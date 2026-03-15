@@ -11,9 +11,24 @@
   <div id="connect-modal" class="modal">
     <div class="modal-content">
       <h3>Connect to Alpaca</h3>
+      <div id="saved-accounts-section">
+        <label>Saved Accounts:</label>
+        <select id="saved-accounts">
+          <option value="">— New Account —</option>
+        </select>
+        <button id="btn-delete-account" class="btn-small btn-danger-small">×</button>
+      </div>
+      <input id="account-name" type="text" placeholder="Account Name (e.g. Paper Main)" />
       <input id="api-key" type="text" placeholder="API Key" />
       <input id="secret-key" type="password" placeholder="Secret Key" />
-      <label><input id="paper-mode" type="checkbox" checked /> Paper Trading</label>
+      <div class="account-type-row">
+        <label>Type:</label>
+        <select id="account-type">
+          <option value="paper">Paper</option>
+          <option value="live">Live</option>
+        </select>
+      </div>
+      <label><input id="save-credentials" type="checkbox" checked /> Save credentials</label>
       <button id="btn-connect">Connect</button>
       <div id="connect-status"></div>
     </div>

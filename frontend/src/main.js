@@ -427,16 +427,99 @@ function setupKeyboard() {
   });
 }
 
+// ── Credential Storage ──────────────────────────────────────
+
+const STORAGE_KEY = "typhoon_accounts";
+
+function loadSavedAccounts() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+  } catch { return []; }
+}
+
+function saveAccounts(accounts) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
+}
+
+function populateAccountDropdown() {
+  const select = document.getElementById("saved-accounts");
+  const accounts = loadSavedAccounts();
+  // Keep the "New Account" option, remove others
+  while (select.options.length > 1) select.remove(1);
+  for (const acct of accounts) {
+    const opt = document.createElement("option");
+    opt.value = acct.name;
+    opt.textContent = `${acct.name} (${acct.type})`;
+    select.appendChild(opt);
+  }
+}
+
+function fillFormFromAccount(name) {
+  const accounts = loadSavedAccounts();
+  const acct = accounts.find(a => a.name === name);
+  if (acct) {
+    document.getElementById("account-name").value = acct.name;
+    document.getElementById("api-key").value = acct.apiKey;
+    document.getElementById("secret-key").value = acct.secretKey;
+    document.getElementById("account-type").value = acct.type;
+  } else {
+    document.getElementById("account-name").value = "";
+    document.getElementById("api-key").value = "";
+    document.getElementById("secret-key").value = "";
+    document.getElementById("account-type").value = "paper";
+  }
+}
+
 // ── Connection ──────────────────────────────────────────────
+
+let dashboardInterval = null;
 
 function setupConnect() {
   const modal = document.getElementById("connect-modal");
   const status = document.getElementById("connect-status");
 
+  // Load saved accounts into dropdown
+  populateAccountDropdown();
+
+  // When saved account selected, fill form
+  document.getElementById("saved-accounts").addEventListener("change", (e) => {
+    fillFormFromAccount(e.target.value);
+  });
+
+  // Delete saved account
+  document.getElementById("btn-delete-account").addEventListener("click", () => {
+    const select = document.getElementById("saved-accounts");
+    const name = select.value;
+    if (!name) return;
+    if (!confirm(`Delete saved account "${name}"?`)) return;
+    const accounts = loadSavedAccounts().filter(a => a.name !== name);
+    saveAccounts(accounts);
+    populateAccountDropdown();
+    fillFormFromAccount("");
+    status.textContent = `Deleted "${name}"`;
+    status.style.color = "#ff8";
+  });
+
+  // Warn on live account selection
+  document.getElementById("account-type").addEventListener("change", (e) => {
+    if (e.target.value === "live") {
+      e.target.classList.add("live-warning");
+      status.textContent = "WARNING: Live trading uses real money!";
+      status.style.color = "#f44";
+    } else {
+      e.target.classList.remove("live-warning");
+      status.textContent = "";
+    }
+  });
+
+  // Connect button
   document.getElementById("btn-connect").addEventListener("click", async () => {
     const apiKey = document.getElementById("api-key").value.trim();
     const secretKey = document.getElementById("secret-key").value.trim();
-    const paper = document.getElementById("paper-mode").checked;
+    const accountType = document.getElementById("account-type").value;
+    const accountName = document.getElementById("account-name").value.trim();
+    const saveCredentials = document.getElementById("save-credentials").checked;
+    const paper = accountType === "paper";
 
     if (!apiKey || !secretKey) {
       status.textContent = "API Key and Secret Key are required";
@@ -449,22 +532,44 @@ function setupConnect() {
     try {
       const result = await invoke("connect", { apiKey, secretKey, paper });
       const acct = JSON.parse(result);
-      status.textContent = `Connected! Equity: $${Number(acct.equity).toFixed(2)}`;
+
+      // Save credentials if requested
+      if (saveCredentials && accountName) {
+        const accounts = loadSavedAccounts();
+        const existing = accounts.findIndex(a => a.name === accountName);
+        const entry = { name: accountName, apiKey, secretKey, type: accountType };
+        if (existing >= 0) accounts[existing] = entry;
+        else accounts.push(entry);
+        saveAccounts(accounts);
+        populateAccountDropdown();
+      }
+
+      const typeLabel = paper ? "Paper" : "LIVE";
+      status.textContent = `Connected! [${typeLabel}] Equity: $${Number(acct.equity).toFixed(2)}`;
       status.style.color = "#8f8";
-      // Hide modal after short delay
       setTimeout(() => modal.classList.add("hidden"), 800);
-      // Start dashboard updates
-      setInterval(updateDashboard, 2000);
+
+      // Start dashboard updates (only once)
+      if (!dashboardInterval) {
+        dashboardInterval = setInterval(updateDashboard, 2000);
+      }
     } catch (e) {
       status.textContent = `Failed: ${e}`;
       status.style.color = "#f88";
     }
   });
 
-  // Allow Enter to connect
+  // Enter to connect
   document.getElementById("secret-key").addEventListener("keydown", (e) => {
     if (e.key === "Enter") document.getElementById("btn-connect").click();
   });
+
+  // Auto-connect if only one saved account
+  const accounts = loadSavedAccounts();
+  if (accounts.length === 1) {
+    fillFormFromAccount(accounts[0].name);
+    document.getElementById("saved-accounts").value = accounts[0].name;
+  }
 }
 
 // ── Init ────────────────────────────────────────────────────

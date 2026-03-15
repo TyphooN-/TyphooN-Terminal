@@ -238,3 +238,65 @@ body {
   color: #f88;
   min-height: 16px;
 }
+
+#saved-accounts-section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#saved-accounts-section label {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+#saved-accounts {
+  flex: 1;
+  background: #0f3460;
+  border: 1px solid #555;
+  color: #fff;
+  padding: 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+#saved-accounts option {
+  background: #0f3460;
+  color: #fff;
+}
+
+.btn-small {
+  padding: 4px 8px !important;
+  font-size: 11px !important;
+  min-width: 0 !important;
+}
+
+.btn-danger-small {
+  background: #5a1a1a !important;
+  color: #f88 !important;
+}
+
+.account-type-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-type-row select {
+  background: #0f3460;
+  border: 1px solid #555;
+  color: #fff;
+  padding: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  flex: 1;
+}
+
+.account-type-row select option {
+  background: #0f3460;
+  color: #fff;
+}
+
+.modal-content select.live-warning {
+  border-color: #f44336;
+}
