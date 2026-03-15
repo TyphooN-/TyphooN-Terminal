@@ -634,6 +634,65 @@ select option {
 .fundamental-row .label { color: #888; }
 .fundamental-row .value { color: #8cf; }
 
+/* ── Article Reader ──────────────────────────────────────── */
+
+#article-reader {
+  border-top: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  max-height: 500px;
+  overflow: hidden;
+}
+
+#article-reader.hidden { display: none; }
+
+#article-reader-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: #111;
+  border-bottom: 1px solid #222;
+}
+
+#btn-article-back {
+  background: none;
+  border: 1px solid #444;
+  color: #8cf;
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+#btn-article-back:hover { color: #fff; }
+
+#article-title {
+  font-size: 11px;
+  color: #ccc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#article-body {
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #ccc;
+  overflow-y: auto;
+  flex: 1;
+}
+
+#article-body p { margin: 6px 0; }
+#article-body a { color: #8cf; }
+#article-body img { max-width: 100%; height: auto; }
+#article-body h1, #article-body h2, #article-body h3 {
+  color: #fff;
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+
 /* ── Log Panel ───────────────────────────────────────────── */
 
 #log-panel {

@@ -564,6 +564,42 @@ async fn get_company_fundamentals(symbol: String) -> Result<String, String> {
     Ok(serde_json::to_string(&result).unwrap())
 }
 
+/// Fetch article content from URL, return as text. For in-app reading.
+#[tauri::command]
+async fn fetch_article(url: String) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "TyphooN-Terminal/0.1")
+        .send()
+        .await
+        .map_err(|e| format!("Article fetch failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("Read failed: {e}"))
+}
+
+/// Clear all cached data for a specific symbol from cold storage.
+#[tauri::command]
+async fn clear_symbol_cache(symbol: String) -> Result<String, String> {
+    let dir = get_cache_dir();
+    let prefix = symbol.replace('/', "_");
+    let mut removed = 0;
+    if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with(&prefix) || name.contains(&format!("_{}", prefix)) || name.contains(&format!("{}:", symbol)) {
+                    tokio::fs::remove_file(entry.path()).await.ok();
+                    removed += 1;
+                }
+            }
+        }
+    }
+    tracing::info!("Cleared {removed} cache files for {symbol}");
+    Ok(format!("Cleared {removed} files"))
+}
+
 // ── Cold Cache (zstd-compressed files on disk) ──────────────────
 
 fn get_cache_dir() -> std::path::PathBuf {
@@ -688,6 +724,9 @@ fn main() {
             get_corporate_actions,
             get_sec_filings,
             get_company_fundamentals,
+            // Articles & cache management
+            fetch_article,
+            clear_symbol_cache,
             // Cold cache (zstd)
             save_cold_cache,
             load_cold_cache,

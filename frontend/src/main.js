@@ -2251,7 +2251,7 @@ async function loadNewsAndFundamentals(symbol) {
 
         if (article.url) {
           item.addEventListener("click", () => {
-            window.open(article.url, "_blank");
+            openArticleInline(article.url, article.headline || article.title || "Article");
           });
         }
 
@@ -2264,6 +2264,68 @@ async function loadNewsAndFundamentals(symbol) {
   }
 }
 
+async function openArticleInline(url, title) {
+  const reader = document.getElementById("article-reader");
+  const body = document.getElementById("article-body");
+  const titleEl = document.getElementById("article-title");
+  const newsPanel = document.getElementById("news-panel");
+
+  titleEl.textContent = title;
+  body.textContent = "Loading...";
+  reader.classList.remove("hidden");
+  newsPanel.style.display = "none";
+
+  // Check cold cache first
+  const cacheKey = `article:${url}`;
+  let html = await coldLoad(cacheKey);
+
+  if (!html) {
+    try {
+      html = await invoke("fetch_article", { url });
+      if (html) coldSave(cacheKey, html); // cache the article content
+    } catch (e) {
+      body.textContent = `Failed to load: ${e}`;
+      return;
+    }
+  }
+
+  // Extract readable content (strip scripts/styles, keep text)
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+  // Remove scripts, styles, nav, header, footer
+  doc.querySelectorAll("script, style, nav, header, footer, iframe, .ad, .ads, .sidebar").forEach(el => el.remove());
+
+  // Try to find main content
+  const main = doc.querySelector("article, main, .article-body, .post-content, .entry-content, .story-body");
+  if (main) {
+    body.textContent = ""; // Clear safely
+    // Use textContent for paragraphs to avoid XSS
+    const paragraphs = main.querySelectorAll("p, h1, h2, h3, h4, li");
+    for (const p of paragraphs) {
+      const div = document.createElement("p");
+      div.textContent = p.textContent;
+      body.appendChild(div);
+    }
+  } else {
+    // Fallback: extract all paragraph text
+    body.textContent = "";
+    const paragraphs = doc.querySelectorAll("p");
+    for (const p of paragraphs) {
+      if (p.textContent.trim().length > 20) {
+        const div = document.createElement("p");
+        div.textContent = p.textContent;
+        body.appendChild(div);
+      }
+    }
+  }
+
+  if (body.children.length === 0) {
+    body.textContent = "Could not extract article content. The source may require JavaScript or authentication.";
+  }
+
+  log(`Article cached: ${title.substring(0, 50)}`, "ok");
+}
+
 function setupNewsPanel() {
   const panel = document.getElementById("news-panel");
   const header = document.getElementById("news-header");
@@ -2271,6 +2333,12 @@ function setupNewsPanel() {
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
     header.textContent = panel.classList.contains("collapsed") ? "News & Events ▶" : "News & Events ▼";
+  });
+
+  // Article reader back button
+  document.getElementById("btn-article-back").addEventListener("click", () => {
+    document.getElementById("article-reader").classList.add("hidden");
+    document.getElementById("news-panel").style.display = "";
   });
 }
 
