@@ -217,15 +217,14 @@ body {
 }
 
 .sub-pane {
-  flex: 1;
+  flex: none;
   background: #000000;
   border-top: 1px solid #444;
   position: relative;
-  min-height: 80px;
 }
 
-#fisher-pane { height: 120px; flex: none; }
-#volume-pane { height: 100px; flex: none; }
+#fisher-pane { height: 120px; }
+#volume-pane { height: 100px; }
 
 .pane-resizer {
   height: 5px;
