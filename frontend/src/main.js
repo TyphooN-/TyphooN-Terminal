@@ -840,22 +840,52 @@ function applyIndicators(chartData) {
       volumeChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
 
     } else if (ind === "supply-demand" && chartData.length > 10) {
-      // Supply/Demand zones — two horizontal lines per zone (top + bottom)
-      // Demand = green dashed, Supply = red dashed
+      // Supply/Demand zones — filled rectangles (like a trader would draw)
+      // Two area series per zone: one fills DOWN from top, one fills UP from bottom
+      // Where they overlap creates a solid filled rectangle
       const zones = calcSupplyDemandZones(chartData);
       for (let zi = 0; zi < zones.length; zi++) {
         const z = zones[zi];
         const isDemand = z.type === "demand";
-        const color = isDemand ? "#00FF0088" : "#FF000088";
-        // Just two price lines — clean, no fill
-        candleSeries.createPriceLine({
-          price: z.high, color, lineWidth: 1, lineStyle: 2,
-          axisLabelVisible: false, title: "",
+        const fillColor = isDemand ? "#00FF0025" : "#FF000025";
+        const lineColor = isDemand ? "#00FF0077" : "#FF000077";
+        const zoneBars = clip(chartData.filter(d => d.time >= z.startTime));
+        if (zoneBars.length < 2) continue;
+
+        // Top line of zone
+        const topLine = chart.addLineSeries({
+          color: lineColor, lineWidth: 1, lastValueVisible: false,
+          priceLineVisible: false, crosshairMarkerVisible: false,
         });
-        candleSeries.createPriceLine({
-          price: z.low, color, lineWidth: 1, lineStyle: 2,
-          axisLabelVisible: false, title: "",
+        topLine.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
+
+        // Bottom line of zone
+        const botLine = chart.addLineSeries({
+          color: lineColor, lineWidth: 1, lastValueVisible: false,
+          priceLineVisible: false, crosshairMarkerVisible: false,
         });
+        botLine.setData(zoneBars.map(d => ({ time: d.time, value: z.low })));
+
+        // Fill: baseline series — fills between line and a fixed price level
+        // This creates a proper bounded rectangle between zone top and bottom
+        const fillArea = chart.addBaselineSeries({
+          topFillColor1: fillColor,
+          topFillColor2: fillColor,
+          bottomFillColor1: fillColor,
+          bottomFillColor2: fillColor,
+          topLineColor: "transparent",
+          bottomLineColor: "transparent",
+          lineWidth: 0,
+          baseValue: { type: "price", price: z.low },
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        fillArea.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
+
+        indicatorSeries[`sd_${zi}_t`] = topLine;
+        indicatorSeries[`sd_${zi}_b`] = botLine;
+        indicatorSeries[`sd_${zi}_f`] = fillArea;
       }
 
     } else if (ind === "rvol" && chartData.length > 11) {
