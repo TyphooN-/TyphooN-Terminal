@@ -428,8 +428,10 @@ async fn get_margin_info(state: State<'_, SharedState>) -> Result<String, String
     let gross: f64 = positions.iter().map(|p| p.qty.abs()).sum();
     let spread_tol = margin::spread_tolerance(account.equity, gross);
 
-    // Determine MG zone
-    let zone = if ml <= s.martingale.config.hard_floor_pct {
+    // Determine MG zone — only show zone if positions exist and MG is active
+    let zone = if gross <= 0.0 || !s.martingale.config.enabled {
+        ""
+    } else if ml <= s.martingale.config.hard_floor_pct {
         "HARD FLOOR"
     } else if ml < s.martingale.config.protect_pct {
         "PROTECT"

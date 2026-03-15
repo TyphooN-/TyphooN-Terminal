@@ -138,13 +138,20 @@ async function updateDashboard() {
     const marginJson = await invoke("get_margin_info");
     const mi = JSON.parse(marginJson);
 
-    setText("account-info", `Eq: $${fmt(mi.equity)} | ML: ${mi.margin_level_pct.toFixed(1)}%`);
+    const hasPositions = mi.gross_lots > 0;
+    const mlText = hasPositions ? `${mi.margin_level_pct.toFixed(1)}%` : "—";
+    setText("account-info", `Eq: $${fmt(mi.equity)}${hasPositions ? ` | ML: ${mlText}` : ""}`);
     setText("info-equity", `Eq: $${mi.equity.toFixed(2)}`);
     setText("info-balance", `Bal: $${mi.balance.toFixed(2)}`);
 
     const mlEl = document.getElementById("info-margin");
-    mlEl.textContent = `ML: ${mi.margin_level_pct.toFixed(1)}% [${mi.zone}]`;
-    mlEl.className = `dash-row ${mi.zone === "TRIM" ? "positive" : mi.zone === "DEAD ZONE" ? "neutral" : "negative"}`;
+    if (!hasPositions || !mi.zone) {
+      mlEl.textContent = "ML: —";
+      mlEl.className = "dash-row neutral";
+    } else {
+      mlEl.textContent = `ML: ${mi.margin_level_pct.toFixed(1)}% [${mi.zone}]`;
+      mlEl.className = `dash-row ${mi.zone === "TRIM" ? "positive" : mi.zone === "DEAD ZONE" ? "neutral" : "negative"}`;
+    }
 
     // Positions
     const posJson = await invoke("get_positions");
