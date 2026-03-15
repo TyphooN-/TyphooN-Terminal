@@ -310,7 +310,8 @@ impl AlpacaBroker {
 
         // Alpaca doesn't support 1Month — fetch weekly bars and aggregate
         if timeframe == "1Month" {
-            let weekly = Box::pin(self.get_bars(symbol, "1Week", limit * 5)).await?;
+            // Fetch enough weekly bars: ~4.3 weeks per month, request 5x for safety
+            let weekly = Box::pin(self.get_bars(symbol, "1Week", (limit * 5).max(1000))).await?;
             let monthly = Self::aggregate_weekly_to_monthly(&weekly);
             let trimmed = if monthly.len() > limit as usize {
                 monthly[monthly.len() - limit as usize..].to_vec()
@@ -443,10 +444,14 @@ impl AlpacaBroker {
                 if chunk_start >= chrono::Utc::now() {
                     break;
                 }
+
+                // Rate limit: brief pause between chunk requests to avoid 429
+                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
             }
 
             if !all_bars.is_empty() {
-                // Deduplicate by timestamp (overlapping chunks)
+                // Sort by timestamp (chunks may overlap) then deduplicate
+                all_bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
                 all_bars.dedup_by(|a, b| a.timestamp == b.timestamp);
                 // Trim to requested limit (keep most recent)
                 if all_bars.len() > actual_limit as usize {
