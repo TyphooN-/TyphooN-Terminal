@@ -680,16 +680,23 @@ function calcHTFATRProjection(htfBars, period = 14) {
   return { atr, upper: curOpen + atr, lower: curOpen - atr };
 }
 
+// Truncate indicator data to not extend past last candle
+function clipToChart(indData, chartData) {
+  if (!chartData || chartData.length === 0 || !indData || indData.length === 0) return indData;
+  const lastTime = chartData[chartData.length - 1].time;
+  return indData.filter(d => d.time <= lastTime);
+}
+
 function applyIndicators(chartData) {
   clearIndicators();
-  // Clear sub-pane charts
   for (const [, s] of Object.entries(fisherSeries)) fisherChart.removeSeries(s);
   for (const [, s] of Object.entries(volumeSeries)) volumeChart.removeSeries(s);
   fisherSeries = {};
   volumeSeries = {};
-  // Remove old price lines from candleSeries
-  // (lightweight-charts doesn't have removeAllPriceLines, so we recreate the approach)
   const checkboxes = document.querySelectorAll("#indicator-list input[type=checkbox]:checked");
+  const lastTime = chartData.length > 0 ? chartData[chartData.length - 1].time : Infinity;
+  // Helper: clip any data array to not exceed last candle time
+  const clip = (data) => data.filter(d => d.time <= lastTime);
 
   for (const cb of checkboxes) {
     const ind = cb.dataset.ind;
@@ -705,7 +712,7 @@ function applyIndicators(chartData) {
       // Current chart's own KAMA
       if (chartData.length > period + 1) {
         const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
-        s.setData(calcKAMA(chartData, period));
+        s.setData(clip(calcKAMA(chartData, period)));
         indicatorSeries[key] = s;
       }
       // HTF KAMAs projected onto current chart
@@ -716,9 +723,8 @@ function applyIndicators(chartData) {
         const kamaData = calcKAMA(tfBars, period);
         const projected = projectHTFToChartTime(kamaData, chartData);
         if (projected.length === 0) continue;
-        const label = MTF_LABELS[tf] || tf;
         const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
-        s.setData(projected);
+        s.setData(clip(projected));
         indicatorSeries[`${key}_${tf}`] = s;
       }
 
@@ -729,7 +735,7 @@ function applyIndicators(chartData) {
         const pcl = calcPrevCandleLevels(chartData);
         const sh = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
         const sl2 = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
-        sh.setData(pcl.highs); sl2.setData(pcl.lows);
+        sh.setData(clip(pcl.highs)); sl2.setData(clip(pcl.lows));
         indicatorSeries[key + "_h"] = sh;
         indicatorSeries[key + "_l"] = sl2;
       }
@@ -754,7 +760,7 @@ function applyIndicators(chartData) {
         const atrp = calcATRProjection(chartData, period);
         const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "", lastValueVisible: false, priceLineVisible: false });
         const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "", lastValueVisible: false, priceLineVisible: false });
-        su.setData(atrp.upper); sl3.setData(atrp.lower);
+        su.setData(clip(atrp.upper)); sl3.setData(clip(atrp.lower));
         indicatorSeries[key + "_u"] = su;
         indicatorSeries[key + "_l"] = sl3;
       }
@@ -834,38 +840,41 @@ function applyIndicators(chartData) {
       volumeChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
 
     } else if (ind === "supply-demand" && chartData.length > 10) {
-      // Supply/Demand zones — projected as colored bands
+      // Supply/Demand zones — MT5 style filled rectangles
       const zones = calcSupplyDemandZones(chartData);
       for (let zi = 0; zi < zones.length; zi++) {
         const z = zones[zi];
-        const color = z.type === "demand" ? "#00FF0033" : "#FF000033"; // semi-transparent green/red
-        const borderColor = z.type === "demand" ? "#00FF00" : "#FF0000";
-        // Draw as two price lines (top and bottom of zone)
-        const top = candleSeries.createPriceLine({
-          price: z.high, color: borderColor, lineWidth: 1, lineStyle: 2,
-          axisLabelVisible: false, title: "",
+        const isDemand = z.type === "demand";
+        const fillColor = isDemand ? "#00FF0018" : "#FF000018";  // very subtle fill
+        const borderColor = isDemand ? "#00FF0066" : "#FF000066";
+        // Top border line series
+        const topS = chart.addLineSeries({
+          color: borderColor, lineWidth: 1, lastValueVisible: false,
+          priceLineVisible: false, crosshairMarkerVisible: false,
         });
-        const bot = candleSeries.createPriceLine({
-          price: z.low, color: borderColor, lineWidth: 1, lineStyle: 2,
-          axisLabelVisible: false, title: "",
+        // Bottom border line series
+        const botS = chart.addLineSeries({
+          color: borderColor, lineWidth: 1, lastValueVisible: false,
+          priceLineVisible: false, crosshairMarkerVisible: false,
         });
-        // Use a filled area series for the zone body
-        const upper = chart.addLineSeries({
-          color: borderColor + "44", lineWidth: 0, lastValueVisible: false, priceLineVisible: false,
+        // Fill area between top and bottom using area series
+        const fillS = chart.addAreaSeries({
+          topColor: fillColor, bottomColor: fillColor, lineColor: "transparent",
+          lineWidth: 0, lastValueVisible: false, priceLineVisible: false,
           crosshairMarkerVisible: false,
         });
-        const lower = chart.addLineSeries({
-          color: borderColor + "44", lineWidth: 0, lastValueVisible: false, priceLineVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        // Project zone across visible bars from startTime to end
-        const zoneData = chartData
-          .filter(d => d.time >= z.startTime)
-          .map(d => d.time);
-        upper.setData(zoneData.map(t => ({ time: t, value: z.high })));
-        lower.setData(zoneData.map(t => ({ time: t, value: z.low })));
-        indicatorSeries[`sd_${zi}_u`] = upper;
-        indicatorSeries[`sd_${zi}_l`] = lower;
+        // Project zone across bars from start to last candle
+        const zoneBars = clip(chartData.filter(d => d.time >= z.startTime));
+        if (zoneBars.length === 0) continue;
+        topS.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
+        botS.setData(zoneBars.map(d => ({ time: d.time, value: z.low })));
+        // Area series: lineValue = high, fills down to bottomValue
+        fillS.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
+        // Unfortunately area series fills to bottom of chart, not to a specific level.
+        // Use the top line as the visible boundary with subtle fill.
+        indicatorSeries[`sd_${zi}_t`] = topS;
+        indicatorSeries[`sd_${zi}_b`] = botS;
+        indicatorSeries[`sd_${zi}_f`] = fillS;
       }
 
     } else if (ind === "rvol" && chartData.length > 11) {
@@ -896,18 +905,18 @@ function applyIndicators(chartData) {
     } else if (ind === "sma" && chartData.length > period) {
       const colors = { 200: "#FFFF00", 50: "#2196f3" };
       const s = chart.addLineSeries({ color: colors[period] || "#FFFFFF", lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
-      s.setData(calcSMA(chartData, period));
+      s.setData(clip(calcSMA(chartData, period)));
       indicatorSeries[key] = s;
 
     } else if (ind === "ema" && chartData.length > period) {
       const colors = { 50: "#2196f3", 200: "#ff9800" };
-      const s = chart.addLineSeries({ color: colors[period] || "#FFFFFF", lineWidth: 1, title: `EMA${period}`, priceLineVisible: false });
-      s.setData(calcEMA(chartData, period));
+      const s = chart.addLineSeries({ color: colors[period] || "#FFFFFF", lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+      s.setData(clip(calcEMA(chartData, period)));
       indicatorSeries[key] = s;
 
     } else if (ind === "dema" && chartData.length > period * 2) {
-      const s = chart.addLineSeries({ color: "#00e676", lineWidth: 1, title: `DEMA${period}`, priceLineVisible: false });
-      s.setData(calcDEMA(chartData, period));
+      const s = chart.addLineSeries({ color: "#00e676", lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+      s.setData(clip(calcDEMA(chartData, period)));
       indicatorSeries[key] = s;
 
     } else if (ind === "bollinger" && chartData.length > period) {
@@ -946,6 +955,49 @@ function applyIndicators(chartData) {
       const s = chart.addLineSeries({ color: "#ff4081", lineWidth: 2, title: "VWAP", lastValueVisible: true });
       s.setData(calcVWAP(chartData)); indicatorSeries[key] = s;
     }
+  }
+}
+
+// ── MTF MA Grid Update ──────────────────────────────────────
+
+function updateMTFGrid() {
+  const tfs = ["1Hour", "4Hour", "1Day", "1Week"];
+  for (const tf of tfs) {
+    const bars = mtfData[tf];
+    if (!bars || bars.length < 201) {
+      // Not enough data
+      setMTFDot(`mtf-sma200-${tf}`, "neutral");
+      setMTFDot(`mtf-kama-${tf}`, "neutral");
+      setMTFDot(`mtf-fisher-${tf}`, "neutral");
+      continue;
+    }
+    const lastPrice = bars[bars.length - 1].close;
+
+    // SMA 200
+    const sma200 = calcSMA(bars, 200);
+    if (sma200.length > 0) {
+      setMTFDot(`mtf-sma200-${tf}`, lastPrice > sma200[sma200.length - 1].value ? "bullish" : "bearish");
+    }
+
+    // KAMA
+    const kama = calcKAMA(bars, 10);
+    if (kama.length > 0) {
+      setMTFDot(`mtf-kama-${tf}`, lastPrice > kama[kama.length - 1].value ? "bullish" : "bearish");
+    }
+
+    // Fisher
+    const ef = calcEhlersFisher(bars, 32);
+    if (ef.colors.length > 0) {
+      const lastColor = ef.colors[ef.colors.length - 1];
+      setMTFDot(`mtf-fisher-${tf}`, lastColor === "#3CB371" ? "bullish" : lastColor === "#FF4500" ? "bearish" : "neutral");
+    }
+  }
+}
+
+function setMTFDot(id, state) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.className = `mtf-dot ${state}`;
   }
 }
 
@@ -1002,8 +1054,11 @@ async function loadChart(symbol, timeframe) {
     currentTimeframe = timeframe;
     if (chartData.length > 0) lastPrice = chartData[chartData.length - 1].close;
 
-    // Load MTF data for multi-timeframe indicators, then apply all
-    loadMTFData(symbol).then(() => applyIndicators(chartData)).catch(() => applyIndicators(chartData));
+    // Load MTF data for multi-timeframe indicators, then apply all + update grid
+    loadMTFData(symbol).then(() => {
+      applyIndicators(chartData);
+      updateMTFGrid();
+    }).catch(() => applyIndicators(chartData));
 
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
     setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
