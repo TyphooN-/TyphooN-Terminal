@@ -285,6 +285,7 @@ body {
   width: 240px;
   background: #0a0a14;
   border-left: 1px solid #222;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -592,7 +593,10 @@ select option {
 #news-panel {
   border-top: 1px solid #333;
   font-size: 10px;
-  max-height: 200px;
+}
+
+#news-content {
+  max-height: 400px;
   overflow-y: auto;
 }
 

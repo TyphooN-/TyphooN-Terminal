@@ -2278,6 +2278,10 @@ function setupIndicatorPanel() {
   const panel = document.getElementById("indicator-panel");
   const header = document.getElementById("indicator-header");
 
+  // Start collapsed by default
+  panel.classList.add("collapsed");
+  header.textContent = "Indicators ▶";
+
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
     header.textContent = panel.classList.contains("collapsed") ? "Indicators ▶" : "Indicators ▼";
@@ -2375,6 +2379,100 @@ function setupPaneResizers() {
 
 // ── Init ────────────────────────────────────────────────────
 
+// ── Session State Persistence ────────────────────────────────
+
+const SESSION_KEY = "typhoon_session";
+
+function saveSession() {
+  try {
+    // Save current tab state first
+    if (activeTabId !== null) {
+      const cur = tabs.find(t => t.id === activeTabId);
+      if (cur) {
+        cur.symbol = currentSymbol;
+        cur.timeframe = currentTimeframe;
+        cur.barCount = document.getElementById("bar-count").value;
+        cur.lastPrice = lastPrice;
+      }
+    }
+
+    // Gather indicator checkbox states
+    const indicators = {};
+    document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
+      const key = `${cb.dataset.ind}_${cb.dataset.period || ""}`;
+      indicators[key] = cb.checked;
+    });
+
+    // Pane heights
+    const fisherH = document.getElementById("fisher-pane")?.offsetHeight || 120;
+    const volumeH = document.getElementById("volume-pane")?.offsetHeight || 100;
+
+    const session = {
+      tabs: tabs.map(t => ({ symbol: t.symbol, timeframe: t.timeframe, barCount: t.barCount })),
+      activeTabIndex: tabs.findIndex(t => t.id === activeTabId),
+      indicators,
+      orderMode: document.getElementById("order-mode")?.value || "VaR",
+      fisherPaneHeight: fisherH,
+      volumePaneHeight: volumeH,
+      timestamp: Date.now(),
+    };
+
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch (_) {}
+}
+
+function restoreSession() {
+  try {
+    const json = localStorage.getItem(SESSION_KEY);
+    if (!json) return false;
+    const session = JSON.parse(json);
+    if (!session || !session.tabs || session.tabs.length === 0) return false;
+
+    // Restore indicator checkboxes
+    if (session.indicators) {
+      document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
+        const key = `${cb.dataset.ind}_${cb.dataset.period || ""}`;
+        if (key in session.indicators) cb.checked = session.indicators[key];
+      });
+    }
+
+    // Restore order mode
+    if (session.orderMode) {
+      const modeEl = document.getElementById("order-mode");
+      if (modeEl) modeEl.value = session.orderMode;
+    }
+
+    // Restore pane heights
+    if (session.fisherPaneHeight) {
+      const fp = document.getElementById("fisher-pane");
+      if (fp) fp.style.height = session.fisherPaneHeight + "px";
+    }
+    if (session.volumePaneHeight) {
+      const vp = document.getElementById("volume-pane");
+      if (vp) vp.style.height = session.volumePaneHeight + "px";
+    }
+
+    // Restore tabs
+    for (const t of session.tabs) {
+      createTab(t.symbol, t.timeframe);
+      const tab = tabs[tabs.length - 1];
+      tab.barCount = t.barCount || "1000";
+    }
+
+    // Switch to previously active tab
+    const idx = session.activeTabIndex >= 0 ? session.activeTabIndex : 0;
+    if (tabs[idx]) switchTab(tabs[idx].id);
+
+    log(`Session restored: ${session.tabs.length} tabs`, "ok");
+    return true;
+  } catch (e) {
+    log(`Session restore failed: ${e}`, "warn");
+    return false;
+  }
+}
+
+// ── Init ────────────────────────────────────────────────────
+
 document.addEventListener("DOMContentLoaded", () => {
   loadBarCacheFromDisk().then(() => migrateLocalStorageCache());
   initChart();
@@ -2387,11 +2485,20 @@ document.addEventListener("DOMContentLoaded", () => {
   setupKeyboard();
   setupConnect();
   setupTabs();
+
+  // Auto-save session periodically and on shutdown
+  setInterval(saveSession, 30000); // every 30s
+  window.addEventListener("beforeunload", saveSession);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saveSession();
+  });
 });
 
 function setupTabs() {
-  // Create initial tab
-  createTab();
+  // Restore previous session or create a fresh tab
+  if (!restoreSession()) {
+    createTab();
+  }
 
   // "+" button creates new tab
   document.getElementById("btn-new-tab").addEventListener("click", () => {
