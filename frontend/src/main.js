@@ -103,13 +103,21 @@ function switchTab(id) {
 
   renderTabs();
 
+  // Stop live polling from previous tab
+  if (liveBarInterval) { clearInterval(liveBarInterval); liveBarInterval = null; }
+
+  // Clear current chart immediately before loading new
+  candleSeries.setData([]);
+  clearIndicators();
+  for (const [, s] of Object.entries(fisherSeries)) fisherChart.removeSeries(s);
+  for (const [, s] of Object.entries(volumeSeries)) volumeChart.removeSeries(s);
+  fisherSeries = {};
+  volumeSeries = {};
+  setText("connect-status-bar", "");
+
   // Load chart if symbol set
   if (tab.symbol) {
     loadChart(tab.symbol, tab.timeframe);
-  } else {
-    // Clear chart
-    candleSeries.setData([]);
-    clearIndicators();
   }
 }
 
@@ -1221,7 +1229,12 @@ let liveBarInterval = null;
 async function loadChart(symbol, timeframe) {
   const loading = document.getElementById("loading-indicator");
   loading.classList.remove("hidden");
-  loading.textContent = "Loading...";
+  loading.textContent = `Loading ${symbol}...`;
+
+  // Set symbol immediately so tab identity is correct
+  currentSymbol = symbol;
+  currentTimeframe = timeframe;
+  const loadTabId = activeTabId; // capture which tab initiated this load
 
   try {
     const limit = parseInt(document.getElementById("bar-count").value) || 1000;
@@ -1253,6 +1266,14 @@ async function loadChart(symbol, timeframe) {
     if (chartData.length === 0) {
       log(`No bars returned for ${symbol} @ ${timeframe}`, "warn");
       setText("connect-status-bar", `No data for ${symbol} @ ${timeframe}`);
+      loading.classList.add("hidden");
+      return;
+    }
+
+    // Guard: if user switched tabs during async load, don't overwrite wrong chart
+    if (activeTabId !== loadTabId) {
+      log(`Discarding late bars for ${symbol} (tab switched)`, "warn");
+      loading.classList.add("hidden");
       return;
     }
 
