@@ -518,6 +518,71 @@ async fn get_margin_info(state: State<'_, SharedState>) -> Result<String, String
     })).unwrap())
 }
 
+// ── Cold Cache (zstd-compressed files on disk) ──────────────────
+
+fn get_cache_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let dir = std::path::PathBuf::from(home).join(".config").join("typhoon-terminal").join("cache");
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
+fn cache_key_to_filename(key: &str) -> String {
+    key.replace('/', "_").replace(':', "_") + ".zst"
+}
+
+#[tauri::command]
+async fn save_cold_cache(key: String, data: String) -> Result<(), String> {
+    let dir = get_cache_dir();
+    let path = dir.join(cache_key_to_filename(&key));
+    let compressed = zstd::encode_all(data.as_bytes(), 3)
+        .map_err(|e| format!("zstd compress failed: {e}"))?;
+    let raw_size = data.len();
+    let compressed_size = compressed.len();
+    tokio::fs::write(&path, compressed).await
+        .map_err(|e| format!("Cache write failed: {e}"))?;
+    tracing::debug!(
+        "Cold cache: {} → {} bytes ({:.1}x compression)",
+        raw_size, compressed_size, raw_size as f64 / compressed_size.max(1) as f64
+    );
+    Ok(())
+}
+
+#[tauri::command]
+async fn load_cold_cache(key: String) -> Result<String, String> {
+    let dir = get_cache_dir();
+    let path = dir.join(cache_key_to_filename(&key));
+    if !path.exists() {
+        return Err("Not in cold cache".to_string());
+    }
+    let compressed = tokio::fs::read(&path).await
+        .map_err(|e| format!("Cache read failed: {e}"))?;
+    let decompressed = zstd::decode_all(compressed.as_slice())
+        .map_err(|e| format!("zstd decompress failed: {e}"))?;
+    String::from_utf8(decompressed)
+        .map_err(|e| format!("UTF-8 decode failed: {e}"))
+}
+
+#[tauri::command]
+async fn list_cold_cache() -> Result<String, String> {
+    let dir = get_cache_dir();
+    let mut entries = Vec::new();
+    if let Ok(mut read_dir) = tokio::fs::read_dir(&dir).await {
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(".zst") {
+                    let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
+                    entries.push(serde_json::json!({
+                        "key": name.trim_end_matches(".zst").replace('_', ":"),
+                        "size": size,
+                    }));
+                }
+            }
+        }
+    }
+    Ok(serde_json::to_string(&entries).unwrap())
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -572,6 +637,10 @@ fn main() {
             get_margin_info,
             // Notifications
             send_discord_notification,
+            // Cold cache (zstd)
+            save_cold_cache,
+            load_cold_cache,
+            list_cold_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TyphooN Terminal");

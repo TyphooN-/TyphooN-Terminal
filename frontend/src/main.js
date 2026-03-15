@@ -1179,47 +1179,149 @@ function setMTFDot(id, state) {
   }
 }
 
-// ── Bar Cache (localStorage persistent) ─────────────────────
+// ══════════════════════════════════════════════════════════════
+// THREE-TIER BAR CACHE
+//   Hot:  In-memory (instant, 1-min TTL for freshness)
+//   Warm: IndexedDB (50MB+, survives restarts, structured)
+//   Cold: zstd-compressed files via Rust (unlimited, persistent)
+// ══════════════════════════════════════════════════════════════
 
-const barCache = {}; // "SYMBOL:TF" → { data: [], timestamp: Date }
-const CACHE_TTL_MS = 60 * 1000; // 1 minute — only refetch if older than this
-const BAR_CACHE_PREFIX = "typhoon_bars_";
+const barCache = {}; // Hot: "SYMBOL:TF" → { data: [], timestamp: Date }
+const CACHE_TTL_MS = 60 * 1000; // 1 minute — fresh threshold
+let idb = null; // Warm: IndexedDB handle
 
 function getCacheKey(symbol, tf) { return `${symbol}:${tf}`; }
 
-// Load cache from localStorage on startup
-function loadBarCacheFromDisk() {
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(BAR_CACHE_PREFIX)) {
-        const cacheKey = key.substring(BAR_CACHE_PREFIX.length);
-        const stored = JSON.parse(localStorage.getItem(key));
-        if (stored && stored.data && stored.timestamp) {
-          barCache[cacheKey] = { data: stored.data, timestamp: stored.timestamp };
-        }
+// ── IndexedDB (Warm Cache) ──────────────────────────────────
+
+function openIndexedDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("typhoon_bars", 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("bars")) {
+        db.createObjectStore("bars", { keyPath: "key" });
       }
-    }
-    const count = Object.keys(barCache).length;
-    if (count > 0) log(`Loaded ${count} cached bar sets from disk`, "info");
+    };
+    req.onsuccess = (e) => { idb = e.target.result; resolve(idb); };
+    req.onerror = () => reject("IndexedDB open failed");
+  });
+}
+
+async function idbGet(key) {
+  if (!idb) return null;
+  return new Promise((resolve) => {
+    const tx = idb.transaction("bars", "readonly");
+    const req = tx.objectStore("bars").get(key);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+async function idbPut(key, data, timestamp) {
+  if (!idb) return;
+  return new Promise((resolve) => {
+    const tx = idb.transaction("bars", "readwrite");
+    tx.objectStore("bars").put({ key, data, timestamp });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+  });
+}
+
+// ── Cold Cache (zstd via Rust) ──────────────────────────────
+
+async function coldSave(key, data) {
+  try {
+    await invoke("save_cold_cache", { key, data: JSON.stringify(data) });
   } catch (_) {}
 }
 
-// Save a cache entry to localStorage
-function saveBarCacheToDisk(cacheKey, data) {
+async function coldLoad(key) {
   try {
-    const entry = { data, timestamp: Date.now() };
-    localStorage.setItem(BAR_CACHE_PREFIX + cacheKey, JSON.stringify(entry));
-  } catch (e) {
-    // localStorage full — clear old entries
-    log(`Cache storage full, clearing old entries`, "warn");
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith(BAR_CACHE_PREFIX)) {
-        localStorage.removeItem(key);
+    const json = await invoke("load_cold_cache", { key });
+    return JSON.parse(json);
+  } catch (_) {
+    return null;
+  }
+}
+
+// ── Unified Cache Operations ────────────────────────────────
+
+// Load from all tiers on startup: cold → warm → hot
+async function loadBarCacheFromDisk() {
+  try {
+    await openIndexedDB();
+    // Load from IndexedDB (warm) into hot cache
+    if (idb) {
+      const tx = idb.transaction("bars", "readonly");
+      const store = tx.objectStore("bars");
+      const req = store.getAll();
+      await new Promise((resolve) => {
+        req.onsuccess = () => {
+          for (const entry of req.result || []) {
+            if (entry.key && entry.data) {
+              barCache[entry.key] = { data: entry.data, timestamp: entry.timestamp || 0 };
+            }
+          }
+          resolve();
+        };
+        req.onerror = () => resolve();
+      });
+    }
+    const count = Object.keys(barCache).length;
+    if (count > 0) log(`Loaded ${count} cached bar sets from IndexedDB`, "info");
+
+    // Also check cold cache for anything not in warm
+    try {
+      const coldList = JSON.parse(await invoke("list_cold_cache"));
+      let coldLoaded = 0;
+      for (const entry of coldList) {
+        if (!barCache[entry.key]) {
+          const data = await coldLoad(entry.key);
+          if (data) {
+            barCache[entry.key] = { data, timestamp: Date.now() - 3600000 }; // mark as stale
+            await idbPut(entry.key, data, Date.now() - 3600000); // promote to warm
+            coldLoaded++;
+          }
+        }
       }
+      if (coldLoaded > 0) log(`Promoted ${coldLoaded} cold cache entries to warm`, "info");
+    } catch (_) {}
+  } catch (e) {
+    log(`Cache init: ${e}`, "warn");
+  }
+}
+
+// Save to all tiers: hot → warm → cold (async, non-blocking)
+function saveBarCacheToDisk(cacheKey, data) {
+  const ts = Date.now();
+  barCache[cacheKey] = { data, timestamp: ts };
+  // Warm (IndexedDB) — async, fire-and-forget
+  idbPut(cacheKey, data, ts);
+  // Cold (zstd file) — async, fire-and-forget
+  coldSave(cacheKey, data);
+}
+
+// Migrate old localStorage cache to IndexedDB on first run
+async function migrateLocalStorageCache() {
+  const BAR_CACHE_PREFIX = "typhoon_bars_";
+  let migrated = 0;
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith(BAR_CACHE_PREFIX)) {
+      try {
+        const stored = JSON.parse(localStorage.getItem(key));
+        if (stored && stored.data) {
+          const cacheKey = key.substring(BAR_CACHE_PREFIX.length);
+          await idbPut(cacheKey, stored.data, stored.timestamp || 0);
+          barCache[cacheKey] = { data: stored.data, timestamp: stored.timestamp || 0 };
+          migrated++;
+        }
+        localStorage.removeItem(key); // clean up old format
+      } catch (_) {}
     }
   }
+  if (migrated > 0) log(`Migrated ${migrated} cache entries from localStorage to IndexedDB`, "ok");
 }
 
 // ── Load Queue (shows all symbols loading across tabs) ──────
@@ -2053,7 +2155,7 @@ function setupPaneResizers() {
 // ── Init ────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
-  loadBarCacheFromDisk();
+  loadBarCacheFromDisk().then(() => migrateLocalStorageCache());
   initChart();
   setupPaneResizers();
   setupLogPanel();
