@@ -308,11 +308,20 @@ impl AlpacaBroker {
     ) -> Result<Vec<Bar>, String> {
         let is_crypto = symbol.contains('/');
 
-        // Alpaca doesn't support 1Month — map to 1Week with more bars
-        let (actual_tf, actual_limit) = match timeframe {
-            "1Month" => ("1Week", limit * 4),
-            other => (other, limit),
-        };
+        // Alpaca doesn't support 1Month — fetch weekly bars and aggregate
+        if timeframe == "1Month" {
+            let weekly = Box::pin(self.get_bars(symbol, "1Week", limit * 5)).await?;
+            let monthly = Self::aggregate_weekly_to_monthly(&weekly);
+            let trimmed = if monthly.len() > limit as usize {
+                monthly[monthly.len() - limit as usize..].to_vec()
+            } else {
+                monthly
+            };
+            return Ok(trimmed);
+        }
+
+        let actual_tf = timeframe;
+        let actual_limit = limit;
 
         // Try multiple feeds in order: sip (paid) → iex (free) for stocks
         // Crypto uses a different endpoint and doesn't need a feed param
@@ -328,30 +337,33 @@ impl AlpacaBroker {
             format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
         };
 
-        // Alpaca requires a start date for bar queries — go back far enough
-        let start = chrono::Utc::now() - chrono::Duration::days(match actual_tf {
-            "1Min" => 5,
-            "5Min" | "15Min" => 10,
-            "1Hour" => 60,
-            "4Hour" => 180,
-            "1Day" => 730,
-            "1Week" => 1825,
-            _ => 365,
-        });
-        let start_str = start.format("%Y-%m-%dT00:00:00Z").to_string();
+        // Go back far enough to cover requested bars
+        let max_lookback_days = match actual_tf {
+            "1Min" => 7,
+            "5Min" | "15Min" => 30,
+            "1Hour" => 365,
+            "4Hour" => 730,
+            "1Day" => 3650,
+            "1Week" => 7300,
+            _ => 1825,
+        };
+        let earliest_start = chrono::Utc::now() - chrono::Duration::days(max_lookback_days);
 
         let mut last_error = String::new();
-        let page_size = actual_limit.min(10000); // Alpaca max per request
 
         for feed in &feeds {
             let mut all_bars: Vec<Bar> = Vec::new();
-            let mut page_token: Option<String> = None;
+            // Sequential chunk fetching: IEX caps at ~260 bars per request.
+            // We fetch chunks from oldest to newest, advancing the start date each time.
+            let mut chunk_start = earliest_start;
+            let mut consecutive_empty = 0;
 
             loop {
+                let start_str = chunk_start.format("%Y-%m-%dT00:00:00Z").to_string();
                 let mut params = vec![
                     ("timeframe", actual_tf.to_string()),
-                    ("limit", page_size.to_string()),
-                    ("start", start_str.clone()),
+                    ("limit", "10000".to_string()), // request max, API will cap it
+                    ("start", start_str),
                     ("sort", "asc".to_string()),
                 ];
                 if let Some(f) = feed {
@@ -359,9 +371,6 @@ impl AlpacaBroker {
                 }
                 if is_crypto {
                     params.push(("symbols", symbol.to_string()));
-                }
-                if let Some(ref token) = page_token {
-                    params.push(("page_token", token.clone()));
                 }
 
                 let resp = match self
@@ -393,29 +402,112 @@ impl AlpacaBroker {
                     }
                 };
 
-                let page_bars = Self::parse_bars(&json, symbol, is_crypto);
-                let page_count = page_bars.len();
-                all_bars.extend(page_bars);
+                let chunk_bars = Self::parse_bars(&json, symbol, is_crypto);
+                let chunk_count = chunk_bars.len();
 
-                // Check for next page
-                let next = json["next_page_token"].as_str().map(|s| s.to_string());
-                if next.is_none() || page_count == 0 || all_bars.len() as u32 >= actual_limit {
+                if chunk_count == 0 {
+                    consecutive_empty += 1;
+                    if consecutive_empty >= 3 {
+                        break; // no more data available
+                    }
+                    // Advance start by a chunk to skip empty gaps
+                    chunk_start = chunk_start + chrono::Duration::days(match actual_tf {
+                        "1Min" | "5Min" | "15Min" => 1,
+                        "1Hour" => 30,
+                        "4Hour" => 90,
+                        "1Day" => 365,
+                        "1Week" => 730,
+                        _ => 90,
+                    });
+                    continue;
+                }
+
+                consecutive_empty = 0;
+
+                // Advance start to just after the last bar in this chunk
+                if let Some(last_bar) = chunk_bars.last() {
+                    if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(&last_bar.timestamp) {
+                        chunk_start = last_time.with_timezone(&chrono::Utc) + chrono::Duration::seconds(1);
+                    } else {
+                        // Fallback: advance by a reasonable chunk
+                        chunk_start = chunk_start + chrono::Duration::days(30);
+                    }
+                }
+
+                all_bars.extend(chunk_bars);
+
+                // Stop if we have enough bars or reached the present
+                if all_bars.len() as u32 >= actual_limit {
                     break;
                 }
-                page_token = next;
+                if chunk_start >= chrono::Utc::now() {
+                    break;
+                }
             }
 
             if !all_bars.is_empty() {
-                // Trim to requested limit
+                // Deduplicate by timestamp (overlapping chunks)
+                all_bars.dedup_by(|a, b| a.timestamp == b.timestamp);
+                // Trim to requested limit (keep most recent)
                 if all_bars.len() > actual_limit as usize {
                     let skip = all_bars.len() - actual_limit as usize;
                     all_bars.drain(..skip);
                 }
+                tracing::info!(
+                    "Loaded {} bars for {} @ {} (feed={:?}, {} chunks)",
+                    all_bars.len(), symbol, actual_tf, feed,
+                    (all_bars.len() as f64 / 260.0).ceil() as u32
+                );
                 return Ok(all_bars);
             }
         }
 
         Err(format!("No bar data for {symbol} @ {timeframe}: {last_error}"))
+    }
+
+    /// Aggregate weekly bars into synthetic monthly bars.
+    /// Groups by calendar month (year-month), combines OHLCV.
+    pub fn aggregate_weekly_to_monthly(weekly: &[Bar]) -> Vec<Bar> {
+        if weekly.is_empty() { return vec![]; }
+        let mut monthly: Vec<Bar> = Vec::new();
+        let mut cur_month = String::new();
+        let mut open = 0.0;
+        let mut high = f64::MIN;
+        let mut low = f64::MAX;
+        let mut close = 0.0;
+        let mut volume = 0.0;
+        let mut month_start = String::new();
+
+        for bar in weekly {
+            // Extract YYYY-MM from timestamp
+            let ym = if bar.timestamp.len() >= 7 { &bar.timestamp[..7] } else { "" };
+            if ym != cur_month {
+                if !cur_month.is_empty() {
+                    monthly.push(Bar {
+                        timestamp: month_start.clone(),
+                        open, high, low, close, volume,
+                    });
+                }
+                cur_month = ym.to_string();
+                month_start = bar.timestamp.clone();
+                open = bar.open;
+                high = bar.high;
+                low = bar.low;
+                close = bar.close;
+                volume = bar.volume;
+            } else {
+                high = high.max(bar.high);
+                low = low.min(bar.low);
+                close = bar.close;
+                volume += bar.volume;
+            }
+        }
+        if !cur_month.is_empty() {
+            monthly.push(Bar {
+                timestamp: month_start, open, high, low, close, volume,
+            });
+        }
+        monthly
     }
 
     fn parse_bars(json: &serde_json::Value, symbol: &str, is_crypto: bool) -> Vec<Bar> {

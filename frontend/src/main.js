@@ -609,25 +609,39 @@ function calcSupplyDemandZones(data, lookback = 200) {
 // MULTI-TIMEFRAME INDICATORS — ports from MultiKAMA, ATR_Projection, PreviousCandleLevels
 // ══════════════════════════════════════════════════════════════
 
-const MTF_TIMEFRAMES = ["15Min", "1Hour", "4Hour", "1Day", "1Week"];
+const MTF_TIMEFRAMES = ["1Hour", "4Hour", "1Day", "1Week"];
 const ALL_MTF_KAMA_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
 const ALL_MTF_ATR_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
 const ALL_MTF_PCL_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
 
 // Timeframe hierarchy — only show TFs HIGHER than current chart (like MT5)
-const TF_RANK = { "1Min": 0, "5Min": 1, "15Min": 2, "1Hour": 3, "4Hour": 4, "1Day": 5, "1Week": 6 };
+const TF_RANK = { "1Min": 0, "5Min": 1, "15Min": 2, "1Hour": 3, "4Hour": 4, "1Day": 5, "1Week": 6, "1Month": 7 };
 
 function getRelevantMTFs(allTFs) {
   const currentRank = TF_RANK[currentTimeframe] ?? 3;
   return allTFs.filter(tf => (TF_RANK[tf] ?? 0) > currentRank);
 }
 
-const MTF_COLORS = {
-  "15Min": "#808080",  // gray
-  "1Hour": "#FFFFFF",  // white (PreviousCandleColour)
-  "4Hour": "#FFFFFF",  // white
-  "1Day":  "#FF00FF",  // magenta (JudasLevelColour)
-  "1Week": "#FF00FF",  // magenta
+// PreviousCandleLevels.mqh defaults:
+//   PreviousCandleColour = clrWhite (H1/H4 prev levels)
+//   JudasLevelColour = clrMagenta (D1/W1/MN1 prev + current levels)
+const MTF_PCL_COLORS = {
+  "1Hour": "#FFFFFF",
+  "4Hour": "#FFFFFF",
+  "1Day":  "#FF00FF",
+  "1Week": "#FF00FF",
+};
+
+// MTF_MA indicator colors from MQL5 defaults:
+//   H1 200SMA = clrTomato (#FF6347)
+//   H4/D1/W1 200SMA = clrMagenta (#FF00FF)
+//   W1 100SMA = clrMagenta
+//   MN1 100SMA = clrMagenta
+const MTF_MA_COLORS = {
+  "1Hour": "#FF6347",  // Tomato
+  "4Hour": "#FF00FF",  // Magenta
+  "1Day":  "#FF00FF",  // Magenta
+  "1Week": "#FF00FF",  // Magenta
 };
 
 const MTF_LABELS = { "15Min": "M15", "1Hour": "H1", "4Hour": "H4", "1Day": "D1", "1Week": "W1" };
@@ -743,7 +757,8 @@ function applyIndicators(chartData) {
         const kamaData = calcKAMA(tfBars, period);
         const projected = projectHTFToChartTime(kamaData, chartData);
         if (projected.length === 0) continue;
-        const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
+        const maColor = MTF_MA_COLORS[tf] || "#FF00FF";
+        const s = chart.addLineSeries({ color: maColor, lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
         s.setData(clip(projected));
         indicatorSeries[`${key}_${tf}`] = s;
       }
@@ -764,7 +779,7 @@ function applyIndicators(chartData) {
         const tfBars = mtfData[tf];
         const levels = calcHTFPrevLevels(tfBars, chartData);
         if (!levels) continue;
-        const color = MTF_COLORS[tf] || "#FFFFFF";
+        const color = MTF_PCL_COLORS[tf] || "#FFFFFF";
         // Previous bar levels span from previous HTF bar start to current
         const prevStart = tfBars.length >= 2 ? tfBars[tfBars.length - 2].time : 0;
         const levelBars = clip(chartData.filter(d => d.time >= prevStart));
