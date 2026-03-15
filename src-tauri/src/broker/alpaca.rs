@@ -495,6 +495,16 @@ impl AlpacaBroker {
 
                 consecutive_empty = 0;
 
+                // Log chunk progress with date range
+                if let (Some(first), Some(last)) = (chunk_bars.first(), chunk_bars.last()) {
+                    let first_date = &first.timestamp[..10.min(first.timestamp.len())];
+                    let last_date = &last.timestamp[..10.min(last.timestamp.len())];
+                    tracing::info!(
+                        "{} @ {}: chunk +{} bars ({} → {}), total {}",
+                        symbol, actual_tf, chunk_count, first_date, last_date, all_bars.len() + chunk_count
+                    );
+                }
+
                 // Advance start to just after the last bar in this chunk
                 if let Some(last_bar) = chunk_bars.last() {
                     if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(&last_bar.timestamp) {

@@ -1224,15 +1224,22 @@ function saveBarCacheToDisk(cacheKey, data) {
 
 // ── Load Queue (shows all symbols loading across tabs) ──────
 
-const loadingSymbols = new Set();
+const loadingSymbols = new Map(); // symbol → status string
+
+function setLoadingStatus(symbol, status) {
+  if (status) loadingSymbols.set(symbol, status);
+  else loadingSymbols.delete(symbol);
+  updateLoadingIndicator();
+}
 
 function updateLoadingIndicator() {
-  const loading = document.getElementById("loading-indicator");
+  const el = document.getElementById("loading-indicator");
   if (loadingSymbols.size === 0) {
-    loadingSymbols.delete(symbol); updateLoadingIndicator();
+    el.classList.add("hidden");
   } else {
-    loading.classList.remove("hidden");
-    loading.textContent = `Loading ${[...loadingSymbols].join(", ")}...`;
+    el.classList.remove("hidden");
+    const parts = [...loadingSymbols.entries()].map(([sym, st]) => `${sym} (${st})`);
+    el.textContent = parts.join(" | ");
   }
 }
 
@@ -1241,8 +1248,7 @@ function updateLoadingIndicator() {
 let liveBarInterval = null;
 
 async function loadChart(symbol, timeframe) {
-  loadingSymbols.add(symbol);
-  updateLoadingIndicator();
+  setLoadingStatus(symbol, "loading...");
 
   // Set symbol immediately so tab identity is correct
   currentSymbol = symbol;
@@ -1264,6 +1270,12 @@ async function loadChart(symbol, timeframe) {
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
       saveBarCacheToDisk(cacheKey, bars);
+      // Show date range progress
+      if (bars.length > 0) {
+        const first = bars[0].timestamp.substring(0, 10);
+        const last = bars[bars.length - 1].timestamp.substring(0, 10);
+        setLoadingStatus(symbol, `${first} → ${last} · ${bars.length} bars`);
+      }
     }
 
     const chartData = bars.map((b) => ({
@@ -1278,14 +1290,14 @@ async function loadChart(symbol, timeframe) {
     if (chartData.length === 0) {
       log(`No bars returned for ${symbol} @ ${timeframe}`, "warn");
       setText("connect-status-bar", `No data for ${symbol} @ ${timeframe}`);
-      loadingSymbols.delete(symbol); updateLoadingIndicator();
+      setLoadingStatus(symbol, null);
       return;
     }
 
     // Guard: if user switched tabs during async load, don't overwrite wrong chart
     if (activeTabId !== loadTabId) {
       log(`Discarding late bars for ${symbol} (tab switched)`, "warn");
-      loadingSymbols.delete(symbol); updateLoadingIndicator();
+      setLoadingStatus(symbol, null);
       return;
     }
 
@@ -1303,7 +1315,7 @@ async function loadChart(symbol, timeframe) {
 
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
     setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
-    loadingSymbols.delete(symbol); updateLoadingIndicator();
+    setLoadingStatus(symbol, null);
     updateTabLabel();
 
     // Start live bar polling (update latest bar every 10s)
@@ -1312,7 +1324,7 @@ async function loadChart(symbol, timeframe) {
   } catch (e) {
     log(`Chart load failed for ${symbol} @ ${timeframe}: ${e}`, "error");
     setText("connect-status-bar", `Chart error: ${e}`);
-    loadingSymbols.delete(symbol); updateLoadingIndicator();
+    setLoadingStatus(symbol, null);
   }
 }
 
