@@ -61,27 +61,28 @@ function initChart() {
     width: container.clientWidth,
     height: container.clientHeight,
     layout: {
-      background: { color: "#1a1a2e" },
+      background: { color: "#000000" },
       textColor: "#d1d4dc",
       fontFamily: "Consolas, Courier New, monospace",
-      attributionLogo: false, // Remove TV watermark
+      attributionLogo: false,
     },
     grid: {
-      vertLines: { color: "#2B2B43" },
-      horzLines: { color: "#2B2B43" },
+      vertLines: { color: "#1a1a1a" },
+      horzLines: { color: "#1a1a1a" },
     },
     crosshair: { mode: CrosshairMode.Normal },
-    rightPriceScale: { borderColor: "#2B2B43" },
-    timeScale: { borderColor: "#2B2B43", timeVisible: true },
+    rightPriceScale: { borderColor: "#333" },
+    timeScale: { borderColor: "#333", timeVisible: true },
   });
 
+  // MT5 default candlestick colors: black body green/white wick up, red body red wick down
   candleSeries = chart.addCandlestickSeries({
-    upColor: "#4caf50",
-    downColor: "#f44336",
-    borderDownColor: "#f44336",
-    borderUpColor: "#4caf50",
-    wickDownColor: "#f44336",
-    wickUpColor: "#4caf50",
+    upColor: "#000000",
+    downColor: "#000000",
+    borderDownColor: "#ff0000",
+    borderUpColor: "#00ff00",
+    wickDownColor: "#ff0000",
+    wickUpColor: "#00ff00",
   });
 
   new ResizeObserver((entries) => {
@@ -130,17 +131,160 @@ function removeTPLine() {
 function getSLPrice() { return slLine ? slLine.options().price : null; }
 function getTPPrice() { return tpLine ? tpLine.options().price : null; }
 
-// ── Indicator Series ─────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// INDICATOR CALCULATIONS — Exact ports from MQL5 NNFX system
+// ══════════════════════════════════════════════════════════════
 
-let indicatorSeries = {}; // key → series object
+let indicatorSeries = {};
 
 function clearIndicators() {
-  for (const [key, series] of Object.entries(indicatorSeries)) {
+  for (const [, series] of Object.entries(indicatorSeries)) {
     chart.removeSeries(series);
   }
   indicatorSeries = {};
 }
 
+// ── KAMA (Kaufman Adaptive Moving Average) ──────────────────
+// Port of KAMA.mqh: period=10, fast=2, slow=30, applied to OPEN
+// Colors: clrWhite (#FFFFFF), width 2
+function calcKAMA(data, period = 10, fastP = 2, slowP = 30) {
+  const fastSC = 2.0 / (fastP + 1.0);
+  const slowSC = 2.0 / (slowP + 1.0);
+  const result = [];
+  if (data.length < period + 1) return result;
+  // Applied to OPEN price (matching MQL5 PRICE_OPEN)
+  let kama = data[period].open;
+  for (let i = period; i < data.length; i++) {
+    const signal = Math.abs(data[i].open - data[i - period].open);
+    let noise = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      noise += Math.abs(data[j].open - data[j - 1].open);
+    }
+    const er = noise !== 0 ? signal / noise : 0;
+    const ssc = er * (fastSC - slowSC) + slowSC;
+    const ssc2 = ssc * ssc;
+    kama = ssc2 * (data[i].open - kama) + kama;
+    result.push({ time: data[i].time, value: kama });
+  }
+  return result;
+}
+
+// ── Previous Candle Levels ──────────────────────────────────
+// Port of PreviousCandleLevels.mqh
+// Colors: clrWhite (#FFFFFF) for H1/H4, clrMagenta (#FF00FF) for D1/W1/MN1
+// Width: 2, Style: SOLID
+function calcPrevCandleLevels(data) {
+  const highs = [], lows = [];
+  for (let i = 1; i < data.length; i++) {
+    highs.push({ time: data[i].time, value: data[i - 1].high });
+    lows.push({ time: data[i].time, value: data[i - 1].low });
+  }
+  return { highs, lows };
+}
+
+// ── ATR Projection ──────────────────────────────────────────
+// Port of ATR_Projection.mqh: period=14
+// Colors: clrYellow (#FFFF00), style=STYLE_DOT, width=2
+// Projection: currentOpen ± ATR
+function calcATRProjection(data, period = 14) {
+  const trs = [];
+  for (let i = 1; i < data.length; i++) {
+    trs.push(Math.max(
+      data[i].high - data[i].low,
+      Math.abs(data[i].high - data[i - 1].close),
+      Math.abs(data[i].low - data[i - 1].close)
+    ));
+  }
+  if (trs.length < period) return { upper: [], lower: [], atrValues: [] };
+
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const upper = [], lower = [], atrValues = [];
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+    const idx = i + 1;
+    if (idx < data.length) {
+      // MQL5: currentOpen + ATR / currentOpen - ATR
+      upper.push({ time: data[idx].time, value: data[idx].open + atr });
+      lower.push({ time: data[idx].time, value: data[idx].open - atr });
+      atrValues.push({ time: data[idx].time, value: atr });
+    }
+  }
+  return { upper, lower, atrValues };
+}
+
+// ── Ehlers Fisher Transform ─────────────────────────────────
+// Port of EhlersFisherTransform.mqh: period=32, price=MEDIAN
+// Colors: clrMediumSeaGreen (#3CB371) bullish, clrOrangeRed (#FF4500) bearish, clrDarkGray (#A9A9A9) neutral
+// Signal line: clrDarkGray, width 1
+// Fisher line: width 2, color changes based on Fisher vs Signal
+function calcEhlersFisher(data, period = 32) {
+  if (data.length < period + 1) return { fisher: [], signal: [], colors: [] };
+  const fisher = [], signal = [], colors = [];
+  let prevSmoothed = 0, prevFisher = 0;
+
+  for (let i = period; i < data.length; i++) {
+    // Find highest/lowest over period (excluding current bar — calc_no mode)
+    let maxH = -Infinity, minL = Infinity;
+    for (let j = i - period; j < i; j++) {
+      if (data[j].high > maxH) maxH = data[j].high;
+      if (data[j].low < minL) minL = data[j].low;
+    }
+    // Median price = (high + low) / 2
+    const price = (data[i].high + data[i].low) / 2;
+    const range = maxH - minL;
+    // Normalize to 0-1, then center to -1..+1
+    const normalized = range > 0 ? (price - minL) / range : 0.5;
+    const os = 2.0 * (normalized - 0.5);
+    // Smooth
+    let smoothed = 0.5 * os + 0.5 * prevSmoothed;
+    smoothed = Math.max(-0.999, Math.min(0.999, smoothed));
+    // Fisher transform with smoothing
+    const ft = 0.25 * Math.log((1 + smoothed) / (1 - smoothed)) + 0.5 * prevFisher;
+
+    // Color: green if fisher > signal (bullish), red if < (bearish), gray if equal
+    const sig = prevFisher;
+    let color;
+    if (ft > sig) color = "#3CB371";      // clrMediumSeaGreen
+    else if (ft < sig) color = "#FF4500"; // clrOrangeRed
+    else color = "#A9A9A9";               // clrDarkGray
+
+    fisher.push({ time: data[i].time, value: ft });
+    signal.push({ time: data[i].time, value: sig });
+    colors.push(color);
+
+    prevSmoothed = smoothed;
+    prevFisher = ft;
+  }
+  return { fisher, signal, colors };
+}
+
+// ── RVOL (Relative Volume) ──────────────────────────────────
+// Port of RVOL.mqh: averagingDays=10
+// Colors: clrGreen (#00FF00) >1.25, clrOrange (#FFA500) 0.8-1.25, clrRed (#FF0000) <0.8
+// Style: DRAW_COLOR_HISTOGRAM, width 3
+function calcRVOL(data, avgDays = 10) {
+  const result = [];
+  if (data.length < avgDays + 1) return result;
+  // Sliding window
+  let windowSum = 0;
+  for (let i = 0; i < avgDays; i++) windowSum += (data[i].volume || 0);
+  for (let i = avgDays; i < data.length; i++) {
+    const mean = windowSum / avgDays;
+    const vol = data[i].volume || 0;
+    const rvol = mean > 0 ? vol / mean : 0;
+    let color;
+    if (rvol > 1.25) color = "#00FF00";       // clrGreen — above average
+    else if (rvol >= 0.8) color = "#FFA500";   // clrOrange — average
+    else color = "#FF0000";                     // clrRed — below average
+    result.push({ time: data[i].time, value: rvol, color });
+    // Slide window
+    windowSum += vol;
+    windowSum -= (data[i - avgDays].volume || 0);
+  }
+  return result;
+}
+
+// ── SMA ─────────────────────────────────────────────────────
 function calcSMA(data, period) {
   const result = [];
   for (let i = period - 1; i < data.length; i++) {
@@ -151,6 +295,7 @@ function calcSMA(data, period) {
   return result;
 }
 
+// ── EMA ─────────────────────────────────────────────────────
 function calcEMA(data, period) {
   const k = 2 / (period + 1);
   const result = [];
@@ -162,10 +307,26 @@ function calcEMA(data, period) {
   return result;
 }
 
+// ── DEMA ────────────────────────────────────────────────────
+function calcDEMA(data, period) {
+  const ema1 = calcEMA(data, period);
+  if (ema1.length < period) return [];
+  const ema2data = ema1.map(e => ({ close: e.value, time: e.time }));
+  const k = 2 / (period + 1);
+  let ema2 = ema2data[0].close;
+  const result = [];
+  for (let i = 0; i < ema2data.length; i++) {
+    ema2 = ema2data[i].close * k + ema2 * (1 - k);
+    if (i >= period - 1) result.push({ time: ema2data[i].time, value: 2 * ema2data[i].close - ema2 });
+  }
+  return result;
+}
+
+// ── RSI ─────────────────────────────────────────────────────
 function calcRSI(data, period) {
   const result = [];
   let gains = 0, losses = 0;
-  for (let i = 1; i <= period; i++) {
+  for (let i = 1; i <= period && i < data.length; i++) {
     const change = data[i].close - data[i - 1].close;
     if (change > 0) gains += change; else losses -= change;
   }
@@ -182,178 +343,72 @@ function calcRSI(data, period) {
   return result;
 }
 
-function calcBollinger(data, period) {
-  const upper = [], lower = [], mid = [];
-  for (let i = period - 1; i < data.length; i++) {
-    let sum = 0, sumSq = 0;
-    for (let j = i - period + 1; j <= i; j++) { sum += data[j].close; sumSq += data[j].close ** 2; }
-    const mean = sum / period;
-    const std = Math.sqrt(sumSq / period - mean ** 2);
-    mid.push({ time: data[i].time, value: mean });
-    upper.push({ time: data[i].time, value: mean + 2 * std });
-    lower.push({ time: data[i].time, value: mean - 2 * std });
-  }
-  return { upper, lower, mid };
-}
-
-function calcATR(data, period) {
-  const result = [];
-  const trs = [];
-  for (let i = 1; i < data.length; i++) {
-    const tr = Math.max(data[i].high - data[i].low, Math.abs(data[i].high - data[i - 1].close), Math.abs(data[i].low - data[i - 1].close));
-    trs.push(tr);
-  }
-  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  for (let i = period; i < trs.length; i++) {
-    atr = (atr * (period - 1) + trs[i]) / period;
-    result.push({ time: data[i + 1].time, value: atr });
-  }
-  return result;
-}
-
-function calcDEMA(data, period) {
-  // Double EMA = 2*EMA - EMA(EMA)
-  const ema1 = calcEMA(data, period);
-  if (ema1.length < period) return [];
-  const ema2data = ema1.map(e => ({ close: e.value, time: e.time }));
-  const k = 2 / (period + 1);
-  let ema2 = ema2data[0].close;
-  const result = [];
-  for (let i = 0; i < ema2data.length; i++) {
-    ema2 = ema2data[i].close * k + ema2 * (1 - k);
-    if (i >= period - 1) {
-      result.push({ time: ema2data[i].time, value: 2 * ema2data[i].close - ema2 });
-    }
-  }
-  return result;
-}
-
+// ── MACD ────────────────────────────────────────────────────
 function calcMACD(data, fastP = 12, slowP = 26, signalP = 9) {
   const fastEMA = calcEMA(data, fastP);
   const slowEMA = calcEMA(data, slowP);
-  // Align by time
   const slowMap = new Map(slowEMA.map(e => [e.time, e.value]));
-  const macdLine = [], signalData = [];
+  const macdLine = [];
   for (const fe of fastEMA) {
     const sv = slowMap.get(fe.time);
-    if (sv !== undefined) {
-      macdLine.push({ time: fe.time, value: fe.value - sv });
-    }
+    if (sv !== undefined) macdLine.push({ time: fe.time, value: fe.value - sv });
   }
-  // Signal line = EMA of MACD
   if (macdLine.length < signalP) return { macd: macdLine, signal: [], histogram: [] };
   const k = 2 / (signalP + 1);
   let sig = macdLine[0].value;
-  const histogram = [];
+  const signalData = [], histogram = [];
   for (let i = 0; i < macdLine.length; i++) {
     sig = macdLine[i].value * k + sig * (1 - k);
     if (i >= signalP - 1) {
       signalData.push({ time: macdLine[i].time, value: sig });
-      histogram.push({
-        time: macdLine[i].time,
-        value: macdLine[i].value - sig,
-        color: macdLine[i].value - sig >= 0 ? "#26a69a" : "#ef5350",
-      });
+      const diff = macdLine[i].value - sig;
+      histogram.push({ time: macdLine[i].time, value: diff, color: diff >= 0 ? "#26a69a" : "#ef5350" });
     }
   }
   return { macd: macdLine, signal: signalData, histogram };
 }
 
-function calcEhlersFisher(data, period = 10) {
-  // Ehlers Fisher Transform
-  const result = [];
-  if (data.length < period) return result;
+// ── Bollinger Bands ─────────────────────────────────────────
+function calcBollinger(data, period) {
+  const upper = [], lower = [];
   for (let i = period - 1; i < data.length; i++) {
-    let maxH = -Infinity, minL = Infinity;
-    for (let j = i - period + 1; j <= i; j++) {
-      if (data[j].high > maxH) maxH = data[j].high;
-      if (data[j].low < minL) minL = data[j].low;
-    }
-    const mid = (data[i].high + data[i].low) / 2;
-    const range = maxH - minL;
-    let x = range > 0 ? 2 * ((mid - minL) / range - 0.5) : 0;
-    x = Math.max(-0.999, Math.min(0.999, x)); // clamp
-    const fisher = 0.5 * Math.log((1 + x) / (1 - x));
-    result.push({ time: data[i].time, value: fisher });
+    let sum = 0, sumSq = 0;
+    for (let j = i - period + 1; j <= i; j++) { sum += data[j].close; sumSq += data[j].close ** 2; }
+    const mean = sum / period;
+    const std = Math.sqrt(sumSq / period - mean ** 2);
+    upper.push({ time: data[i].time, value: mean + 2 * std });
+    lower.push({ time: data[i].time, value: mean - 2 * std });
+  }
+  return { upper, lower };
+}
+
+// ── ATR (standalone, for separate pane) ─────────────────────
+function calcATR(data, period) {
+  const result = [], trs = [];
+  for (let i = 1; i < data.length; i++) {
+    trs.push(Math.max(data[i].high - data[i].low, Math.abs(data[i].high - data[i - 1].close), Math.abs(data[i].low - data[i - 1].close)));
+  }
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+    if (i + 1 < data.length) result.push({ time: data[i + 1].time, value: atr });
   }
   return result;
 }
 
+// ── VWAP ────────────────────────────────────────────────────
 function calcVWAP(data) {
-  // Volume Weighted Average Price — resets daily (by checking date change)
   const result = [];
   let cumVol = 0, cumTPV = 0, lastDate = "";
   for (const d of data) {
     const date = typeof d.time === "number" ? new Date(d.time * 1000).toISOString().slice(0, 10) : "";
-    if (date !== lastDate) {
-      cumVol = 0; cumTPV = 0; lastDate = date;
-    }
+    if (date !== lastDate) { cumVol = 0; cumTPV = 0; lastDate = date; }
     const tp = (d.high + d.low + d.close) / 3;
     const vol = d.volume || 1;
-    cumVol += vol;
-    cumTPV += tp * vol;
-    if (cumVol > 0) {
-      result.push({ time: d.time, value: cumTPV / cumVol });
-    }
+    cumVol += vol; cumTPV += tp * vol;
+    if (cumVol > 0) result.push({ time: d.time, value: cumTPV / cumVol });
   }
   return result;
-}
-
-function calcKAMA(data, period) {
-  // Kaufman Adaptive Moving Average
-  const fastSC = 2 / (2 + 1);   // fast EMA constant
-  const slowSC = 2 / (30 + 1);  // slow EMA constant
-  const result = [];
-  if (data.length < period + 1) return result;
-  let kama = data[period].close;
-  for (let i = period; i < data.length; i++) {
-    const direction = Math.abs(data[i].close - data[i - period].close);
-    let volatility = 0;
-    for (let j = i - period + 1; j <= i; j++) {
-      volatility += Math.abs(data[j].close - data[j - 1].close);
-    }
-    const er = volatility !== 0 ? direction / volatility : 0;
-    const sc = (er * (fastSC - slowSC) + slowSC) ** 2;
-    kama = kama + sc * (data[i].close - kama);
-    result.push({ time: data[i].time, value: kama });
-  }
-  return result;
-}
-
-function calcPrevCandleLevels(data) {
-  // Previous candle high/low as horizontal markers on current bar
-  const highs = [], lows = [];
-  for (let i = 1; i < data.length; i++) {
-    highs.push({ time: data[i].time, value: data[i - 1].high });
-    lows.push({ time: data[i].time, value: data[i - 1].low });
-  }
-  return { highs, lows };
-}
-
-function calcATRProjection(data, period) {
-  // ATR projected from current close as upper/lower bands
-  const atrValues = [];
-  for (let i = 1; i < data.length; i++) {
-    const tr = Math.max(
-      data[i].high - data[i].low,
-      Math.abs(data[i].high - data[i - 1].close),
-      Math.abs(data[i].low - data[i - 1].close)
-    );
-    atrValues.push(tr);
-  }
-  if (atrValues.length < period) return { upper: [], lower: [] };
-
-  let atr = atrValues.slice(0, period).reduce((a, b) => a + b, 0) / period;
-  const upper = [], lower = [];
-  for (let i = period; i < atrValues.length; i++) {
-    atr = (atr * (period - 1) + atrValues[i]) / period;
-    const idx = i + 1; // offset by 1 since atrValues starts at data[1]
-    if (idx < data.length) {
-      upper.push({ time: data[idx].time, value: data[idx].close + atr });
-      lower.push({ time: data[idx].time, value: data[idx].close - atr });
-    }
-  }
-  return { upper, lower };
 }
 
 function applyIndicators(chartData) {
@@ -365,111 +420,154 @@ function applyIndicators(chartData) {
     const period = parseInt(cb.dataset.period) || 14;
     const key = `${ind}_${period}`;
 
-    if (ind === "sma" && chartData.length > period) {
-      const s = chart.addLineSeries({ color: "#ffeb3b", lineWidth: 1, title: `SMA${period}` });
-      s.setData(calcSMA(chartData, period));
-      indicatorSeries[key] = s;
-    } else if (ind === "ema" && chartData.length > period) {
-      const colors = { 50: "#2196f3", 200: "#ff9800", 20: "#e91e63" };
-      const s = chart.addLineSeries({ color: colors[period] || "#fff", lineWidth: 1, title: `EMA${period}` });
-      s.setData(calcEMA(chartData, period));
-      indicatorSeries[key] = s;
-    } else if (ind === "bollinger" && chartData.length > period) {
-      const bb = calcBollinger(chartData, period);
-      const su = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB+" });
-      const sl = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB-" });
-      su.setData(bb.upper); sl.setData(bb.lower);
-      indicatorSeries[key + "_u"] = su;
-      indicatorSeries[key + "_l"] = sl;
-    } else if (ind === "volume") {
-      const s = chart.addHistogramSeries({
-        color: "#26a69a", priceFormat: { type: "volume" },
-        priceScaleId: "volume",
-      });
-      chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-      s.setData(chartData.map(d => ({ time: d.time, value: d.volume || 0, color: d.close >= d.open ? "#26a69a80" : "#ef535080" })));
-      indicatorSeries[key] = s;
-    }
-    else if (ind === "kama" && chartData.length > period) {
-      const s = chart.addLineSeries({ color: "#e91e63", lineWidth: 2, title: `KAMA${period}` });
+    // ══════════════════════════════════════════════════════════
+    // NNFX SYSTEM INDICATORS — exact MQL5 ports
+    // ══════════════════════════════════════════════════════════
+
+    if (ind === "kama" && chartData.length > period + 1) {
+      // KAMA.mqh: clrWhite, STYLE_SOLID, width 2
+      const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: `KAMA${period}`, priceLineVisible: false });
       s.setData(calcKAMA(chartData, period));
       indicatorSeries[key] = s;
+
     } else if (ind === "prev-levels" && chartData.length > 1) {
+      // PreviousCandleLevels.mqh: clrWhite (#FFFFFF), STYLE_SOLID, width 2
       const pcl = calcPrevCandleLevels(chartData);
-      const sh = chart.addLineSeries({ color: "#ffeb3b", lineWidth: 1, lineStyle: 2, title: "PrevH", lastValueVisible: false, priceLineVisible: false });
-      const sl2 = chart.addLineSeries({ color: "#ffeb3b", lineWidth: 1, lineStyle: 2, title: "PrevL", lastValueVisible: false, priceLineVisible: false });
+      const sh = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "PrevH", lastValueVisible: false, priceLineVisible: false });
+      const sl2 = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "PrevL", lastValueVisible: false, priceLineVisible: false });
       sh.setData(pcl.highs); sl2.setData(pcl.lows);
       indicatorSeries[key + "_h"] = sh;
       indicatorSeries[key + "_l"] = sl2;
+
     } else if (ind === "atr-proj" && chartData.length > period + 1) {
+      // ATR_Projection.mqh: clrYellow (#FFFF00), STYLE_DOT, width 2
       const atrp = calcATRProjection(chartData, period);
-      const su = chart.addLineSeries({ color: "#00bcd4", lineWidth: 1, lineStyle: 1, title: "ATR+", lastValueVisible: false });
-      const sl3 = chart.addLineSeries({ color: "#00bcd4", lineWidth: 1, lineStyle: 1, title: "ATR-", lastValueVisible: false });
+      const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "ATR+", lastValueVisible: false, priceLineVisible: false });
+      const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "ATR-", lastValueVisible: false, priceLineVisible: false });
       su.setData(atrp.upper); sl3.setData(atrp.lower);
       indicatorSeries[key + "_u"] = su;
       indicatorSeries[key + "_l"] = sl3;
-    }
-    // ── Separate-pane indicators (use dedicated price scales) ──
-    else if (ind === "rsi" && chartData.length > period + 1) {
-      const rsiData = calcRSI(chartData, period);
-      const s = chart.addLineSeries({
-        color: "#ab47bc", lineWidth: 1, title: `RSI${period}`,
-        priceScaleId: "rsi", lastValueVisible: true,
+
+    } else if (ind === "fisher" && chartData.length > period) {
+      // EhlersFisherTransform.mqh: period 32, DRAW_COLOR_LINE width 2
+      // Fisher: clrMediumSeaGreen (#3CB371) bullish, clrOrangeRed (#FF4500) bearish, clrDarkGray (#A9A9A9) neutral
+      // Signal: clrDarkGray (#A9A9A9), width 1
+      const ef = calcEhlersFisher(chartData, period);
+      // Fisher line — use last color for the line (lightweight-charts doesn't support per-bar color on line series)
+      // We'll render segments as individual series colored by bias
+      const lastColor = ef.colors.length > 0 ? ef.colors[ef.colors.length - 1] : "#A9A9A9";
+      const sFisher = chart.addLineSeries({
+        color: lastColor, lineWidth: 2, title: "Fisher",
+        priceScaleId: "fisher", lastValueVisible: true,
       });
-      chart.priceScale("rsi").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, borderVisible: false });
+      chart.priceScale("fisher").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
+      sFisher.setData(ef.fisher);
+
+      // Signal line
+      const sSignal = chart.addLineSeries({
+        color: "#A9A9A9", lineWidth: 1, title: "Signal",
+        priceScaleId: "fisher", lastValueVisible: false, priceLineVisible: false,
+      });
+      sSignal.setData(ef.signal);
+
+      // Zero line
+      const sZero = chart.addLineSeries({
+        color: "#FFFFFF22", lineWidth: 1, lineStyle: 2,
+        priceScaleId: "fisher", lastValueVisible: false, priceLineVisible: false,
+      });
+      sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
+      indicatorSeries[key] = sFisher;
+      indicatorSeries[key + "_sig"] = sSignal;
+      indicatorSeries[key + "_z"] = sZero;
+
+    } else if (ind === "rvol" && chartData.length > 11) {
+      // RVOL.mqh: DRAW_COLOR_HISTOGRAM, width 3
+      // clrGreen (#00FF00) >1.25, clrOrange (#FFA500) 0.8-1.25, clrRed (#FF0000) <0.8
+      const rvolData = calcRVOL(chartData, period);
+      const s = chart.addHistogramSeries({
+        priceScaleId: "rvol", lastValueVisible: true,
+        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+      });
+      chart.priceScale("rvol").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
+      s.setData(rvolData);
+      // Reference levels: 1.25 and 0.8
+      const l125 = chart.addLineSeries({ color: "#FFFFFF44", lineWidth: 1, lineStyle: 2, priceScaleId: "rvol", lastValueVisible: false, priceLineVisible: false });
+      const l08 = chart.addLineSeries({ color: "#FFFFFF44", lineWidth: 1, lineStyle: 2, priceScaleId: "rvol", lastValueVisible: false, priceLineVisible: false });
+      l125.setData(rvolData.map(d => ({ time: d.time, value: 1.25 })));
+      l08.setData(rvolData.map(d => ({ time: d.time, value: 0.8 })));
+      indicatorSeries[key] = s;
+      indicatorSeries[key + "_125"] = l125;
+      indicatorSeries[key + "_08"] = l08;
+
+    } else if (ind === "volume") {
+      // Standard volume — green/red by candle direction
+      const s = chart.addHistogramSeries({
+        priceFormat: { type: "volume" },
+        priceScaleId: "volume",
+      });
+      chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+      s.setData(chartData.map(d => ({
+        time: d.time, value: d.volume || 0,
+        color: d.close >= d.open ? "#26a69a80" : "#ef535080",
+      })));
+      indicatorSeries[key] = s;
+
+    // ══════════════════════════════════════════════════════════
+    // STANDARD INDICATORS
+    // ══════════════════════════════════════════════════════════
+
+    } else if (ind === "sma" && chartData.length > period) {
+      const colors = { 200: "#FFFF00", 50: "#2196f3" };
+      const s = chart.addLineSeries({ color: colors[period] || "#FFFFFF", lineWidth: 1, title: `SMA${period}`, priceLineVisible: false });
+      s.setData(calcSMA(chartData, period));
+      indicatorSeries[key] = s;
+
+    } else if (ind === "ema" && chartData.length > period) {
+      const colors = { 50: "#2196f3", 200: "#ff9800" };
+      const s = chart.addLineSeries({ color: colors[period] || "#FFFFFF", lineWidth: 1, title: `EMA${period}`, priceLineVisible: false });
+      s.setData(calcEMA(chartData, period));
+      indicatorSeries[key] = s;
+
+    } else if (ind === "dema" && chartData.length > period * 2) {
+      const s = chart.addLineSeries({ color: "#00e676", lineWidth: 1, title: `DEMA${period}`, priceLineVisible: false });
+      s.setData(calcDEMA(chartData, period));
+      indicatorSeries[key] = s;
+
+    } else if (ind === "bollinger" && chartData.length > period) {
+      const bb = calcBollinger(chartData, period);
+      const su = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB+", priceLineVisible: false });
+      const sl = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB-", priceLineVisible: false });
+      su.setData(bb.upper); sl.setData(bb.lower);
+      indicatorSeries[key + "_u"] = su;
+      indicatorSeries[key + "_l"] = sl;
+
+    } else if (ind === "rsi" && chartData.length > period + 1) {
+      const rsiData = calcRSI(chartData, period);
+      const s = chart.addLineSeries({ color: "#ab47bc", lineWidth: 1, title: `RSI${period}`, priceScaleId: "rsi", lastValueVisible: true });
+      chart.priceScale("rsi").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
       s.setData(rsiData);
-      // Overbought/oversold markers
       const ob = chart.addLineSeries({ color: "#f4433644", lineWidth: 1, lineStyle: 2, priceScaleId: "rsi", lastValueVisible: false, priceLineVisible: false });
       const os = chart.addLineSeries({ color: "#4caf5044", lineWidth: 1, lineStyle: 2, priceScaleId: "rsi", lastValueVisible: false, priceLineVisible: false });
-      ob.setData(rsiData.map(d => ({ time: d.time, value: 70 })));
-      os.setData(rsiData.map(d => ({ time: d.time, value: 30 })));
-      indicatorSeries[key] = s;
-      indicatorSeries[key + "_ob"] = ob;
-      indicatorSeries[key + "_os"] = os;
+      ob.setData(rsiData.map(d => ({ time: d.time, value: 70 }))); os.setData(rsiData.map(d => ({ time: d.time, value: 30 })));
+      indicatorSeries[key] = s; indicatorSeries[key + "_ob"] = ob; indicatorSeries[key + "_os"] = os;
+
     } else if (ind === "macd" && chartData.length > 26) {
       const m = calcMACD(chartData);
       const sLine = chart.addLineSeries({ color: "#2196f3", lineWidth: 1, title: "MACD", priceScaleId: "macd", lastValueVisible: true });
       const sSig = chart.addLineSeries({ color: "#ff9800", lineWidth: 1, title: "Signal", priceScaleId: "macd", lastValueVisible: false });
       const sHist = chart.addHistogramSeries({ priceScaleId: "macd", lastValueVisible: false });
-      chart.priceScale("macd").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
-      sLine.setData(m.macd);
-      sSig.setData(m.signal);
-      sHist.setData(m.histogram);
-      indicatorSeries[key + "_l"] = sLine;
-      indicatorSeries[key + "_s"] = sSig;
-      indicatorSeries[key + "_h"] = sHist;
+      chart.priceScale("macd").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
+      sLine.setData(m.macd); sSig.setData(m.signal); sHist.setData(m.histogram);
+      indicatorSeries[key + "_l"] = sLine; indicatorSeries[key + "_s"] = sSig; indicatorSeries[key + "_h"] = sHist;
+
     } else if (ind === "atr" && chartData.length > period + 1) {
-      const atrData = calcATR(chartData, period);
-      const s = chart.addLineSeries({
-        color: "#ff5722", lineWidth: 1, title: `ATR${period}`,
-        priceScaleId: "atr", lastValueVisible: true,
-      });
-      chart.priceScale("atr").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
-      s.setData(atrData);
-      indicatorSeries[key] = s;
+      const s = chart.addLineSeries({ color: "#ff5722", lineWidth: 1, title: `ATR${period}`, priceScaleId: "atr", lastValueVisible: true });
+      chart.priceScale("atr").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
+      s.setData(calcATR(chartData, period)); indicatorSeries[key] = s;
+
     } else if (ind === "vwap" && chartData.length > 1) {
-      const vwapData = calcVWAP(chartData);
       const s = chart.addLineSeries({ color: "#ff4081", lineWidth: 2, title: "VWAP", lastValueVisible: true });
-      s.setData(vwapData);
-      indicatorSeries[key] = s;
-    } else if (ind === "dema" && chartData.length > period * 2) {
-      const demaData = calcDEMA(chartData, period);
-      const s = chart.addLineSeries({ color: "#00e676", lineWidth: 1, title: `DEMA${period}` });
-      s.setData(demaData);
-      indicatorSeries[key] = s;
-    } else if (ind === "fisher" && chartData.length > period) {
-      const fisherData = calcEhlersFisher(chartData, period);
-      const s = chart.addLineSeries({
-        color: "#e91e63", lineWidth: 1, title: "Fisher",
-        priceScaleId: "fisher", lastValueVisible: true,
-      });
-      chart.priceScale("fisher").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
-      s.setData(fisherData);
-      // Zero line
-      const z = chart.addLineSeries({ color: "#ffffff22", lineWidth: 1, lineStyle: 2, priceScaleId: "fisher", lastValueVisible: false, priceLineVisible: false });
-      z.setData(fisherData.map(d => ({ time: d.time, value: 0 })));
-      indicatorSeries[key] = s;
-      indicatorSeries[key + "_z"] = z;
+      s.setData(calcVWAP(chartData)); indicatorSeries[key] = s;
     }
   }
 }

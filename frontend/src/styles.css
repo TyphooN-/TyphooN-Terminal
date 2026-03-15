@@ -6,7 +6,7 @@
 
 body {
   font-family: 'Consolas', 'Courier New', monospace;
-  background: #1a1a2e;
+  background: #000000;
   color: #e0e0e0;
   overflow: hidden;
   height: 100vh;
@@ -25,8 +25,8 @@ body {
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  background: #16213e;
-  border-bottom: 1px solid #333;
+  background: #0a0a0a;
+  border-bottom: 1px solid #222;
 }
 
 #symbol-wrapper {
@@ -150,7 +150,7 @@ body {
 
 #chart-container {
   flex: 1;
-  background: #1a1a2e;
+  background: #000000;
   position: relative;
 }
 
@@ -158,8 +158,8 @@ body {
 
 #right-panel {
   width: 240px;
-  background: #16213e;
-  border-left: 1px solid #333;
+  background: #0a0a14;
+  border-left: 1px solid #222;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
