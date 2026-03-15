@@ -247,17 +247,99 @@ function setTextClass(id, text, cls) {
 }
 function fmt(n) { return Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 }); }
 
+// ── Symbol Autocomplete ─────────────────────────────────────
+
+let symbolsLoaded = false;
+let autocompleteIndex = -1;
+
+async function loadSymbolList() {
+  try {
+    const count = await invoke("load_symbols");
+    console.log(`Loaded ${count} tradable symbols`);
+    symbolsLoaded = true;
+  } catch (e) {
+    console.error("Failed to load symbols:", e);
+  }
+}
+
+function setupAutocomplete() {
+  const input = document.getElementById("symbol-input");
+  const list = document.getElementById("symbol-autocomplete");
+  let debounceTimer = null;
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    const q = input.value.trim();
+    if (q.length < 1 || !symbolsLoaded) {
+      list.classList.add("hidden");
+      return;
+    }
+    debounceTimer = setTimeout(async () => {
+      try {
+        const resultJson = await invoke("search_symbols", { query: q });
+        const matches = JSON.parse(resultJson);
+        list.innerHTML = "";
+        autocompleteIndex = -1;
+        if (matches.length === 0) {
+          list.classList.add("hidden");
+          return;
+        }
+        for (const [sym, name] of matches) {
+          const item = document.createElement("div");
+          item.className = "autocomplete-item";
+          item.innerHTML = `<span class="sym">${sym}</span><span class="name">${name}</span>`;
+          item.addEventListener("mousedown", (e) => {
+            e.preventDefault();
+            input.value = sym;
+            list.classList.add("hidden");
+            document.getElementById("btn-load-chart").click();
+          });
+          list.appendChild(item);
+        }
+        list.classList.remove("hidden");
+      } catch (_) {
+        list.classList.add("hidden");
+      }
+    }, 150);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    const items = list.querySelectorAll(".autocomplete-item");
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      autocompleteIndex = Math.min(autocompleteIndex + 1, items.length - 1);
+      items.forEach((el, i) => el.classList.toggle("selected", i === autocompleteIndex));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      autocompleteIndex = Math.max(autocompleteIndex - 1, 0);
+      items.forEach((el, i) => el.classList.toggle("selected", i === autocompleteIndex));
+    } else if (e.key === "Enter") {
+      if (autocompleteIndex >= 0 && items[autocompleteIndex]) {
+        input.value = items[autocompleteIndex].querySelector(".sym").textContent;
+        list.classList.add("hidden");
+      }
+      document.getElementById("btn-load-chart").click();
+    } else if (e.key === "Escape") {
+      list.classList.add("hidden");
+    }
+  });
+
+  input.addEventListener("blur", () => {
+    setTimeout(() => list.classList.add("hidden"), 200);
+  });
+}
+
 // ── Button Handlers ─────────────────────────────────────────
 
 function setupButtons() {
   document.getElementById("btn-load-chart").addEventListener("click", () => {
-    const symbol = document.getElementById("symbol-input").value.trim();
+    const symbol = document.getElementById("symbol-input").value.trim().toUpperCase();
     const tf = document.getElementById("timeframe-select").value;
-    if (symbol) loadChart(symbol, tf);
-  });
-
-  document.getElementById("symbol-input").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") document.getElementById("btn-load-chart").click();
+    if (symbol) {
+      document.getElementById("symbol-input").value = symbol;
+      document.getElementById("symbol-autocomplete").classList.add("hidden");
+      loadChart(symbol, tf);
+    }
   });
 
   // Buy Lines: SL = lowest visible, TP = highest visible
@@ -545,9 +627,15 @@ function setupConnect() {
       }
 
       const typeLabel = paper ? "Paper" : "LIVE";
-      status.textContent = `Connected! [${typeLabel}] Equity: $${Number(acct.equity).toFixed(2)}`;
+      status.textContent = `Connected! [${typeLabel}] Equity: $${Number(acct.equity).toFixed(2)} — Loading symbols...`;
       status.style.color = "#8f8";
-      setTimeout(() => modal.classList.add("hidden"), 800);
+
+      // Load symbol list for autocomplete (async, don't block connect)
+      loadSymbolList().then(() => {
+        status.textContent = `Connected! [${typeLabel}] Equity: $${Number(acct.equity).toFixed(2)}`;
+      });
+
+      setTimeout(() => modal.classList.add("hidden"), 1200);
 
       // Start dashboard updates (only once)
       if (!dashboardInterval) {
@@ -576,6 +664,7 @@ function setupConnect() {
 
 document.addEventListener("DOMContentLoaded", () => {
   initChart();
+  setupAutocomplete();
   setupButtons();
   setupKeyboard();
   setupConnect();

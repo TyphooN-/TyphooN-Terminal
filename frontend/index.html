@@ -37,7 +37,10 @@
   <div id="app">
     <!-- Top bar: symbol selector + account info -->
     <div id="top-bar">
-      <input id="symbol-input" type="text" placeholder="Symbol (e.g. AAPL, BTC/USD)" />
+      <div id="symbol-wrapper">
+        <input id="symbol-input" type="text" placeholder="Symbol (e.g. AAPL, BTC/USD)" autocomplete="off" />
+        <div id="symbol-autocomplete" class="autocomplete-list hidden"></div>
+      </div>
       <select id="timeframe-select">
         <option value="1Min">1m</option>
         <option value="5Min">5m</option>

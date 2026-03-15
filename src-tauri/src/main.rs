@@ -34,6 +34,8 @@ struct AppState {
     /// Per-symbol SL/TP tracked locally (Alpaca can't modify after placement).
     sl_levels: std::collections::HashMap<String, f64>,
     tp_levels: std::collections::HashMap<String, f64>,
+    /// Cached symbol list for autocomplete.
+    symbols: Vec<(String, String)>, // (symbol, name)
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -113,6 +115,34 @@ async fn close_all(state: State<'_, SharedState>) -> Result<(), String> {
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     broker.close_all_positions().await
+}
+
+#[tauri::command]
+async fn load_symbols(state: State<'_, SharedState>) -> Result<String, String> {
+    let mut s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let assets = broker.get_all_assets().await?;
+    let symbols: Vec<(String, String)> = assets
+        .iter()
+        .map(|a| (a.symbol.clone(), a.name.clone()))
+        .collect();
+    let count = symbols.len();
+    s.symbols = symbols;
+    Ok(format!("{count}"))
+}
+
+#[tauri::command]
+async fn search_symbols(state: State<'_, SharedState>, query: String) -> Result<String, String> {
+    let s = state.lock().await;
+    let q = query.to_uppercase();
+    let matches: Vec<&(String, String)> = s.symbols
+        .iter()
+        .filter(|(sym, name)| {
+            sym.starts_with(&q) || name.to_uppercase().contains(&q)
+        })
+        .take(20)
+        .collect();
+    Ok(serde_json::to_string(&matches).unwrap())
 }
 
 #[tauri::command]
@@ -467,6 +497,7 @@ fn main() {
         martingale: MartingaleState::new(MartingaleConfig::default()),
         sl_levels: std::collections::HashMap::new(),
         tp_levels: std::collections::HashMap::new(),
+        symbols: Vec::new(),
     }));
 
     tauri::Builder::default()
@@ -482,6 +513,8 @@ fn main() {
             close_position,
             close_all,
             get_asset,
+            load_symbols,
+            search_symbols,
             // Risk
             calculate_lots,
             calculate_position_var,

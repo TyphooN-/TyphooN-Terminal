@@ -29,6 +29,10 @@ body {
   border-bottom: 1px solid #333;
 }
 
+#symbol-wrapper {
+  position: relative;
+}
+
 #symbol-input {
   background: #0f3460;
   border: 1px solid #444;
@@ -36,7 +40,49 @@ body {
   padding: 4px 8px;
   font-family: inherit;
   font-size: 13px;
-  width: 180px;
+  width: 220px;
+}
+
+.autocomplete-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #16213e;
+  border: 1px solid #555;
+  border-top: none;
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 100;
+}
+
+.autocomplete-list.hidden { display: none; }
+
+.autocomplete-item {
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px solid #222;
+}
+
+.autocomplete-item:hover, .autocomplete-item.selected {
+  background: #0f3460;
+}
+
+.autocomplete-item .sym {
+  color: #8ff;
+  font-weight: bold;
+}
+
+.autocomplete-item .name {
+  color: #888;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
 }
 
 #timeframe-select, #order-mode {

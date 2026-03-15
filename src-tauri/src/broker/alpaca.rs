@@ -263,6 +263,41 @@ impl AlpacaBroker {
         })
     }
 
+    // ── Symbol List ────────────────────────────────────────────────
+
+    pub async fn get_all_assets(&self) -> Result<Vec<AssetInfo>, String> {
+        let resp = self
+            .client
+            .get(format!("{}/v2/assets", self.base_url))
+            .headers(self.headers())
+            .query(&[("status", "active")])
+            .send()
+            .await
+            .map_err(|e| format!("Assets request failed: {e}"))?;
+
+        let json: Vec<serde_json::Value> = resp
+            .json()
+            .await
+            .map_err(|e| format!("Assets parse failed: {e}"))?;
+
+        Ok(json
+            .iter()
+            .filter(|a| a["tradable"].as_bool().unwrap_or(false))
+            .map(|a| AssetInfo {
+                symbol: a["symbol"].as_str().unwrap_or("").to_string(),
+                name: a["name"].as_str().unwrap_or("").to_string(),
+                asset_class: a["class"].as_str().unwrap_or("").to_string(),
+                tradable: true,
+                marginable: a["marginable"].as_bool().unwrap_or(false),
+                shortable: a["shortable"].as_bool().unwrap_or(false),
+                fractionable: a["fractionable"].as_bool().unwrap_or(false),
+                min_order_size: a["min_order_size"].as_str().and_then(|s| s.parse().ok()),
+                min_trade_increment: a["min_trade_increment"].as_str().and_then(|s| s.parse().ok()),
+                price_increment: a["price_increment"].as_str().and_then(|s| s.parse().ok()),
+            })
+            .collect())
+    }
+
     // ── Historical Data ──────────────────────────────────────────────
 
     pub async fn get_bars(
@@ -281,6 +316,7 @@ impl AlpacaBroker {
         let mut params = vec![
             ("timeframe", timeframe.to_string()),
             ("limit", limit.to_string()),
+            ("feed", if is_crypto { "us".to_string() } else { "sip".to_string() }),
         ];
         if is_crypto {
             params.push(("symbols", symbol.to_string()));
@@ -295,18 +331,56 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Bars request failed: {e}"))?;
 
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Bars parse failed: {e}"))?;
+        let status = resp.status();
+        let body = resp.text().await.map_err(|e| format!("Bars read failed: {e}"))?;
 
+        if !status.is_success() {
+            // Try iex feed as fallback (free tier)
+            let mut params2 = vec![
+                ("timeframe", timeframe.to_string()),
+                ("limit", limit.to_string()),
+                ("feed", "iex".to_string()),
+            ];
+            if is_crypto {
+                params2.push(("symbols", symbol.to_string()));
+            }
+
+            let resp2 = self
+                .client
+                .get(&base)
+                .headers(self.headers())
+                .query(&params2)
+                .send()
+                .await
+                .map_err(|e| format!("Bars fallback failed: {e}"))?;
+
+            if !resp2.status().is_success() {
+                let err_body = resp2.text().await.unwrap_or_default();
+                return Err(format!("Bars failed ({}): {}", status, err_body));
+            }
+
+            let json: serde_json::Value = resp2
+                .json()
+                .await
+                .map_err(|e| format!("Bars parse failed: {e}"))?;
+
+            return Ok(Self::parse_bars(&json, symbol, is_crypto));
+        }
+
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .map_err(|e| format!("Bars JSON parse failed: {e}"))?;
+
+        Ok(Self::parse_bars(&json, symbol, is_crypto))
+    }
+
+    fn parse_bars(json: &serde_json::Value, symbol: &str, is_crypto: bool) -> Vec<Bar> {
         let bars_array = if is_crypto {
             json["bars"][symbol].as_array()
         } else {
             json["bars"].as_array()
         };
 
-        Ok(bars_array
+        bars_array
             .map(|arr| {
                 arr.iter()
                     .map(|b| Bar {
@@ -319,6 +393,6 @@ impl AlpacaBroker {
                     })
                     .collect()
             })
-            .unwrap_or_default())
+            .unwrap_or_default()
     }
 }
