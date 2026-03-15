@@ -64,6 +64,7 @@ function initChart() {
       background: { color: "#1a1a2e" },
       textColor: "#d1d4dc",
       fontFamily: "Consolas, Courier New, monospace",
+      attributionLogo: false, // Remove TV watermark
     },
     grid: {
       vertLines: { color: "#2B2B43" },
@@ -210,6 +211,94 @@ function calcATR(data, period) {
   return result;
 }
 
+function calcDEMA(data, period) {
+  // Double EMA = 2*EMA - EMA(EMA)
+  const ema1 = calcEMA(data, period);
+  if (ema1.length < period) return [];
+  const ema2data = ema1.map(e => ({ close: e.value, time: e.time }));
+  const k = 2 / (period + 1);
+  let ema2 = ema2data[0].close;
+  const result = [];
+  for (let i = 0; i < ema2data.length; i++) {
+    ema2 = ema2data[i].close * k + ema2 * (1 - k);
+    if (i >= period - 1) {
+      result.push({ time: ema2data[i].time, value: 2 * ema2data[i].close - ema2 });
+    }
+  }
+  return result;
+}
+
+function calcMACD(data, fastP = 12, slowP = 26, signalP = 9) {
+  const fastEMA = calcEMA(data, fastP);
+  const slowEMA = calcEMA(data, slowP);
+  // Align by time
+  const slowMap = new Map(slowEMA.map(e => [e.time, e.value]));
+  const macdLine = [], signalData = [];
+  for (const fe of fastEMA) {
+    const sv = slowMap.get(fe.time);
+    if (sv !== undefined) {
+      macdLine.push({ time: fe.time, value: fe.value - sv });
+    }
+  }
+  // Signal line = EMA of MACD
+  if (macdLine.length < signalP) return { macd: macdLine, signal: [], histogram: [] };
+  const k = 2 / (signalP + 1);
+  let sig = macdLine[0].value;
+  const histogram = [];
+  for (let i = 0; i < macdLine.length; i++) {
+    sig = macdLine[i].value * k + sig * (1 - k);
+    if (i >= signalP - 1) {
+      signalData.push({ time: macdLine[i].time, value: sig });
+      histogram.push({
+        time: macdLine[i].time,
+        value: macdLine[i].value - sig,
+        color: macdLine[i].value - sig >= 0 ? "#26a69a" : "#ef5350",
+      });
+    }
+  }
+  return { macd: macdLine, signal: signalData, histogram };
+}
+
+function calcEhlersFisher(data, period = 10) {
+  // Ehlers Fisher Transform
+  const result = [];
+  if (data.length < period) return result;
+  for (let i = period - 1; i < data.length; i++) {
+    let maxH = -Infinity, minL = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (data[j].high > maxH) maxH = data[j].high;
+      if (data[j].low < minL) minL = data[j].low;
+    }
+    const mid = (data[i].high + data[i].low) / 2;
+    const range = maxH - minL;
+    let x = range > 0 ? 2 * ((mid - minL) / range - 0.5) : 0;
+    x = Math.max(-0.999, Math.min(0.999, x)); // clamp
+    const fisher = 0.5 * Math.log((1 + x) / (1 - x));
+    result.push({ time: data[i].time, value: fisher });
+  }
+  return result;
+}
+
+function calcVWAP(data) {
+  // Volume Weighted Average Price — resets daily (by checking date change)
+  const result = [];
+  let cumVol = 0, cumTPV = 0, lastDate = "";
+  for (const d of data) {
+    const date = typeof d.time === "number" ? new Date(d.time * 1000).toISOString().slice(0, 10) : "";
+    if (date !== lastDate) {
+      cumVol = 0; cumTPV = 0; lastDate = date;
+    }
+    const tp = (d.high + d.low + d.close) / 3;
+    const vol = d.volume || 1;
+    cumVol += vol;
+    cumTPV += tp * vol;
+    if (cumVol > 0) {
+      result.push({ time: d.time, value: cumTPV / cumVol });
+    }
+  }
+  return result;
+}
+
 function calcKAMA(data, period) {
   // Kaufman Adaptive Moving Average
   const fastSC = 2 / (2 + 1);   // fast EMA constant
@@ -320,9 +409,67 @@ function applyIndicators(chartData) {
       indicatorSeries[key + "_u"] = su;
       indicatorSeries[key + "_l"] = sl3;
     }
-    // RSI, MACD, ATR would need a separate pane — coming soon
-    else if (ind === "rsi" || ind === "macd" || ind === "atr" || ind === "vwap") {
-      log(`${ind.toUpperCase()} indicator requires separate pane — coming soon`, "warn");
+    // ── Separate-pane indicators (use dedicated price scales) ──
+    else if (ind === "rsi" && chartData.length > period + 1) {
+      const rsiData = calcRSI(chartData, period);
+      const s = chart.addLineSeries({
+        color: "#ab47bc", lineWidth: 1, title: `RSI${period}`,
+        priceScaleId: "rsi", lastValueVisible: true,
+      });
+      chart.priceScale("rsi").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 }, borderVisible: false });
+      s.setData(rsiData);
+      // Overbought/oversold markers
+      const ob = chart.addLineSeries({ color: "#f4433644", lineWidth: 1, lineStyle: 2, priceScaleId: "rsi", lastValueVisible: false, priceLineVisible: false });
+      const os = chart.addLineSeries({ color: "#4caf5044", lineWidth: 1, lineStyle: 2, priceScaleId: "rsi", lastValueVisible: false, priceLineVisible: false });
+      ob.setData(rsiData.map(d => ({ time: d.time, value: 70 })));
+      os.setData(rsiData.map(d => ({ time: d.time, value: 30 })));
+      indicatorSeries[key] = s;
+      indicatorSeries[key + "_ob"] = ob;
+      indicatorSeries[key + "_os"] = os;
+    } else if (ind === "macd" && chartData.length > 26) {
+      const m = calcMACD(chartData);
+      const sLine = chart.addLineSeries({ color: "#2196f3", lineWidth: 1, title: "MACD", priceScaleId: "macd", lastValueVisible: true });
+      const sSig = chart.addLineSeries({ color: "#ff9800", lineWidth: 1, title: "Signal", priceScaleId: "macd", lastValueVisible: false });
+      const sHist = chart.addHistogramSeries({ priceScaleId: "macd", lastValueVisible: false });
+      chart.priceScale("macd").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
+      sLine.setData(m.macd);
+      sSig.setData(m.signal);
+      sHist.setData(m.histogram);
+      indicatorSeries[key + "_l"] = sLine;
+      indicatorSeries[key + "_s"] = sSig;
+      indicatorSeries[key + "_h"] = sHist;
+    } else if (ind === "atr" && chartData.length > period + 1) {
+      const atrData = calcATR(chartData, period);
+      const s = chart.addLineSeries({
+        color: "#ff5722", lineWidth: 1, title: `ATR${period}`,
+        priceScaleId: "atr", lastValueVisible: true,
+      });
+      chart.priceScale("atr").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
+      s.setData(atrData);
+      indicatorSeries[key] = s;
+    } else if (ind === "vwap" && chartData.length > 1) {
+      const vwapData = calcVWAP(chartData);
+      const s = chart.addLineSeries({ color: "#ff4081", lineWidth: 2, title: "VWAP", lastValueVisible: true });
+      s.setData(vwapData);
+      indicatorSeries[key] = s;
+    } else if (ind === "dema" && chartData.length > period * 2) {
+      const demaData = calcDEMA(chartData, period);
+      const s = chart.addLineSeries({ color: "#00e676", lineWidth: 1, title: `DEMA${period}` });
+      s.setData(demaData);
+      indicatorSeries[key] = s;
+    } else if (ind === "fisher" && chartData.length > period) {
+      const fisherData = calcEhlersFisher(chartData, period);
+      const s = chart.addLineSeries({
+        color: "#e91e63", lineWidth: 1, title: "Fisher",
+        priceScaleId: "fisher", lastValueVisible: true,
+      });
+      chart.priceScale("fisher").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
+      s.setData(fisherData);
+      // Zero line
+      const z = chart.addLineSeries({ color: "#ffffff22", lineWidth: 1, lineStyle: 2, priceScaleId: "fisher", lastValueVisible: false, priceLineVisible: false });
+      z.setData(fisherData.map(d => ({ time: d.time, value: 0 })));
+      indicatorSeries[key] = s;
+      indicatorSeries[key + "_z"] = z;
     }
   }
 }
