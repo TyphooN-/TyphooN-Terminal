@@ -3776,9 +3776,18 @@ async function cmdOrderBook() {
       const pct = (size / maxSize) * 100;
       const row = document.createElement("div");
       row.className = "dom-row dom-ask";
-      row.innerHTML = `<div class="dom-bar dom-bar-ask" style="width:${pct}%"></div>`
-        + `<span class="dom-size">${size.toLocaleString()}</span>`
-        + `<span class="dom-price">${Number(price).toFixed(2)}</span>`;
+      const askBar = document.createElement("div");
+      askBar.className = "dom-bar dom-bar-ask";
+      askBar.style.width = pct + "%";
+      const askSize = document.createElement("span");
+      askSize.className = "dom-size";
+      askSize.textContent = size.toLocaleString();
+      const askPrice = document.createElement("span");
+      askPrice.className = "dom-price";
+      askPrice.textContent = Number(price).toFixed(2);
+      row.appendChild(askBar);
+      row.appendChild(askSize);
+      row.appendChild(askPrice);
       container.appendChild(row);
     }
 
@@ -3800,9 +3809,18 @@ async function cmdOrderBook() {
       const pct = (size / maxSize) * 100;
       const row = document.createElement("div");
       row.className = "dom-row dom-bid";
-      row.innerHTML = `<div class="dom-bar dom-bar-bid" style="width:${pct}%"></div>`
-        + `<span class="dom-size">${size.toLocaleString()}</span>`
-        + `<span class="dom-price">${Number(price).toFixed(2)}</span>`;
+      const bidBar = document.createElement("div");
+      bidBar.className = "dom-bar dom-bar-bid";
+      bidBar.style.width = pct + "%";
+      const bidSize = document.createElement("span");
+      bidSize.className = "dom-size";
+      bidSize.textContent = size.toLocaleString();
+      const bidPrice = document.createElement("span");
+      bidPrice.className = "dom-price";
+      bidPrice.textContent = Number(price).toFixed(2);
+      row.appendChild(bidBar);
+      row.appendChild(bidSize);
+      row.appendChild(bidPrice);
       container.appendChild(row);
     }
 

@@ -1,0 +1,26 @@
+#!/bin/bash
+# TyphooN Terminal — Launch script for Hyprland/NVIDIA/Wayland
+#
+# Required environment variables for WebKitGTK on Hyprland with NVIDIA:
+#   WEBKIT_DISABLE_DMABUF_RENDERER=1  — prevents DMABUF crash on NVIDIA
+#   WEBKIT_DISABLE_COMPOSITING_MODE=1 — disables GPU compositing (fixes blank window)
+#   GDK_BACKEND=x11                   — forces X11 backend via XWayland (most stable)
+#
+# Usage:
+#   ./launch.sh        — production build
+#   ./launch.sh dev    — development mode with hot reload
+
+set -euo pipefail
+cd "$(dirname "$0")"
+
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+export WEBKIT_DISABLE_COMPOSITING_MODE=1
+export GDK_BACKEND=x11
+
+if [ "${1:-}" = "dev" ]; then
+    echo "Starting TyphooN Terminal (dev mode)..."
+    cd src-tauri && cargo tauri dev
+else
+    echo "Starting TyphooN Terminal..."
+    cd src-tauri && cargo tauri build && ../target/release/typhoon-terminal
+fi

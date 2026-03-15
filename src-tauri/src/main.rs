@@ -90,9 +90,19 @@ async fn connect(
 
 const KEYCHAIN_SERVICE: &str = "typhoon-terminal";
 
+/// Validate account name: printable ASCII, no control chars, no path separators.
+fn is_valid_account_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && name.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+}
+
 #[tauri::command]
 async fn keychain_save(account_name: String, api_key: String, secret_key: String) -> Result<(), String> {
-    if account_name.is_empty() || account_name.len() > 100 {
+    if !is_valid_account_name(&account_name) {
         return Err("Invalid account name".into());
     }
     if api_key.is_empty() || api_key.len() > 100 || !api_key.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -123,7 +133,7 @@ async fn keychain_save(account_name: String, api_key: String, secret_key: String
 
 #[tauri::command]
 async fn keychain_load(account_name: String) -> Result<String, String> {
-    if account_name.is_empty() || account_name.len() > 100 {
+    if !is_valid_account_name(&account_name) {
         return Err("Invalid account name".into());
     }
     let name = account_name.clone();
@@ -139,7 +149,7 @@ async fn keychain_load(account_name: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn keychain_delete(account_name: String) -> Result<(), String> {
-    if account_name.is_empty() || account_name.len() > 100 {
+    if !is_valid_account_name(&account_name) {
         return Err("Invalid account name".into());
     }
     let name = account_name.clone();

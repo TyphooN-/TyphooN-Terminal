@@ -1,6 +1,6 @@
 # ADR-006: Security Hardening
 
-**Status:** Implemented (Pass 8)
+**Status:** Implemented (Pass 9)
 **Date:** 2026-03-15
 **Updated:** 2026-03-15
 
@@ -180,3 +180,19 @@ Full review of ~4,000 lines of code written by automated agents across 4 paralle
 ### Critical → Fixed
 
 57. **Credentials moved from localStorage to OS keychain**: API keys and secret keys now stored via `keyring` crate v3 (gnome-keyring on Linux, KWallet on KDE, macOS Keychain, Windows Credential Manager). localStorage stores ONLY account metadata (name + type). Keys loaded asynchronously from keychain on form fill and auto-connect. Fallback to localStorage if keychain unavailable (logged as warning). Migration-safe: reads legacy localStorage entries with keys, new saves go to keychain. Three Tauri commands: `keychain_save`, `keychain_load`, `keychain_delete`. All validate input (name ≤100 chars, key format alphanumeric ≤100 chars). Uses `tokio::task::spawn_blocking` since keyring crate is blocking I/O.
+
+## Pass 9 — Final Sweep
+
+### Medium → Fixed
+
+58. **Keychain `account_name` not character-validated**: `keychain_save/load/delete` accepted arbitrary strings including path separators, control chars, Unicode. Added `is_valid_account_name()`: printable ASCII + spaces only, no `/`, `\`, `..`
+59. **Two `innerHTML` usages in DOM orderbook renderer**: Agent-written code used `innerHTML` with template literals for ask/bid bars. Replaced with `createElement` + `textContent` + `appendChild` — zero `innerHTML` remaining in entire frontend
+60. **(Verified clean)**: Full grep confirms 0 `innerHTML`, 0 `eval()` on untrusted input, 0 `document.write`, 0 `insertAdjacentHTML`
+
+## Summary
+
+**9 passes, 60 findings total: 54 fixed, 6 accepted with documented rationale.**
+
+All actionable security items completed. Remaining items are defense-in-depth beyond current threat model:
+- Certificate pinning for Alpaca API (TLS already validated by system)
+- Tauri command allowlist per window (N/A — single window app)

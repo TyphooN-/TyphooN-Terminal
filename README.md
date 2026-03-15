@@ -156,16 +156,23 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 - Tauri CLI: `cargo install tauri-cli`
 - Linux: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`
 
-### Development
+### Quick Start (Hyprland/NVIDIA)
+
+```bash
+./launch.sh dev    # development with hot reload
+./launch.sh        # production build + run
+```
+
+The launch script sets the required environment variables for WebKitGTK on Hyprland with NVIDIA:
+- `WEBKIT_DISABLE_DMABUF_RENDERER=1` — prevents DMABUF crash
+- `WEBKIT_DISABLE_COMPOSITING_MODE=1` — fixes blank window
+- `GDK_BACKEND=x11` — forces XWayland backend (most stable)
+
+### Manual Development
 
 ```bash
 cd frontend && npm install
 cd ../src-tauri && cargo tauri dev
-```
-
-On Hyprland/NVIDIA:
-```bash
-WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 GDK_BACKEND=x11 cargo tauri dev
 ```
 
 ### Production Build
