@@ -85,6 +85,27 @@ async fn get_bars(
     Ok(serde_json::to_string(&bars).unwrap())
 }
 
+/// Fetch bars from multiple timeframes for a symbol (for MultiKAMA, ATR_Projection, PreviousCandleLevels).
+/// Returns JSON: { "1Hour": [...bars], "4Hour": [...bars], "1Day": [...bars], ... }
+#[tauri::command]
+async fn get_multi_tf_bars(
+    state: State<'_, SharedState>,
+    symbol: String,
+    timeframes: Vec<String>,
+    limit: u32,
+) -> Result<String, String> {
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let mut result = serde_json::Map::new();
+    for tf in &timeframes {
+        match broker.get_bars(&symbol, tf, limit).await {
+            Ok(bars) => { result.insert(tf.clone(), serde_json::to_value(&bars).unwrap()); }
+            Err(e) => { tracing::warn!("MTF bars failed for {symbol} @ {tf}: {e}"); }
+        }
+    }
+    Ok(serde_json::Value::Object(result).to_string())
+}
+
 #[tauri::command]
 async fn place_order(
     state: State<'_, SharedState>,
@@ -513,6 +534,7 @@ fn main() {
             close_position,
             close_all,
             get_asset,
+            get_multi_tf_bars,
             load_symbols,
             search_symbols,
             // Risk

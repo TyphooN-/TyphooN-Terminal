@@ -52,6 +52,7 @@ let tpLine = null;
 let currentSymbol = "";
 let currentTimeframe = "1Hour";
 let lastPrice = 0;
+let mtfData = {}; // { "1Hour": [...bars], "1Day": [...bars], ... }
 
 // ── Chart Setup ─────────────────────────────────────────────
 
@@ -411,6 +412,177 @@ function calcVWAP(data) {
   return result;
 }
 
+// ── BetterVolume ────────────────────────────────────────────
+// Volume bars colored by price action characteristics
+function calcBetterVolume(data) {
+  const result = [];
+  if (data.length < 2) return result;
+  // Calculate average volume over 20 bars
+  for (let i = 1; i < data.length; i++) {
+    const vol = data[i].volume || 0;
+    const range = data[i].high - data[i].low;
+    const body = Math.abs(data[i].close - data[i].open);
+    const isUp = data[i].close >= data[i].open;
+    // Average volume (lookback 20)
+    let avgVol = 0, count = 0;
+    for (let j = Math.max(0, i - 20); j < i; j++) { avgVol += (data[j].volume || 0); count++; }
+    avgVol = count > 0 ? avgVol / count : vol;
+    // Climax: very high volume + large range
+    const isClimax = vol > avgVol * 2 && range > 0;
+    // High volume
+    const isHigh = vol > avgVol * 1.5;
+    // Low volume
+    const isLow = vol < avgVol * 0.5;
+    // Churn: high volume but small body relative to range
+    const isChurn = isHigh && range > 0 && (body / range) < 0.3;
+
+    let color;
+    if (isChurn) color = "#FFFF00";           // Yellow — churn (indecision)
+    else if (isClimax && isUp) color = "#00FF00";  // Green — climax up
+    else if (isClimax && !isUp) color = "#FF0000"; // Red — climax down
+    else if (isHigh && isUp) color = "#00BFFF";    // Cyan — high vol up
+    else if (isHigh && !isUp) color = "#FF00FF";   // Magenta — high vol down
+    else if (isLow) color = "#FFFFFF44";           // Dim white — low volume
+    else color = isUp ? "#2196f380" : "#ef535080";  // Normal — muted green/red
+
+    result.push({ time: data[i].time, value: vol, color });
+  }
+  return result;
+}
+
+// ── Supply/Demand Zones ─────────────────────────────────────
+// Detect strong move-away candles and project their origin as zones
+function calcSupplyDemandZones(data, lookback = 100) {
+  const zones = []; // { type: "supply"|"demand", high, low, startTime }
+  if (data.length < 10) return zones;
+
+  const start = Math.max(0, data.length - lookback);
+  for (let i = start + 2; i < data.length - 1; i++) {
+    const prev = data[i - 1];
+    const cur = data[i];
+    const next = data[i + 1];
+    const range = cur.high - cur.low;
+    const body = Math.abs(cur.close - cur.open);
+
+    // Skip tiny candles
+    if (range === 0) continue;
+    const bodyRatio = body / range;
+
+    // Demand zone: strong bullish candle leaving a base
+    // Large body candle (>60% body/range) going up, preceded by small candle
+    const prevRange = prev.high - prev.low;
+    if (bodyRatio > 0.6 && cur.close > cur.open && prevRange > 0) {
+      const prevBodyRatio = Math.abs(prev.close - prev.open) / prevRange;
+      if (prevBodyRatio < 0.5) {
+        // Base candle is the demand zone
+        zones.push({ type: "demand", high: prev.high, low: prev.low, startTime: prev.time, endTime: data[data.length - 1].time });
+      }
+    }
+
+    // Supply zone: strong bearish candle leaving a base
+    if (bodyRatio > 0.6 && cur.close < cur.open && prevRange > 0) {
+      const prevBodyRatio = Math.abs(prev.close - prev.open) / prevRange;
+      if (prevBodyRatio < 0.5) {
+        zones.push({ type: "supply", high: prev.high, low: prev.low, startTime: prev.time, endTime: data[data.length - 1].time });
+      }
+    }
+  }
+
+  // Filter out broken zones (price traded through them)
+  const lastPrice = data[data.length - 1].close;
+  return zones.filter(z => {
+    if (z.type === "demand") return lastPrice > z.low; // demand valid if price above zone low
+    return lastPrice < z.high; // supply valid if price below zone high
+  }).slice(-10); // keep last 10 zones max
+}
+
+// ══════════════════════════════════════════════════════════════
+// MULTI-TIMEFRAME INDICATORS — ports from MultiKAMA, ATR_Projection, PreviousCandleLevels
+// ══════════════════════════════════════════════════════════════
+
+const MTF_TIMEFRAMES = ["15Min", "1Hour", "4Hour", "1Day", "1Week"];
+const MTF_KAMA_TFS = ["1Hour", "4Hour", "1Day", "1Week"]; // MultiKAMA draws these on chart
+const MTF_ATR_TFS = ["15Min", "1Hour", "4Hour", "1Day", "1Week"]; // ATR_Projection
+const MTF_PCL_TFS = ["1Hour", "4Hour", "1Day", "1Week"]; // PreviousCandleLevels
+
+const MTF_COLORS = {
+  "15Min": "#808080",  // gray
+  "1Hour": "#FFFFFF",  // white (PreviousCandleColour)
+  "4Hour": "#FFFFFF",  // white
+  "1Day":  "#FF00FF",  // magenta (JudasLevelColour)
+  "1Week": "#FF00FF",  // magenta
+};
+
+const MTF_LABELS = { "15Min": "M15", "1Hour": "H1", "4Hour": "H4", "1Day": "D1", "1Week": "W1" };
+
+async function loadMTFData(symbol) {
+  try {
+    const json = await invoke("get_multi_tf_bars", {
+      symbol,
+      timeframes: MTF_TIMEFRAMES,
+      limit: 500,
+    });
+    mtfData = {};
+    const parsed = JSON.parse(json);
+    for (const [tf, bars] of Object.entries(parsed)) {
+      mtfData[tf] = bars.map(b => ({
+        time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+        open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
+      }));
+    }
+    log(`MTF data loaded: ${Object.keys(mtfData).map(tf => `${MTF_LABELS[tf] || tf}=${(mtfData[tf]||[]).length}`).join(", ")}`, "ok");
+  } catch (e) {
+    log(`MTF data load failed: ${e}`, "error");
+  }
+}
+
+// MultiKAMA: project HTF KAMA values onto current chart's time axis
+function projectHTFToChartTime(htfData, chartData) {
+  if (!htfData || htfData.length === 0 || chartData.length === 0) return [];
+  const result = [];
+  let htfIdx = 0;
+  for (const bar of chartData) {
+    while (htfIdx < htfData.length - 1 && htfData[htfIdx + 1].time <= bar.time) htfIdx++;
+    if (htfData[htfIdx].time <= bar.time) {
+      result.push({ time: bar.time, value: htfData[htfIdx].value });
+    }
+  }
+  return result;
+}
+
+// Previous candle levels from HTF: project prev bar's high/low as horizontal lines
+function calcHTFPrevLevels(htfBars, chartData) {
+  if (!htfBars || htfBars.length < 2 || chartData.length === 0) return null;
+  const prevBar = htfBars[htfBars.length - 2]; // previous completed bar
+  const curBar = htfBars[htfBars.length - 1];  // current bar
+  return {
+    prevHigh: prevBar.high,
+    prevLow: prevBar.low,
+    curHigh: curBar.high,
+    curLow: curBar.low,
+  };
+}
+
+// ATR projection from HTF: project open ± ATR onto chart
+function calcHTFATRProjection(htfBars, period = 14) {
+  if (!htfBars || htfBars.length < period + 2) return null;
+  // Calculate ATR from HTF bars
+  const trs = [];
+  for (let i = 1; i < htfBars.length; i++) {
+    trs.push(Math.max(
+      htfBars[i].high - htfBars[i].low,
+      Math.abs(htfBars[i].high - htfBars[i - 1].close),
+      Math.abs(htfBars[i].low - htfBars[i - 1].close)
+    ));
+  }
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+  }
+  const curOpen = htfBars[htfBars.length - 1].open;
+  return { atr, upper: curOpen + atr, lower: curOpen - atr };
+}
+
 function applyIndicators(chartData) {
   clearIndicators();
   const checkboxes = document.querySelectorAll("#indicator-list input[type=checkbox]:checked");
@@ -424,44 +596,93 @@ function applyIndicators(chartData) {
     // NNFX SYSTEM INDICATORS — exact MQL5 ports
     // ══════════════════════════════════════════════════════════
 
-    if (ind === "kama" && chartData.length > period + 1) {
-      // KAMA.mqh: clrWhite, STYLE_SOLID, width 2
-      const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: `KAMA${period}`, priceLineVisible: false });
-      s.setData(calcKAMA(chartData, period));
-      indicatorSeries[key] = s;
+    if (ind === "kama") {
+      // MultiKAMA.mqh: KAMA from multiple timeframes, all clrWhite, width 2
+      // Current chart's own KAMA
+      if (chartData.length > period + 1) {
+        const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: "KAMA", priceLineVisible: false });
+        s.setData(calcKAMA(chartData, period));
+        indicatorSeries[key] = s;
+      }
+      // HTF KAMAs projected onto current chart
+      for (const tf of MTF_KAMA_TFS) {
+        if (tf === currentTimeframe) continue; // skip current TF (already drawn above)
+        const tfBars = mtfData[tf];
+        if (!tfBars || tfBars.length < period + 1) continue;
+        const kamaData = calcKAMA(tfBars, period);
+        const projected = projectHTFToChartTime(kamaData, chartData);
+        if (projected.length === 0) continue;
+        const label = MTF_LABELS[tf] || tf;
+        const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: `KAMA_${label}`, priceLineVisible: false });
+        s.setData(projected);
+        indicatorSeries[`${key}_${tf}`] = s;
+      }
 
-    } else if (ind === "prev-levels" && chartData.length > 1) {
-      // PreviousCandleLevels.mqh: clrWhite (#FFFFFF), STYLE_SOLID, width 2
-      const pcl = calcPrevCandleLevels(chartData);
-      const sh = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "PrevH", lastValueVisible: false, priceLineVisible: false });
-      const sl2 = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "PrevL", lastValueVisible: false, priceLineVisible: false });
-      sh.setData(pcl.highs); sl2.setData(pcl.lows);
-      indicatorSeries[key + "_h"] = sh;
-      indicatorSeries[key + "_l"] = sl2;
+    } else if (ind === "prev-levels") {
+      // PreviousCandleLevels.mqh: multi-TF previous high/low
+      // Current chart prev candle levels
+      if (chartData.length > 1) {
+        const pcl = calcPrevCandleLevels(chartData);
+        const sh = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "PrevH", lastValueVisible: false, priceLineVisible: false });
+        const sl2 = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "PrevL", lastValueVisible: false, priceLineVisible: false });
+        sh.setData(pcl.highs); sl2.setData(pcl.lows);
+        indicatorSeries[key + "_h"] = sh;
+        indicatorSeries[key + "_l"] = sl2;
+      }
+      // HTF previous candle levels as price lines
+      for (const tf of MTF_PCL_TFS) {
+        const tfBars = mtfData[tf];
+        const levels = calcHTFPrevLevels(tfBars, chartData);
+        if (!levels) continue;
+        const label = MTF_LABELS[tf] || tf;
+        const color = MTF_COLORS[tf] || "#FFFFFF";
+        // Previous bar high/low
+        candleSeries.createPriceLine({ price: levels.prevHigh, color, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${label} PH` });
+        candleSeries.createPriceLine({ price: levels.prevLow, color, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${label} PL` });
+        // D1/W1 current bar high/low (Judas levels — magenta)
+        if (tf === "1Day" || tf === "1Week") {
+          candleSeries.createPriceLine({ price: levels.curHigh, color: "#FF00FF", lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${label} CH` });
+          candleSeries.createPriceLine({ price: levels.curLow, color: "#FF00FF", lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${label} CL` });
+        }
+      }
 
-    } else if (ind === "atr-proj" && chartData.length > period + 1) {
-      // ATR_Projection.mqh: clrYellow (#FFFF00), STYLE_DOT, width 2
-      const atrp = calcATRProjection(chartData, period);
-      const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "ATR+", lastValueVisible: false, priceLineVisible: false });
-      const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "ATR-", lastValueVisible: false, priceLineVisible: false });
-      su.setData(atrp.upper); sl3.setData(atrp.lower);
-      indicatorSeries[key + "_u"] = su;
-      indicatorSeries[key + "_l"] = sl3;
+    } else if (ind === "atr-proj") {
+      // ATR_Projection.mqh: ATR from multiple timeframes, clrYellow, STYLE_DOT, width 2
+      // Current chart ATR projection
+      if (chartData.length > period + 1) {
+        const atrp = calcATRProjection(chartData, period);
+        const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "ATR+", lastValueVisible: false, priceLineVisible: false });
+        const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "ATR-", lastValueVisible: false, priceLineVisible: false });
+        su.setData(atrp.upper); sl3.setData(atrp.lower);
+        indicatorSeries[key + "_u"] = su;
+        indicatorSeries[key + "_l"] = sl3;
+      }
+      // HTF ATR projections as horizontal price lines
+      for (const tf of MTF_ATR_TFS) {
+        const tfBars = mtfData[tf];
+        const proj = calcHTFATRProjection(tfBars, period);
+        if (!proj) continue;
+        const label = MTF_LABELS[tf] || tf;
+        candleSeries.createPriceLine({ price: proj.upper, color: "#FFFF00", lineWidth: 2, lineStyle: 3, axisLabelVisible: true, title: `${label} ATR+` });
+        candleSeries.createPriceLine({ price: proj.lower, color: "#FFFF00", lineWidth: 2, lineStyle: 3, axisLabelVisible: true, title: `${label} ATR-` });
+      }
 
     } else if (ind === "fisher" && chartData.length > period) {
-      // EhlersFisherTransform.mqh: period 32, DRAW_COLOR_LINE width 2
-      // Fisher: clrMediumSeaGreen (#3CB371) bullish, clrOrangeRed (#FF4500) bearish, clrDarkGray (#A9A9A9) neutral
-      // Signal: clrDarkGray (#A9A9A9), width 1
+      // EhlersFisherTransform.mqh: period 32
+      // Fisher: clrMediumSeaGreen (#3CB371) bullish, clrOrangeRed (#FF4500) bearish, clrDarkGray (#A9A9A9)
+      // Signal: clrDarkGray, width 1
       const ef = calcEhlersFisher(chartData, period);
-      // Fisher line — use last color for the line (lightweight-charts doesn't support per-bar color on line series)
-      // We'll render segments as individual series colored by bias
-      const lastColor = ef.colors.length > 0 ? ef.colors[ef.colors.length - 1] : "#A9A9A9";
-      const sFisher = chart.addLineSeries({
-        color: lastColor, lineWidth: 2, title: "Fisher",
-        priceScaleId: "fisher", lastValueVisible: true,
-      });
       chart.priceScale("fisher").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
-      sFisher.setData(ef.fisher);
+
+      // Fisher as colored histogram — supports per-bar coloring (matching MQL5 DRAW_COLOR_LINE visual)
+      const sHist = chart.addHistogramSeries({
+        priceScaleId: "fisher", lastValueVisible: true,
+        priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
+      });
+      const fisherHist = ef.fisher.map((d, i) => ({
+        time: d.time, value: d.value, color: ef.colors[i] || "#A9A9A9",
+      }));
+      sHist.setData(fisherHist);
 
       // Signal line
       const sSignal = chart.addLineSeries({
@@ -476,35 +697,70 @@ function applyIndicators(chartData) {
         priceScaleId: "fisher", lastValueVisible: false, priceLineVisible: false,
       });
       sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
-      indicatorSeries[key] = sFisher;
+      indicatorSeries[key] = sHist;
       indicatorSeries[key + "_sig"] = sSignal;
       indicatorSeries[key + "_z"] = sZero;
 
+    } else if (ind === "better-vol" && chartData.length > 2) {
+      // BetterVolume — colored by price action (climax/churn/high/low)
+      const bvData = calcBetterVolume(chartData);
+      const s = chart.addHistogramSeries({
+        priceFormat: { type: "volume" },
+        priceScaleId: "bettervol",
+      });
+      chart.priceScale("bettervol").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+      s.setData(bvData);
+      indicatorSeries[key] = s;
+
+    } else if (ind === "supply-demand" && chartData.length > 10) {
+      // Supply/Demand zones — projected as colored bands
+      const zones = calcSupplyDemandZones(chartData);
+      for (let zi = 0; zi < zones.length; zi++) {
+        const z = zones[zi];
+        const color = z.type === "demand" ? "#00FF0033" : "#FF000033"; // semi-transparent green/red
+        const borderColor = z.type === "demand" ? "#00FF00" : "#FF0000";
+        // Draw as two price lines (top and bottom of zone)
+        const top = candleSeries.createPriceLine({
+          price: z.high, color: borderColor, lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: false, title: "",
+        });
+        const bot = candleSeries.createPriceLine({
+          price: z.low, color: borderColor, lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: false, title: "",
+        });
+        // Use a filled area series for the zone body
+        const upper = chart.addLineSeries({
+          color: borderColor + "44", lineWidth: 0, lastValueVisible: false, priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        const lower = chart.addLineSeries({
+          color: borderColor + "44", lineWidth: 0, lastValueVisible: false, priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        // Project zone across visible bars from startTime to end
+        const zoneData = chartData
+          .filter(d => d.time >= z.startTime)
+          .map(d => d.time);
+        upper.setData(zoneData.map(t => ({ time: t, value: z.high })));
+        lower.setData(zoneData.map(t => ({ time: t, value: z.low })));
+        indicatorSeries[`sd_${zi}_u`] = upper;
+        indicatorSeries[`sd_${zi}_l`] = lower;
+      }
+
     } else if (ind === "rvol" && chartData.length > 11) {
-      // RVOL.mqh: DRAW_COLOR_HISTOGRAM, width 3
-      // clrGreen (#00FF00) >1.25, clrOrange (#FFA500) 0.8-1.25, clrRed (#FF0000) <0.8
+      // RVOL.mqh: DRAW_COLOR_HISTOGRAM
       const rvolData = calcRVOL(chartData, period);
       const s = chart.addHistogramSeries({
         priceScaleId: "rvol", lastValueVisible: true,
         priceFormat: { type: "price", precision: 2, minMove: 0.01 },
       });
-      chart.priceScale("rvol").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
+      chart.priceScale("rvol").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
       s.setData(rvolData);
-      // Reference levels: 1.25 and 0.8
-      const l125 = chart.addLineSeries({ color: "#FFFFFF44", lineWidth: 1, lineStyle: 2, priceScaleId: "rvol", lastValueVisible: false, priceLineVisible: false });
-      const l08 = chart.addLineSeries({ color: "#FFFFFF44", lineWidth: 1, lineStyle: 2, priceScaleId: "rvol", lastValueVisible: false, priceLineVisible: false });
-      l125.setData(rvolData.map(d => ({ time: d.time, value: 1.25 })));
-      l08.setData(rvolData.map(d => ({ time: d.time, value: 0.8 })));
       indicatorSeries[key] = s;
-      indicatorSeries[key + "_125"] = l125;
-      indicatorSeries[key + "_08"] = l08;
 
     } else if (ind === "volume") {
-      // Standard volume — green/red by candle direction
-      const s = chart.addHistogramSeries({
-        priceFormat: { type: "volume" },
-        priceScaleId: "volume",
-      });
+      // Standard volume
+      const s = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "volume" });
       chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
       s.setData(chartData.map(d => ({
         time: d.time, value: d.volume || 0,
@@ -625,8 +881,8 @@ async function loadChart(symbol, timeframe) {
     currentTimeframe = timeframe;
     if (chartData.length > 0) lastPrice = chartData[chartData.length - 1].close;
 
-    // Apply indicators
-    applyIndicators(chartData);
+    // Load MTF data for multi-timeframe indicators, then apply all
+    loadMTFData(symbol).then(() => applyIndicators(chartData)).catch(() => applyIndicators(chartData));
 
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
     setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
