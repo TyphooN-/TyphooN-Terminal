@@ -114,6 +114,20 @@ body {
   font-family: inherit;
 }
 
+.loading {
+  font-size: 11px;
+  color: #ff8;
+  margin-left: 8px;
+  animation: pulse 1s infinite;
+}
+
+.loading.hidden { display: none; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .status-bar {
   font-size: 11px;
   color: #888;
@@ -356,6 +370,57 @@ select option {
 
 .modal-content select.live-warning {
   border-color: #f44336;
+}
+
+/* ── Indicator Panel ─────────────────────────────────────── */
+
+#indicator-panel {
+  border-top: 1px solid #333;
+  font-size: 11px;
+}
+
+#indicator-header {
+  padding: 6px 8px;
+  cursor: pointer;
+  color: #8cf;
+  user-select: none;
+  font-weight: bold;
+}
+
+#indicator-header:hover { color: #adf; }
+
+#indicator-list {
+  padding: 0 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+#indicator-panel.collapsed #indicator-list { display: none; }
+
+.ind-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 0;
+}
+
+.ind-row:hover { color: #fff; }
+
+.ind-section {
+  color: #666;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-top: 4px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid #222;
+}
+
+.ind-row input[type="checkbox"] {
+  accent-color: #4caf50;
 }
 
 /* ── Log Panel ───────────────────────────────────────────── */

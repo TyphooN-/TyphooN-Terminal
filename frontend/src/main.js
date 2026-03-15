@@ -129,12 +129,235 @@ function removeTPLine() {
 function getSLPrice() { return slLine ? slLine.options().price : null; }
 function getTPPrice() { return tpLine ? tpLine.options().price : null; }
 
+// ── Indicator Series ─────────────────────────────────────────
+
+let indicatorSeries = {}; // key → series object
+
+function clearIndicators() {
+  for (const [key, series] of Object.entries(indicatorSeries)) {
+    chart.removeSeries(series);
+  }
+  indicatorSeries = {};
+}
+
+function calcSMA(data, period) {
+  const result = [];
+  for (let i = period - 1; i < data.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += data[j].close;
+    result.push({ time: data[i].time, value: sum / period });
+  }
+  return result;
+}
+
+function calcEMA(data, period) {
+  const k = 2 / (period + 1);
+  const result = [];
+  let ema = data[0].close;
+  for (let i = 0; i < data.length; i++) {
+    ema = data[i].close * k + ema * (1 - k);
+    if (i >= period - 1) result.push({ time: data[i].time, value: ema });
+  }
+  return result;
+}
+
+function calcRSI(data, period) {
+  const result = [];
+  let gains = 0, losses = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = data[i].close - data[i - 1].close;
+    if (change > 0) gains += change; else losses -= change;
+  }
+  let avgGain = gains / period, avgLoss = losses / period;
+  for (let i = period; i < data.length; i++) {
+    if (i > period) {
+      const change = data[i].close - data[i - 1].close;
+      avgGain = (avgGain * (period - 1) + (change > 0 ? change : 0)) / period;
+      avgLoss = (avgLoss * (period - 1) + (change < 0 ? -change : 0)) / period;
+    }
+    const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+    result.push({ time: data[i].time, value: 100 - 100 / (1 + rs) });
+  }
+  return result;
+}
+
+function calcBollinger(data, period) {
+  const upper = [], lower = [], mid = [];
+  for (let i = period - 1; i < data.length; i++) {
+    let sum = 0, sumSq = 0;
+    for (let j = i - period + 1; j <= i; j++) { sum += data[j].close; sumSq += data[j].close ** 2; }
+    const mean = sum / period;
+    const std = Math.sqrt(sumSq / period - mean ** 2);
+    mid.push({ time: data[i].time, value: mean });
+    upper.push({ time: data[i].time, value: mean + 2 * std });
+    lower.push({ time: data[i].time, value: mean - 2 * std });
+  }
+  return { upper, lower, mid };
+}
+
+function calcATR(data, period) {
+  const result = [];
+  const trs = [];
+  for (let i = 1; i < data.length; i++) {
+    const tr = Math.max(data[i].high - data[i].low, Math.abs(data[i].high - data[i - 1].close), Math.abs(data[i].low - data[i - 1].close));
+    trs.push(tr);
+  }
+  let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < trs.length; i++) {
+    atr = (atr * (period - 1) + trs[i]) / period;
+    result.push({ time: data[i + 1].time, value: atr });
+  }
+  return result;
+}
+
+function calcKAMA(data, period) {
+  // Kaufman Adaptive Moving Average
+  const fastSC = 2 / (2 + 1);   // fast EMA constant
+  const slowSC = 2 / (30 + 1);  // slow EMA constant
+  const result = [];
+  if (data.length < period + 1) return result;
+  let kama = data[period].close;
+  for (let i = period; i < data.length; i++) {
+    const direction = Math.abs(data[i].close - data[i - period].close);
+    let volatility = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      volatility += Math.abs(data[j].close - data[j - 1].close);
+    }
+    const er = volatility !== 0 ? direction / volatility : 0;
+    const sc = (er * (fastSC - slowSC) + slowSC) ** 2;
+    kama = kama + sc * (data[i].close - kama);
+    result.push({ time: data[i].time, value: kama });
+  }
+  return result;
+}
+
+function calcPrevCandleLevels(data) {
+  // Previous candle high/low as horizontal markers on current bar
+  const highs = [], lows = [];
+  for (let i = 1; i < data.length; i++) {
+    highs.push({ time: data[i].time, value: data[i - 1].high });
+    lows.push({ time: data[i].time, value: data[i - 1].low });
+  }
+  return { highs, lows };
+}
+
+function calcATRProjection(data, period) {
+  // ATR projected from current close as upper/lower bands
+  const atrValues = [];
+  for (let i = 1; i < data.length; i++) {
+    const tr = Math.max(
+      data[i].high - data[i].low,
+      Math.abs(data[i].high - data[i - 1].close),
+      Math.abs(data[i].low - data[i - 1].close)
+    );
+    atrValues.push(tr);
+  }
+  if (atrValues.length < period) return { upper: [], lower: [] };
+
+  let atr = atrValues.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  const upper = [], lower = [];
+  for (let i = period; i < atrValues.length; i++) {
+    atr = (atr * (period - 1) + atrValues[i]) / period;
+    const idx = i + 1; // offset by 1 since atrValues starts at data[1]
+    if (idx < data.length) {
+      upper.push({ time: data[idx].time, value: data[idx].close + atr });
+      lower.push({ time: data[idx].time, value: data[idx].close - atr });
+    }
+  }
+  return { upper, lower };
+}
+
+function applyIndicators(chartData) {
+  clearIndicators();
+  const checkboxes = document.querySelectorAll("#indicator-list input[type=checkbox]:checked");
+
+  for (const cb of checkboxes) {
+    const ind = cb.dataset.ind;
+    const period = parseInt(cb.dataset.period) || 14;
+    const key = `${ind}_${period}`;
+
+    if (ind === "sma" && chartData.length > period) {
+      const s = chart.addLineSeries({ color: "#ffeb3b", lineWidth: 1, title: `SMA${period}` });
+      s.setData(calcSMA(chartData, period));
+      indicatorSeries[key] = s;
+    } else if (ind === "ema" && chartData.length > period) {
+      const colors = { 50: "#2196f3", 200: "#ff9800", 20: "#e91e63" };
+      const s = chart.addLineSeries({ color: colors[period] || "#fff", lineWidth: 1, title: `EMA${period}` });
+      s.setData(calcEMA(chartData, period));
+      indicatorSeries[key] = s;
+    } else if (ind === "bollinger" && chartData.length > period) {
+      const bb = calcBollinger(chartData, period);
+      const su = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB+" });
+      const sl = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB-" });
+      su.setData(bb.upper); sl.setData(bb.lower);
+      indicatorSeries[key + "_u"] = su;
+      indicatorSeries[key + "_l"] = sl;
+    } else if (ind === "volume") {
+      const s = chart.addHistogramSeries({
+        color: "#26a69a", priceFormat: { type: "volume" },
+        priceScaleId: "volume",
+      });
+      chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+      s.setData(chartData.map(d => ({ time: d.time, value: d.volume || 0, color: d.close >= d.open ? "#26a69a80" : "#ef535080" })));
+      indicatorSeries[key] = s;
+    }
+    else if (ind === "kama" && chartData.length > period) {
+      const s = chart.addLineSeries({ color: "#e91e63", lineWidth: 2, title: `KAMA${period}` });
+      s.setData(calcKAMA(chartData, period));
+      indicatorSeries[key] = s;
+    } else if (ind === "prev-levels" && chartData.length > 1) {
+      const pcl = calcPrevCandleLevels(chartData);
+      const sh = chart.addLineSeries({ color: "#ffeb3b", lineWidth: 1, lineStyle: 2, title: "PrevH", lastValueVisible: false, priceLineVisible: false });
+      const sl2 = chart.addLineSeries({ color: "#ffeb3b", lineWidth: 1, lineStyle: 2, title: "PrevL", lastValueVisible: false, priceLineVisible: false });
+      sh.setData(pcl.highs); sl2.setData(pcl.lows);
+      indicatorSeries[key + "_h"] = sh;
+      indicatorSeries[key + "_l"] = sl2;
+    } else if (ind === "atr-proj" && chartData.length > period + 1) {
+      const atrp = calcATRProjection(chartData, period);
+      const su = chart.addLineSeries({ color: "#00bcd4", lineWidth: 1, lineStyle: 1, title: "ATR+", lastValueVisible: false });
+      const sl3 = chart.addLineSeries({ color: "#00bcd4", lineWidth: 1, lineStyle: 1, title: "ATR-", lastValueVisible: false });
+      su.setData(atrp.upper); sl3.setData(atrp.lower);
+      indicatorSeries[key + "_u"] = su;
+      indicatorSeries[key + "_l"] = sl3;
+    }
+    // RSI, MACD, ATR would need a separate pane — coming soon
+    else if (ind === "rsi" || ind === "macd" || ind === "atr" || ind === "vwap") {
+      log(`${ind.toUpperCase()} indicator requires separate pane — coming soon`, "warn");
+    }
+  }
+}
+
+// ── Bar Cache ───────────────────────────────────────────────
+
+const barCache = {}; // "SYMBOL:TF" → { data: [], timestamp: Date }
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function getCacheKey(symbol, tf) { return `${symbol}:${tf}`; }
+
 // ── Load Chart Data ─────────────────────────────────────────
 
+let liveBarInterval = null;
+
 async function loadChart(symbol, timeframe) {
+  const loading = document.getElementById("loading-indicator");
+  loading.classList.remove("hidden");
+  loading.textContent = "Loading...";
+
   try {
-    const barsJson = await invoke("get_bars", { symbol, timeframe, limit: 500 });
-    const bars = JSON.parse(barsJson);
+    const limit = parseInt(document.getElementById("bar-count").value) || 1000;
+    const cacheKey = getCacheKey(symbol, timeframe);
+    let bars;
+
+    // Check cache
+    const cached = barCache[cacheKey];
+    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+      bars = cached.data;
+      log(`${symbol} @ ${timeframe}: ${bars.length} bars from cache`, "info");
+    } else {
+      const barsJson = await invoke("get_bars", { symbol, timeframe, limit });
+      bars = JSON.parse(barsJson);
+      barCache[cacheKey] = { data: bars, timestamp: Date.now() };
+    }
 
     const chartData = bars.map((b) => ({
       time: Math.floor(new Date(b.timestamp).getTime() / 1000),
@@ -142,6 +365,7 @@ async function loadChart(symbol, timeframe) {
       high: b.high,
       low: b.low,
       close: b.close,
+      volume: b.volume,
     }));
 
     if (chartData.length === 0) {
@@ -155,12 +379,41 @@ async function loadChart(symbol, timeframe) {
     currentSymbol = symbol;
     currentTimeframe = timeframe;
     if (chartData.length > 0) lastPrice = chartData[chartData.length - 1].close;
+
+    // Apply indicators
+    applyIndicators(chartData);
+
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
     setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
+    loading.classList.add("hidden");
+
+    // Start live bar polling (update latest bar every 10s)
+    if (liveBarInterval) clearInterval(liveBarInterval);
+    liveBarInterval = setInterval(() => updateLatestBar(symbol, timeframe), 10000);
   } catch (e) {
     log(`Chart load failed for ${symbol} @ ${timeframe}: ${e}`, "error");
     setText("connect-status-bar", `Chart error: ${e}`);
+    loading.classList.add("hidden");
   }
+}
+
+async function updateLatestBar(symbol, timeframe) {
+  if (symbol !== currentSymbol || timeframe !== currentTimeframe) return;
+  try {
+    const barsJson = await invoke("get_bars", { symbol, timeframe, limit: 2 });
+    const bars = JSON.parse(barsJson);
+    if (bars.length === 0) return;
+    const latest = bars[bars.length - 1];
+    const bar = {
+      time: Math.floor(new Date(latest.timestamp).getTime() / 1000),
+      open: latest.open,
+      high: latest.high,
+      low: latest.low,
+      close: latest.close,
+    };
+    candleSeries.update(bar);
+    lastPrice = bar.close;
+  } catch (_) {}
 }
 
 // ── Dashboard Update (all 11 labels) ────────────────────────
@@ -704,6 +957,24 @@ function setupConnect() {
 
 // ── Log Panel ───────────────────────────────────────────────
 
+function setupIndicatorPanel() {
+  const panel = document.getElementById("indicator-panel");
+  const header = document.getElementById("indicator-header");
+
+  header.addEventListener("click", () => {
+    panel.classList.toggle("collapsed");
+    header.textContent = panel.classList.contains("collapsed") ? "Indicators ▶" : "Indicators ▼";
+  });
+
+  // Re-apply indicators when checkboxes change
+  document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const data = candleSeries.data();
+      if (data && data.length > 0) applyIndicators(data);
+    });
+  });
+}
+
 function setupLogPanel() {
   const panel = document.getElementById("log-panel");
   const toggle = document.getElementById("btn-log-toggle");
@@ -735,6 +1006,7 @@ function setupLogPanel() {
 document.addEventListener("DOMContentLoaded", () => {
   initChart();
   setupLogPanel();
+  setupIndicatorPanel();
   setupAutocomplete();
   setupButtons();
   setupKeyboard();

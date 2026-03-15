@@ -341,55 +341,78 @@ impl AlpacaBroker {
         let start_str = start.format("%Y-%m-%dT00:00:00Z").to_string();
 
         let mut last_error = String::new();
+        let page_size = actual_limit.min(10000); // Alpaca max per request
 
         for feed in &feeds {
-            let mut params = vec![
-                ("timeframe", actual_tf.to_string()),
-                ("limit", actual_limit.to_string()),
-                ("start", start_str.clone()),
-                ("sort", "asc".to_string()),
-            ];
-            if let Some(f) = feed {
-                params.push(("feed", f.to_string()));
-            }
-            if is_crypto {
-                params.push(("symbols", symbol.to_string()));
-            }
+            let mut all_bars: Vec<Bar> = Vec::new();
+            let mut page_token: Option<String> = None;
 
-            let resp = match self
-                .client
-                .get(&base)
-                .headers(self.headers())
-                .query(&params)
-                .send()
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    last_error = format!("Request failed: {e}");
-                    continue;
+            loop {
+                let mut params = vec![
+                    ("timeframe", actual_tf.to_string()),
+                    ("limit", page_size.to_string()),
+                    ("start", start_str.clone()),
+                    ("sort", "asc".to_string()),
+                ];
+                if let Some(f) = feed {
+                    params.push(("feed", f.to_string()));
                 }
-            };
-
-            if !resp.status().is_success() {
-                last_error = format!("HTTP {} (feed={:?})", resp.status(), feed);
-                let _ = resp.text().await; // consume body
-                continue;
-            }
-
-            let json: serde_json::Value = match resp.json().await {
-                Ok(j) => j,
-                Err(e) => {
-                    last_error = format!("Parse failed: {e}");
-                    continue;
+                if is_crypto {
+                    params.push(("symbols", symbol.to_string()));
                 }
-            };
+                if let Some(ref token) = page_token {
+                    params.push(("page_token", token.clone()));
+                }
 
-            let bars = Self::parse_bars(&json, symbol, is_crypto);
-            if !bars.is_empty() {
-                return Ok(bars);
+                let resp = match self
+                    .client
+                    .get(&base)
+                    .headers(self.headers())
+                    .query(&params)
+                    .send()
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_error = format!("Request failed: {e}");
+                        break;
+                    }
+                };
+
+                if !resp.status().is_success() {
+                    last_error = format!("HTTP {} (feed={:?})", resp.status(), feed);
+                    let _ = resp.text().await;
+                    break;
+                }
+
+                let json: serde_json::Value = match resp.json().await {
+                    Ok(j) => j,
+                    Err(e) => {
+                        last_error = format!("Parse failed: {e}");
+                        break;
+                    }
+                };
+
+                let page_bars = Self::parse_bars(&json, symbol, is_crypto);
+                let page_count = page_bars.len();
+                all_bars.extend(page_bars);
+
+                // Check for next page
+                let next = json["next_page_token"].as_str().map(|s| s.to_string());
+                if next.is_none() || page_count == 0 || all_bars.len() as u32 >= actual_limit {
+                    break;
+                }
+                page_token = next;
             }
-            last_error = format!("Empty bars (feed={:?})", feed);
+
+            if !all_bars.is_empty() {
+                // Trim to requested limit
+                if all_bars.len() > actual_limit as usize {
+                    let skip = all_bars.len() - actual_limit as usize;
+                    all_bars.drain(..skip);
+                }
+                return Ok(all_bars);
+            }
         }
 
         Err(format!("No bar data for {symbol} @ {timeframe}: {last_error}"))
