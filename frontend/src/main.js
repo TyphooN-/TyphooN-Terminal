@@ -1321,11 +1321,39 @@ async function loadChart(symbol, timeframe) {
     // Start live bar polling (update latest bar every 10s)
     if (liveBarInterval) clearInterval(liveBarInterval);
     liveBarInterval = setInterval(() => updateLatestBar(symbol, timeframe), 10000);
+
+    // Background pre-fetch: load all other timeframes for this symbol
+    prefetchAllTimeframes(symbol, timeframe, limit);
   } catch (e) {
     log(`Chart load failed for ${symbol} @ ${timeframe}: ${e}`, "error");
     setText("connect-status-bar", `Chart error: ${e}`);
     setLoadingStatus(symbol, null);
   }
+}
+
+const ALL_TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week"];
+
+async function prefetchAllTimeframes(symbol, currentTF, limit) {
+  const toFetch = ALL_TIMEFRAMES.filter(tf => tf !== currentTF);
+  log(`Pre-fetching ${toFetch.length} timeframes for ${symbol}...`, "info");
+  for (const tf of toFetch) {
+    const cacheKey = getCacheKey(symbol, tf);
+    const cached = barCache[cacheKey];
+    // Skip if already cached and fresh
+    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS * 60) continue; // 60× TTL for prefetch (1 hour)
+    try {
+      const barsJson = await invoke("get_bars", { symbol, timeframe: tf, limit });
+      const bars = JSON.parse(barsJson);
+      if (bars.length > 0) {
+        barCache[cacheKey] = { data: bars, timestamp: Date.now() };
+        saveBarCacheToDisk(cacheKey, bars);
+        log(`Pre-cached ${symbol} @ ${tf}: ${bars.length} bars`, "info");
+      }
+    } catch (_) {
+      // Silent fail on prefetch — not critical
+    }
+  }
+  log(`Pre-fetch complete for ${symbol}`, "ok");
 }
 
 async function updateLatestBar(symbol, timeframe) {
