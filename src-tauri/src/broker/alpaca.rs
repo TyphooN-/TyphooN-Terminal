@@ -328,12 +328,26 @@ impl AlpacaBroker {
             format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
         };
 
+        // Alpaca requires a start date for bar queries — go back far enough
+        let start = chrono::Utc::now() - chrono::Duration::days(match actual_tf {
+            "1Min" => 5,
+            "5Min" | "15Min" => 10,
+            "1Hour" => 60,
+            "4Hour" => 180,
+            "1Day" => 730,
+            "1Week" => 1825,
+            _ => 365,
+        });
+        let start_str = start.format("%Y-%m-%dT00:00:00Z").to_string();
+
         let mut last_error = String::new();
 
         for feed in &feeds {
             let mut params = vec![
                 ("timeframe", actual_tf.to_string()),
                 ("limit", actual_limit.to_string()),
+                ("start", start_str.clone()),
+                ("sort", "asc".to_string()),
             ];
             if let Some(f) = feed {
                 params.push(("feed", f.to_string()));

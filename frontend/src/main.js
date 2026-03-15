@@ -11,12 +11,36 @@
 
 import { createChart, CrosshairMode } from "lightweight-charts";
 
-// Tauri v2 invoke — lazy access to avoid race with __TAURI__ injection
+// ── Logging ─────────────────────────────────────────────────
+
+function log(msg, level = "info") {
+  const content = document.getElementById("log-content");
+  if (!content) { console.log(`[${level}] ${msg}`); return; }
+  const entry = document.createElement("div");
+  const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+  entry.className = `log-entry log-${level}`;
+  entry.innerHTML = `<span class="log-time">${time}</span>${msg}`;
+  content.appendChild(entry);
+  content.scrollTop = content.scrollHeight;
+  // Also mirror to console
+  if (level === "error") console.error(msg);
+  else if (level === "warn") console.warn(msg);
+  else console.log(msg);
+}
+
+// Tauri v2 invoke — with logging
 function invoke(cmd, args) {
   if (!window.__TAURI__ || !window.__TAURI__.core) {
+    log("Tauri not loaded yet", "error");
     return Promise.reject("Tauri not loaded yet");
   }
-  return window.__TAURI__.core.invoke(cmd, args);
+  return window.__TAURI__.core.invoke(cmd, args).then(result => {
+    log(`${cmd} → OK`, "ok");
+    return result;
+  }).catch(err => {
+    log(`${cmd} → ${err}`, "error");
+    throw err;
+  });
 }
 
 // ── State ───────────────────────────────────────────────────
@@ -121,7 +145,7 @@ async function loadChart(symbol, timeframe) {
     }));
 
     if (chartData.length === 0) {
-      console.warn(`No bars returned for ${symbol} @ ${timeframe}`);
+      log(`No bars returned for ${symbol} @ ${timeframe}`, "warn");
       setText("connect-status-bar", `No data for ${symbol} @ ${timeframe}`);
       return;
     }
@@ -131,9 +155,10 @@ async function loadChart(symbol, timeframe) {
     currentSymbol = symbol;
     currentTimeframe = timeframe;
     if (chartData.length > 0) lastPrice = chartData[chartData.length - 1].close;
-    setText("connect-status-bar", `${symbol} — ${chartData.length} bars loaded`);
+    log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
+    setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
   } catch (e) {
-    console.error("Failed to load chart:", e);
+    log(`Chart load failed for ${symbol} @ ${timeframe}: ${e}`, "error");
     setText("connect-status-bar", `Chart error: ${e}`);
   }
 }
@@ -677,10 +702,39 @@ function setupConnect() {
   }
 }
 
+// ── Log Panel ───────────────────────────────────────────────
+
+function setupLogPanel() {
+  const panel = document.getElementById("log-panel");
+  const toggle = document.getElementById("btn-log-toggle");
+  const clear = document.getElementById("btn-log-clear");
+
+  // Start collapsed
+  panel.classList.add("collapsed");
+
+  toggle.addEventListener("click", () => {
+    panel.classList.toggle("collapsed");
+    toggle.textContent = panel.classList.contains("collapsed") ? "▼" : "▲";
+  });
+
+  document.getElementById("log-header").addEventListener("click", (e) => {
+    if (e.target === toggle || e.target === clear) return;
+    toggle.click();
+  });
+
+  clear.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("log-content").innerHTML = "";
+  });
+
+  log("TyphooN Terminal initialized", "info");
+}
+
 // ── Init ────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
   initChart();
+  setupLogPanel();
   setupAutocomplete();
   setupButtons();
   setupKeyboard();
