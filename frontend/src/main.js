@@ -1222,14 +1222,27 @@ function saveBarCacheToDisk(cacheKey, data) {
   }
 }
 
+// ── Load Queue (shows all symbols loading across tabs) ──────
+
+const loadingSymbols = new Set();
+
+function updateLoadingIndicator() {
+  const loading = document.getElementById("loading-indicator");
+  if (loadingSymbols.size === 0) {
+    loadingSymbols.delete(symbol); updateLoadingIndicator();
+  } else {
+    loading.classList.remove("hidden");
+    loading.textContent = `Loading ${[...loadingSymbols].join(", ")}...`;
+  }
+}
+
 // ── Load Chart Data ─────────────────────────────────────────
 
 let liveBarInterval = null;
 
 async function loadChart(symbol, timeframe) {
-  const loading = document.getElementById("loading-indicator");
-  loading.classList.remove("hidden");
-  loading.textContent = `Loading ${symbol}...`;
+  loadingSymbols.add(symbol);
+  updateLoadingIndicator();
 
   // Set symbol immediately so tab identity is correct
   currentSymbol = symbol;
@@ -1247,7 +1260,6 @@ async function loadChart(symbol, timeframe) {
       bars = cached.data;
       log(`${symbol} @ ${timeframe}: ${bars.length} bars from memory cache`, "info");
     } else {
-      loading.textContent = `Loading ${symbol}...`;
       const barsJson = await invoke("get_bars", { symbol, timeframe, limit });
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
@@ -1266,14 +1278,14 @@ async function loadChart(symbol, timeframe) {
     if (chartData.length === 0) {
       log(`No bars returned for ${symbol} @ ${timeframe}`, "warn");
       setText("connect-status-bar", `No data for ${symbol} @ ${timeframe}`);
-      loading.classList.add("hidden");
+      loadingSymbols.delete(symbol); updateLoadingIndicator();
       return;
     }
 
     // Guard: if user switched tabs during async load, don't overwrite wrong chart
     if (activeTabId !== loadTabId) {
       log(`Discarding late bars for ${symbol} (tab switched)`, "warn");
-      loading.classList.add("hidden");
+      loadingSymbols.delete(symbol); updateLoadingIndicator();
       return;
     }
 
@@ -1291,7 +1303,7 @@ async function loadChart(symbol, timeframe) {
 
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
     setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
-    loading.classList.add("hidden");
+    loadingSymbols.delete(symbol); updateLoadingIndicator();
     updateTabLabel();
 
     // Start live bar polling (update latest bar every 10s)
@@ -1300,7 +1312,7 @@ async function loadChart(symbol, timeframe) {
   } catch (e) {
     log(`Chart load failed for ${symbol} @ ${timeframe}: ${e}`, "error");
     setText("connect-status-bar", `Chart error: ${e}`);
-    loading.classList.add("hidden");
+    loadingSymbols.delete(symbol); updateLoadingIndicator();
   }
 }
 
