@@ -210,7 +210,7 @@ body {
   font-family: 'Consolas', monospace;
   color: #ddd;
   pointer-events: none;
-  white-space: nowrap;
+  white-space: pre-line;
   border-radius: 2px;
 }
 

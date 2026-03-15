@@ -124,6 +124,19 @@ async fn place_order(
     qty: f64,
     side: String,
 ) -> Result<String, String> {
+    // Input validation
+    if symbol.is_empty() || symbol.len() > 20 || symbol.contains('/') && symbol.len() > 10 {
+        return Err("Invalid symbol".to_string());
+    }
+    if !symbol.chars().all(|c| c.is_alphanumeric() || c == '/' || c == '.') {
+        return Err("Symbol contains invalid characters".to_string());
+    }
+    if qty <= 0.0 || qty > 1_000_000.0 || !qty.is_finite() {
+        return Err(format!("Invalid quantity: {qty}. Must be 0 < qty <= 1,000,000"));
+    }
+    if side != "buy" && side != "sell" {
+        return Err(format!("Invalid side: {side}. Must be 'buy' or 'sell'"));
+    }
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let result = broker.market_order(&symbol, qty, &side).await?;

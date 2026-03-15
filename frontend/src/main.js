@@ -19,7 +19,11 @@ function log(msg, level = "info") {
   const entry = document.createElement("div");
   const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
   entry.className = `log-entry log-${level}`;
-  entry.innerHTML = `<span class="log-time">${time}</span>${msg}`;
+  const timeSpan = document.createElement("span");
+  timeSpan.className = "log-time";
+  timeSpan.textContent = time;
+  entry.appendChild(timeSpan);
+  entry.appendChild(document.createTextNode(msg));
   content.appendChild(entry);
   content.scrollTop = content.scrollHeight;
   // Also mirror to console
@@ -180,7 +184,7 @@ function setupTooltip() {
       }
     }
     if (lines.length > 0) {
-      tooltip.innerHTML = lines.join("<br>");
+      tooltip.textContent = lines.join("\n");
       tooltip.style.left = param.point.x + 16 + "px";
       tooltip.style.top = param.point.y + "px";
       tooltip.classList.remove("hidden");
@@ -1069,12 +1073,48 @@ function setMTFDot(id, state) {
   }
 }
 
-// ── Bar Cache ───────────────────────────────────────────────
+// ── Bar Cache (localStorage persistent) ─────────────────────
 
 const barCache = {}; // "SYMBOL:TF" → { data: [], timestamp: Date }
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 60 * 1000; // 1 minute — only refetch if older than this
+const BAR_CACHE_PREFIX = "typhoon_bars_";
 
 function getCacheKey(symbol, tf) { return `${symbol}:${tf}`; }
+
+// Load cache from localStorage on startup
+function loadBarCacheFromDisk() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(BAR_CACHE_PREFIX)) {
+        const cacheKey = key.substring(BAR_CACHE_PREFIX.length);
+        const stored = JSON.parse(localStorage.getItem(key));
+        if (stored && stored.data && stored.timestamp) {
+          barCache[cacheKey] = { data: stored.data, timestamp: stored.timestamp };
+        }
+      }
+    }
+    const count = Object.keys(barCache).length;
+    if (count > 0) log(`Loaded ${count} cached bar sets from disk`, "info");
+  } catch (_) {}
+}
+
+// Save a cache entry to localStorage
+function saveBarCacheToDisk(cacheKey, data) {
+  try {
+    const entry = { data, timestamp: Date.now() };
+    localStorage.setItem(BAR_CACHE_PREFIX + cacheKey, JSON.stringify(entry));
+  } catch (e) {
+    // localStorage full — clear old entries
+    log(`Cache storage full, clearing old entries`, "warn");
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(BAR_CACHE_PREFIX)) {
+        localStorage.removeItem(key);
+      }
+    }
+  }
+}
 
 // ── Load Chart Data ─────────────────────────────────────────
 
@@ -1090,15 +1130,17 @@ async function loadChart(symbol, timeframe) {
     const cacheKey = getCacheKey(symbol, timeframe);
     let bars;
 
-    // Check cache
+    // Check memory cache, then disk cache, then fetch
     const cached = barCache[cacheKey];
-    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS && cached.data.length >= limit * 0.9) {
       bars = cached.data;
-      log(`${symbol} @ ${timeframe}: ${bars.length} bars from cache`, "info");
+      log(`${symbol} @ ${timeframe}: ${bars.length} bars from memory cache`, "info");
     } else {
+      loading.textContent = `Loading ${symbol}...`;
       const barsJson = await invoke("get_bars", { symbol, timeframe, limit });
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
+      saveBarCacheToDisk(cacheKey, bars);
     }
 
     const chartData = bars.map((b) => ({
@@ -1318,7 +1360,14 @@ function setupAutocomplete() {
         for (const [sym, name] of matches) {
           const item = document.createElement("div");
           item.className = "autocomplete-item";
-          item.innerHTML = `<span class="sym">${sym}</span><span class="name">${name}</span>`;
+          const symSpan = document.createElement("span");
+          symSpan.className = "sym";
+          symSpan.textContent = sym;
+          const nameSpan = document.createElement("span");
+          nameSpan.className = "name";
+          nameSpan.textContent = name;
+          item.appendChild(symSpan);
+          item.appendChild(nameSpan);
           item.addEventListener("mousedown", (e) => {
             e.preventDefault();
             input.value = sym;
@@ -1804,6 +1853,7 @@ function setupPaneResizers() {
 // ── Init ────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
+  loadBarCacheFromDisk();
   initChart();
   setupPaneResizers();
   setupLogPanel();
