@@ -1597,15 +1597,18 @@ async function prefetchAllTimeframes(symbol, currentTF, limit) {
   log(`Pre-fetch complete for ${symbol}`, "ok");
 }
 
+let lastBarTime = 0;
+
 async function updateLatestBar(symbol, timeframe) {
   if (symbol !== currentSymbol || timeframe !== currentTimeframe) return;
   try {
-    const barsJson = await invoke("get_bars", { symbol, timeframe, limit: 2 });
+    const barsJson = await invoke("get_bars", { symbol, timeframe, limit: 5 });
     const bars = JSON.parse(barsJson);
     if (bars.length === 0) return;
     const latest = bars[bars.length - 1];
+    const barTime = Math.floor(new Date(latest.timestamp).getTime() / 1000);
     const bar = {
-      time: Math.floor(new Date(latest.timestamp).getTime() / 1000),
+      time: barTime,
       open: latest.open,
       high: latest.high,
       low: latest.low,
@@ -1613,6 +1616,16 @@ async function updateLatestBar(symbol, timeframe) {
     };
     candleSeries.update(bar);
     lastPrice = bar.close;
+
+    // If a NEW bar has printed (different timestamp), refresh all indicators
+    if (barTime !== lastBarTime && lastBarTime !== 0) {
+      log(`New bar on ${symbol} @ ${timeframe}`, "info");
+      const chartData = candleSeries.data();
+      if (chartData && chartData.length > 0) {
+        applyIndicators(chartData);
+      }
+    }
+    lastBarTime = barTime;
   } catch (_) {}
 }
 
@@ -2160,11 +2173,37 @@ function setupConnect() {
     if (e.key === "Enter") document.getElementById("btn-connect").click();
   });
 
-  // Auto-connect if only one saved account
+  // Auto-connect if saved account exists
   const accounts = loadSavedAccounts();
-  if (accounts.length === 1) {
+  if (accounts.length >= 1) {
+    // Pre-fill with first (or only) account
     fillFormFromAccount(accounts[0].name);
     document.getElementById("saved-accounts").value = accounts[0].name;
+
+    // Auto-connect silently
+    const acct = accounts[0];
+    const paper = acct.type === "paper";
+    status.textContent = "Auto-connecting...";
+    status.style.color = "#ff8";
+
+    invoke("connect", { apiKey: acct.apiKey, secretKey: acct.secretKey, paper }).then((result) => {
+      const parsed = JSON.parse(result);
+      const typeLabel = paper ? "Paper" : "LIVE";
+      status.textContent = `Connected [${typeLabel}] $${Number(parsed.equity).toFixed(0)}`;
+      status.style.color = "#8f8";
+      modal.classList.add("hidden");
+
+      // Start dashboard + symbol loading
+      if (!dashboardInterval) {
+        dashboardInterval = setInterval(updateDashboard, 2000);
+      }
+      loadSymbolList();
+      log(`Auto-connected to ${acct.name} (${typeLabel})`, "ok");
+    }).catch((e) => {
+      status.textContent = `Auto-connect failed: ${e}`;
+      status.style.color = "#f88";
+      log(`Auto-connect failed: ${e}`, "error");
+    });
   }
 }
 
