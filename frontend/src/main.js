@@ -759,17 +759,31 @@ function applyIndicators(chartData) {
         indicatorSeries[key + "_h"] = sh;
         indicatorSeries[key + "_l"] = sl2;
       }
-      // HTF previous candle levels as price lines — NO axis labels to avoid spam
+      // HTF previous candle levels — solid lines from HTF bar start to last candle
       for (const tf of getRelevantMTFs(ALL_MTF_PCL_TFS)) {
         const tfBars = mtfData[tf];
         const levels = calcHTFPrevLevels(tfBars, chartData);
         if (!levels) continue;
         const color = MTF_COLORS[tf] || "#FFFFFF";
-        candleSeries.createPriceLine({ price: levels.prevHigh, color, lineWidth: 2, lineStyle: 0, axisLabelVisible: false, title: "" });
-        candleSeries.createPriceLine({ price: levels.prevLow, color, lineWidth: 2, lineStyle: 0, axisLabelVisible: false, title: "" });
+        // Previous bar levels span from previous HTF bar start to current
+        const prevStart = tfBars.length >= 2 ? tfBars[tfBars.length - 2].time : 0;
+        const levelBars = clip(chartData.filter(d => d.time >= prevStart));
+        if (levelBars.length < 2) continue;
+        const drawLevel = (val, clr, k) => {
+          const s = chart.addLineSeries({ color: clr, lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
+          s.setData(levelBars.map(d => ({ time: d.time, value: val })));
+          indicatorSeries[`pcl_${tf}_${k}`] = s;
+        };
+        drawLevel(levels.prevHigh, color, "ph");
+        drawLevel(levels.prevLow, color, "pl");
+        // D1/W1 current bar levels (Judas)
         if (tf === "1Day" || tf === "1Week") {
-          candleSeries.createPriceLine({ price: levels.curHigh, color: "#FF00FF", lineWidth: 2, lineStyle: 0, axisLabelVisible: false, title: "" });
-          candleSeries.createPriceLine({ price: levels.curLow, color: "#FF00FF", lineWidth: 2, lineStyle: 0, axisLabelVisible: false, title: "" });
+          const curStart = tfBars[tfBars.length - 1].time;
+          const curBars = clip(chartData.filter(d => d.time >= curStart));
+          if (curBars.length >= 2) {
+            drawLevel(levels.curHigh, "#FF00FF", "ch");
+            drawLevel(levels.curLow, "#FF00FF", "cl");
+          }
         }
       }
 
@@ -778,19 +792,27 @@ function applyIndicators(chartData) {
       // Current chart ATR projection
       if (chartData.length > period + 1) {
         const atrp = calcATRProjection(chartData, period);
-        const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "", lastValueVisible: false, priceLineVisible: false });
-        const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "", lastValueVisible: false, priceLineVisible: false });
+        const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
+        const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
         su.setData(clip(atrp.upper)); sl3.setData(clip(atrp.lower));
         indicatorSeries[key + "_u"] = su;
         indicatorSeries[key + "_l"] = sl3;
       }
-      // HTF ATR projections — no axis labels
+      // HTF ATR projections — solid yellow lines, clipped to chart range
       for (const tf of getRelevantMTFs(ALL_MTF_ATR_TFS)) {
         const tfBars = mtfData[tf];
         const proj = calcHTFATRProjection(tfBars, period);
         if (!proj) continue;
-        candleSeries.createPriceLine({ price: proj.upper, color: "#FFFF00", lineWidth: 2, lineStyle: 3, axisLabelVisible: false, title: "" });
-        candleSeries.createPriceLine({ price: proj.lower, color: "#FFFF00", lineWidth: 2, lineStyle: 3, axisLabelVisible: false, title: "" });
+        // Draw as line series from HTF current bar start to last candle (not edge-to-edge price lines)
+        const htfStart = tfBars[tfBars.length - 1].time;
+        const projBars = clip(chartData.filter(d => d.time >= htfStart));
+        if (projBars.length < 2) continue;
+        const sU = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
+        const sL = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
+        sU.setData(projBars.map(d => ({ time: d.time, value: proj.upper })));
+        sL.setData(projBars.map(d => ({ time: d.time, value: proj.lower })));
+        indicatorSeries[`atr_mtf_${tf}_u`] = sU;
+        indicatorSeries[`atr_mtf_${tf}_l`] = sL;
       }
 
     } else if (ind === "fisher" && chartData.length > period) {
