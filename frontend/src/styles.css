@@ -173,6 +173,24 @@ body {
 #fisher-pane { flex: 1.2; }
 #volume-pane { flex: 1; }
 
+/* ── Chart Tooltip ───────────────────────────────────────── */
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 50;
+  background: #111111ee;
+  border: 1px solid #444;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-family: 'Consolas', monospace;
+  color: #ddd;
+  pointer-events: none;
+  white-space: nowrap;
+  border-radius: 2px;
+}
+
+.chart-tooltip.hidden { display: none; }
+
 /* ── Right Panel ─────────────────────────────────────────── */
 
 #right-panel {

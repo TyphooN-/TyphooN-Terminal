@@ -115,10 +115,33 @@ function initChart() {
   });
 
   // Sync time scales: when main chart scrolls, sub-panes follow
+  let syncing = false;
   chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-    if (range) {
+    if (range && !syncing) {
+      syncing = true;
       fisherChart.timeScale().setVisibleLogicalRange(range);
       volumeChart.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    }
+  });
+
+  // Sync crosshair across panes
+  chart.subscribeCrosshairMove((param) => {
+    if (param.time) {
+      fisherChart.setCrosshairPosition(undefined, undefined, param.time);
+      volumeChart.setCrosshairPosition(undefined, undefined, param.time);
+    }
+  });
+  fisherChart.subscribeCrosshairMove((param) => {
+    if (param.time) {
+      chart.setCrosshairPosition(undefined, undefined, param.time);
+      volumeChart.setCrosshairPosition(undefined, undefined, param.time);
+    }
+  });
+  volumeChart.subscribeCrosshairMove((param) => {
+    if (param.time) {
+      chart.setCrosshairPosition(undefined, undefined, param.time);
+      fisherChart.setCrosshairPosition(undefined, undefined, param.time);
     }
   });
 
@@ -131,6 +154,40 @@ function initChart() {
   ro.observe(container);
   ro.observe(fisherContainer);
   ro.observe(volumeContainer);
+
+  // Tooltip for indicator values on crosshair
+  setupTooltip();
+}
+
+function setupTooltip() {
+  const tooltip = document.createElement("div");
+  tooltip.id = "chart-tooltip";
+  tooltip.className = "chart-tooltip hidden";
+  document.getElementById("chart-stack").appendChild(tooltip);
+
+  chart.subscribeCrosshairMove((param) => {
+    if (!param.time || !param.point || param.point.x < 0) {
+      tooltip.classList.add("hidden");
+      return;
+    }
+    const lines = [];
+    for (const [key, series] of Object.entries(indicatorSeries)) {
+      const data = param.seriesData.get(series);
+      if (data && data.value !== undefined) {
+        // Derive label from key
+        const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+        lines.push(`${label}: ${data.value.toFixed(4)}`);
+      }
+    }
+    if (lines.length > 0) {
+      tooltip.innerHTML = lines.join("<br>");
+      tooltip.style.left = param.point.x + 16 + "px";
+      tooltip.style.top = param.point.y + "px";
+      tooltip.classList.remove("hidden");
+    } else {
+      tooltip.classList.add("hidden");
+    }
+  });
 }
 
 // ── SL/TP Lines ─────────────────────────────────────────────
@@ -715,38 +772,40 @@ function applyIndicators(chartData) {
       // Green (#3CB371) when fisher > signal (bullish), Red (#FF4500) when < (bearish), Gray neutral
       const ef = calcEhlersFisher(chartData, period);
 
-      // Split fisher data into green and red segments for color-changing line
-      const greenData = [], redData = [], grayData = [];
-      for (let i = 0; i < ef.fisher.length; i++) {
+      // MQL5 DRAW_COLOR_LINE: ONE line that changes color per bar.
+      // Split into contiguous same-color segments, each as its own line series.
+      // Each segment includes the last point of the previous segment for continuity.
+      const segments = [];
+      let curColor = ef.colors[0];
+      let curSeg = [{ time: ef.fisher[0].time, value: ef.fisher[0].value }];
+
+      for (let i = 1; i < ef.fisher.length; i++) {
         const d = { time: ef.fisher[i].time, value: ef.fisher[i].value };
-        const c = ef.colors[i];
-        // To get connected lines, each segment needs the transition point
-        if (c === "#3CB371") {
-          greenData.push(d);
-          if (i > 0 && ef.colors[i - 1] !== "#3CB371") greenData.push(d); // connect
-        } else if (c === "#FF4500") {
-          redData.push(d);
-          if (i > 0 && ef.colors[i - 1] !== "#FF4500") redData.push(d);
+        if (ef.colors[i] !== curColor) {
+          // Close current segment with this transition point
+          curSeg.push(d);
+          segments.push({ color: curColor, data: curSeg });
+          // Start new segment from this point
+          curColor = ef.colors[i];
+          curSeg = [d];
         } else {
-          grayData.push(d);
+          curSeg.push(d);
         }
       }
+      if (curSeg.length > 0) segments.push({ color: curColor, data: curSeg });
 
-      // Draw all three color lines (they overlap where color transitions)
-      const sGreen = fisherChart.addLineSeries({ color: "#3CB371", lineWidth: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-      const sRed = fisherChart.addLineSeries({ color: "#FF4500", lineWidth: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-
-      // Full fisher line in appropriate colors — use the complete data for each
-      // Green segments: set value to NaN for non-green bars to create gaps
-      sGreen.setData(ef.fisher.map((d, i) => ({
-        time: d.time,
-        value: ef.colors[i] === "#3CB371" ? d.value : NaN,
-      })).filter(d => !isNaN(d.value)));
-
-      sRed.setData(ef.fisher.map((d, i) => ({
-        time: d.time,
-        value: ef.colors[i] === "#FF4500" ? d.value : NaN,
-      })).filter(d => !isNaN(d.value)));
+      // Draw each segment as its own line series
+      for (let si = 0; si < segments.length; si++) {
+        const seg = segments[si];
+        if (seg.data.length < 2) continue;
+        const s = fisherChart.addLineSeries({
+          color: seg.color, lineWidth: 2,
+          lastValueVisible: si === segments.length - 1, // only last segment shows value
+          priceLineVisible: false, crosshairMarkerVisible: false,
+        });
+        s.setData(seg.data);
+        fisherSeries[`seg_${si}`] = s;
+      }
 
       // Signal line (gray, thin)
       const sSignal = fisherChart.addLineSeries({
@@ -760,8 +819,6 @@ function applyIndicators(chartData) {
       });
       sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
 
-      fisherSeries.green = sGreen;
-      fisherSeries.red = sRed;
       fisherSeries.signal = sSignal;
       fisherSeries.zero = sZero;
       fisherChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
