@@ -414,11 +414,51 @@ function setupKeyboard() {
   });
 }
 
+// ── Connection ──────────────────────────────────────────────
+
+function setupConnect() {
+  const modal = document.getElementById("connect-modal");
+  const status = document.getElementById("connect-status");
+
+  document.getElementById("btn-connect").addEventListener("click", async () => {
+    const apiKey = document.getElementById("api-key").value.trim();
+    const secretKey = document.getElementById("secret-key").value.trim();
+    const paper = document.getElementById("paper-mode").checked;
+
+    if (!apiKey || !secretKey) {
+      status.textContent = "API Key and Secret Key are required";
+      return;
+    }
+
+    status.textContent = "Connecting...";
+    status.style.color = "#ff8";
+
+    try {
+      const result = await invoke("connect", { apiKey, secretKey, paper });
+      const acct = JSON.parse(result);
+      status.textContent = `Connected! Equity: $${Number(acct.equity).toFixed(2)}`;
+      status.style.color = "#8f8";
+      // Hide modal after short delay
+      setTimeout(() => modal.classList.add("hidden"), 800);
+      // Start dashboard updates
+      setInterval(updateDashboard, 2000);
+    } catch (e) {
+      status.textContent = `Failed: ${e}`;
+      status.style.color = "#f88";
+    }
+  });
+
+  // Allow Enter to connect
+  document.getElementById("secret-key").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") document.getElementById("btn-connect").click();
+  });
+}
+
 // ── Init ────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
   initChart();
   setupButtons();
   setupKeyboard();
-  setInterval(updateDashboard, 2000);
+  setupConnect();
 });

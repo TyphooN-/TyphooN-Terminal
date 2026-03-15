@@ -7,6 +7,18 @@
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
+  <!-- Connection modal -->
+  <div id="connect-modal" class="modal">
+    <div class="modal-content">
+      <h3>Connect to Alpaca</h3>
+      <input id="api-key" type="text" placeholder="API Key" />
+      <input id="secret-key" type="password" placeholder="Secret Key" />
+      <label><input id="paper-mode" type="checkbox" checked /> Paper Trading</label>
+      <button id="btn-connect">Connect</button>
+      <div id="connect-status"></div>
+    </div>
+  </div>
+
   <div id="app">
     <!-- Top bar: symbol selector + account info -->
     <div id="top-bar">
