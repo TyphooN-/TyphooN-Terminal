@@ -659,60 +659,87 @@ function calcBetterVolume(data) {
 
 // ── Supply/Demand Zones ─────────────────────────────────────
 // Detect strong move-away candles and project their origin as zones
-function calcSupplyDemandZones(data, lookback = 200) {
-  const zones = [];
-  if (data.length < 10) return zones;
+// Exact port of SupplyDemand.mqh — fractal-based detection with strength tiers
+function calcSupplyDemandZones(data, fractalLookback = 5, backLimit = 1000) {
+  if (data.length < fractalLookback * 2 + 1) return [];
 
-  // Calculate average range for significance filtering
-  let avgRange = 0;
-  for (let i = Math.max(0, data.length - lookback); i < data.length; i++) {
-    avgRange += data[i].high - data[i].low;
-  }
-  avgRange /= Math.min(lookback, data.length);
-  const minMoveSize = avgRange * 1.5; // impulse candle must be significantly larger than average
+  const limit = Math.min(backLimit, data.length - fractalLookback - 1);
 
-  const start = Math.max(0, data.length - lookback);
-  for (let i = start + 2; i < data.length - 1; i++) {
-    const prev = data[i - 1];
-    const cur = data[i];
-    const range = cur.high - cur.low;
-    const body = Math.abs(cur.close - cur.open);
-
-    if (range === 0) continue;
-    const bodyRatio = body / range;
-
-    // Impulse candle: large body (>70%), range > 1.5x average
-    if (bodyRatio < 0.7 || range < minMoveSize) continue;
-
-    const prevRange = prev.high - prev.low;
-    if (prevRange <= 0) continue;
-    const prevBodyRatio = Math.abs(prev.close - prev.open) / prevRange;
-
-    // Base candle must be small body (<40%) — indecision before the move
-    if (prevBodyRatio >= 0.4) continue;
-
-    if (cur.close > cur.open) {
-      // Demand: strong bullish impulse leaving a base
-      zones.push({ type: "demand", high: prev.high, low: prev.low, startTime: prev.time });
-    } else {
-      // Supply: strong bearish impulse leaving a base
-      zones.push({ type: "supply", high: prev.high, low: prev.low, startTime: prev.time });
-    }
-  }
-
-  // Filter out broken zones (price traded through the zone body)
-  const lastPrice = data[data.length - 1].close;
-  const valid = zones.filter(z => {
-    // Check if price has traded through the zone since it formed
-    const startIdx = data.findIndex(d => d.time >= z.startTime);
-    if (startIdx < 0) return false;
-    for (let k = startIdx + 2; k < data.length; k++) {
-      if (z.type === "demand" && data[k].close < z.low) return false; // broken demand
-      if (z.type === "supply" && data[k].close > z.high) return false; // broken supply
+  // Fractal detection (matches IsFractalHigh/IsFractalLow in MQL5)
+  function isFractalHigh(bar) {
+    const val = data[bar].high;
+    for (let i = 1; i <= fractalLookback; i++) {
+      if (bar - i < 0 || bar + i >= data.length) return false;
+      if (data[bar - i].high >= val || data[bar + i].high >= val) return false;
     }
     return true;
-  });
-  return valid.slice(-6); // keep max 6 most recent valid zones
+  }
+  function isFractalLow(bar) {
+    const val = data[bar].low;
+    for (let i = 1; i <= fractalLookback; i++) {
+      if (bar - i < 0 || bar + i >= data.length) return false;
+      if (data[bar - i].low <= val || data[bar + i].low <= val) return false;
+    }
+    return true;
+  }
+
+  // Find zones at fractals (matches FindZones in MQL5)
+  const zones = [];
+  const startBar = Math.max(fractalLookback, data.length - limit);
+  for (let i = startBar; i < data.length - fractalLookback; i++) {
+    // Supply zone at fractal high: zone = [min(close,open) → high]
+    if (isFractalHigh(i)) {
+      const hi = data[i].high;
+      let lo = Math.min(data[i].close, data[i].open);
+      if (hi - lo < 0.0001) lo = hi - 0.0001;
+      zones.push({ type: "supply", high: hi, low: lo, startTime: data[i].time, barIdx: i, touches: 0, strength: "untested" });
+    }
+    // Demand zone at fractal low: zone = [low → max(close,open)]
+    if (isFractalLow(i)) {
+      let hi = Math.max(data[i].close, data[i].open);
+      const lo = data[i].low;
+      if (hi - lo < 0.0001) hi = lo + 0.0001;
+      zones.push({ type: "demand", high: hi, low: lo, startTime: data[i].time, barIdx: i, touches: 0, strength: "untested" });
+    }
+  }
+
+  // Test zones against subsequent price action (matches TestZones in MQL5)
+  for (const z of zones) {
+    const scanFrom = Math.min(z.barIdx + fractalLookback + 1, data.length - 1);
+    for (let b = scanFrom; b < data.length; b++) {
+      // Does bar overlap zone?
+      if (data[b].high >= z.low && data[b].low <= z.high) {
+        // Broken: close pierces beyond zone boundary
+        if (z.type === "supply" && data[b].close > z.high) { z.strength = "broken"; break; }
+        if (z.type === "demand" && data[b].close < z.low) { z.strength = "broken"; break; }
+        z.touches++;
+      }
+    }
+    if (z.strength !== "broken") {
+      if (z.touches === 0) z.strength = "untested";
+      else if (z.touches <= 2) z.strength = "tested";
+      else z.strength = "proven";
+    }
+  }
+
+  // Merge overlapping same-type zones (matches MergeZones in MQL5)
+  zones.sort((a, b) => a.type === b.type ? a.low - b.low : a.type.localeCompare(b.type));
+  const merged = [];
+  for (const z of zones) {
+    const last = merged.length > 0 ? merged[merged.length - 1] : null;
+    if (last && last.type === z.type && z.low <= last.high) {
+      last.high = Math.max(last.high, z.high);
+      last.low = Math.min(last.low, z.low);
+      last.touches += z.touches;
+      if (z.strength === "broken") last.strength = "broken";
+      if (z.startTime < last.startTime) last.startTime = z.startTime;
+    } else {
+      merged.push({ ...z });
+    }
+  }
+
+  // Filter: remove broken, keep active zones
+  return merged.filter(z => z.strength !== "broken");
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1007,15 +1034,23 @@ function applyIndicators(chartData) {
       volumeChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
 
     } else if (ind === "supply-demand" && chartData.length > 10) {
-      // Supply/Demand zones — filled rectangles (like a trader would draw)
-      // Two area series per zone: one fills DOWN from top, one fills UP from bottom
-      // Where they overlap creates a solid filled rectangle
+      // SupplyDemand.mqh: fractal-based zones with strength-tier colors
       const zones = calcSupplyDemandZones(chartData);
       for (let zi = 0; zi < zones.length; zi++) {
         const z = zones[zi];
-        const isDemand = z.type === "demand";
-        const fillColor = isDemand ? "#00FF0025" : "#FF000025";
-        const lineColor = isDemand ? "#00FF0077" : "#FF000077";
+        // MQL5 default colors by type and strength
+        const colors = z.type === "supply" ? {
+          untested: "#87CEEB",  // clrSkyBlue
+          tested:   "#00BFFF",  // clrDeepSkyBlue
+          proven:   "#1E90FF",  // clrDodgerBlue
+        } : {
+          untested: "#8FBC8F",  // clrDarkSeaGreen
+          tested:   "#3CB371",  // clrMediumSeaGreen
+          proven:   "#2E8B57",  // clrSeaGreen
+        };
+        const zoneColor = colors[z.strength] || colors.untested;
+        const fillColor = zoneColor + "30"; // semi-transparent fill
+        const lineColor = zoneColor + "88"; // slightly transparent border
         const zoneBars = clip(chartData.filter(d => d.time >= z.startTime));
         if (zoneBars.length < 2) continue;
 
