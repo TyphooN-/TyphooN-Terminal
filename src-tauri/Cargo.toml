@@ -20,6 +20,7 @@ zeroize = { version = "1", features = ["derive"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
 async-trait = "0.1"
+keyring = "3"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

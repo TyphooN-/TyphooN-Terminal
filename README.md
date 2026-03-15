@@ -30,7 +30,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
 | **CSV Export** | Export trade history as CSV |
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
-| **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), secure local credential storage |
+| **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | Full NNFX system ported from MQL5 + standard indicators (RSI, MACD, Bollinger, etc.) |
 | **Security** | 6-pass audit (50 findings): input validation, HTTP timeouts, path traversal protection, CSP, config bounds, resource limits |
 

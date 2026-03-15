@@ -86,6 +86,75 @@ async fn connect(
     Ok(serde_json::to_string(&account).unwrap())
 }
 
+// ── OS Keychain (gnome-keyring / KWallet / macOS Keychain) ──────────
+
+const KEYCHAIN_SERVICE: &str = "typhoon-terminal";
+
+#[tauri::command]
+async fn keychain_save(account_name: String, api_key: String, secret_key: String) -> Result<(), String> {
+    if account_name.is_empty() || account_name.len() > 100 {
+        return Err("Invalid account name".into());
+    }
+    if api_key.is_empty() || api_key.len() > 100 || !api_key.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("Invalid API key format".into());
+    }
+    if secret_key.is_empty() || secret_key.len() > 100 || !secret_key.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("Invalid secret key format".into());
+    }
+    // Store as JSON: {"apiKey":"...","secretKey":"..."}
+    let cred_json = serde_json::json!({
+        "apiKey": api_key,
+        "secretKey": secret_key,
+    }).to_string();
+
+    // keyring crate uses blocking I/O, run in spawn_blocking
+    let name = account_name.clone();
+    tokio::task::spawn_blocking(move || {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &name)
+            .map_err(|e| format!("Keychain entry error: {e}"))?;
+        entry.set_password(&cred_json)
+            .map_err(|e| format!("Keychain save failed: {e}"))?;
+        Ok::<(), String>(())
+    }).await.map_err(|e| format!("Task error: {e}"))??;
+
+    tracing::info!("Saved credentials for '{}' to OS keychain", account_name);
+    Ok(())
+}
+
+#[tauri::command]
+async fn keychain_load(account_name: String) -> Result<String, String> {
+    if account_name.is_empty() || account_name.len() > 100 {
+        return Err("Invalid account name".into());
+    }
+    let name = account_name.clone();
+    let cred_json = tokio::task::spawn_blocking(move || {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &name)
+            .map_err(|e| format!("Keychain entry error: {e}"))?;
+        entry.get_password()
+            .map_err(|e| format!("Keychain load failed: {e}"))
+    }).await.map_err(|e| format!("Task error: {e}"))??;
+
+    Ok(cred_json)
+}
+
+#[tauri::command]
+async fn keychain_delete(account_name: String) -> Result<(), String> {
+    if account_name.is_empty() || account_name.len() > 100 {
+        return Err("Invalid account name".into());
+    }
+    let name = account_name.clone();
+    tokio::task::spawn_blocking(move || {
+        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &name)
+            .map_err(|e| format!("Keychain entry error: {e}"))?;
+        entry.delete_credential()
+            .map_err(|e| format!("Keychain delete failed: {e}"))?;
+        Ok::<(), String>(())
+    }).await.map_err(|e| format!("Task error: {e}"))??;
+
+    tracing::info!("Deleted credentials for '{}' from OS keychain", account_name);
+    Ok(())
+}
+
 #[tauri::command]
 async fn get_account(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.lock().await;
@@ -1433,6 +1502,10 @@ fn main() {
         // tauri-plugin-shell removed — not used, reduces attack surface
         .manage(state)
         .invoke_handler(tauri::generate_handler![
+            // Keychain
+            keychain_save,
+            keychain_load,
+            keychain_delete,
             // Broker
             connect,
             get_account,

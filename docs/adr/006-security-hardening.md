@@ -1,6 +1,6 @@
 # ADR-006: Security Hardening
 
-**Status:** Implemented (Pass 7)
+**Status:** Implemented (Pass 8)
 **Date:** 2026-03-15
 **Updated:** 2026-03-15
 
@@ -171,6 +171,12 @@ Full review of ~4,000 lines of code written by automated agents across 4 paralle
 - ~~`zeroize` crate for API key memory cleanup~~ ✅ Done (Pass 7)
 - ~~Frontend rate limiting (debounce rapid-fire order clicks)~~ ✅ Done (Pass 7)
 - ~~`cargo audit` and `npm audit`~~ ✅ Clean (0 vulnerabilities)
-- OS keychain for credential storage (via `keyring` crate)
+- ~~OS keychain for credential storage~~ ✅ Done (Pass 8 — `keyring` v3 crate, gnome-keyring/KWallet/macOS Keychain)
 - Certificate pinning for Alpaca API endpoints (TLS 1.2+ min with rustls)
 - Restrict Tauri command allowlist per window (N/A — single window app)
+
+## Pass 8 — OS Keychain Integration
+
+### Critical → Fixed
+
+57. **Credentials moved from localStorage to OS keychain**: API keys and secret keys now stored via `keyring` crate v3 (gnome-keyring on Linux, KWallet on KDE, macOS Keychain, Windows Credential Manager). localStorage stores ONLY account metadata (name + type). Keys loaded asynchronously from keychain on form fill and auto-connect. Fallback to localStorage if keychain unavailable (logged as warning). Migration-safe: reads legacy localStorage entries with keys, new saves go to keychain. Three Tauri commands: `keychain_save`, `keychain_load`, `keychain_delete`. All validate input (name ≤100 chars, key format alphanumeric ≤100 chars). Uses `tokio::task::spawn_blocking` since keyring crate is blocking I/O.

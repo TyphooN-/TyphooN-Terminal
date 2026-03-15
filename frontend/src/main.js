@@ -2353,24 +2353,72 @@ function setupKeyboard() {
   });
 }
 
-// ── Credential Storage ──────────────────────────────────────
+// ── Credential Storage (OS Keychain + localStorage metadata) ──
 
 const STORAGE_KEY = "typhoon_accounts";
 
+// localStorage stores ONLY { name, type } — no keys/secrets.
+// Actual credentials stored in OS keychain (gnome-keyring / KWallet / macOS Keychain).
 function loadSavedAccounts() {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
   } catch { return []; }
 }
 
-function saveAccounts(accounts) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
+function saveAccountMetadata(accounts) {
+  // Strip any leftover apiKey/secretKey from metadata (migration safety)
+  const clean = accounts.map(a => ({ name: a.name, type: a.type }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
+}
+
+async function saveCredentials(accountName, apiKey, secretKey, accountType) {
+  // Save keys to OS keychain
+  try {
+    await invoke("keychain_save", { accountName, apiKey, secretKey });
+    log(`Credentials saved to OS keychain for "${accountName}"`, "ok");
+  } catch (e) {
+    log(`Keychain save failed (${e}), falling back to localStorage`, "warn");
+    // Fallback: save in localStorage (legacy behavior)
+    const accounts = loadSavedAccounts();
+    const existing = accounts.findIndex(a => a.name === accountName);
+    const entry = { name: accountName, apiKey, secretKey, type: accountType };
+    if (existing >= 0) accounts[existing] = entry;
+    else accounts.push(entry);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
+    return;
+  }
+  // Save metadata (no keys) in localStorage
+  const accounts = loadSavedAccounts();
+  const existing = accounts.findIndex(a => a.name === accountName);
+  const entry = { name: accountName, type: accountType };
+  if (existing >= 0) accounts[existing] = entry;
+  else accounts.push(entry);
+  saveAccountMetadata(accounts);
+}
+
+async function loadCredentials(accountName) {
+  // Try OS keychain first
+  try {
+    const json = await invoke("keychain_load", { accountName });
+    return JSON.parse(json); // { apiKey, secretKey }
+  } catch (_) {
+    // Fallback: check localStorage for legacy entries with keys
+    const accounts = loadSavedAccounts();
+    const acct = accounts.find(a => a.name === accountName);
+    if (acct && acct.apiKey) return { apiKey: acct.apiKey, secretKey: acct.secretKey };
+    return null;
+  }
+}
+
+async function deleteCredentials(accountName) {
+  try { await invoke("keychain_delete", { accountName }); } catch (_) {}
+  const accounts = loadSavedAccounts().filter(a => a.name !== accountName);
+  saveAccountMetadata(accounts);
 }
 
 function populateAccountDropdown() {
   const select = document.getElementById("saved-accounts");
   const accounts = loadSavedAccounts();
-  // Keep the "New Account" option, remove others
   while (select.options.length > 1) select.remove(1);
   for (const acct of accounts) {
     const opt = document.createElement("option");
@@ -2380,14 +2428,21 @@ function populateAccountDropdown() {
   }
 }
 
-function fillFormFromAccount(name) {
+async function fillFormFromAccount(name) {
   const accounts = loadSavedAccounts();
   const acct = accounts.find(a => a.name === name);
   if (acct) {
     document.getElementById("account-name").value = acct.name;
-    document.getElementById("api-key").value = acct.apiKey;
-    document.getElementById("secret-key").value = acct.secretKey;
     document.getElementById("account-type").value = acct.type;
+    // Load keys from keychain asynchronously
+    const creds = await loadCredentials(name);
+    if (creds) {
+      document.getElementById("api-key").value = creds.apiKey || "";
+      document.getElementById("secret-key").value = creds.secretKey || "";
+    } else {
+      document.getElementById("api-key").value = "";
+      document.getElementById("secret-key").value = "";
+    }
   } else {
     document.getElementById("account-name").value = "";
     document.getElementById("api-key").value = "";
@@ -2407,21 +2462,20 @@ function setupConnect() {
   // Load saved accounts into dropdown
   populateAccountDropdown();
 
-  // When saved account selected, fill form
+  // When saved account selected, fill form (async — loads from keychain)
   document.getElementById("saved-accounts").addEventListener("change", (e) => {
     fillFormFromAccount(e.target.value);
   });
 
-  // Delete saved account
-  document.getElementById("btn-delete-account").addEventListener("click", () => {
+  // Delete saved account (from keychain + localStorage)
+  document.getElementById("btn-delete-account").addEventListener("click", async () => {
     const select = document.getElementById("saved-accounts");
     const name = select.value;
     if (!name) return;
     if (!confirm(`Delete saved account "${name}"?`)) return;
-    const accounts = loadSavedAccounts().filter(a => a.name !== name);
-    saveAccounts(accounts);
+    await deleteCredentials(name);
     populateAccountDropdown();
-    fillFormFromAccount("");
+    await fillFormFromAccount("");
     status.textContent = `Deleted "${name}"`;
     status.style.color = "#ff8";
   });
@@ -2459,14 +2513,9 @@ function setupConnect() {
       const result = await invoke("connect", { apiKey, secretKey, paper });
       const acct = JSON.parse(result);
 
-      // Save credentials if requested
+      // Save credentials to OS keychain if requested
       if (saveCredentials && accountName) {
-        const accounts = loadSavedAccounts();
-        const existing = accounts.findIndex(a => a.name === accountName);
-        const entry = { name: accountName, apiKey, secretKey, type: accountType };
-        if (existing >= 0) accounts[existing] = entry;
-        else accounts.push(entry);
-        saveAccounts(accounts);
+        await saveCredentials(accountName, apiKey, secretKey, accountType);
         populateAccountDropdown();
       }
 
@@ -2496,36 +2545,40 @@ function setupConnect() {
     if (e.key === "Enter") document.getElementById("btn-connect").click();
   });
 
-  // Auto-connect if saved account exists
+  // Auto-connect if saved account exists (load keys from OS keychain)
   const accounts = loadSavedAccounts();
   if (accounts.length >= 1) {
-    // Pre-fill with first (or only) account
-    fillFormFromAccount(accounts[0].name);
-    document.getElementById("saved-accounts").value = accounts[0].name;
+    const acctMeta = accounts[0];
+    fillFormFromAccount(acctMeta.name);
+    document.getElementById("saved-accounts").value = acctMeta.name;
 
-    // Auto-connect silently
-    const acct = accounts[0];
-    const paper = acct.type === "paper";
     status.textContent = "Auto-connecting...";
     status.style.color = "#ff8";
 
-    invoke("connect", { apiKey: acct.apiKey, secretKey: acct.secretKey, paper }).then((result) => {
-      const parsed = JSON.parse(result);
-      const typeLabel = paper ? "Paper" : "LIVE";
-      status.textContent = `Connected [${typeLabel}] $${Number(parsed.equity).toFixed(0)}`;
-      status.style.color = "#8f8";
-      modal.classList.add("hidden");
-
-      // Start dashboard + symbol loading
-      if (!dashboardInterval) {
-        dashboardInterval = setInterval(updateDashboard, 2000);
+    loadCredentials(acctMeta.name).then(async (creds) => {
+      if (!creds || !creds.apiKey || !creds.secretKey) {
+        status.textContent = "No credentials found — enter keys manually";
+        status.style.color = "#f88";
+        return;
       }
-      loadSymbolList();
-      log(`Auto-connected to ${acct.name} (${typeLabel})`, "ok");
-    }).catch((e) => {
-      status.textContent = `Auto-connect failed: ${e}`;
-      status.style.color = "#f88";
-      log(`Auto-connect failed: ${e}`, "error");
+      const paper = acctMeta.type === "paper";
+      try {
+        const result = await invoke("connect", { apiKey: creds.apiKey, secretKey: creds.secretKey, paper });
+        const parsed = JSON.parse(result);
+        const typeLabel = paper ? "Paper" : "LIVE";
+        status.textContent = `Connected [${typeLabel}] $${Number(parsed.equity).toFixed(0)}`;
+        status.style.color = "#8f8";
+        modal.classList.add("hidden");
+        if (!dashboardInterval) {
+          dashboardInterval = setInterval(updateDashboard, 2000);
+        }
+        loadSymbolList();
+        log(`Auto-connected to ${acctMeta.name} (${typeLabel}) [keychain]`, "ok");
+      } catch (e) {
+        status.textContent = `Auto-connect failed: ${e}`;
+        status.style.color = "#f88";
+        log(`Auto-connect failed: ${e}`, "error");
+      }
     });
   }
 }

@@ -55,7 +55,7 @@ This is a visual system for manual trading decisions. Every indicator must look 
 - **Crypto URL encoding** — symbols with `/` properly encoded as `%2F` in API path segments
 - **Minimal attack surface** — unused plugins (shell) and dependencies (4 crates) removed
 - **Devtools opt-in** — only available with `--features devtools` flag, not in release builds
-- **Credentials sandboxed** — Tauri webview localStorage is isolated per application
+- **OS keychain storage** — API keys stored in gnome-keyring/KWallet/macOS Keychain via `keyring` crate; localStorage stores only account names (no secrets)
 
 ## 6. Document Everything
 
