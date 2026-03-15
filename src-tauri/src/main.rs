@@ -18,7 +18,7 @@ mod notifications;
 mod strategies;
 
 use broker::alpaca::AlpacaBroker;
-use core::risk::{self, OrderMode, RiskConfig, SymbolSpec, VaRMode};
+use core::risk::{self, OrderMode, RiskConfig, SymbolSpec};
 use core::var;
 use core::margin;
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
