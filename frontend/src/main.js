@@ -46,13 +46,17 @@ function invoke(cmd, args) {
 // ── State ───────────────────────────────────────────────────
 
 let chart = null;
+let fisherChart = null;
+let volumeChart = null;
 let candleSeries = null;
+let fisherSeries = {};
+let volumeSeries = {};
 let slLine = null;
 let tpLine = null;
 let currentSymbol = "";
 let currentTimeframe = "1Hour";
 let lastPrice = 0;
-let mtfData = {}; // { "1Hour": [...bars], "1Day": [...bars], ... }
+let mtfData = {};
 
 // ── Chart Setup ─────────────────────────────────────────────
 
@@ -76,7 +80,6 @@ function initChart() {
     timeScale: { borderColor: "#333", timeVisible: true },
   });
 
-  // MT5 default candlestick colors: black body green/white wick up, red body red wick down
   candleSeries = chart.addCandlestickSeries({
     upColor: "#000000",
     downColor: "#000000",
@@ -86,11 +89,47 @@ function initChart() {
     wickUpColor: "#00ff00",
   });
 
-  new ResizeObserver((entries) => {
-    for (const entry of entries) {
-      chart.resize(entry.contentRect.width, entry.contentRect.height);
+  // Fisher pane — separate chart instance
+  const fisherContainer = document.getElementById("fisher-pane");
+  fisherChart = createChart(fisherContainer, {
+    width: fisherContainer.clientWidth,
+    height: fisherContainer.clientHeight,
+    layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+    grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+    rightPriceScale: { borderColor: "#333" },
+    timeScale: { visible: false }, // synced with main chart
+    crosshair: { mode: CrosshairMode.Normal },
+  });
+
+  // Volume pane — separate chart instance
+  const volumeContainer = document.getElementById("volume-pane");
+  volumeChart = createChart(volumeContainer, {
+    width: volumeContainer.clientWidth,
+    height: volumeContainer.clientHeight,
+    layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+    grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+    rightPriceScale: { borderColor: "#333" },
+    timeScale: { visible: false },
+    crosshair: { mode: CrosshairMode.Normal },
+  });
+
+  // Sync time scales: when main chart scrolls, sub-panes follow
+  chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (range) {
+      fisherChart.timeScale().setVisibleLogicalRange(range);
+      volumeChart.timeScale().setVisibleLogicalRange(range);
     }
-  }).observe(container);
+  });
+
+  // Resize all charts together
+  const ro = new ResizeObserver(() => {
+    chart.resize(container.clientWidth, container.clientHeight);
+    fisherChart.resize(fisherContainer.clientWidth, fisherContainer.clientHeight);
+    volumeChart.resize(volumeContainer.clientWidth, volumeContainer.clientHeight);
+  });
+  ro.observe(container);
+  ro.observe(fisherContainer);
+  ro.observe(volumeContainer);
 }
 
 // ── SL/TP Lines ─────────────────────────────────────────────
@@ -585,6 +624,13 @@ function calcHTFATRProjection(htfBars, period = 14) {
 
 function applyIndicators(chartData) {
   clearIndicators();
+  // Clear sub-pane charts
+  for (const [, s] of Object.entries(fisherSeries)) fisherChart.removeSeries(s);
+  for (const [, s] of Object.entries(volumeSeries)) volumeChart.removeSeries(s);
+  fisherSeries = {};
+  volumeSeries = {};
+  // Remove old price lines from candleSeries
+  // (lightweight-charts doesn't have removeAllPriceLines, so we recreate the approach)
   const checkboxes = document.querySelectorAll("#indicator-list input[type=checkbox]:checked");
 
   for (const cb of checkboxes) {
@@ -613,7 +659,7 @@ function applyIndicators(chartData) {
         const projected = projectHTFToChartTime(kamaData, chartData);
         if (projected.length === 0) continue;
         const label = MTF_LABELS[tf] || tf;
-        const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: `KAMA_${label}`, priceLineVisible: false });
+        const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
         s.setData(projected);
         indicatorSeries[`${key}_${tf}`] = s;
       }
@@ -629,20 +675,17 @@ function applyIndicators(chartData) {
         indicatorSeries[key + "_h"] = sh;
         indicatorSeries[key + "_l"] = sl2;
       }
-      // HTF previous candle levels as price lines
+      // HTF previous candle levels as price lines — NO axis labels to avoid spam
       for (const tf of MTF_PCL_TFS) {
         const tfBars = mtfData[tf];
         const levels = calcHTFPrevLevels(tfBars, chartData);
         if (!levels) continue;
-        const label = MTF_LABELS[tf] || tf;
         const color = MTF_COLORS[tf] || "#FFFFFF";
-        // Previous bar high/low
-        candleSeries.createPriceLine({ price: levels.prevHigh, color, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${label} PH` });
-        candleSeries.createPriceLine({ price: levels.prevLow, color, lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${label} PL` });
-        // D1/W1 current bar high/low (Judas levels — magenta)
+        candleSeries.createPriceLine({ price: levels.prevHigh, color, lineWidth: 2, lineStyle: 0, axisLabelVisible: false, title: "" });
+        candleSeries.createPriceLine({ price: levels.prevLow, color, lineWidth: 2, lineStyle: 0, axisLabelVisible: false, title: "" });
         if (tf === "1Day" || tf === "1Week") {
-          candleSeries.createPriceLine({ price: levels.curHigh, color: "#FF00FF", lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${label} CH` });
-          candleSeries.createPriceLine({ price: levels.curLow, color: "#FF00FF", lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `${label} CL` });
+          candleSeries.createPriceLine({ price: levels.curHigh, color: "#FF00FF", lineWidth: 2, lineStyle: 0, axisLabelVisible: false, title: "" });
+          candleSeries.createPriceLine({ price: levels.curLow, color: "#FF00FF", lineWidth: 2, lineStyle: 0, axisLabelVisible: false, title: "" });
         }
       }
 
@@ -651,66 +694,59 @@ function applyIndicators(chartData) {
       // Current chart ATR projection
       if (chartData.length > period + 1) {
         const atrp = calcATRProjection(chartData, period);
-        const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "ATR+", lastValueVisible: false, priceLineVisible: false });
-        const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "ATR-", lastValueVisible: false, priceLineVisible: false });
+        const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "", lastValueVisible: false, priceLineVisible: false });
+        const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 3, title: "", lastValueVisible: false, priceLineVisible: false });
         su.setData(atrp.upper); sl3.setData(atrp.lower);
         indicatorSeries[key + "_u"] = su;
         indicatorSeries[key + "_l"] = sl3;
       }
-      // HTF ATR projections as horizontal price lines
+      // HTF ATR projections — no axis labels
       for (const tf of MTF_ATR_TFS) {
         const tfBars = mtfData[tf];
         const proj = calcHTFATRProjection(tfBars, period);
         if (!proj) continue;
-        const label = MTF_LABELS[tf] || tf;
-        candleSeries.createPriceLine({ price: proj.upper, color: "#FFFF00", lineWidth: 2, lineStyle: 3, axisLabelVisible: true, title: `${label} ATR+` });
-        candleSeries.createPriceLine({ price: proj.lower, color: "#FFFF00", lineWidth: 2, lineStyle: 3, axisLabelVisible: true, title: `${label} ATR-` });
+        candleSeries.createPriceLine({ price: proj.upper, color: "#FFFF00", lineWidth: 2, lineStyle: 3, axisLabelVisible: false, title: "" });
+        candleSeries.createPriceLine({ price: proj.lower, color: "#FFFF00", lineWidth: 2, lineStyle: 3, axisLabelVisible: false, title: "" });
       }
 
     } else if (ind === "fisher" && chartData.length > period) {
-      // EhlersFisherTransform.mqh: period 32
-      // Fisher: clrMediumSeaGreen (#3CB371) bullish, clrOrangeRed (#FF4500) bearish, clrDarkGray (#A9A9A9)
-      // Signal: clrDarkGray, width 1
+      // Ehlers Fisher Transform — rendered in dedicated fisherChart pane
       const ef = calcEhlersFisher(chartData, period);
-      chart.priceScale("fisher").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
 
-      // Fisher as colored histogram — supports per-bar coloring (matching MQL5 DRAW_COLOR_LINE visual)
-      const sHist = chart.addHistogramSeries({
-        priceScaleId: "fisher", lastValueVisible: true,
+      // Fisher as colored histogram bars
+      const sHist = fisherChart.addHistogramSeries({
         priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
       });
-      const fisherHist = ef.fisher.map((d, i) => ({
+      sHist.setData(ef.fisher.map((d, i) => ({
         time: d.time, value: d.value, color: ef.colors[i] || "#A9A9A9",
-      }));
-      sHist.setData(fisherHist);
+      })));
 
       // Signal line
-      const sSignal = chart.addLineSeries({
-        color: "#A9A9A9", lineWidth: 1, title: "Signal",
-        priceScaleId: "fisher", lastValueVisible: false, priceLineVisible: false,
+      const sSignal = fisherChart.addLineSeries({
+        color: "#A9A9A9", lineWidth: 1, lastValueVisible: false, priceLineVisible: false,
       });
       sSignal.setData(ef.signal);
 
       // Zero line
-      const sZero = chart.addLineSeries({
-        color: "#FFFFFF22", lineWidth: 1, lineStyle: 2,
-        priceScaleId: "fisher", lastValueVisible: false, priceLineVisible: false,
+      const sZero = fisherChart.addLineSeries({
+        color: "#FFFFFF33", lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false,
       });
       sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
-      indicatorSeries[key] = sHist;
-      indicatorSeries[key + "_sig"] = sSignal;
-      indicatorSeries[key + "_z"] = sZero;
+
+      fisherSeries.hist = sHist;
+      fisherSeries.signal = sSignal;
+      fisherSeries.zero = sZero;
+      fisherChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
 
     } else if (ind === "better-vol" && chartData.length > 2) {
-      // BetterVolume — colored by price action (climax/churn/high/low)
+      // BetterVolume — rendered in dedicated volumeChart pane
       const bvData = calcBetterVolume(chartData);
-      const s = chart.addHistogramSeries({
+      const s = volumeChart.addHistogramSeries({
         priceFormat: { type: "volume" },
-        priceScaleId: "bettervol",
       });
-      chart.priceScale("bettervol").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
       s.setData(bvData);
-      indicatorSeries[key] = s;
+      volumeSeries.hist = s;
+      volumeChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
 
     } else if (ind === "supply-demand" && chartData.length > 10) {
       // Supply/Demand zones — projected as colored bands

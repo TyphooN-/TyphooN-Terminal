@@ -148,10 +148,26 @@ body {
   overflow: hidden;
 }
 
-#chart-container {
+#chart-stack {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#chart-container {
+  flex: 7;
   background: #000000;
   position: relative;
+  min-height: 100px;
+}
+
+.sub-pane {
+  flex: 1;
+  background: #000000;
+  border-top: 1px solid #333;
+  position: relative;
+  min-height: 60px;
 }
 
 /* ── Right Panel ─────────────────────────────────────────── */
