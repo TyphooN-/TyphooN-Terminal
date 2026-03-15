@@ -40,3 +40,22 @@ Alpaca doesn't support monthly bars. Synthesized by:
 - App restart loads from disk cache, only fetches latest bars
 - localStorage has ~5-10MB limit per origin — sufficient for typical usage
 - Cache cleared automatically on overflow
+
+## API Call Efficiency Philosophy
+
+Every API call is an investment. The caching strategy maximizes the useful lifespan of each call:
+
+1. **Never re-fetch what we have**: Disk cache persists across restarts — historical bars fetched once are never fetched again
+2. **Cache-first display**: Show stale cached data immediately, refresh in background — user sees chart in milliseconds, not seconds
+3. **Background pre-fetch**: After primary chart loads, silently cache all other timeframes — future timeframe switches are instant
+4. **Deduplication**: Sort + dedup after chunk collection prevents storing duplicate bars from overlapping requests
+5. **Stale detection**: Stop fetching when API returns bars we already have (same date as last cached bar)
+
+This philosophy mirrors how we respect CPU and memory cycles — API calls are a finite resource (200/min on free plan) and each one should produce lasting value in the cache.
+
+## Future: Cache Compression
+
+localStorage is limited to ~5-10MB. For heavy multi-symbol usage, consider:
+- **zstd compression** via Rust backend: store compressed bar data on disk (Tauri file API), decompress on load. OHLCV data compresses ~5-10x due to repeating price patterns
+- **IndexedDB**: larger storage quota than localStorage (50MB+), structured storage
+- **Hybrid**: hot cache in memory, warm cache in IndexedDB, cold cache in compressed files
