@@ -45,6 +45,7 @@
         <option value="1Min">1m</option>
         <option value="5Min">5m</option>
         <option value="15Min">15m</option>
+        <option value="30Min">30m</option>
         <option value="1Hour" selected>1H</option>
         <option value="4Hour">4H</option>
         <option value="1Day">D1</option>
@@ -96,6 +97,8 @@
         <div id="mtf-grid">
           <div class="mtf-header">
             <span class="mtf-label">MTF</span>
+            <span class="mtf-tf">M15</span>
+            <span class="mtf-tf">M30</span>
             <span class="mtf-tf">H1</span>
             <span class="mtf-tf">H4</span>
             <span class="mtf-tf">D1</span>
@@ -103,6 +106,8 @@
           </div>
           <div class="mtf-row" id="mtf-sma200">
             <span class="mtf-label">SMA200</span>
+            <span class="mtf-dot" id="mtf-sma200-15Min">●</span>
+            <span class="mtf-dot" id="mtf-sma200-30Min">●</span>
             <span class="mtf-dot" id="mtf-sma200-1Hour">●</span>
             <span class="mtf-dot" id="mtf-sma200-4Hour">●</span>
             <span class="mtf-dot" id="mtf-sma200-1Day">●</span>
@@ -110,6 +115,8 @@
           </div>
           <div class="mtf-row" id="mtf-kama">
             <span class="mtf-label">KAMA</span>
+            <span class="mtf-dot" id="mtf-kama-15Min">●</span>
+            <span class="mtf-dot" id="mtf-kama-30Min">●</span>
             <span class="mtf-dot" id="mtf-kama-1Hour">●</span>
             <span class="mtf-dot" id="mtf-kama-4Hour">●</span>
             <span class="mtf-dot" id="mtf-kama-1Day">●</span>
@@ -117,6 +124,8 @@
           </div>
           <div class="mtf-row" id="mtf-fisher">
             <span class="mtf-label">Fisher</span>
+            <span class="mtf-dot" id="mtf-fisher-15Min">●</span>
+            <span class="mtf-dot" id="mtf-fisher-30Min">●</span>
             <span class="mtf-dot" id="mtf-fisher-1Hour">●</span>
             <span class="mtf-dot" id="mtf-fisher-4Hour">●</span>
             <span class="mtf-dot" id="mtf-fisher-1Day">●</span>

@@ -609,13 +609,13 @@ function calcSupplyDemandZones(data, lookback = 200) {
 // MULTI-TIMEFRAME INDICATORS — ports from MultiKAMA, ATR_Projection, PreviousCandleLevels
 // ══════════════════════════════════════════════════════════════
 
-const MTF_TIMEFRAMES = ["1Hour", "4Hour", "1Day", "1Week"];
+const MTF_TIMEFRAMES = ["15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week"];
 const ALL_MTF_KAMA_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
 const ALL_MTF_ATR_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
 const ALL_MTF_PCL_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
 
 // Timeframe hierarchy — only show TFs HIGHER than current chart (like MT5)
-const TF_RANK = { "1Min": 0, "5Min": 1, "15Min": 2, "1Hour": 3, "4Hour": 4, "1Day": 5, "1Week": 6, "1Month": 7 };
+const TF_RANK = { "1Min": 0, "5Min": 1, "15Min": 2, "30Min": 3, "1Hour": 4, "4Hour": 5, "1Day": 6, "1Week": 7, "1Month": 8 };
 
 function getRelevantMTFs(allTFs) {
   const currentRank = TF_RANK[currentTimeframe] ?? 3;
@@ -644,7 +644,7 @@ const MTF_MA_COLORS = {
   "1Week": "#FF00FF",  // Magenta
 };
 
-const MTF_LABELS = { "15Min": "M15", "1Hour": "H1", "4Hour": "H4", "1Day": "D1", "1Week": "W1" };
+const MTF_LABELS = { "15Min": "M15", "30Min": "M30", "1Hour": "H1", "4Hour": "H4", "1Day": "D1", "1Week": "W1" };
 
 async function loadMTFData(symbol) {
   try {
@@ -1029,7 +1029,7 @@ function applyIndicators(chartData) {
 // ── MTF MA Grid Update ──────────────────────────────────────
 
 function updateMTFGrid() {
-  const tfs = ["1Hour", "4Hour", "1Day", "1Week"];
+  const tfs = ["15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week"];
   for (const tf of tfs) {
     const bars = mtfData[tf];
     if (!bars || bars.length < 201) {
@@ -1256,7 +1256,7 @@ async function updateDashboard() {
 
 function updateNextBarTime() {
   const tfMap = {
-    "1Min": 60, "5Min": 300, "15Min": 900, "1Hour": 3600,
+    "1Min": 60, "5Min": 300, "15Min": 900, "30Min": 1800, "1Hour": 3600,
     "4Hour": 14400, "1Day": 86400, "1Week": 604800,
   };
   const secs = tfMap[currentTimeframe] || 3600;

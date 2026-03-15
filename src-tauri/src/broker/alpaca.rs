@@ -340,7 +340,7 @@ impl AlpacaBroker {
         // Go back far enough to cover requested bars
         let max_lookback_days = match actual_tf {
             "1Min" => 7,
-            "5Min" | "15Min" => 30,
+            "5Min" | "15Min" | "30Min" => 30,
             "1Hour" => 365,
             "4Hour" => 730,
             "1Day" => 3650,
@@ -412,7 +412,7 @@ impl AlpacaBroker {
                     }
                     // Advance start by a chunk to skip empty gaps
                     chunk_start = chunk_start + chrono::Duration::days(match actual_tf {
-                        "1Min" | "5Min" | "15Min" => 1,
+                        "1Min" | "5Min" | "15Min" | "30Min" => 1,
                         "1Hour" => 30,
                         "4Hour" => 90,
                         "1Day" => 365,
