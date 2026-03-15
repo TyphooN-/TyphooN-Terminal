@@ -3300,10 +3300,14 @@ function setupProfiles() {
 const CMD_PALETTE_COMMANDS = [
   { name: "DES", desc: "Description / Fundamentals", action: cmdDescription },
   { name: "NEWS", desc: "News headlines", action: cmdNews },
-  { name: "FA", desc: "Financial Analysis (SEC filings)", action: cmdFinancials },
+  { name: "FA", desc: "Financial Analysis (income, balance, cash flow)", action: cmdFinancialAnalysis },
   { name: "OPT", desc: "Options chain (coming soon)", action: cmdOptions },
   { name: "SCAN", desc: "Screener / Scanner", action: cmdScreener },
-  { name: "HDS", desc: "Holders / Ownership", action: cmdHolders },
+  { name: "HDS", desc: "Institutional Holders", action: cmdInstitutionalHolders },
+  { name: "MOST", desc: "Most Active stocks", action: cmdMostActive },
+  { name: "DOM", desc: "DOM / Level 2 Order Book", action: cmdOrderBook },
+  { name: "BACKTEST", desc: "Visual Backtester", action: openVisualBacktester },
+  { name: "OPTIMIZE", desc: "Genetic Optimizer", action: openOptimizer },
   { name: "HIST", desc: "Trade History / Orders", action: cmdHistory },
   { name: "QM", desc: "Quote Monitor / Watchlist", action: cmdWatchlist },
   { name: "CAL", desc: "Economic Calendar", action: cmdCalendar },
@@ -3492,15 +3496,72 @@ async function cmdNews() {
   } catch (e) { log(`NEWS command failed: ${e}`, "error"); }
 }
 
-async function cmdFinancials() {
+async function cmdFinancialAnalysis() {
   if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Financial Analysis`, width: 700, height: 550 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading financial data...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
   try {
-    const json = await invoke("get_company_filings", { symbol: currentSymbol });
-    const filings = JSON.parse(json);
-    openFilingsWindow(currentSymbol, filings);
+    const json = await invoke("get_financial_analysis", { symbol: currentSymbol });
+    const data = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+
+    const sections = [
+      { title: "Income Statement", key: "income_statement" },
+      { title: "Balance Sheet", key: "balance_sheet" },
+      { title: "Cash Flow", key: "cash_flow" },
+    ];
+
+    for (const sec of sections) {
+      const rows = data[sec.key];
+      if (!rows || (Array.isArray(rows) && rows.length === 0)) continue;
+
+      const heading = document.createElement("h3");
+      heading.textContent = sec.title;
+      heading.style.cssText = "color:#8cf;margin:12px 0 6px;font-size:13px;border-bottom:1px solid #333;padding-bottom:4px;";
+      win.appendElement(heading);
+
+      const table = document.createElement("table");
+      table.className = "fw-table";
+
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          const tr = document.createElement("tr");
+          for (const [k, v] of Object.entries(row)) {
+            const td = document.createElement("td");
+            td.className = "fw-value";
+            td.style.textAlign = "left";
+            td.textContent = typeof v === "number" ? v.toLocaleString() : String(v ?? "—");
+            tr.appendChild(td);
+          }
+          table.appendChild(tr);
+        }
+      } else if (typeof rows === "object") {
+        for (const [label, value] of Object.entries(rows)) {
+          const tr = document.createElement("tr");
+          const td1 = document.createElement("td");
+          td1.className = "fw-label";
+          td1.textContent = label;
+          const td2 = document.createElement("td");
+          td2.className = "fw-value";
+          td2.textContent = typeof value === "number" ? value.toLocaleString() : String(value ?? "—");
+          tr.appendChild(td1);
+          tr.appendChild(td2);
+          table.appendChild(tr);
+        }
+      }
+      win.appendElement(table);
+    }
+
+    if (!data.income_statement && !data.balance_sheet && !data.cash_flow) {
+      win.setContent("No financial analysis data available for this symbol.");
+    }
   } catch (e) {
-    const win = createWindow({ title: `${currentSymbol} — Financials`, width: 400, height: 300 });
-    win.setContent(`Could not load filings: ${e}`);
+    win.contentElement.textContent = "";
+    win.setContent(`Could not load financial analysis: ${e}`);
   }
 }
 
@@ -3514,9 +3575,668 @@ function cmdScreener() {
   win.setContent("Stock screener is not yet implemented. Coming in a future release.");
 }
 
-function cmdHolders() {
-  const win = createWindow({ title: `${currentSymbol || ""} — Holders`, width: 400, height: 200 });
-  win.setContent("Holders / ownership data not yet implemented. Coming in a future release.");
+async function cmdInstitutionalHolders() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Institutional Holders`, width: 600, height: 450 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading holder data...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("get_institutional_holders", { symbol: currentSymbol });
+    const holders = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+    if (!holders || (Array.isArray(holders) && holders.length === 0)) {
+      win.setContent("No institutional holder data available.");
+      return;
+    }
+    const list = Array.isArray(holders) ? holders : (holders.holders || []);
+    const table = document.createElement("table");
+    table.className = "fw-table";
+    const thead = document.createElement("tr");
+    for (const h of ["Holder", "Shares", "Value", "% Out", "Change"]) {
+      const th = document.createElement("td");
+      th.style.cssText = "color:#666;font-weight:bold;font-size:10px;text-transform:uppercase;";
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+    for (const h of list) {
+      const tr = document.createElement("tr");
+      const vals = [
+        h.holder || h.name || "—",
+        h.shares ? Number(h.shares).toLocaleString() : "—",
+        h.value ? `$${Number(h.value).toLocaleString()}` : "—",
+        h.percent_out ? `${Number(h.percent_out).toFixed(2)}%` : (h.pct ? `${Number(h.pct).toFixed(2)}%` : "—"),
+        h.change ? Number(h.change).toLocaleString() : "—",
+      ];
+      for (const v of vals) {
+        const td = document.createElement("td");
+        td.className = "fw-value";
+        td.style.textAlign = "left";
+        td.textContent = v;
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Could not load holders: ${e}`);
+  }
+}
+
+async function cmdMostActive() {
+  const win = createWindow({ title: "Most Active Stocks", width: 600, height: 500 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading most active...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("get_most_active");
+    const stocks = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+    const list = Array.isArray(stocks) ? stocks : (stocks.most_active || stocks.stocks || []);
+    if (list.length === 0) {
+      win.setContent("No most active data available.");
+      return;
+    }
+    const table = document.createElement("table");
+    table.className = "fw-table most-active-table";
+    const thead = document.createElement("tr");
+    for (const h of ["Symbol", "Last", "Change", "% Chg", "Volume"]) {
+      const th = document.createElement("td");
+      th.style.cssText = "color:#666;font-weight:bold;font-size:10px;text-transform:uppercase;";
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+    for (const s of list) {
+      const tr = document.createElement("tr");
+      tr.style.cursor = "pointer";
+      const sym = s.symbol || s.ticker || "—";
+      const chg = s.change ?? s.price_change ?? 0;
+      const chgPct = s.change_percent ?? s.pct_change ?? 0;
+      const vals = [
+        sym,
+        s.last ?? s.price ?? "—",
+        typeof chg === "number" ? (chg >= 0 ? `+${chg.toFixed(2)}` : chg.toFixed(2)) : String(chg),
+        typeof chgPct === "number" ? `${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%` : String(chgPct),
+        s.volume ? (s.volume >= 1e6 ? `${(s.volume / 1e6).toFixed(1)}M` : Number(s.volume).toLocaleString()) : "—",
+      ];
+      for (let i = 0; i < vals.length; i++) {
+        const td = document.createElement("td");
+        td.className = "fw-value";
+        td.style.textAlign = "left";
+        td.textContent = vals[i];
+        if (i === 0) td.style.cssText = "color:#8ff;font-weight:bold;text-align:left;padding:6px 8px;";
+        if (i === 2 || i === 3) {
+          const n = parseFloat(vals[i]);
+          if (!isNaN(n)) td.style.color = n >= 0 ? "#4caf50" : "#f44336";
+        }
+        tr.appendChild(td);
+      }
+      tr.addEventListener("click", () => {
+        document.getElementById("symbol-input").value = sym;
+        triggerLoad();
+      });
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Could not load most active: ${e}`);
+  }
+}
+
+async function cmdOrderBook() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — DOM / Level 2`, width: 400, height: 500 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading order book...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("get_orderbook", { symbol: currentSymbol });
+    const book = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+
+    const bids = Array.isArray(book.bids) ? book.bids : [];
+    const asks = Array.isArray(book.asks) ? book.asks : [];
+    const maxSize = Math.max(
+      ...bids.map(b => b.size || b.qty || 0),
+      ...asks.map(a => a.size || a.qty || 0),
+      1
+    );
+
+    const container = document.createElement("div");
+    container.className = "dom-container";
+
+    // Asks (reversed so highest ask on top)
+    const asksReversed = [...asks].reverse();
+    for (const a of asksReversed) {
+      const price = a.price ?? 0;
+      const size = a.size ?? a.qty ?? 0;
+      const pct = (size / maxSize) * 100;
+      const row = document.createElement("div");
+      row.className = "dom-row dom-ask";
+      row.innerHTML = `<div class="dom-bar dom-bar-ask" style="width:${pct}%"></div>`
+        + `<span class="dom-size">${size.toLocaleString()}</span>`
+        + `<span class="dom-price">${Number(price).toFixed(2)}</span>`;
+      container.appendChild(row);
+    }
+
+    // Spread line
+    if (asks.length > 0 && bids.length > 0) {
+      const bestAsk = Math.min(...asks.map(a => a.price ?? Infinity));
+      const bestBid = Math.max(...bids.map(b => b.price ?? 0));
+      const spread = (bestAsk - bestBid).toFixed(2);
+      const spreadRow = document.createElement("div");
+      spreadRow.className = "dom-spread";
+      spreadRow.textContent = `Spread: $${spread}`;
+      container.appendChild(spreadRow);
+    }
+
+    // Bids
+    for (const b of bids) {
+      const price = b.price ?? 0;
+      const size = b.size ?? b.qty ?? 0;
+      const pct = (size / maxSize) * 100;
+      const row = document.createElement("div");
+      row.className = "dom-row dom-bid";
+      row.innerHTML = `<div class="dom-bar dom-bar-bid" style="width:${pct}%"></div>`
+        + `<span class="dom-size">${size.toLocaleString()}</span>`
+        + `<span class="dom-price">${Number(price).toFixed(2)}</span>`;
+      container.appendChild(row);
+    }
+
+    if (bids.length === 0 && asks.length === 0) {
+      const msg = document.createElement("div");
+      msg.style.cssText = "color:#888;padding:20px;text-align:center;";
+      msg.textContent = "No order book data available.";
+      container.appendChild(msg);
+    }
+
+    win.appendElement(container);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Could not load order book: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// Visual Backtester
+// ══════════════════════════════════════════════════════════════
+
+function openVisualBacktester() {
+  const sym = currentSymbol || "SPY";
+  const tf = currentTimeframe || "1Day";
+
+  const win = createWindow({ title: "Visual Backtester", width: 750, height: 600 });
+  win.contentElement.textContent = "";
+
+  // Controls row
+  const controls = document.createElement("div");
+  controls.className = "bt-controls";
+
+  const makeInput = (label, id, value, type = "number") => {
+    const wrap = document.createElement("label");
+    wrap.className = "bt-field";
+    wrap.textContent = label;
+    const inp = document.createElement("input");
+    inp.type = type;
+    inp.id = id;
+    inp.value = value;
+    inp.className = "bt-input";
+    wrap.appendChild(inp);
+    return wrap;
+  };
+
+  const symInput = makeInput("Symbol:", "bt-symbol", sym, "text");
+  const tfSelect = document.createElement("label");
+  tfSelect.className = "bt-field";
+  tfSelect.textContent = "TF:";
+  const tfSel = document.createElement("select");
+  tfSel.className = "bt-input";
+  for (const [v, l] of [["1Min","1m"],["5Min","5m"],["15Min","15m"],["1Hour","1H"],["4Hour","4H"],["1Day","D1"],["1Week","W1"]]) {
+    const opt = document.createElement("option");
+    opt.value = v; opt.textContent = l;
+    if (v === tf) opt.selected = true;
+    tfSel.appendChild(opt);
+  }
+  tfSelect.appendChild(tfSel);
+
+  const stratSelect = document.createElement("label");
+  stratSelect.className = "bt-field";
+  stratSelect.textContent = "Strategy:";
+  const stratSel = document.createElement("select");
+  stratSel.className = "bt-input";
+  for (const s of ["SMA Cross"]) {
+    const opt = document.createElement("option");
+    opt.value = s; opt.textContent = s;
+    stratSel.appendChild(opt);
+  }
+  stratSelect.appendChild(stratSel);
+
+  const fastInput = makeInput("Fast:", "bt-fast", "10");
+  const slowInput = makeInput("Slow:", "bt-slow", "50");
+
+  const runBtn = document.createElement("button");
+  runBtn.textContent = "Run Backtest";
+  runBtn.className = "bt-run-btn";
+
+  controls.appendChild(symInput);
+  controls.appendChild(tfSelect);
+  controls.appendChild(stratSelect);
+  controls.appendChild(fastInput);
+  controls.appendChild(slowInput);
+  controls.appendChild(runBtn);
+  win.appendElement(controls);
+
+  // Results area
+  const resultsArea = document.createElement("div");
+  resultsArea.className = "bt-results";
+  win.appendElement(resultsArea);
+
+  // Equity chart container
+  const eqContainer = document.createElement("div");
+  eqContainer.className = "bt-equity-chart";
+  eqContainer.style.cssText = "width:100%;height:200px;background:#000;border:1px solid #333;margin-bottom:8px;";
+  resultsArea.appendChild(eqContainer);
+
+  // Stats table container
+  const statsDiv = document.createElement("div");
+  statsDiv.className = "bt-stats";
+  resultsArea.appendChild(statsDiv);
+
+  // Trade list container
+  const tradesDiv = document.createElement("div");
+  tradesDiv.className = "bt-trades";
+  tradesDiv.style.cssText = "max-height:150px;overflow-y:auto;";
+  resultsArea.appendChild(tradesDiv);
+
+  let eqChart = null;
+
+  runBtn.addEventListener("click", async () => {
+    const btSym = symInput.querySelector("input").value.trim().toUpperCase() || sym;
+    const btTf = tfSel.value;
+    const btStrat = stratSel.value;
+    const btFast = parseInt(fastInput.querySelector("input").value) || 10;
+    const btSlow = parseInt(slowInput.querySelector("input").value) || 50;
+
+    runBtn.disabled = true;
+    runBtn.textContent = "Running...";
+    statsDiv.textContent = "";
+    tradesDiv.textContent = "";
+
+    try {
+      const json = await invoke("run_backtest", {
+        symbol: btSym,
+        timeframe: btTf,
+        strategy: btStrat,
+        fast_period: btFast,
+        slow_period: btSlow,
+      });
+      const result = typeof json === "string" ? JSON.parse(json) : json;
+
+      // Equity curve
+      const equityCurve = result.equity_curve || [];
+      if (eqChart) { eqChart.remove(); eqChart = null; }
+      eqChart = createChart(eqContainer, {
+        width: eqContainer.clientWidth,
+        height: 200,
+        layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false },
+        grid: { vertLines: { color: "#1a1a2e" }, horzLines: { color: "#1a1a2e" } },
+        rightPriceScale: { borderColor: "#333" },
+        timeScale: { borderColor: "#333", timeVisible: true },
+      });
+      const eqSeries = eqChart.addLineSeries({ color: "#4caf50", lineWidth: 2, title: "Equity" });
+      const eqData = equityCurve.map(p => ({
+        time: typeof p.time === "number" ? p.time : Math.floor(new Date(p.time).getTime() / 1000),
+        value: p.value ?? p.equity ?? 0,
+      }));
+      if (eqData.length > 0) {
+        eqSeries.setData(eqData);
+        eqChart.timeScale().fitContent();
+      }
+
+      // Stats table
+      const stats = result.stats || {};
+      const statsTable = document.createElement("table");
+      statsTable.className = "fw-table";
+      const statRows = [
+        ["Total P/L", stats.total_pnl != null ? `$${Number(stats.total_pnl).toFixed(2)}` : "—"],
+        ["Sharpe Ratio", stats.sharpe != null ? Number(stats.sharpe).toFixed(3) : "—"],
+        ["Win Rate", stats.win_rate != null ? `${(Number(stats.win_rate) * 100).toFixed(1)}%` : "—"],
+        ["Max Drawdown", stats.max_drawdown != null ? `$${Number(stats.max_drawdown).toFixed(2)}` : "—"],
+        ["Trades", stats.total_trades ?? stats.num_trades ?? "—"],
+        ["Profit Factor", stats.profit_factor != null ? Number(stats.profit_factor).toFixed(2) : "—"],
+      ];
+      for (const [label, value] of statRows) {
+        const tr = document.createElement("tr");
+        const td1 = document.createElement("td");
+        td1.className = "fw-label"; td1.textContent = label;
+        const td2 = document.createElement("td");
+        td2.className = "fw-value"; td2.textContent = value;
+        tr.appendChild(td1); tr.appendChild(td2);
+        statsTable.appendChild(tr);
+      }
+      statsDiv.appendChild(statsTable);
+
+      // Trade list
+      const trades = result.trades || [];
+      if (trades.length > 0) {
+        const heading = document.createElement("div");
+        heading.style.cssText = "color:#666;font-size:10px;margin:8px 0 4px;text-transform:uppercase;";
+        heading.textContent = `Trades (${trades.length})`;
+        tradesDiv.appendChild(heading);
+        const tbl = document.createElement("table");
+        tbl.className = "fw-table";
+        const th = document.createElement("tr");
+        for (const h of ["Entry", "Exit", "Side", "P/L"]) {
+          const td = document.createElement("td");
+          td.style.cssText = "color:#666;font-weight:bold;font-size:10px;";
+          td.textContent = h; th.appendChild(td);
+        }
+        tbl.appendChild(th);
+        for (const t of trades) {
+          const tr = document.createElement("tr");
+          const entryTime = t.entry_time ? String(t.entry_time).substring(0, 16) : "—";
+          const exitTime = t.exit_time ? String(t.exit_time).substring(0, 16) : "—";
+          const pnl = t.pnl ?? t.profit ?? 0;
+          for (const val of [entryTime, exitTime, t.side || "—", `$${Number(pnl).toFixed(2)}`]) {
+            const td = document.createElement("td");
+            td.className = "fw-value"; td.style.textAlign = "left";
+            td.textContent = val;
+            if (val.startsWith("$")) td.style.color = pnl >= 0 ? "#4caf50" : "#f44336";
+            tr.appendChild(td);
+          }
+          tbl.appendChild(tr);
+        }
+        tradesDiv.appendChild(tbl);
+      }
+    } catch (e) {
+      statsDiv.textContent = `Backtest failed: ${e}`;
+      statsDiv.style.color = "#f44";
+    }
+
+    runBtn.disabled = false;
+    runBtn.textContent = "Run Backtest";
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// Genetic Optimizer
+// ══════════════════════════════════════════════════════════════
+
+function openOptimizer() {
+  const sym = currentSymbol || "SPY";
+  const tf = currentTimeframe || "1Day";
+
+  const win = createWindow({ title: "Genetic Optimizer", width: 700, height: 550 });
+  win.contentElement.textContent = "";
+
+  // Controls
+  const controls = document.createElement("div");
+  controls.className = "bt-controls";
+
+  const makeField = (label, id, value) => {
+    const wrap = document.createElement("label");
+    wrap.className = "bt-field";
+    wrap.textContent = label;
+    const inp = document.createElement("input");
+    inp.type = "number"; inp.id = id; inp.value = value;
+    inp.className = "bt-input";
+    wrap.appendChild(inp);
+    return { wrap, inp };
+  };
+
+  const symWrap = document.createElement("label");
+  symWrap.className = "bt-field";
+  symWrap.textContent = "Symbol:";
+  const symInp = document.createElement("input");
+  symInp.type = "text"; symInp.value = sym; symInp.className = "bt-input";
+  symWrap.appendChild(symInp);
+  controls.appendChild(symWrap);
+
+  const fMin = makeField("Fast Min:", "opt-fmin", "5");
+  const fMax = makeField("Fast Max:", "opt-fmax", "50");
+  const sMin = makeField("Slow Min:", "opt-smin", "20");
+  const sMax = makeField("Slow Max:", "opt-smax", "200");
+  controls.appendChild(fMin.wrap);
+  controls.appendChild(fMax.wrap);
+  controls.appendChild(sMin.wrap);
+  controls.appendChild(sMax.wrap);
+
+  const runBtn = document.createElement("button");
+  runBtn.textContent = "Optimize";
+  runBtn.className = "bt-run-btn";
+  controls.appendChild(runBtn);
+  win.appendElement(controls);
+
+  // Results
+  const resultsDiv = document.createElement("div");
+  resultsDiv.style.cssText = "max-height:400px;overflow-y:auto;";
+  win.appendElement(resultsDiv);
+
+  let sortCol = null;
+  let sortAsc = true;
+  let lastResults = [];
+
+  function renderOptResults(results) {
+    resultsDiv.textContent = "";
+    if (!results || results.length === 0) {
+      resultsDiv.textContent = "No results.";
+      return;
+    }
+    const table = document.createElement("table");
+    table.className = "fw-table opt-results-table";
+    const thead = document.createElement("tr");
+    const headers = ["fast", "slow", "pnl", "sharpe", "win_rate", "max_drawdown"];
+    const labels = ["Fast", "Slow", "P/L", "Sharpe", "Win %", "Max DD"];
+    for (let i = 0; i < headers.length; i++) {
+      const th = document.createElement("td");
+      th.style.cssText = "color:#8cf;font-weight:bold;font-size:10px;cursor:pointer;user-select:none;text-transform:uppercase;padding:6px 8px;";
+      th.textContent = labels[i] + (sortCol === headers[i] ? (sortAsc ? " ▲" : " ▼") : "");
+      const col = headers[i];
+      th.addEventListener("click", () => {
+        if (sortCol === col) { sortAsc = !sortAsc; }
+        else { sortCol = col; sortAsc = false; }
+        const sorted = [...lastResults].sort((a, b) => {
+          const av = a[col] ?? 0;
+          const bv = b[col] ?? 0;
+          return sortAsc ? av - bv : bv - av;
+        });
+        renderOptResults(sorted);
+      });
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+
+    for (const r of results) {
+      const tr = document.createElement("tr");
+      const vals = [
+        r.fast ?? "—",
+        r.slow ?? "—",
+        r.pnl != null ? `$${Number(r.pnl).toFixed(2)}` : "—",
+        r.sharpe != null ? Number(r.sharpe).toFixed(3) : "—",
+        r.win_rate != null ? `${(Number(r.win_rate) * 100).toFixed(1)}%` : "—",
+        r.max_drawdown != null ? `$${Number(r.max_drawdown).toFixed(2)}` : "—",
+      ];
+      for (let i = 0; i < vals.length; i++) {
+        const td = document.createElement("td");
+        td.className = "fw-value"; td.style.textAlign = "right";
+        td.textContent = vals[i];
+        if (i === 2) {
+          const n = r.pnl ?? 0;
+          td.style.color = n >= 0 ? "#4caf50" : "#f44336";
+        }
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    resultsDiv.appendChild(table);
+  }
+
+  runBtn.addEventListener("click", async () => {
+    runBtn.disabled = true;
+    runBtn.textContent = "Optimizing...";
+    resultsDiv.textContent = "Running optimization...";
+    resultsDiv.style.color = "#888";
+
+    try {
+      const json = await invoke("run_optimization", {
+        symbol: symInp.value.trim().toUpperCase() || sym,
+        timeframe: tf,
+        fast_min: parseInt(fMin.inp.value) || 5,
+        fast_max: parseInt(fMax.inp.value) || 50,
+        slow_min: parseInt(sMin.inp.value) || 20,
+        slow_max: parseInt(sMax.inp.value) || 200,
+      });
+      const result = typeof json === "string" ? JSON.parse(json) : json;
+      lastResults = Array.isArray(result) ? result : (result.results || []);
+      sortCol = "pnl";
+      sortAsc = false;
+      const sorted = [...lastResults].sort((a, b) => (b.pnl ?? 0) - (a.pnl ?? 0));
+      resultsDiv.style.color = "";
+      renderOptResults(sorted);
+    } catch (e) {
+      resultsDiv.textContent = `Optimization failed: ${e}`;
+      resultsDiv.style.color = "#f44";
+    }
+
+    runBtn.disabled = false;
+    runBtn.textContent = "Optimize";
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// Custom Indicator Plugin System
+// ══════════════════════════════════════════════════════════════
+
+let customPlugins = {}; // { name: { name, params, calculate, seriesKeys } }
+let customPluginSeries = {}; // { pluginName: [series] }
+
+async function loadCustomIndicatorPlugins() {
+  try {
+    const json = await invoke("list_custom_indicators");
+    const plugins = typeof json === "string" ? JSON.parse(json) : json;
+    return Array.isArray(plugins) ? plugins : (plugins.indicators || []);
+  } catch (e) {
+    log(`Failed to list custom indicators: ${e}`, "error");
+    return [];
+  }
+}
+
+async function activateCustomPlugin(pluginInfo) {
+  try {
+    const name = pluginInfo.name || pluginInfo;
+    const json = await invoke("get_custom_indicator_source", { name });
+    const source = typeof json === "string" ? json : JSON.stringify(json);
+    // Evaluate plugin in a sandboxed function scope
+    const pluginFn = new Function("return (" + source + ")")();
+    if (!pluginFn || !pluginFn.calculate) {
+      log(`Plugin ${name} has no calculate() function`, "error");
+      return;
+    }
+    customPlugins[name] = pluginFn;
+    applyCustomPlugin(name, pluginFn);
+    log(`Custom indicator loaded: ${name}`, "ok");
+  } catch (e) {
+    log(`Failed to load plugin: ${e}`, "error");
+  }
+}
+
+function applyCustomPlugin(name, plugin) {
+  // Remove existing series for this plugin
+  removeCustomPlugin(name);
+  if (!chart || !candleSeries) return;
+  const data = candleSeries.data();
+  if (!data || data.length === 0) return;
+
+  const params = plugin.params || {};
+  const result = plugin.calculate(data, params);
+  if (!result || !Array.isArray(result)) return;
+
+  const colors = ["#e040fb", "#40c4ff", "#ffab40", "#69f0ae", "#ff5252"];
+  const seriesList = [];
+  // If result is array of {time, value}, single series
+  if (result.length > 0 && result[0].time !== undefined && result[0].value !== undefined) {
+    const s = chart.addLineSeries({
+      color: colors[0],
+      lineWidth: 1.5,
+      title: name,
+      lastValueVisible: true,
+    });
+    s.setData(result);
+    seriesList.push(s);
+  }
+  customPluginSeries[name] = seriesList;
+}
+
+function removeCustomPlugin(name) {
+  if (customPluginSeries[name]) {
+    for (const s of customPluginSeries[name]) {
+      try { chart.removeSeries(s); } catch (_) {}
+    }
+    delete customPluginSeries[name];
+  }
+  delete customPlugins[name];
+}
+
+function setupCustomPluginUI() {
+  const indicatorList = document.getElementById("indicator-list");
+  if (!indicatorList) return;
+
+  // Add plugin section
+  const section = document.createElement("div");
+  section.className = "ind-section";
+  section.textContent = "Custom Plugins";
+  indicatorList.appendChild(section);
+
+  const pluginContainer = document.createElement("div");
+  pluginContainer.id = "custom-plugin-list";
+  indicatorList.appendChild(pluginContainer);
+
+  const loadBtn = document.createElement("button");
+  loadBtn.textContent = "Load Plugins";
+  loadBtn.className = "bt-run-btn";
+  loadBtn.style.cssText = "font-size:10px;padding:3px 8px;margin-top:4px;width:100%;";
+  indicatorList.appendChild(loadBtn);
+
+  loadBtn.addEventListener("click", async () => {
+    loadBtn.textContent = "Loading...";
+    loadBtn.disabled = true;
+    const plugins = await loadCustomIndicatorPlugins();
+    pluginContainer.textContent = "";
+    if (plugins.length === 0) {
+      const msg = document.createElement("div");
+      msg.style.cssText = "color:#666;font-size:10px;padding:2px 0;";
+      msg.textContent = "No custom plugins found.";
+      pluginContainer.appendChild(msg);
+    } else {
+      for (const p of plugins) {
+        const pName = p.name || p;
+        const label = document.createElement("label");
+        label.className = "ind-row";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.dataset.plugin = pName;
+        cb.addEventListener("change", () => {
+          if (cb.checked) activateCustomPlugin(p);
+          else removeCustomPlugin(pName);
+        });
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(` ${pName}`));
+        pluginContainer.appendChild(label);
+      }
+    }
+    loadBtn.textContent = "Load Plugins";
+    loadBtn.disabled = false;
+  });
 }
 
 async function cmdHistory() {
@@ -4256,6 +4976,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupCommandPalette();
   setupSplitButton();
   setupScreenshotShortcut();
+  setupCustomPluginUI();
 
   // Auto-save session periodically and on shutdown
   setInterval(saveSession, 30000); // every 30s

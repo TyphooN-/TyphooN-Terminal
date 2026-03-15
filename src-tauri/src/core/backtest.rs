@@ -204,6 +204,254 @@ impl Strategy for SMACrossStrategy {
 
 // ── Backtest Engine ─────────────────────────────────────────────────
 
+// ── Bar-by-bar State (for visual replay) ────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BarState {
+    pub bar_index: usize,
+    pub timestamp: String,
+    pub equity: f64,
+    pub position_size: f64, // positive = long, negative = short, 0 = flat
+    pub signal: Option<Signal>,
+    pub trade_pnl: f64, // PnL of trade closed on this bar (0 if none)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BarByBarResult {
+    pub states: Vec<BarState>,
+    pub trades: Vec<Trade>,
+    pub report: TradeReport,
+}
+
+/// Run a bar-by-bar backtest that returns the full state at each bar.
+/// This lets the frontend replay the backtest visually on a chart.
+pub fn bar_by_bar_backtest(
+    bars: &[Bar],
+    strategy: &mut dyn Strategy,
+    initial_equity: f64,
+) -> BarByBarResult {
+    let mut trades: Vec<Trade> = Vec::new();
+    let mut states: Vec<BarState> = Vec::with_capacity(bars.len());
+    let mut equity = initial_equity;
+
+    let mut in_position = false;
+    let mut position_side = String::new();
+    let mut entry_price = 0.0;
+    let mut entry_index = 0;
+
+    for (i, bar) in bars.iter().enumerate() {
+        let signal = strategy.on_bar(bar, i, bars);
+        let mut trade_pnl = 0.0;
+
+        if let Some(ref sig) = signal {
+            match sig {
+                Signal::Buy => {
+                    if in_position && position_side == "short" {
+                        let pnl = (entry_price - bar.close) * (initial_equity / entry_price);
+                        let pnl_pct = (entry_price - bar.close) / entry_price * 100.0;
+                        trades.push(Trade {
+                            entry_index,
+                            exit_index: i,
+                            entry_price,
+                            exit_price: bar.close,
+                            side: "short".to_string(),
+                            pnl,
+                            pnl_pct,
+                            entry_time: bars[entry_index].timestamp.clone(),
+                            exit_time: bar.timestamp.clone(),
+                        });
+                        equity += pnl;
+                        trade_pnl = pnl;
+                    }
+                    in_position = true;
+                    position_side = "long".to_string();
+                    entry_price = bar.close;
+                    entry_index = i;
+                }
+                Signal::Sell => {
+                    if in_position && position_side == "long" {
+                        let pnl = (bar.close - entry_price) * (initial_equity / entry_price);
+                        let pnl_pct = (bar.close - entry_price) / entry_price * 100.0;
+                        trades.push(Trade {
+                            entry_index,
+                            exit_index: i,
+                            entry_price,
+                            exit_price: bar.close,
+                            side: "long".to_string(),
+                            pnl,
+                            pnl_pct,
+                            entry_time: bars[entry_index].timestamp.clone(),
+                            exit_time: bar.timestamp.clone(),
+                        });
+                        equity += pnl;
+                        trade_pnl = pnl;
+                    }
+                    in_position = true;
+                    position_side = "short".to_string();
+                    entry_price = bar.close;
+                    entry_index = i;
+                }
+                Signal::Close => {
+                    if in_position {
+                        let pnl = if position_side == "long" {
+                            (bar.close - entry_price) * (initial_equity / entry_price)
+                        } else {
+                            (entry_price - bar.close) * (initial_equity / entry_price)
+                        };
+                        let pnl_pct = if position_side == "long" {
+                            (bar.close - entry_price) / entry_price * 100.0
+                        } else {
+                            (entry_price - bar.close) / entry_price * 100.0
+                        };
+                        trades.push(Trade {
+                            entry_index,
+                            exit_index: i,
+                            entry_price,
+                            exit_price: bar.close,
+                            side: position_side.clone(),
+                            pnl,
+                            pnl_pct,
+                            entry_time: bars[entry_index].timestamp.clone(),
+                            exit_time: bar.timestamp.clone(),
+                        });
+                        equity += pnl;
+                        trade_pnl = pnl;
+                        in_position = false;
+                    }
+                }
+            }
+        }
+
+        let position_size = if !in_position {
+            0.0
+        } else if position_side == "long" {
+            initial_equity / entry_price
+        } else {
+            -(initial_equity / entry_price)
+        };
+
+        states.push(BarState {
+            bar_index: i,
+            timestamp: bar.timestamp.clone(),
+            equity,
+            position_size,
+            signal,
+            trade_pnl,
+        });
+    }
+
+    // Close any open position at last bar
+    if in_position && !bars.is_empty() {
+        let last = bars.last().unwrap();
+        let last_idx = bars.len() - 1;
+        let pnl = if position_side == "long" {
+            (last.close - entry_price) * (initial_equity / entry_price)
+        } else {
+            (entry_price - last.close) * (initial_equity / entry_price)
+        };
+        let pnl_pct = if position_side == "long" {
+            (last.close - entry_price) / entry_price * 100.0
+        } else {
+            (entry_price - last.close) / entry_price * 100.0
+        };
+        trades.push(Trade {
+            entry_index,
+            exit_index: last_idx,
+            entry_price,
+            exit_price: last.close,
+            side: position_side,
+            pnl,
+            pnl_pct,
+            entry_time: bars[entry_index].timestamp.clone(),
+            exit_time: last.timestamp.clone(),
+        });
+        equity += pnl;
+        if let Some(last_state) = states.last_mut() {
+            last_state.equity = equity;
+            last_state.trade_pnl = pnl;
+            last_state.position_size = 0.0;
+        }
+    }
+
+    let report = TradeReport::from_trades(&trades, initial_equity);
+
+    BarByBarResult {
+        states,
+        trades,
+        report,
+    }
+}
+
+// ── Optimization ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptimizationResult {
+    pub fast_period: usize,
+    pub slow_period: usize,
+    pub total_trades: usize,
+    pub total_pnl: f64,
+    pub profit_factor: f64,
+    pub sharpe_ratio: f64,
+    pub win_rate: f64,
+    pub max_drawdown_pct: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptimizationReport {
+    pub results: Vec<OptimizationResult>,
+    pub total_combinations: usize,
+}
+
+/// Grid-search optimization over SMA cross fast/slow period combinations.
+/// Returns top N results sorted by profit factor.
+pub fn optimize_sma_cross(
+    bars: &[Bar],
+    fast_range: (usize, usize), // (min, max) inclusive
+    slow_range: (usize, usize), // (min, max) inclusive
+    initial_equity: f64,
+    top_n: usize,
+) -> OptimizationReport {
+    let mut all_results: Vec<OptimizationResult> = Vec::new();
+    let mut total_combinations = 0;
+
+    for fast in fast_range.0..=fast_range.1 {
+        for slow in slow_range.0..=slow_range.1 {
+            if fast >= slow { continue; }
+            if slow > bars.len() { continue; }
+            total_combinations += 1;
+
+            let mut strat = SMACrossStrategy::new(fast, slow);
+            let result = run_backtest(bars, &mut strat, initial_equity);
+
+            all_results.push(OptimizationResult {
+                fast_period: fast,
+                slow_period: slow,
+                total_trades: result.report.total_trades,
+                total_pnl: result.report.total_pnl,
+                profit_factor: result.report.profit_factor,
+                sharpe_ratio: result.report.sharpe_ratio,
+                win_rate: result.report.win_rate,
+                max_drawdown_pct: result.report.max_drawdown_pct,
+            });
+        }
+    }
+
+    // Sort by profit factor descending (infinity goes first, then highest)
+    all_results.sort_by(|a, b| {
+        b.profit_factor.partial_cmp(&a.profit_factor).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Take top N
+    all_results.truncate(top_n);
+
+    OptimizationReport {
+        results: all_results,
+        total_combinations,
+    }
+}
+
+// ── Original Backtest Engine ────────────────────────────────────────
+
 pub fn run_backtest(
     bars: &[Bar],
     strategy: &mut dyn Strategy,

@@ -81,7 +81,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | WebSocket streaming | ✅ Done | Real-time trades/quotes via Alpaca WS, poll_stream command |
 | Time & Sales | ✅ Done | Via WebSocket trade stream subscription |
 | **All 38+ MT5 indicators** | 🔲 Deferred | Current 20 indicators cover NNFX + standard; remaining are niche |
-| **Custom indicator plugin system** | 🔲 Deferred | Architecture designed but not yet implemented |
+| Custom indicator plugin system | ✅ Done | Load/save/list JS plugins from ~/.config/typhoon-terminal/indicators/ |
 
 ### Tier 3 — Godel Terminal Features
 
@@ -93,16 +93,16 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | SCAN — Stock screener | ✅ Done | Filter by price, volume, sector, change%, tradable/shortable |
 | QM — Quote monitor (watchlist) | ✅ Done | Multi-symbol dashboard with live prices, Ctrl+K → QM |
 | Interactive news/filing panels | ✅ Done | In-app article reading in floating windows |
-| **FA — Financial analysis** | 🔲 Deferred | Needs income statement/balance sheet/cash flow API |
-| **ANR — Analyst recommendations** | 🔲 Deferred | Needs third-party data source |
-| **SI — Short interest** | 🔲 Deferred | Needs third-party data source |
-| **HDS — Institutional holders** | 🔲 Deferred | 13F parsing complex, future work |
-| **MOST — Most active** | 🔲 Deferred | Needs Alpaca most-active endpoint or custom ranking |
-| **WEI — World equity indices** | 🔲 Deferred | Needs non-US market data source |
+| FA — Financial analysis | ✅ Done | Income stmt, balance sheet, cash flow from SEC EDGAR us-gaap |
+| **ANR — Analyst recommendations** | 🔲 Deferred | No free consensus data API |
+| **SI — Short interest** | 🔲 Deferred | No free reliable API |
+| HDS — Institutional holders | ✅ Done | 13F filing history from SEC EDGAR submissions |
+| MOST — Most active | ✅ Done | Alpaca screener most-actives + top movers endpoints |
+| **WEI — World equity indices** | 🔲 Deferred | Alpaca is US-only |
 | **FX — Currency matrix** | 🔲 Deferred | Needs forex data source |
-| **HMS — Historical market stats** | 🔲 Deferred | Needs FRED integration |
+| **HMS — Historical market stats** | 🔲 Deferred | Needs FRED API key |
 | **AI chat** | 🔲 Deferred | Needs LLM API integration |
-| **Community chat** | 🔲 Deferred | Needs WebSocket chat server infrastructure |
+| **Community chat** | 🔲 Deferred | Needs server infrastructure |
 
 ### Tier 4 — Advanced / Long-Term
 
@@ -112,9 +112,9 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Push notifications (mobile) | ✅ Done | Pushover + ntfy.sh integration |
 | Multi-chart layouts | ✅ Done | Split view with independent symbols |
 | Chart screenshot export | ✅ Done | Ctrl+Shift+S, copy to clipboard + toast |
-| **Visual backtester** | 🔲 Deferred | Chart replay with pause/speed — needs UI work |
-| **Genetic optimization** | 🔲 Deferred | Parameter sweep with fitness function |
-| **DOM / Level 2** | 🔲 Deferred | Crypto only via Alpaca orderbook WS |
+| Visual backtester | ✅ Done | Bar-by-bar replay with equity curve in floating window |
+| Genetic optimization | ✅ Done | Grid search over SMA periods, sortable results table |
+| DOM / Level 2 | ✅ Done | Crypto orderbook from Alpaca, bid/ask depth display |
 | **Options flow analysis** | 🔲 Deferred | Needs unusual activity data source |
 | **Plugin marketplace** | 🔲 Deferred | Needs community infrastructure |
 | **Pure Rust GUI migration** | 🔲 Deferred | Egui/Iced — long-term goal |

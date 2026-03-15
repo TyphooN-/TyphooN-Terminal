@@ -21,7 +21,7 @@ use broker::alpaca::{AlpacaBroker, StreamMessage};
 use core::risk::{self, OrderMode, RiskConfig, SymbolSpec};
 use core::var;
 use core::margin;
-use core::backtest::{self as backtest_engine, SMACrossStrategy, BacktestResult};
+use core::backtest::{self as backtest_engine, SMACrossStrategy, BacktestResult, BarByBarResult};
 use core::screener::{self as screener_engine, ScreenerFilter, ScreenerSymbol};
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
 use std::sync::Arc;
@@ -1146,6 +1146,263 @@ async fn list_cold_cache() -> Result<String, String> {
     Ok(serde_json::to_string(&entries).unwrap())
 }
 
+// ── Financial Analysis Commands ──────────────────────────────────
+
+#[tauri::command]
+async fn get_financial_analysis(symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    let result = AlpacaBroker::get_financial_analysis(&symbol).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[tauri::command]
+async fn get_institutional_holders(symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    let result = AlpacaBroker::get_institutional_holders(&symbol).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+// ── Most Active / Top Movers Commands ───────────────────────────
+
+#[tauri::command]
+async fn get_most_active(
+    state: State<'_, SharedState>,
+    top: Option<u32>,
+) -> Result<String, String> {
+    let top = top.unwrap_or(20).min(100);
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let result = broker.get_most_active(top).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[tauri::command]
+async fn get_top_movers(
+    state: State<'_, SharedState>,
+    market_type: Option<String>,
+    top: Option<u32>,
+) -> Result<String, String> {
+    let market_type = market_type.unwrap_or_else(|| "stocks".to_string());
+    let top = top.unwrap_or(20).min(100);
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let result = broker.get_top_movers(&market_type, top).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+// ── Visual Backtester Commands ──────────────────────────────────
+
+#[tauri::command]
+async fn run_bar_by_bar_backtest(
+    state: State<'_, SharedState>,
+    symbol: String,
+    timeframe: String,
+    strategy: String,
+    fast_period: Option<usize>,
+    slow_period: Option<usize>,
+    initial_equity: Option<f64>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
+
+    let equity = initial_equity.unwrap_or(100_000.0);
+    if equity <= 0.0 || !equity.is_finite() { return Err("Invalid initial equity".into()); }
+
+    let bar_limit = limit.unwrap_or(5000).min(50_000);
+
+    let bars = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?;
+        broker.get_bars(&symbol, &timeframe, bar_limit).await?
+    };
+
+    if bars.len() < 2 {
+        return Err("Insufficient bar data for backtest".into());
+    }
+
+    let result: BarByBarResult = match strategy.as_str() {
+        "sma_cross" | "SMA Cross" => {
+            let fast = fast_period.unwrap_or(10);
+            let slow = slow_period.unwrap_or(20);
+            if fast >= slow { return Err("fast_period must be < slow_period".into()); }
+            if slow > bars.len() { return Err("Not enough bars for slow period".into()); }
+            let mut strat = SMACrossStrategy::new(fast, slow);
+            backtest_engine::bar_by_bar_backtest(&bars, &mut strat, equity)
+        }
+        _ => return Err(format!("Unknown strategy: {strategy}. Available: sma_cross")),
+    };
+
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+// ── Optimization Commands ───────────────────────────────────────
+
+#[tauri::command]
+async fn run_optimization(
+    state: State<'_, SharedState>,
+    symbol: String,
+    timeframe: String,
+    fast_min: usize,
+    fast_max: usize,
+    slow_min: usize,
+    slow_max: usize,
+    initial_equity: Option<f64>,
+    top_n: Option<usize>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
+
+    let equity = initial_equity.unwrap_or(100_000.0);
+    if equity <= 0.0 || !equity.is_finite() { return Err("Invalid initial equity".into()); }
+
+    // Sanity limits on ranges
+    if fast_min < 2 || fast_max > 200 || slow_min < 3 || slow_max > 500 {
+        return Err("Period ranges out of bounds (fast: 2-200, slow: 3-500)".into());
+    }
+    if fast_min > fast_max || slow_min > slow_max {
+        return Err("Invalid range: min must be <= max".into());
+    }
+    // Cap total combinations to prevent abuse
+    let total_combos = (fast_max - fast_min + 1) * (slow_max - slow_min + 1);
+    if total_combos > 50_000 {
+        return Err(format!("Too many combinations ({total_combos}). Max 50,000. Narrow ranges."));
+    }
+
+    let top = top_n.unwrap_or(20).min(500);
+    let bar_limit = limit.unwrap_or(5000).min(50_000);
+
+    let bars = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?;
+        broker.get_bars(&symbol, &timeframe, bar_limit).await?
+    };
+
+    if bars.len() < 2 {
+        return Err("Insufficient bar data for optimization".into());
+    }
+
+    let result = backtest_engine::optimize_sma_cross(
+        &bars,
+        (fast_min, fast_max),
+        (slow_min, slow_max),
+        equity,
+        top,
+    );
+
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+// ── DOM / Level 2 Commands ──────────────────────────────────────
+
+#[tauri::command]
+async fn get_orderbook(
+    state: State<'_, SharedState>,
+    symbol: String,
+) -> Result<String, String> {
+    // Orderbook is crypto-only on Alpaca; symbol must contain "/"
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !symbol.contains('/') {
+        return Err("Orderbook is only available for crypto pairs (e.g. BTC/USD)".into());
+    }
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let result = broker.get_orderbook(&symbol).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+// ── Custom Indicator Plugin System ──────────────────────────────
+
+fn get_indicators_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let dir = std::path::PathBuf::from(home)
+        .join(".config")
+        .join("typhoon-terminal")
+        .join("indicators");
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
+/// Validate indicator name: alphanumeric, hyphens, underscores only. No path traversal.
+fn is_valid_indicator_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && !name.contains("..")
+}
+
+#[tauri::command]
+async fn load_custom_indicator(source: String) -> Result<String, String> {
+    // Validate JS source isn't absurdly large
+    if source.len() > 1024 * 1024 {
+        return Err("Indicator source too large (max 1MB)".to_string());
+    }
+    // Return the source for frontend sandboxed evaluation
+    Ok(serde_json::to_string(&serde_json::json!({
+        "source": source,
+        "loaded": true,
+    })).unwrap())
+}
+
+#[tauri::command]
+async fn list_custom_indicators() -> Result<String, String> {
+    let dir = get_indicators_dir();
+    let mut indicators = Vec::new();
+
+    if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(".js") {
+                    let size = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
+                    indicators.push(serde_json::json!({
+                        "name": name.trim_end_matches(".js"),
+                        "filename": name,
+                        "size": size,
+                    }));
+                    if indicators.len() >= 1000 { break; }
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::to_string(&indicators).unwrap())
+}
+
+#[tauri::command]
+async fn save_custom_indicator(name: String, source: String) -> Result<String, String> {
+    if !is_valid_indicator_name(&name) {
+        return Err("Invalid indicator name (alphanumeric, hyphens, underscores only)".to_string());
+    }
+    if source.len() > 1024 * 1024 {
+        return Err("Indicator source too large (max 1MB)".to_string());
+    }
+
+    let dir = get_indicators_dir();
+    let filename = format!("{}.js", name);
+    let path = dir.join(&filename);
+
+    // Ensure resolved path stays within indicators directory
+    let canonical_dir = std::fs::canonicalize(&dir)
+        .map_err(|e| format!("Indicators dir error: {e}"))?;
+    // Write first, then verify canonical path
+    tokio::fs::write(&path, source.as_bytes()).await
+        .map_err(|e| format!("Write failed: {e}"))?;
+    if let Ok(canonical_path) = std::fs::canonicalize(&path) {
+        if !canonical_path.starts_with(&canonical_dir) {
+            // Path traversal detected — remove the file and error
+            tokio::fs::remove_file(&path).await.ok();
+            return Err("Invalid path".to_string());
+        }
+    }
+
+    Ok(serde_json::json!({
+        "name": name,
+        "filename": filename,
+        "saved": true,
+    }).to_string())
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -1224,12 +1481,26 @@ fn main() {
             list_cold_cache,
             // Backtest
             run_backtest,
+            run_bar_by_bar_backtest,
+            run_optimization,
             // CSV Export
             export_trade_history,
             // Options
             get_options,
             // Screener
             run_screener,
+            // Financial Analysis & Institutional Holders
+            get_financial_analysis,
+            get_institutional_holders,
+            // Most Active / Top Movers
+            get_most_active,
+            get_top_movers,
+            // DOM / Level 2
+            get_orderbook,
+            // Custom Indicators
+            load_custom_indicator,
+            list_custom_indicators,
+            save_custom_indicator,
             // WebSocket Streaming
             start_streaming,
             poll_stream,

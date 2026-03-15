@@ -1154,6 +1154,333 @@ impl AlpacaBroker {
         (strike, option_type, expiry)
     }
 
+    // ── Financial Analysis (extended SEC EDGAR) ─────────────────────
+
+    /// Fetch comprehensive financial analysis from SEC EDGAR companyfacts.
+    /// Returns income statement, balance sheet, and cash flow data.
+    pub async fn get_financial_analysis(ticker: &str) -> Result<serde_json::Value, String> {
+        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err("Invalid ticker for SEC lookup".to_string());
+        }
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| format!("HTTP client error: {e}"))?;
+
+        // Reuse same CIK lookup as get_sec_company_facts
+        let tickers_resp = client
+            .get("https://www.sec.gov/files/company_tickers.json")
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|_| "SEC ticker map request failed".to_string())?;
+
+        let tickers: serde_json::Value = tickers_resp.json().await
+            .map_err(|_| "SEC ticker map parse failed".to_string())?;
+
+        let upper_ticker = ticker.to_uppercase();
+        let mut cik: Option<u64> = None;
+        if let Some(obj) = tickers.as_object() {
+            for (_, v) in obj {
+                if v["ticker"].as_str() == Some(&upper_ticker) {
+                    cik = v["cik_str"].as_u64().or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()));
+                    break;
+                }
+            }
+        }
+
+        let cik = cik.ok_or_else(|| format!("CIK not found for {ticker}"))?;
+        let cik_padded = format!("CIK{:010}", cik);
+
+        let facts_resp = client
+            .get(format!("https://data.sec.gov/api/xbrl/companyfacts/{}.json", cik_padded))
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|e| format!("SEC company facts failed: {e}"))?;
+
+        if !facts_resp.status().is_success() {
+            return Err(format!("SEC company facts: HTTP {}", facts_resp.status()));
+        }
+
+        let facts: serde_json::Value = facts_resp.json().await
+            .map_err(|e| format!("SEC facts parse failed: {e}"))?;
+
+        let us_gaap = &facts["facts"]["us-gaap"];
+
+        let result = serde_json::json!({
+            "cik": cik,
+            "entity": facts["entityName"],
+            // Income Statement
+            "income_statement": {
+                "revenue": extract_latest_fact(us_gaap, "Revenues"),
+                "revenue_alt": extract_latest_fact(us_gaap, "RevenueFromContractWithCustomerExcludingAssessedTax"),
+                "cost_of_goods_sold": extract_latest_fact(us_gaap, "CostOfGoodsSold"),
+                "cogs_alt": extract_latest_fact(us_gaap, "CostOfGoodsAndServicesSold"),
+                "gross_profit": extract_latest_fact(us_gaap, "GrossProfit"),
+                "operating_income": extract_latest_fact(us_gaap, "OperatingIncomeLoss"),
+                "net_income": extract_latest_fact(us_gaap, "NetIncomeLoss"),
+                "ebitda": extract_latest_fact(us_gaap, "EarningsBeforeInterestTaxesDepreciationAndAmortization"),
+                "eps_basic": extract_latest_fact(us_gaap, "EarningsPerShareBasic"),
+                "eps_diluted": extract_latest_fact(us_gaap, "EarningsPerShareDiluted"),
+                "research_and_development": extract_latest_fact(us_gaap, "ResearchAndDevelopmentExpense"),
+                "sga_expense": extract_latest_fact(us_gaap, "SellingGeneralAndAdministrativeExpense"),
+            },
+            // Balance Sheet
+            "balance_sheet": {
+                "total_assets": extract_latest_fact(us_gaap, "Assets"),
+                "total_liabilities": extract_latest_fact(us_gaap, "Liabilities"),
+                "stockholders_equity": extract_latest_fact(us_gaap, "StockholdersEquity"),
+                "cash": extract_latest_fact(us_gaap, "CashAndCashEquivalentsAtCarryingValue"),
+                "short_term_investments": extract_latest_fact(us_gaap, "ShortTermInvestments"),
+                "accounts_receivable": extract_latest_fact(us_gaap, "AccountsReceivableNetCurrent"),
+                "inventory": extract_latest_fact(us_gaap, "InventoryNet"),
+                "current_assets": extract_latest_fact(us_gaap, "AssetsCurrent"),
+                "current_liabilities": extract_latest_fact(us_gaap, "LiabilitiesCurrent"),
+                "long_term_debt": extract_latest_fact(us_gaap, "LongTermDebt"),
+                "long_term_debt_alt": extract_latest_fact(us_gaap, "LongTermDebtNoncurrent"),
+                "total_debt": extract_latest_fact(us_gaap, "DebtCurrent"),
+                "shares_outstanding": extract_latest_fact(us_gaap, "CommonStockSharesOutstanding"),
+                "retained_earnings": extract_latest_fact(us_gaap, "RetainedEarningsAccumulatedDeficit"),
+                "goodwill": extract_latest_fact(us_gaap, "Goodwill"),
+                "intangible_assets": extract_latest_fact(us_gaap, "IntangibleAssetsNetExcludingGoodwill"),
+                "property_plant_equipment": extract_latest_fact(us_gaap, "PropertyPlantAndEquipmentNet"),
+            },
+            // Cash Flow
+            "cash_flow": {
+                "operating_cash_flow": extract_latest_fact(us_gaap, "NetCashProvidedByOperatingActivities"),
+                "investing_cash_flow": extract_latest_fact(us_gaap, "NetCashProvidedByInvestingActivities"),
+                "financing_cash_flow": extract_latest_fact(us_gaap, "NetCashProvidedByFinancingActivities"),
+                "capex": extract_latest_fact(us_gaap, "PaymentsToAcquirePropertyPlantAndEquipment"),
+                "depreciation": extract_latest_fact(us_gaap, "DepreciationDepletionAndAmortization"),
+                "stock_based_compensation": extract_latest_fact(us_gaap, "ShareBasedCompensation"),
+                "dividends_paid": extract_latest_fact(us_gaap, "PaymentsOfDividends"),
+                "share_repurchases": extract_latest_fact(us_gaap, "PaymentsForRepurchaseOfCommonStock"),
+                "free_cash_flow_note": "Calculate as operating_cash_flow - capex",
+            },
+        });
+
+        Ok(result)
+    }
+
+    // ── Institutional Holders (13F filings) ───────────────────────────
+
+    /// Fetch institutional holder info from SEC EDGAR submissions.
+    /// Looks for 13F filings in the company's filing history.
+    pub async fn get_institutional_holders(ticker: &str) -> Result<serde_json::Value, String> {
+        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err("Invalid ticker for SEC lookup".to_string());
+        }
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| format!("HTTP client error: {e}"))?;
+
+        // Ticker → CIK lookup
+        let tickers_resp = client
+            .get("https://www.sec.gov/files/company_tickers.json")
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|_| "SEC ticker map request failed".to_string())?;
+
+        let tickers: serde_json::Value = tickers_resp.json().await
+            .map_err(|_| "SEC ticker map parse failed".to_string())?;
+
+        let upper_ticker = ticker.to_uppercase();
+        let mut cik: Option<u64> = None;
+        if let Some(obj) = tickers.as_object() {
+            for (_, v) in obj {
+                if v["ticker"].as_str() == Some(&upper_ticker) {
+                    cik = v["cik_str"].as_u64().or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()));
+                    break;
+                }
+            }
+        }
+
+        let cik = cik.ok_or_else(|| format!("CIK not found for {ticker}"))?;
+        let cik_padded = format!("{:010}", cik);
+
+        // Fetch submissions (filing history)
+        let subs_resp = client
+            .get(format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded))
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|e| format!("SEC submissions request failed: {e}"))?;
+
+        if !subs_resp.status().is_success() {
+            return Err(format!("SEC submissions: HTTP {}", subs_resp.status()));
+        }
+
+        let subs: serde_json::Value = subs_resp.json().await
+            .map_err(|e| format!("SEC submissions parse failed: {e}"))?;
+
+        // Extract company info
+        let entity_name = subs["name"].as_str().unwrap_or("");
+        let sic = subs["sic"].as_str().unwrap_or("");
+        let sic_description = subs["sicDescription"].as_str().unwrap_or("");
+        let state = subs["stateOfIncorporation"].as_str().unwrap_or("");
+        let fiscal_year_end = subs["fiscalYearEnd"].as_str().unwrap_or("");
+
+        // Search recent filings for 13F entries
+        let recent = &subs["filings"]["recent"];
+        let forms = recent["form"].as_array();
+        let dates = recent["filingDate"].as_array();
+        let accessions = recent["accessionNumber"].as_array();
+        let primary_docs = recent["primaryDocument"].as_array();
+
+        let mut filings_13f = Vec::new();
+        if let (Some(forms), Some(dates), Some(accessions), Some(primary_docs)) =
+            (forms, dates, accessions, primary_docs)
+        {
+            for i in 0..forms.len().min(200) {
+                let form = forms.get(i).and_then(|v| v.as_str()).unwrap_or("");
+                if form.starts_with("13F") {
+                    let date = dates.get(i).and_then(|v| v.as_str()).unwrap_or("");
+                    let accession = accessions.get(i).and_then(|v| v.as_str()).unwrap_or("");
+                    let doc = primary_docs.get(i).and_then(|v| v.as_str()).unwrap_or("");
+                    filings_13f.push(serde_json::json!({
+                        "form": form,
+                        "filing_date": date,
+                        "accession_number": accession,
+                        "primary_document": doc,
+                        "url": format!(
+                            "https://www.sec.gov/Archives/edgar/data/{}/{}",
+                            cik,
+                            accession.replace('-', "")
+                        ),
+                    }));
+                    if filings_13f.len() >= 20 { break; }
+                }
+            }
+        }
+
+        let result = serde_json::json!({
+            "cik": cik,
+            "entity_name": entity_name,
+            "sic": sic,
+            "sic_description": sic_description,
+            "state_of_incorporation": state,
+            "fiscal_year_end": fiscal_year_end,
+            "filings_13f": filings_13f,
+            "total_13f_found": filings_13f.len(),
+        });
+
+        Ok(result)
+    }
+
+    // ── Most Active / Top Movers (Alpaca Screener API) ────────────────
+
+    /// Fetch most active stocks by volume/trade count from Alpaca screener API.
+    pub async fn get_most_active(&self, top: u32) -> Result<serde_json::Value, String> {
+        self.rate_limiter.wait().await;
+
+        let resp = self
+            .client
+            .get(format!("{}/v1beta1/screener/stocks/most-actives", DATA_BASE))
+            .headers(self.headers())
+            .query(&[("top", top.to_string())])
+            .send()
+            .await
+            .map_err(|e| format!("Most actives request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Most actives failed: HTTP {status}: {body}"));
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Most actives parse failed: {e}"))?;
+
+        Ok(json)
+    }
+
+    /// Fetch top movers (gainers/losers) from Alpaca screener API.
+    /// market_type: "stocks" or "crypto"
+    pub async fn get_top_movers(&self, market_type: &str, top: u32) -> Result<serde_json::Value, String> {
+        if !matches!(market_type, "stocks" | "crypto") {
+            return Err("market_type must be 'stocks' or 'crypto'".to_string());
+        }
+        self.rate_limiter.wait().await;
+
+        let resp = self
+            .client
+            .get(format!("{}/v1beta1/screener/{}/movers", DATA_BASE, market_type))
+            .headers(self.headers())
+            .query(&[("top", top.to_string())])
+            .send()
+            .await
+            .map_err(|e| format!("Top movers request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Top movers failed: HTTP {status}: {body}"));
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Top movers parse failed: {e}"))?;
+
+        Ok(json)
+    }
+
+    // ── DOM / Level 2 (Crypto Orderbook) ──────────────────────────────
+
+    /// Fetch crypto orderbook snapshot from Alpaca.
+    pub async fn get_orderbook(&self, symbol: &str) -> Result<serde_json::Value, String> {
+        self.rate_limiter.wait().await;
+
+        let resp = self
+            .client
+            .get(format!("{}/v1beta1/crypto/us/orderbooks/snapshots", DATA_BASE))
+            .headers(self.headers())
+            .query(&[("symbols", symbol)])
+            .send()
+            .await
+            .map_err(|e| format!("Orderbook request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Orderbook failed: HTTP {status}: {body}"));
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Orderbook parse failed: {e}"))?;
+
+        // Extract the orderbook for the requested symbol and structure it
+        let orderbook = &json["orderbooks"][symbol];
+        if orderbook.is_null() {
+            return Err(format!("No orderbook data for {symbol}"));
+        }
+
+        let parse_level = |entry: &serde_json::Value| -> serde_json::Value {
+            serde_json::json!({
+                "price": entry["p"].as_f64().unwrap_or(0.0),
+                "size": entry["s"].as_f64().unwrap_or(0.0),
+            })
+        };
+
+        let bids: Vec<serde_json::Value> = orderbook["b"]
+            .as_array()
+            .map(|arr| arr.iter().map(parse_level).collect())
+            .unwrap_or_default();
+
+        let asks: Vec<serde_json::Value> = orderbook["a"]
+            .as_array()
+            .map(|arr| arr.iter().map(parse_level).collect())
+            .unwrap_or_default();
+
+        Ok(serde_json::json!({
+            "symbol": symbol,
+            "timestamp": orderbook["t"],
+            "bids": bids,
+            "asks": asks,
+        }))
+    }
+
     // ── WebSocket Streaming ─────────────────────────────────────────
 
     /// Start a WebSocket connection to Alpaca's real-time data stream.

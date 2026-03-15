@@ -972,3 +972,139 @@ select option {
   70% { opacity: 1; }
   100% { opacity: 0; }
 }
+
+/* ── Backtester & Optimizer Controls ────────────────────── */
+
+.bt-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid #333;
+  align-items: flex-end;
+  background: #0a0a14;
+}
+
+.bt-field {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  color: #888;
+  gap: 2px;
+}
+
+.bt-input {
+  background: #0f3460 !important;
+  border: 1px solid #555 !important;
+  color: #fff !important;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 11px;
+  width: 70px;
+}
+
+.bt-input[type="text"] { width: 80px; }
+
+.bt-run-btn {
+  background: #0a5f38;
+  color: #8f8;
+  border: 1px solid #555;
+  padding: 5px 14px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: bold;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.bt-run-btn:hover { filter: brightness(1.3); }
+.bt-run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.bt-results {
+  padding: 8px;
+}
+
+.bt-stats, .bt-trades {
+  margin-top: 6px;
+}
+
+.bt-equity-chart {
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+/* ── Optimizer Results Table ─────────────────────────────── */
+
+.opt-results-table td {
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+.opt-results-table tr:hover {
+  background: #111;
+}
+
+/* ── DOM / Level 2 ───────────────────────────────────────── */
+
+.dom-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11px;
+  font-family: 'Consolas', monospace;
+}
+
+.dom-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+  padding: 3px 8px;
+  min-height: 22px;
+}
+
+.dom-bar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  opacity: 0.15;
+  border-radius: 1px;
+}
+
+.dom-bar-ask { background: #f44336; }
+.dom-bar-bid { background: #4caf50; }
+
+.dom-ask .dom-price { color: #f44336; }
+.dom-bid .dom-price { color: #4caf50; }
+
+.dom-price {
+  flex: 1;
+  text-align: right;
+  font-weight: bold;
+  z-index: 1;
+}
+
+.dom-size {
+  width: 80px;
+  text-align: right;
+  color: #aaa;
+  z-index: 1;
+  margin-right: 12px;
+}
+
+.dom-spread {
+  text-align: center;
+  color: #ff8;
+  font-size: 10px;
+  padding: 4px 0;
+  border-top: 1px solid #333;
+  border-bottom: 1px solid #333;
+  background: #111;
+}
+
+/* ── Most Active Table ───────────────────────────────────── */
+
+.most-active-table tr:hover {
+  background: #111;
+  cursor: pointer;
+}
