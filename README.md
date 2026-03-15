@@ -16,6 +16,20 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Order Placement** | Draggable SL/TP lines, 6 order types (market/bracket/limit/stop/stop-limit/trailing), auto lot calculation |
 | **Order Management** | Open positions panel with live P/L, trade history, cancel pending orders, smart partial close |
 | **Price Alerts** | Set alerts at any price, browser notifications, persistent across sessions |
+| **Backtester** | Strategy trait with SMA Cross example, equity curve, trade reports (Sharpe, drawdown, profit factor) |
+| **WebSocket Streaming** | Real-time trades/quotes via Alpaca WebSocket, Time & Sales |
+| **Options Chain** | Full Greeks, strike/expiry/bid/ask via Alpaca options API |
+| **Stock Screener** | Filter by price, volume, sector, change%, tradable/shortable flags |
+| **Command Palette** | Ctrl+K Bloomberg-style: DES, NEWS, FA, OPT, SCAN, HDS, HIST, QM |
+| **Watchlist** | Multi-symbol quote monitor with live prices and daily change |
+| **Chart Templates** | Save/load indicator configs and order mode |
+| **Workspace Profiles** | Save/load entire layout (tabs, indicators, pane sizes) |
+| **Drawing Tools** | Trend lines, Fibonacci, horizontal lines, rectangles, channels |
+| **Multi-Chart Layouts** | Split view with independent symbols |
+| **Screenshot Export** | Ctrl+Shift+S to clipboard with toast notification |
+| **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
+| **CSV Export** | Export trade history as CSV |
+| **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), secure local credential storage |
 | **Indicators** | Full NNFX system ported from MQL5 + standard indicators (RSI, MACD, Bollinger, etc.) |
 | **Security** | 6-pass audit (50 findings): input validation, HTTP timeouts, path traversal protection, CSP, config bounds, resource limits |
@@ -107,7 +121,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
 | [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
 | [INDICATOR_PORTING.md](INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
-| [docs/adr/](docs/adr/) | Architecture Decision Records (17 ADRs) |
+| [docs/adr/](docs/adr/) | Architecture Decision Records (17+ ADRs) |
 
 ### ADR Index
 

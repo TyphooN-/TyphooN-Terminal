@@ -17,10 +17,12 @@ mod core;
 mod notifications;
 mod strategies;
 
-use broker::alpaca::AlpacaBroker;
+use broker::alpaca::{AlpacaBroker, StreamMessage};
 use core::risk::{self, OrderMode, RiskConfig, SymbolSpec};
 use core::var;
 use core::margin;
+use core::backtest::{self as backtest_engine, SMACrossStrategy, BacktestResult};
+use core::screener::{self as screener_engine, ScreenerFilter, ScreenerSymbol};
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -36,6 +38,8 @@ struct AppState {
     tp_levels: std::collections::HashMap<String, f64>,
     /// Cached symbol list for autocomplete.
     symbols: Vec<(String, String)>, // (symbol, name)
+    /// Active WebSocket stream receiver.
+    stream_rx: Option<tokio::sync::mpsc::Receiver<StreamMessage>>,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -852,6 +856,209 @@ async fn clear_symbol_cache(symbol: String) -> Result<String, String> {
     Ok(format!("Cleared {removed} files"))
 }
 
+// ── Backtest Commands ────────────────────────────────────────────
+
+#[tauri::command]
+async fn run_backtest(
+    state: State<'_, SharedState>,
+    symbol: String,
+    timeframe: String,
+    strategy: String,
+    fast_period: Option<usize>,
+    slow_period: Option<usize>,
+    initial_equity: Option<f64>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
+
+    let equity = initial_equity.unwrap_or(100_000.0);
+    if equity <= 0.0 || !equity.is_finite() { return Err("Invalid initial equity".into()); }
+
+    let bar_limit = limit.unwrap_or(5000).min(50_000);
+
+    // Fetch bars
+    let bars = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?;
+        broker.get_bars(&symbol, &timeframe, bar_limit).await?
+    };
+
+    if bars.len() < 2 {
+        return Err("Insufficient bar data for backtest".into());
+    }
+
+    // Create strategy
+    let result: BacktestResult = match strategy.as_str() {
+        "sma_cross" | "SMA Cross" => {
+            let fast = fast_period.unwrap_or(10);
+            let slow = slow_period.unwrap_or(20);
+            if fast >= slow { return Err("fast_period must be < slow_period".into()); }
+            if slow > bars.len() { return Err("Not enough bars for slow period".into()); }
+            let mut strat = SMACrossStrategy::new(fast, slow);
+            backtest_engine::run_backtest(&bars, &mut strat, equity)
+        }
+        _ => return Err(format!("Unknown strategy: {strategy}. Available: sma_cross")),
+    };
+
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+// ── CSV Export Commands ─────────────────────────────────────────────
+
+#[tauri::command]
+async fn export_trade_history(
+    state: State<'_, SharedState>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let limit = limit.unwrap_or(500).min(500);
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let orders = broker.get_orders("closed", limit).await?;
+
+    let mut csv = String::from("id,symbol,side,qty,filled_qty,order_type,status,limit_price,stop_price,created_at,filled_at,filled_avg_price\n");
+    for o in &orders {
+        csv.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            o.id,
+            o.symbol,
+            o.side,
+            o.qty,
+            o.filled_qty,
+            o.order_type,
+            o.status,
+            o.limit_price.as_deref().unwrap_or(""),
+            o.stop_price.as_deref().unwrap_or(""),
+            o.created_at,
+            o.filled_at.as_deref().unwrap_or(""),
+            o.filled_avg_price.as_deref().unwrap_or(""),
+        ));
+    }
+    Ok(csv)
+}
+
+// ── Options Commands ────────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_options(
+    state: State<'_, SharedState>,
+    symbol: String,
+    expiry: String,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    // Validate expiry format: YYYY-MM-DD
+    if expiry.len() != 10 || expiry.chars().nth(4) != Some('-') || expiry.chars().nth(7) != Some('-') {
+        return Err("Invalid expiry format (expected YYYY-MM-DD)".into());
+    }
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let chain = broker.get_options_chain(&symbol, &expiry).await?;
+    Ok(serde_json::to_string(&chain).unwrap())
+}
+
+// ── Screener Commands ───────────────────────────────────────────────
+
+#[tauri::command]
+async fn run_screener(
+    state: State<'_, SharedState>,
+    filters_json: String,
+    symbols_json: String,
+) -> Result<String, String> {
+    if filters_json.len() > 4096 { return Err("Filters too large".into()); }
+    if symbols_json.len() > 10 * 1024 * 1024 { return Err("Symbol data too large".into()); }
+
+    let filters: ScreenerFilter = serde_json::from_str(&filters_json)
+        .map_err(|e| format!("Invalid filters: {e}"))?;
+    let symbols: Vec<ScreenerSymbol> = serde_json::from_str(&symbols_json)
+        .map_err(|e| format!("Invalid symbols data: {e}"))?;
+
+    // Also allow running against cached asset list if no symbols_json provided
+    let _s = state.lock().await;
+    let result = screener_engine::screen_symbols(&filters, &symbols);
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+// ── WebSocket Streaming Commands ────────────────────────────────────
+
+#[tauri::command]
+async fn start_streaming(
+    state: State<'_, SharedState>,
+    trade_symbols: Vec<String>,
+    quote_symbols: Vec<String>,
+) -> Result<String, String> {
+    // Validate all symbols
+    for sym in trade_symbols.iter().chain(quote_symbols.iter()) {
+        if !is_valid_symbol(sym) { return Err(format!("Invalid symbol: {sym}")); }
+    }
+    if trade_symbols.is_empty() && quote_symbols.is_empty() {
+        return Err("Must provide at least one trade or quote symbol".into());
+    }
+    if trade_symbols.len() + quote_symbols.len() > 100 {
+        return Err("Too many symbols (max 100)".into());
+    }
+
+    let mut s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+
+    // Drop any existing stream
+    s.stream_rx = None;
+
+    let rx = broker.start_stream(trade_symbols.clone(), quote_symbols.clone()).await?;
+    s.stream_rx = Some(rx);
+
+    Ok(serde_json::to_string(&serde_json::json!({
+        "status": "streaming",
+        "trades": trade_symbols,
+        "quotes": quote_symbols,
+    })).unwrap())
+}
+
+#[tauri::command]
+async fn poll_stream(state: State<'_, SharedState>) -> Result<String, String> {
+    let mut s = state.lock().await;
+    let rx = s.stream_rx.as_mut().ok_or("No active stream")?;
+
+    let mut messages = Vec::new();
+    // Drain up to 100 messages without blocking
+    for _ in 0..100 {
+        match rx.try_recv() {
+            Ok(msg) => messages.push(msg),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                s.stream_rx = None;
+                break;
+            }
+        }
+    }
+    Ok(serde_json::to_string(&messages).unwrap())
+}
+
+#[tauri::command]
+async fn stop_streaming(state: State<'_, SharedState>) -> Result<(), String> {
+    let mut s = state.lock().await;
+    s.stream_rx = None;
+    Ok(())
+}
+
+// ── Push Notification Commands ──────────────────────────────────────
+
+#[tauri::command]
+async fn send_pushover_notification(
+    token: String,
+    user: String,
+    message: String,
+) -> Result<(), String> {
+    notifications::send_pushover(&token, &user, &message).await
+}
+
+#[tauri::command]
+async fn send_ntfy_notification(
+    topic: String,
+    message: String,
+) -> Result<(), String> {
+    notifications::send_ntfy(&topic, &message).await
+}
+
 // ── Cold Cache (zstd-compressed files on disk) ──────────────────
 
 fn get_cache_dir() -> std::path::PathBuf {
@@ -954,6 +1161,7 @@ fn main() {
         sl_levels: std::collections::HashMap::new(),
         tp_levels: std::collections::HashMap::new(),
         symbols: Vec::new(),
+        stream_rx: None,
     }));
 
     tauri::Builder::default()
@@ -1014,6 +1222,21 @@ fn main() {
             save_cold_cache,
             load_cold_cache,
             list_cold_cache,
+            // Backtest
+            run_backtest,
+            // CSV Export
+            export_trade_history,
+            // Options
+            get_options,
+            // Screener
+            run_screener,
+            // WebSocket Streaming
+            start_streaming,
+            poll_stream,
+            stop_streaming,
+            // Push Notifications
+            send_pushover_notification,
+            send_ntfy_notification,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TyphooN Terminal");

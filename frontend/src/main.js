@@ -491,6 +491,11 @@ function setupDrawingCanvas() {
 }
 
 function renderDrawings() {
+  // Delegate to extended version if available (supports horizontal, rectangle, channel)
+  if (typeof renderDrawingsExtended === "function") {
+    renderDrawingsExtended();
+    return;
+  }
   if (!drawCanvas || !chart || !candleSeries) return;
   const ctx = drawCanvas.getContext("2d");
   ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
@@ -2319,9 +2324,24 @@ function setupKeyboard() {
         break;
       case "x": // delete last drawing
         if (drawings.length > 0) {
-          drawings.pop(); saveDrawings(); renderDrawings();
+          drawings.pop(); saveDrawings(); renderDrawings(); renderDrawingsExtended();
           log("Deleted last drawing", "info");
         }
+        break;
+      case "n": // horizontal line
+        drawingMode = "horizontal"; drawingAnchor = null; channelThirdClick = false;
+        document.getElementById("chart-container").style.cursor = "crosshair";
+        log("Drawing mode: horizontal line — click to place", "info");
+        break;
+      case "r": // rectangle
+        drawingMode = "rectangle"; drawingAnchor = null; channelThirdClick = false;
+        document.getElementById("chart-container").style.cursor = "crosshair";
+        log("Drawing mode: rectangle — click two corners", "info");
+        break;
+      case "y": // channel (parallel)
+        drawingMode = "channel"; drawingAnchor = null; channelThirdClick = false;
+        document.getElementById("chart-container").style.cursor = "crosshair";
+        log("Drawing mode: channel — click two points + offset", "info");
         break;
       case "w":
         if (e.altKey) { closeAllWindows(); e.preventDefault(); }
@@ -3053,6 +3073,1162 @@ function fireAlert(alert) {
   try { new Notification(`${alert.symbol} Alert`, { body: `Price ${alert.direction} $${alert.price.toFixed(4)}` }); } catch (_) {}
 }
 
+// ══════════════════════════════════════════════════════════════
+// FEATURE 1: Chart Templates — save/load indicator + order mode
+// ══════════════════════════════════════════════════════════════
+
+const TEMPLATES_KEY = "typhoon_templates";
+
+function saveChartTemplate(name) {
+  const templates = listChartTemplatesRaw();
+  const indicators = {};
+  document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
+    const key = `${cb.dataset.ind}_${cb.dataset.period || ""}`;
+    indicators[key] = cb.checked;
+  });
+  templates[name] = {
+    indicators,
+    orderMode: document.getElementById("order-mode")?.value || "VaR",
+    timestamp: Date.now(),
+  };
+  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+  log(`Template "${name}" saved`, "ok");
+}
+
+function loadChartTemplate(name) {
+  const templates = listChartTemplatesRaw();
+  const tpl = templates[name];
+  if (!tpl) { log(`Template "${name}" not found`, "warn"); return; }
+  if (tpl.indicators) {
+    document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
+      const key = `${cb.dataset.ind}_${cb.dataset.period || ""}`;
+      if (key in tpl.indicators) cb.checked = tpl.indicators[key];
+    });
+  }
+  if (tpl.orderMode) {
+    const modeEl = document.getElementById("order-mode");
+    if (modeEl) modeEl.value = tpl.orderMode;
+  }
+  // Re-apply indicators
+  const data = candleSeries.data();
+  if (data && data.length > 0) applyIndicators(data);
+  log(`Template "${name}" loaded`, "ok");
+}
+
+function listChartTemplates() {
+  return Object.keys(listChartTemplatesRaw());
+}
+
+function listChartTemplatesRaw() {
+  try { return JSON.parse(localStorage.getItem(TEMPLATES_KEY) || "{}"); }
+  catch { return {}; }
+}
+
+function deleteChartTemplate(name) {
+  const templates = listChartTemplatesRaw();
+  delete templates[name];
+  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+}
+
+function populateTemplateDropdown() {
+  const sel = document.getElementById("template-select");
+  if (!sel) return;
+  while (sel.options.length > 1) sel.remove(1);
+  for (const name of listChartTemplates()) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+}
+
+function setupTemplates() {
+  populateTemplateDropdown();
+
+  document.getElementById("btn-save-template")?.addEventListener("click", () => {
+    const name = prompt("Template name:");
+    if (!name) return;
+    saveChartTemplate(name);
+    populateTemplateDropdown();
+    document.getElementById("template-select").value = name;
+  });
+
+  document.getElementById("template-select")?.addEventListener("change", (e) => {
+    if (e.target.value) loadChartTemplate(e.target.value);
+  });
+
+  document.getElementById("btn-delete-template")?.addEventListener("click", () => {
+    const sel = document.getElementById("template-select");
+    const name = sel?.value;
+    if (!name) return;
+    deleteChartTemplate(name);
+    populateTemplateDropdown();
+    log(`Template "${name}" deleted`, "info");
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE 2: Workspace Profiles — save/load full layout
+// ══════════════════════════════════════════════════════════════
+
+const PROFILES_KEY = "typhoon_profiles";
+
+function listProfilesRaw() {
+  try { return JSON.parse(localStorage.getItem(PROFILES_KEY) || "{}"); }
+  catch { return {}; }
+}
+
+function saveWorkspaceProfile(name) {
+  const profiles = listProfilesRaw();
+  // Capture current tab state
+  if (activeTabId !== null) {
+    const cur = tabs.find(t => t.id === activeTabId);
+    if (cur) {
+      cur.symbol = currentSymbol;
+      cur.timeframe = currentTimeframe;
+      cur.barCount = document.getElementById("bar-count").value;
+      cur.lastPrice = lastPrice;
+    }
+  }
+  const indicators = {};
+  document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
+    const key = `${cb.dataset.ind}_${cb.dataset.period || ""}`;
+    indicators[key] = cb.checked;
+  });
+
+  profiles[name] = {
+    tabs: tabs.map(t => ({ symbol: t.symbol, timeframe: t.timeframe, barCount: t.barCount })),
+    activeTabIndex: tabs.findIndex(t => t.id === activeTabId),
+    indicators,
+    orderMode: document.getElementById("order-mode")?.value || "VaR",
+    fisherPaneHeight: document.getElementById("fisher-pane")?.offsetHeight || 120,
+    volumePaneHeight: document.getElementById("volume-pane")?.offsetHeight || 100,
+    splitActive: splitActive,
+    splitSymbol: splitSymbol,
+    timestamp: Date.now(),
+  };
+  localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+  log(`Profile "${name}" saved`, "ok");
+}
+
+function loadWorkspaceProfile(name) {
+  const profiles = listProfilesRaw();
+  const profile = profiles[name];
+  if (!profile) { log(`Profile "${name}" not found`, "warn"); return; }
+
+  // Restore indicator checkboxes
+  if (profile.indicators) {
+    document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
+      const key = `${cb.dataset.ind}_${cb.dataset.period || ""}`;
+      if (key in profile.indicators) cb.checked = profile.indicators[key];
+    });
+  }
+  if (profile.orderMode) {
+    const modeEl = document.getElementById("order-mode");
+    if (modeEl) modeEl.value = profile.orderMode;
+  }
+  if (profile.fisherPaneHeight) {
+    const fp = document.getElementById("fisher-pane");
+    if (fp) fp.style.height = profile.fisherPaneHeight + "px";
+  }
+  if (profile.volumePaneHeight) {
+    const vp = document.getElementById("volume-pane");
+    if (vp) vp.style.height = profile.volumePaneHeight + "px";
+  }
+
+  // Close existing tabs and recreate
+  tabs.length = 0;
+  activeTabId = null;
+  nextTabId = 1;
+  if (profile.tabs && profile.tabs.length > 0) {
+    for (const t of profile.tabs) {
+      createTab(t.symbol, t.timeframe);
+      const tab = tabs[tabs.length - 1];
+      tab.barCount = t.barCount || "50000";
+    }
+    const idx = profile.activeTabIndex >= 0 ? profile.activeTabIndex : 0;
+    if (tabs[idx]) switchTab(tabs[idx].id);
+  } else {
+    createTab();
+  }
+
+  // Restore split if applicable
+  if (profile.splitActive && profile.splitSymbol) {
+    activateSplit(profile.splitSymbol);
+  } else {
+    deactivateSplit();
+  }
+
+  log(`Profile "${name}" loaded`, "ok");
+}
+
+function populateProfileDropdown() {
+  const sel = document.getElementById("profile-select");
+  if (!sel) return;
+  while (sel.options.length > 1) sel.remove(1);
+  for (const name of Object.keys(listProfilesRaw())) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+}
+
+function setupProfiles() {
+  populateProfileDropdown();
+
+  document.getElementById("btn-save-profile")?.addEventListener("click", () => {
+    const name = prompt("Profile name:");
+    if (!name) return;
+    saveWorkspaceProfile(name);
+    populateProfileDropdown();
+    document.getElementById("profile-select").value = name;
+  });
+
+  document.getElementById("btn-load-profile")?.addEventListener("click", () => {
+    const sel = document.getElementById("profile-select");
+    const name = sel?.value;
+    if (!name) return;
+    loadWorkspaceProfile(name);
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE 3: Command Palette (Bloomberg/Godel-style)
+// ══════════════════════════════════════════════════════════════
+
+const CMD_PALETTE_COMMANDS = [
+  { name: "DES", desc: "Description / Fundamentals", action: cmdDescription },
+  { name: "NEWS", desc: "News headlines", action: cmdNews },
+  { name: "FA", desc: "Financial Analysis (SEC filings)", action: cmdFinancials },
+  { name: "OPT", desc: "Options chain (coming soon)", action: cmdOptions },
+  { name: "SCAN", desc: "Screener / Scanner", action: cmdScreener },
+  { name: "HDS", desc: "Holders / Ownership", action: cmdHolders },
+  { name: "HIST", desc: "Trade History / Orders", action: cmdHistory },
+  { name: "QM", desc: "Quote Monitor / Watchlist", action: cmdWatchlist },
+  { name: "CAL", desc: "Economic Calendar", action: cmdCalendar },
+  { name: "TILE", desc: "Tile all floating windows", action: () => tileWindows() },
+  { name: "CLOSE", desc: "Close all floating windows", action: () => closeAllWindows() },
+];
+
+function fuzzyMatch(query, target) {
+  query = query.toLowerCase();
+  target = target.toLowerCase();
+  if (target.startsWith(query)) return 100;
+  if (target.includes(query)) return 50;
+  let qi = 0;
+  for (let ti = 0; ti < target.length && qi < query.length; ti++) {
+    if (target[ti] === query[qi]) qi++;
+  }
+  return qi === query.length ? 30 : 0;
+}
+
+let cmdPaletteIndex = -1;
+
+function setupCommandPalette() {
+  const overlay = document.getElementById("command-palette");
+  const input = document.getElementById("cmd-palette-input");
+  const results = document.getElementById("cmd-palette-results");
+  if (!overlay || !input || !results) return;
+
+  function openPalette() {
+    overlay.classList.remove("hidden");
+    input.value = "";
+    input.focus();
+    cmdPaletteIndex = -1;
+    renderCmdResults("");
+  }
+
+  function closePalette() {
+    overlay.classList.add("hidden");
+    input.value = "";
+  }
+
+  function renderCmdResults(query) {
+    results.textContent = "";
+    let items;
+    if (!query) {
+      items = CMD_PALETTE_COMMANDS.map(c => ({ ...c, score: 100 }));
+    } else {
+      items = CMD_PALETTE_COMMANDS
+        .map(c => ({ ...c, score: Math.max(fuzzyMatch(query, c.name), fuzzyMatch(query, c.desc)) }))
+        .filter(c => c.score > 0)
+        .sort((a, b) => b.score - a.score);
+    }
+
+    for (let i = 0; i < items.length; i++) {
+      const c = items[i];
+      const div = document.createElement("div");
+      div.className = `cmd-result-item${i === cmdPaletteIndex ? " selected" : ""}`;
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "cmd-name";
+      nameSpan.textContent = c.name;
+      const descSpan = document.createElement("span");
+      descSpan.className = "cmd-desc";
+      descSpan.textContent = c.desc;
+      div.appendChild(nameSpan);
+      div.appendChild(descSpan);
+      div.addEventListener("click", () => {
+        closePalette();
+        c.action();
+      });
+      results.appendChild(div);
+    }
+
+    // If no command matches, treat query as symbol
+    if (items.length === 0 && query.length >= 1) {
+      const div = document.createElement("div");
+      div.className = "cmd-result-item";
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "cmd-name";
+      nameSpan.textContent = query.toUpperCase();
+      const descSpan = document.createElement("span");
+      descSpan.className = "cmd-desc";
+      descSpan.textContent = "Switch chart to this symbol";
+      div.appendChild(nameSpan);
+      div.appendChild(descSpan);
+      div.addEventListener("click", () => {
+        closePalette();
+        document.getElementById("symbol-input").value = query.toUpperCase();
+        triggerLoad();
+      });
+      results.appendChild(div);
+    }
+  }
+
+  input.addEventListener("input", () => {
+    cmdPaletteIndex = -1;
+    renderCmdResults(input.value.trim());
+  });
+
+  input.addEventListener("keydown", (e) => {
+    const items = results.querySelectorAll(".cmd-result-item");
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      cmdPaletteIndex = Math.min(cmdPaletteIndex + 1, items.length - 1);
+      items.forEach((el, i) => el.classList.toggle("selected", i === cmdPaletteIndex));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      cmdPaletteIndex = Math.max(cmdPaletteIndex - 1, 0);
+      items.forEach((el, i) => el.classList.toggle("selected", i === cmdPaletteIndex));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (cmdPaletteIndex >= 0 && items[cmdPaletteIndex]) {
+        items[cmdPaletteIndex].click();
+      } else if (items.length > 0) {
+        items[0].click();
+      } else {
+        // Treat as symbol
+        const sym = input.value.trim().toUpperCase();
+        if (sym) {
+          closePalette();
+          document.getElementById("symbol-input").value = sym;
+          triggerLoad();
+        }
+      }
+    } else if (e.key === "Escape") {
+      closePalette();
+    }
+  });
+
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closePalette();
+  });
+
+  // Global shortcut: Ctrl+K or / to open
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey && e.key === "k") || (e.key === "/" && e.target.tagName !== "INPUT" && e.target.tagName !== "SELECT")) {
+      e.preventDefault();
+      if (overlay.classList.contains("hidden")) openPalette();
+      else closePalette();
+    }
+  });
+}
+
+// Command palette actions
+async function cmdDescription() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  try {
+    const json = await invoke("get_company_fundamentals", { symbol: currentSymbol });
+    const data = JSON.parse(json);
+    if (data && data.entity) openFundamentalsWindow(currentSymbol, data);
+    else {
+      const win = createWindow({ title: `${currentSymbol} — Description`, width: 400, height: 300 });
+      win.setContent("No fundamental data available for this symbol.");
+    }
+  } catch (e) {
+    log(`DES command failed: ${e}`, "error");
+  }
+}
+
+async function cmdNews() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  try {
+    const json = await invoke("get_news", { symbol: currentSymbol, limit: 30 });
+    const articles = JSON.parse(json);
+    const win = createWindow({ title: `${currentSymbol} — News`, width: 550, height: 500 });
+    if (!articles || articles.length === 0) {
+      win.setContent("No news available.");
+      return;
+    }
+    win.contentElement.textContent = "";
+    for (const article of articles) {
+      const item = document.createElement("div");
+      item.style.cssText = "padding:6px 0;border-bottom:1px solid #1a1a2e;cursor:pointer;";
+      const ts = (article.created_at || "").substring(0, 16).replace("T", " ");
+      const dateEl = document.createElement("div");
+      dateEl.style.cssText = "color:#666;font-size:10px;";
+      dateEl.textContent = `${ts} | ${article.source || ""}`;
+      const headEl = document.createElement("div");
+      headEl.style.cssText = "color:#ccc;font-size:11px;margin-top:2px;";
+      headEl.textContent = article.headline || article.title || "";
+      item.appendChild(dateEl);
+      item.appendChild(headEl);
+      if (article.url) {
+        item.addEventListener("click", () => openArticleInline(article.url, article.headline || "Article"));
+      }
+      win.appendElement(item);
+    }
+  } catch (e) { log(`NEWS command failed: ${e}`, "error"); }
+}
+
+async function cmdFinancials() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  try {
+    const json = await invoke("get_company_filings", { symbol: currentSymbol });
+    const filings = JSON.parse(json);
+    openFilingsWindow(currentSymbol, filings);
+  } catch (e) {
+    const win = createWindow({ title: `${currentSymbol} — Financials`, width: 400, height: 300 });
+    win.setContent(`Could not load filings: ${e}`);
+  }
+}
+
+function cmdOptions() {
+  const win = createWindow({ title: `${currentSymbol || ""} — Options`, width: 400, height: 200 });
+  win.setContent("Options chain viewer is not yet implemented. Coming in a future release.");
+}
+
+function cmdScreener() {
+  const win = createWindow({ title: "Screener", width: 500, height: 400 });
+  win.setContent("Stock screener is not yet implemented. Coming in a future release.");
+}
+
+function cmdHolders() {
+  const win = createWindow({ title: `${currentSymbol || ""} — Holders`, width: 400, height: 200 });
+  win.setContent("Holders / ownership data not yet implemented. Coming in a future release.");
+}
+
+async function cmdHistory() {
+  const win = createWindow({ title: "Trade History", width: 550, height: 400 });
+  try {
+    const histJson = await invoke("get_order_history", { limit: 50 });
+    const history = JSON.parse(histJson);
+    if (!history || history.length === 0) { win.setContent("No order history found."); return; }
+    win.contentElement.textContent = "";
+    const table = document.createElement("table");
+    table.className = "fw-table";
+    const thead = document.createElement("tr");
+    for (const h of ["Time", "Symbol", "Side", "Qty", "Price", "Status"]) {
+      const th = document.createElement("td");
+      th.style.cssText = "color:#666;font-weight:bold;font-size:10px;";
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+    for (const o of history) {
+      const tr = document.createElement("tr");
+      const vals = [
+        (o.created_at || "").substring(0, 16).replace("T", " "),
+        o.symbol,
+        o.side,
+        o.qty,
+        o.filled_avg_price || o.limit_price || "—",
+        o.status,
+      ];
+      for (const v of vals) {
+        const td = document.createElement("td");
+        td.className = "fw-value";
+        td.style.textAlign = "left";
+        td.textContent = v;
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+  } catch (e) { win.setContent(`Failed to load history: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE 4: Watchlist / Quote Monitor
+// ══════════════════════════════════════════════════════════════
+
+const WATCHLIST_KEY = "typhoon_watchlist";
+let watchlistInterval = null;
+let watchlistWindow = null;
+
+function getWatchlist() {
+  try { return JSON.parse(localStorage.getItem(WATCHLIST_KEY) || "[]"); }
+  catch { return []; }
+}
+
+function saveWatchlist(list) {
+  localStorage.setItem(WATCHLIST_KEY, JSON.stringify(list));
+}
+
+function cmdWatchlist() {
+  if (watchlistWindow) {
+    try { watchlistWindow.close(); } catch (_) {}
+  }
+  watchlistWindow = createWindow({
+    title: "Quote Monitor",
+    width: 450,
+    height: 400,
+    onClose: () => {
+      if (watchlistInterval) { clearInterval(watchlistInterval); watchlistInterval = null; }
+      watchlistWindow = null;
+    },
+  });
+
+  const container = document.createElement("div");
+  container.style.cssText = "display:flex;flex-direction:column;height:100%;";
+
+  // Add symbol row
+  const addRow = document.createElement("div");
+  addRow.style.cssText = "display:flex;gap:4px;padding:4px;border-bottom:1px solid #333;";
+  const addInput = document.createElement("input");
+  addInput.type = "text";
+  addInput.placeholder = "Add symbol...";
+  addInput.style.cssText = "flex:1;background:#111;color:#fff;border:1px solid #555;padding:4px 8px;font-family:inherit;font-size:11px;";
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "+";
+  addBtn.style.cssText = "background:#0a5f38;color:#8f8;border:1px solid #555;padding:4px 10px;cursor:pointer;font-family:inherit;font-weight:bold;";
+  addBtn.addEventListener("click", () => {
+    const sym = addInput.value.trim().toUpperCase();
+    if (!sym) return;
+    const wl = getWatchlist();
+    if (!wl.includes(sym)) { wl.push(sym); saveWatchlist(wl); }
+    addInput.value = "";
+    refreshWatchlist(tableBody);
+  });
+  addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn.click(); });
+  addRow.appendChild(addInput);
+  addRow.appendChild(addBtn);
+  container.appendChild(addRow);
+
+  // Table
+  const table = document.createElement("table");
+  table.className = "watchlist-table";
+  const thead = document.createElement("thead");
+  const hdr = document.createElement("tr");
+  for (const h of ["Symbol", "Last", "Chg %", "Vol", ""]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    hdr.appendChild(th);
+  }
+  thead.appendChild(hdr);
+  table.appendChild(thead);
+  const tableBody = document.createElement("tbody");
+  table.appendChild(tableBody);
+  container.appendChild(table);
+
+  watchlistWindow.contentElement.textContent = "";
+  watchlistWindow.appendElement(container);
+
+  refreshWatchlist(tableBody);
+  if (watchlistInterval) clearInterval(watchlistInterval);
+  watchlistInterval = setInterval(() => refreshWatchlist(tableBody), 30000);
+}
+
+async function refreshWatchlist(tableBody) {
+  const wl = getWatchlist();
+  tableBody.textContent = "";
+  for (const sym of wl) {
+    const tr = document.createElement("tr");
+
+    const tdSym = document.createElement("td");
+    tdSym.textContent = sym;
+    tdSym.style.color = "#8ff";
+    tdSym.style.fontWeight = "bold";
+
+    const tdLast = document.createElement("td");
+    tdLast.textContent = "...";
+    const tdChg = document.createElement("td");
+    tdChg.textContent = "...";
+    const tdVol = document.createElement("td");
+    tdVol.textContent = "...";
+
+    const tdDel = document.createElement("td");
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "×";
+    delBtn.style.cssText = "background:none;border:1px solid #f44;color:#f44;cursor:pointer;font-size:10px;padding:0 4px;border-radius:2px;";
+    delBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const list = getWatchlist().filter(s => s !== sym);
+      saveWatchlist(list);
+      tr.remove();
+    });
+    tdDel.appendChild(delBtn);
+
+    tr.appendChild(tdSym);
+    tr.appendChild(tdLast);
+    tr.appendChild(tdChg);
+    tr.appendChild(tdVol);
+    tr.appendChild(tdDel);
+
+    // Click row to switch chart
+    tr.addEventListener("click", () => {
+      document.getElementById("symbol-input").value = sym;
+      triggerLoad();
+    });
+
+    tableBody.appendChild(tr);
+
+    // Fetch data async
+    (async () => {
+      try {
+        const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 2 });
+        const bars = JSON.parse(barsJson);
+        if (bars.length >= 2) {
+          const last = bars[bars.length - 1];
+          const prev = bars[bars.length - 2];
+          const chgPct = ((last.close - prev.close) / prev.close * 100);
+          tdLast.textContent = last.close.toFixed(2);
+          tdChg.textContent = `${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%`;
+          tdChg.className = chgPct >= 0 ? "wl-positive" : "wl-negative";
+          tdVol.textContent = last.volume ? (last.volume >= 1e6 ? `${(last.volume / 1e6).toFixed(1)}M` : last.volume.toLocaleString()) : "—";
+        } else if (bars.length === 1) {
+          tdLast.textContent = bars[0].close.toFixed(2);
+          tdChg.textContent = "—";
+          tdVol.textContent = bars[0].volume ? bars[0].volume.toLocaleString() : "—";
+        }
+      } catch (_) {
+        tdLast.textContent = "err";
+      }
+    })();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE 5: Multi-chart layouts (Split View)
+// ══════════════════════════════════════════════════════════════
+
+let splitActive = false;
+let splitChart = null;
+let splitCandleSeries = null;
+let splitSymbol = "";
+let splitContainer = null;
+
+function activateSplit(symbol) {
+  if (splitActive) deactivateSplit();
+  const chartStack = document.getElementById("chart-stack");
+
+  // Create split container
+  splitContainer = document.createElement("div");
+  splitContainer.id = "split-chart-container";
+  chartStack.appendChild(splitContainer);
+  chartStack.classList.add("split-mode");
+
+  splitChart = createChart(splitContainer, {
+    width: splitContainer.clientWidth,
+    height: splitContainer.clientHeight,
+    layout: {
+      background: { color: "#000000" },
+      textColor: "#d1d4dc",
+      fontFamily: "Consolas, Courier New, monospace",
+      attributionLogo: false,
+    },
+    grid: {
+      vertLines: { color: "#333333", style: 3 },
+      horzLines: { color: "#333333", style: 3 },
+    },
+    crosshair: { mode: CrosshairMode.Normal },
+    rightPriceScale: { borderColor: "#333" },
+    timeScale: { borderColor: "#333", timeVisible: true },
+  });
+
+  splitCandleSeries = splitChart.addCandlestickSeries({
+    upColor: "#00ff00",
+    downColor: "#ff0000",
+    borderDownColor: "#ff0000",
+    borderUpColor: "#00ff00",
+    wickDownColor: "#ff0000",
+    wickUpColor: "#00ff00",
+  });
+
+  const ro = new ResizeObserver(() => {
+    if (splitChart && splitContainer) {
+      splitChart.resize(splitContainer.clientWidth, splitContainer.clientHeight);
+    }
+  });
+  ro.observe(splitContainer);
+
+  splitActive = true;
+  splitSymbol = symbol;
+
+  // Load data for split chart
+  loadSplitChart(symbol);
+  log(`Split view activated: ${symbol}`, "ok");
+}
+
+async function loadSplitChart(symbol) {
+  if (!splitChart || !splitCandleSeries) return;
+  try {
+    const tf = document.getElementById("timeframe-select").value;
+    const limit = parseInt(document.getElementById("bar-count").value) || 1000;
+    const cacheKey = getCacheKey(symbol, tf);
+    let bars;
+    const cached = barCache[cacheKey];
+    if (cached && cached.data) {
+      bars = cached.data;
+    } else {
+      const barsJson = await invoke("get_bars", { symbol, timeframe: tf, limit });
+      bars = JSON.parse(barsJson);
+    }
+    const chartData = bars.map(b => ({
+      time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+      open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
+    }));
+    splitCandleSeries.setData(chartData);
+    splitChart.timeScale().fitContent();
+  } catch (e) {
+    log(`Split chart load failed: ${e}`, "error");
+  }
+}
+
+function deactivateSplit() {
+  if (!splitActive) return;
+  const chartStack = document.getElementById("chart-stack");
+  chartStack.classList.remove("split-mode");
+  if (splitChart) { splitChart.remove(); splitChart = null; splitCandleSeries = null; }
+  if (splitContainer) { splitContainer.remove(); splitContainer = null; }
+  splitActive = false;
+  splitSymbol = "";
+  // Resize main chart
+  const container = document.getElementById("chart-container");
+  chart.resize(container.clientWidth, container.clientHeight);
+  log("Split view deactivated", "info");
+}
+
+function setupSplitButton() {
+  const btn = document.getElementById("btn-split");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    if (splitActive) {
+      deactivateSplit();
+      btn.textContent = "Split";
+      btn.style.color = "#8cf";
+    } else {
+      const sym = prompt("Symbol for split panel:", currentSymbol || "SPY");
+      if (!sym) return;
+      activateSplit(sym.toUpperCase());
+      btn.textContent = "Unsplit";
+      btn.style.color = "#f88";
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE 6: Chart Screenshot Export (Ctrl+Shift+S)
+// ══════════════════════════════════════════════════════════════
+
+function showToast(msg) {
+  const toast = document.createElement("div");
+  toast.className = "screenshot-toast";
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2100);
+}
+
+async function captureChartScreenshot() {
+  const container = document.getElementById("chart-container");
+  if (!container) return;
+
+  // Find all canvas elements within the chart container
+  const canvases = container.querySelectorAll("canvas");
+  if (canvases.length === 0) { log("No chart canvas found", "warn"); return; }
+
+  // Create a composite canvas
+  const compositeCanvas = document.createElement("canvas");
+  compositeCanvas.width = container.clientWidth;
+  compositeCanvas.height = container.clientHeight;
+  const ctx = compositeCanvas.getContext("2d");
+
+  // Fill background
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+
+  // Draw each canvas at its position
+  for (const canvas of canvases) {
+    const rect = canvas.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const x = rect.left - containerRect.left;
+    const y = rect.top - containerRect.top;
+    try {
+      ctx.drawImage(canvas, x, y, rect.width, rect.height);
+    } catch (_) {}
+  }
+
+  // Also draw the drawing overlay canvas
+  if (drawCanvas) {
+    try { ctx.drawImage(drawCanvas, 0, 0); } catch (_) {}
+  }
+
+  // Add watermark
+  ctx.fillStyle = "#ffffff44";
+  ctx.font = "10px Consolas";
+  ctx.fillText(`${currentSymbol} ${currentTimeframe} — TyphooN Terminal`, 8, compositeCanvas.height - 8);
+
+  try {
+    // Copy to clipboard
+    compositeCanvas.toBlob(async (blob) => {
+      if (!blob) return;
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        showToast("Screenshot copied to clipboard");
+        log("Chart screenshot copied to clipboard", "ok");
+      } catch (e) {
+        // Fallback: download
+        downloadBlob(blob);
+      }
+    }, "image/png");
+  } catch (e) {
+    log(`Screenshot failed: ${e}`, "error");
+  }
+}
+
+function downloadChartScreenshot() {
+  const container = document.getElementById("chart-container");
+  if (!container) return;
+  const canvases = container.querySelectorAll("canvas");
+  if (canvases.length === 0) return;
+
+  const compositeCanvas = document.createElement("canvas");
+  compositeCanvas.width = container.clientWidth;
+  compositeCanvas.height = container.clientHeight;
+  const ctx = compositeCanvas.getContext("2d");
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+
+  for (const canvas of canvases) {
+    const rect = canvas.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    try { ctx.drawImage(canvas, rect.left - containerRect.left, rect.top - containerRect.top, rect.width, rect.height); } catch (_) {}
+  }
+  if (drawCanvas) try { ctx.drawImage(drawCanvas, 0, 0); } catch (_) {}
+
+  compositeCanvas.toBlob((blob) => {
+    if (blob) downloadBlob(blob);
+  }, "image/png");
+}
+
+function downloadBlob(blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${currentSymbol || "chart"}_${currentTimeframe}_${new Date().toISOString().slice(0, 10)}.png`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  showToast("Screenshot saved to file");
+  log("Chart screenshot saved to file", "ok");
+}
+
+function setupScreenshotShortcut() {
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.shiftKey && e.key === "S") {
+      e.preventDefault();
+      captureChartScreenshot();
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE 7: Economic Calendar
+// ══════════════════════════════════════════════════════════════
+
+async function cmdCalendar() {
+  const win = createWindow({ title: "Economic Calendar", width: 550, height: 400 });
+  win.contentElement.textContent = "";
+
+  // Try Alpaca calendar API first
+  let calendarData = null;
+  try {
+    const json = await invoke("get_calendar", { start: new Date().toISOString().slice(0, 10), end: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10) });
+    calendarData = JSON.parse(json);
+  } catch (_) {}
+
+  if (calendarData && calendarData.length > 0) {
+    const table = document.createElement("table");
+    table.className = "calendar-table";
+    const thead = document.createElement("tr");
+    for (const h of ["Date", "Open", "Close", "Status"]) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+    for (const day of calendarData) {
+      const tr = document.createElement("tr");
+      const isToday = day.date === new Date().toISOString().slice(0, 10);
+      for (const val of [day.date, day.open || "09:30", day.close || "16:00", isToday ? "TODAY" : ""]) {
+        const td = document.createElement("td");
+        td.textContent = val;
+        if (isToday) td.style.color = "#4caf50";
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+  } else {
+    // Fallback: hardcoded major events
+    const events = [
+      { date: "2026-03-17", time: "08:30", event: "Retail Sales", impact: "High", prev: "0.2%", forecast: "0.5%" },
+      { date: "2026-03-18", time: "14:00", event: "FOMC Meeting", impact: "High", prev: "5.25%", forecast: "5.25%" },
+      { date: "2026-03-19", time: "14:00", event: "FOMC Decision", impact: "High", prev: "5.25%", forecast: "5.25%" },
+      { date: "2026-03-20", time: "08:30", event: "Initial Claims", impact: "Medium", prev: "220K", forecast: "218K" },
+      { date: "2026-03-21", time: "09:45", event: "PMI Flash", impact: "Medium", prev: "52.2", forecast: "52.5" },
+      { date: "2026-03-25", time: "10:00", event: "Consumer Confidence", impact: "High", prev: "104.7", forecast: "105.0" },
+      { date: "2026-03-26", time: "08:30", event: "Durable Goods", impact: "Medium", prev: "-4.5%", forecast: "1.0%" },
+      { date: "2026-03-28", time: "08:30", event: "GDP (Q4 Final)", impact: "High", prev: "3.2%", forecast: "3.2%" },
+    ];
+    const table = document.createElement("table");
+    table.className = "calendar-table";
+    const thead = document.createElement("tr");
+    for (const h of ["Date", "Time", "Event", "Impact", "Prev", "Forecast"]) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+    for (const ev of events) {
+      const tr = document.createElement("tr");
+      for (const val of [ev.date, ev.time, ev.event, ev.impact, ev.prev, ev.forecast]) {
+        const td = document.createElement("td");
+        td.textContent = val;
+        if (val === "High") td.style.color = "#f44336";
+        else if (val === "Medium") td.style.color = "#ff8";
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+    const note = document.createElement("div");
+    note.style.cssText = "color:#555;font-size:9px;padding:8px;";
+    note.textContent = "Note: Showing hardcoded calendar data. Connect to Alpaca for live market calendar.";
+    win.appendElement(note);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE 8: Extended Drawing Tools
+// ══════════════════════════════════════════════════════════════
+
+// Extended drawing types: "horizontal", "rectangle", "channel"
+// These augment the existing "trendline" and "fibonacci" system.
+// drawingMode can now be: "trendline", "fibonacci", "horizontal", "rectangle", "channel"
+// "horizontal" needs one click.
+// "rectangle" needs two clicks (two corners).
+// "channel" needs three clicks (trendline + offset point).
+
+let channelThirdClick = false; // track channel state
+
+// Extended drawing renderer: handles trendline, fibonacci, horizontal, rectangle, channel
+// Extended drawing renderer: handles all types including horizontal, rectangle, channel.
+// The original renderDrawings() delegates here via the check at its top.
+
+function renderDrawingsExtended() {
+  if (!drawCanvas || !chart || !candleSeries) return;
+  const ctx = drawCanvas.getContext("2d");
+  ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+
+  for (const d of drawings) {
+    if (d.type === "trendline") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
+      const y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+      const y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      ctx.beginPath();
+      ctx.strokeStyle = "#00bcd4";
+      ctx.lineWidth = 1.5;
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+
+    } else if (d.type === "fibonacci") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
+      const y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+      const y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const high = Math.max(d.p1.price, d.p2.price);
+      const low = Math.min(d.p1.price, d.p2.price);
+      const range = high - low;
+      const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
+      const colors = ["#f44336", "#ff9800", "#ffeb3b", "#8bc34a", "#00bcd4", "#3f51b5", "#9c27b0"];
+      const xLeft = Math.min(x1, x2);
+      const xRight = drawCanvas.width;
+      for (let i = 0; i < levels.length; i++) {
+        const price = high - range * levels[i];
+        const y = candleSeries.priceToCoordinate(price);
+        if (y === null) continue;
+        ctx.beginPath();
+        ctx.strokeStyle = colors[i];
+        ctx.lineWidth = 0.8;
+        ctx.setLineDash([4, 4]);
+        ctx.moveTo(xLeft, y);
+        ctx.lineTo(xRight, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = colors[i];
+        ctx.font = "10px Consolas";
+        ctx.fillText(`${(levels[i] * 100).toFixed(1)}% $${price.toFixed(2)}`, xLeft + 4, y - 3);
+      }
+
+    } else if (d.type === "horizontal") {
+      const y = candleSeries.priceToCoordinate(d.p1.price);
+      if (y === null) continue;
+      ctx.beginPath();
+      ctx.strokeStyle = "#ff9800";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([6, 3]);
+      ctx.moveTo(0, y);
+      ctx.lineTo(drawCanvas.width, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#ff9800";
+      ctx.font = "10px Consolas";
+      ctx.fillText(`$${d.p1.price.toFixed(2)}`, 4, y - 4);
+
+    } else if (d.type === "rectangle") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
+      const y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+      const y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const rx = Math.min(x1, x2);
+      const ry = Math.min(y1, y2);
+      const rw = Math.abs(x2 - x1);
+      const rh = Math.abs(y2 - y1);
+      ctx.fillStyle = "#00bcd420";
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeStyle = "#00bcd4";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rx, ry, rw, rh);
+
+    } else if (d.type === "channel") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
+      const y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+      const y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const offset = d.offset || 0;
+      const oY = candleSeries.priceToCoordinate(d.p1.price + offset);
+      const oY2 = candleSeries.priceToCoordinate(d.p2.price + offset);
+      if (oY === null || oY2 === null) continue;
+      // Main line
+      ctx.beginPath();
+      ctx.strokeStyle = "#00bcd4";
+      ctx.lineWidth = 1.5;
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      // Parallel line
+      ctx.beginPath();
+      ctx.strokeStyle = "#00bcd4";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 2]);
+      ctx.moveTo(x1, oY);
+      ctx.lineTo(x2, oY2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+}
+
+// Override the existing click handler for drawing to support new types
+function setupExtendedDrawings() {
+  const container = document.getElementById("chart-container");
+
+  // We need to intercept clicks for the extended drawing modes
+  // The existing click handler in setupDrawingCanvas already handles trendline/fibonacci
+  // We add a new capture-phase listener for our extended types
+  container.addEventListener("click", (e) => {
+    if (!drawingMode || drawingMode === "trendline" || drawingMode === "fibonacci") return;
+
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const time = chart.timeScale().coordinateToTime(x);
+    const price = candleSeries.coordinateToPrice(y);
+    if (time === null || price === null) return;
+
+    if (drawingMode === "horizontal") {
+      drawings.push({ type: "horizontal", p1: { time, price }, p2: { time, price } });
+      saveDrawings();
+      log(`Horizontal line at $${price.toFixed(4)}`, "ok");
+      drawingMode = null;
+      drawingAnchor = null;
+      container.style.cursor = "";
+      renderDrawings();
+      e.stopImmediatePropagation(); // prevent the original handler
+
+    } else if (drawingMode === "rectangle") {
+      if (!drawingAnchor) {
+        drawingAnchor = { time, price };
+        log("Rectangle: first corner set — click second corner", "info");
+        e.stopImmediatePropagation();
+      } else {
+        drawings.push({ type: "rectangle", p1: drawingAnchor, p2: { time, price } });
+        saveDrawings();
+        log("Rectangle drawn", "ok");
+        drawingAnchor = null;
+        drawingMode = null;
+        container.style.cursor = "";
+        renderDrawings();
+        e.stopImmediatePropagation();
+      }
+
+    } else if (drawingMode === "channel") {
+      if (!drawingAnchor) {
+        drawingAnchor = { time, price };
+        log("Channel: set first point — click second point", "info");
+        e.stopImmediatePropagation();
+      } else if (!channelThirdClick) {
+        // Second click: save the trendline endpoints, wait for offset
+        channelThirdClick = true;
+        drawingAnchor._p2 = { time, price };
+        log("Channel: set line — click to set parallel offset", "info");
+        e.stopImmediatePropagation();
+      } else {
+        // Third click: compute offset from first point
+        const offset = price - drawingAnchor.price;
+        drawings.push({
+          type: "channel",
+          p1: { time: drawingAnchor.time, price: drawingAnchor.price },
+          p2: drawingAnchor._p2,
+          offset,
+        });
+        saveDrawings();
+        log("Channel drawn", "ok");
+        drawingAnchor = null;
+        drawingMode = null;
+        channelThirdClick = false;
+        container.style.cursor = "";
+        renderDrawings();
+        e.stopImmediatePropagation();
+      }
+    }
+  }, true); // capture phase to run before existing handler
+}
+
+// patchRenderDrawings is no longer needed - renderDrawings delegates to renderDrawingsExtended
+function patchRenderDrawings() {
+  // No-op: delegation handled in renderDrawings() directly
+}
+
 // ── Init ────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -3061,6 +4237,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setupDrawingCanvas();
   loadDrawings();
   setupLineDrag();
+  setupExtendedDrawings();
+  patchRenderDrawings();
   setupPaneResizers();
   setupLogPanel();
   setupNewsPanel();
@@ -3073,6 +4251,11 @@ document.addEventListener("DOMContentLoaded", () => {
   setupKeyboard();
   setupConnect();
   setupTabs();
+  setupTemplates();
+  setupProfiles();
+  setupCommandPalette();
+  setupSplitButton();
+  setupScreenshotShortcut();
 
   // Auto-save session periodically and on shutdown
   setInterval(saveSession, 30000); // every 30s

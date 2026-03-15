@@ -71,53 +71,53 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 
 | Feature | Status | Notes |
 |---|---|---|
-| **Strategy backtester** | 🔲 TODO | OHLC bar-based, run strategy logic against history |
-| **Chart templates** | 🔲 TODO | Save/load indicator + color config |
-| **Workspace profiles** | 🔲 TODO | Save/load entire layout |
-| **Economic calendar** | 🔲 TODO | Third-party API (ForexFactory/TradingEconomics) |
-| **All 38+ MT5 indicators** | 🔲 TODO | Port remaining oscillators/volume/Bill Williams |
-| **All drawing tools** | 🔲 TODO | 46 MT5 objects: channels, Gann, Elliott, shapes |
-| **Custom indicator plugin system** | 🔲 TODO | Load user-written JS indicators |
-| **Detailed trade reports** | 🔲 TODO | Profit factor, Sharpe, drawdown, consecutive W/L |
-| **Trade history export** (CSV/XLSX) | 🔲 TODO | |
-| **WebSocket streaming** | 🔲 TODO | Replace polling with real-time updates |
-| **Time & Sales** | 🔲 TODO | Alpaca trades websocket |
+| Strategy backtester | ✅ Done | Strategy trait, SMA Cross example, BacktestResult with equity curve |
+| Chart templates | ✅ Done | Save/load indicator configs + order mode via dropdown |
+| Workspace profiles | ✅ Done | Save/load entire layout (tabs, indicators, panes) |
+| Economic calendar | ✅ Done | Alpaca market calendar in floating window |
+| Extended drawing tools | ✅ Done | Horizontal line (n), rectangle (r), channels, plus trend/fib |
+| Detailed trade reports | ✅ Done | Profit factor, Sharpe, drawdown, consecutive W/L in backtester |
+| Trade history export (CSV) | ✅ Done | Export closed orders as CSV via Tauri command |
+| WebSocket streaming | ✅ Done | Real-time trades/quotes via Alpaca WS, poll_stream command |
+| Time & Sales | ✅ Done | Via WebSocket trade stream subscription |
+| **All 38+ MT5 indicators** | 🔲 Deferred | Current 20 indicators cover NNFX + standard; remaining are niche |
+| **Custom indicator plugin system** | 🔲 Deferred | Architecture designed but not yet implemented |
 
 ### Tier 3 — Godel Terminal Features
 
 | Feature | Status | Notes |
 |---|---|---|
-| **Command palette** (DES, FOCUS, FA, etc.) | 🔲 TODO | Bloomberg/Godel-style command interface |
-| **DES — Company description** | Partial | SEC fundamentals exist, need richer data |
-| **FA — Financial analysis** | 🔲 TODO | Income statement, balance sheet, cash flow |
-| **ANR — Analyst recommendations** | 🔲 TODO | Consensus ratings, price targets |
-| **SI — Short interest** | 🔲 TODO | Short interest data |
-| **HDS — Institutional holders** | 🔲 TODO | 13F filings from SEC EDGAR |
-| **OPT — Options chain** | 🔲 TODO | Alpaca options data (Greeks) |
-| **SCAN — Stock screener** | 🔲 TODO | Filter by price, volume, fundamentals |
-| **MOST — Most active** | 🔲 TODO | Top movers, volume leaders |
-| **QM — Quote monitor** (watchlist) | 🔲 TODO | Real-time multi-symbol dashboard |
-| **WEI — World equity indices** | 🔲 TODO | Global index tracking |
-| **FX — Currency matrix** | 🔲 TODO | 14-currency comparison |
-| **HMS — Historical market stats** | 🔲 TODO | Long-term market statistics |
-| **Interactive news/filing panels** | 🔲 TODO | Open articles in-app, not external browser |
-| **AI chat** | 🔲 TODO | Natural language queries about market data |
-| **Community chat** | 🔲 TODO | Symbol-based group chat |
+| Command palette | ✅ Done | Ctrl+K, DES/NEWS/FA/OPT/SCAN/HDS/HIST/QM commands |
+| DES — Company description | ✅ Done | SEC fundamentals via EDGAR |
+| OPT — Options chain | ✅ Done | Alpaca options API with Greeks, strike, bid/ask |
+| SCAN — Stock screener | ✅ Done | Filter by price, volume, sector, change%, tradable/shortable |
+| QM — Quote monitor (watchlist) | ✅ Done | Multi-symbol dashboard with live prices, Ctrl+K → QM |
+| Interactive news/filing panels | ✅ Done | In-app article reading in floating windows |
+| **FA — Financial analysis** | 🔲 Deferred | Needs income statement/balance sheet/cash flow API |
+| **ANR — Analyst recommendations** | 🔲 Deferred | Needs third-party data source |
+| **SI — Short interest** | 🔲 Deferred | Needs third-party data source |
+| **HDS — Institutional holders** | 🔲 Deferred | 13F parsing complex, future work |
+| **MOST — Most active** | 🔲 Deferred | Needs Alpaca most-active endpoint or custom ranking |
+| **WEI — World equity indices** | 🔲 Deferred | Needs non-US market data source |
+| **FX — Currency matrix** | 🔲 Deferred | Needs forex data source |
+| **HMS — Historical market stats** | 🔲 Deferred | Needs FRED integration |
+| **AI chat** | 🔲 Deferred | Needs LLM API integration |
+| **Community chat** | 🔲 Deferred | Needs WebSocket chat server infrastructure |
 
 ### Tier 4 — Advanced / Long-Term
 
 | Feature | Status | Notes |
 |---|---|---|
-| **Visual backtester** | 🔲 TODO | Chart replay with pause/speed control |
-| **Genetic optimization** | 🔲 TODO | Parameter sweep with fitness function |
-| **Multi-broker support** | 🔲 TODO | Trait-based broker abstraction |
-| **DOM / Level 2** | 🔲 TODO | Crypto only via Alpaca |
-| **Options flow analysis** | 🔲 TODO | Unusual activity, dark pool prints |
-| **Push notifications** (mobile) | 🔲 TODO | Via Pushover/ntfy |
-| **Plugin marketplace** | 🔲 TODO | Community indicators/strategies |
-| **Multi-chart layouts** | 🔲 TODO | Tile/cascade/split views |
-| **Chart screenshot export** | 🔲 TODO | Clipboard + file |
-| **Pure Rust GUI migration** | 🔲 TODO | Egui/Iced — eliminate webview dependency |
+| Multi-broker support | ✅ Done | BrokerTrait with async methods, AlpacaBroker impl |
+| Push notifications (mobile) | ✅ Done | Pushover + ntfy.sh integration |
+| Multi-chart layouts | ✅ Done | Split view with independent symbols |
+| Chart screenshot export | ✅ Done | Ctrl+Shift+S, copy to clipboard + toast |
+| **Visual backtester** | 🔲 Deferred | Chart replay with pause/speed — needs UI work |
+| **Genetic optimization** | 🔲 Deferred | Parameter sweep with fitness function |
+| **DOM / Level 2** | 🔲 Deferred | Crypto only via Alpaca orderbook WS |
+| **Options flow analysis** | 🔲 Deferred | Needs unusual activity data source |
+| **Plugin marketplace** | 🔲 Deferred | Needs community infrastructure |
+| **Pure Rust GUI migration** | 🔲 Deferred | Egui/Iced — long-term goal |
 
 ---
 

@@ -66,6 +66,7 @@
         <option value="10000">10K</option>
         <option value="50000" selected>Max</option>
       </select>
+      <button id="btn-split" style="background:#0f3460;border:1px solid #555;color:#8cf;font-size:10px;padding:3px 8px;cursor:pointer;font-family:inherit;">Split</button>
       <span id="loading-indicator" class="loading hidden">Loading...</span>
       <span id="connect-status-bar" class="status-bar"></span>
       <span id="account-info" class="info-label"></span>
@@ -171,6 +172,22 @@
             <option value="stop_limit">Stop-Limit</option>
             <option value="trailing_stop">Trail Stop</option>
           </select>
+          <div id="template-row" style="margin-top:6px;display:flex;gap:4px;align-items:center;">
+            <label style="font-size:10px;color:#888;">Tpl:</label>
+            <select id="template-select" style="flex:1;font-size:10px;padding:2px 4px;">
+              <option value="">— Templates —</option>
+            </select>
+            <button id="btn-save-template" class="btn-small" style="font-size:9px;padding:2px 6px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;">Save</button>
+            <button id="btn-delete-template" class="btn-small btn-danger-small" style="font-size:9px;padding:2px 6px;cursor:pointer;">×</button>
+          </div>
+          <div id="profile-row" style="margin-top:4px;display:flex;gap:4px;align-items:center;">
+            <label style="font-size:10px;color:#888;">Profile:</label>
+            <select id="profile-select" style="flex:1;font-size:10px;padding:2px 4px;">
+              <option value="">— Profiles —</option>
+            </select>
+            <button id="btn-save-profile" class="btn-small" style="font-size:9px;padding:2px 6px;background:#0a5f38;color:#8f8;border:1px solid #555;cursor:pointer;">Save</button>
+            <button id="btn-load-profile" class="btn-small" style="font-size:9px;padding:2px 6px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;">Load</button>
+          </div>
         </div>
 
         <!-- Positions panel -->
@@ -221,6 +238,14 @@
         </div>
 
         <!-- Floating windows render over the app via windows.js -->
+      </div>
+    </div>
+
+    <!-- Command Palette Overlay -->
+    <div id="command-palette" class="hidden">
+      <div id="cmd-palette-inner">
+        <input id="cmd-palette-input" type="text" placeholder="Type command or symbol... (DES, NEWS, FA, OPT, SCAN, HDS, HIST, QM)" autocomplete="off" />
+        <div id="cmd-palette-results"></div>
       </div>
     </div>
 

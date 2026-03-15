@@ -17,6 +17,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zstd = "0.13"
 zeroize = { version = "1", features = ["derive"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+async-trait = "0.1"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

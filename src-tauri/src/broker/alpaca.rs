@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
+use futures_util::{SinkExt, StreamExt};
 
 const PAPER_BASE: &str = "https://paper-api.alpaca.markets";
 const LIVE_BASE: &str = "https://api.alpaca.markets";
@@ -1058,4 +1059,251 @@ impl AlpacaBroker {
             })
             .unwrap_or_default()
     }
+
+    // ── Options Chain ───────────────────────────────────────────────
+
+    /// Fetch options chain from Alpaca options API.
+    pub async fn get_options_chain(
+        &self,
+        underlying_symbol: &str,
+        expiry: &str,
+    ) -> Result<Vec<OptionContract>, String> {
+        self.rate_limiter.wait().await;
+
+        let resp = self
+            .client
+            .get(format!("{}/v1beta1/options/snapshots/{}", DATA_BASE, underlying_symbol))
+            .headers(self.headers())
+            .query(&[
+                ("feed", "indicative"),
+                ("expiration_date", expiry),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Options request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let _ = resp.text().await;
+            return Err(format!("Options request failed: HTTP {status}"));
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Options parse failed: {e}"))?;
+
+        let mut contracts = Vec::new();
+
+        if let Some(snapshots) = json["snapshots"].as_object() {
+            for (symbol, snap) in snapshots {
+                let latest_quote = &snap["latestQuote"];
+                let greeks = &snap["greeks"];
+
+                // Parse option symbol to extract strike, type, expiry
+                // Alpaca option symbols: AAPL240119C00150000 (symbol + YYMMDD + C/P + strike*1000)
+                let (strike, option_type, parsed_expiry) = Self::parse_option_symbol(symbol);
+
+                contracts.push(OptionContract {
+                    symbol: symbol.clone(),
+                    underlying: underlying_symbol.to_string(),
+                    strike,
+                    expiry: parsed_expiry,
+                    option_type,
+                    bid: latest_quote["bp"].as_f64().unwrap_or(0.0),
+                    ask: latest_quote["ap"].as_f64().unwrap_or(0.0),
+                    last_price: snap["latestTrade"]["p"].as_f64().unwrap_or(0.0),
+                    volume: snap["dailyBar"]["v"].as_f64().unwrap_or(0.0) as u64,
+                    open_interest: snap["openInterest"].as_u64().unwrap_or(0),
+                    implied_volatility: greeks["impliedVolatility"].as_f64().unwrap_or(0.0),
+                    delta: greeks["delta"].as_f64().unwrap_or(0.0),
+                    gamma: greeks["gamma"].as_f64().unwrap_or(0.0),
+                    theta: greeks["theta"].as_f64().unwrap_or(0.0),
+                    vega: greeks["vega"].as_f64().unwrap_or(0.0),
+                    rho: greeks["rho"].as_f64().unwrap_or(0.0),
+                });
+            }
+        }
+
+        // Sort by strike price
+        contracts.sort_by(|a, b| a.strike.partial_cmp(&b.strike).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(contracts)
+    }
+
+    /// Parse an OCC option symbol like "AAPL240119C00150000" into (strike, type, expiry).
+    fn parse_option_symbol(sym: &str) -> (f64, String, String) {
+        // OCC format: underlying (variable) + YYMMDD + C/P + strike*1000 (8 digits)
+        let len = sym.len();
+        if len < 15 {
+            return (0.0, "unknown".to_string(), String::new());
+        }
+        // Last 8 digits are strike * 1000
+        let strike_str = &sym[len - 8..];
+        let strike = strike_str.parse::<f64>().unwrap_or(0.0) / 1000.0;
+        // C or P is at len - 9
+        let option_type = match sym.chars().nth(len - 9) {
+            Some('C') => "call".to_string(),
+            Some('P') => "put".to_string(),
+            _ => "unknown".to_string(),
+        };
+        // YYMMDD is at len-15..len-9
+        let date_str = &sym[len - 15..len - 9];
+        let expiry = if date_str.len() == 6 {
+            format!("20{}-{}-{}", &date_str[0..2], &date_str[2..4], &date_str[4..6])
+        } else {
+            String::new()
+        };
+        (strike, option_type, expiry)
+    }
+
+    // ── WebSocket Streaming ─────────────────────────────────────────
+
+    /// Start a WebSocket connection to Alpaca's real-time data stream.
+    /// Returns a receiver for incoming StreamMessage events.
+    /// Subscribes to the given trade and quote symbols.
+    pub async fn start_stream(
+        &self,
+        trade_symbols: Vec<String>,
+        quote_symbols: Vec<String>,
+    ) -> Result<tokio::sync::mpsc::Receiver<StreamMessage>, String> {
+        let is_crypto = trade_symbols.iter().chain(quote_symbols.iter()).any(|s| s.contains('/'));
+        let ws_url = if is_crypto {
+            "wss://stream.data.alpaca.markets/v1beta3/crypto/us"
+        } else {
+            "wss://stream.data.alpaca.markets/v2/iex"
+        };
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url)
+            .await
+            .map_err(|e| format!("WebSocket connect failed: {e}"))?;
+
+        let (mut write, mut read) = ws_stream.split();
+
+        // Authenticate
+        let auth_msg = serde_json::json!({
+            "action": "auth",
+            "key": self.api_key.as_str(),
+            "secret": self.secret_key.as_str(),
+        });
+        write
+            .send(tokio_tungstenite::tungstenite::Message::Text(auth_msg.to_string()))
+            .await
+            .map_err(|e| format!("WebSocket auth send failed: {e}"))?;
+
+        // Wait for auth response
+        if let Some(Ok(msg)) = read.next().await {
+            // First message is connection welcome
+            tracing::debug!("WS welcome: {msg}");
+        }
+        if let Some(Ok(msg)) = read.next().await {
+            let text = msg.to_text().unwrap_or("");
+            if text.contains("\"error\"") {
+                return Err(format!("WebSocket auth failed: {text}"));
+            }
+            tracing::debug!("WS auth response: {text}");
+        }
+
+        // Subscribe
+        let sub_msg = serde_json::json!({
+            "action": "subscribe",
+            "trades": trade_symbols,
+            "quotes": quote_symbols,
+        });
+        write
+            .send(tokio_tungstenite::tungstenite::Message::Text(sub_msg.to_string()))
+            .await
+            .map_err(|e| format!("WebSocket subscribe failed: {e}"))?;
+
+        // Channel for outgoing messages
+        let (tx, rx) = tokio::sync::mpsc::channel::<StreamMessage>(1024);
+
+        // Spawn reader task
+        tokio::spawn(async move {
+            while let Some(Ok(msg)) = read.next().await {
+                let text = match msg.to_text() {
+                    Ok(t) => t.to_string(),
+                    Err(_) => continue,
+                };
+
+                let parsed: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&text);
+                if let Ok(events) = parsed {
+                    for event in events {
+                        let msg_type = event["T"].as_str().unwrap_or("");
+                        let stream_msg = match msg_type {
+                            "t" => Some(StreamMessage::Trade(StreamTrade {
+                                symbol: event["S"].as_str().unwrap_or("").to_string(),
+                                price: event["p"].as_f64().unwrap_or(0.0),
+                                size: event["s"].as_f64().unwrap_or(0.0),
+                                timestamp: event["t"].as_str().unwrap_or("").to_string(),
+                            })),
+                            "q" => Some(StreamMessage::Quote(StreamQuote {
+                                symbol: event["S"].as_str().unwrap_or("").to_string(),
+                                bid: event["bp"].as_f64().unwrap_or(0.0),
+                                ask: event["ap"].as_f64().unwrap_or(0.0),
+                                bid_size: event["bs"].as_f64().unwrap_or(0.0),
+                                ask_size: event["as"].as_f64().unwrap_or(0.0),
+                                timestamp: event["t"].as_str().unwrap_or("").to_string(),
+                            })),
+                            _ => None,
+                        };
+                        if let Some(sm) = stream_msg {
+                            if tx.send(sm).await.is_err() {
+                                tracing::info!("Stream receiver dropped, closing WS");
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            tracing::info!("WebSocket stream ended");
+        });
+
+        Ok(rx)
+    }
+}
+
+// ── Streaming Types ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StreamMessage {
+    Trade(StreamTrade),
+    Quote(StreamQuote),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamTrade {
+    pub symbol: String,
+    pub price: f64,
+    pub size: f64,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamQuote {
+    pub symbol: String,
+    pub bid: f64,
+    pub ask: f64,
+    pub bid_size: f64,
+    pub ask_size: f64,
+    pub timestamp: String,
+}
+
+// ── Options Types ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptionContract {
+    pub symbol: String,
+    pub underlying: String,
+    pub strike: f64,
+    pub expiry: String,
+    pub option_type: String, // "call" or "put"
+    pub bid: f64,
+    pub ask: f64,
+    pub last_price: f64,
+    pub volume: u64,
+    pub open_interest: u64,
+    pub implied_volatility: f64,
+    pub delta: f64,
+    pub gamma: f64,
+    pub theta: f64,
+    pub vega: f64,
+    pub rho: f64,
 }
