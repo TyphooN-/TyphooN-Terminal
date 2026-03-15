@@ -840,41 +840,22 @@ function applyIndicators(chartData) {
       volumeChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
 
     } else if (ind === "supply-demand" && chartData.length > 10) {
-      // Supply/Demand zones — MT5 style filled rectangles
+      // Supply/Demand zones — two horizontal lines per zone (top + bottom)
+      // Demand = green dashed, Supply = red dashed
       const zones = calcSupplyDemandZones(chartData);
       for (let zi = 0; zi < zones.length; zi++) {
         const z = zones[zi];
         const isDemand = z.type === "demand";
-        const fillColor = isDemand ? "#00FF0018" : "#FF000018";  // very subtle fill
-        const borderColor = isDemand ? "#00FF0066" : "#FF000066";
-        // Top border line series
-        const topS = chart.addLineSeries({
-          color: borderColor, lineWidth: 1, lastValueVisible: false,
-          priceLineVisible: false, crosshairMarkerVisible: false,
+        const color = isDemand ? "#00FF0088" : "#FF000088";
+        // Just two price lines — clean, no fill
+        candleSeries.createPriceLine({
+          price: z.high, color, lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: false, title: "",
         });
-        // Bottom border line series
-        const botS = chart.addLineSeries({
-          color: borderColor, lineWidth: 1, lastValueVisible: false,
-          priceLineVisible: false, crosshairMarkerVisible: false,
+        candleSeries.createPriceLine({
+          price: z.low, color, lineWidth: 1, lineStyle: 2,
+          axisLabelVisible: false, title: "",
         });
-        // Fill area between top and bottom using area series
-        const fillS = chart.addAreaSeries({
-          topColor: fillColor, bottomColor: fillColor, lineColor: "transparent",
-          lineWidth: 0, lastValueVisible: false, priceLineVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        // Project zone across bars from start to last candle
-        const zoneBars = clip(chartData.filter(d => d.time >= z.startTime));
-        if (zoneBars.length === 0) continue;
-        topS.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
-        botS.setData(zoneBars.map(d => ({ time: d.time, value: z.low })));
-        // Area series: lineValue = high, fills down to bottomValue
-        fillS.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
-        // Unfortunately area series fills to bottom of chart, not to a specific level.
-        // Use the top line as the visible boundary with subtle fill.
-        indicatorSeries[`sd_${zi}_t`] = topS;
-        indicatorSeries[`sd_${zi}_b`] = botS;
-        indicatorSeries[`sd_${zi}_f`] = fillS;
       }
 
     } else if (ind === "rvol" && chartData.length > 11) {
