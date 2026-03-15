@@ -11,7 +11,9 @@
 #   ./launch.sh dev    — development mode with hot reload
 
 set -euo pipefail
-cd "$(dirname "$0")/src-tauri"
+
+# Navigate to project root (where this script lives)
+cd "$(dirname "$0")"
 
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
 export WEBKIT_DISABLE_COMPOSITING_MODE=1
@@ -23,5 +25,5 @@ if [ "${1:-}" = "dev" ]; then
 else
     echo "Starting TyphooN Terminal..."
     cargo tauri build
-    echo "Build complete. Binary at target/release/typhoon-terminal"
+    echo "Build complete. Binary at src-tauri/target/release/typhoon-terminal"
 fi
