@@ -12,9 +12,8 @@
 
 set -euo pipefail
 
-# Tauri v2 runs beforeDevCommand/beforeBuildCommand from src-tauri/,
-# so cargo tauri must be invoked from src-tauri/ for 'cd ../frontend' to work.
-cd "$(dirname "$0")/src-tauri"
+# Tauri CLI v2 runs beforeDevCommand from the project root
+cd "$(dirname "$0")"
 
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
 export WEBKIT_DISABLE_COMPOSITING_MODE=1
@@ -26,5 +25,5 @@ if [ "${1:-}" = "dev" ]; then
 else
     echo "Starting TyphooN Terminal..."
     cargo tauri build
-    echo "Build complete. Binary at target/release/typhoon-terminal"
+    echo "Build complete. Binary at src-tauri/target/release/typhoon-terminal"
 fi
