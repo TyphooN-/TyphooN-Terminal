@@ -1,0 +1,27 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicholasrice/tauri/HEAD/crates/tauri-schema-generator/schemas/config.schema.json",
+  "productName": "TyphooN-Terminal",
+  "version": "0.1.0",
+  "identifier": "org.marketwizardry.typhoon-terminal",
+  "build": {
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "cd ../frontend && npm run dev",
+    "beforeBuildCommand": "cd ../frontend && npm run build"
+  },
+  "app": {
+    "title": "TyphooN Terminal",
+    "windows": [
+      {
+        "title": "TyphooN Terminal",
+        "width": 1600,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

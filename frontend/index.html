@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TyphooN Terminal</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Top bar: symbol selector + account info -->
+    <div id="top-bar">
+      <input id="symbol-input" type="text" placeholder="Symbol (e.g. AAPL, BTC/USD)" />
+      <select id="timeframe-select">
+        <option value="1Min">1m</option>
+        <option value="5Min">5m</option>
+        <option value="15Min">15m</option>
+        <option value="1Hour" selected>1H</option>
+        <option value="4Hour">4H</option>
+        <option value="1Day">D1</option>
+        <option value="1Week">W1</option>
+        <option value="1Month">MN</option>
+      </select>
+      <button id="btn-load-chart">Load</button>
+      <span id="account-info" class="info-label"></span>
+    </div>
+
+    <!-- Main layout: chart + controls -->
+    <div id="main-layout">
+      <!-- Chart area -->
+      <div id="chart-container"></div>
+
+      <!-- Right panel: controls + dashboard -->
+      <div id="right-panel">
+        <!-- Button grid (matches TyphooN EA 5×2 layout) -->
+        <div id="button-grid">
+          <button id="btn-trade" class="btn-action">Open Trade</button>
+          <button id="btn-martingale" class="btn-mg">MG: OFF</button>
+          <button id="btn-buy-lines" class="btn-lines">Buy Lines</button>
+          <button id="btn-sell-lines" class="btn-lines">Sell Lines</button>
+          <button id="btn-destroy-lines" class="btn-lines">Destroy Lines</button>
+          <button id="btn-open-mg" class="btn-mg">Open MG</button>
+          <button id="btn-close-all" class="btn-danger">Close All</button>
+          <button id="btn-close-partial" class="btn-danger">Close Partial</button>
+          <button id="btn-set-sl" class="btn-lines">Set SL</button>
+          <button id="btn-set-tp" class="btn-lines">Set TP</button>
+        </div>
+
+        <!-- Dashboard labels (matches TyphooN EA info labels) -->
+        <div id="dashboard">
+          <div id="info-position" class="dash-row">Position: —</div>
+          <div id="info-var" class="dash-row">VaR: —</div>
+          <div id="info-risk" class="dash-row">Risk: —</div>
+          <div id="info-pl" class="dash-row">P/L: —</div>
+          <div id="info-sl-pl" class="dash-row">SL P/L: —</div>
+          <div id="info-tp-pl" class="dash-row">TP P/L: —</div>
+          <div id="info-rr" class="dash-row">RR: —</div>
+          <div id="info-margin" class="dash-row">ML: —</div>
+          <div id="info-equity" class="dash-row">Eq: —</div>
+          <div id="info-balance" class="dash-row">Bal: —</div>
+          <div id="info-time" class="dash-row">Next bar: —</div>
+        </div>
+
+        <!-- Order mode selector -->
+        <div id="order-config">
+          <label>Mode:</label>
+          <select id="order-mode">
+            <option value="VaR">VaR</option>
+            <option value="Standard">Standard</option>
+            <option value="Fixed">Fixed</option>
+            <option value="Dynamic">Dynamic</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

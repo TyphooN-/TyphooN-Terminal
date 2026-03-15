@@ -1,0 +1,166 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Consolas', 'Courier New', monospace;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  overflow: hidden;
+  height: 100vh;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ── Top Bar ─────────────────────────────────────────────── */
+
+#top-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #16213e;
+  border-bottom: 1px solid #333;
+}
+
+#symbol-input {
+  background: #0f3460;
+  border: 1px solid #444;
+  color: #fff;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  width: 180px;
+}
+
+#timeframe-select, #order-mode {
+  background: #0f3460;
+  border: 1px solid #444;
+  color: #fff;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+#btn-load-chart {
+  background: #0f3460;
+  border: 1px solid #555;
+  color: #8ff;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.info-label {
+  margin-left: auto;
+  font-size: 12px;
+  color: #8f8;
+}
+
+/* ── Main Layout ─────────────────────────────────────────── */
+
+#main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+#chart-container {
+  flex: 1;
+  background: #1a1a2e;
+  position: relative;
+}
+
+/* ── Right Panel ─────────────────────────────────────────── */
+
+#right-panel {
+  width: 240px;
+  background: #16213e;
+  border-left: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* ── Button Grid (5×2, matches TyphooN EA) ───────────────── */
+
+#button-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 8px;
+}
+
+#button-grid button {
+  padding: 8px 4px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: bold;
+  cursor: pointer;
+  border: 1px solid #444;
+  border-radius: 2px;
+}
+
+.btn-action {
+  background: #0a5f38;
+  color: #8f8;
+}
+
+.btn-mg {
+  background: #3a3a00;
+  color: #ff8;
+}
+
+.btn-lines {
+  background: #0f3460;
+  color: #8cf;
+}
+
+.btn-danger {
+  background: #5a1a1a;
+  color: #f88;
+}
+
+#button-grid button:hover {
+  filter: brightness(1.3);
+}
+
+/* ── Dashboard Labels ────────────────────────────────────── */
+
+#dashboard {
+  padding: 8px;
+  border-top: 1px solid #333;
+  flex: 1;
+}
+
+.dash-row {
+  font-size: 11px;
+  padding: 2px 4px;
+  border-bottom: 1px solid #222;
+  white-space: nowrap;
+}
+
+.dash-row.positive { color: #4caf50; }
+.dash-row.negative { color: #f44336; }
+.dash-row.neutral  { color: #e0e0e0; }
+
+/* ── Order Config ────────────────────────────────────────── */
+
+#order-config {
+  padding: 8px;
+  border-top: 1px solid #333;
+  font-size: 11px;
+}
+
+#order-config label {
+  margin-right: 6px;
+}
+
+/* ── SL/TP Line Colors (used by lightweight-charts) ──────── */
+/* SL = red, TP = green — same as MQL5 */
