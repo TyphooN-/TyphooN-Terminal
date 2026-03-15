@@ -10,13 +10,14 @@
 //! - Discord webhook notifications
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![allow(dead_code)] // Scaffold — functions will be wired up incrementally
 
 mod broker;
 mod core;
 mod notifications;
 mod strategies;
 
-use broker::alpaca::{AlpacaBroker, Bar};
+use broker::alpaca::AlpacaBroker;
 use core::risk::RiskConfig;
 use strategies::martingale::{MartingaleConfig, MartingaleState};
 use std::sync::Arc;
