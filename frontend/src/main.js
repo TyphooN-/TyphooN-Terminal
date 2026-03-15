@@ -63,6 +63,7 @@ let currentSymbol = "";
 let currentTimeframe = "1Hour";
 let lastPrice = 0;
 let mtfData = {};
+let currentChartData = []; // full chartData with volume — candleSeries.data() drops volume
 
 // ── Tab State ───────────────────────────────────────────────
 
@@ -1698,6 +1699,7 @@ async function loadChart(symbol, timeframe) {
                   open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
                 }));
                 candleSeries.setData(freshChartData);
+                currentChartData = freshChartData;
                 lastPrice = freshChartData[freshChartData.length - 1].close;
                 log(`${symbol} @ ${timeframe}: refreshed to ${freshBars.length} bars`, "ok");
               }
@@ -1742,6 +1744,7 @@ async function loadChart(symbol, timeframe) {
     }
 
     candleSeries.setData(chartData);
+    currentChartData = chartData; // preserve volume for indicators
     chart.timeScale().fitContent();
     currentSymbol = symbol;
     currentTimeframe = timeframe;
@@ -1822,10 +1825,13 @@ async function updateLatestBar(symbol, timeframe) {
     // If a NEW bar has printed (different timestamp), refresh all indicators
     if (barTime !== lastBarTime && lastBarTime !== 0) {
       log(`New bar on ${symbol} @ ${timeframe}`, "info");
-      const chartData = candleSeries.data();
-      if (chartData && chartData.length > 0) {
-        applyIndicators(chartData);
+      // Update currentChartData with the new bar (preserve volume)
+      if (currentChartData.length > 0 && currentChartData[currentChartData.length - 1].time === barTime) {
+        currentChartData[currentChartData.length - 1] = bar;
+      } else {
+        currentChartData.push(bar);
       }
+      applyIndicators(currentChartData);
     }
     lastBarTime = barTime;
   } catch (_) {}
@@ -2746,11 +2752,10 @@ function setupIndicatorPanel() {
     header.textContent = panel.classList.contains("collapsed") ? "Indicators ▶" : "Indicators ▼";
   });
 
-  // Re-apply indicators when checkboxes change
+  // Re-apply indicators when checkboxes change (use currentChartData for volume)
   document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
     cb.addEventListener("change", () => {
-      const data = candleSeries.data();
-      if (data && data.length > 0) applyIndicators(data);
+      if (currentChartData && currentChartData.length > 0) applyIndicators(currentChartData);
     });
   });
 }
