@@ -60,7 +60,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Modify/cancel pending orders | ✅ Done | Orders panel with cancel buttons, PATCH API |
 | Close Partial (smart) | ✅ Done | Floating window with 25/50/75/100% quick buttons |
 | Draggable SL/TP lines | ✅ Done | Double-click to grab, drag to adjust |
-| **Drawing tools** (trend lines, Fibonacci) | 🔲 TODO | Requires lightweight-charts plugin API |
+| Drawing tools (trend lines, Fibonacci) | ✅ Done | Canvas overlay, keyboard L/F/X, persistent |
 | Price alerts | ✅ Done | Keyboard `a`, browser notifications, persistent |
 | Trade history panel | ✅ Done | Orders panel with open + recent fills |
 | Open positions panel | ✅ Done | Live P/L, one-click close, click to switch chart |

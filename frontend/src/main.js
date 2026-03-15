@@ -429,6 +429,115 @@ function setupLineDrag() {
   });
 }
 
+// ── Drawing Tools (Trend Lines + Fibonacci) ─────────────────
+// Canvas overlay approach: draw on a transparent canvas synced with the chart.
+// Lines stored as [{ type, p1: {time, price}, p2: {time, price} }].
+// Fibonacci retracements auto-compute 0/23.6/38.2/50/61.8/78.6/100% levels.
+
+let drawings = []; // [{ type: "trendline"|"fibonacci", p1, p2 }]
+let drawingMode = null; // null | "trendline" | "fibonacci"
+let drawingAnchor = null; // first click point { time, price }
+let drawCanvas = null;
+const DRAWINGS_KEY = "typhoon_drawings";
+
+function loadDrawings() {
+  try { drawings = JSON.parse(localStorage.getItem(DRAWINGS_KEY) || "[]"); } catch { drawings = []; }
+}
+function saveDrawings() { localStorage.setItem(DRAWINGS_KEY, JSON.stringify(drawings)); }
+
+function setupDrawingCanvas() {
+  const container = document.getElementById("chart-container");
+  drawCanvas = document.createElement("canvas");
+  drawCanvas.id = "draw-overlay";
+  drawCanvas.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10;";
+  container.style.position = "relative";
+  container.appendChild(drawCanvas);
+
+  // Resize canvas to match container
+  const resizeCanvas = () => {
+    drawCanvas.width = container.clientWidth;
+    drawCanvas.height = container.clientHeight;
+    renderDrawings();
+  };
+  new ResizeObserver(resizeCanvas).observe(container);
+  resizeCanvas();
+
+  // Re-render when chart scrolls or zooms
+  chart.timeScale().subscribeVisibleLogicalRangeChange(() => renderDrawings());
+
+  // Click to place anchor points (only when in drawing mode)
+  container.addEventListener("click", (e) => {
+    if (!drawingMode) return;
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const time = chart.timeScale().coordinateToTime(x);
+    const price = candleSeries.coordinateToPrice(y);
+    if (time === null || price === null) return;
+
+    if (!drawingAnchor) {
+      drawingAnchor = { time, price };
+      log(`Drawing: anchor set at $${price.toFixed(4)}`, "info");
+    } else {
+      drawings.push({ type: drawingMode, p1: drawingAnchor, p2: { time, price } });
+      saveDrawings();
+      log(`${drawingMode} drawn`, "ok");
+      drawingAnchor = null;
+      drawingMode = null;
+      container.style.cursor = "";
+      renderDrawings();
+    }
+  });
+}
+
+function renderDrawings() {
+  if (!drawCanvas || !chart || !candleSeries) return;
+  const ctx = drawCanvas.getContext("2d");
+  ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+
+  for (const d of drawings) {
+    const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
+    const y1 = candleSeries.priceToCoordinate(d.p1.price);
+    const x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+    const y2 = candleSeries.priceToCoordinate(d.p2.price);
+    if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+
+    if (d.type === "trendline") {
+      ctx.beginPath();
+      ctx.strokeStyle = "#00bcd4";
+      ctx.lineWidth = 1.5;
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    } else if (d.type === "fibonacci") {
+      const high = Math.max(d.p1.price, d.p2.price);
+      const low = Math.min(d.p1.price, d.p2.price);
+      const range = high - low;
+      const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
+      const colors = ["#f44336", "#ff9800", "#ffeb3b", "#8bc34a", "#00bcd4", "#3f51b5", "#9c27b0"];
+      const xLeft = Math.min(x1, x2);
+      const xRight = drawCanvas.width;
+
+      for (let i = 0; i < levels.length; i++) {
+        const price = high - range * levels[i];
+        const y = candleSeries.priceToCoordinate(price);
+        if (y === null) continue;
+        ctx.beginPath();
+        ctx.strokeStyle = colors[i];
+        ctx.lineWidth = 0.8;
+        ctx.setLineDash([4, 4]);
+        ctx.moveTo(xLeft, y);
+        ctx.lineTo(xRight, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = colors[i];
+        ctx.font = "10px Consolas";
+        ctx.fillText(`${(levels[i] * 100).toFixed(1)}% $${price.toFixed(2)}`, xLeft + 4, y - 3);
+      }
+    }
+  }
+}
+
 // ══════════════════════════════════════════════════════════════
 // INDICATOR CALCULATIONS — Exact ports from MQL5 NNFX system
 // ══════════════════════════════════════════════════════════════
@@ -2198,6 +2307,22 @@ function setupKeyboard() {
         }
         break;
       case "h": updateOrdersPanel(); break;
+      case "l": // trend Line
+        drawingMode = "trendline"; drawingAnchor = null;
+        document.getElementById("chart-container").style.cursor = "crosshair";
+        log("Drawing mode: trend line — click two points", "info");
+        break;
+      case "f": // Fibonacci
+        drawingMode = "fibonacci"; drawingAnchor = null;
+        document.getElementById("chart-container").style.cursor = "crosshair";
+        log("Drawing mode: Fibonacci — click high and low points", "info");
+        break;
+      case "x": // delete last drawing
+        if (drawings.length > 0) {
+          drawings.pop(); saveDrawings(); renderDrawings();
+          log("Deleted last drawing", "info");
+        }
+        break;
       case "w":
         if (e.altKey) { closeAllWindows(); e.preventDefault(); }
         break;
@@ -2933,6 +3058,8 @@ function fireAlert(alert) {
 document.addEventListener("DOMContentLoaded", () => {
   loadBarCacheFromDisk().then(() => migrateLocalStorageCache());
   initChart();
+  setupDrawingCanvas();
+  loadDrawings();
   setupLineDrag();
   setupPaneResizers();
   setupLogPanel();
