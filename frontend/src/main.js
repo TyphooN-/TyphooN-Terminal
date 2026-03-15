@@ -1260,17 +1260,45 @@ async function loadChart(symbol, timeframe) {
     const cacheKey = getCacheKey(symbol, timeframe);
     let bars;
 
-    // Check memory cache, then disk cache, then fetch
+    // Strategy: show cached data IMMEDIATELY, then refresh in background
     const cached = barCache[cacheKey];
-    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS && cached.data.length >= limit * 0.9) {
+    const isFresh = cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS;
+    const hasEnough = cached && cached.data && cached.data.length >= limit * 0.5;
+
+    if (hasEnough) {
+      // Display cached data instantly
       bars = cached.data;
-      log(`${symbol} @ ${timeframe}: ${bars.length} bars from memory cache`, "info");
+      log(`${symbol} @ ${timeframe}: ${bars.length} bars from cache (${isFresh ? "fresh" : "stale, refreshing..."})`, "info");
+
+      if (!isFresh) {
+        // Refresh in background — will update chart when done
+        (async () => {
+          try {
+            const freshJson = await invoke("get_bars", { symbol, timeframe, limit });
+            const freshBars = JSON.parse(freshJson);
+            if (freshBars.length > 0) {
+              barCache[cacheKey] = { data: freshBars, timestamp: Date.now() };
+              saveBarCacheToDisk(cacheKey, freshBars);
+              // If still on same tab/symbol, update chart
+              if (currentSymbol === symbol && currentTimeframe === timeframe) {
+                const freshChartData = freshBars.map(b => ({
+                  time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+                  open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
+                }));
+                candleSeries.setData(freshChartData);
+                lastPrice = freshChartData[freshChartData.length - 1].close;
+                log(`${symbol} @ ${timeframe}: refreshed to ${freshBars.length} bars`, "ok");
+              }
+            }
+          } catch (_) {}
+        })();
+      }
     } else {
+      // No usable cache — fetch synchronously
       const barsJson = await invoke("get_bars", { symbol, timeframe, limit });
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
       saveBarCacheToDisk(cacheKey, bars);
-      // Show date range progress
       if (bars.length > 0) {
         const first = bars[0].timestamp.substring(0, 10);
         const last = bars[bars.length - 1].timestamp.substring(0, 10);
