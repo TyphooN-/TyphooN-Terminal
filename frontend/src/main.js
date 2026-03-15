@@ -360,18 +360,18 @@ function calcKAMA(data, period = 10, fastP = 2, slowP = 30) {
   const slowSC = 2.0 / (slowP + 1.0);
   const result = [];
   if (data.length < period + 1) return result;
-  // Applied to OPEN price (matching MQL5 PRICE_OPEN)
-  let kama = data[period].open;
+  // Applied to CLOSE price (MQL5 default price[] parameter)
+  let kama = data[period].close;
   for (let i = period; i < data.length; i++) {
-    const signal = Math.abs(data[i].open - data[i - period].open);
+    const signal = Math.abs(data[i].close - data[i - period].close);
     let noise = 0;
     for (let j = i - period + 1; j <= i; j++) {
-      noise += Math.abs(data[j].open - data[j - 1].open);
+      noise += Math.abs(data[j].close - data[j - 1].close);
     }
     const er = noise !== 0 ? signal / noise : 0;
     const ssc = er * (fastSC - slowSC) + slowSC;
     const ssc2 = ssc * ssc;
-    kama = ssc2 * (data[i].open - kama) + kama;
+    kama = ssc2 * (data[i].close - kama) + kama;
     result.push({ time: data[i].time, value: kama });
   }
   return result;
@@ -620,39 +620,87 @@ function calcVWAP(data) {
 }
 
 // ── BetterVolume ────────────────────────────────────────────
-// Volume bars colored by price action characteristics
-function calcBetterVolume(data) {
+// Exact port of BetterVolume.mqh — Emini-Watch classification
+// Colors: Yellow=LowVol, Red=ClimaxUp, White=ClimaxDn, Green=Churn, Magenta=Climax+Churn, SteelBlue=Normal
+function calcBetterVolume(data, lookback = 20) {
   const result = [];
-  if (data.length < 2) return result;
-  // Calculate average volume over 20 bars
-  for (let i = 1; i < data.length; i++) {
-    const vol = data[i].volume || 0;
-    const range = data[i].high - data[i].low;
-    const body = Math.abs(data[i].close - data[i].open);
-    const isUp = data[i].close >= data[i].open;
-    // Average volume (lookback 20)
-    let avgVol = 0, count = 0;
-    for (let j = Math.max(0, i - 20); j < i; j++) { avgVol += (data[j].volume || 0); count++; }
-    avgVol = count > 0 ? avgVol / count : vol;
-    // Climax: very high volume + large range
-    const isClimax = vol > avgVol * 2 && range > 0;
-    // High volume
-    const isHigh = vol > avgVol * 1.5;
-    // Low volume
-    const isLow = vol < avgVol * 0.5;
-    // Churn: high volume but small body relative to range
-    const isChurn = isHigh && range > 0 && (body / range) < 0.3;
+  if (data.length < lookback + 2) return result;
 
+  // Estimate buy/sell volume (matches EstimateBuySell in MQL5)
+  function estimateBuySell(bar) {
+    const vol = data[bar].volume || 0;
+    const range = data[bar].high - data[bar].low;
+    if (range <= 0) return { buy: vol * 0.5, sell: vol * 0.5 };
+    const o = data[bar].open, c = data[bar].close;
+    let buyVol;
+    if (c > o) {
+      const denom = 2.0 * range + o - c;
+      buyVol = (range / (denom > 0 ? denom : range)) * vol;
+    } else if (c < o) {
+      const denom = 2.0 * range + c - o;
+      buyVol = ((range + c - o) / (denom > 0 ? denom : range)) * vol;
+    } else {
+      buyVol = vol * 0.5;
+    }
+    return { buy: buyVol, sell: vol - buyVol };
+  }
+
+  for (let pos = lookback + 1; pos < data.length; pos++) {
+    const vol = data[pos].volume || 0;
+    const range = data[pos].high - data[pos].low || 0.0001;
+    const { buy: buyVol, sell: sellVol } = estimateBuySell(pos);
+
+    // Current bar metrics
+    const buyRange = buyVol * range;
+    const sellRange = sellVol * range;
+    const volDivR = vol / range;
+    const sellDivR = sellVol / range;
+    const buyDivR = buyVol / range;
+
+    // Find lookback extremes (1-bar)
+    let highBuyRange = 0, highSellRange = 0, highVolDivR = 0;
+    let lowSellDivR = Infinity, lowBuyDivR = Infinity, lowTotalVol = Infinity;
+
+    for (let i = 0; i < lookback; i++) {
+      const b = pos - 1 - i;
+      if (b < 0) break;
+      const { buy: bv, sell: sv } = estimateBuySell(b);
+      const r = data[b].high - data[b].low || 0.0001;
+      const v = data[b].volume || 0;
+      const br = bv * r, sr = sv * r, vr = v / r;
+      const sdr = sv / r, bdr = bv / r;
+      if (br > highBuyRange) highBuyRange = br;
+      if (sr > highSellRange) highSellRange = sr;
+      if (vr > highVolDivR) highVolDivR = vr;
+      if (sdr < lowSellDivR) lowSellDivR = sdr;
+      if (bdr < lowBuyDivR) lowBuyDivR = bdr;
+      if (v < lowTotalVol) lowTotalVol = v;
+    }
+
+    // Classification flags
+    let isClimaxUp = false, isClimaxDn = false, isChurn = false, isLowVol = false;
+
+    // Low Volume
+    if (vol <= lowTotalVol) isLowVol = true;
+    // Climax Up: bullish bar with highest buy pressure
+    if (data[pos].close > data[pos].open && (buyRange >= highBuyRange || sellDivR <= lowSellDivR))
+      isClimaxUp = true;
+    // Climax Down: bearish bar with highest sell pressure
+    if (data[pos].close < data[pos].open && (sellRange >= highSellRange || buyDivR <= lowBuyDivR))
+      isClimaxDn = true;
+    // Churn: highest volume/range ratio
+    if (volDivR >= highVolDivR) isChurn = true;
+
+    // Priority: ClimaxChurn > LowVol > ClimaxUp > ClimaxDown > Churn > Normal
     let color;
-    if (isChurn) color = "#FFFF00";           // Yellow — churn (indecision)
-    else if (isClimax && isUp) color = "#00FF00";  // Green — climax up
-    else if (isClimax && !isUp) color = "#FF0000"; // Red — climax down
-    else if (isHigh && isUp) color = "#00BFFF";    // Cyan — high vol up
-    else if (isHigh && !isUp) color = "#FF00FF";   // Magenta — high vol down
-    else if (isLow) color = "#FFFFFF44";           // Dim white — low volume
-    else color = isUp ? "#2196f380" : "#ef535080";  // Normal — muted green/red
+    if ((isClimaxUp || isClimaxDn) && isChurn) color = "#FF00FF";     // Magenta — Climax+Churn
+    else if (isLowVol) color = "#FFFF00";                              // Yellow — Low Volume
+    else if (isClimaxUp) color = "#FF0000";                            // Red — Climax Up
+    else if (isClimaxDn) color = "#FFFFFF";                            // White — Climax Down
+    else if (isChurn) color = "#00FF00";                                // Green — Churn
+    else color = "#4682B4";                                             // SteelBlue — Normal
 
-    result.push({ time: data[i].time, value: vol, color });
+    result.push({ time: data[pos].time, value: vol, color });
   }
   return result;
 }
@@ -1110,6 +1158,29 @@ function applyIndicators(chartData) {
         color: d.close >= d.open ? "#26a69a80" : "#ef535080",
       })));
       indicatorSeries[key] = s;
+
+    } else if (ind === "mtf-ma") {
+      // MTF_MA: SMA from current chart + higher timeframes
+      // MQL5 defaults: H1 200SMA=Tomato, H4/D1/W1 200SMA=Magenta, W1/MN1 100SMA=Magenta
+      if (chartData.length > period) {
+        const currentColor = period === 200 ? "#FFFF00" : "#FF00FF"; // 200=yellow on current, 100=magenta
+        const s = chart.addLineSeries({ color: currentColor, lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+        s.setData(clip(calcSMA(chartData, period)));
+        indicatorSeries[key] = s;
+      }
+      // HTF SMA projected onto current chart
+      for (const tf of getRelevantMTFs(ALL_MTF_KAMA_TFS)) {
+        const tfBars = mtfData[tf];
+        if (!tfBars || tfBars.length < period + 1) continue;
+        const smaData = calcSMA(tfBars, period);
+        const projected = projectHTFToChartTime(smaData, chartData);
+        if (projected.length === 0) continue;
+        // MQL5 color: H1=Tomato, H4/D1/W1=Magenta (from MTF_MA indicator)
+        const maColor = tf === "1Hour" ? "#FF6347" : "#FF00FF";
+        const s = chart.addLineSeries({ color: maColor, lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
+        s.setData(clip(projected));
+        indicatorSeries[`${key}_${tf}`] = s;
+      }
 
     // ══════════════════════════════════════════════════════════
     // STANDARD INDICATORS
