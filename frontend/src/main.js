@@ -549,48 +549,60 @@ function calcBetterVolume(data) {
 
 // ── Supply/Demand Zones ─────────────────────────────────────
 // Detect strong move-away candles and project their origin as zones
-function calcSupplyDemandZones(data, lookback = 100) {
-  const zones = []; // { type: "supply"|"demand", high, low, startTime }
+function calcSupplyDemandZones(data, lookback = 200) {
+  const zones = [];
   if (data.length < 10) return zones;
+
+  // Calculate average range for significance filtering
+  let avgRange = 0;
+  for (let i = Math.max(0, data.length - lookback); i < data.length; i++) {
+    avgRange += data[i].high - data[i].low;
+  }
+  avgRange /= Math.min(lookback, data.length);
+  const minMoveSize = avgRange * 1.5; // impulse candle must be significantly larger than average
 
   const start = Math.max(0, data.length - lookback);
   for (let i = start + 2; i < data.length - 1; i++) {
     const prev = data[i - 1];
     const cur = data[i];
-    const next = data[i + 1];
     const range = cur.high - cur.low;
     const body = Math.abs(cur.close - cur.open);
 
-    // Skip tiny candles
     if (range === 0) continue;
     const bodyRatio = body / range;
 
-    // Demand zone: strong bullish candle leaving a base
-    // Large body candle (>60% body/range) going up, preceded by small candle
-    const prevRange = prev.high - prev.low;
-    if (bodyRatio > 0.6 && cur.close > cur.open && prevRange > 0) {
-      const prevBodyRatio = Math.abs(prev.close - prev.open) / prevRange;
-      if (prevBodyRatio < 0.5) {
-        // Base candle is the demand zone
-        zones.push({ type: "demand", high: prev.high, low: prev.low, startTime: prev.time, endTime: data[data.length - 1].time });
-      }
-    }
+    // Impulse candle: large body (>70%), range > 1.5x average
+    if (bodyRatio < 0.7 || range < minMoveSize) continue;
 
-    // Supply zone: strong bearish candle leaving a base
-    if (bodyRatio > 0.6 && cur.close < cur.open && prevRange > 0) {
-      const prevBodyRatio = Math.abs(prev.close - prev.open) / prevRange;
-      if (prevBodyRatio < 0.5) {
-        zones.push({ type: "supply", high: prev.high, low: prev.low, startTime: prev.time, endTime: data[data.length - 1].time });
-      }
+    const prevRange = prev.high - prev.low;
+    if (prevRange <= 0) continue;
+    const prevBodyRatio = Math.abs(prev.close - prev.open) / prevRange;
+
+    // Base candle must be small body (<40%) — indecision before the move
+    if (prevBodyRatio >= 0.4) continue;
+
+    if (cur.close > cur.open) {
+      // Demand: strong bullish impulse leaving a base
+      zones.push({ type: "demand", high: prev.high, low: prev.low, startTime: prev.time });
+    } else {
+      // Supply: strong bearish impulse leaving a base
+      zones.push({ type: "supply", high: prev.high, low: prev.low, startTime: prev.time });
     }
   }
 
-  // Filter out broken zones (price traded through them)
+  // Filter out broken zones (price traded through the zone body)
   const lastPrice = data[data.length - 1].close;
-  return zones.filter(z => {
-    if (z.type === "demand") return lastPrice > z.low; // demand valid if price above zone low
-    return lastPrice < z.high; // supply valid if price below zone high
-  }).slice(-10); // keep last 10 zones max
+  const valid = zones.filter(z => {
+    // Check if price has traded through the zone since it formed
+    const startIdx = data.findIndex(d => d.time >= z.startTime);
+    if (startIdx < 0) return false;
+    for (let k = startIdx + 2; k < data.length; k++) {
+      if (z.type === "demand" && data[k].close < z.low) return false; // broken demand
+      if (z.type === "supply" && data[k].close > z.high) return false; // broken supply
+    }
+    return true;
+  });
+  return valid.slice(-6); // keep max 6 most recent valid zones
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -598,9 +610,17 @@ function calcSupplyDemandZones(data, lookback = 100) {
 // ══════════════════════════════════════════════════════════════
 
 const MTF_TIMEFRAMES = ["15Min", "1Hour", "4Hour", "1Day", "1Week"];
-const MTF_KAMA_TFS = ["1Hour", "4Hour", "1Day", "1Week"]; // MultiKAMA draws these on chart
-const MTF_ATR_TFS = ["15Min", "1Hour", "4Hour", "1Day", "1Week"]; // ATR_Projection
-const MTF_PCL_TFS = ["1Hour", "4Hour", "1Day", "1Week"]; // PreviousCandleLevels
+const ALL_MTF_KAMA_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
+const ALL_MTF_ATR_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
+const ALL_MTF_PCL_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
+
+// Timeframe hierarchy — only show TFs HIGHER than current chart (like MT5)
+const TF_RANK = { "1Min": 0, "5Min": 1, "15Min": 2, "1Hour": 3, "4Hour": 4, "1Day": 5, "1Week": 6 };
+
+function getRelevantMTFs(allTFs) {
+  const currentRank = TF_RANK[currentTimeframe] ?? 3;
+  return allTFs.filter(tf => (TF_RANK[tf] ?? 0) > currentRank);
+}
 
 const MTF_COLORS = {
   "15Min": "#808080",  // gray
@@ -716,7 +736,7 @@ function applyIndicators(chartData) {
         indicatorSeries[key] = s;
       }
       // HTF KAMAs projected onto current chart
-      for (const tf of MTF_KAMA_TFS) {
+      for (const tf of getRelevantMTFs(ALL_MTF_KAMA_TFS)) {
         if (tf === currentTimeframe) continue; // skip current TF (already drawn above)
         const tfBars = mtfData[tf];
         if (!tfBars || tfBars.length < period + 1) continue;
@@ -740,7 +760,7 @@ function applyIndicators(chartData) {
         indicatorSeries[key + "_l"] = sl2;
       }
       // HTF previous candle levels as price lines — NO axis labels to avoid spam
-      for (const tf of MTF_PCL_TFS) {
+      for (const tf of getRelevantMTFs(ALL_MTF_PCL_TFS)) {
         const tfBars = mtfData[tf];
         const levels = calcHTFPrevLevels(tfBars, chartData);
         if (!levels) continue;
@@ -765,7 +785,7 @@ function applyIndicators(chartData) {
         indicatorSeries[key + "_l"] = sl3;
       }
       // HTF ATR projections — no axis labels
-      for (const tf of MTF_ATR_TFS) {
+      for (const tf of getRelevantMTFs(ALL_MTF_ATR_TFS)) {
         const tfBars = mtfData[tf];
         const proj = calcHTFATRProjection(tfBars, period);
         if (!proj) continue;
@@ -1689,10 +1709,66 @@ function setupLogPanel() {
   log("TyphooN Terminal initialized", "info");
 }
 
+// ── Pane Resizers ───────────────────────────────────────────
+
+function setupPaneResizers() {
+  const resizers = document.querySelectorAll(".pane-resizer");
+
+  for (const resizer of resizers) {
+    const aboveId = resizer.dataset.above;
+    const belowId = resizer.dataset.below;
+    const aboveEl = document.getElementById(aboveId);
+    const belowEl = document.getElementById(belowId);
+
+    let startY = 0;
+    let startAboveH = 0;
+    let startBelowH = 0;
+
+    const onMouseDown = (e) => {
+      e.preventDefault();
+      startY = e.clientY;
+      startAboveH = aboveEl.getBoundingClientRect().height;
+      startBelowH = belowEl.getBoundingClientRect().height;
+      resizer.classList.add("active");
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    };
+
+    const onMouseMove = (e) => {
+      const dy = e.clientY - startY;
+      const newAbove = Math.max(60, startAboveH + dy);
+      const newBelow = Math.max(40, startBelowH - dy);
+
+      // For the main chart (flex:1), set flex to none and use explicit height
+      if (aboveId === "chart-container") {
+        aboveEl.style.flex = "none";
+        aboveEl.style.height = newAbove + "px";
+      } else {
+        aboveEl.style.height = newAbove + "px";
+      }
+      belowEl.style.height = newBelow + "px";
+
+      // Trigger chart resizes
+      chart.resize(document.getElementById("chart-container").clientWidth, document.getElementById("chart-container").clientHeight);
+      fisherChart.resize(document.getElementById("fisher-pane").clientWidth, document.getElementById("fisher-pane").clientHeight);
+      volumeChart.resize(document.getElementById("volume-pane").clientWidth, document.getElementById("volume-pane").clientHeight);
+    };
+
+    const onMouseUp = () => {
+      resizer.classList.remove("active");
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+
+    resizer.addEventListener("mousedown", onMouseDown);
+  }
+}
+
 // ── Init ────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
   initChart();
+  setupPaneResizers();
   setupLogPanel();
   setupIndicatorPanel();
   setupAutocomplete();

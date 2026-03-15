@@ -156,7 +156,7 @@ body {
 }
 
 #chart-container {
-  flex: 5;
+  flex: 1;
   background: #000000;
   position: relative;
   min-height: 100px;
@@ -170,8 +170,33 @@ body {
   min-height: 80px;
 }
 
-#fisher-pane { flex: 1.2; }
-#volume-pane { flex: 1; }
+#fisher-pane { height: 120px; flex: none; }
+#volume-pane { height: 100px; flex: none; }
+
+.pane-resizer {
+  height: 5px;
+  background: #222;
+  cursor: ns-resize;
+  position: relative;
+  z-index: 10;
+  flex: none;
+}
+
+.pane-resizer:hover, .pane-resizer.active {
+  background: #4caf50;
+}
+
+.pane-resizer::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 1px;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 3px;
+  border-top: 1px solid #555;
+  border-bottom: 1px solid #555;
+}
 
 /* ── Chart Tooltip ───────────────────────────────────────── */
 
