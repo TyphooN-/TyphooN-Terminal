@@ -495,22 +495,46 @@ impl AlpacaBroker {
 
                 consecutive_empty = 0;
 
-                // Log chunk progress with date range
-                if let (Some(first), Some(last)) = (chunk_bars.first(), chunk_bars.last()) {
-                    let first_date = &first.timestamp[..10.min(first.timestamp.len())];
-                    let last_date = &last.timestamp[..10.min(last.timestamp.len())];
-                    tracing::info!(
-                        "{} @ {}: chunk +{} bars ({} → {}), total {}",
-                        symbol, actual_tf, chunk_count, first_date, last_date, all_bars.len() + chunk_count
-                    );
+                // Detect stale chunk: if we got very few bars and they're all the same
+                // timestamp as what we already have, we've reached the end of available data
+                if chunk_count <= 5 && !all_bars.is_empty() {
+                    let last_existing = all_bars.last().map(|b| &b.timestamp);
+                    let last_new = chunk_bars.last().map(|b| &b.timestamp);
+                    if last_existing == last_new {
+                        tracing::info!("{} @ {}: reached end of data ({} bars total)", symbol, actual_tf, all_bars.len());
+                        break;
+                    }
                 }
 
-                // Advance start to just after the last bar in this chunk
+                // Log chunk progress with date range (only for meaningful chunks)
+                if chunk_count > 5 {
+                    if let (Some(first), Some(last)) = (chunk_bars.first(), chunk_bars.last()) {
+                        let first_date = &first.timestamp[..10.min(first.timestamp.len())];
+                        let last_date = &last.timestamp[..10.min(last.timestamp.len())];
+                        tracing::info!(
+                            "{} @ {}: chunk +{} bars ({} → {}), total {}",
+                            symbol, actual_tf, chunk_count, first_date, last_date, all_bars.len() + chunk_count
+                        );
+                    }
+                }
+
+                // Advance start past the last bar — use period-appropriate jump
                 if let Some(last_bar) = chunk_bars.last() {
                     if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(&last_bar.timestamp) {
-                        chunk_start = last_time.with_timezone(&chrono::Utc) + chrono::Duration::seconds(1);
+                        // Jump by at least one period to avoid re-fetching the same bar
+                        let jump = match actual_tf {
+                            "1Min" => chrono::Duration::minutes(1),
+                            "5Min" => chrono::Duration::minutes(5),
+                            "15Min" => chrono::Duration::minutes(15),
+                            "30Min" => chrono::Duration::minutes(30),
+                            "1Hour" => chrono::Duration::hours(1),
+                            "4Hour" => chrono::Duration::hours(4),
+                            "1Day" => chrono::Duration::days(1),
+                            "1Week" => chrono::Duration::weeks(1),
+                            _ => chrono::Duration::days(1),
+                        };
+                        chunk_start = last_time.with_timezone(&chrono::Utc) + jump;
                     } else {
-                        // Fallback: advance by a reasonable chunk
                         chunk_start = chunk_start + chrono::Duration::days(30);
                     }
                 }
