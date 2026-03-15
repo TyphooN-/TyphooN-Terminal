@@ -1,0 +1,191 @@
+/* ══════════════════════════════════════════════════════════════
+   Floating Window Manager — Godel Terminal-style panels
+   ══════════════════════════════════════════════════════════════ */
+
+.floating-window {
+  position: fixed;
+  background: #0d0d1a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 250px;
+  min-height: 150px;
+}
+
+.floating-window.dragging {
+  opacity: 0.9;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.8);
+}
+
+/* ── Title Bar ───────────────────────────────────────────────── */
+
+.fw-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #111122;
+  padding: 4px 8px;
+  cursor: move;
+  user-select: none;
+  border-bottom: 1px solid #222;
+  flex-shrink: 0;
+}
+
+.fw-title {
+  font-size: 11px;
+  font-weight: bold;
+  color: #8cf;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  margin-right: 8px;
+}
+
+.fw-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.fw-btn {
+  background: none;
+  border: 1px solid #333;
+  color: #888;
+  font-size: 12px;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  font-family: inherit;
+  line-height: 1;
+}
+
+.fw-btn:hover { color: #fff; border-color: #555; }
+.fw-btn-close:hover { color: #f44; border-color: #f44; }
+.fw-btn-max:hover { color: #4f4; border-color: #4f4; }
+.fw-btn-min:hover { color: #ff8; border-color: #ff8; }
+
+/* ── Content ─────────────────────────────────────────────────── */
+
+.fw-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #ccc;
+}
+
+.fw-content p {
+  margin: 6px 0;
+}
+
+.fw-content h1, .fw-content h2, .fw-content h3 {
+  color: #fff;
+  font-size: 14px;
+  margin: 12px 0 6px;
+}
+
+/* ── Resize Handle ───────────────────────────────────────────── */
+
+.fw-resize {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+}
+
+.fw-resize::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid #444;
+  border-bottom: 2px solid #444;
+}
+
+/* ── Table (Fundamentals, Earnings) ──────────────────────────── */
+
+.fw-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.fw-table tr {
+  border-bottom: 1px solid #1a1a2e;
+}
+
+.fw-table tr:hover {
+  background: #111;
+}
+
+.fw-label {
+  padding: 6px 8px;
+  color: #888;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.fw-value {
+  padding: 6px 8px;
+  color: #8cf;
+  font-size: 11px;
+  text-align: right;
+  font-family: 'Consolas', monospace;
+}
+
+/* ── Filing Items ────────────────────────────────────────────── */
+
+.fw-filing-item {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #1a1a2e;
+  align-items: baseline;
+}
+
+.fw-filing-type {
+  color: #ff8;
+  font-weight: bold;
+  font-size: 10px;
+  min-width: 50px;
+}
+
+.fw-filing-date {
+  color: #666;
+  font-size: 10px;
+  min-width: 80px;
+}
+
+.fw-filing-desc {
+  color: #ccc;
+  font-size: 10px;
+  flex: 1;
+}
+
+/* ── Snap Indicators ─────────────────────────────────────────── */
+
+.floating-window.snap-left {
+  outline: 2px solid #4caf50;
+  outline-offset: -2px;
+}
+
+.floating-window.snap-right {
+  outline: 2px solid #4caf50;
+  outline-offset: -2px;
+}
+
+.floating-window.snap-top {
+  outline: 2px solid #2196f3;
+  outline-offset: -2px;
+}

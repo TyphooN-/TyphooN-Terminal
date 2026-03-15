@@ -10,6 +10,8 @@
  */
 
 import { createChart, CrosshairMode } from "lightweight-charts";
+import { createWindow, openArticleWindow, openFundamentalsWindow, openFilingsWindow, tileWindows, closeAllWindows } from "./windows.js";
+import "./windows.css";
 
 // ── Logging ─────────────────────────────────────────────────
 
@@ -2005,6 +2007,12 @@ function setupKeyboard() {
       case "c": document.getElementById("btn-close-all").click(); break;
       case "p": document.getElementById("btn-close-partial").click(); break;
       case "Escape": removeSLLine(); removeTPLine(); break;
+      case "w":
+        if (e.altKey) { closeAllWindows(); e.preventDefault(); }
+        break;
+      case "g":
+        if (e.altKey) { tileWindows(); e.preventDefault(); }
+        break;
     }
   });
 }
@@ -2169,7 +2177,7 @@ async function loadNewsAndFundamentals(symbol) {
   if (!panel) return;
   panel.innerHTML = "";
 
-  // Load fundamentals (SEC EDGAR — cached in cold storage)
+  // Load fundamentals (SEC EDGAR — cached, show summary + click to expand)
   try {
     const cacheKey = `fundamentals:${symbol}`;
     let data = await coldLoad(cacheKey);
@@ -2179,38 +2187,22 @@ async function loadNewsAndFundamentals(symbol) {
       if (data && data.entity) coldSave(cacheKey, data);
     }
     if (data && data.entity) {
-      const section = document.createElement("div");
-      section.style.borderBottom = "1px solid #333";
-      section.style.paddingBottom = "4px";
-      section.style.marginBottom = "4px";
-
-      const addRow = (label, value) => {
-        const row = document.createElement("div");
-        row.className = "fundamental-row";
-        const l = document.createElement("span"); l.className = "label"; l.textContent = label;
-        const v = document.createElement("span"); v.className = "value"; v.textContent = value;
-        row.appendChild(l); row.appendChild(v);
-        section.appendChild(row);
-      };
-
-      const fmtNum = (v) => {
-        if (!v || !v.value) return "N/A";
-        const n = Number(v.value);
-        if (Math.abs(n) >= 1e12) return `$${(n/1e12).toFixed(2)}T`;
-        if (Math.abs(n) >= 1e9) return `$${(n/1e9).toFixed(2)}B`;
-        if (Math.abs(n) >= 1e6) return `$${(n/1e6).toFixed(2)}M`;
-        return `$${n.toLocaleString()}`;
-      };
-
-      addRow("Entity", data.entity);
-      addRow("Revenue", fmtNum(data.revenue));
-      addRow("Net Income", fmtNum(data.net_income));
-      addRow("Assets", fmtNum(data.total_assets));
-      addRow("Equity", fmtNum(data.stockholders_equity));
-      addRow("Shares Out", data.shares_outstanding?.value ? Number(data.shares_outstanding.value).toLocaleString() : "N/A");
-      addRow("EPS", data.eps?.value ? `$${Number(data.eps.value).toFixed(2)}` : "N/A");
-
-      panel.appendChild(section);
+      // Compact summary in sidebar
+      const btn = document.createElement("div");
+      btn.className = "news-item";
+      btn.style.cursor = "pointer";
+      btn.style.borderBottom = "1px solid #333";
+      const label = document.createElement("div");
+      label.className = "news-headline";
+      label.textContent = `${data.entity} — Fundamentals`;
+      label.style.color = "#8cf";
+      const sub = document.createElement("div");
+      sub.className = "news-source";
+      sub.textContent = "Click to open detailed view";
+      btn.appendChild(label);
+      btn.appendChild(sub);
+      btn.addEventListener("click", () => openFundamentalsWindow(symbol, data));
+      panel.appendChild(btn);
       log(`Fundamentals loaded for ${symbol}`, "ok");
     }
   } catch (e) {
@@ -2265,15 +2257,14 @@ async function loadNewsAndFundamentals(symbol) {
 }
 
 async function openArticleInline(url, title) {
-  const reader = document.getElementById("article-reader");
-  const body = document.getElementById("article-body");
-  const titleEl = document.getElementById("article-title");
-  const newsPanel = document.getElementById("news-panel");
-
-  titleEl.textContent = title;
-  body.textContent = "Loading...";
-  reader.classList.remove("hidden");
-  newsPanel.style.display = "none";
+  // Open article in a floating window (Godel Terminal style)
+  const win = createWindow({
+    title: title.substring(0, 60),
+    type: "article",
+    width: 550,
+    height: 500,
+  });
+  win.setContent("Loading...");
 
   // Check cold cache first
   const cacheKey = `article:${url}`;
@@ -2282,48 +2273,38 @@ async function openArticleInline(url, title) {
   if (!html) {
     try {
       html = await invoke("fetch_article", { url });
-      if (html) coldSave(cacheKey, html); // cache the article content
+      if (html) coldSave(cacheKey, html);
     } catch (e) {
-      body.textContent = `Failed to load: ${e}`;
+      win.setContent(`Failed to load: ${e}`);
       return;
     }
   }
 
-  // Extract readable content (strip scripts/styles, keep text)
+  // Extract readable content (XSS-safe via textContent)
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, "text/html");
-  // Remove scripts, styles, nav, header, footer
   doc.querySelectorAll("script, style, nav, header, footer, iframe, .ad, .ads, .sidebar").forEach(el => el.remove());
 
-  // Try to find main content
   const main = doc.querySelector("article, main, .article-body, .post-content, .entry-content, .story-body");
-  if (main) {
-    body.textContent = ""; // Clear safely
-    // Use textContent for paragraphs to avoid XSS
-    const paragraphs = main.querySelectorAll("p, h1, h2, h3, h4, li");
-    for (const p of paragraphs) {
-      const div = document.createElement("p");
-      div.textContent = p.textContent;
-      body.appendChild(div);
-    }
-  } else {
-    // Fallback: extract all paragraph text
-    body.textContent = "";
-    const paragraphs = doc.querySelectorAll("p");
-    for (const p of paragraphs) {
-      if (p.textContent.trim().length > 20) {
-        const div = document.createElement("p");
-        div.textContent = p.textContent;
-        body.appendChild(div);
-      }
+  const source = main || doc.body;
+  const paragraphs = source ? source.querySelectorAll("p, h1, h2, h3, h4, li") : doc.querySelectorAll("p");
+
+  win.contentElement.textContent = ""; // Clear loading text
+  let found = 0;
+  for (const p of paragraphs) {
+    if (p.textContent.trim().length > 15) {
+      const el = document.createElement("p");
+      el.textContent = p.textContent;
+      win.appendElement(el);
+      found++;
     }
   }
 
-  if (body.children.length === 0) {
-    body.textContent = "Could not extract article content. The source may require JavaScript or authentication.";
+  if (found === 0) {
+    win.setContent("Could not extract article content. Source may require JavaScript or authentication.");
   }
 
-  log(`Article cached: ${title.substring(0, 50)}`, "ok");
+  log(`Article opened: ${title.substring(0, 50)}`, "ok");
 }
 
 function setupNewsPanel() {
