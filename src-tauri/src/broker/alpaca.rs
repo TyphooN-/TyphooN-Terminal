@@ -321,6 +321,180 @@ impl AlpacaBroker {
         })
     }
 
+    // ── News ─────────────────────────────────────────────────────
+
+    pub async fn get_news(&self, symbol: &str, limit: u32) -> Result<Vec<serde_json::Value>, String> {
+        self.rate_limiter.wait().await;
+        let resp = self
+            .client
+            .get(format!("{}/v1beta1/news", DATA_BASE))
+            .headers(self.headers())
+            .query(&[
+                ("symbols", symbol),
+                ("limit", &limit.to_string()),
+                ("sort", "desc"),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("News request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("News failed ({}): {}", status, body));
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("News parse failed: {e}"))?;
+
+        Ok(json["news"].as_array().cloned().unwrap_or_default())
+    }
+
+    // ── Corporate Actions (Earnings/Dividends) ──────────────────
+
+    pub async fn get_corporate_actions(&self, symbol: &str, types: &str) -> Result<Vec<serde_json::Value>, String> {
+        self.rate_limiter.wait().await;
+        // Alpaca corporate actions endpoint
+        let resp = self
+            .client
+            .get(format!("{}/v1/corporate-actions", self.base_url))
+            .headers(self.headers())
+            .query(&[
+                ("symbols", symbol),
+                ("types", types), // "dividend", "merger", "spinoff", "split"
+            ])
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let json: serde_json::Value = r.json().await
+                    .map_err(|e| format!("Corporate actions parse failed: {e}"))?;
+                Ok(json.as_array().cloned().unwrap_or_default())
+            }
+            Ok(r) => Err(format!("Corporate actions: HTTP {}", r.status())),
+            Err(e) => Err(format!("Corporate actions request failed: {e}")),
+        }
+    }
+
+    // ── SEC EDGAR Filings ─────────────────────────────────────────
+
+    /// Fetch recent SEC filings for a company via EDGAR API (free, no auth).
+    /// CIK lookup by ticker, then fetch filings.
+    pub async fn get_sec_filings(ticker: &str, filing_type: &str, _limit: u32) -> Result<serde_json::Value, String> {
+        let client = Client::new();
+
+        // Step 1: Look up CIK from ticker
+        let cik_resp = client
+            .get("https://efts.sec.gov/LATEST/search-index?q=%22".to_owned() + ticker + "%22&dateRange=custom&startdt=2020-01-01&forms=" + filing_type)
+            .header("User-Agent", "TyphooN-Terminal/0.1 (contact@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|e| format!("SEC EDGAR request failed: {e}"))?;
+
+        if !cik_resp.status().is_success() {
+            // Fallback: use full-text search
+            let search_resp = client
+                .get(format!(
+                    "https://efts.sec.gov/LATEST/search-index?q={}&forms={}&dateRange=custom&startdt=2020-01-01",
+                    ticker, filing_type
+                ))
+                .header("User-Agent", "TyphooN-Terminal/0.1 (contact@marketwizardry.org)")
+                .send()
+                .await
+                .map_err(|e| format!("SEC EDGAR search failed: {e}"))?;
+
+            let json: serde_json::Value = search_resp.json().await
+                .map_err(|e| format!("SEC EDGAR parse failed: {e}"))?;
+            return Ok(json);
+        }
+
+        let json: serde_json::Value = cik_resp.json().await
+            .map_err(|e| format!("SEC EDGAR parse failed: {e}"))?;
+        Ok(json)
+    }
+
+    /// Fetch company facts from SEC EDGAR (financials, shares outstanding, etc.)
+    pub async fn get_sec_company_facts(ticker: &str) -> Result<serde_json::Value, String> {
+        let client = Client::new();
+
+        // First resolve ticker to CIK via SEC ticker map
+        let tickers_resp = client
+            .get("https://www.sec.gov/files/company_tickers.json")
+            .header("User-Agent", "TyphooN-Terminal/0.1 (contact@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|e| format!("SEC ticker map failed: {e}"))?;
+
+        let tickers: serde_json::Value = tickers_resp.json().await
+            .map_err(|e| format!("SEC ticker map parse failed: {e}"))?;
+
+        // Find CIK for ticker
+        let upper_ticker = ticker.to_uppercase();
+        let mut cik: Option<u64> = None;
+        if let Some(obj) = tickers.as_object() {
+            for (_, v) in obj {
+                if v["ticker"].as_str() == Some(&upper_ticker) {
+                    cik = v["cik_str"].as_u64().or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()));
+                    break;
+                }
+            }
+        }
+
+        let cik = cik.ok_or_else(|| format!("CIK not found for {ticker}"))?;
+        let cik_padded = format!("CIK{:010}", cik);
+
+        // Fetch company facts
+        let facts_resp = client
+            .get(format!("https://data.sec.gov/api/xbrl/companyfacts/{}.json", cik_padded))
+            .header("User-Agent", "TyphooN-Terminal/0.1 (contact@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|e| format!("SEC company facts failed: {e}"))?;
+
+        if !facts_resp.status().is_success() {
+            return Err(format!("SEC company facts: HTTP {}", facts_resp.status()));
+        }
+
+        let facts: serde_json::Value = facts_resp.json().await
+            .map_err(|e| format!("SEC facts parse failed: {e}"))?;
+
+        // Extract key metrics
+        let us_gaap = &facts["facts"]["us-gaap"];
+        let result = serde_json::json!({
+            "cik": cik,
+            "entity": facts["entityName"],
+            "revenue": extract_latest_fact(us_gaap, "Revenues"),
+            "net_income": extract_latest_fact(us_gaap, "NetIncomeLoss"),
+            "total_assets": extract_latest_fact(us_gaap, "Assets"),
+            "total_liabilities": extract_latest_fact(us_gaap, "Liabilities"),
+            "shares_outstanding": extract_latest_fact(us_gaap, "CommonStockSharesOutstanding"),
+            "stockholders_equity": extract_latest_fact(us_gaap, "StockholdersEquity"),
+            "eps": extract_latest_fact(us_gaap, "EarningsPerShareBasic"),
+        });
+
+        Ok(result)
+    }
+}
+
+fn extract_latest_fact(gaap: &serde_json::Value, concept: &str) -> serde_json::Value {
+    if let Some(units) = gaap[concept]["units"].as_object() {
+        for (_, entries) in units {
+            if let Some(arr) = entries.as_array() {
+                if let Some(last) = arr.last() {
+                    return serde_json::json!({
+                        "value": last["val"],
+                        "period": last["end"],
+                        "form": last["form"],
+                    });
+                }
+            }
+        }
+    }
+    serde_json::Value::Null
+}
+
+impl AlpacaBroker {
     // ── Symbol List ────────────────────────────────────────────────
 
     pub async fn get_all_assets(&self) -> Result<Vec<AssetInfo>, String> {

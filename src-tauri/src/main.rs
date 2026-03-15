@@ -534,6 +534,36 @@ async fn get_margin_info(state: State<'_, SharedState>) -> Result<String, String
     })).unwrap())
 }
 
+// ── News & Events ───────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_news(state: State<'_, SharedState>, symbol: String, limit: u32) -> Result<String, String> {
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let news = broker.get_news(&symbol, limit).await?;
+    Ok(serde_json::to_string(&news).unwrap())
+}
+
+#[tauri::command]
+async fn get_corporate_actions(state: State<'_, SharedState>, symbol: String) -> Result<String, String> {
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let actions = broker.get_corporate_actions(&symbol, "dividend").await?;
+    Ok(serde_json::to_string(&actions).unwrap())
+}
+
+#[tauri::command]
+async fn get_sec_filings(symbol: String, filing_type: String) -> Result<String, String> {
+    let result = broker::alpaca::AlpacaBroker::get_sec_filings(&symbol, &filing_type, 20).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[tauri::command]
+async fn get_company_fundamentals(symbol: String) -> Result<String, String> {
+    let result = broker::alpaca::AlpacaBroker::get_sec_company_facts(&symbol).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
 // ── Cold Cache (zstd-compressed files on disk) ──────────────────
 
 fn get_cache_dir() -> std::path::PathBuf {
@@ -653,6 +683,11 @@ fn main() {
             get_margin_info,
             // Notifications
             send_discord_notification,
+            // News, Events & Fundamentals
+            get_news,
+            get_corporate_actions,
+            get_sec_filings,
+            get_company_fundamentals,
             // Cold cache (zstd)
             save_cold_cache,
             load_cold_cache,

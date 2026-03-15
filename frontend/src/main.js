@@ -1560,6 +1560,9 @@ async function loadChart(symbol, timeframe) {
 
     // Background pre-fetch: load all other timeframes for this symbol
     prefetchAllTimeframes(symbol, timeframe, limit);
+
+    // Load news and fundamentals for this symbol (background)
+    loadNewsAndFundamentals(symbol);
   } catch (e) {
     log(`Chart load failed for ${symbol} @ ${timeframe}: ${e}`, "error");
     setText("connect-status-bar", `Chart error: ${e}`);
@@ -2159,6 +2162,118 @@ function setupConnect() {
 
 // ── Log Panel ───────────────────────────────────────────────
 
+// ── News & Fundamentals ─────────────────────────────────────
+
+async function loadNewsAndFundamentals(symbol) {
+  const panel = document.getElementById("news-content");
+  if (!panel) return;
+  panel.innerHTML = "";
+
+  // Load fundamentals (SEC EDGAR — cached in cold storage)
+  try {
+    const cacheKey = `fundamentals:${symbol}`;
+    let data = await coldLoad(cacheKey);
+    if (!data) {
+      const json = await invoke("get_company_fundamentals", { symbol });
+      data = JSON.parse(json);
+      if (data && data.entity) coldSave(cacheKey, data);
+    }
+    if (data && data.entity) {
+      const section = document.createElement("div");
+      section.style.borderBottom = "1px solid #333";
+      section.style.paddingBottom = "4px";
+      section.style.marginBottom = "4px";
+
+      const addRow = (label, value) => {
+        const row = document.createElement("div");
+        row.className = "fundamental-row";
+        const l = document.createElement("span"); l.className = "label"; l.textContent = label;
+        const v = document.createElement("span"); v.className = "value"; v.textContent = value;
+        row.appendChild(l); row.appendChild(v);
+        section.appendChild(row);
+      };
+
+      const fmtNum = (v) => {
+        if (!v || !v.value) return "N/A";
+        const n = Number(v.value);
+        if (Math.abs(n) >= 1e12) return `$${(n/1e12).toFixed(2)}T`;
+        if (Math.abs(n) >= 1e9) return `$${(n/1e9).toFixed(2)}B`;
+        if (Math.abs(n) >= 1e6) return `$${(n/1e6).toFixed(2)}M`;
+        return `$${n.toLocaleString()}`;
+      };
+
+      addRow("Entity", data.entity);
+      addRow("Revenue", fmtNum(data.revenue));
+      addRow("Net Income", fmtNum(data.net_income));
+      addRow("Assets", fmtNum(data.total_assets));
+      addRow("Equity", fmtNum(data.stockholders_equity));
+      addRow("Shares Out", data.shares_outstanding?.value ? Number(data.shares_outstanding.value).toLocaleString() : "N/A");
+      addRow("EPS", data.eps?.value ? `$${Number(data.eps.value).toFixed(2)}` : "N/A");
+
+      panel.appendChild(section);
+      log(`Fundamentals loaded for ${symbol}`, "ok");
+    }
+  } catch (e) {
+    log(`Fundamentals failed for ${symbol}: ${e}`, "warn");
+  }
+
+  // Load news (Alpaca News API — cached)
+  try {
+    const cacheKey = `news:${symbol}`;
+    let articles = await coldLoad(cacheKey);
+    const cacheAge = articles ? 0 : Infinity; // cold cache doesn't track age, always refresh
+    if (!articles || cacheAge > 15 * 60 * 1000) {
+      const json = await invoke("get_news", { symbol, limit: 20 });
+      articles = JSON.parse(json);
+      if (articles && articles.length > 0) coldSave(cacheKey, articles);
+    }
+    if (articles && articles.length > 0) {
+      for (const article of articles.slice(0, 15)) {
+        const item = document.createElement("div");
+        item.className = "news-item";
+
+        const date = document.createElement("div");
+        date.className = "news-date";
+        const ts = article.created_at || article.updated_at || "";
+        date.textContent = ts.substring(0, 16).replace("T", " ");
+
+        const headline = document.createElement("div");
+        headline.className = "news-headline";
+        headline.textContent = article.headline || article.title || "";
+
+        const source = document.createElement("div");
+        source.className = "news-source";
+        source.textContent = article.source || "";
+
+        item.appendChild(date);
+        item.appendChild(headline);
+        item.appendChild(source);
+
+        if (article.url) {
+          item.addEventListener("click", () => {
+            window.open(article.url, "_blank");
+          });
+        }
+
+        panel.appendChild(item);
+      }
+      log(`${articles.length} news articles loaded for ${symbol}`, "ok");
+    }
+  } catch (e) {
+    log(`News failed for ${symbol}: ${e}`, "warn");
+  }
+}
+
+function setupNewsPanel() {
+  const panel = document.getElementById("news-panel");
+  const header = document.getElementById("news-header");
+
+  header.addEventListener("click", () => {
+    panel.classList.toggle("collapsed");
+    header.textContent = panel.classList.contains("collapsed") ? "News & Events ▶" : "News & Events ▼";
+  });
+}
+
 function setupIndicatorPanel() {
   const panel = document.getElementById("indicator-panel");
   const header = document.getElementById("indicator-header");
@@ -2265,6 +2380,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initChart();
   setupPaneResizers();
   setupLogPanel();
+  setupNewsPanel();
   setupIndicatorPanel();
   setupAutocomplete();
   setupButtons();
