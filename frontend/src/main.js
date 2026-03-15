@@ -2316,11 +2316,6 @@ function setupNewsPanel() {
     header.textContent = panel.classList.contains("collapsed") ? "News & Events ▶" : "News & Events ▼";
   });
 
-  // Article reader back button
-  document.getElementById("btn-article-back").addEventListener("click", () => {
-    document.getElementById("article-reader").classList.add("hidden");
-    document.getElementById("news-panel").style.display = "";
-  });
 }
 
 function setupIndicatorPanel() {
