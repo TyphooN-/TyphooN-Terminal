@@ -156,7 +156,7 @@ body {
 }
 
 #chart-container {
-  flex: 7;
+  flex: 5;
   background: #000000;
   position: relative;
   min-height: 100px;
@@ -165,10 +165,13 @@ body {
 .sub-pane {
   flex: 1;
   background: #000000;
-  border-top: 1px solid #333;
+  border-top: 1px solid #444;
   position: relative;
-  min-height: 60px;
+  min-height: 80px;
 }
+
+#fisher-pane { flex: 1.2; }
+#volume-pane { flex: 1; }
 
 /* ── Right Panel ─────────────────────────────────────────── */
 

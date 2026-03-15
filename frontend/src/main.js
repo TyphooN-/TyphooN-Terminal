@@ -72,17 +72,18 @@ function initChart() {
       attributionLogo: false,
     },
     grid: {
-      vertLines: { color: "#1a1a1a" },
-      horzLines: { color: "#1a1a1a" },
+      vertLines: { color: "#333333", style: 3 },
+      horzLines: { color: "#333333", style: 3 },
     },
     crosshair: { mode: CrosshairMode.Normal },
     rightPriceScale: { borderColor: "#333" },
     timeScale: { borderColor: "#333", timeVisible: true },
   });
 
+  // MT5 default: filled green up, filled red down
   candleSeries = chart.addCandlestickSeries({
-    upColor: "#000000",
-    downColor: "#000000",
+    upColor: "#00ff00",
+    downColor: "#ff0000",
     borderDownColor: "#ff0000",
     borderUpColor: "#00ff00",
     wickDownColor: "#ff0000",
@@ -646,7 +647,7 @@ function applyIndicators(chartData) {
       // MultiKAMA.mqh: KAMA from multiple timeframes, all clrWhite, width 2
       // Current chart's own KAMA
       if (chartData.length > period + 1) {
-        const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: "KAMA", priceLineVisible: false });
+        const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
         s.setData(calcKAMA(chartData, period));
         indicatorSeries[key] = s;
       }
@@ -669,8 +670,8 @@ function applyIndicators(chartData) {
       // Current chart prev candle levels
       if (chartData.length > 1) {
         const pcl = calcPrevCandleLevels(chartData);
-        const sh = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "PrevH", lastValueVisible: false, priceLineVisible: false });
-        const sl2 = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "PrevL", lastValueVisible: false, priceLineVisible: false });
+        const sh = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
+        const sl2 = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
         sh.setData(pcl.highs); sl2.setData(pcl.lows);
         indicatorSeries[key + "_h"] = sh;
         indicatorSeries[key + "_l"] = sl2;
@@ -710,18 +711,44 @@ function applyIndicators(chartData) {
       }
 
     } else if (ind === "fisher" && chartData.length > period) {
-      // Ehlers Fisher Transform — rendered in dedicated fisherChart pane
+      // EhlersFisherTransform.mqh — DRAW_COLOR_LINE in separate pane
+      // Green (#3CB371) when fisher > signal (bullish), Red (#FF4500) when < (bearish), Gray neutral
       const ef = calcEhlersFisher(chartData, period);
 
-      // Fisher as colored histogram bars
-      const sHist = fisherChart.addHistogramSeries({
-        priceFormat: { type: "price", precision: 4, minMove: 0.0001 },
-      });
-      sHist.setData(ef.fisher.map((d, i) => ({
-        time: d.time, value: d.value, color: ef.colors[i] || "#A9A9A9",
-      })));
+      // Split fisher data into green and red segments for color-changing line
+      const greenData = [], redData = [], grayData = [];
+      for (let i = 0; i < ef.fisher.length; i++) {
+        const d = { time: ef.fisher[i].time, value: ef.fisher[i].value };
+        const c = ef.colors[i];
+        // To get connected lines, each segment needs the transition point
+        if (c === "#3CB371") {
+          greenData.push(d);
+          if (i > 0 && ef.colors[i - 1] !== "#3CB371") greenData.push(d); // connect
+        } else if (c === "#FF4500") {
+          redData.push(d);
+          if (i > 0 && ef.colors[i - 1] !== "#FF4500") redData.push(d);
+        } else {
+          grayData.push(d);
+        }
+      }
 
-      // Signal line
+      // Draw all three color lines (they overlap where color transitions)
+      const sGreen = fisherChart.addLineSeries({ color: "#3CB371", lineWidth: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+      const sRed = fisherChart.addLineSeries({ color: "#FF4500", lineWidth: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+
+      // Full fisher line in appropriate colors — use the complete data for each
+      // Green segments: set value to NaN for non-green bars to create gaps
+      sGreen.setData(ef.fisher.map((d, i) => ({
+        time: d.time,
+        value: ef.colors[i] === "#3CB371" ? d.value : NaN,
+      })).filter(d => !isNaN(d.value)));
+
+      sRed.setData(ef.fisher.map((d, i) => ({
+        time: d.time,
+        value: ef.colors[i] === "#FF4500" ? d.value : NaN,
+      })).filter(d => !isNaN(d.value)));
+
+      // Signal line (gray, thin)
       const sSignal = fisherChart.addLineSeries({
         color: "#A9A9A9", lineWidth: 1, lastValueVisible: false, priceLineVisible: false,
       });
@@ -733,7 +760,8 @@ function applyIndicators(chartData) {
       });
       sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
 
-      fisherSeries.hist = sHist;
+      fisherSeries.green = sGreen;
+      fisherSeries.red = sRed;
       fisherSeries.signal = sSignal;
       fisherSeries.zero = sZero;
       fisherChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
@@ -810,7 +838,7 @@ function applyIndicators(chartData) {
 
     } else if (ind === "sma" && chartData.length > period) {
       const colors = { 200: "#FFFF00", 50: "#2196f3" };
-      const s = chart.addLineSeries({ color: colors[period] || "#FFFFFF", lineWidth: 1, title: `SMA${period}`, priceLineVisible: false });
+      const s = chart.addLineSeries({ color: colors[period] || "#FFFFFF", lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
       s.setData(calcSMA(chartData, period));
       indicatorSeries[key] = s;
 
