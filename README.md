@@ -92,9 +92,30 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 
 **JavaScript frontend** — TradingView lightweight-charts (MIT, 170KB), HTML/CSS UI with 10-button panel, 11-label dashboard, indicator config panel.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full decision record (why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI).
+### Documentation
 
-See [INDICATOR_PORTING.md](INDICATOR_PORTING.md) for lessons learned porting MQL5 indicators to JavaScript.
+| Document | Purpose |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
+| [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
+| [INDICATOR_PORTING.md](INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
+| [docs/adr/](docs/adr/) | Architecture Decision Records (11 ADRs) |
+
+### ADR Index
+
+| ADR | Topic |
+|---|---|
+| [001](docs/adr/001-rust-tauri-architecture.md) | Rust + Tauri architecture decision |
+| [002](docs/adr/002-lightweight-charts.md) | TradingView lightweight-charts rationale |
+| [003](docs/adr/003-bar-data-caching.md) | Three-tier cache (memory + IndexedDB + zstd) |
+| [004](docs/adr/004-mtf-indicators.md) | Multi-timeframe indicator support |
+| [005](docs/adr/005-indicator-visual-parity.md) | Indicator visual parity with MT5 |
+| [006](docs/adr/006-security-hardening.md) | Security hardening findings and fixes |
+| [007](docs/adr/007-bar-prefetch-strategy.md) | Background bar pre-fetch strategy |
+| [008](docs/adr/008-multi-tab-charts.md) | Multi-tab chart support |
+| [009](docs/adr/009-rate-limiter.md) | Centralized rate limiter |
+| [010](docs/adr/010-multi-account.md) | Multi-account credential management |
+| [011](docs/adr/011-resizable-panes.md) | Resizable chart panes |
 
 ---
 
