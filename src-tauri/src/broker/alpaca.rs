@@ -6,10 +6,66 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 const PAPER_BASE: &str = "https://paper-api.alpaca.markets";
 const LIVE_BASE: &str = "https://api.alpaca.markets";
 const DATA_BASE: &str = "https://data.alpaca.markets";
+
+/// Alpaca free plan: 200 requests/minute = 1 request per 300ms.
+/// We use 320ms to leave headroom.
+const RATE_LIMIT_MS: u64 = 320;
+
+/// Centralized rate limiter — shared across all data API requests.
+/// On 429, pauses all requests for a cooldown period.
+#[derive(Debug, Clone)]
+pub struct RateLimiter {
+    last_request: Arc<Mutex<std::time::Instant>>,
+    cooldown_until: Arc<Mutex<Option<std::time::Instant>>>,
+}
+
+impl RateLimiter {
+    pub fn new() -> Self {
+        Self {
+            last_request: Arc::new(Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1))),
+            cooldown_until: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Wait until we can make another request without hitting rate limit.
+    /// Returns false if in cooldown (caller should skip/fail gracefully).
+    pub async fn wait(&self) -> bool {
+        // Check cooldown
+        {
+            let cooldown = self.cooldown_until.lock().await;
+            if let Some(until) = *cooldown {
+                if std::time::Instant::now() < until {
+                    let remaining = until - std::time::Instant::now();
+                    tracing::debug!("Rate limiter in cooldown for {}ms", remaining.as_millis());
+                    tokio::time::sleep(remaining).await;
+                }
+            }
+        }
+        // Normal pacing
+        let mut last = self.last_request.lock().await;
+        let elapsed = last.elapsed();
+        let min_interval = std::time::Duration::from_millis(RATE_LIMIT_MS);
+        if elapsed < min_interval {
+            tokio::time::sleep(min_interval - elapsed).await;
+        }
+        *last = std::time::Instant::now();
+        true
+    }
+
+    /// Called when a 429 response is received. Pauses all requests for 60 seconds.
+    pub async fn trigger_cooldown(&self) {
+        let mut cooldown = self.cooldown_until.lock().await;
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        *cooldown = Some(until);
+        tracing::warn!("Rate limit hit — cooling down for 60s");
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AlpacaBroker {
@@ -17,6 +73,7 @@ pub struct AlpacaBroker {
     base_url: String,
     api_key: String,
     secret_key: String,
+    rate_limiter: RateLimiter,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +147,7 @@ impl AlpacaBroker {
             base_url,
             api_key,
             secret_key,
+            rate_limiter: RateLimiter::new(),
         }
     }
 
@@ -360,10 +418,13 @@ impl AlpacaBroker {
             let mut consecutive_empty = 0;
 
             loop {
+                // Centralized rate limiter — respects global request budget
+                self.rate_limiter.wait().await;
+
                 let start_str = chunk_start.format("%Y-%m-%dT00:00:00Z").to_string();
                 let mut params = vec![
                     ("timeframe", actual_tf.to_string()),
-                    ("limit", "10000".to_string()), // request max, API will cap it
+                    ("limit", "10000".to_string()), // request max, server returns ~260 on free plan
                     ("start", start_str),
                     ("sort", "asc".to_string()),
                 ];
@@ -390,7 +451,16 @@ impl AlpacaBroker {
                 };
 
                 if !resp.status().is_success() {
-                    last_error = format!("HTTP {} (feed={:?})", resp.status(), feed);
+                    let status = resp.status();
+                    if status.as_u16() == 429 {
+                        self.rate_limiter.trigger_cooldown().await;
+                        // Return what we have so far rather than retrying
+                        if !all_bars.is_empty() {
+                            tracing::info!("429 hit, returning {} bars collected so far", all_bars.len());
+                            break;
+                        }
+                    }
+                    last_error = format!("HTTP {} (feed={:?})", status, feed);
                     let _ = resp.text().await;
                     break;
                 }
@@ -445,8 +515,7 @@ impl AlpacaBroker {
                     break;
                 }
 
-                // Rate limit: brief pause between chunk requests to avoid 429
-                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+                // Rate limiting handled by self.rate_limiter.wait() at top of loop
             }
 
             if !all_bars.is_empty() {

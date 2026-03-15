@@ -98,21 +98,11 @@ async fn get_multi_tf_bars(
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let mut result = serde_json::Map::new();
     for tf in &timeframes {
+        // Rate limiting handled by broker.rate_limiter inside get_bars
         match broker.get_bars(&symbol, tf, limit).await {
             Ok(bars) => { result.insert(tf.clone(), serde_json::to_value(&bars).unwrap()); }
-            Err(ref e) if e.contains("429") => {
-                tracing::warn!("Rate limited on {symbol} @ {tf}, waiting 2s...");
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                // Retry once
-                match broker.get_bars(&symbol, tf, limit).await {
-                    Ok(bars) => { result.insert(tf.clone(), serde_json::to_value(&bars).unwrap()); }
-                    Err(e2) => { tracing::warn!("MTF bars retry failed for {symbol} @ {tf}: {e2}"); }
-                }
-            }
-            Err(e) => { tracing::warn!("MTF bars failed for {symbol} @ {tf}: {e}"); }
+            Err(e) => { tracing::warn!("MTF bars {symbol} @ {tf}: {e}"); }
         }
-        // Rate limit between TF requests
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
     }
     Ok(serde_json::Value::Object(result).to_string())
 }
