@@ -250,19 +250,24 @@ body {
   white-space: nowrap;
 }
 
-#saved-accounts {
-  flex: 1;
-  background: #0f3460;
-  border: 1px solid #555;
-  color: #fff;
+/* Force dark theme on ALL selects globally */
+select {
+  background: #0f3460 !important;
+  border: 1px solid #555 !important;
+  color: #fff !important;
   padding: 6px;
   font-family: inherit;
   font-size: 12px;
+  color-scheme: dark;
 }
 
-#saved-accounts option {
-  background: #0f3460;
-  color: #fff;
+select option {
+  background: #0f3460 !important;
+  color: #fff !important;
+}
+
+#saved-accounts {
+  flex: 1;
 }
 
 .btn-small {
