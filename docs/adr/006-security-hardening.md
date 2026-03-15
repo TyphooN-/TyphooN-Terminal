@@ -152,9 +152,9 @@ Re-audited every Tauri command and frontend file after Pass 2 changes. Found and
 
 ## Remaining Work (Future Passes)
 
-- OS keychain for credential storage (via `tauri-plugin-store` or system keyring)
-- `zeroize` crate for API key memory cleanup
-- Frontend rate limiting (debounce rapid-fire order clicks)
-- `cargo audit` and `npm audit` in CI pipeline
-- Certificate pinning for Alpaca API endpoints
-- Restrict Tauri command allowlist per window
+- ~~`zeroize` crate for API key memory cleanup~~ ✅ Done (Pass 7)
+- ~~Frontend rate limiting (debounce rapid-fire order clicks)~~ ✅ Done (Pass 7 — all 4 trading buttons)
+- ~~`cargo audit` and `npm audit`~~ ✅ Clean (0 vulnerabilities, 18 allowed GTK warnings)
+- OS keychain for credential storage (via `keyring` crate)
+- Certificate pinning for Alpaca API endpoints (TLS 1.2+ min with rustls)
+- Restrict Tauri command allowlist per window (N/A — single window app)

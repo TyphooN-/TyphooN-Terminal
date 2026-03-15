@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use zeroize::Zeroizing;
 
 const PAPER_BASE: &str = "https://paper-api.alpaca.markets";
 const LIVE_BASE: &str = "https://api.alpaca.markets";
@@ -71,8 +72,8 @@ impl RateLimiter {
 pub struct AlpacaBroker {
     client: Client,
     base_url: String,
-    api_key: String,
-    secret_key: String,
+    api_key: Zeroizing<String>,
+    secret_key: Zeroizing<String>,
     rate_limiter: RateLimiter,
 }
 
@@ -125,6 +126,25 @@ pub struct OrderResult {
     pub status: String,
 }
 
+/// Full order info for history/management.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderInfo {
+    pub id: String,
+    pub symbol: String,
+    pub qty: String,
+    pub filled_qty: String,
+    pub side: String,
+    pub order_type: String,
+    pub status: String,
+    pub limit_price: Option<String>,
+    pub stop_price: Option<String>,
+    pub trail_price: Option<String>,
+    pub trail_percent: Option<String>,
+    pub created_at: String,
+    pub filled_at: Option<String>,
+    pub filled_avg_price: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bar {
     pub timestamp: String,
@@ -148,8 +168,8 @@ impl AlpacaBroker {
                 .build()
                 .unwrap_or_else(|_| Client::new()),
             base_url,
-            api_key,
-            secret_key,
+            api_key: Zeroizing::new(api_key),
+            secret_key: Zeroizing::new(secret_key),
             rate_limiter: RateLimiter::new(),
         }
     }
@@ -257,6 +277,194 @@ impl AlpacaBroker {
             side: json["side"].as_str().unwrap_or("").to_string(),
             status: json["status"].as_str().unwrap_or("").to_string(),
         })
+    }
+
+    /// Place a limit order.
+    pub async fn limit_order(&self, symbol: &str, qty: f64, side: &str, limit_price: f64, tif: &str) -> Result<OrderResult, String> {
+        let body = serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "limit",
+            "limit_price": limit_price.to_string(),
+            "time_in_force": tif,
+        });
+        self.submit_order(&body).await
+    }
+
+    /// Place a stop order.
+    pub async fn stop_order(&self, symbol: &str, qty: f64, side: &str, stop_price: f64, tif: &str) -> Result<OrderResult, String> {
+        let body = serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "stop",
+            "stop_price": stop_price.to_string(),
+            "time_in_force": tif,
+        });
+        self.submit_order(&body).await
+    }
+
+    /// Place a stop-limit order.
+    pub async fn stop_limit_order(&self, symbol: &str, qty: f64, side: &str, stop_price: f64, limit_price: f64, tif: &str) -> Result<OrderResult, String> {
+        let body = serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "stop_limit",
+            "stop_price": stop_price.to_string(),
+            "limit_price": limit_price.to_string(),
+            "time_in_force": tif,
+        });
+        self.submit_order(&body).await
+    }
+
+    /// Place a trailing stop order.
+    pub async fn trailing_stop_order(&self, symbol: &str, qty: f64, side: &str, trail_price: Option<f64>, trail_percent: Option<f64>, tif: &str) -> Result<OrderResult, String> {
+        let mut body = serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "trailing_stop",
+            "time_in_force": tif,
+        });
+        if let Some(tp) = trail_price {
+            body["trail_price"] = serde_json::json!(tp.to_string());
+        }
+        if let Some(tp) = trail_percent {
+            body["trail_percent"] = serde_json::json!(tp.to_string());
+        }
+        self.submit_order(&body).await
+    }
+
+    /// Place a bracket order (market entry with TP + SL legs).
+    pub async fn bracket_order(&self, symbol: &str, qty: f64, side: &str, tp_price: f64, sl_price: f64) -> Result<OrderResult, String> {
+        let body = serde_json::json!({
+            "symbol": symbol,
+            "qty": qty.to_string(),
+            "side": side,
+            "type": "market",
+            "time_in_force": "gtc",
+            "order_class": "bracket",
+            "take_profit": { "limit_price": tp_price.to_string() },
+            "stop_loss": { "stop_price": sl_price.to_string() },
+        });
+        self.submit_order(&body).await
+    }
+
+    /// Common order submission logic.
+    async fn submit_order(&self, body: &serde_json::Value) -> Result<OrderResult, String> {
+        let resp = self
+            .client
+            .post(format!("{}/v2/orders", self.base_url))
+            .headers(self.headers())
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| format!("Order request failed: {e}"))?;
+
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Order parse failed: {e}"))?;
+
+        if let Some(msg) = json["message"].as_str() {
+            if !msg.is_empty() {
+                return Err(format!("Order rejected: {msg}"));
+            }
+        }
+
+        Ok(OrderResult {
+            id: json["id"].as_str().unwrap_or("").to_string(),
+            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
+            qty: json["qty"].as_str().unwrap_or("0").to_string(),
+            side: json["side"].as_str().unwrap_or("").to_string(),
+            status: json["status"].as_str().unwrap_or("").to_string(),
+        })
+    }
+
+    /// Get orders by status (open, closed, all).
+    pub async fn get_orders(&self, status: &str, limit: u32) -> Result<Vec<OrderInfo>, String> {
+        let resp = self
+            .client
+            .get(format!("{}/v2/orders", self.base_url))
+            .headers(self.headers())
+            .query(&[
+                ("status", status),
+                ("limit", &limit.to_string()),
+                ("direction", "desc"),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Orders request failed: {e}"))?;
+
+        let json: Vec<serde_json::Value> = resp
+            .json()
+            .await
+            .map_err(|e| format!("Orders parse failed: {e}"))?;
+
+        Ok(json.iter().map(Self::parse_order_info).collect())
+    }
+
+    /// Modify a pending order.
+    pub async fn modify_order(&self, order_id: &str, qty: Option<f64>, limit_price: Option<f64>, stop_price: Option<f64>, trail: Option<f64>) -> Result<OrderResult, String> {
+        let mut body = serde_json::Map::new();
+        if let Some(q) = qty { body.insert("qty".into(), serde_json::json!(q.to_string())); }
+        if let Some(lp) = limit_price { body.insert("limit_price".into(), serde_json::json!(lp.to_string())); }
+        if let Some(sp) = stop_price { body.insert("stop_price".into(), serde_json::json!(sp.to_string())); }
+        if let Some(t) = trail { body.insert("trail".into(), serde_json::json!(t.to_string())); }
+
+        let resp = self
+            .client
+            .patch(format!("{}/v2/orders/{}", self.base_url, order_id))
+            .headers(self.headers())
+            .json(&serde_json::Value::Object(body))
+            .send()
+            .await
+            .map_err(|e| format!("Modify order failed: {e}"))?;
+
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Modify parse failed: {e}"))?;
+
+        Ok(OrderResult {
+            id: json["id"].as_str().unwrap_or("").to_string(),
+            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
+            qty: json["qty"].as_str().unwrap_or("0").to_string(),
+            side: json["side"].as_str().unwrap_or("").to_string(),
+            status: json["status"].as_str().unwrap_or("").to_string(),
+        })
+    }
+
+    /// Cancel a pending order.
+    pub async fn cancel_order(&self, order_id: &str) -> Result<(), String> {
+        self.client
+            .delete(format!("{}/v2/orders/{}", self.base_url, order_id))
+            .headers(self.headers())
+            .send()
+            .await
+            .map_err(|e| format!("Cancel order failed: {e}"))?;
+        Ok(())
+    }
+
+    fn parse_order_info(o: &serde_json::Value) -> OrderInfo {
+        OrderInfo {
+            id: o["id"].as_str().unwrap_or("").to_string(),
+            symbol: o["symbol"].as_str().unwrap_or("").to_string(),
+            qty: o["qty"].as_str().unwrap_or("0").to_string(),
+            filled_qty: o["filled_qty"].as_str().unwrap_or("0").to_string(),
+            side: o["side"].as_str().unwrap_or("").to_string(),
+            order_type: o["type"].as_str().unwrap_or("").to_string(),
+            status: o["status"].as_str().unwrap_or("").to_string(),
+            limit_price: o["limit_price"].as_str().map(|s| s.to_string()),
+            stop_price: o["stop_price"].as_str().map(|s| s.to_string()),
+            trail_price: o["trail_price"].as_str().map(|s| s.to_string()),
+            trail_percent: o["trail_percent"].as_str().map(|s| s.to_string()),
+            created_at: o["created_at"].as_str().unwrap_or("").to_string(),
+            filled_at: o["filled_at"].as_str().map(|s| s.to_string()),
+            filled_avg_price: o["filled_avg_price"].as_str().map(|s| s.to_string()),
+        }
     }
 
     pub async fn close_position(&self, symbol: &str, qty: Option<f64>) -> Result<OrderResult, String> {

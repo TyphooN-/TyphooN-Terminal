@@ -182,6 +182,152 @@ async fn close_position(
 }
 
 #[tauri::command]
+async fn place_limit_order(
+    state: State<'_, SharedState>,
+    symbol: String,
+    qty: f64,
+    side: String,
+    limit_price: f64,
+    tif: String,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if qty <= 0.0 || qty > 1_000_000.0 || !qty.is_finite() { return Err("Invalid quantity".into()); }
+    if side != "buy" && side != "sell" { return Err("Invalid side".into()); }
+    if !limit_price.is_finite() || limit_price <= 0.0 { return Err("Invalid limit price".into()); }
+    let tif = if matches!(tif.as_str(), "day" | "gtc" | "ioc" | "fok") { tif } else { "gtc".to_string() };
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let result = broker.limit_order(&symbol, qty, &side, limit_price, &tif).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[tauri::command]
+async fn place_stop_order(
+    state: State<'_, SharedState>,
+    symbol: String,
+    qty: f64,
+    side: String,
+    stop_price: f64,
+    tif: String,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if qty <= 0.0 || qty > 1_000_000.0 || !qty.is_finite() { return Err("Invalid quantity".into()); }
+    if side != "buy" && side != "sell" { return Err("Invalid side".into()); }
+    if !stop_price.is_finite() || stop_price <= 0.0 { return Err("Invalid stop price".into()); }
+    let tif = if matches!(tif.as_str(), "day" | "gtc" | "ioc" | "fok") { tif } else { "gtc".to_string() };
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let result = broker.stop_order(&symbol, qty, &side, stop_price, &tif).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[tauri::command]
+async fn place_stop_limit_order(
+    state: State<'_, SharedState>,
+    symbol: String,
+    qty: f64,
+    side: String,
+    stop_price: f64,
+    limit_price: f64,
+    tif: String,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if qty <= 0.0 || qty > 1_000_000.0 || !qty.is_finite() { return Err("Invalid quantity".into()); }
+    if side != "buy" && side != "sell" { return Err("Invalid side".into()); }
+    if !stop_price.is_finite() || stop_price <= 0.0 || !limit_price.is_finite() || limit_price <= 0.0 {
+        return Err("Invalid price".into());
+    }
+    let tif = if matches!(tif.as_str(), "day" | "gtc" | "ioc" | "fok") { tif } else { "gtc".to_string() };
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let result = broker.stop_limit_order(&symbol, qty, &side, stop_price, limit_price, &tif).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[tauri::command]
+async fn place_trailing_stop(
+    state: State<'_, SharedState>,
+    symbol: String,
+    qty: f64,
+    side: String,
+    trail_price: Option<f64>,
+    trail_percent: Option<f64>,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if qty <= 0.0 || qty > 1_000_000.0 || !qty.is_finite() { return Err("Invalid quantity".into()); }
+    if side != "buy" && side != "sell" { return Err("Invalid side".into()); }
+    if trail_price.is_none() && trail_percent.is_none() { return Err("Must specify trail_price or trail_percent".into()); }
+    if let Some(tp) = trail_price { if !tp.is_finite() || tp <= 0.0 { return Err("Invalid trail price".into()); } }
+    if let Some(tp) = trail_percent { if !tp.is_finite() || tp <= 0.0 || tp > 50.0 { return Err("Invalid trail percent".into()); } }
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let result = broker.trailing_stop_order(&symbol, qty, &side, trail_price, trail_percent, "gtc").await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[tauri::command]
+async fn place_bracket_order(
+    state: State<'_, SharedState>,
+    symbol: String,
+    qty: f64,
+    side: String,
+    tp_price: f64,
+    sl_price: f64,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if qty <= 0.0 || qty > 1_000_000.0 || !qty.is_finite() { return Err("Invalid quantity".into()); }
+    if side != "buy" && side != "sell" { return Err("Invalid side".into()); }
+    if !tp_price.is_finite() || tp_price <= 0.0 || !sl_price.is_finite() || sl_price <= 0.0 {
+        return Err("Invalid TP/SL price".into());
+    }
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let result = broker.bracket_order(&symbol, qty, &side, tp_price, sl_price).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[tauri::command]
+async fn get_open_orders(state: State<'_, SharedState>) -> Result<String, String> {
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let orders = broker.get_orders("open", 100).await?;
+    Ok(serde_json::to_string(&orders).unwrap())
+}
+
+#[tauri::command]
+async fn get_order_history(state: State<'_, SharedState>, limit: u32) -> Result<String, String> {
+    let limit = limit.min(500);
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let orders = broker.get_orders("closed", limit).await?;
+    Ok(serde_json::to_string(&orders).unwrap())
+}
+
+#[tauri::command]
+async fn modify_order(
+    state: State<'_, SharedState>,
+    order_id: String,
+    qty: Option<f64>,
+    limit_price: Option<f64>,
+    stop_price: Option<f64>,
+    trail: Option<f64>,
+) -> Result<String, String> {
+    if order_id.is_empty() || order_id.len() > 100 { return Err("Invalid order ID".into()); }
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let result = broker.modify_order(&order_id, qty, limit_price, stop_price, trail).await?;
+    Ok(serde_json::to_string(&result).unwrap())
+}
+
+#[tauri::command]
+async fn cancel_order(state: State<'_, SharedState>, order_id: String) -> Result<(), String> {
+    if order_id.is_empty() || order_id.len() > 100 { return Err("Invalid order ID".into()); }
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    broker.cancel_order(&order_id).await
+}
+
+#[tauri::command]
 async fn close_all(state: State<'_, SharedState>) -> Result<(), String> {
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
@@ -820,6 +966,15 @@ fn main() {
             get_positions,
             get_bars,
             place_order,
+            place_limit_order,
+            place_stop_order,
+            place_stop_limit_order,
+            place_trailing_stop,
+            place_bracket_order,
+            get_open_orders,
+            get_order_history,
+            modify_order,
+            cancel_order,
             close_position,
             close_all,
             get_asset,

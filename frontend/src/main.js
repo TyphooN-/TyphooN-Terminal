@@ -1807,6 +1807,8 @@ async function updateDashboard() {
     }
 
     updateNextBarTime();
+    updatePositionsPanel();
+    checkAlerts();
   } catch (_) {}
 }
 
@@ -2003,8 +2005,22 @@ function setupButtons() {
 
       orderInFlight = true;
       try {
+        const orderType = document.getElementById("order-type").value;
         for (let i = 0; i < calc.count; i++) {
-          await invoke("place_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side });
+          if (orderType === "bracket") {
+            await invoke("place_bracket_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side, tpPrice: tp, slPrice: sl });
+          } else if (orderType === "limit") {
+            await invoke("place_limit_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side, limitPrice: lastPrice, tif: "gtc" });
+          } else if (orderType === "stop") {
+            await invoke("place_stop_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side, stopPrice: sl, tif: "gtc" });
+          } else if (orderType === "stop_limit") {
+            await invoke("place_stop_limit_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side, stopPrice: sl, limitPrice: tp, tif: "gtc" });
+          } else if (orderType === "trailing_stop") {
+            const trail = Math.abs(lastPrice - sl);
+            await invoke("place_trailing_stop", { symbol: currentSymbol, qty: calc.lots, side: calc.side, trailPrice: trail, trailPercent: null });
+          } else {
+            await invoke("place_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side });
+          }
         }
         await invoke("set_sl_level", { symbol: currentSymbol, price: sl });
         await invoke("set_tp_level", { symbol: currentSymbol, price: tp });
@@ -2019,23 +2035,74 @@ function setupButtons() {
   });
 
   // ── Close All ──
+  let closeAllInFlight = false;
   document.getElementById("btn-close-all").addEventListener("click", async () => {
+    if (closeAllInFlight) return;
     if (!currentSymbol || !confirm(`Close ALL positions on ${currentSymbol}?`)) return;
+    closeAllInFlight = true;
     try {
       await invoke("close_position", { symbol: currentSymbol, qty: null });
       updateDashboard();
     } catch (e) { alert(`Close failed: ${e}`); }
+    finally { closeAllInFlight = false; }
   });
 
-  // ── Close Partial ──
+  // ── Close Partial (smart) ──
+  let closePartialInFlight = false;
   document.getElementById("btn-close-partial").addEventListener("click", async () => {
-    if (!currentSymbol) return;
-    const qty = prompt(`Qty to close on ${currentSymbol}:`);
-    if (!qty || isNaN(qty)) return;
-    try {
-      await invoke("close_position", { symbol: currentSymbol, qty: parseFloat(qty) });
-      updateDashboard();
-    } catch (e) { alert(`Close partial failed: ${e}`); }
+    if (closePartialInFlight || !currentSymbol) return;
+    // Smart close: show floating window with fraction buttons
+    const win = createWindow({ title: `Close Partial — ${currentSymbol}`, width: 320, height: 250 });
+    const posJson = await invoke("get_positions").catch(() => "[]");
+    const positions = JSON.parse(posJson);
+    const pos = positions.find(p => p.symbol === currentSymbol || p.symbol === currentSymbol.replace("/", ""));
+    if (!pos) { win.setContent("No position found"); return; }
+
+    const totalQty = Math.abs(pos.qty);
+    const container = document.createElement("div");
+    container.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:4px;";
+
+    const info = document.createElement("div");
+    info.textContent = `${pos.side === "long" ? "Long" : "Short"} ${totalQty} lots | P/L: $${pos.unrealized_pl.toFixed(2)}`;
+    info.style.color = "#8cf";
+    container.appendChild(info);
+
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "0.01";
+    input.value = (totalQty / 2).toFixed(2);
+    input.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:6px;font-family:inherit;";
+    container.appendChild(input);
+
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:4px;";
+    for (const [label, frac] of [["25%", 0.25], ["50%", 0.5], ["75%", 0.75], ["100%", 1.0]]) {
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      btn.style.cssText = "flex:1;padding:6px;background:#1a3a5a;color:#8ff;border:1px solid #555;cursor:pointer;font-family:inherit;";
+      btn.addEventListener("click", () => { input.value = (totalQty * frac).toFixed(2); });
+      btnRow.appendChild(btn);
+    }
+    container.appendChild(btnRow);
+
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "Close Position";
+    closeBtn.style.cssText = "padding:8px;background:#5a1a1a;color:#f88;border:1px solid #f44;cursor:pointer;font-family:inherit;font-weight:bold;";
+    closeBtn.addEventListener("click", async () => {
+      const qty = parseFloat(input.value);
+      if (isNaN(qty) || qty <= 0) return;
+      closePartialInFlight = true;
+      try {
+        await invoke("close_position", { symbol: currentSymbol, qty });
+        updateDashboard();
+        win.close();
+      } catch (e) { alert(`Close failed: ${e}`); }
+      finally { closePartialInFlight = false; }
+    });
+    container.appendChild(closeBtn);
+
+    win.contentElement.textContent = "";
+    win.appendElement(container);
   });
 
   // ── Set SL/TP — sync dragged lines to backend ──
@@ -2065,8 +2132,9 @@ function setupButtons() {
   });
 
   // ── Open MG — calculates sizing and places hedge/bias ──
+  let mgInFlight = false;
   document.getElementById("btn-open-mg").addEventListener("click", async () => {
-    if (!currentSymbol) return;
+    if (mgInFlight || !currentSymbol) return;
     try {
       const sizeJson = await invoke("calc_open_mg_size");
       const size = JSON.parse(sizeJson);
@@ -2090,11 +2158,14 @@ function setupButtons() {
 
       if (!confirm(msg)) return;
 
-      await invoke("open_martingale_hedge", { symbol: currentSymbol, direction });
-      await invoke("set_martingale_mode", { mode: direction });
-      document.getElementById("btn-martingale").textContent = `MG: ${direction.toUpperCase()}`;
-      updateDashboard();
-    } catch (e) { alert(`Open MG failed: ${e}`); }
+      mgInFlight = true;
+      try {
+        await invoke("open_martingale_hedge", { symbol: currentSymbol, direction });
+        await invoke("set_martingale_mode", { mode: direction });
+        document.getElementById("btn-martingale").textContent = `MG: ${direction.toUpperCase()}`;
+        updateDashboard();
+      } finally { mgInFlight = false; }
+    } catch (e) { mgInFlight = false; alert(`Open MG failed: ${e}`); }
   });
 
   // ── Order Mode Selector ──
@@ -2120,6 +2191,13 @@ function setupKeyboard() {
       case "c": document.getElementById("btn-close-all").click(); break;
       case "p": document.getElementById("btn-close-partial").click(); break;
       case "Escape": removeSLLine(); removeTPLine(); break;
+      case "a":
+        if (currentSymbol && lastPrice > 0) {
+          const dir = prompt("Alert direction (above/below):", "above");
+          if (dir === "above" || dir === "below") addPriceAlert(currentSymbol, lastPrice, dir);
+        }
+        break;
+      case "h": updateOrdersPanel(); break;
       case "w":
         if (e.altKey) { closeAllWindows(); e.preventDefault(); }
         break;
@@ -2654,6 +2732,202 @@ function restoreSession() {
   }
 }
 
+// ── Positions Panel ──────────────────────────────────────────
+
+function setupPositionsPanel() {
+  const panel = document.getElementById("positions-panel");
+  const header = document.getElementById("positions-header");
+  const content = document.getElementById("positions-content");
+
+  header.addEventListener("click", () => {
+    panel.classList.toggle("collapsed");
+    header.textContent = panel.classList.contains("collapsed") ? "Positions ▶" : "Positions ▼";
+  });
+}
+
+async function updatePositionsPanel() {
+  const content = document.getElementById("positions-content");
+  if (!content) return;
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+    content.textContent = "";
+    if (positions.length === 0) {
+      content.textContent = "No positions";
+      return;
+    }
+    for (const p of positions) {
+      const row = document.createElement("div");
+      row.className = "pos-row";
+      row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid #1a1a2e;font-size:11px;";
+
+      const info = document.createElement("span");
+      const plColor = p.unrealized_pl >= 0 ? "#4caf50" : "#f44336";
+      info.style.color = "#ccc";
+      info.textContent = `${p.symbol} ${p.side === "long" ? "L" : "S"} ${Math.abs(p.qty)}`;
+
+      const pl = document.createElement("span");
+      pl.style.cssText = `color:${plColor};font-family:Consolas,monospace;`;
+      pl.textContent = `$${p.unrealized_pl.toFixed(2)}`;
+
+      const closeBtn = document.createElement("button");
+      closeBtn.textContent = "×";
+      closeBtn.title = "Close position";
+      closeBtn.style.cssText = "background:none;border:1px solid #f44;color:#f44;cursor:pointer;font-size:10px;padding:1px 5px;border-radius:2px;";
+      closeBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Close ${p.symbol} (${Math.abs(p.qty)} ${p.side})?`)) return;
+        try {
+          await invoke("close_position", { symbol: p.symbol, qty: null });
+          updateDashboard();
+        } catch (err) { alert(`Close failed: ${err}`); }
+      });
+
+      row.appendChild(info);
+      row.appendChild(pl);
+      row.appendChild(closeBtn);
+      content.appendChild(row);
+
+      // Click row to switch chart to that symbol
+      row.style.cursor = "pointer";
+      row.addEventListener("click", () => {
+        document.getElementById("symbol-input").value = p.symbol;
+        triggerLoad();
+      });
+    }
+  } catch (_) {}
+}
+
+// ── Orders Panel (Trade History) ─────────────────────────────
+
+function setupOrdersPanel() {
+  const panel = document.getElementById("orders-panel");
+  const header = document.getElementById("orders-header");
+
+  panel.classList.add("collapsed");
+  header.textContent = "Orders ▶";
+
+  header.addEventListener("click", () => {
+    panel.classList.toggle("collapsed");
+    header.textContent = panel.classList.contains("collapsed") ? "Orders ▶" : "Orders ▼";
+    if (!panel.classList.contains("collapsed")) updateOrdersPanel();
+  });
+}
+
+async function updateOrdersPanel() {
+  const content = document.getElementById("orders-content");
+  if (!content) return;
+  content.textContent = "";
+  try {
+    // Open orders first
+    const openJson = await invoke("get_open_orders");
+    const openOrders = JSON.parse(openJson);
+    if (openOrders.length > 0) {
+      const hdr = document.createElement("div");
+      hdr.textContent = "Open Orders";
+      hdr.style.cssText = "color:#ff8;font-size:10px;font-weight:bold;padding:4px 0 2px;";
+      content.appendChild(hdr);
+      for (const o of openOrders) {
+        content.appendChild(renderOrderRow(o, true));
+      }
+    }
+
+    // Recent closed orders
+    const histJson = await invoke("get_order_history", { limit: 20 });
+    const history = JSON.parse(histJson);
+    if (history.length > 0) {
+      const hdr = document.createElement("div");
+      hdr.textContent = "Recent Fills";
+      hdr.style.cssText = "color:#888;font-size:10px;font-weight:bold;padding:4px 0 2px;";
+      content.appendChild(hdr);
+      for (const o of history.slice(0, 15)) {
+        content.appendChild(renderOrderRow(o, false));
+      }
+    }
+
+    if (openOrders.length === 0 && history.length === 0) {
+      content.textContent = "No orders";
+    }
+  } catch (_) {}
+}
+
+function renderOrderRow(o, canCancel) {
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:2px 0;border-bottom:1px solid #111;font-size:10px;color:#aaa;";
+
+  const left = document.createElement("span");
+  const typeLabel = o.order_type === "market" ? "" : ` ${o.order_type}`;
+  left.textContent = `${o.symbol} ${o.side}${typeLabel} ${o.qty}`;
+
+  const mid = document.createElement("span");
+  mid.style.color = "#666";
+  const price = o.filled_avg_price || o.limit_price || o.stop_price || "";
+  mid.textContent = price ? `@${price}` : o.status;
+
+  const right = document.createElement("span");
+  right.style.color = "#555";
+  right.textContent = o.created_at.substring(0, 16).replace("T", " ");
+
+  row.appendChild(left);
+  row.appendChild(mid);
+  row.appendChild(right);
+
+  if (canCancel) {
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "×";
+    cancelBtn.style.cssText = "background:none;border:1px solid #f44;color:#f44;cursor:pointer;font-size:9px;padding:0 4px;margin-left:4px;border-radius:2px;";
+    cancelBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await invoke("cancel_order", { orderId: o.id });
+        updateOrdersPanel();
+      } catch (err) { alert(`Cancel failed: ${err}`); }
+    });
+    row.appendChild(cancelBtn);
+  }
+
+  return row;
+}
+
+// ── Price Alerts ─────────────────────────────────────────────
+
+let priceAlerts = []; // [{ symbol, price, direction: "above"|"below", triggered }]
+const ALERTS_KEY = "typhoon_alerts";
+
+function loadAlerts() {
+  try { priceAlerts = JSON.parse(localStorage.getItem(ALERTS_KEY) || "[]"); } catch { priceAlerts = []; }
+}
+
+function saveAlerts() {
+  localStorage.setItem(ALERTS_KEY, JSON.stringify(priceAlerts));
+}
+
+function addPriceAlert(symbol, price, direction) {
+  priceAlerts.push({ symbol, price, direction, triggered: false });
+  saveAlerts();
+  log(`Alert set: ${symbol} ${direction} $${price.toFixed(4)}`, "ok");
+}
+
+function checkAlerts() {
+  if (priceAlerts.length === 0 || !currentSymbol || lastPrice <= 0) return;
+  for (const alert of priceAlerts) {
+    if (alert.triggered || alert.symbol !== currentSymbol) continue;
+    if (alert.direction === "above" && lastPrice >= alert.price) {
+      alert.triggered = true;
+      fireAlert(alert);
+    } else if (alert.direction === "below" && lastPrice <= alert.price) {
+      alert.triggered = true;
+      fireAlert(alert);
+    }
+  }
+  saveAlerts();
+}
+
+function fireAlert(alert) {
+  log(`ALERT: ${alert.symbol} ${alert.direction} $${alert.price.toFixed(4)} — price: $${lastPrice.toFixed(4)}`, "warn");
+  try { new Notification(`${alert.symbol} Alert`, { body: `Price ${alert.direction} $${alert.price.toFixed(4)}` }); } catch (_) {}
+}
+
 // ── Init ────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -2664,6 +2938,9 @@ document.addEventListener("DOMContentLoaded", () => {
   setupLogPanel();
   setupNewsPanel();
   setupIndicatorPanel();
+  setupPositionsPanel();
+  setupOrdersPanel();
+  loadAlerts();
   setupAutocomplete();
   setupButtons();
   setupKeyboard();

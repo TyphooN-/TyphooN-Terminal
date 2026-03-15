@@ -153,7 +153,7 @@
           <div id="info-time" class="dash-row">Next bar: —</div>
         </div>
 
-        <!-- Order mode selector -->
+        <!-- Order config -->
         <div id="order-config">
           <label>Mode:</label>
           <select id="order-mode">
@@ -162,6 +162,27 @@
             <option value="Fixed">Fixed</option>
             <option value="Dynamic">Dynamic</option>
           </select>
+          <label>Type:</label>
+          <select id="order-type">
+            <option value="market">Market</option>
+            <option value="bracket">Bracket</option>
+            <option value="limit">Limit</option>
+            <option value="stop">Stop</option>
+            <option value="stop_limit">Stop-Limit</option>
+            <option value="trailing_stop">Trail Stop</option>
+          </select>
+        </div>
+
+        <!-- Positions panel -->
+        <div id="positions-panel">
+          <div id="positions-header">Positions ▼</div>
+          <div id="positions-content"></div>
+        </div>
+
+        <!-- Orders panel -->
+        <div id="orders-panel">
+          <div id="orders-header">Orders ▼</div>
+          <div id="orders-content"></div>
         </div>
 
         <!-- Indicator Config -->

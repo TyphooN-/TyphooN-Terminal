@@ -54,16 +54,18 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Symbol autocomplete | ✅ Done | 11K+ symbols |
 | Rate limiter with 429 cooldown | ✅ Done | |
 | Background bar pre-fetch | ✅ Done | All TFs cached silently |
-| **Limit orders** | 🔲 TODO | Alpaca supports limit/stop/stop-limit |
-| **Trailing stops** | 🔲 TODO | Alpaca supports trail_price/trail_percent |
-| **Bracket orders** | 🔲 TODO | Alpaca supports OTO/OCO brackets |
-| **Modify pending orders** | 🔲 TODO | Alpaca PATCH /orders |
-| **Close Partial (smart)** | 🔲 TODO | Prompt for lots, intelligent selection |
+| Limit orders | ✅ Done | Limit, stop, stop-limit via order type selector |
+| Trailing stops | ✅ Done | Trail price/percent via order type selector |
+| Bracket orders | ✅ Done | Market entry + TP/SL legs (default with SL/TP lines) |
+| Modify/cancel pending orders | ✅ Done | Orders panel with cancel buttons, PATCH API |
+| Close Partial (smart) | ✅ Done | Floating window with 25/50/75/100% quick buttons |
 | Draggable SL/TP lines | ✅ Done | Double-click to grab, drag to adjust |
-| **Drawing tools** (trend lines, Fibonacci) | 🔲 TODO | Essential for manual trading |
-| **Price alerts** | 🔲 TODO | Sound + notification |
-| **Trade history panel** | 🔲 TODO | Past orders with P/L |
-| **Open positions panel** | 🔲 TODO | Live P/L, one-click close |
+| **Drawing tools** (trend lines, Fibonacci) | 🔲 TODO | Requires lightweight-charts plugin API |
+| Price alerts | ✅ Done | Keyboard `a`, browser notifications, persistent |
+| Trade history panel | ✅ Done | Orders panel with open + recent fills |
+| Open positions panel | ✅ Done | Live P/L, one-click close, click to switch chart |
+| Zeroize API keys | ✅ Done | `zeroize` crate for memory cleanup on drop |
+| Button debounce | ✅ Done | All trading buttons guarded against double-fire |
 
 ### Tier 2 — Competitive with MT5
 
