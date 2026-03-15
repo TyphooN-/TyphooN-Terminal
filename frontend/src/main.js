@@ -11,7 +11,13 @@
 
 import { createChart, CrosshairMode } from "lightweight-charts";
 
-const { invoke } = window.__TAURI__.core;
+// Tauri v2 invoke — lazy access to avoid race with __TAURI__ injection
+function invoke(cmd, args) {
+  if (!window.__TAURI__ || !window.__TAURI__.core) {
+    return Promise.reject("Tauri not loaded yet");
+  }
+  return window.__TAURI__.core.invoke(cmd, args);
+}
 
 // ── State ───────────────────────────────────────────────────
 
