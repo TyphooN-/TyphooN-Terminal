@@ -114,6 +114,12 @@ body {
   font-family: inherit;
 }
 
+.status-bar {
+  font-size: 11px;
+  color: #888;
+  margin-left: 8px;
+}
+
 .info-label {
   margin-left: auto;
   font-size: 12px;

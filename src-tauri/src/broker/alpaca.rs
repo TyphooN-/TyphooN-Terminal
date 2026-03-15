@@ -307,70 +307,78 @@ impl AlpacaBroker {
         limit: u32,
     ) -> Result<Vec<Bar>, String> {
         let is_crypto = symbol.contains('/');
+
+        // Alpaca doesn't support 1Month — map to 1Week with more bars
+        let (actual_tf, actual_limit) = match timeframe {
+            "1Month" => ("1Week", limit * 4),
+            other => (other, limit),
+        };
+
+        // Try multiple feeds in order: sip (paid) → iex (free) for stocks
+        // Crypto uses a different endpoint and doesn't need a feed param
+        let feeds: Vec<Option<&str>> = if is_crypto {
+            vec![None] // crypto endpoint doesn't use feed param
+        } else {
+            vec![Some("iex"), Some("sip")] // try free tier first
+        };
+
         let base = if is_crypto {
             format!("{}/v1beta3/crypto/us/bars", DATA_BASE)
         } else {
             format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
         };
 
-        let mut params = vec![
-            ("timeframe", timeframe.to_string()),
-            ("limit", limit.to_string()),
-            ("feed", if is_crypto { "us".to_string() } else { "sip".to_string() }),
-        ];
-        if is_crypto {
-            params.push(("symbols", symbol.to_string()));
-        }
+        let mut last_error = String::new();
 
-        let resp = self
-            .client
-            .get(&base)
-            .headers(self.headers())
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| format!("Bars request failed: {e}"))?;
-
-        let status = resp.status();
-        let body = resp.text().await.map_err(|e| format!("Bars read failed: {e}"))?;
-
-        if !status.is_success() {
-            // Try iex feed as fallback (free tier)
-            let mut params2 = vec![
-                ("timeframe", timeframe.to_string()),
-                ("limit", limit.to_string()),
-                ("feed", "iex".to_string()),
+        for feed in &feeds {
+            let mut params = vec![
+                ("timeframe", actual_tf.to_string()),
+                ("limit", actual_limit.to_string()),
             ];
+            if let Some(f) = feed {
+                params.push(("feed", f.to_string()));
+            }
             if is_crypto {
-                params2.push(("symbols", symbol.to_string()));
+                params.push(("symbols", symbol.to_string()));
             }
 
-            let resp2 = self
+            let resp = match self
                 .client
                 .get(&base)
                 .headers(self.headers())
-                .query(&params2)
+                .query(&params)
                 .send()
                 .await
-                .map_err(|e| format!("Bars fallback failed: {e}"))?;
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    last_error = format!("Request failed: {e}");
+                    continue;
+                }
+            };
 
-            if !resp2.status().is_success() {
-                let err_body = resp2.text().await.unwrap_or_default();
-                return Err(format!("Bars failed ({}): {}", status, err_body));
+            if !resp.status().is_success() {
+                last_error = format!("HTTP {} (feed={:?})", resp.status(), feed);
+                let _ = resp.text().await; // consume body
+                continue;
             }
 
-            let json: serde_json::Value = resp2
-                .json()
-                .await
-                .map_err(|e| format!("Bars parse failed: {e}"))?;
+            let json: serde_json::Value = match resp.json().await {
+                Ok(j) => j,
+                Err(e) => {
+                    last_error = format!("Parse failed: {e}");
+                    continue;
+                }
+            };
 
-            return Ok(Self::parse_bars(&json, symbol, is_crypto));
+            let bars = Self::parse_bars(&json, symbol, is_crypto);
+            if !bars.is_empty() {
+                return Ok(bars);
+            }
+            last_error = format!("Empty bars (feed={:?})", feed);
         }
 
-        let json: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| format!("Bars JSON parse failed: {e}"))?;
-
-        Ok(Self::parse_bars(&json, symbol, is_crypto))
+        Err(format!("No bar data for {symbol} @ {timeframe}: {last_error}"))
     }
 
     fn parse_bars(json: &serde_json::Value, symbol: &str, is_crypto: bool) -> Vec<Bar> {

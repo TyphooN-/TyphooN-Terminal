@@ -120,13 +120,21 @@ async function loadChart(symbol, timeframe) {
       close: b.close,
     }));
 
+    if (chartData.length === 0) {
+      console.warn(`No bars returned for ${symbol} @ ${timeframe}`);
+      setText("connect-status-bar", `No data for ${symbol} @ ${timeframe}`);
+      return;
+    }
+
     candleSeries.setData(chartData);
     chart.timeScale().fitContent();
     currentSymbol = symbol;
     currentTimeframe = timeframe;
     if (chartData.length > 0) lastPrice = chartData[chartData.length - 1].close;
+    setText("connect-status-bar", `${symbol} — ${chartData.length} bars loaded`);
   } catch (e) {
     console.error("Failed to load chart:", e);
+    setText("connect-status-bar", `Chart error: ${e}`);
   }
 }
 
@@ -333,13 +341,22 @@ function setupAutocomplete() {
 
 function setupButtons() {
   document.getElementById("btn-load-chart").addEventListener("click", () => {
-    const symbol = document.getElementById("symbol-input").value.trim().toUpperCase();
+    let symbol = document.getElementById("symbol-input").value.trim().toUpperCase();
     const tf = document.getElementById("timeframe-select").value;
-    if (symbol) {
-      document.getElementById("symbol-input").value = symbol;
-      document.getElementById("symbol-autocomplete").classList.add("hidden");
-      loadChart(symbol, tf);
-    }
+    if (!symbol) return;
+
+    // Auto-detect common crypto tickers → Alpaca format (BTC → BTC/USD)
+    const cryptoMap = {
+      "BTC": "BTC/USD", "ETH": "ETH/USD", "SOL": "SOL/USD", "DOGE": "DOGE/USD",
+      "ADA": "ADA/USD", "XRP": "XRP/USD", "DOT": "DOT/USD", "AVAX": "AVAX/USD",
+      "LINK": "LINK/USD", "MATIC": "MATIC/USD", "UNI": "UNI/USD", "SHIB": "SHIB/USD",
+      "LTC": "LTC/USD", "BCH": "BCH/USD", "AAVE": "AAVE/USD", "SUSHI": "SUSHI/USD",
+    };
+    if (cryptoMap[symbol]) symbol = cryptoMap[symbol];
+
+    document.getElementById("symbol-input").value = symbol;
+    document.getElementById("symbol-autocomplete").classList.add("hidden");
+    loadChart(symbol, tf);
   });
 
   // Buy Lines: SL = lowest visible, TP = highest visible
