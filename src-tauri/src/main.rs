@@ -916,22 +916,30 @@ async fn export_trade_history(
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let orders = broker.get_orders("closed", limit).await?;
 
+    // CSV-safe escaping: quote fields that may contain commas/quotes
+    fn csv_escape(s: &str) -> String {
+        if s.contains(',') || s.contains('"') || s.contains('\n') {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        } else {
+            s.to_string()
+        }
+    }
     let mut csv = String::from("id,symbol,side,qty,filled_qty,order_type,status,limit_price,stop_price,created_at,filled_at,filled_avg_price\n");
     for o in &orders {
         csv.push_str(&format!(
             "{},{},{},{},{},{},{},{},{},{},{},{}\n",
-            o.id,
-            o.symbol,
-            o.side,
-            o.qty,
-            o.filled_qty,
-            o.order_type,
-            o.status,
-            o.limit_price.as_deref().unwrap_or(""),
-            o.stop_price.as_deref().unwrap_or(""),
-            o.created_at,
-            o.filled_at.as_deref().unwrap_or(""),
-            o.filled_avg_price.as_deref().unwrap_or(""),
+            csv_escape(&o.id),
+            csv_escape(&o.symbol),
+            csv_escape(&o.side),
+            csv_escape(&o.qty),
+            csv_escape(&o.filled_qty),
+            csv_escape(&o.order_type),
+            csv_escape(&o.status),
+            csv_escape(o.limit_price.as_deref().unwrap_or("")),
+            csv_escape(o.stop_price.as_deref().unwrap_or("")),
+            csv_escape(&o.created_at),
+            csv_escape(o.filled_at.as_deref().unwrap_or("")),
+            csv_escape(o.filled_avg_price.as_deref().unwrap_or("")),
         ));
     }
     Ok(csv)
@@ -1380,21 +1388,21 @@ async fn save_custom_indicator(name: String, source: String) -> Result<String, S
 
     let dir = get_indicators_dir();
     let filename = format!("{}.js", name);
+    // Verify path stays within indicators directory BEFORE writing
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return Err("Invalid indicator filename".to_string());
+    }
     let path = dir.join(&filename);
-
-    // Ensure resolved path stays within indicators directory
     let canonical_dir = std::fs::canonicalize(&dir)
         .map_err(|e| format!("Indicators dir error: {e}"))?;
-    // Write first, then verify canonical path
+    // Verify the target path (without following symlinks on the final component)
+    // Since filename is validated above, dir.join(filename) cannot escape dir
+    let expected_parent = path.parent().and_then(|p| std::fs::canonicalize(p).ok());
+    if expected_parent.as_ref() != Some(&canonical_dir) {
+        return Err("Invalid path".to_string());
+    }
     tokio::fs::write(&path, source.as_bytes()).await
         .map_err(|e| format!("Write failed: {e}"))?;
-    if let Ok(canonical_path) = std::fs::canonicalize(&path) {
-        if !canonical_path.starts_with(&canonical_dir) {
-            // Path traversal detected — remove the file and error
-            tokio::fs::remove_file(&path).await.ok();
-            return Err("Invalid path".to_string());
-        }
-    }
 
     Ok(serde_json::json!({
         "name": name,

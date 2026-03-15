@@ -1,6 +1,6 @@
 # ADR-006: Security Hardening
 
-**Status:** Implemented (Pass 6)
+**Status:** Implemented (Pass 7)
 **Date:** 2026-03-15
 **Updated:** 2026-03-15
 
@@ -150,11 +150,27 @@ Re-audited every Tauri command and frontend file after Pass 2 changes. Found and
 49. **`fetch_article` SSRF via localhost HTTPS**: Low-risk in desktop app context — no multi-tenant concern, user controls the URL. Documented
 50. **`windowZIndex` unbounded counter**: Cosmetic only — browser handles integer overflow gracefully
 
+## Pass 7 — Agent-Written Code Review
+
+Full review of ~4,000 lines of code written by automated agents across 4 parallel batches.
+
+### Medium → Fixed
+
+51. **Error messages leak API response body** (alpaca.rs): `get_most_active`, `get_top_movers`, `get_orderbook` all included `resp.text()` body in error messages. Changed to discard body, return generic HTTP status only
+52. **`save_custom_indicator` write-before-verify race** (main.rs:1389): File was written to disk before path canonicalization check. Attacker-crafted filename could briefly exist outside indicators dir. Fixed: verify path BEFORE write using parent canonicalization
+53. **CSV injection in `export_trade_history`** (main.rs:920): Values from Alpaca API (symbols, IDs) could contain commas or quotes, breaking CSV format. Added `csv_escape()` that quotes fields containing special characters
+
+### Accepted
+
+54. **`run_optimization` CPU cost**: 50K backtest combinations could take seconds. Acceptable for desktop app — capped at 50K max, UI shows progress
+55. **WebSocket auth in plaintext JSON**: Over WSS (encrypted wire). Credentials in `Zeroizing<String>`. Acceptable
+56. **Custom indicator `eval()`**: Frontend evaluates user's own local JS files. CSP blocks remote scripts. Source size capped at 1MB. Acceptable — same trust model as browser extensions
+
 ## Remaining Work (Future Passes)
 
 - ~~`zeroize` crate for API key memory cleanup~~ ✅ Done (Pass 7)
-- ~~Frontend rate limiting (debounce rapid-fire order clicks)~~ ✅ Done (Pass 7 — all 4 trading buttons)
-- ~~`cargo audit` and `npm audit`~~ ✅ Clean (0 vulnerabilities, 18 allowed GTK warnings)
+- ~~Frontend rate limiting (debounce rapid-fire order clicks)~~ ✅ Done (Pass 7)
+- ~~`cargo audit` and `npm audit`~~ ✅ Clean (0 vulnerabilities)
 - OS keychain for credential storage (via `keyring` crate)
 - Certificate pinning for Alpaca API endpoints (TLS 1.2+ min with rustls)
 - Restrict Tauri command allowlist per window (N/A — single window app)

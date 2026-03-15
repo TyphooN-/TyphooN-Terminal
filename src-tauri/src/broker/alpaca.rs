@@ -1387,8 +1387,8 @@ impl AlpacaBroker {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Most actives failed: HTTP {status}: {body}"));
+            let _ = resp.text().await;
+            return Err(format!("Most actives request failed: HTTP {status}"));
         }
 
         let json: serde_json::Value = resp.json().await
@@ -1416,8 +1416,8 @@ impl AlpacaBroker {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Top movers failed: HTTP {status}: {body}"));
+            let _ = resp.text().await;
+            return Err(format!("Top movers request failed: HTTP {status}"));
         }
 
         let json: serde_json::Value = resp.json().await
@@ -1443,8 +1443,8 @@ impl AlpacaBroker {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Orderbook failed: HTTP {status}: {body}"));
+            let _ = resp.text().await;
+            return Err(format!("Orderbook request failed: HTTP {status}"));
         }
 
         let json: serde_json::Value = resp.json().await
