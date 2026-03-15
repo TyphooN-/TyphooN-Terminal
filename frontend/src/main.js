@@ -62,6 +62,104 @@ let currentTimeframe = "1Hour";
 let lastPrice = 0;
 let mtfData = {};
 
+// ── Tab State ───────────────────────────────────────────────
+
+let tabs = []; // [{ id, symbol, timeframe, barCount, lastPrice, chartData }]
+let activeTabId = null;
+let nextTabId = 1;
+
+function createTab(symbol = "", timeframe = "1Hour") {
+  const id = nextTabId++;
+  const tab = { id, symbol, timeframe, barCount: "1000", lastPrice: 0, chartData: null };
+  tabs.push(tab);
+  renderTabs();
+  switchTab(id);
+  return tab;
+}
+
+function switchTab(id) {
+  // Save current tab state before switching
+  if (activeTabId !== null) {
+    const cur = tabs.find(t => t.id === activeTabId);
+    if (cur) {
+      cur.symbol = currentSymbol;
+      cur.timeframe = currentTimeframe;
+      cur.lastPrice = lastPrice;
+      cur.barCount = document.getElementById("bar-count").value;
+    }
+  }
+
+  activeTabId = id;
+  const tab = tabs.find(t => t.id === id);
+  if (!tab) return;
+
+  // Restore tab state to UI
+  document.getElementById("symbol-input").value = tab.symbol;
+  document.getElementById("timeframe-select").value = tab.timeframe;
+  document.getElementById("bar-count").value = tab.barCount;
+  currentSymbol = tab.symbol;
+  currentTimeframe = tab.timeframe;
+  lastPrice = tab.lastPrice;
+
+  renderTabs();
+
+  // Load chart if symbol set
+  if (tab.symbol) {
+    loadChart(tab.symbol, tab.timeframe);
+  } else {
+    // Clear chart
+    candleSeries.setData([]);
+    clearIndicators();
+  }
+}
+
+function closeTab(id) {
+  if (tabs.length <= 1) return; // Keep at least one tab
+  const idx = tabs.findIndex(t => t.id === id);
+  if (idx < 0) return;
+  tabs.splice(idx, 1);
+  if (activeTabId === id) {
+    // Switch to nearest tab
+    const newIdx = Math.min(idx, tabs.length - 1);
+    switchTab(tabs[newIdx].id);
+  }
+  renderTabs();
+}
+
+function renderTabs() {
+  const list = document.getElementById("tab-list");
+  list.innerHTML = "";
+  for (const tab of tabs) {
+    const el = document.createElement("div");
+    el.className = `chart-tab${tab.id === activeTabId ? " active" : ""}`;
+
+    const label = document.createElement("span");
+    label.textContent = tab.symbol || "New";
+    el.appendChild(label);
+
+    if (tabs.length > 1) {
+      const close = document.createElement("span");
+      close.className = "tab-close";
+      close.textContent = "×";
+      close.addEventListener("click", (e) => { e.stopPropagation(); closeTab(tab.id); });
+      el.appendChild(close);
+    }
+
+    el.addEventListener("click", () => switchTab(tab.id));
+    list.appendChild(el);
+  }
+}
+
+function updateTabLabel() {
+  if (activeTabId === null) return;
+  const tab = tabs.find(t => t.id === activeTabId);
+  if (tab && currentSymbol) {
+    tab.symbol = currentSymbol;
+    tab.timeframe = currentTimeframe;
+    renderTabs();
+  }
+}
+
 // ── Chart Setup ─────────────────────────────────────────────
 
 function initChart() {
@@ -1173,6 +1271,7 @@ async function loadChart(symbol, timeframe) {
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
     setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
     loading.classList.add("hidden");
+    updateTabLabel();
 
     // Start live bar polling (update latest bar every 10s)
     if (liveBarInterval) clearInterval(liveBarInterval);
@@ -1862,4 +1961,28 @@ document.addEventListener("DOMContentLoaded", () => {
   setupButtons();
   setupKeyboard();
   setupConnect();
+  setupTabs();
 });
+
+function setupTabs() {
+  // Create initial tab
+  createTab();
+
+  // "+" button creates new tab
+  document.getElementById("btn-new-tab").addEventListener("click", () => {
+    createTab();
+    document.getElementById("symbol-input").focus();
+  });
+
+  // Keyboard: Ctrl+T new tab, Ctrl+W close tab
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.key === "t") {
+      e.preventDefault();
+      document.getElementById("btn-new-tab").click();
+    }
+    if (e.ctrlKey && e.key === "w") {
+      e.preventDefault();
+      if (activeTabId !== null) closeTab(activeTabId);
+    }
+  });
+}
