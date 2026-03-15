@@ -495,12 +495,12 @@ impl AlpacaBroker {
 
                 consecutive_empty = 0;
 
-                // Detect stale chunk: if we got very few bars and they're all the same
-                // timestamp as what we already have, we've reached the end of available data
-                if chunk_count <= 5 && !all_bars.is_empty() {
-                    let last_existing = all_bars.last().map(|b| &b.timestamp);
-                    let last_new = chunk_bars.last().map(|b| &b.timestamp);
-                    if last_existing == last_new {
+                // Detect stale chunk: if the chunk's last bar date matches what we already
+                // have, we've reached the end of available data (API keeps returning same bars)
+                if !all_bars.is_empty() {
+                    let last_existing_date = all_bars.last().map(|b| &b.timestamp[..10.min(b.timestamp.len())]);
+                    let last_new_date = chunk_bars.last().map(|b| &b.timestamp[..10.min(b.timestamp.len())]);
+                    if last_existing_date == last_new_date {
                         tracing::info!("{} @ {}: reached end of data ({} bars total)", symbol, actual_tf, all_bars.len());
                         break;
                     }
