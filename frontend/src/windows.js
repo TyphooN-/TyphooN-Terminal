@@ -102,49 +102,43 @@ export function createWindow(opts) {
     e.preventDefault();
   });
 
-  document.addEventListener("mousemove", (e) => {
+  const onDragMove = (e) => {
     if (!isDragging) return;
     let newX = e.clientX - dragOffsetX;
     let newY = e.clientY - dragOffsetY;
-    // Keep within viewport
     newX = Math.max(0, Math.min(newX, window.innerWidth - 100));
     newY = Math.max(0, Math.min(newY, window.innerHeight - 50));
     win.style.left = newX + "px";
     win.style.top = newY + "px";
 
-    // Snap zones (edge tiling)
     win.classList.remove("snap-left", "snap-right", "snap-top");
     if (e.clientX < 20) win.classList.add("snap-left");
     else if (e.clientX > window.innerWidth - 20) win.classList.add("snap-right");
     else if (e.clientY < 20) win.classList.add("snap-top");
-  });
+  };
 
-  document.addEventListener("mouseup", (e) => {
+  const onDragUp = (e) => {
     if (!isDragging) return;
     isDragging = false;
     win.classList.remove("dragging");
 
-    // Apply snap
     if (win.classList.contains("snap-left")) {
-      win.style.left = "0";
-      win.style.top = "0";
-      win.style.width = "50vw";
-      win.style.height = "100vh";
+      win.style.left = "0"; win.style.top = "0";
+      win.style.width = "50vw"; win.style.height = "100vh";
       win.classList.remove("snap-left");
     } else if (win.classList.contains("snap-right")) {
-      win.style.left = "50vw";
-      win.style.top = "0";
-      win.style.width = "50vw";
-      win.style.height = "100vh";
+      win.style.left = "50vw"; win.style.top = "0";
+      win.style.width = "50vw"; win.style.height = "100vh";
       win.classList.remove("snap-right");
     } else if (win.classList.contains("snap-top")) {
-      win.style.left = "0";
-      win.style.top = "0";
-      win.style.width = "100vw";
-      win.style.height = "100vh";
+      win.style.left = "0"; win.style.top = "0";
+      win.style.width = "100vw"; win.style.height = "100vh";
       win.classList.remove("snap-top");
     }
-  });
+  };
+
+  document.addEventListener("mousemove", onDragMove);
+  document.addEventListener("mouseup", onDragUp);
 
   // ── Resizing ──────────────────────────────────────────────
   let isResizing = false, resizeStartX = 0, resizeStartY = 0, startW = 0, startH = 0;
@@ -160,17 +154,20 @@ export function createWindow(opts) {
     e.stopPropagation();
   });
 
-  document.addEventListener("mousemove", (e) => {
+  const onResizeMove = (e) => {
     if (!isResizing) return;
     const newW = Math.max(250, startW + (e.clientX - resizeStartX));
     const newH = Math.max(150, startH + (e.clientY - resizeStartY));
     win.style.width = newW + "px";
     win.style.height = newH + "px";
-  });
+  };
 
-  document.addEventListener("mouseup", () => {
+  const onResizeUp = () => {
     isResizing = false;
-  });
+  };
+
+  document.addEventListener("mousemove", onResizeMove);
+  document.addEventListener("mouseup", onResizeUp);
 
   // ── Controls ──────────────────────────────────────────────
   let isMinimized = false, isMaximized = false;
@@ -204,6 +201,11 @@ export function createWindow(opts) {
   });
 
   btnClose.addEventListener("click", () => {
+    // Clean up document-level listeners to prevent leaks
+    document.removeEventListener("mousemove", onDragMove);
+    document.removeEventListener("mouseup", onDragUp);
+    document.removeEventListener("mousemove", onResizeMove);
+    document.removeEventListener("mouseup", onResizeUp);
     win.remove();
     delete activeWindows[id];
     if (opts.onClose) opts.onClose();

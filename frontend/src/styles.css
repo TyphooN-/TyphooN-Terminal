@@ -168,15 +168,6 @@ body {
   color: #fff;
 }
 
-#btn-load-chart {
-  background: #0f3460;
-  border: 1px solid #555;
-  color: #8ff;
-  padding: 4px 12px;
-  cursor: pointer;
-  font-family: inherit;
-}
-
 .loading {
   font-size: 11px;
   color: #ff8;

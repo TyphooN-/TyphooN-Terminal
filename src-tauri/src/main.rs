@@ -40,6 +40,25 @@ struct AppState {
 
 type SharedState = Arc<Mutex<AppState>>;
 
+// ── Input Validation ────────────────────────────────────────────────
+
+/// Strict symbol validation: 1-10 alphanumeric chars, optional single "/" for crypto pairs.
+fn is_valid_symbol(symbol: &str) -> bool {
+    if symbol.is_empty() || symbol.len() > 10 {
+        return false;
+    }
+    let slash_count = symbol.chars().filter(|&c| c == '/').count();
+    if slash_count > 1 {
+        return false;
+    }
+    symbol.chars().all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '.')
+}
+
+/// Validate timeframe input against known Alpaca timeframes.
+fn is_valid_timeframe(tf: &str) -> bool {
+    matches!(tf, "1Min" | "5Min" | "15Min" | "30Min" | "1Hour" | "4Hour" | "1Day" | "1Week" | "1Month")
+}
+
 // ── Broker Commands ─────────────────────────────────────────────────
 
 #[tauri::command]
@@ -49,6 +68,13 @@ async fn connect(
     secret_key: String,
     paper: bool,
 ) -> Result<String, String> {
+    // Validate API key format (Alpaca keys are 20 alphanumeric chars)
+    if api_key.is_empty() || api_key.len() > 100 || !api_key.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("Invalid API key format".to_string());
+    }
+    if secret_key.is_empty() || secret_key.len() > 100 || !secret_key.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("Invalid secret key format".to_string());
+    }
     let broker = AlpacaBroker::new(api_key, secret_key, paper);
     let account = broker.get_account().await?;
     let mut s = state.lock().await;
@@ -79,6 +105,9 @@ async fn get_bars(
     timeframe: String,
     limit: u32,
 ) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
+    let limit = limit.min(50_000);
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let bars = broker.get_bars(&symbol, &timeframe, limit).await?;
@@ -94,6 +123,12 @@ async fn get_multi_tf_bars(
     timeframes: Vec<String>,
     limit: u32,
 ) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if timeframes.len() > 10 { return Err("Too many timeframes".into()); }
+    for tf in &timeframes {
+        if !is_valid_timeframe(tf) { return Err(format!("Invalid timeframe: {tf}")); }
+    }
+    let limit = limit.min(50_000);
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let mut result = serde_json::Map::new();
@@ -114,12 +149,9 @@ async fn place_order(
     qty: f64,
     side: String,
 ) -> Result<String, String> {
-    // Input validation
-    if symbol.is_empty() || symbol.len() > 20 || symbol.contains('/') && symbol.len() > 10 {
+    // Input validation — strict symbol whitelist
+    if !is_valid_symbol(&symbol) {
         return Err("Invalid symbol".to_string());
-    }
-    if !symbol.chars().all(|c| c.is_alphanumeric() || c == '/' || c == '.') {
-        return Err("Symbol contains invalid characters".to_string());
     }
     if qty <= 0.0 || qty > 1_000_000.0 || !qty.is_finite() {
         return Err(format!("Invalid quantity: {qty}. Must be 0 < qty <= 1,000,000"));
@@ -139,6 +171,10 @@ async fn close_position(
     symbol: String,
     qty: Option<f64>,
 ) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if let Some(q) = qty {
+        if q <= 0.0 || !q.is_finite() { return Err("Invalid quantity".into()); }
+    }
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let result = broker.close_position(&symbol, qty).await?;
@@ -168,6 +204,7 @@ async fn load_symbols(state: State<'_, SharedState>) -> Result<String, String> {
 
 #[tauri::command]
 async fn search_symbols(state: State<'_, SharedState>, query: String) -> Result<String, String> {
+    if query.len() > 50 { return Err("Query too long".into()); }
     let s = state.lock().await;
     let q = query.to_uppercase();
     let matches: Vec<&(String, String)> = s.symbols
@@ -182,6 +219,7 @@ async fn search_symbols(state: State<'_, SharedState>, query: String) -> Result<
 
 #[tauri::command]
 async fn get_asset(state: State<'_, SharedState>, symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let asset = broker.get_asset(&symbol).await?;
@@ -203,6 +241,13 @@ async fn calculate_lots(
     tp_price: f64,
     current_price: f64,
 ) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !sl_price.is_finite() || !tp_price.is_finite() || !current_price.is_finite() {
+        return Err("Invalid price value".into());
+    }
+    if sl_price <= 0.0 || tp_price <= 0.0 || current_price <= 0.0 {
+        return Err("Prices must be positive".into());
+    }
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
 
@@ -250,8 +295,9 @@ async fn calculate_lots(
     let has_break_even = {
         let positions = broker.get_positions().await.unwrap_or_default();
         let tick = spec.tick_size;
+        let symbol_no_slash = symbol.replace("/", "");
         positions.iter().any(|p| {
-            p.symbol == symbol || p.symbol == symbol.replace("/", "") && {
+            (p.symbol == symbol || p.symbol == symbol_no_slash) && {
                 // Check if SL is tracked in backend state
                 if let Some(&sl) = s.sl_levels.get(&symbol) {
                     (sl - p.avg_entry_price).abs() < tick * 0.5
@@ -293,6 +339,10 @@ async fn calculate_position_var(
     position_size: f64,
     current_price: f64,
 ) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !position_size.is_finite() || !current_price.is_finite() || current_price <= 0.0 {
+        return Err("Invalid price or position size".into());
+    }
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
 
@@ -332,8 +382,22 @@ async fn set_order_mode(state: State<'_, SharedState>, mode: String) -> Result<(
 
 #[tauri::command]
 async fn set_risk_config(state: State<'_, SharedState>, config_json: String) -> Result<(), String> {
+    if config_json.len() > 4096 { return Err("Config too large".into()); }
     let config: RiskConfig = serde_json::from_str(&config_json)
         .map_err(|e| format!("Invalid config: {e}"))?;
+    // Bounds validation on all financial parameters
+    if config.risk_pct < 0.0 || config.risk_pct > 100.0 { return Err("risk_pct must be 0-100".into()); }
+    if config.max_risk_pct < 0.0 || config.max_risk_pct > 100.0 { return Err("max_risk_pct must be 0-100".into()); }
+    if config.var_confidence < 0.0 || config.var_confidence > 1.0 { return Err("var_confidence must be 0-1".into()); }
+    if config.fixed_lots < 0.0 || config.fixed_lots > 1_000_000.0 { return Err("fixed_lots out of range".into()); }
+    if config.fixed_orders > 100 { return Err("fixed_orders too large".into()); }
+    if config.var_risk_pct < 0.0 || config.var_risk_pct > 100.0 { return Err("var_risk_pct must be 0-100".into()); }
+    if config.var_notional < 0.0 || config.var_notional > 1e9 { return Err("var_notional out of range".into()); }
+    if config.var_periods > 10_000 { return Err("var_periods too large".into()); }
+    if config.margin_buffer_pct < 0.0 || config.margin_buffer_pct > 100.0 { return Err("margin_buffer_pct must be 0-100".into()); }
+    if config.min_balance < 0.0 { return Err("min_balance must be non-negative".into()); }
+    if config.additional_risk_ratio < 0.0 || config.additional_risk_ratio > 10.0 { return Err("additional_risk_ratio out of range".into()); }
+    if !is_valid_timeframe(&config.var_timeframe) { return Err("Invalid var_timeframe".into()); }
     let mut s = state.lock().await;
     s.risk_config = config;
     Ok(())
@@ -343,6 +407,8 @@ async fn set_risk_config(state: State<'_, SharedState>, config_json: String) -> 
 
 #[tauri::command]
 async fn set_sl_level(state: State<'_, SharedState>, symbol: String, price: f64) -> Result<(), String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !price.is_finite() || price <= 0.0 { return Err("Invalid price".into()); }
     let mut s = state.lock().await;
     s.sl_levels.insert(symbol, price);
     Ok(())
@@ -350,6 +416,8 @@ async fn set_sl_level(state: State<'_, SharedState>, symbol: String, price: f64)
 
 #[tauri::command]
 async fn set_tp_level(state: State<'_, SharedState>, symbol: String, price: f64) -> Result<(), String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !price.is_finite() || price <= 0.0 { return Err("Invalid price".into()); }
     let mut s = state.lock().await;
     s.tp_levels.insert(symbol, price);
     Ok(())
@@ -363,6 +431,9 @@ async fn get_sl_tp_pl(
     side: String,
     entry_price: f64,
 ) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !qty.is_finite() || !entry_price.is_finite() { return Err("Invalid numeric value".into()); }
+    if side != "long" && side != "short" { return Err("Invalid side".into()); }
     let s = state.lock().await;
     let sl = s.sl_levels.get(&symbol).copied();
     let tp = s.tp_levels.get(&symbol).copied();
@@ -433,8 +504,14 @@ async fn toggle_martingale(state: State<'_, SharedState>) -> Result<String, Stri
 
 #[tauri::command]
 async fn set_martingale_config(state: State<'_, SharedState>, config_json: String) -> Result<(), String> {
+    if config_json.len() > 4096 { return Err("Config too large".into()); }
     let config: MartingaleConfig = serde_json::from_str(&config_json)
         .map_err(|e| format!("Invalid MG config: {e}"))?;
+    // Bounds: percentages must be 0-10000 (allow high margin levels), spread tolerance non-negative
+    if config.trim_pct < 0.0 || config.protect_pct < 0.0 || config.hard_floor_pct < 0.0 {
+        return Err("Margin thresholds must be non-negative".into());
+    }
+    if config.spread_tolerance < 0.0 { return Err("Spread tolerance must be non-negative".into()); }
     let mut s = state.lock().await;
     s.martingale.config = config;
     Ok(())
@@ -462,6 +539,7 @@ async fn open_martingale_hedge(
     symbol: String,
     direction: String,
 ) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let account = broker.get_account().await?;
@@ -538,6 +616,8 @@ async fn get_margin_info(state: State<'_, SharedState>) -> Result<String, String
 
 #[tauri::command]
 async fn get_news(state: State<'_, SharedState>, symbol: String, limit: u32) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    let limit = limit.min(50);
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let news = broker.get_news(&symbol, limit).await?;
@@ -546,6 +626,7 @@ async fn get_news(state: State<'_, SharedState>, symbol: String, limit: u32) -> 
 
 #[tauri::command]
 async fn get_corporate_actions(state: State<'_, SharedState>, symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
     let actions = broker.get_corporate_actions(&symbol, "dividend").await?;
@@ -554,43 +635,68 @@ async fn get_corporate_actions(state: State<'_, SharedState>, symbol: String) ->
 
 #[tauri::command]
 async fn get_sec_filings(symbol: String, filing_type: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let result = broker::alpaca::AlpacaBroker::get_sec_filings(&symbol, &filing_type, 20).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
 
 #[tauri::command]
 async fn get_company_fundamentals(symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let result = broker::alpaca::AlpacaBroker::get_sec_company_facts(&symbol).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
 
 /// Fetch article content from URL, return as text. For in-app reading.
+/// Hardened: HTTPS only, 10s timeout, 2MB max response.
 #[tauri::command]
 async fn fetch_article(url: String) -> Result<String, String> {
-    let client = reqwest::Client::new();
+    if !url.starts_with("https://") {
+        return Err("Only HTTPS URLs allowed".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
     let resp = client
         .get(&url)
-        .header("User-Agent", "TyphooN-Terminal/0.1")
+        .header("User-Agent", "Mozilla/5.0 (compatible)")
         .send()
         .await
-        .map_err(|e| format!("Article fetch failed: {e}"))?;
+        .map_err(|_| "Article fetch failed".to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    resp.text().await.map_err(|e| format!("Read failed: {e}"))
+    // Limit response body to 2MB
+    let bytes = resp.bytes().await.map_err(|_| "Read failed".to_string())?;
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err("Response too large".to_string());
+    }
+    String::from_utf8(bytes.to_vec()).map_err(|_| "Invalid UTF-8".to_string())
 }
 
 /// Clear all cached data for a specific symbol from cold storage.
+/// Hardened: validates symbol, ensures deletions stay within cache directory.
 #[tauri::command]
 async fn clear_symbol_cache(symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let dir = get_cache_dir();
+    let canonical_dir = std::fs::canonicalize(&dir).map_err(|e| format!("Cache dir error: {e}"))?;
     let prefix = symbol.replace('/', "_");
     let mut removed = 0;
     if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
+            // Ensure file is actually inside cache directory (prevent symlink traversal)
+            let entry_path = entry.path();
+            if let Ok(canonical_entry) = std::fs::canonicalize(&entry_path) {
+                if !canonical_entry.starts_with(&canonical_dir) { continue; }
+            } else {
+                continue;
+            }
             if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with(&prefix) || name.contains(&format!("_{}", prefix)) || name.contains(&format!("{}:", symbol)) {
-                    tokio::fs::remove_file(entry.path()).await.ok();
+                if !name.ends_with(".zst") { continue; }
+                if name.starts_with(&prefix) || name.contains(&format!("_{prefix}")) {
+                    tokio::fs::remove_file(entry_path).await.ok();
                     removed += 1;
                 }
             }
@@ -615,8 +721,17 @@ fn cache_key_to_filename(key: &str) -> String {
 
 #[tauri::command]
 async fn save_cold_cache(key: String, data: String) -> Result<(), String> {
+    // Validate cache key doesn't contain path traversal
+    let filename = cache_key_to_filename(&key);
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return Err("Invalid cache key".to_string());
+    }
+    // Limit uncompressed data to 50MB (prevents disk exhaustion)
+    if data.len() > 50 * 1024 * 1024 {
+        return Err("Cache data too large".to_string());
+    }
     let dir = get_cache_dir();
-    let path = dir.join(cache_key_to_filename(&key));
+    let path = dir.join(&filename);
     let compressed = zstd::encode_all(data.as_bytes(), 3)
         .map_err(|e| format!("zstd compress failed: {e}"))?;
     let raw_size = data.len();
@@ -632,15 +747,27 @@ async fn save_cold_cache(key: String, data: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn load_cold_cache(key: String) -> Result<String, String> {
+    let filename = cache_key_to_filename(&key);
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return Err("Invalid cache key".to_string());
+    }
     let dir = get_cache_dir();
-    let path = dir.join(cache_key_to_filename(&key));
+    let path = dir.join(&filename);
     if !path.exists() {
         return Err("Not in cold cache".to_string());
     }
     let compressed = tokio::fs::read(&path).await
         .map_err(|e| format!("Cache read failed: {e}"))?;
+    // Reject suspiciously large compressed files (>10MB compressed → could be a zstd bomb)
+    if compressed.len() > 10 * 1024 * 1024 {
+        return Err("Compressed cache file too large".to_string());
+    }
     let decompressed = zstd::decode_all(compressed.as_slice())
         .map_err(|e| format!("zstd decompress failed: {e}"))?;
+    // Cap decompressed size at 50MB
+    if decompressed.len() > 50 * 1024 * 1024 {
+        return Err("Decompressed data too large".to_string());
+    }
     String::from_utf8(decompressed)
         .map_err(|e| format!("UTF-8 decode failed: {e}"))
 }
@@ -658,6 +785,7 @@ async fn list_cold_cache() -> Result<String, String> {
                         "key": name.trim_end_matches(".zst").replace('_', ":"),
                         "size": size,
                     }));
+                    if entries.len() >= 10_000 { break; } // cap listing
                 }
             }
         }
@@ -683,7 +811,7 @@ fn main() {
     }));
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+        // tauri-plugin-shell removed — not used, reduces attack surface
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             // Broker

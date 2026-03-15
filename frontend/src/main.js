@@ -138,7 +138,7 @@ function closeTab(id) {
 
 function renderTabs() {
   const list = document.getElementById("tab-list");
-  list.innerHTML = "";
+  list.textContent = "";
   for (const tab of tabs) {
     const el = document.createElement("div");
     el.className = `chart-tab${tab.id === activeTabId ? " active" : ""}`;
@@ -313,7 +313,6 @@ function createSLLine(price) {
     lineStyle: 0,
     axisLabelVisible: true,
     title: "SL",
-    draggable: true,
   });
   if (currentSymbol) invoke("set_sl_level", { symbol: currentSymbol, price }).catch(() => {});
 }
@@ -327,7 +326,6 @@ function createTPLine(price) {
     lineStyle: 0,
     axisLabelVisible: true,
     title: "TP",
-    draggable: true,
   });
   if (currentSymbol) invoke("set_tp_level", { symbol: currentSymbol, price }).catch(() => {});
 }
@@ -340,6 +338,96 @@ function removeTPLine() {
 }
 function getSLPrice() { return slLine ? slLine.options().price : null; }
 function getTPPrice() { return tpLine ? tpLine.options().price : null; }
+
+// ── Draggable SL/TP Lines (MT5-style) ──────────────────────
+// Double-click near a line to grab it, drag to new price, release to set.
+// Uses chart price scale coordinateToPrice/priceToCoordinate for pixel↔price.
+
+let draggingLine = null; // "sl" | "tp" | null
+
+function setupLineDrag() {
+  const container = document.getElementById("chart-container");
+  const HIT_TOLERANCE = 8; // pixels
+
+  function getLineYCoord(line) {
+    if (!line || !candleSeries) return null;
+    const price = line.options().price;
+    const priceScale = candleSeries.priceScale();
+    // Use series coordinate conversion
+    const y = candleSeries.priceToCoordinate(price);
+    return y;
+  }
+
+  function hitTestLine(clientY) {
+    const rect = container.getBoundingClientRect();
+    const y = clientY - rect.top;
+
+    const slY = slLine ? getLineYCoord(slLine) : null;
+    const tpY = tpLine ? getLineYCoord(tpLine) : null;
+
+    const slDist = slY !== null ? Math.abs(y - slY) : Infinity;
+    const tpDist = tpY !== null ? Math.abs(y - tpY) : Infinity;
+
+    if (slDist <= HIT_TOLERANCE && slDist <= tpDist) return "sl";
+    if (tpDist <= HIT_TOLERANCE) return "tp";
+    return null;
+  }
+
+  // Double-click to start dragging
+  container.addEventListener("dblclick", (e) => {
+    const hit = hitTestLine(e.clientY);
+    if (!hit) return;
+    draggingLine = hit;
+    container.style.cursor = "ns-resize";
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  // Drag — update line price in real-time
+  container.addEventListener("mousemove", (e) => {
+    if (!draggingLine) {
+      // Show resize cursor when hovering near a line
+      const hit = hitTestLine(e.clientY);
+      container.style.cursor = hit ? "ns-resize" : "";
+      return;
+    }
+    const rect = container.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const newPrice = candleSeries.coordinateToPrice(y);
+    if (newPrice === null || newPrice <= 0) return;
+
+    const line = draggingLine === "sl" ? slLine : tpLine;
+    if (line) {
+      line.applyOptions({ price: newPrice });
+    }
+  });
+
+  // Release — finalize price and sync to backend
+  container.addEventListener("mouseup", () => {
+    if (!draggingLine) return;
+    const line = draggingLine === "sl" ? slLine : tpLine;
+    if (line && currentSymbol) {
+      const finalPrice = line.options().price;
+      if (draggingLine === "sl") {
+        invoke("set_sl_level", { symbol: currentSymbol, price: finalPrice }).catch(() => {});
+        log(`SL moved to ${finalPrice.toFixed(4)}`, "info");
+      } else {
+        invoke("set_tp_level", { symbol: currentSymbol, price: finalPrice }).catch(() => {});
+        log(`TP moved to ${finalPrice.toFixed(4)}`, "info");
+      }
+    }
+    draggingLine = null;
+    container.style.cursor = "";
+  });
+
+  // Cancel drag if mouse leaves chart
+  container.addEventListener("mouseleave", () => {
+    if (draggingLine) {
+      draggingLine = null;
+      container.style.cursor = "";
+    }
+  });
+}
 
 // ══════════════════════════════════════════════════════════════
 // INDICATOR CALCULATIONS — Exact ports from MQL5 NNFX system
@@ -1777,7 +1865,7 @@ function setupAutocomplete() {
       try {
         const resultJson = await invoke("search_symbols", { query: q });
         const matches = JSON.parse(resultJson);
-        list.innerHTML = "";
+        list.textContent = "";
         autocompleteIndex = -1;
         if (matches.length === 0) {
           list.classList.add("hidden");
@@ -1798,7 +1886,7 @@ function setupAutocomplete() {
             e.preventDefault();
             input.value = sym;
             list.classList.add("hidden");
-            document.getElementById("btn-load-chart").click();
+            triggerLoad();
           });
           list.appendChild(item);
         }
@@ -1824,7 +1912,7 @@ function setupAutocomplete() {
         input.value = items[autocompleteIndex].querySelector(".sym").textContent;
         list.classList.add("hidden");
       }
-      document.getElementById("btn-load-chart").click();
+      triggerLoad();
     } else if (e.key === "Escape") {
       list.classList.add("hidden");
     }
@@ -1835,27 +1923,31 @@ function setupAutocomplete() {
   });
 }
 
+// ── Chart Trigger ────────────────────────────────────────────
+
+const CRYPTO_MAP = {
+  "BTC": "BTC/USD", "ETH": "ETH/USD", "SOL": "SOL/USD", "DOGE": "DOGE/USD",
+  "ADA": "ADA/USD", "XRP": "XRP/USD", "DOT": "DOT/USD", "AVAX": "AVAX/USD",
+  "LINK": "LINK/USD", "MATIC": "MATIC/USD", "UNI": "UNI/USD", "SHIB": "SHIB/USD",
+  "LTC": "LTC/USD", "BCH": "BCH/USD", "AAVE": "AAVE/USD", "SUSHI": "SUSHI/USD",
+};
+
+function triggerLoad() {
+  let symbol = document.getElementById("symbol-input").value.trim().toUpperCase();
+  const tf = document.getElementById("timeframe-select").value;
+  if (!symbol) return;
+  if (CRYPTO_MAP[symbol]) symbol = CRYPTO_MAP[symbol];
+  document.getElementById("symbol-input").value = symbol;
+  document.getElementById("symbol-autocomplete").classList.add("hidden");
+  loadChart(symbol, tf);
+}
+
 // ── Button Handlers ─────────────────────────────────────────
 
 function setupButtons() {
-  document.getElementById("btn-load-chart").addEventListener("click", () => {
-    let symbol = document.getElementById("symbol-input").value.trim().toUpperCase();
-    const tf = document.getElementById("timeframe-select").value;
-    if (!symbol) return;
-
-    // Auto-detect common crypto tickers → Alpaca format (BTC → BTC/USD)
-    const cryptoMap = {
-      "BTC": "BTC/USD", "ETH": "ETH/USD", "SOL": "SOL/USD", "DOGE": "DOGE/USD",
-      "ADA": "ADA/USD", "XRP": "XRP/USD", "DOT": "DOT/USD", "AVAX": "AVAX/USD",
-      "LINK": "LINK/USD", "MATIC": "MATIC/USD", "UNI": "UNI/USD", "SHIB": "SHIB/USD",
-      "LTC": "LTC/USD", "BCH": "BCH/USD", "AAVE": "AAVE/USD", "SUSHI": "SUSHI/USD",
-    };
-    if (cryptoMap[symbol]) symbol = cryptoMap[symbol];
-
-    document.getElementById("symbol-input").value = symbol;
-    document.getElementById("symbol-autocomplete").classList.add("hidden");
-    loadChart(symbol, tf);
-  });
+  // Auto-load on timeframe or bar count change
+  document.getElementById("timeframe-select").addEventListener("change", triggerLoad);
+  document.getElementById("bar-count").addEventListener("change", triggerLoad);
 
   // Buy Lines: SL = lowest visible, TP = highest visible
   document.getElementById("btn-buy-lines").addEventListener("click", () => {
@@ -1881,7 +1973,9 @@ function setupButtons() {
   });
 
   // ── Open Trade — calculates lots via backend, confirms, places ──
+  let orderInFlight = false;
   document.getElementById("btn-trade").addEventListener("click", async () => {
+    if (orderInFlight) return; // prevent double-fire
     const sl = getSLPrice();
     const tp = getTPPrice();
     if (!sl || !tp || !currentSymbol) {
@@ -1907,13 +2001,19 @@ function setupButtons() {
 
       if (!confirm(msg)) return;
 
-      for (let i = 0; i < calc.count; i++) {
-        await invoke("place_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side });
+      orderInFlight = true;
+      try {
+        for (let i = 0; i < calc.count; i++) {
+          await invoke("place_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side });
+        }
+        await invoke("set_sl_level", { symbol: currentSymbol, price: sl });
+        await invoke("set_tp_level", { symbol: currentSymbol, price: tp });
+        updateDashboard();
+      } finally {
+        orderInFlight = false;
       }
-      await invoke("set_sl_level", { symbol: currentSymbol, price: sl });
-      await invoke("set_tp_level", { symbol: currentSymbol, price: tp });
-      updateDashboard();
     } catch (e) {
+      orderInFlight = false;
       alert(`Order failed: ${e}`);
     }
   });
@@ -2214,7 +2314,7 @@ function setupConnect() {
 async function loadNewsAndFundamentals(symbol) {
   const panel = document.getElementById("news-content");
   if (!panel) return;
-  panel.innerHTML = "";
+  panel.textContent = "";
 
   // Load fundamentals (SEC EDGAR — cached, show summary + click to expand)
   try {
@@ -2399,7 +2499,7 @@ function setupLogPanel() {
 
   clear.addEventListener("click", (e) => {
     e.stopPropagation();
-    document.getElementById("log-content").innerHTML = "";
+    document.getElementById("log-content").textContent = "";
   });
 
   log("TyphooN Terminal initialized", "info");
@@ -2559,6 +2659,7 @@ function restoreSession() {
 document.addEventListener("DOMContentLoaded", () => {
   loadBarCacheFromDisk().then(() => migrateLocalStorageCache());
   initChart();
+  setupLineDrag();
   setupPaneResizers();
   setupLogPanel();
   setupNewsPanel();

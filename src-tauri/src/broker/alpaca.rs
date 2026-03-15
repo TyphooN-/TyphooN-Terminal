@@ -143,7 +143,10 @@ impl AlpacaBroker {
             LIVE_BASE.to_string()
         };
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             base_url,
             api_key,
             secret_key,
@@ -153,8 +156,12 @@ impl AlpacaBroker {
 
     fn headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("APCA-API-KEY-ID", self.api_key.parse().unwrap());
-        headers.insert("APCA-API-SECRET-KEY", self.secret_key.parse().unwrap());
+        if let Ok(key) = self.api_key.parse() {
+            headers.insert("APCA-API-KEY-ID", key);
+        }
+        if let Ok(secret) = self.secret_key.parse() {
+            headers.insert("APCA-API-SECRET-KEY", secret);
+        }
         headers
     }
 
@@ -253,10 +260,12 @@ impl AlpacaBroker {
     }
 
     pub async fn close_position(&self, symbol: &str, qty: Option<f64>) -> Result<OrderResult, String> {
+        // Alpaca position endpoint uses symbol without slash (BTC/USD → BTCUSD)
+        let encoded_symbol = symbol.replace('/', "%2F");
         let url = if let Some(q) = qty {
-            format!("{}/v2/positions/{}?qty={}", self.base_url, symbol, q)
+            format!("{}/v2/positions/{}?qty={}", self.base_url, encoded_symbol, q)
         } else {
-            format!("{}/v2/positions/{}", self.base_url, symbol)
+            format!("{}/v2/positions/{}", self.base_url, encoded_symbol)
         };
 
         let resp = self
@@ -294,9 +303,10 @@ impl AlpacaBroker {
     // ── Asset Info ───────────────────────────────────────────────────
 
     pub async fn get_asset(&self, symbol: &str) -> Result<AssetInfo, String> {
+        let encoded_symbol = symbol.replace('/', "%2F");
         let resp = self
             .client
-            .get(format!("{}/v2/assets/{}", self.base_url, symbol))
+            .get(format!("{}/v2/assets/{}", self.base_url, encoded_symbol))
             .headers(self.headers())
             .send()
             .await
@@ -340,8 +350,8 @@ impl AlpacaBroker {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("News failed ({}): {}", status, body));
+            let _ = resp.text().await; // consume body without exposing it
+            return Err(format!("News request failed: HTTP {}", status));
         }
 
         let json: serde_json::Value = resp.json().await
@@ -381,53 +391,79 @@ impl AlpacaBroker {
 
     /// Fetch recent SEC filings for a company via EDGAR API (free, no auth).
     /// CIK lookup by ticker, then fetch filings.
+    /// Hardened: uses .query() to prevent URL parameter injection.
     pub async fn get_sec_filings(ticker: &str, filing_type: &str, _limit: u32) -> Result<serde_json::Value, String> {
-        let client = Client::new();
+        // Validate ticker format (alphanumeric only, no injection)
+        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err("Invalid ticker for SEC lookup".to_string());
+        }
+        // Validate filing type
+        if !matches!(filing_type, "10-K" | "10-Q" | "8-K" | "S-1" | "DEF 14A" | "13F" | "4" | "SC 13D" | "SC 13G") {
+            return Err("Invalid filing type".to_string());
+        }
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("HTTP client error: {e}"))?;
 
-        // Step 1: Look up CIK from ticker
+        let quoted_ticker = format!("\"{}\"", ticker);
         let cik_resp = client
-            .get("https://efts.sec.gov/LATEST/search-index?q=%22".to_owned() + ticker + "%22&dateRange=custom&startdt=2020-01-01&forms=" + filing_type)
-            .header("User-Agent", "TyphooN-Terminal/0.1 (contact@marketwizardry.org)")
+            .get("https://efts.sec.gov/LATEST/search-index")
+            .query(&[
+                ("q", quoted_ticker.as_str()),
+                ("dateRange", "custom"),
+                ("startdt", "2020-01-01"),
+                ("forms", filing_type),
+            ])
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
             .send()
             .await
-            .map_err(|e| format!("SEC EDGAR request failed: {e}"))?;
+            .map_err(|_| "SEC EDGAR request failed".to_string())?;
 
         if !cik_resp.status().is_success() {
-            // Fallback: use full-text search
             let search_resp = client
-                .get(format!(
-                    "https://efts.sec.gov/LATEST/search-index?q={}&forms={}&dateRange=custom&startdt=2020-01-01",
-                    ticker, filing_type
-                ))
-                .header("User-Agent", "TyphooN-Terminal/0.1 (contact@marketwizardry.org)")
+                .get("https://efts.sec.gov/LATEST/search-index")
+                .query(&[
+                    ("q", ticker),
+                    ("forms", filing_type),
+                    ("dateRange", "custom"),
+                    ("startdt", "2020-01-01"),
+                ])
+                .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
                 .send()
                 .await
-                .map_err(|e| format!("SEC EDGAR search failed: {e}"))?;
+                .map_err(|_| "SEC EDGAR search failed".to_string())?;
 
             let json: serde_json::Value = search_resp.json().await
-                .map_err(|e| format!("SEC EDGAR parse failed: {e}"))?;
+                .map_err(|_| "SEC EDGAR parse failed".to_string())?;
             return Ok(json);
         }
 
         let json: serde_json::Value = cik_resp.json().await
-            .map_err(|e| format!("SEC EDGAR parse failed: {e}"))?;
+            .map_err(|_| "SEC EDGAR parse failed".to_string())?;
         Ok(json)
     }
 
     /// Fetch company facts from SEC EDGAR (financials, shares outstanding, etc.)
+    /// Hardened: timeout, validated ticker, generic error messages.
     pub async fn get_sec_company_facts(ticker: &str) -> Result<serde_json::Value, String> {
-        let client = Client::new();
+        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err("Invalid ticker for SEC lookup".to_string());
+        }
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| format!("HTTP client error: {e}"))?;
 
-        // First resolve ticker to CIK via SEC ticker map
         let tickers_resp = client
             .get("https://www.sec.gov/files/company_tickers.json")
-            .header("User-Agent", "TyphooN-Terminal/0.1 (contact@marketwizardry.org)")
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
             .send()
             .await
-            .map_err(|e| format!("SEC ticker map failed: {e}"))?;
+            .map_err(|_| "SEC ticker map request failed".to_string())?;
 
         let tickers: serde_json::Value = tickers_resp.json().await
-            .map_err(|e| format!("SEC ticker map parse failed: {e}"))?;
+            .map_err(|_| "SEC ticker map parse failed".to_string())?;
 
         // Find CIK for ticker
         let upper_ticker = ticker.to_uppercase();
@@ -447,7 +483,7 @@ impl AlpacaBroker {
         // Fetch company facts
         let facts_resp = client
             .get(format!("https://data.sec.gov/api/xbrl/companyfacts/{}.json", cik_padded))
-            .header("User-Agent", "TyphooN-Terminal/0.1 (contact@marketwizardry.org)")
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
             .send()
             .await
             .map_err(|e| format!("SEC company facts failed: {e}"))?;

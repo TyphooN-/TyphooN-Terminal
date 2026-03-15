@@ -273,6 +273,9 @@ impl MartingaleState {
     /// Calculate Open MG position size.
     /// Returns (per_side_qty, safe_gross).
     pub fn calc_open_mg_size(&self, equity: f64) -> (f64, f64) {
+        if self.config.spread_tolerance <= 0.0 || equity <= 0.0 {
+            return (0.0, 0.0);
+        }
         let safe_gross = (equity / self.config.spread_tolerance).floor();
         let per_side = (safe_gross / 2.0).floor();
         (per_side, safe_gross)

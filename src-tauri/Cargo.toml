@@ -7,18 +7,14 @@ license = "GPL-3.0"
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-shell = "2"
+# tauri-plugin-shell removed — not used, reduces attack surface
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
-futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
-toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-url = "2"
 zstd = "0.13"
 
 [build-dependencies]

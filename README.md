@@ -10,12 +10,13 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 
 | Feature | Description |
 |---|---|
-| **Charting** | Candlestick charts with 10K+ bar support, multi-timeframe indicator overlays, separate indicator panes |
+| **Charting** | Candlestick charts with 10K+ bar support, auto-load on timeframe change, multi-timeframe indicator overlays, separate indicator panes |
 | **Risk Management** | 4 order modes: Standard (% risk), Fixed lots, Dynamic (min-balance scaling), VaR (percent/notional) |
 | **Hedged Martingale** | Forward-looking TRIM, dynamic PROTECT, Open MG one-click setup, equity TP, unwind — full port of TyphooN EA v1.420 |
-| **Order Placement** | Draggable SL/TP lines on chart, one-click order with automatic lot calculation, keyboard shortcuts |
+| **Order Placement** | Double-click-to-drag SL/TP lines on chart, one-click order with automatic lot calculation, keyboard shortcuts |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), secure local credential storage |
 | **Indicators** | Full NNFX system ported from MQL5 + standard indicators (RSI, MACD, Bollinger, etc.) |
+| **Security** | 6-pass audit (50 findings): input validation, HTTP timeouts, path traversal protection, CSP, config bounds, resource limits |
 
 ---
 
@@ -99,7 +100,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
 | [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
 | [INDICATOR_PORTING.md](INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
-| [docs/adr/](docs/adr/) | Architecture Decision Records (11 ADRs) |
+| [docs/adr/](docs/adr/) | Architecture Decision Records (14 ADRs) |
 
 ### ADR Index
 
@@ -110,12 +111,15 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [003](docs/adr/003-bar-data-caching.md) | Three-tier cache (memory + IndexedDB + zstd) |
 | [004](docs/adr/004-mtf-indicators.md) | Multi-timeframe indicator support |
 | [005](docs/adr/005-indicator-visual-parity.md) | Indicator visual parity with MT5 |
-| [006](docs/adr/006-security-hardening.md) | Security hardening findings and fixes |
+| [006](docs/adr/006-security-hardening.md) | Security hardening (6 passes, 50 findings) |
 | [007](docs/adr/007-bar-prefetch-strategy.md) | Background bar pre-fetch strategy |
 | [008](docs/adr/008-multi-tab-charts.md) | Multi-tab chart support |
 | [009](docs/adr/009-rate-limiter.md) | Centralized rate limiter |
 | [010](docs/adr/010-multi-account.md) | Multi-account credential management |
 | [011](docs/adr/011-resizable-panes.md) | Resizable chart panes |
+| [012](docs/adr/012-news-earnings-dividends.md) | News, earnings, and dividend data |
+| [013](docs/adr/013-auto-load-timeframe.md) | Auto-load on timeframe/bar count change |
+| [014](docs/adr/014-draggable-sl-tp-lines.md) | Draggable SL/TP lines (MT5-style) |
 
 ---
 

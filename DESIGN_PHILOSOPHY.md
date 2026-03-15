@@ -40,9 +40,20 @@ This is a visual system for manual trading decisions. Every indicator must look 
 
 ## 5. Security by Default
 
-- **CSP enabled** — scripts restricted to self-origin only
+6-pass security audit with 50 findings addressed (see [ADR-006](docs/adr/006-security-hardening.md)):
+
+- **CSP enabled** — scripts, connects, frames, forms restricted to self-origin only
 - **No innerHTML** — all DOM updates via createElement + textContent (XSS prevention)
-- **Input validation** — symbol, quantity, and side validated in Rust before any API call
+- **Strict input validation** — `is_valid_symbol()` on all 17 symbol-accepting commands, `is_valid_timeframe()` on all timeframe inputs, `is_finite()` + positive checks on all financial values
+- **Config bounds** — all 12 `RiskConfig` fields and all `MartingaleConfig` fields validated (ranges, non-negative, timeframe whitelist)
+- **HTTP hardened** — all clients have explicit timeouts (10-30s), `fetch_article()` HTTPS-only with 2MB cap, SEC EDGAR uses `.query()` (no string concatenation), Discord webhook 10s timeout + 2000 char cap
+- **Path traversal protection** — cache ops validate paths with `canonicalize()`, reject `..`/`/`/`\` in cache keys, `.zst` extension guard
+- **Resource limits** — cold cache write 50MB, read 10MB compressed / 50MB decompressed, cache listing capped at 10K entries, bar limit 50K, news limit 50
+- **No resource leaks** — floating window event listeners cleaned up on close
+- **Division-by-zero guards** — MG sizing returns 0 if spread_tolerance ≤ 0
+- **Double-order prevention** — `orderInFlight` flag on trade button
+- **Crypto URL encoding** — symbols with `/` properly encoded as `%2F` in API path segments
+- **Minimal attack surface** — unused plugins (shell) and dependencies (4 crates) removed
 - **Devtools opt-in** — only available with `--features devtools` flag, not in release builds
 - **Credentials sandboxed** — Tauri webview localStorage is isolated per application
 

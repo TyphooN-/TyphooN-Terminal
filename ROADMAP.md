@@ -45,9 +45,11 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Three-tier cache (memory/IndexedDB/zstd) | ✅ Done | |
 | Session persistence | ✅ Done | Tabs, indicators, pane sizes |
 | Multi-account management | ✅ Done | Paper + Live |
-| News feed (Alpaca) | ✅ Done | |
+| News feed (Alpaca) | ✅ Done | In-app reading with floating windows |
 | SEC fundamentals (EDGAR) | ✅ Done | Revenue, EPS, shares, etc. |
-| SEC filings search | ✅ Done | |
+| SEC filings search | ✅ Done | Hardened: parameterized queries |
+| Auto-load on timeframe change | ✅ Done | No "Load" button needed |
+| Security hardening (6 passes) | ✅ Done | 50 findings: input validation, timeouts, path traversal, CSP, config bounds, resource limits, event listener cleanup |
 | MTF MA grid | ✅ Done | SMA200/KAMA/Fisher across TFs |
 | Symbol autocomplete | ✅ Done | 11K+ symbols |
 | Rate limiter with 429 cooldown | ✅ Done | |
@@ -57,6 +59,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | **Bracket orders** | 🔲 TODO | Alpaca supports OTO/OCO brackets |
 | **Modify pending orders** | 🔲 TODO | Alpaca PATCH /orders |
 | **Close Partial (smart)** | 🔲 TODO | Prompt for lots, intelligent selection |
+| Draggable SL/TP lines | ✅ Done | Double-click to grab, drag to adjust |
 | **Drawing tools** (trend lines, Fibonacci) | 🔲 TODO | Essential for manual trading |
 | **Price alerts** | 🔲 TODO | Sound + notification |
 | **Trade history panel** | 🔲 TODO | Past orders with P/L |

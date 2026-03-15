@@ -39,7 +39,7 @@ TyphooN-Terminal replaces MetaTrader 5 as a local desktop trading terminal. It m
 - **Memory usage** — Electron apps consume 200-500MB RAM at baseline. Tauri uses the system's existing WebKitGTK (Linux) or WebView2 (Windows) — no extra browser process
 - **Startup time** — Electron cold-starts in 2-5 seconds (loading Chromium). Tauri starts in <1 second
 - **No Rust** — Electron's backend is Node.js (JavaScript). Risk calculations, margin math, and VaR need to be fast and correct. JavaScript's floating-point handling and lack of strong typing make financial math error-prone. Rust's type system and zero-cost abstractions are ideal for this domain
-- **Security** — Electron's full Chromium has a massive attack surface. Tauri's webview is sandboxed with explicit IPC permissions
+- **Security** — Electron's full Chromium has a massive attack surface. Tauri's webview is sandboxed with explicit IPC permissions, CSP headers, and strict input validation
 
 #### 3. Qt/C++ (rejected)
 

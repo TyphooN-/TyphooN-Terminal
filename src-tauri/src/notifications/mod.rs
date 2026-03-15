@@ -16,8 +16,15 @@ pub async fn send_discord(webhook_url: &str, message: &str) -> Result<(), String
     if webhook_url.is_empty() || !webhook_url.starts_with("https://discord.com/api/webhooks/") {
         return Err("Invalid Discord webhook URL".to_string());
     }
+    // Discord max message length is 2000 chars
+    if message.len() > 2000 {
+        return Err("Message too long (max 2000 chars)".to_string());
+    }
 
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
     let body = json!({ "content": message });
 
     let resp = client
