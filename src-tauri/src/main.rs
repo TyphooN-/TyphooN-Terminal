@@ -246,13 +246,29 @@ async fn calculate_lots(
         0.0
     };
 
+    // Break-even detection: check if any existing position on this symbol has SL ≈ entry
+    let has_break_even = {
+        let positions = broker.get_positions().await.unwrap_or_default();
+        let tick = spec.tick_size;
+        positions.iter().any(|p| {
+            p.symbol == symbol || p.symbol == symbol.replace("/", "") && {
+                // Check if SL is tracked in backend state
+                if let Some(&sl) = s.sl_levels.get(&symbol) {
+                    (sl - p.avg_entry_price).abs() < tick * 0.5
+                } else {
+                    false
+                }
+            }
+        })
+    };
+
     let (lots, count) = risk::calculate_lots(
         &s.risk_config,
         &spec,
         balance,
         equity,
         sl_distance,
-        false, // TODO: break-even detection from positions
+        has_break_even,
         var_per_lot,
     );
 
