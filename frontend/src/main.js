@@ -68,9 +68,9 @@ let tabs = []; // [{ id, symbol, timeframe, barCount, lastPrice, chartData }]
 let activeTabId = null;
 let nextTabId = 1;
 
-function createTab(symbol = "", timeframe = "1Hour") {
+function createTab(symbol = "", timeframe = "1Month") {
   const id = nextTabId++;
-  const tab = { id, symbol, timeframe, barCount: "1000", lastPrice: 0, chartData: null };
+  const tab = { id, symbol, timeframe, barCount: "50000", lastPrice: 0, chartData: null };
   tabs.push(tab);
   renderTabs();
   switchTab(id);
