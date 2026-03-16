@@ -2489,6 +2489,7 @@ async function updateDashboard() {
     checkMultiConditionAlerts();
     checkEquityProtection();
     checkDividendAlerts();
+    syncMTFGridLivePrice();
 
     // Bid/Ask spread (non-blocking — don't fail dashboard if quote fails)
     if (currentSymbol) {
@@ -7568,6 +7569,27 @@ function resizeMTFGrid() {
       cell.fisherChart.resize(cell.fisherDiv.clientWidth, cell.fisherDiv.clientHeight);
       cell.volumeChart.resize(cell.volumeDiv.clientWidth, cell.volumeDiv.clientHeight);
     }
+  }
+}
+
+// Sync live price across all MTF grid cells — update last bar's close to current price
+function syncMTFGridLivePrice() {
+  if (!mtfGridActive || mtfGridCells.length === 0 || lastPrice <= 0) return;
+  const now = Math.floor(Date.now() / 1000);
+  for (const cell of mtfGridCells) {
+    try {
+      const data = cell.candleSeries.data();
+      if (!data || data.length === 0) continue;
+      const lastBar = data[data.length - 1];
+      // Update the last bar with current live price
+      cell.candleSeries.update({
+        time: lastBar.time,
+        open: lastBar.open,
+        high: Math.max(lastBar.high, lastPrice),
+        low: Math.min(lastBar.low, lastPrice),
+        close: lastPrice,
+      });
+    } catch (_) {}
   }
 }
 
