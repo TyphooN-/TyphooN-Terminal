@@ -298,25 +298,26 @@ function setupTooltip() {
     // OHLCV from candle series
     const ohlc = param.seriesData.get(candleSeries);
     if (ohlc) {
+      const dp = lastPrice > 100 ? 2 : lastPrice > 1 ? 4 : 6; // auto decimal places
       if (ohlc.open !== undefined) {
-        lines.push(`O: ${ohlc.open.toFixed(4)}  H: ${ohlc.high.toFixed(4)}`);
-        lines.push(`L: ${ohlc.low.toFixed(4)}  C: ${ohlc.close.toFixed(4)}`);
+        lines.push(`O: ${ohlc.open.toFixed(dp)}  H: ${ohlc.high.toFixed(dp)}`);
+        lines.push(`L: ${ohlc.low.toFixed(dp)}  C: ${ohlc.close.toFixed(dp)}`);
       } else if (ohlc.value !== undefined) {
-        lines.push(`Price: ${ohlc.value.toFixed(4)}`);
+        lines.push(`Price: ${ohlc.value.toFixed(dp)}`);
       }
-      // Find volume from currentChartData by matching time
       const bar = currentChartData.find(d => d.time === param.time);
-      if (bar && bar.volume !== undefined) {
-        lines.push(`Vol: ${bar.volume.toLocaleString()}`);
-      }
+      if (bar && bar.volume) lines.push(`Vol: ${bar.volume.toLocaleString()}`);
     }
 
-    // All active indicator values
+    // Active indicator values (limit to 8 to avoid overflow)
+    let indCount = 0;
     for (const [key, series] of Object.entries(indicatorSeries)) {
+      if (indCount >= 8) break;
       const data = param.seriesData.get(series);
       if (data && data.value !== undefined) {
-        const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-        lines.push(`${label}: ${data.value.toFixed(4)}`);
+        const label = key.replace(/_\d+$/,"").replace(/_/g," ").substring(0,12);
+        lines.push(`${label}: ${data.value.toFixed(2)}`);
+        indCount++;
       }
     }
 
@@ -324,7 +325,7 @@ function setupTooltip() {
     for (const [key, series] of Object.entries(fisherSeries)) {
       const data = param.seriesData.get(series);
       if (data && data.value !== undefined) {
-        lines.push(`Fisher: ${data.value.toFixed(4)}`);
+        lines.push(`Fisher: ${data.value.toFixed(2)}`);
         break; // just show one fisher value
       }
     }
@@ -7394,7 +7395,12 @@ async function loadMTFCellData(cellInfo, symbol) {
     if (chartData.length === 0) return;
 
     cellInfo.candleSeries.setData(chartData);
-    cellInfo.chart.timeScale().fitContent();
+    // Zoom to last ~80 bars (MT5-style visible range, not all data)
+    const visibleBars = Math.min(80, chartData.length);
+    cellInfo.chart.timeScale().setVisibleLogicalRange({
+      from: chartData.length - visibleBars,
+      to: chartData.length,
+    });
 
     // Fisher — color-segmented like main chart (green bullish, red bearish)
     if (chartData.length > 32) {
