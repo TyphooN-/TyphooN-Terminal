@@ -359,6 +359,15 @@ function rebuildMainSeries(chartType) {
       upColor: "#00ff00",
       downColor: "#ff0000",
     });
+  } else if (chartType === "heikin-ashi") {
+    candleSeries = chart.addCandlestickSeries({
+      upColor: "#00e676",
+      downColor: "#ff1744",
+      borderDownColor: "#ff1744",
+      borderUpColor: "#00e676",
+      wickDownColor: "#ff1744",
+      wickUpColor: "#00e676",
+    });
   } else {
     // Default: candlestick
     candleSeries = chart.addCandlestickSeries({
@@ -377,6 +386,8 @@ function rebuildMainSeries(chartType) {
   if (currentChartData && currentChartData.length > 0) {
     if (chartType === "line") {
       candleSeries.setData(currentChartData.map(d => ({ time: d.time, value: d.close })));
+    } else if (chartType === "heikin-ashi") {
+      candleSeries.setData(calcHeikinAshi(currentChartData));
     } else {
       candleSeries.setData(currentChartData);
     }
@@ -403,6 +414,7 @@ function createSLLine(price) {
     title: "SL",
   });
   if (currentSymbol) invoke("set_sl_level", { symbol: currentSymbol, price }).catch(() => {});
+  updateRiskRewardOverlay();
 }
 
 function createTPLine(price) {
@@ -416,6 +428,7 @@ function createTPLine(price) {
     title: "TP",
   });
   if (currentSymbol) invoke("set_tp_level", { symbol: currentSymbol, price }).catch(() => {});
+  updateRiskRewardOverlay();
 }
 
 function removeSLLine() {
@@ -4394,6 +4407,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "CORR", desc: "Correlation Matrix (open positions)", action: cmdCorrelation },
   { name: "MONTECARLO", desc: "Monte Carlo Risk of Ruin", action: cmdMonteCarlo },
   { name: "ALERTS", desc: "Multi-Condition Alert Manager", action: cmdMultiAlerts },
+  { name: "JOURNAL", desc: "Trade Journal (log & review)", action: cmdTradeJournal },
   { name: "SETTINGS", desc: "API Keys & Configuration", action: cmdSettings },
   { name: "FRED", desc: "FRED Economic Data (rates, CPI, GDP)", action: cmdFRED },
   { name: "AI", desc: "AI Trading Assistant (Claude/GPT)", action: cmdAIChat },
@@ -7591,6 +7605,154 @@ function syncMTFGridLivePrice() {
       });
     } catch (_) {}
   }
+}
+
+// ── Risk/Reward Overlay (visual P&L zones on chart) ──────────
+
+let rrOverlaySeries = [];
+
+function updateRiskRewardOverlay() {
+  // Clear previous
+  for (const s of rrOverlaySeries) { try { chart.removeSeries(s); } catch (_) {} }
+  rrOverlaySeries = [];
+
+  const sl = getSLPrice();
+  const tp = getTPPrice();
+  if (!sl || !tp || !lastPrice || lastPrice <= 0) return;
+
+  const isBuy = tp > sl;
+
+  // Loss zone (entry → SL) — red
+  const lossFill = chart.addBaselineSeries({
+    topFillColor1: "#f4433620", topFillColor2: "#f4433620",
+    bottomFillColor1: "#f4433620", bottomFillColor2: "#f4433620",
+    topLineColor: "transparent", bottomLineColor: "transparent",
+    lineWidth: 0,
+    baseValue: { type: "price", price: sl },
+    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+  });
+  // Profit zone (entry → TP) — green
+  const profitFill = chart.addBaselineSeries({
+    topFillColor1: "#4caf5020", topFillColor2: "#4caf5020",
+    bottomFillColor1: "#4caf5020", bottomFillColor2: "#4caf5020",
+    topLineColor: "transparent", bottomLineColor: "transparent",
+    lineWidth: 0,
+    baseValue: { type: "price", price: lastPrice },
+    lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+  });
+
+  // Use last 20 bars as visible range for the overlay
+  if (currentChartData.length > 1) {
+    const recent = currentChartData.slice(-20);
+    lossFill.setData(recent.map(d => ({ time: d.time, value: lastPrice })));
+    profitFill.setData(recent.map(d => ({ time: d.time, value: tp })));
+    rrOverlaySeries.push(lossFill, profitFill);
+  }
+}
+
+// ── Trade Journal ────────────────────────────────────────────
+
+const JOURNAL_KEY = "typhoon_journal";
+
+function loadJournal() {
+  try { return JSON.parse(localStorage.getItem(JOURNAL_KEY) || "[]"); } catch { return []; }
+}
+function saveJournal(entries) { localStorage.setItem(JOURNAL_KEY, JSON.stringify(entries)); }
+
+function cmdTradeJournal() {
+  const win = createWindow({ title: "Trade Journal", width: 600, height: 500 });
+  const entries = loadJournal();
+  const c = document.createElement("div");
+  c.style.cssText = "display:flex;flex-direction:column;height:100%;";
+
+  // Add entry form
+  const form = document.createElement("div");
+  form.style.cssText = "display:flex;gap:4px;padding:4px;border-bottom:1px solid #333;";
+  const symbolInp = document.createElement("input");
+  symbolInp.value = currentSymbol || "";
+  symbolInp.placeholder = "Symbol";
+  symbolInp.style.cssText = "width:70px;background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
+  const sideInp = document.createElement("select");
+  sideInp.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;";
+  sideInp.innerHTML = "";
+  for (const v of ["BUY","SELL"]) { const o = document.createElement("option"); o.value = v; o.textContent = v; sideInp.appendChild(o); }
+  const noteInp = document.createElement("input");
+  noteInp.placeholder = "Notes (setup, emotion, reason)";
+  noteInp.style.cssText = "flex:1;background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "+";
+  addBtn.style.cssText = "padding:4px 8px;background:#0a5f38;color:#8f8;border:1px solid #555;cursor:pointer;font-family:inherit;";
+  addBtn.addEventListener("click", () => {
+    const entry = {
+      date: new Date().toISOString().slice(0,16).replace("T"," "),
+      symbol: symbolInp.value.trim().toUpperCase() || currentSymbol,
+      side: sideInp.value,
+      price: lastPrice,
+      sl: getSLPrice(),
+      tp: getTPPrice(),
+      note: noteInp.value.trim(),
+    };
+    entries.unshift(entry);
+    saveJournal(entries);
+    noteInp.value = "";
+    renderList();
+    log(`Journal: ${entry.side} ${entry.symbol} @ $${entry.price}`, "ok");
+  });
+  form.appendChild(symbolInp);
+  form.appendChild(sideInp);
+  form.appendChild(noteInp);
+  form.appendChild(addBtn);
+  c.appendChild(form);
+
+  // Entry list
+  const list = document.createElement("div");
+  list.style.cssText = "flex:1;overflow-y:auto;font-size:10px;";
+  c.appendChild(list);
+
+  function renderList() {
+    list.textContent = "";
+    for (let i = 0; i < entries.length && i < 100; i++) {
+      const e = entries[i];
+      const row = document.createElement("div");
+      row.style.cssText = "padding:4px 6px;border-bottom:1px solid #111;display:flex;justify-content:space-between;";
+      const left = document.createElement("span");
+      left.style.color = e.side === "BUY" ? "#4caf50" : "#f44336";
+      left.textContent = `${e.date} ${e.side} ${e.symbol} @ $${e.price?.toFixed?.(2) || "?"}`;
+      const right = document.createElement("span");
+      right.style.color = "#888";
+      right.textContent = e.note || "";
+      const del = document.createElement("span");
+      del.textContent = "×";
+      del.style.cssText = "color:#f44;cursor:pointer;margin-left:8px;";
+      del.addEventListener("click", () => { entries.splice(i, 1); saveJournal(entries); renderList(); });
+      row.appendChild(left);
+      row.appendChild(right);
+      row.appendChild(del);
+      list.appendChild(row);
+    }
+    if (entries.length === 0) { list.textContent = "No journal entries yet."; list.style.color = "#555"; list.style.padding = "12px"; }
+  }
+  renderList();
+
+  win.contentElement.textContent = "";
+  win.appendElement(c);
+}
+
+// ── Heikin-Ashi Calculation ──────────────────────────────────
+
+function calcHeikinAshi(data) {
+  if (data.length === 0) return [];
+  const result = [];
+  let prevHA = { open: data[0].open, close: (data[0].open + data[0].high + data[0].low + data[0].close) / 4 };
+  for (let i = 0; i < data.length; i++) {
+    const haClose = (data[i].open + data[i].high + data[i].low + data[i].close) / 4;
+    const haOpen = i === 0 ? data[i].open : (prevHA.open + prevHA.close) / 2;
+    const haHigh = Math.max(data[i].high, haOpen, haClose);
+    const haLow = Math.min(data[i].low, haOpen, haClose);
+    result.push({ time: data[i].time, open: haOpen, high: haHigh, low: haLow, close: haClose, volume: data[i].volume });
+    prevHA = { open: haOpen, close: haClose };
+  }
+  return result;
 }
 
 function closeMTFGrid() {
