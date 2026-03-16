@@ -4376,6 +4376,9 @@ const CMD_PALETTE_COMMANDS = [
   { name: "CORR", desc: "Correlation Matrix (open positions)", action: cmdCorrelation },
   { name: "MONTECARLO", desc: "Monte Carlo Risk of Ruin", action: cmdMonteCarlo },
   { name: "ALERTS", desc: "Multi-Condition Alert Manager", action: cmdMultiAlerts },
+  { name: "SETTINGS", desc: "API Keys & Configuration", action: cmdSettings },
+  { name: "FRED", desc: "FRED Economic Data (rates, CPI, GDP)", action: cmdFRED },
+  { name: "AI", desc: "AI Trading Assistant (Claude/GPT)", action: cmdAIChat },
   { name: "TILE", desc: "Tile all floating windows", action: () => tileWindows() },
   { name: "CLOSE", desc: "Close all floating windows", action: () => closeAllWindows() },
 ];
@@ -7531,6 +7534,120 @@ function closeMTFGrid() {
 
   // Show normal chart stack
   document.getElementById("chart-stack").style.display = "";
+}
+
+// ── Settings Panel (API Keys) ────────────────────────────────
+
+const SETTINGS_KEY = "typhoon_settings";
+function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"); } catch { return {}; } }
+function saveSettings(s) { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }
+
+function cmdSettings() {
+  const win = createWindow({ title: "Settings — API Keys", width: 450, height: 380 });
+  const settings = loadSettings();
+  const c = document.createElement("div");
+  c.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:4px;";
+  const fields = [
+    { key: "fredApiKey", label: "FRED API Key", ph: "32-char from fred.stlouisfed.org" },
+    { key: "aiProvider", label: "AI Provider", ph: "anthropic or openai", val: settings.aiProvider || "anthropic" },
+    { key: "aiApiKey", label: "AI API Key", ph: "sk-ant-... or sk-..." },
+    { key: "aiModel", label: "AI Model (opt)", ph: "claude-haiku-4-5-20251001 / gpt-4o-mini" },
+  ];
+  const inputs = {};
+  for (const f of fields) {
+    const lbl = document.createElement("label");
+    lbl.textContent = f.label;
+    lbl.style.cssText = "display:block;color:#888;font-size:10px;margin-bottom:1px;";
+    const inp = document.createElement("input");
+    inp.type = f.key.includes("Key") ? "password" : "text";
+    inp.placeholder = f.ph;
+    inp.value = f.val || settings[f.key] || "";
+    inp.style.cssText = "width:100%;background:#111;color:#fff;border:1px solid #555;padding:5px;font-family:inherit;font-size:11px;box-sizing:border-box;";
+    c.appendChild(lbl); c.appendChild(inp);
+    inputs[f.key] = inp;
+  }
+  const btn = document.createElement("button");
+  btn.textContent = "Save Settings";
+  btn.style.cssText = "padding:8px;background:#0a5f38;color:#8f8;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-weight:bold;";
+  btn.addEventListener("click", () => {
+    const s = {}; for (const [k, inp] of Object.entries(inputs)) s[k] = inp.value.trim();
+    saveSettings(s); log("Settings saved", "ok"); win.close();
+  });
+  c.appendChild(btn);
+  const note = document.createElement("div");
+  note.style.cssText = "font-size:9px;color:#555;";
+  note.textContent = "See API_KEYS.md for free signup links.";
+  c.appendChild(note);
+  win.contentElement.textContent = ""; win.appendElement(c);
+}
+
+// ── FRED Economic Data ───────────────────────────────────────
+
+function cmdFRED() {
+  const s = loadSettings();
+  if (!s.fredApiKey) { alert("FRED API key required. Ctrl+K → SETTINGS.\nFree: https://fred.stlouisfed.org/docs/api/api_key.html"); return; }
+  const win = createWindow({ title: "FRED Economic Data", width: 500, height: 400 });
+  const presets = [
+    ["DFF","Fed Funds"],["CPIAUCSL","CPI"],["UNRATE","Unemployment"],["GDP","GDP"],
+    ["DGS10","10Y Treasury"],["DGS2","2Y Treasury"],["T10Y2Y","10Y-2Y Spread"],["VIXCLS","VIX"],["M2SL","M2 Supply"],
+  ];
+  const c = document.createElement("div"); c.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:4px;";
+  const row = document.createElement("div"); row.style.cssText = "display:flex;gap:3px;flex-wrap:wrap;";
+  for (const [id,name] of presets) {
+    const b = document.createElement("button");
+    b.textContent = name; b.style.cssText = "padding:2px 5px;background:#1a3a5a;color:#8cf;border:1px solid #555;cursor:pointer;font-size:9px;font-family:inherit;border-radius:2px;";
+    b.addEventListener("click", async () => {
+      win.setTitle(`FRED — ${name}...`);
+      try {
+        const json = await invoke("fetch_fred_series", { seriesId: id, apiKey: s.fredApiKey, limit: 50 });
+        const data = JSON.parse(json); const obs = data.observations || [];
+        win.setTitle(`FRED — ${name} (${obs.length})`);
+        const tbl = document.createElement("table"); tbl.className = "fw-table"; tbl.style.fontSize = "10px";
+        for (const o of obs) { const tr = document.createElement("tr"); const td1 = document.createElement("td"); td1.className = "fw-label"; td1.textContent = o.date; const td2 = document.createElement("td"); td2.className = "fw-value"; td2.textContent = o.value; tr.appendChild(td1); tr.appendChild(td2); tbl.appendChild(tr); }
+        dataDiv.textContent = ""; dataDiv.appendChild(tbl);
+      } catch (e) { win.setTitle(`FRED — ${e}`); }
+    });
+    row.appendChild(b);
+  }
+  c.appendChild(row);
+  const dataDiv = document.createElement("div"); dataDiv.style.cssText = "overflow-y:auto;max-height:320px;";
+  c.appendChild(dataDiv);
+  win.contentElement.textContent = ""; win.appendElement(c);
+}
+
+// ── AI Chat ──────────────────────────────────────────────────
+
+function cmdAIChat() {
+  const s = loadSettings();
+  if (!s.aiApiKey) { alert("AI API key required. Ctrl+K → SETTINGS.\nAnthropic: https://console.anthropic.com/"); return; }
+  const win = createWindow({ title: "AI Trading Assistant", width: 500, height: 420 });
+  const c = document.createElement("div"); c.style.cssText = "display:flex;flex-direction:column;height:100%;";
+  const msgs = document.createElement("div"); msgs.style.cssText = "flex:1;overflow-y:auto;padding:4px;font-size:11px;line-height:1.5;";
+  c.appendChild(msgs);
+  const addMsg = (role, text) => {
+    const d = document.createElement("div");
+    d.style.cssText = `margin:4px 0;padding:6px 8px;border-radius:4px;white-space:pre-wrap;${role === "user" ? "background:#1a3a5a;color:#8cf;text-align:right;" : "background:#111;color:#ccc;"}`;
+    d.textContent = text; msgs.appendChild(d); msgs.scrollTop = msgs.scrollHeight;
+  };
+  addMsg("assistant", `Connected to ${s.aiProvider || "anthropic"}. Ask about positions, risk, or market analysis.`);
+  const ir = document.createElement("div"); ir.style.cssText = "display:flex;gap:4px;padding:4px 0;";
+  const inp = document.createElement("input"); inp.placeholder = "Ask about market, positions, risk...";
+  inp.style.cssText = "flex:1;background:#111;color:#fff;border:1px solid #555;padding:6px;font-family:inherit;font-size:11px;";
+  const sendBtn = document.createElement("button"); sendBtn.textContent = "Send";
+  sendBtn.style.cssText = "padding:6px 12px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;font-family:inherit;";
+  const send = async () => {
+    const msg = inp.value.trim(); if (!msg) return; inp.value = "";
+    addMsg("user", msg); addMsg("assistant", "Thinking...");
+    try {
+      const ctx = `Symbol: ${currentSymbol}, TF: ${currentTimeframe}, Price: $${lastPrice}, SL: ${getSLPrice() || "none"}, TP: ${getTPPrice() || "none"}`;
+      const reply = await invoke("ai_chat", { apiKey: s.aiApiKey, provider: s.aiProvider || "anthropic", model: s.aiModel || "", message: msg, context: ctx });
+      msgs.lastChild.textContent = reply;
+    } catch (e) { msgs.lastChild.textContent = `Error: ${e}`; msgs.lastChild.style.color = "#f44"; }
+  };
+  sendBtn.addEventListener("click", send);
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  ir.appendChild(inp); ir.appendChild(sendBtn); c.appendChild(ir);
+  win.contentElement.textContent = ""; win.appendElement(c);
 }
 
 function setupTabs() {

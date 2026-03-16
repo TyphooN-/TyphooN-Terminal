@@ -44,6 +44,8 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Portfolio Breakdown** | Positions grouped by asset class with $ value/P&L |
 | **Drawing Properties** | Right-click drawings: color picker, line width, delete |
 | **Earnings Calendar** | Corporate actions table via command palette |
+| **FRED Economic Data** | Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply (free API key) |
+| **AI Trading Assistant** | Claude (Anthropic) or GPT (OpenAI) with market context |
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |

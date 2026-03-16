@@ -143,11 +143,9 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Dividend alerts | ✅ Done | Auto-notify 5 days before ex-dividend |
 | Correlation matrix | ✅ Done | Ctrl+K → CORR, pairwise heatmap from cached bars |
 
-### Future — Implementable (Not Yet Started)
-
-| Feature | Effort | Notes |
-|---|---|---|
-| Congress trading data | 8h | Needs Congress API key (free registration) |
+| FRED economic data | ✅ Done | Fed Funds, CPI, GDP, Treasury yields, VIX, M2 (user provides free API key) |
+| AI trading assistant | ✅ Done | Claude (Anthropic) or GPT (OpenAI) chat with market context |
+| Settings panel | ✅ Done | Ctrl+K → SETTINGS for API key management |
 
 ### Blocked — Needs External Resources
 
@@ -158,9 +156,8 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Dark pool / options flow | No free data source |
 | World equity indices | Alpaca is US-only |
 | Forex currency matrix | Alpaca has crypto not forex |
-| Historical market stats | Needs user's FRED API key |
-| AI chat | Needs LLM API key |
-| Community chat | Needs WebSocket server |
+| Congress trading | Free APIs locked down; QuiverQuant requires paid tier |
+| Community chat | Needs WebSocket server infrastructure |
 
 ---
 

@@ -1309,6 +1309,131 @@ async fn stop_streaming(state: State<'_, SharedState>) -> Result<(), String> {
     Ok(())
 }
 
+// ── FRED API Commands ───────────────────────────────────────────────
+
+#[tauri::command]
+async fn fetch_fred_series(series_id: String, api_key: String, limit: Option<u32>) -> Result<String, String> {
+    if series_id.is_empty() || series_id.len() > 50 || !series_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err("Invalid FRED series ID".into());
+    }
+    if api_key.is_empty() || api_key.len() > 64 || !api_key.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("Invalid FRED API key".into());
+    }
+    let limit = limit.unwrap_or(100).min(10000);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let resp = client
+        .get("https://api.stlouisfed.org/fred/series/observations")
+        .query(&[
+            ("series_id", series_id.as_str()),
+            ("api_key", api_key.as_str()),
+            ("file_type", "json"),
+            ("sort_order", "desc"),
+            ("limit", &limit.to_string()),
+        ])
+        .send()
+        .await
+        .map_err(|_| "FRED request failed".to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let _ = resp.text().await;
+        return Err(format!("FRED request failed: HTTP {status}"));
+    }
+
+    let json: serde_json::Value = resp.json().await
+        .map_err(|_| "FRED parse failed".to_string())?;
+    Ok(serde_json::to_string(&json).unwrap())
+}
+
+// ── AI Chat Command ─────────────────────────────────────────────────
+
+#[tauri::command]
+async fn ai_chat(
+    api_key: String,
+    provider: String,
+    model: String,
+    message: String,
+    context: Option<String>,
+) -> Result<String, String> {
+    if api_key.is_empty() || api_key.len() > 200 {
+        return Err("Invalid API key".into());
+    }
+    if message.is_empty() || message.len() > 10_000 {
+        return Err("Message must be 1-10000 chars".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let system_prompt = "You are a trading assistant for TyphooN-Terminal. Help with market analysis, risk management, and trading decisions. Be concise.";
+    let ctx = context.unwrap_or_default();
+    let full_msg = if ctx.is_empty() { message.clone() } else { format!("{ctx}\n\nUser: {message}") };
+
+    match provider.as_str() {
+        "anthropic" => {
+            let body = serde_json::json!({
+                "model": if model.is_empty() { "claude-haiku-4-5-20251001" } else { model.as_str() },
+                "max_tokens": 1024,
+                "system": system_prompt,
+                "messages": [{ "role": "user", "content": full_msg }],
+            });
+            let resp = client
+                .post("https://api.anthropic.com/v1/messages")
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|_| "Anthropic request failed".to_string())?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let _ = resp.text().await;
+                return Err(format!("Anthropic: HTTP {status}"));
+            }
+            let json: serde_json::Value = resp.json().await
+                .map_err(|_| "Anthropic parse failed".to_string())?;
+            let text = json["content"][0]["text"].as_str().unwrap_or("No response");
+            Ok(text.to_string())
+        }
+        "openai" => {
+            let body = serde_json::json!({
+                "model": if model.is_empty() { "gpt-4o-mini" } else { model.as_str() },
+                "max_tokens": 1024,
+                "messages": [
+                    { "role": "system", "content": system_prompt },
+                    { "role": "user", "content": full_msg },
+                ],
+            });
+            let resp = client
+                .post("https://api.openai.com/v1/chat/completions")
+                .header("Authorization", format!("Bearer {api_key}"))
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|_| "OpenAI request failed".to_string())?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let _ = resp.text().await;
+                return Err(format!("OpenAI: HTTP {status}"));
+            }
+            let json: serde_json::Value = resp.json().await
+                .map_err(|_| "OpenAI parse failed".to_string())?;
+            let text = json["choices"][0]["message"]["content"].as_str().unwrap_or("No response");
+            Ok(text.to_string())
+        }
+        _ => Err("Provider must be 'anthropic' or 'openai'".into()),
+    }
+}
+
 // ── Push Notification Commands ──────────────────────────────────────
 
 #[tauri::command]
@@ -1814,6 +1939,9 @@ fn main() {
             // Account Protection
             set_equity_protection,
             check_equity_protection,
+            // FRED + AI
+            fetch_fred_series,
+            ai_chat,
             // Notifications
             send_discord_notification,
             // News, Events & Fundamentals
