@@ -506,7 +506,11 @@ function createSLLine(price) {
     title: "SL",
   });
   if (currentSymbol) invoke("set_sl_level", { symbol: currentSymbol, price }).catch(() => {});
+  // Sync input field
+  const slInp = document.getElementById("sl-input");
+  if (slInp) slInp.value = price.toFixed(2);
   updateRiskRewardOverlay();
+  updateRiskCalcPanel();
 }
 
 function createTPLine(price) {
@@ -520,6 +524,9 @@ function createTPLine(price) {
     title: "TP",
   });
   if (currentSymbol) invoke("set_tp_level", { symbol: currentSymbol, price }).catch(() => {});
+  // Sync input field
+  const tpInp = document.getElementById("tp-input");
+  if (tpInp) tpInp.value = price.toFixed(2);
   updateRiskRewardOverlay();
 }
 
@@ -593,16 +600,20 @@ function setupLineDrag() {
     return lines.join("\n");
   }
 
-  // Single mousedown near line starts drag (no double-click needed)
-  document.addEventListener("mousedown", (e) => {
-    if (e.button !== 0) return; // left click only
+  // Single mousedown near line starts drag — capture phase to beat lightweight-charts
+  // Must stopPropagation to prevent chart pan/scroll when dragging SL/TP
+  window._onDragMouseDown = function onDragMouseDown(e) {
+    if (e.button !== 0) return;
     const hit = hitTestLine(e.clientY);
     if (!hit) return;
     draggingLine = hit;
     const container = getActiveContainer();
     if (container) container.style.cursor = "ns-resize";
     e.preventDefault();
-  });
+    e.stopPropagation(); // prevent chart from panning
+  }
+  // Attach to chart container in capture phase (fires before lightweight-charts)
+  document.getElementById("chart-container").addEventListener("mousedown", window._onDragMouseDown, true);
 
   document.addEventListener("mousemove", (e) => {
     const container = getActiveContainer();
@@ -641,12 +652,17 @@ function setupLineDrag() {
       const finalPrice = line.options().price;
       if (draggingLine === "sl") {
         invoke("set_sl_level", { symbol: currentSymbol, price: finalPrice }).catch(() => {});
+        const slInp = document.getElementById("sl-input");
+        if (slInp) slInp.value = finalPrice.toFixed(2);
         log(`SL → $${finalPrice.toFixed(4)}`, "info");
       } else {
         invoke("set_tp_level", { symbol: currentSymbol, price: finalPrice }).catch(() => {});
+        const tpInp = document.getElementById("tp-input");
+        if (tpInp) tpInp.value = finalPrice.toFixed(2);
         log(`TP → $${finalPrice.toFixed(4)}`, "info");
       }
       updateRiskRewardOverlay();
+      updateRiskCalcPanel();
     }
     draggingLine = null;
     dragInfo.style.display = "none";
@@ -3100,6 +3116,31 @@ function setupButtons() {
     await invoke("set_tp_level", { symbol: currentSymbol, price: tp });
     updateDashboard();
   });
+
+  // ── SL/TP Manual Input ──
+  const slInput = document.getElementById("sl-input");
+  const tpInput = document.getElementById("tp-input");
+
+  if (slInput) {
+    slInput.addEventListener("change", () => {
+      const val = parseFloat(slInput.value);
+      if (isNaN(val) || val <= 0) return;
+      createSLLine(val);
+    });
+    slInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { slInput.blur(); slInput.dispatchEvent(new Event("change")); }
+    });
+  }
+  if (tpInput) {
+    tpInput.addEventListener("change", () => {
+      const val = parseFloat(tpInput.value);
+      if (isNaN(val) || val <= 0) return;
+      createTPLine(val);
+    });
+    tpInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { tpInput.blur(); tpInput.dispatchEvent(new Event("change")); }
+    });
+  }
 
   // ── Martingale Toggle — syncs to backend ──
   document.getElementById("btn-martingale").addEventListener("click", async () => {
@@ -7754,6 +7795,9 @@ async function openMTFGrid(symbol, timeframes) {
       cell.style.outline = "2px solid #4caf50";
       mtfActiveCell = cellInfo;
     }
+
+    // Attach SL/TP drag handler to this cell's chart area (capture phase)
+    if (window._onDragMouseDown) chartDiv.addEventListener("mousedown", window._onDragMouseDown, true);
 
     // Double-click to fullscreen/restore
     cell.addEventListener("dblclick", () => {
