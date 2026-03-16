@@ -910,6 +910,100 @@ function calcBetterVolume(data, lookback = 20) {
   return result;
 }
 
+// ── Auto Fibonacci (fractal-based swing detection) ──────────
+// Finds the most significant swing high/low and draws retracement + extension levels.
+// Bull scenario: swing low → swing high. Bear scenario: swing high → swing low.
+function calcAutoFibonacci(data, fractalLookback = 10) {
+  if (data.length < fractalLookback * 2 + 10) return null;
+
+  // Find all fractal highs and lows
+  const swingHighs = [];
+  const swingLows = [];
+
+  for (let i = fractalLookback; i < data.length - fractalLookback; i++) {
+    let isHigh = true, isLow = true;
+    for (let j = 1; j <= fractalLookback; j++) {
+      if (data[i - j].high >= data[i].high || data[i + j].high >= data[i].high) isHigh = false;
+      if (data[i - j].low <= data[i].low || data[i + j].low <= data[i].low) isLow = false;
+    }
+    if (isHigh) swingHighs.push({ idx: i, price: data[i].high, time: data[i].time });
+    if (isLow) swingLows.push({ idx: i, price: data[i].low, time: data[i].time });
+  }
+
+  if (swingHighs.length === 0 || swingLows.length === 0) return null;
+
+  // Find the most significant recent swing pair:
+  // Use the highest high and lowest low from the recent portion of the chart
+  const recentStart = Math.max(0, data.length - Math.floor(data.length * 0.6));
+  const recentHighs = swingHighs.filter(h => h.idx >= recentStart);
+  const recentLows = swingLows.filter(l => l.idx >= recentStart);
+
+  if (recentHighs.length === 0 || recentLows.length === 0) return null;
+
+  const swingHigh = recentHighs.reduce((a, b) => b.price > a.price ? b : a);
+  const swingLow = recentLows.reduce((a, b) => b.price < a.price ? b : a);
+
+  // Determine bull or bear based on which came first
+  const isBull = swingLow.idx < swingHigh.idx; // low first = uptrend = bull fib
+
+  const high = swingHigh.price;
+  const low = swingLow.price;
+  const range = high - low;
+  if (range <= 0) return null;
+
+  // Retracement levels (from the end of the move back toward start)
+  // Extension levels (beyond the move)
+  const levels = [
+    { ratio: 0.0,   label: "0%",       type: "retrace" },
+    { ratio: 0.236, label: "23.6%",    type: "retrace" },
+    { ratio: 0.382, label: "38.2%",    type: "retrace" },
+    { ratio: 0.5,   label: "50%",      type: "retrace" },
+    { ratio: 0.618, label: "61.8%",    type: "retrace" },
+    { ratio: 0.786, label: "78.6%",    type: "retrace" },
+    { ratio: 1.0,   label: "100%",     type: "retrace" },
+    { ratio: 1.272, label: "127.2%",   type: "extension" },
+    { ratio: 1.618, label: "161.8%",   type: "extension" },
+    { ratio: 2.0,   label: "200%",     type: "extension" },
+    { ratio: 2.618, label: "261.8%",   type: "extension" },
+    { ratio: 3.618, label: "361.8%",   type: "extension" },
+    { ratio: 4.236, label: "423.6%",   type: "extension" },
+  ];
+
+  const result = [];
+  for (const level of levels) {
+    let price;
+    if (isBull) {
+      // Bull: retrace from high toward low; extend above high
+      price = high - range * level.ratio;
+      if (level.type === "extension" && level.ratio > 1.0) {
+        price = low + range * level.ratio; // extension above swing high
+      }
+    } else {
+      // Bear: retrace from low toward high; extend below low
+      price = low + range * level.ratio;
+      if (level.type === "extension" && level.ratio > 1.0) {
+        price = high - range * level.ratio; // extension below swing low
+      }
+    }
+    result.push({
+      price,
+      label: level.label,
+      type: level.type,
+      ratio: level.ratio,
+    });
+  }
+
+  const startTime = Math.min(swingHigh.time, swingLow.time);
+
+  return {
+    isBull,
+    swingHigh: { price: high, time: swingHigh.time },
+    swingLow: { price: low, time: swingLow.time },
+    levels: result,
+    startTime,
+  };
+}
+
 // ── Supply/Demand Zones ─────────────────────────────────────
 // Detect strong move-away candles and project their origin as zones
 // Exact port of SupplyDemand.mqh — fractal-based detection with strength tiers
@@ -1341,6 +1435,64 @@ function applyIndicators(chartData) {
         indicatorSeries[`sd_${zi}_t`] = topLine;
         indicatorSeries[`sd_${zi}_b`] = botLine;
         indicatorSeries[`sd_${zi}_f`] = fillArea;
+      }
+
+    } else if (ind === "auto-fib" && chartData.length > 30) {
+      // Auto Fibonacci: fractal-based swing detection with retracement + extension levels
+      const fib = calcAutoFibonacci(chartData);
+      if (fib) {
+        const fibBars = clip(chartData.filter(d => d.time >= fib.startTime));
+        if (fibBars.length >= 2) {
+          // Retracement colors (warm → cool gradient)
+          const retraceColors = {
+            "0%": "#f44336", "23.6%": "#ff9800", "38.2%": "#ffeb3b",
+            "50%": "#8bc34a", "61.8%": "#00bcd4", "78.6%": "#3f51b5", "100%": "#9c27b0",
+          };
+          // Extension colors (distinct from retracements)
+          const extColors = {
+            "127.2%": "#e91e63", "161.8%": "#ff5722", "200%": "#ff9800",
+            "261.8%": "#ffc107", "361.8%": "#cddc39", "423.6%": "#8bc34a",
+          };
+
+          for (let li = 0; li < fib.levels.length; li++) {
+            const level = fib.levels[li];
+            const color = level.type === "extension"
+              ? (extColors[level.label] || "#888")
+              : (retraceColors[level.label] || "#888");
+            const lineStyle = level.type === "extension" ? 2 : 0; // dashed for extensions
+            const lineWidth = level.label === "50%" || level.label === "61.8%" ? 1.5 : 0.8;
+
+            const s = chart.addLineSeries({
+              color,
+              lineWidth,
+              lineStyle,
+              lastValueVisible: false,
+              priceLineVisible: false,
+              crosshairMarkerVisible: false,
+              title: "",
+            });
+            s.setData(fibBars.map(d => ({ time: d.time, value: level.price })));
+            indicatorSeries[`afib_${li}`] = s;
+          }
+
+          // Draw the swing line (connecting swing low to swing high)
+          const swingLine = chart.addLineSeries({
+            color: fib.isBull ? "#4caf50" : "#f44336",
+            lineWidth: 1,
+            lineStyle: 2,
+            lastValueVisible: false,
+            priceLineVisible: false,
+            crosshairMarkerVisible: false,
+          });
+          swingLine.setData([
+            { time: Math.min(fib.swingLow.time, fib.swingHigh.time), value: fib.isBull ? fib.swingLow.price : fib.swingHigh.price },
+            { time: Math.max(fib.swingLow.time, fib.swingHigh.time), value: fib.isBull ? fib.swingHigh.price : fib.swingLow.price },
+          ]);
+          indicatorSeries.afib_swing = swingLine;
+
+          const direction = fib.isBull ? "BULL" : "BEAR";
+          log(`Auto-Fib: ${direction} ${fib.swingLow.price.toFixed(2)} → ${fib.swingHigh.price.toFixed(2)} (${fib.levels.length} levels)`, "ok");
+        }
       }
 
     } else if (ind === "rvol" && chartData.length > 11) {
