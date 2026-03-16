@@ -1374,7 +1374,9 @@ function applyIndicators(chartData) {
 
       fisherSeries.signal = sSignal;
       fisherSeries.zero = sZero;
-      fisherChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
+      // Sync Fisher time scale — use fitContent then match main chart range
+      fisherChart.timeScale().fitContent();
+      try { fisherChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange()); } catch (_) {}
 
     } else if (ind === "better-vol" && chartData.length > 2) {
       // BetterVolume — rendered in dedicated volumeChart pane
@@ -1384,7 +1386,8 @@ function applyIndicators(chartData) {
       });
       s.setData(bvData);
       volumeSeries.hist = s;
-      volumeChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange());
+      volumeChart.timeScale().fitContent();
+      try { volumeChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange()); } catch (_) {}
 
     } else if (ind === "supply-demand" && chartData.length > 10) {
       // SupplyDemand.mqh: fractal-based zones with strength-tier colors
@@ -5456,10 +5459,11 @@ async function loadMTFCellData(cellInfo, symbol) {
     cellInfo.candleSeries.setData(chartData);
     cellInfo.chart.timeScale().fitContent();
 
-    // Fisher
+    // Fisher — color-segmented like main chart (green bullish, red bearish)
     if (chartData.length > 32) {
       const ef = calcEhlersFisher(chartData, 32);
-      if (ef.fisher.length > 1) {
+      if (ef.fisher.length > 0) {
+        // Build color segments (same as main chart)
         const segments = [];
         let curColor = ef.colors[0];
         let curSeg = [ef.fisher[0]];
@@ -5474,14 +5478,33 @@ async function loadMTFCellData(cellInfo, symbol) {
           }
         }
         if (curSeg.length > 0) segments.push({ color: curColor, data: curSeg });
+
         for (const seg of segments) {
           if (seg.data.length < 2) continue;
-          const s = cellInfo.fisherChart.addLineSeries({ color: seg.color, lineWidth: 1.5, lastValueVisible: false, priceLineVisible: false });
+          const s = cellInfo.fisherChart.addLineSeries({
+            color: seg.color, lineWidth: 1.5,
+            lastValueVisible: false, priceLineVisible: false,
+          });
           s.setData(seg.data);
         }
-        cellInfo.fisherChart.timeScale().setVisibleLogicalRange(cellInfo.chart.timeScale().getVisibleLogicalRange());
+
+        // Signal line (gray)
+        const sSignal = cellInfo.fisherChart.addLineSeries({
+          color: "#A9A9A9", lineWidth: 1,
+          lastValueVisible: false, priceLineVisible: false,
+        });
+        sSignal.setData(ef.signal);
+
+        // Zero line
+        const sZero = cellInfo.fisherChart.addLineSeries({
+          color: "#FFFFFF33", lineWidth: 1, lineStyle: 2,
+          lastValueVisible: false, priceLineVisible: false,
+        });
+        sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
       }
     }
+    // Sync Fisher time scale after data loaded
+    cellInfo.fisherChart.timeScale().fitContent();
 
     // BetterVolume
     if (chartData.length > 22) {
@@ -5489,9 +5512,10 @@ async function loadMTFCellData(cellInfo, symbol) {
       if (bv.length > 0) {
         const s = cellInfo.volumeChart.addHistogramSeries({ priceFormat: { type: "volume" } });
         s.setData(bv);
-        cellInfo.volumeChart.timeScale().setVisibleLogicalRange(cellInfo.chart.timeScale().getVisibleLogicalRange());
       }
     }
+    // Sync Volume time scale after data loaded
+    cellInfo.volumeChart.timeScale().fitContent();
 
     // ── Full indicator set (matches main chart NNFX system) ──
     const addLine = (color, width, data) => {
