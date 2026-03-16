@@ -2907,7 +2907,12 @@ async function openArticleInline(url, title) {
         const img = document.createElement("img");
         img.src = src; // safe: HTTPS only, CSP restricts to https:
         img.alt = imgNode?.getAttribute("alt") || "";
-        img.style.cssText = "max-width:100%;height:auto;border-radius:4px;margin:8px 0;display:block;";
+        img.style.cssText = "max-width:200px;max-height:150px;height:auto;border-radius:3px;margin:6px 0;display:block;cursor:pointer;";
+        img.title = "Click to enlarge";
+        img.addEventListener("click", () => {
+          img.style.maxWidth = img.style.maxWidth === "200px" ? "100%" : "200px";
+          img.style.maxHeight = img.style.maxHeight === "150px" ? "none" : "150px";
+        });
         img.loading = "lazy";
         win.appendElement(img);
         found++;
