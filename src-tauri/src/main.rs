@@ -908,12 +908,98 @@ async fn get_news(state: State<'_, SharedState>, symbol: String, limit: u32) -> 
 }
 
 #[tauri::command]
-async fn get_corporate_actions(state: State<'_, SharedState>, symbol: String) -> Result<String, String> {
+async fn get_corporate_actions(state: State<'_, SharedState>, symbol: String, types: Option<String>) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let s = state.lock().await;
     let broker = s.broker.as_ref().ok_or("Not connected")?;
-    let actions = broker.get_corporate_actions(&symbol, "dividend").await?;
+    let action_types = types.as_deref().unwrap_or("dividend");
+    let actions = broker.get_corporate_actions(&symbol, action_types).await?;
     Ok(serde_json::to_string(&actions).unwrap())
+}
+
+#[tauri::command]
+async fn run_walk_forward(
+    state: State<'_, SharedState>,
+    symbol: String,
+    timeframe: String,
+    fast_min: usize,
+    fast_max: usize,
+    slow_min: usize,
+    slow_max: usize,
+    initial_equity: Option<f64>,
+    in_sample_pct: Option<f64>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
+
+    let equity = initial_equity.unwrap_or(100_000.0);
+    if equity <= 0.0 || !equity.is_finite() { return Err("Invalid initial equity".into()); }
+
+    let is_pct = in_sample_pct.unwrap_or(70.0).clamp(30.0, 90.0) / 100.0;
+    let bar_limit = limit.unwrap_or(5000).min(50_000);
+
+    if fast_min < 2 || fast_max > 200 || slow_min < 3 || slow_max > 500 {
+        return Err("Period ranges out of bounds (fast: 2-200, slow: 3-500)".into());
+    }
+
+    let bars = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?;
+        broker.get_bars(&symbol, &timeframe, bar_limit).await?
+    };
+
+    if bars.len() < 50 {
+        return Err("Insufficient bar data for walk-forward test".into());
+    }
+
+    let split = (bars.len() as f64 * is_pct) as usize;
+    let in_sample = &bars[..split];
+    let out_sample = &bars[split..];
+
+    // Optimize on in-sample
+    let opt_result = backtest_engine::optimize_sma_cross(
+        in_sample,
+        (fast_min, fast_max),
+        (slow_min, slow_max),
+        equity,
+        1,
+    );
+
+    if opt_result.results.is_empty() {
+        return Err("Optimization produced no results".into());
+    }
+
+    let best = &opt_result.results[0];
+    let best_fast = best.fast_period;
+    let best_slow = best.slow_period;
+
+    // Run best params on in-sample (full result)
+    let mut is_strat = SMACrossStrategy::new(best_fast, best_slow);
+    let is_result = backtest_engine::run_backtest(in_sample, &mut is_strat, equity);
+
+    // Run best params on out-of-sample
+    let mut os_strat = SMACrossStrategy::new(best_fast, best_slow);
+    let os_result = backtest_engine::run_backtest(out_sample, &mut os_strat, equity);
+
+    let result = serde_json::json!({
+        "best_fast": best_fast,
+        "best_slow": best_slow,
+        "in_sample_bars": in_sample.len(),
+        "out_sample_bars": out_sample.len(),
+        "in_sample": {
+            "report": is_result.report,
+            "trades": is_result.trades,
+            "equity_curve": is_result.equity_curve,
+        },
+        "out_sample": {
+            "report": os_result.report,
+            "trades": os_result.trades,
+            "equity_curve": os_result.equity_curve,
+        },
+    });
+
+    Ok(serde_json::to_string(&result).unwrap())
 }
 
 #[tauri::command]
@@ -1755,6 +1841,7 @@ fn main() {
             run_backtest,
             run_bar_by_bar_backtest,
             run_optimization,
+            run_walk_forward,
             // CSV Export
             export_trade_history,
             // Options

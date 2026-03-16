@@ -36,6 +36,14 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Insider Trading** | SEC Form 4 filings via EDGAR (command palette: INSIDER) |
 | **Context Menu** | Right-click chart for drawing tools, alerts, copy price |
 | **Pending Orders on Chart** | Open orders visualized as colored price lines |
+| **Data Window** | Fixed OHLCV + all indicator values at cursor position |
+| **Multi-Condition Alerts** | RSI > 70, KAMA crosses SMA200, Fisher > 0, dividend alerts |
+| **Walk-Forward Testing** | 70/30 in-sample/out-of-sample with auto-optimization |
+| **Monte Carlo** | 100K simulations for risk-of-ruin at 25/50/75% drawdown |
+| **Correlation Matrix** | Pairwise Pearson correlation heatmap from cached bars |
+| **Portfolio Breakdown** | Positions grouped by asset class with $ value/P&L |
+| **Drawing Properties** | Right-click drawings: color picker, line width, delete |
+| **Earnings Calendar** | Corporate actions table via command palette |
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |

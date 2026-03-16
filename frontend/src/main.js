@@ -281,33 +281,55 @@ function initChart() {
 }
 
 function setupTooltip() {
-  const tooltip = document.createElement("div");
-  tooltip.id = "chart-tooltip";
-  tooltip.className = "chart-tooltip hidden";
-  document.getElementById("chart-stack").appendChild(tooltip);
+  // Fixed data window panel (top-left of chart) — shows OHLCV + all indicator values at cursor
+  const dataWindow = document.createElement("div");
+  dataWindow.id = "data-window";
+  dataWindow.className = "data-window";
+  document.getElementById("chart-stack").appendChild(dataWindow);
 
   chart.subscribeCrosshairMove((param) => {
     if (!param.time || !param.point || param.point.x < 0) {
-      tooltip.classList.add("hidden");
+      dataWindow.style.opacity = "0.3";
       return;
     }
+    dataWindow.style.opacity = "1";
     const lines = [];
+
+    // OHLCV from candle series
+    const ohlc = param.seriesData.get(candleSeries);
+    if (ohlc) {
+      if (ohlc.open !== undefined) {
+        lines.push(`O: ${ohlc.open.toFixed(4)}  H: ${ohlc.high.toFixed(4)}`);
+        lines.push(`L: ${ohlc.low.toFixed(4)}  C: ${ohlc.close.toFixed(4)}`);
+      } else if (ohlc.value !== undefined) {
+        lines.push(`Price: ${ohlc.value.toFixed(4)}`);
+      }
+      // Find volume from currentChartData by matching time
+      const bar = currentChartData.find(d => d.time === param.time);
+      if (bar && bar.volume !== undefined) {
+        lines.push(`Vol: ${bar.volume.toLocaleString()}`);
+      }
+    }
+
+    // All active indicator values
     for (const [key, series] of Object.entries(indicatorSeries)) {
       const data = param.seriesData.get(series);
       if (data && data.value !== undefined) {
-        // Derive label from key
         const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
         lines.push(`${label}: ${data.value.toFixed(4)}`);
       }
     }
-    if (lines.length > 0) {
-      tooltip.textContent = lines.join("\n");
-      tooltip.style.left = param.point.x + 16 + "px";
-      tooltip.style.top = param.point.y + "px";
-      tooltip.classList.remove("hidden");
-    } else {
-      tooltip.classList.add("hidden");
+
+    // Fisher pane values
+    for (const [key, series] of Object.entries(fisherSeries)) {
+      const data = param.seriesData.get(series);
+      if (data && data.value !== undefined) {
+        lines.push(`Fisher: ${data.value.toFixed(4)}`);
+        break; // just show one fisher value
+      }
     }
+
+    dataWindow.textContent = lines.join("\n");
   });
 }
 
@@ -2463,7 +2485,9 @@ async function updateDashboard() {
     updatePositionsPanel();
     updateOrderPriceLines();
     checkAlerts();
+    checkMultiConditionAlerts();
     checkEquityProtection();
+    checkDividendAlerts();
 
     // Bid/Ask spread (non-blocking — don't fail dashboard if quote fails)
     if (currentSymbol) {
@@ -3721,6 +3745,122 @@ function fireAlert(alert) {
   try { new Notification(`${alert.symbol} Alert`, { body: `Price ${alert.direction} $${alert.price.toFixed(4)}` }); } catch (_) {}
 }
 
+// ── Dividend/Corporate Action Alerts ─────────────────────────
+const DIVIDEND_ALERTS_KEY = "typhoon_dividend_alerts_seen";
+let lastDividendCheck = 0;
+
+function getSeenDividendAlerts() {
+  try { return JSON.parse(localStorage.getItem(DIVIDEND_ALERTS_KEY) || "{}"); } catch { return {}; }
+}
+function markDividendAlertSeen(key) {
+  const seen = getSeenDividendAlerts();
+  seen[key] = Date.now();
+  localStorage.setItem(DIVIDEND_ALERTS_KEY, JSON.stringify(seen));
+}
+
+async function checkDividendAlerts() {
+  // Only check every 60s to avoid hammering the API
+  const now = Date.now();
+  if (now - lastDividendCheck < 60000) return;
+  lastDividendCheck = now;
+
+  if (!currentSymbol) return;
+  try {
+    const json = await invoke("get_corporate_actions", { symbol: currentSymbol, types: "dividend" });
+    const actions = JSON.parse(json);
+    if (!Array.isArray(actions) || actions.length === 0) return;
+
+    const seen = getSeenDividendAlerts();
+    const today = new Date();
+    const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
+
+    for (const action of actions) {
+      const exDate = action.ex_date || action.ex_dividend_date || action.date;
+      if (!exDate) continue;
+      const exDateObj = new Date(exDate);
+      const diff = exDateObj.getTime() - today.getTime();
+      if (diff >= 0 && diff <= fiveDaysMs) {
+        const alertKey = `${currentSymbol}_${exDate}`;
+        if (seen[alertKey]) continue;
+        const daysUntil = Math.ceil(diff / (24 * 60 * 60 * 1000));
+        const amount = action.cash_amount || action.amount || "?";
+        const msg = `${currentSymbol}: Ex-dividend in ${daysUntil} day(s) — $${amount}/share on ${exDate}`;
+        log(`DIVIDEND ALERT: ${msg}`, "warn");
+        try { new Notification(`${currentSymbol} Dividend Alert`, { body: msg }); } catch (_) {}
+        markDividendAlertSeen(alertKey);
+      }
+    }
+  } catch (_) {
+    // Corporate actions API may not be available — fail silently
+  }
+}
+
+// ── Multi-Condition Alerts ──────────────────────────────────
+const MULTI_ALERTS_KEY = "typhoon_multi_alerts";
+let multiConditionAlerts = [];
+
+function loadMultiAlerts() {
+  try { multiConditionAlerts = JSON.parse(localStorage.getItem(MULTI_ALERTS_KEY) || "[]"); } catch { multiConditionAlerts = []; }
+}
+function saveMultiAlerts() {
+  localStorage.setItem(MULTI_ALERTS_KEY, JSON.stringify(multiConditionAlerts));
+}
+
+function addMultiConditionAlert(symbol, condition) {
+  multiConditionAlerts.push({ symbol, condition, triggered: false, createdAt: Date.now() });
+  saveMultiAlerts();
+  log(`Multi-alert set: ${symbol} ${condition}`, "ok");
+}
+
+function evaluateCondition(condition, chartData) {
+  if (!chartData || chartData.length < 200) return false;
+  const lastBar = chartData[chartData.length - 1];
+
+  // RSI conditions
+  if (condition === "RSI > 70" || condition === "RSI < 30") {
+    const rsi = calcRSI(chartData, 14);
+    if (rsi.length === 0) return false;
+    const lastRSI = rsi[rsi.length - 1].value;
+    if (condition === "RSI > 70") return lastRSI > 70;
+    if (condition === "RSI < 30") return lastRSI < 30;
+  }
+
+  // KAMA vs SMA200 conditions
+  if (condition === "KAMA > SMA200" || condition === "KAMA < SMA200") {
+    const kama = calcKAMA(chartData, 10);
+    const sma = calcSMA(chartData, 200);
+    if (kama.length === 0 || sma.length === 0) return false;
+    const lastKAMA = kama[kama.length - 1].value;
+    const lastSMA = sma[sma.length - 1].value;
+    if (condition === "KAMA > SMA200") return lastKAMA > lastSMA;
+    if (condition === "KAMA < SMA200") return lastKAMA < lastSMA;
+  }
+
+  // Fisher conditions
+  if (condition === "Fisher > 0" || condition === "Fisher < 0") {
+    const ef = calcEhlersFisher(chartData, 32);
+    if (ef.fisher.length === 0) return false;
+    const lastFisher = ef.fisher[ef.fisher.length - 1].value;
+    if (condition === "Fisher > 0") return lastFisher > 0;
+    if (condition === "Fisher < 0") return lastFisher < 0;
+  }
+
+  return false;
+}
+
+function checkMultiConditionAlerts() {
+  if (multiConditionAlerts.length === 0 || !currentSymbol || currentChartData.length === 0) return;
+  for (const alert of multiConditionAlerts) {
+    if (alert.triggered || alert.symbol !== currentSymbol) continue;
+    if (evaluateCondition(alert.condition, currentChartData)) {
+      alert.triggered = true;
+      log(`MULTI-ALERT: ${alert.symbol} ${alert.condition} triggered`, "warn");
+      try { new Notification(`${alert.symbol} Alert`, { body: `Condition met: ${alert.condition}` }); } catch (_) {}
+    }
+  }
+  saveMultiAlerts();
+}
+
 // ══════════════════════════════════════════════════════════════
 // FEATURE 1: Chart Templates — save/load indicator + order mode
 // ══════════════════════════════════════════════════════════════
@@ -4231,6 +4371,11 @@ const CMD_PALETTE_COMMANDS = [
   { name: "T&S", desc: "Time & Sales (live trades)", action: cmdTimeSales },
   { name: "ACTIVITIES", desc: "Account activities (fills, dividends, deposits)", action: cmdActivities },
   { name: "INSIDER", desc: "Insider trading (SEC Form 4)", action: cmdInsider },
+  { name: "EARNINGS", desc: "Earnings & Corporate Actions Calendar", action: cmdEarnings },
+  { name: "PORTFOLIO", desc: "Portfolio Breakdown by Sector", action: cmdPortfolio },
+  { name: "CORR", desc: "Correlation Matrix (open positions)", action: cmdCorrelation },
+  { name: "MONTECARLO", desc: "Monte Carlo Risk of Ruin", action: cmdMonteCarlo },
+  { name: "ALERTS", desc: "Multi-Condition Alert Manager", action: cmdMultiAlerts },
   { name: "TILE", desc: "Tile all floating windows", action: () => tileWindows() },
   { name: "CLOSE", desc: "Close all floating windows", action: () => closeAllWindows() },
 ];
@@ -4706,6 +4851,830 @@ async function cmdOrderBook() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// EARNINGS — Corporate Actions Calendar
+// ══════════════════════════════════════════════════════════════
+
+async function cmdEarnings() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Earnings & Corporate Actions`, width: 600, height: 450 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading corporate actions...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    const types = "dividend,merger,spinoff,split";
+    const json = await invoke("get_corporate_actions", { symbol: currentSymbol, types });
+    const actions = JSON.parse(json);
+
+    win.contentElement.textContent = "";
+    if (!Array.isArray(actions) || actions.length === 0) {
+      win.setContent("No corporate actions found for this symbol.");
+      return;
+    }
+
+    const table = document.createElement("table");
+    table.className = "fw-table";
+
+    // Header
+    const thead = document.createElement("tr");
+    for (const h of ["Date", "Symbol", "Type", "Details"]) {
+      const th = document.createElement("td");
+      th.style.cssText = "color:#888;font-weight:bold;font-size:10px;border-bottom:1px solid #333;";
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+
+    for (const action of actions) {
+      const tr = document.createElement("tr");
+      const date = action.ex_date || action.effective_date || action.date || "—";
+      const type = action.type || action.ca_type || action.sub_type || "—";
+      const symbol = action.symbol || currentSymbol;
+      let details = "";
+      if (action.cash_amount) details = `$${action.cash_amount}/share`;
+      else if (action.old_rate && action.new_rate) details = `${action.old_rate}:${action.new_rate}`;
+      else if (action.description) details = action.description;
+      else details = JSON.stringify(action).substring(0, 80);
+
+      for (const val of [date, symbol, type, details]) {
+        const td = document.createElement("td");
+        td.className = "fw-value";
+        td.style.textAlign = "left";
+        td.textContent = val;
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load corporate actions: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// PORTFOLIO — Breakdown by Sector/Asset Class
+// ══════════════════════════════════════════════════════════════
+
+async function cmdPortfolio() {
+  const win = createWindow({ title: "Portfolio Breakdown", width: 500, height: 450 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading positions...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+
+    if (!positions || positions.length === 0) {
+      win.contentElement.textContent = "";
+      win.setContent("No open positions.");
+      return;
+    }
+
+    // Group by asset class — fetch asset info for each position
+    const groups = {};
+    for (const p of positions) {
+      let assetClass = "unknown";
+      try {
+        const assetJson = await invoke("get_asset", { symbol: p.symbol });
+        const asset = JSON.parse(assetJson);
+        assetClass = asset.class || asset.asset_class || "us_equity";
+      } catch (_) {
+        assetClass = p.asset_class || "us_equity";
+      }
+
+      if (!groups[assetClass]) groups[assetClass] = { count: 0, value: 0, positions: [] };
+      const mv = Math.abs(p.market_value || p.qty * (p.current_price || 0));
+      groups[assetClass].count++;
+      groups[assetClass].value += mv;
+      groups[assetClass].positions.push(p);
+    }
+
+    const totalValue = Object.values(groups).reduce((s, g) => s + g.value, 0);
+
+    win.contentElement.textContent = "";
+
+    // Summary table
+    const table = document.createElement("table");
+    table.className = "fw-table";
+    const thead = document.createElement("tr");
+    for (const h of ["Asset Class", "Positions", "Market Value", "% of Portfolio"]) {
+      const th = document.createElement("td");
+      th.style.cssText = "color:#888;font-weight:bold;font-size:10px;border-bottom:1px solid #333;";
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+
+    for (const [cls, data] of Object.entries(groups).sort((a, b) => b[1].value - a[1].value)) {
+      const tr = document.createElement("tr");
+      const pct = totalValue > 0 ? (data.value / totalValue * 100).toFixed(1) : "0.0";
+      for (const val of [cls.replace(/_/g, " ").toUpperCase(), String(data.count), `$${data.value.toFixed(2)}`, `${pct}%`]) {
+        const td = document.createElement("td");
+        td.className = "fw-value";
+        td.textContent = val;
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+
+    // Total row
+    const totalRow = document.createElement("tr");
+    totalRow.style.borderTop = "1px solid #555";
+    for (const val of ["TOTAL", String(positions.length), `$${totalValue.toFixed(2)}`, "100%"]) {
+      const td = document.createElement("td");
+      td.style.cssText = "font-weight:bold;color:#8cf;";
+      td.textContent = val;
+      totalRow.appendChild(td);
+    }
+    table.appendChild(totalRow);
+    win.appendElement(table);
+
+    // Detail list per group
+    for (const [cls, data] of Object.entries(groups)) {
+      const heading = document.createElement("div");
+      heading.style.cssText = "color:#888;font-size:10px;margin:12px 0 4px;text-transform:uppercase;border-bottom:1px solid #222;padding-bottom:2px;";
+      heading.textContent = `${cls.replace(/_/g, " ")} — ${data.count} positions`;
+      win.appendElement(heading);
+
+      for (const p of data.positions) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;justify-content:space-between;font-size:10px;padding:2px 0;";
+        const name = document.createElement("span");
+        name.textContent = `${p.symbol} ${p.side === "long" ? "L" : "S"} ${Math.abs(p.qty)}`;
+        name.style.color = "#ccc";
+        const val = document.createElement("span");
+        const mv = Math.abs(p.market_value || p.qty * (p.current_price || 0));
+        const pl = p.unrealized_pl || 0;
+        val.textContent = `$${mv.toFixed(2)} (${pl >= 0 ? "+" : ""}$${pl.toFixed(2)})`;
+        val.style.color = pl >= 0 ? "#4caf50" : "#f44336";
+        row.appendChild(name);
+        row.appendChild(val);
+        win.appendElement(row);
+      }
+    }
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load portfolio: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// CORR — Correlation Matrix (from barCache)
+// ══════════════════════════════════════════════════════════════
+
+async function cmdCorrelation() {
+  const win = createWindow({ title: "Correlation Matrix", width: 600, height: 500 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Calculating correlations from cached data...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+
+    if (!positions || positions.length < 2) {
+      win.contentElement.textContent = "";
+      win.setContent("Need at least 2 open positions for correlation matrix.");
+      return;
+    }
+
+    const symbols = positions.map(p => p.symbol);
+
+    // Get close prices from barCache for each symbol
+    const closePrices = {};
+    for (const sym of symbols) {
+      // Try common timeframes in cache
+      let data = null;
+      for (const tf of ["1Day", "4Hour", "1Hour"]) {
+        const key = `${sym}:${tf}`;
+        const cached = barCache[key];
+        if (cached && cached.data && cached.data.length > 20) {
+          data = cached.data;
+          break;
+        }
+      }
+      if (!data) {
+        // Try to fetch daily bars
+        try {
+          const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 100 });
+          const bars = JSON.parse(barsJson);
+          if (bars.length > 20) data = bars;
+        } catch (_) {}
+      }
+      if (data) {
+        closePrices[sym] = data.slice(-100).map(b => b.close || b.c || 0);
+      }
+    }
+
+    const validSymbols = Object.keys(closePrices).filter(s => closePrices[s].length > 10);
+    if (validSymbols.length < 2) {
+      win.contentElement.textContent = "";
+      win.setContent("Insufficient cached bar data for correlation. Load some charts first.");
+      return;
+    }
+
+    // Calculate returns
+    const returns = {};
+    for (const sym of validSymbols) {
+      const prices = closePrices[sym];
+      returns[sym] = [];
+      for (let i = 1; i < prices.length; i++) {
+        returns[sym].push(prices[i] > 0 ? (prices[i] - prices[i - 1]) / prices[i - 1] : 0);
+      }
+    }
+
+    // Pearson correlation
+    function pearson(a, b) {
+      const n = Math.min(a.length, b.length);
+      if (n < 5) return 0;
+      let sumA = 0, sumB = 0, sumAB = 0, sumA2 = 0, sumB2 = 0;
+      for (let i = 0; i < n; i++) {
+        sumA += a[i]; sumB += b[i];
+        sumAB += a[i] * b[i];
+        sumA2 += a[i] * a[i];
+        sumB2 += b[i] * b[i];
+      }
+      const num = n * sumAB - sumA * sumB;
+      const den = Math.sqrt((n * sumA2 - sumA * sumA) * (n * sumB2 - sumB * sumB));
+      return den > 0 ? num / den : 0;
+    }
+
+    // Build matrix
+    const matrix = [];
+    for (let i = 0; i < validSymbols.length; i++) {
+      matrix[i] = [];
+      for (let j = 0; j < validSymbols.length; j++) {
+        matrix[i][j] = i === j ? 1.0 : pearson(returns[validSymbols[i]], returns[validSymbols[j]]);
+      }
+    }
+
+    win.contentElement.textContent = "";
+
+    // Render heatmap table
+    const table = document.createElement("table");
+    table.className = "fw-table corr-matrix";
+    table.style.cssText = "border-collapse:collapse;font-size:10px;";
+
+    // Header row
+    const headerRow = document.createElement("tr");
+    headerRow.appendChild(document.createElement("td")); // corner cell
+    for (const sym of validSymbols) {
+      const th = document.createElement("td");
+      th.textContent = sym.substring(0, 6);
+      th.style.cssText = "color:#888;font-weight:bold;text-align:center;padding:3px 4px;writing-mode:vertical-lr;font-size:9px;";
+      headerRow.appendChild(th);
+    }
+    table.appendChild(headerRow);
+
+    // Data rows
+    for (let i = 0; i < validSymbols.length; i++) {
+      const tr = document.createElement("tr");
+      const label = document.createElement("td");
+      label.textContent = validSymbols[i].substring(0, 6);
+      label.style.cssText = "color:#888;font-weight:bold;text-align:right;padding:3px 6px;font-size:9px;";
+      tr.appendChild(label);
+
+      for (let j = 0; j < validSymbols.length; j++) {
+        const td = document.createElement("td");
+        const corr = matrix[i][j];
+        td.textContent = corr.toFixed(2);
+        td.style.cssText = "text-align:center;padding:3px 4px;font-size:9px;border:1px solid #222;";
+
+        // Color: green for positive, red for negative, intensity by magnitude
+        const absCorr = Math.abs(corr);
+        const alpha = (absCorr * 0.7 + 0.1).toFixed(2);
+        if (i === j) {
+          td.style.background = "#333";
+          td.style.color = "#fff";
+        } else if (corr > 0) {
+          td.style.background = `rgba(76, 175, 80, ${alpha})`;
+          td.style.color = absCorr > 0.5 ? "#fff" : "#ccc";
+        } else {
+          td.style.background = `rgba(244, 67, 54, ${alpha})`;
+          td.style.color = absCorr > 0.5 ? "#fff" : "#ccc";
+        }
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+
+    win.appendElement(table);
+
+    // Legend
+    const legend = document.createElement("div");
+    legend.style.cssText = "margin-top:8px;font-size:9px;color:#666;";
+    legend.textContent = "Green = positive correlation, Red = negative. Based on daily returns from cached/fetched bar data.";
+    win.appendElement(legend);
+
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to build correlation matrix: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// MONTECARLO — Risk of Ruin Simulation
+// ══════════════════════════════════════════════════════════════
+
+function cmdMonteCarlo() {
+  const win = createWindow({ title: "Monte Carlo Risk of Ruin", width: 550, height: 500 });
+  win.contentElement.textContent = "";
+
+  // Controls
+  const controls = document.createElement("div");
+  controls.style.cssText = "padding:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;border-bottom:1px solid #333;";
+
+  const makeField = (label, value) => {
+    const wrap = document.createElement("label");
+    wrap.style.cssText = "font-size:10px;color:#888;display:flex;gap:4px;align-items:center;";
+    wrap.textContent = label;
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.value = value;
+    inp.style.cssText = "width:60px;font-size:10px;padding:2px 4px;background:#1a1a2e;border:1px solid #333;color:#ccc;";
+    wrap.appendChild(inp);
+    return { wrap, inp };
+  };
+
+  const simCount = makeField("Simulations:", "10000");
+  const equityField = makeField("Starting Equity:", "100000");
+
+  const info = document.createElement("div");
+  info.style.cssText = "font-size:10px;color:#666;padding:4px 8px;";
+  info.textContent = "First run a BACKTEST, then click Run Monte Carlo. It uses the trade P&L array from the last backtest.";
+
+  const runBtn = document.createElement("button");
+  runBtn.textContent = "Run Monte Carlo";
+  runBtn.className = "bt-run-btn";
+  runBtn.style.cssText = "font-size:10px;padding:4px 12px;background:#0f3460;border:1px solid #555;color:#8cf;cursor:pointer;";
+
+  // Manual P&L input option
+  const pnlLabel = document.createElement("div");
+  pnlLabel.style.cssText = "font-size:10px;color:#888;padding:4px 8px;width:100%;";
+  pnlLabel.textContent = "Or paste P&L array (comma-separated):";
+  const pnlInput = document.createElement("input");
+  pnlInput.type = "text";
+  pnlInput.placeholder = "e.g. 120,-80,50,-30,200,-150";
+  pnlInput.style.cssText = "width:calc(100% - 16px);margin:0 8px;font-size:10px;padding:2px 4px;background:#1a1a2e;border:1px solid #333;color:#ccc;";
+
+  controls.appendChild(simCount.wrap);
+  controls.appendChild(equityField.wrap);
+  controls.appendChild(runBtn);
+  win.appendElement(controls);
+  win.appendElement(info);
+  win.appendElement(pnlLabel);
+  win.appendElement(pnlInput);
+
+  const resultsDiv = document.createElement("div");
+  resultsDiv.style.cssText = "padding:8px;";
+  win.appendElement(resultsDiv);
+
+  // Store last backtest trades for Monte Carlo
+  runBtn.addEventListener("click", () => {
+    let tradePnLs = [];
+
+    // Check for manual input
+    const manualText = pnlInput.value.trim();
+    if (manualText) {
+      tradePnLs = manualText.split(",").map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+    }
+
+    // Try to get from last backtest result (stored globally)
+    if (tradePnLs.length === 0 && window._lastBacktestTrades) {
+      tradePnLs = window._lastBacktestTrades.map(t => t.pnl || t.profit || 0);
+    }
+
+    if (tradePnLs.length < 3) {
+      resultsDiv.textContent = "";
+      const msg = document.createElement("div");
+      msg.style.color = "#f44";
+      msg.textContent = "Need at least 3 trade P&Ls. Run a BACKTEST first or paste P&L values above.";
+      resultsDiv.appendChild(msg);
+      return;
+    }
+
+    const numSims = Math.min(parseInt(simCount.inp.value) || 10000, 100000);
+    const startingEquity = parseFloat(equityField.inp.value) || 100000;
+    const thresholds = [0.25, 0.50, 0.75]; // drawdown levels
+
+    runBtn.disabled = true;
+    runBtn.textContent = "Running...";
+
+    // Run Monte Carlo in setTimeout to avoid blocking UI
+    setTimeout(() => {
+      const ruinCounts = [0, 0, 0]; // count of sims hitting each threshold
+      const finalEquities = [];
+      const maxDrawdowns = [];
+      const numTrades = tradePnLs.length;
+
+      for (let sim = 0; sim < numSims; sim++) {
+        // Fisher-Yates shuffle of trade P&Ls
+        const shuffled = [...tradePnLs];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+
+        let equity = startingEquity;
+        let peak = equity;
+        let maxDD = 0;
+
+        for (const pnl of shuffled) {
+          equity += pnl;
+          if (equity > peak) peak = equity;
+          const dd = (peak - equity) / peak;
+          if (dd > maxDD) maxDD = dd;
+        }
+
+        finalEquities.push(equity);
+        maxDrawdowns.push(maxDD);
+
+        for (let t = 0; t < thresholds.length; t++) {
+          if (maxDD >= thresholds[t]) ruinCounts[t]++;
+        }
+      }
+
+      // Sort for percentile calculations
+      finalEquities.sort((a, b) => a - b);
+      maxDrawdowns.sort((a, b) => a - b);
+
+      resultsDiv.textContent = "";
+
+      const title = document.createElement("div");
+      title.style.cssText = "font-size:11px;color:#8cf;font-weight:bold;margin-bottom:8px;";
+      title.textContent = `Monte Carlo Results (${numSims.toLocaleString()} simulations, ${numTrades} trades)`;
+      resultsDiv.appendChild(title);
+
+      // Risk of Ruin table
+      const table = document.createElement("table");
+      table.className = "fw-table";
+      const thead = document.createElement("tr");
+      for (const h of ["Drawdown Threshold", "Probability of Ruin", "Simulations Hit"]) {
+        const th = document.createElement("td");
+        th.style.cssText = "color:#888;font-weight:bold;font-size:10px;border-bottom:1px solid #333;";
+        th.textContent = h;
+        thead.appendChild(th);
+      }
+      table.appendChild(thead);
+
+      for (let t = 0; t < thresholds.length; t++) {
+        const tr = document.createElement("tr");
+        const pct = (ruinCounts[t] / numSims * 100).toFixed(2);
+        for (const val of [`-${(thresholds[t] * 100).toFixed(0)}%`, `${pct}%`, `${ruinCounts[t].toLocaleString()}`]) {
+          const td = document.createElement("td");
+          td.className = "fw-value";
+          td.textContent = val;
+          if (val.endsWith("%") && !val.startsWith("-")) {
+            const p = parseFloat(val);
+            td.style.color = p > 50 ? "#f44336" : p > 20 ? "#ff9800" : "#4caf50";
+          }
+          tr.appendChild(td);
+        }
+        table.appendChild(tr);
+      }
+      resultsDiv.appendChild(table);
+
+      // Distribution stats
+      const stats = document.createElement("div");
+      stats.style.cssText = "margin-top:12px;font-size:10px;color:#ccc;";
+      const median = finalEquities[Math.floor(numSims / 2)];
+      const p5 = finalEquities[Math.floor(numSims * 0.05)];
+      const p95 = finalEquities[Math.floor(numSims * 0.95)];
+      const avgDD = (maxDrawdowns.reduce((a, b) => a + b, 0) / numSims * 100).toFixed(1);
+      const medDD = (maxDrawdowns[Math.floor(numSims / 2)] * 100).toFixed(1);
+      stats.innerHTML = `
+        <div style="margin-bottom:4px;font-weight:bold;color:#888;">Equity Distribution</div>
+        <div>Median Final Equity: <span style="color:#8cf">$${median.toFixed(2)}</span></div>
+        <div>5th Percentile: <span style="color:#f44">$${p5.toFixed(2)}</span></div>
+        <div>95th Percentile: <span style="color:#4caf50">$${p95.toFixed(2)}</span></div>
+        <div style="margin-top:6px;font-weight:bold;color:#888;">Drawdown Distribution</div>
+        <div>Average Max DD: <span style="color:#ff9800">${avgDD}%</span></div>
+        <div>Median Max DD: <span style="color:#ff9800">${medDD}%</span></div>
+      `;
+      resultsDiv.appendChild(stats);
+
+      runBtn.disabled = false;
+      runBtn.textContent = "Run Monte Carlo";
+    }, 50);
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// ALERTS — Multi-Condition Alert Manager UI
+// ══════════════════════════════════════════════════════════════
+
+function cmdMultiAlerts() {
+  const win = createWindow({ title: "Multi-Condition Alerts", width: 500, height: 400 });
+  win.contentElement.textContent = "";
+
+  const CONDITIONS = [
+    "RSI > 70", "RSI < 30",
+    "KAMA > SMA200", "KAMA < SMA200",
+    "Fisher > 0", "Fisher < 0",
+  ];
+
+  // Add alert controls
+  const addRow = document.createElement("div");
+  addRow.style.cssText = "padding:8px;display:flex;gap:6px;align-items:center;border-bottom:1px solid #333;";
+
+  const symInput = document.createElement("input");
+  symInput.type = "text";
+  symInput.value = currentSymbol || "";
+  symInput.placeholder = "Symbol";
+  symInput.style.cssText = "width:80px;font-size:10px;padding:2px 4px;background:#1a1a2e;border:1px solid #333;color:#ccc;";
+
+  const condSelect = document.createElement("select");
+  condSelect.style.cssText = "font-size:10px;padding:2px 4px;background:#1a1a2e;border:1px solid #333;color:#ccc;";
+  for (const c of CONDITIONS) {
+    const opt = document.createElement("option");
+    opt.value = c;
+    opt.textContent = c;
+    condSelect.appendChild(opt);
+  }
+
+  // Also allow price alerts here
+  const priceInput = document.createElement("input");
+  priceInput.type = "number";
+  priceInput.placeholder = "Price (or leave empty)";
+  priceInput.style.cssText = "width:80px;font-size:10px;padding:2px 4px;background:#1a1a2e;border:1px solid #333;color:#ccc;";
+
+  const dirSelect = document.createElement("select");
+  dirSelect.style.cssText = "font-size:10px;padding:2px 4px;background:#1a1a2e;border:1px solid #333;color:#ccc;";
+  for (const d of ["above", "below"]) {
+    const opt = document.createElement("option");
+    opt.value = d; opt.textContent = d;
+    dirSelect.appendChild(opt);
+  }
+
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "Add";
+  addBtn.style.cssText = "font-size:10px;padding:2px 8px;background:#0f3460;border:1px solid #555;color:#8cf;cursor:pointer;";
+
+  addRow.appendChild(symInput);
+  addRow.appendChild(condSelect);
+  addRow.appendChild(priceInput);
+  addRow.appendChild(dirSelect);
+  addRow.appendChild(addBtn);
+  win.appendElement(addRow);
+
+  const listDiv = document.createElement("div");
+  listDiv.style.cssText = "padding:4px;";
+  win.appendElement(listDiv);
+
+  function renderAlertList() {
+    listDiv.textContent = "";
+
+    // Multi-condition alerts
+    if (multiConditionAlerts.length > 0) {
+      const heading = document.createElement("div");
+      heading.style.cssText = "color:#888;font-size:10px;margin:4px 0;text-transform:uppercase;";
+      heading.textContent = "Indicator Alerts";
+      listDiv.appendChild(heading);
+
+      for (let i = 0; i < multiConditionAlerts.length; i++) {
+        const a = multiConditionAlerts[i];
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid #1a1a2e;";
+        const text = document.createElement("span");
+        text.style.cssText = `font-size:10px;color:${a.triggered ? "#666" : "#ccc"};${a.triggered ? "text-decoration:line-through;" : ""}`;
+        text.textContent = `${a.symbol} — ${a.condition}`;
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "x";
+        delBtn.style.cssText = "font-size:9px;padding:1px 4px;background:#3a0a0a;border:1px solid #555;color:#f44;cursor:pointer;";
+        delBtn.addEventListener("click", () => {
+          multiConditionAlerts.splice(i, 1);
+          saveMultiAlerts();
+          renderAlertList();
+        });
+        row.appendChild(text);
+        row.appendChild(delBtn);
+        listDiv.appendChild(row);
+      }
+    }
+
+    // Price alerts
+    if (priceAlerts.length > 0) {
+      const heading2 = document.createElement("div");
+      heading2.style.cssText = "color:#888;font-size:10px;margin:8px 0 4px;text-transform:uppercase;";
+      heading2.textContent = "Price Alerts";
+      listDiv.appendChild(heading2);
+
+      for (let i = 0; i < priceAlerts.length; i++) {
+        const a = priceAlerts[i];
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid #1a1a2e;";
+        const text = document.createElement("span");
+        text.style.cssText = `font-size:10px;color:${a.triggered ? "#666" : "#ccc"};${a.triggered ? "text-decoration:line-through;" : ""}`;
+        text.textContent = `${a.symbol} — Price ${a.direction} $${a.price.toFixed(4)}`;
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "x";
+        delBtn.style.cssText = "font-size:9px;padding:1px 4px;background:#3a0a0a;border:1px solid #555;color:#f44;cursor:pointer;";
+        delBtn.addEventListener("click", () => {
+          priceAlerts.splice(i, 1);
+          saveAlerts();
+          renderAlertList();
+        });
+        row.appendChild(text);
+        row.appendChild(delBtn);
+        listDiv.appendChild(row);
+      }
+    }
+
+    if (multiConditionAlerts.length === 0 && priceAlerts.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:#666;font-size:10px;padding:20px;text-align:center;";
+      empty.textContent = "No alerts set. Use the controls above to add one.";
+      listDiv.appendChild(empty);
+    }
+  }
+
+  addBtn.addEventListener("click", () => {
+    const sym = symInput.value.trim().toUpperCase();
+    if (!sym) return;
+
+    const priceVal = parseFloat(priceInput.value);
+    if (!isNaN(priceVal) && priceVal > 0) {
+      // Price alert
+      addPriceAlert(sym, priceVal, dirSelect.value);
+    } else {
+      // Multi-condition alert
+      addMultiConditionAlert(sym, condSelect.value);
+    }
+    priceInput.value = "";
+    renderAlertList();
+  });
+
+  renderAlertList();
+}
+
+// ══════════════════════════════════════════════════════════════
+// Drawing Object Properties Panel
+// ══════════════════════════════════════════════════════════════
+
+function setupDrawingPropertiesPanel() {
+  const container = document.getElementById("chart-container");
+  if (!container) return;
+
+  // Right-click near a drawing to show properties
+  container.addEventListener("contextmenu", (e) => {
+    if (drawingMode) return; // don't interfere with drawing
+
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Find nearest drawing
+    const HIT_DIST = 15; // pixels
+    let nearestIdx = -1;
+    let nearestDist = Infinity;
+
+    for (let di = 0; di < drawings.length; di++) {
+      const d = drawings[di];
+      if (d.type === "horizontal") {
+        const drawY = candleSeries.priceToCoordinate(d.p1.price);
+        if (drawY === null) continue;
+        const dist = Math.abs(y - drawY);
+        if (dist < nearestDist && dist < HIT_DIST) {
+          nearestDist = dist;
+          nearestIdx = di;
+        }
+      } else if (d.type === "trendline" || d.type === "fibonacci" || d.type === "rectangle" || d.type === "channel") {
+        const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
+        const y1 = candleSeries.priceToCoordinate(d.p1.price);
+        const x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+        const y2 = candleSeries.priceToCoordinate(d.p2.price);
+        if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+
+        // Distance from point to line segment
+        const dx = x2 - x1, dy2 = y2 - y1;
+        const lenSq = dx * dx + dy2 * dy2;
+        let t = lenSq > 0 ? ((x - x1) * dx + (y - y1) * dy2) / lenSq : 0;
+        t = Math.max(0, Math.min(1, t));
+        const projX = x1 + t * dx, projY = y1 + t * dy2;
+        const dist = Math.sqrt((x - projX) ** 2 + (y - projY) ** 2);
+        if (dist < nearestDist && dist < HIT_DIST) {
+          nearestDist = dist;
+          nearestIdx = di;
+        }
+      }
+    }
+
+    if (nearestIdx < 0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Show properties panel
+    showDrawingProperties(nearestIdx, e.clientX, e.clientY);
+  });
+}
+
+function showDrawingProperties(drawingIndex, screenX, screenY) {
+  // Remove any existing properties panel
+  const existing = document.getElementById("drawing-props-panel");
+  if (existing) existing.remove();
+
+  const d = drawings[drawingIndex];
+  if (!d) return;
+
+  const panel = document.createElement("div");
+  panel.id = "drawing-props-panel";
+  panel.style.cssText = `
+    position:fixed;left:${screenX}px;top:${screenY}px;z-index:2000;
+    background:#1a1a2e;border:1px solid #555;padding:8px;border-radius:4px;
+    font-size:10px;color:#ccc;min-width:180px;box-shadow:0 4px 12px rgba(0,0,0,0.5);
+  `;
+
+  // Title
+  const title = document.createElement("div");
+  title.style.cssText = "font-weight:bold;margin-bottom:6px;color:#8cf;";
+  title.textContent = `${d.type.charAt(0).toUpperCase() + d.type.slice(1)} Properties`;
+  panel.appendChild(title);
+
+  // Color picker
+  const colorRow = document.createElement("div");
+  colorRow.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:4px;";
+  const colorLabel = document.createElement("span");
+  colorLabel.textContent = "Color:";
+  const colorInput = document.createElement("input");
+  colorInput.type = "color";
+  colorInput.value = d.color || (d.type === "trendline" ? "#00bcd4" : d.type === "horizontal" ? "#ff9800" : "#00bcd4");
+  colorInput.style.cssText = "width:30px;height:20px;border:none;cursor:pointer;background:transparent;";
+  colorRow.appendChild(colorLabel);
+  colorRow.appendChild(colorInput);
+  panel.appendChild(colorRow);
+
+  // Line width slider
+  const widthRow = document.createElement("div");
+  widthRow.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:4px;";
+  const widthLabel = document.createElement("span");
+  widthLabel.textContent = "Width:";
+  const widthInput = document.createElement("input");
+  widthInput.type = "range";
+  widthInput.min = "0.5";
+  widthInput.max = "5";
+  widthInput.step = "0.5";
+  widthInput.value = d.lineWidth || "1.5";
+  widthInput.style.cssText = "width:80px;";
+  const widthVal = document.createElement("span");
+  widthVal.textContent = widthInput.value;
+  widthInput.addEventListener("input", () => { widthVal.textContent = widthInput.value; });
+  widthRow.appendChild(widthLabel);
+  widthRow.appendChild(widthInput);
+  widthRow.appendChild(widthVal);
+  panel.appendChild(widthRow);
+
+  // Apply button
+  const applyBtn = document.createElement("button");
+  applyBtn.textContent = "Apply";
+  applyBtn.style.cssText = "font-size:10px;padding:2px 12px;background:#0f3460;border:1px solid #555;color:#8cf;cursor:pointer;margin-right:4px;";
+  applyBtn.addEventListener("click", () => {
+    drawings[drawingIndex].color = colorInput.value;
+    drawings[drawingIndex].lineWidth = parseFloat(widthInput.value);
+    saveDrawings();
+    renderDrawings();
+    panel.remove();
+  });
+
+  // Delete button
+  const deleteBtn = document.createElement("button");
+  deleteBtn.textContent = "Delete";
+  deleteBtn.style.cssText = "font-size:10px;padding:2px 12px;background:#3a0a0a;border:1px solid #555;color:#f44;cursor:pointer;";
+  deleteBtn.addEventListener("click", () => {
+    drawings.splice(drawingIndex, 1);
+    saveDrawings();
+    renderDrawings();
+    panel.remove();
+    log("Drawing deleted", "info");
+  });
+
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "margin-top:6px;";
+  btnRow.appendChild(applyBtn);
+  btnRow.appendChild(deleteBtn);
+  panel.appendChild(btnRow);
+
+  document.body.appendChild(panel);
+
+  // Close on click outside
+  const closeHandler = (e) => {
+    if (!panel.contains(e.target)) {
+      panel.remove();
+      document.removeEventListener("mousedown", closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener("mousedown", closeHandler), 100);
+}
+
+// ══════════════════════════════════════════════════════════════
 // Visual Backtester
 // ══════════════════════════════════════════════════════════════
 
@@ -4766,12 +5735,18 @@ function openVisualBacktester() {
   runBtn.textContent = "Run Backtest";
   runBtn.className = "bt-run-btn";
 
+  const wfBtn = document.createElement("button");
+  wfBtn.textContent = "Walk-Forward";
+  wfBtn.className = "bt-run-btn";
+  wfBtn.style.cssText = "font-size:10px;padding:4px 10px;background:#3a0f60;border:1px solid #555;color:#c8f;cursor:pointer;";
+
   controls.appendChild(symInput);
   controls.appendChild(tfSelect);
   controls.appendChild(stratSelect);
   controls.appendChild(fastInput);
   controls.appendChild(slowInput);
   controls.appendChild(runBtn);
+  controls.appendChild(wfBtn);
   win.appendElement(controls);
 
   // Results area
@@ -4866,6 +5841,8 @@ function openVisualBacktester() {
 
       // Trade list
       const trades = result.trades || [];
+      // Store for Monte Carlo
+      window._lastBacktestTrades = trades;
       if (trades.length > 0) {
         const heading = document.createElement("div");
         heading.style.cssText = "color:#666;font-size:10px;margin:8px 0 4px;text-transform:uppercase;";
@@ -4903,6 +5880,112 @@ function openVisualBacktester() {
 
     runBtn.disabled = false;
     runBtn.textContent = "Run Backtest";
+  });
+
+  // ── Walk-Forward Test ──────────────────────────────────────
+  wfBtn.addEventListener("click", async () => {
+    const btSym = symInput.querySelector("input").value.trim().toUpperCase() || sym;
+    const btTf = tfSel.value;
+    const btFast = parseInt(fastInput.querySelector("input").value) || 10;
+    const btSlow = parseInt(slowInput.querySelector("input").value) || 50;
+
+    wfBtn.disabled = true;
+    wfBtn.textContent = "Running WF...";
+    statsDiv.textContent = "";
+    tradesDiv.textContent = "";
+
+    try {
+      const json = await invoke("run_walk_forward", {
+        symbol: btSym,
+        timeframe: btTf,
+        fast_min: Math.max(2, btFast - 10),
+        fast_max: btFast + 10,
+        slow_min: Math.max(3, btSlow - 30),
+        slow_max: btSlow + 30,
+        in_sample_pct: 70.0,
+      });
+      const result = typeof json === "string" ? JSON.parse(json) : json;
+
+      // Display walk-forward results
+      const wfTitle = document.createElement("div");
+      wfTitle.style.cssText = "font-size:11px;font-weight:bold;color:#c8f;margin-bottom:8px;";
+      wfTitle.textContent = `Walk-Forward: Best params Fast=${result.best_fast} Slow=${result.best_slow}`;
+      statsDiv.appendChild(wfTitle);
+
+      const splitInfo = document.createElement("div");
+      splitInfo.style.cssText = "font-size:10px;color:#888;margin-bottom:8px;";
+      splitInfo.textContent = `In-sample: ${result.in_sample_bars} bars | Out-of-sample: ${result.out_sample_bars} bars`;
+      statsDiv.appendChild(splitInfo);
+
+      // Side-by-side results
+      const renderSection = (label, data, color) => {
+        const heading = document.createElement("div");
+        heading.style.cssText = `font-size:10px;font-weight:bold;color:${color};margin:8px 0 4px;border-bottom:1px solid #333;padding-bottom:2px;`;
+        heading.textContent = label;
+        statsDiv.appendChild(heading);
+
+        const report = data.report || {};
+        const table = document.createElement("table");
+        table.className = "fw-table";
+        const rows = [
+          ["Total P/L", report.total_pnl != null ? `$${Number(report.total_pnl).toFixed(2)}` : "—"],
+          ["Win Rate", report.win_rate != null ? `${Number(report.win_rate).toFixed(1)}%` : "—"],
+          ["Profit Factor", report.profit_factor != null ? Number(report.profit_factor).toFixed(2) : "—"],
+          ["Sharpe Ratio", report.sharpe_ratio != null ? Number(report.sharpe_ratio).toFixed(3) : "—"],
+          ["Max Drawdown", report.max_drawdown_pct != null ? `${Number(report.max_drawdown_pct).toFixed(1)}%` : "—"],
+          ["Trades", report.total_trades ?? "—"],
+        ];
+        for (const [l, v] of rows) {
+          const tr = document.createElement("tr");
+          const td1 = document.createElement("td");
+          td1.className = "fw-label"; td1.textContent = l;
+          const td2 = document.createElement("td");
+          td2.className = "fw-value"; td2.textContent = v;
+          tr.appendChild(td1); tr.appendChild(td2);
+          table.appendChild(tr);
+        }
+        statsDiv.appendChild(table);
+
+        // Store out-of-sample trades for Monte Carlo
+        if (label.includes("Out-of-Sample") && data.trades) {
+          window._lastBacktestTrades = data.trades;
+        }
+      };
+
+      renderSection("In-Sample (Optimization)", result.in_sample, "#4caf50");
+      renderSection("Out-of-Sample (Validation)", result.out_sample, "#ff9800");
+
+      // Equity curves on the chart
+      if (eqChart) { eqChart.remove(); eqChart = null; }
+      eqChart = createChart(eqContainer, {
+        width: eqContainer.clientWidth,
+        height: 200,
+        layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false },
+        grid: { vertLines: { color: "#1a1a2e" }, horzLines: { color: "#1a1a2e" } },
+        rightPriceScale: { borderColor: "#333" },
+        timeScale: { borderColor: "#333" },
+      });
+
+      const isCurve = result.in_sample.equity_curve || [];
+      const osCurve = result.out_sample.equity_curve || [];
+
+      if (isCurve.length > 0) {
+        const isS = eqChart.addLineSeries({ color: "#4caf50", lineWidth: 2, title: "In-Sample" });
+        isS.setData(isCurve.map((v, i) => ({ time: i + 1, value: typeof v === "number" ? v : v.value || v.equity || 0 })));
+      }
+      if (osCurve.length > 0) {
+        const osS = eqChart.addLineSeries({ color: "#ff9800", lineWidth: 2, title: "Out-of-Sample" });
+        osS.setData(osCurve.map((v, i) => ({ time: isCurve.length + i + 1, value: typeof v === "number" ? v : v.value || v.equity || 0 })));
+      }
+      eqChart.timeScale().fitContent();
+
+    } catch (e) {
+      statsDiv.textContent = `Walk-forward failed: ${e}`;
+      statsDiv.style.color = "#f44";
+    }
+
+    wfBtn.disabled = false;
+    wfBtn.textContent = "Walk-Forward";
   });
 }
 
@@ -5709,8 +6792,8 @@ function renderDrawingsExtended() {
       const y2 = candleSeries.priceToCoordinate(d.p2.price);
       if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
       ctx.beginPath();
-      ctx.strokeStyle = "#00bcd4";
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = d.color || "#00bcd4";
+      ctx.lineWidth = d.lineWidth || 1.5;
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
@@ -5748,15 +6831,16 @@ function renderDrawingsExtended() {
     } else if (d.type === "horizontal") {
       const y = candleSeries.priceToCoordinate(d.p1.price);
       if (y === null) continue;
+      const hColor = d.color || "#ff9800";
       ctx.beginPath();
-      ctx.strokeStyle = "#ff9800";
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = hColor;
+      ctx.lineWidth = d.lineWidth || 1;
       ctx.setLineDash([6, 3]);
       ctx.moveTo(0, y);
       ctx.lineTo(drawCanvas.width, y);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = "#ff9800";
+      ctx.fillStyle = hColor;
       ctx.font = "10px Consolas";
       ctx.fillText(`$${d.p1.price.toFixed(2)}`, 4, y - 4);
 
@@ -6080,6 +7164,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupLineDrag();
   setupExtendedDrawings();
   patchRenderDrawings();
+  setupDrawingPropertiesPanel();
   setupPaneResizers();
   setupLogPanel();
   setupNewsPanel();
@@ -6087,6 +7172,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupPositionsPanel();
   setupOrdersPanel();
   loadAlerts();
+  loadMultiAlerts();
   setupAutocomplete();
   setupButtons();
   setupKeyboard();

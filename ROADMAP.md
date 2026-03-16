@@ -133,20 +133,21 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | **Plugin marketplace** | 🔲 Blocked | Needs distribution infrastructure |
 | **Pure Rust GUI migration** | 🔲 Blocked | Egui/Iced — long-term architectural goal |
 
+| Data Window | ✅ Done | Fixed panel: OHLCV + all indicator values at cursor |
+| Drawing object properties | ✅ Done | Right-click drawing: color picker, line width, delete |
+| Portfolio breakdown by sector | ✅ Done | Ctrl+K → PORTFOLIO, grouped by asset class |
+| Multi-condition alerts | ✅ Done | Ctrl+K → ALERTS: RSI/KAMA/Fisher conditions |
+| Walk-forward testing | ✅ Done | 70/30 in-sample/out-of-sample split, auto-optimize |
+| Monte Carlo risk of ruin | ✅ Done | Ctrl+K → MONTECARLO, 100K simulations |
+| Earnings calendar | ✅ Done | Ctrl+K → EARNINGS, corporate actions table |
+| Dividend alerts | ✅ Done | Auto-notify 5 days before ex-dividend |
+| Correlation matrix | ✅ Done | Ctrl+K → CORR, pairwise heatmap from cached bars |
+
 ### Future — Implementable (Not Yet Started)
 
 | Feature | Effort | Notes |
 |---|---|---|
-| Data Window (indicator readout at cursor) | 4h | Aggregate all indicator values per bar |
-| Drawing object properties panel | 8h | Select + edit drawn objects |
-| Portfolio breakdown by sector | 6h | Pie/bar chart of positions by sector |
-| Multi-condition alerts | 8h | "When RSI > 70" or "KAMA crosses SMA200" |
-| Walk-forward testing | 12h | In-sample/out-of-sample backtesting |
-| Monte Carlo risk of ruin | 6h | Simulate P&L distribution |
-| Earnings calendar with estimates | 4h | Yahoo Finance or Alpaca data |
-| Dividend/corporate action alerts | 3h | Alpaca corporate action signals |
-| Congress trading data | 8h | Congress API free tier |
-| Correlation matrix | 6h | Rolling correlation heatmap |
+| Congress trading data | 8h | Needs Congress API key (free registration) |
 
 ### Blocked — Needs External Resources
 

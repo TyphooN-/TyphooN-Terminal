@@ -269,6 +269,27 @@ body {
 
 .chart-tooltip.hidden { display: none; }
 
+/* ── Data Window (fixed panel, top-left of chart) ────────── */
+
+.data-window {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 50;
+  background: #000000cc;
+  border: 1px solid #333;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-family: 'Consolas', monospace;
+  color: #ccc;
+  pointer-events: none;
+  white-space: pre;
+  border-radius: 2px;
+  min-width: 160px;
+  max-width: 280px;
+  transition: opacity 0.15s;
+}
+
 /* ── Right Panel ─────────────────────────────────────────── */
 
 #right-panel {
