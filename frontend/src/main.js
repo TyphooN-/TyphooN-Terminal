@@ -428,9 +428,15 @@ function rebuildMainSeries(chartType) {
 
 // ── SL/TP Lines ─────────────────────────────────────────────
 
+// Get the active candle series (main chart or MTF grid cell)
+function getActiveCandleSeries() {
+  if (mtfGridActive && mtfActiveCell) return mtfActiveCell.candleSeries;
+  return candleSeries;
+}
+
 function createSLLine(price) {
   removeSLLine();
-  slLine = candleSeries.createPriceLine({
+  slLine = getActiveCandleSeries().createPriceLine({
     price,
     color: "#f44336",
     lineWidth: 2,
@@ -444,7 +450,7 @@ function createSLLine(price) {
 
 function createTPLine(price) {
   removeTPLine();
-  tpLine = candleSeries.createPriceLine({
+  tpLine = getActiveCandleSeries().createPriceLine({
     price,
     color: "#4caf50",
     lineWidth: 2,
@@ -457,10 +463,10 @@ function createTPLine(price) {
 }
 
 function removeSLLine() {
-  if (slLine) { candleSeries.removePriceLine(slLine); slLine = null; }
+  if (slLine) { try { getActiveCandleSeries().removePriceLine(slLine); } catch (_) { try { candleSeries.removePriceLine(slLine); } catch (_) {} } slLine = null; }
 }
 function removeTPLine() {
-  if (tpLine) { candleSeries.removePriceLine(tpLine); tpLine = null; }
+  if (tpLine) { try { getActiveCandleSeries().removePriceLine(tpLine); } catch (_) { try { candleSeries.removePriceLine(tpLine); } catch (_) {} } tpLine = null; }
 }
 function getSLPrice() { return slLine ? slLine.options().price : null; }
 function getTPPrice() { return tpLine ? tpLine.options().price : null; }
@@ -2810,7 +2816,7 @@ function setupButtons() {
 
   // Buy Lines: SL = lowest visible, TP = highest visible
   document.getElementById("btn-buy-lines").addEventListener("click", () => {
-    const data = candleSeries.data();
+    const data = getActiveCandleSeries().data();
     if (!data || data.length === 0) return;
     const recent = data.slice(-50);
     createSLLine(Math.min(...recent.map((d) => d.low)));
@@ -2819,7 +2825,7 @@ function setupButtons() {
 
   // Sell Lines: SL = highest, TP = lowest
   document.getElementById("btn-sell-lines").addEventListener("click", () => {
-    const data = candleSeries.data();
+    const data = getActiveCandleSeries().data();
     if (!data || data.length === 0) return;
     const recent = data.slice(-50);
     createSLLine(Math.max(...recent.map((d) => d.high)));
@@ -7390,6 +7396,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 let mtfGridActive = false;
 let mtfGridCells = []; // [{ tf, chart, candleSeries, fisherChart, volumeChart, container }]
+let mtfActiveCell = null; // currently selected grid cell for trading
 
 function setupMTFGrid() {
   const btn = document.getElementById("btn-mtf-grid");
@@ -7541,6 +7548,21 @@ async function openMTFGrid(symbol, timeframes) {
 
     const cellInfo = { tf, chart: cellChart, candleSeries: cellCandleSeries, fisherChart: cellFisherChart, volumeChart: cellVolumeChart, container: cell, chartDiv, fisherDiv, volumeDiv };
     mtfGridCells.push(cellInfo);
+
+    // Single click to select as active trading cell
+    cell.addEventListener("click", () => {
+      mtfGridCells.forEach(c => c.container.style.outline = "none");
+      cell.style.outline = "2px solid #4caf50";
+      mtfActiveCell = cellInfo;
+      currentTimeframe = tf;
+      log(`MTF: ${tf} selected for trading`, "info");
+    });
+
+    // Auto-select first cell
+    if (mtfGridCells.length === 0) {
+      cell.style.outline = "2px solid #4caf50";
+      mtfActiveCell = cellInfo;
+    }
 
     // Double-click to fullscreen/restore
     cell.addEventListener("dblclick", () => {
@@ -8074,6 +8096,7 @@ function detectRegime(data, period = 20) {
 
 function closeMTFGrid() {
   mtfGridActive = false;
+  mtfActiveCell = null;
   const btn = document.getElementById("btn-mtf-grid");
   btn.textContent = "MTF Grid";
   document.getElementById("mtf-grid-tfs").classList.add("hidden");

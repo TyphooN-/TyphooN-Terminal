@@ -937,6 +937,10 @@ select option {
   border-top: 1px solid #222;
 }
 
+.mtf-grid-cell:hover {
+  outline: 1px solid #444;
+}
+
 .mtf-grid-cell.fullscreen {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
