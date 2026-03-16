@@ -2662,9 +2662,13 @@ async function updateLatestBar(symbol, timeframe) {
 
 async function updateDashboard() {
   try {
-    // Margin info (includes equity, balance, ML, zone, spread tolerance)
-    const marginJson = await invoke("get_margin_info");
+    // Parallel: fetch margin + positions simultaneously (2 API calls → 1 round trip)
+    const [marginJson, posJson] = await Promise.all([
+      invoke("get_margin_info"),
+      invoke("get_positions"),
+    ]);
     const mi = JSON.parse(marginJson);
+    const positions = JSON.parse(posJson);
 
     const hasPositions = mi.gross_lots > 0;
     const mlText = hasPositions ? `${mi.margin_level_pct.toFixed(1)}%` : "—";
@@ -2681,10 +2685,7 @@ async function updateDashboard() {
       mlEl.className = `dash-row ${mi.zone === "TRIM" ? "positive" : mi.zone === "DEAD ZONE" ? "neutral" : "negative"}`;
     }
 
-    // Positions
-    const posJson = await invoke("get_positions");
-    const positions = JSON.parse(posJson);
-
+    // Positions (already fetched in parallel above)
     let totalPL = 0;
     let posText = "Position: —";
     let posQty = 0;
@@ -7770,8 +7771,21 @@ async function openMTFGrid(symbol, timeframes) {
     });
   }
 
-  // Load data SEQUENTIALLY to avoid rate limit (cache-first)
+  // Split: cached cells load in parallel (instant), uncached load sequentially (rate-limited)
+  const cached = [];
+  const uncached = [];
   for (const cellInfo of mtfGridCells) {
+    const cacheKey = getCacheKey(symbol, cellInfo.tf);
+    if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length > 0) {
+      cached.push(cellInfo);
+    } else {
+      uncached.push(cellInfo);
+    }
+  }
+  // Parallel: all cached cells at once (no API calls)
+  await Promise.all(cached.map(c => loadMTFCellData(c, symbol)));
+  // Sequential: uncached cells one at a time (respects rate limiter)
+  for (const cellInfo of uncached) {
     await loadMTFCellData(cellInfo, symbol);
   }
 
