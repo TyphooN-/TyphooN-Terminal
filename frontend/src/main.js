@@ -2887,21 +2887,36 @@ async function openArticleInline(url, title) {
     }
   }
 
-  // Extract readable content (XSS-safe via textContent)
+  // Extract readable content (XSS-safe: textContent for text, sanitized src for images)
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, "text/html");
   doc.querySelectorAll("script, style, nav, header, footer, iframe, .ad, .ads, .sidebar").forEach(el => el.remove());
 
   const main = doc.querySelector("article, main, .article-body, .post-content, .entry-content, .story-body");
   const source = main || doc.body;
-  const paragraphs = source ? source.querySelectorAll("p, h1, h2, h3, h4, li") : doc.querySelectorAll("p");
+  const elements = source ? source.querySelectorAll("p, h1, h2, h3, h4, li, img, figure") : doc.querySelectorAll("p, img");
 
   win.contentElement.textContent = ""; // Clear loading text
   let found = 0;
-  for (const p of paragraphs) {
-    if (p.textContent.trim().length > 15) {
+  for (const node of elements) {
+    if (node.tagName === "IMG" || (node.tagName === "FIGURE" && node.querySelector("img"))) {
+      // Extract image — only allow HTTPS src (XSS-safe)
+      const imgNode = node.tagName === "IMG" ? node : node.querySelector("img");
+      const src = imgNode?.getAttribute("src") || "";
+      if (src.startsWith("https://")) {
+        const img = document.createElement("img");
+        img.src = src; // safe: HTTPS only, CSP restricts to https:
+        img.alt = imgNode?.getAttribute("alt") || "";
+        img.style.cssText = "max-width:100%;height:auto;border-radius:4px;margin:8px 0;display:block;";
+        img.loading = "lazy";
+        win.appendElement(img);
+        found++;
+      }
+    } else if (node.textContent.trim().length > 15) {
       const el = document.createElement("p");
-      el.textContent = p.textContent;
+      el.textContent = node.textContent;
+      el.style.margin = "6px 0";
+      el.style.lineHeight = "1.6";
       win.appendElement(el);
       found++;
     }
