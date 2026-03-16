@@ -2557,11 +2557,14 @@ async function loadChart(symbol, timeframe) {
     if (mtfGridActive && mtfGridCells.length > 0) {
       const selectedTFs = mtfGridCells.map(c => c.tf);
       closeMTFGrid();
-      // Defer grid open so loadChart returns first, then grid fetches sequentially
-      setTimeout(() => openMTFGrid(symbol, selectedTFs), 100);
-      // Skip prefetch — grid will fetch the timeframes it needs
+      setTimeout(() => {
+        openMTFGrid(symbol, selectedTFs).catch(e => {
+          log(`MTF grid reload failed: ${e}`, "warn");
+          // Show main chart as fallback
+          document.getElementById("chart-stack").style.display = "";
+        });
+      }, 200);
     } else {
-      // Background pre-fetch: load all other timeframes for this symbol
       prefetchAllTimeframes(symbol, timeframe, limit);
     }
 
@@ -2570,6 +2573,8 @@ async function loadChart(symbol, timeframe) {
   } catch (e) {
     log(`Chart load failed for ${symbol} @ ${timeframe}: ${e}`, "error");
     setText("connect-status-bar", `Chart error: ${e}`);
+    // Ensure main chart is visible if MTF grid was closed during failed load
+    document.getElementById("chart-stack").style.display = "";
     setLoadingStatus(symbol, null);
   }
 }
@@ -7611,6 +7616,7 @@ function setupMTFGrid() {
 }
 
 async function openMTFGrid(symbol, timeframes) {
+  if (!symbol) { log("MTF grid: no symbol", "warn"); return; }
   mtfGridActive = true;
   const btn = document.getElementById("btn-mtf-grid");
   btn.textContent = "Close Grid";
@@ -7618,6 +7624,8 @@ async function openMTFGrid(symbol, timeframes) {
   // Hide normal chart stack
   const chartStack = document.getElementById("chart-stack");
   chartStack.style.display = "none";
+
+  try { // Wrap entire grid setup in try/catch — restore chart-stack on any error
 
   // Create grid container
   const gridContainer = document.createElement("div");
@@ -7773,6 +7781,17 @@ async function openMTFGrid(symbol, timeframes) {
   // Resize observer
   const ro = new ResizeObserver(() => resizeMTFGrid());
   ro.observe(gridContainer);
+
+  } catch (e) {
+    // Grid failed — restore main chart visibility
+    log(`MTF grid failed: ${e}`, "error");
+    mtfGridActive = false;
+    btn.textContent = "MTF Grid";
+    chartStack.style.display = "";
+    const grid = document.getElementById("mtf-grid-container");
+    if (grid) grid.remove();
+    mtfGridCells = [];
+  }
 }
 
 async function loadMTFCellData(cellInfo, symbol) {
