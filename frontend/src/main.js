@@ -3121,24 +3121,25 @@ function setupButtons() {
   const slInput = document.getElementById("sl-input");
   const tpInput = document.getElementById("tp-input");
 
+  // SL/TP inputs: only fire on Enter key (not blur/change — prevents accidental triggers)
   if (slInput) {
-    slInput.addEventListener("change", () => {
-      const val = parseFloat(slInput.value);
-      if (isNaN(val) || val <= 0) return;
-      createSLLine(val);
-    });
     slInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { slInput.blur(); slInput.dispatchEvent(new Event("change")); }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const val = parseFloat(slInput.value);
+        if (!isNaN(val) && val > 0) createSLLine(val);
+        slInput.blur();
+      }
     });
   }
   if (tpInput) {
-    tpInput.addEventListener("change", () => {
-      const val = parseFloat(tpInput.value);
-      if (isNaN(val) || val <= 0) return;
-      createTPLine(val);
-    });
     tpInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { tpInput.blur(); tpInput.dispatchEvent(new Event("change")); }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const val = parseFloat(tpInput.value);
+        if (!isNaN(val) && val > 0) createTPLine(val);
+        tpInput.blur();
+      }
     });
   }
 
