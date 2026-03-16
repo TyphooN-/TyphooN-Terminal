@@ -3174,6 +3174,16 @@ function setupKeyboard() {
           log("Deleted last drawing", "info");
         }
         break;
+      case "e": // ray (extends right from two points)
+        drawingMode = "ray"; drawingAnchor = null;
+        document.getElementById("chart-container").style.cursor = "crosshair";
+        log("Drawing mode: ray — click two points (extends right)", "info");
+        break;
+      case "j": // ruler / price range measure
+        drawingMode = "ruler"; drawingAnchor = null;
+        document.getElementById("chart-container").style.cursor = "crosshair";
+        log("Ruler mode: click two points to measure", "info");
+        break;
       case "n": // horizontal line
         drawingMode = "horizontal"; drawingAnchor = null; channelThirdClick = false;
         document.getElementById("chart-container").style.cursor = "crosshair";
@@ -7178,6 +7188,53 @@ function renderDrawingsExtended() {
       ctx.lineTo(x2, oY2);
       ctx.stroke();
       ctx.setLineDash([]);
+
+    } else if (d.type === "ray") {
+      // Ray: line from p1 through p2, extending to right edge
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
+      const y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+      const y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      ctx.beginPath();
+      ctx.strokeStyle = d.color || "#ff9800";
+      ctx.lineWidth = d.lineWidth || 1.5;
+      ctx.moveTo(x1, y1);
+      // Extend to right edge
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const extend = dx !== 0 ? (drawCanvas.width - x1) / dx : 1;
+      ctx.lineTo(x1 + dx * extend, y1 + dy * extend);
+      ctx.stroke();
+
+    } else if (d.type === "ruler") {
+      // Ruler: shows price distance, % change, bar count between two points
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
+      const y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+      const y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      // Dashed line
+      ctx.beginPath();
+      ctx.strokeStyle = "#888";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Label box
+      const priceDiff = d.p2.price - d.p1.price;
+      const pctDiff = d.p1.price !== 0 ? (priceDiff / d.p1.price * 100) : 0;
+      const midX = (x1 + x2) / 2;
+      const midY = (y1 + y2) / 2;
+      const sign = priceDiff >= 0 ? "+" : "";
+      const label = `${sign}$${priceDiff.toFixed(2)} (${sign}${pctDiff.toFixed(2)}%)`;
+      ctx.fillStyle = "#000c";
+      ctx.fillRect(midX - 2, midY - 14, ctx.measureText(label).width + 8, 16);
+      ctx.fillStyle = priceDiff >= 0 ? "#4caf50" : "#f44336";
+      ctx.font = "11px Consolas";
+      ctx.fillText(label, midX + 2, midY - 2);
     }
   }
 }
@@ -7322,6 +7379,18 @@ function setupChartContextMenu() {
         drawingAnchor = null;
         container.style.cursor = "crosshair";
         log("Click two points for Fibonacci retracement", "info");
+      }},
+      { label: "Draw Ray", action: () => {
+        drawingMode = "ray";
+        drawingAnchor = null;
+        container.style.cursor = "crosshair";
+        log("Click two points for ray (extends right)", "info");
+      }},
+      { label: "Ruler (Measure)", action: () => {
+        drawingMode = "ruler";
+        drawingAnchor = null;
+        container.style.cursor = "crosshair";
+        log("Click two points to measure distance", "info");
       }},
       { type: "separator" },
       { label: "Set Alert", action: () => {
