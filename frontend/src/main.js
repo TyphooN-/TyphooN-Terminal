@@ -2553,18 +2553,20 @@ async function loadChart(symbol, timeframe) {
     if (liveBarInterval) clearInterval(liveBarInterval);
     liveBarInterval = setInterval(() => updateLatestBar(symbol, timeframe), 10000);
 
-    // Background pre-fetch: load all other timeframes for this symbol
-    prefetchAllTimeframes(symbol, timeframe, limit);
-
-    // Load news and fundamentals for this symbol (background)
-    loadNewsAndFundamentals(symbol);
-
-    // If MTF grid is active, reload all cells with the new symbol
+    // If MTF grid is active, reload cells with new symbol (defer to avoid blocking)
     if (mtfGridActive && mtfGridCells.length > 0) {
       const selectedTFs = mtfGridCells.map(c => c.tf);
       closeMTFGrid();
-      openMTFGrid(symbol, selectedTFs);
+      // Defer grid open so loadChart returns first, then grid fetches sequentially
+      setTimeout(() => openMTFGrid(symbol, selectedTFs), 100);
+      // Skip prefetch — grid will fetch the timeframes it needs
+    } else {
+      // Background pre-fetch: load all other timeframes for this symbol
+      prefetchAllTimeframes(symbol, timeframe, limit);
     }
+
+    // Load news and fundamentals for this symbol (background)
+    loadNewsAndFundamentals(symbol);
   } catch (e) {
     log(`Chart load failed for ${symbol} @ ${timeframe}: ${e}`, "error");
     setText("connect-status-bar", `Chart error: ${e}`);
@@ -7902,29 +7904,15 @@ async function loadMTFCellData(cellInfo, symbol) {
       addLine("#FFFFFF88", 1, pcl.lows);
     }
 
-    // Supply/Demand zones (filled rectangles matching main chart)
+    // Supply/Demand zones (lightweight — lines only, last 4 zones for performance)
     if (chartData.length > 12) {
       const zones = calcSupplyDemandZones(chartData);
-      for (const z of zones.slice(-8)) {
-        const zoneColor = z.type === "supply" ? "#87CEEB" : "#8FBC8F";
-        const fillColor = zoneColor + "30";
-        const lineColor = zoneColor + "88";
+      for (const z of zones.slice(-4)) {
+        const color = z.type === "supply" ? "#87CEEB66" : "#8FBC8F66";
         const zoneBars = chartData.filter(d => d.time >= z.startTime);
         if (zoneBars.length < 2) continue;
-        // Top + bottom lines
-        const topS = cellInfo.chart.addLineSeries({ color: lineColor, lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-        topS.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
-        const botS = cellInfo.chart.addLineSeries({ color: lineColor, lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-        botS.setData(zoneBars.map(d => ({ time: d.time, value: z.low })));
-        // Fill between
-        const fill = cellInfo.chart.addBaselineSeries({
-          topFillColor1: fillColor, topFillColor2: fillColor,
-          bottomFillColor1: fillColor, bottomFillColor2: fillColor,
-          topLineColor: "transparent", bottomLineColor: "transparent",
-          lineWidth: 0, baseValue: { type: "price", price: z.low },
-          lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
-        });
-        fill.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
+        addLine(color, 1, zoneBars.map(d => ({ time: d.time, value: z.high })));
+        addLine(color, 1, zoneBars.map(d => ({ time: d.time, value: z.low })));
       }
     }
 
