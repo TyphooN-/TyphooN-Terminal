@@ -5353,15 +5353,29 @@ function cmdMonteCarlo() {
       const p95 = finalEquities[Math.floor(numSims * 0.95)];
       const avgDD = (maxDrawdowns.reduce((a, b) => a + b, 0) / numSims * 100).toFixed(1);
       const medDD = (maxDrawdowns[Math.floor(numSims / 2)] * 100).toFixed(1);
-      stats.innerHTML = `
-        <div style="margin-bottom:4px;font-weight:bold;color:#888;">Equity Distribution</div>
-        <div>Median Final Equity: <span style="color:#8cf">$${median.toFixed(2)}</span></div>
-        <div>5th Percentile: <span style="color:#f44">$${p5.toFixed(2)}</span></div>
-        <div>95th Percentile: <span style="color:#4caf50">$${p95.toFixed(2)}</span></div>
-        <div style="margin-top:6px;font-weight:bold;color:#888;">Drawdown Distribution</div>
-        <div>Average Max DD: <span style="color:#ff9800">${avgDD}%</span></div>
-        <div>Median Max DD: <span style="color:#ff9800">${medDD}%</span></div>
-      `;
+      stats.textContent = "";
+      const addStat = (label, value, color) => {
+        const d = document.createElement("div");
+        d.textContent = `${label}: `;
+        const s = document.createElement("span");
+        s.style.color = color;
+        s.textContent = value;
+        d.appendChild(s);
+        stats.appendChild(d);
+      };
+      const hdr1 = document.createElement("div");
+      hdr1.style.cssText = "margin-bottom:4px;font-weight:bold;color:#888;";
+      hdr1.textContent = "Equity Distribution";
+      stats.appendChild(hdr1);
+      addStat("Median Final Equity", `$${median.toFixed(2)}`, "#8cf");
+      addStat("5th Percentile", `$${p5.toFixed(2)}`, "#f44");
+      addStat("95th Percentile", `$${p95.toFixed(2)}`, "#4caf50");
+      const hdr2 = document.createElement("div");
+      hdr2.style.cssText = "margin-top:6px;font-weight:bold;color:#888;";
+      hdr2.textContent = "Drawdown Distribution";
+      stats.appendChild(hdr2);
+      addStat("Average Max DD", `${avgDD}%`, "#ff9800");
+      addStat("Median Max DD", `${medDD}%`, "#ff9800");
       resultsDiv.appendChild(stats);
 
       runBtn.disabled = false;
