@@ -167,7 +167,7 @@ impl AlpacaBroker {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .unwrap_or_else(|_| Client::new()),
+                .expect("Failed to build HTTP client"),
             base_url,
             api_key: Zeroizing::new(api_key),
             secret_key: Zeroizing::new(secret_key),
