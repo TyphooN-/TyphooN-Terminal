@@ -25,7 +25,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Chart Templates** | Save/load indicator configs and order mode |
 | **Workspace Profiles** | Save/load entire layout (tabs, indicators, pane sizes) |
 | **Drawing Tools** | Trend lines, Fibonacci, horizontal lines, rectangles, channels |
-| **Multi-Chart Layouts** | Split view with independent symbols |
+| **Multi-Chart Layouts** | Split view + MTF grid (2-5 timeframes with Fisher/BetterVolume per cell) |
 | **Screenshot Export** | Ctrl+Shift+S to clipboard with toast notification |
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
 | **CSV Export** | Export trade history as CSV |
@@ -102,6 +102,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | `l` | Draw trend line (click 2 points) |
 | `f` | Draw Fibonacci retracement (click high/low) |
 | `x` | Delete last drawing |
+| `g` | Toggle MTF grid view (Alt+G to tile floating windows) |
 | `a` | Set price alert at current price |
 | `h` | Refresh trade history |
 | `Esc` | Clear SL/TP lines |
@@ -121,7 +122,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
 | [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
 | [INDICATOR_PORTING.md](INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
-| [docs/adr/](docs/adr/) | Architecture Decision Records (18 ADRs) |
+| [docs/adr/](docs/adr/) | Architecture Decision Records (19 ADRs) |
 
 ### ADR Index
 
@@ -145,6 +146,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [016](docs/adr/016-price-alerts.md) | Price alerts with browser notifications |
 | [017](docs/adr/017-drawing-tools.md) | Drawing tools (trend lines + Fibonacci) |
 | [018](docs/adr/018-mql5-feature-parity.md) | MQL5 feature parity audit |
+| [019](docs/adr/019-mtf-grid-view.md) | Multi-timeframe grid view (MT5-style) |
 
 ---
 

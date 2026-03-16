@@ -868,6 +868,63 @@ select option {
 
 /* ── Split Chart Layout ─────────────────────────────────── */
 
+/* ── MTF Grid Layout ───────────────────────────────────── */
+
+#mtf-grid-container {
+  display: grid;
+  gap: 2px;
+  background: #111;
+  flex: 1;
+  overflow: hidden;
+}
+
+#mtf-grid-container.grid-2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+#mtf-grid-container.grid-3 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#mtf-grid-container.grid-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#mtf-grid-container.grid-5 { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+.mtf-grid-cell {
+  background: #000;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mtf-grid-cell .mtf-cell-label {
+  position: absolute;
+  top: 2px;
+  left: 6px;
+  z-index: 5;
+  font-size: 11px;
+  font-weight: bold;
+  color: #8cf;
+  pointer-events: none;
+  text-shadow: 0 0 4px #000;
+}
+
+.mtf-grid-cell .mtf-cell-chart {
+  flex: 1;
+  min-height: 0;
+}
+
+.mtf-grid-cell .mtf-cell-fisher {
+  height: 50px;
+  border-top: 1px solid #333;
+}
+
+.mtf-grid-cell .mtf-cell-volume {
+  height: 40px;
+  border-top: 1px solid #222;
+}
+
+.mtf-grid-cell.fullscreen {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 1500;
+}
+
 #chart-stack.split-mode {
   flex-direction: row;
 }

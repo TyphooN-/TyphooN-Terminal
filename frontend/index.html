@@ -67,6 +67,14 @@
         <option value="50000" selected>Max</option>
       </select>
       <button id="btn-split" style="background:#0f3460;border:1px solid #555;color:#8cf;font-size:10px;padding:3px 8px;cursor:pointer;font-family:inherit;">Split</button>
+      <button id="btn-mtf-grid" style="background:#3a0f60;border:1px solid #555;color:#c8f;font-size:10px;padding:3px 8px;cursor:pointer;font-family:inherit;">MTF Grid</button>
+      <span id="mtf-grid-tfs" class="hidden" style="font-size:10px;">
+        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Hour" /> H1</label>
+        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="4Hour" checked /> H4</label>
+        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Day" checked /> D1</label>
+        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Week" checked /> W1</label>
+        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Month" checked /> MN</label>
+      </span>
       <span id="loading-indicator" class="loading hidden">Loading...</span>
       <span id="connect-status-bar" class="status-bar"></span>
       <span id="account-info" class="info-label"></span>

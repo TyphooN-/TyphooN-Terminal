@@ -5062,6 +5062,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupButtons();
   setupKeyboard();
   setupConnect();
+  setupMTFGrid();
   setupTabs();
   setupTemplates();
   setupProfiles();
@@ -5077,6 +5078,272 @@ document.addEventListener("DOMContentLoaded", () => {
     if (document.visibilityState === "hidden") saveSession();
   });
 });
+
+// ── MTF Grid View (MT5-style multi-timeframe) ───────────
+
+let mtfGridActive = false;
+let mtfGridCells = []; // [{ tf, chart, candleSeries, fisherChart, volumeChart, container }]
+
+function setupMTFGrid() {
+  const btn = document.getElementById("btn-mtf-grid");
+  const tfCheckboxes = document.getElementById("mtf-grid-tfs");
+
+  btn.addEventListener("click", () => {
+    if (mtfGridActive) {
+      closeMTFGrid();
+    } else {
+      tfCheckboxes.classList.toggle("hidden");
+      if (!tfCheckboxes.classList.contains("hidden")) {
+        // Show checkboxes; user clicks again to activate
+        btn.textContent = "Apply";
+      } else {
+        btn.textContent = "MTF Grid";
+      }
+    }
+  });
+
+  // When "Apply" is clicked with checkboxes visible
+  btn.addEventListener("click", () => {
+    if (btn.textContent === "Apply" && !tfCheckboxes.classList.contains("hidden")) {
+      const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(cb => cb.value);
+      if (selectedTFs.length < 2) { alert("Select at least 2 timeframes"); return; }
+      if (!currentSymbol) { alert("Load a chart first"); return; }
+      tfCheckboxes.classList.add("hidden");
+      openMTFGrid(currentSymbol, selectedTFs);
+    }
+  });
+}
+
+async function openMTFGrid(symbol, timeframes) {
+  mtfGridActive = true;
+  const btn = document.getElementById("btn-mtf-grid");
+  btn.textContent = "Close Grid";
+
+  // Hide normal chart stack
+  const chartStack = document.getElementById("chart-stack");
+  chartStack.style.display = "none";
+
+  // Create grid container
+  const gridContainer = document.createElement("div");
+  gridContainer.id = "mtf-grid-container";
+  const count = timeframes.length;
+  gridContainer.className = `grid-${Math.min(count, 5)}`;
+  chartStack.parentElement.insertBefore(gridContainer, chartStack);
+
+  const tfLabels = { "1Min": "M1", "5Min": "M5", "15Min": "M15", "30Min": "M30", "1Hour": "H1", "4Hour": "H4", "1Day": "D1", "1Week": "W1", "1Month": "MN" };
+
+  for (const tf of timeframes) {
+    const cell = document.createElement("div");
+    cell.className = "mtf-grid-cell";
+
+    const label = document.createElement("div");
+    label.className = "mtf-cell-label";
+    label.textContent = `${symbol} ${tfLabels[tf] || tf}`;
+    cell.appendChild(label);
+
+    const chartDiv = document.createElement("div");
+    chartDiv.className = "mtf-cell-chart";
+    cell.appendChild(chartDiv);
+
+    const fisherDiv = document.createElement("div");
+    fisherDiv.className = "mtf-cell-fisher";
+    cell.appendChild(fisherDiv);
+
+    const volumeDiv = document.createElement("div");
+    volumeDiv.className = "mtf-cell-volume";
+    cell.appendChild(volumeDiv);
+
+    gridContainer.appendChild(cell);
+
+    // Create chart instances
+    const cellChart = createChart(chartDiv, {
+      width: 100, height: 100,
+      layout: { background: { color: "#000000" }, textColor: "#d1d4dc", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+      grid: { vertLines: { color: "#222", style: 3 }, horzLines: { color: "#222", style: 3 } },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: "#333" },
+      timeScale: { borderColor: "#333", timeVisible: true },
+    });
+
+    const cellCandleSeries = cellChart.addCandlestickSeries({
+      upColor: "#00ff00", downColor: "#ff0000",
+      borderDownColor: "#ff0000", borderUpColor: "#00ff00",
+      wickDownColor: "#ff0000", wickUpColor: "#00ff00",
+    });
+
+    const cellFisherChart = createChart(fisherDiv, {
+      width: 100, height: 50,
+      layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+      grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+      rightPriceScale: { borderColor: "#333" },
+      timeScale: { visible: false },
+      crosshair: { mode: CrosshairMode.Normal },
+    });
+
+    const cellVolumeChart = createChart(volumeDiv, {
+      width: 100, height: 40,
+      layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+      grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+      rightPriceScale: { borderColor: "#333" },
+      timeScale: { visible: false },
+      crosshair: { mode: CrosshairMode.Normal },
+    });
+
+    // Sync Fisher/Volume time scale with main
+    cellChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (range) {
+        cellFisherChart.timeScale().setVisibleLogicalRange(range);
+        cellVolumeChart.timeScale().setVisibleLogicalRange(range);
+      }
+    });
+
+    const cellInfo = { tf, chart: cellChart, candleSeries: cellCandleSeries, fisherChart: cellFisherChart, volumeChart: cellVolumeChart, container: cell, chartDiv, fisherDiv, volumeDiv };
+    mtfGridCells.push(cellInfo);
+
+    // Double-click to fullscreen/restore
+    cell.addEventListener("dblclick", () => {
+      if (cell.classList.contains("fullscreen")) {
+        cell.classList.remove("fullscreen");
+        resizeMTFGrid();
+      } else {
+        // Remove fullscreen from others first
+        mtfGridCells.forEach(c => c.container.classList.remove("fullscreen"));
+        cell.classList.add("fullscreen");
+        cellChart.resize(window.innerWidth, window.innerHeight - 90);
+        cellFisherChart.resize(window.innerWidth, 50);
+        cellVolumeChart.resize(window.innerWidth, 40);
+      }
+    });
+
+    // Load data
+    loadMTFCellData(cellInfo, symbol);
+  }
+
+  // Initial resize
+  requestAnimationFrame(() => resizeMTFGrid());
+
+  // Resize observer
+  const ro = new ResizeObserver(() => resizeMTFGrid());
+  ro.observe(gridContainer);
+}
+
+async function loadMTFCellData(cellInfo, symbol) {
+  try {
+    const limit = parseInt(document.getElementById("bar-count").value) || 1000;
+    const cacheKey = getCacheKey(symbol, cellInfo.tf);
+    let bars;
+
+    const cached = barCache[cacheKey];
+    if (cached && cached.data && cached.data.length > 0) {
+      bars = cached.data;
+    } else {
+      const barsJson = await invoke("get_bars", { symbol, timeframe: cellInfo.tf, limit });
+      bars = JSON.parse(barsJson);
+      barCache[cacheKey] = { data: bars, timestamp: Date.now() };
+    }
+
+    const chartData = bars.map(b => ({
+      time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+      open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
+    }));
+
+    if (chartData.length === 0) return;
+
+    cellInfo.candleSeries.setData(chartData);
+    cellInfo.chart.timeScale().fitContent();
+
+    // Fisher
+    if (chartData.length > 32) {
+      const ef = calcEhlersFisher(chartData, 32);
+      if (ef.fisher.length > 1) {
+        const segments = [];
+        let curColor = ef.colors[0];
+        let curSeg = [ef.fisher[0]];
+        for (let i = 1; i < ef.fisher.length; i++) {
+          if (ef.colors[i] !== curColor) {
+            curSeg.push(ef.fisher[i]);
+            segments.push({ color: curColor, data: curSeg });
+            curColor = ef.colors[i];
+            curSeg = [ef.fisher[i]];
+          } else {
+            curSeg.push(ef.fisher[i]);
+          }
+        }
+        if (curSeg.length > 0) segments.push({ color: curColor, data: curSeg });
+        for (const seg of segments) {
+          if (seg.data.length < 2) continue;
+          const s = cellInfo.fisherChart.addLineSeries({ color: seg.color, lineWidth: 1.5, lastValueVisible: false, priceLineVisible: false });
+          s.setData(seg.data);
+        }
+        cellInfo.fisherChart.timeScale().setVisibleLogicalRange(cellInfo.chart.timeScale().getVisibleLogicalRange());
+      }
+    }
+
+    // BetterVolume
+    if (chartData.length > 22) {
+      const bv = calcBetterVolume(chartData);
+      if (bv.length > 0) {
+        const s = cellInfo.volumeChart.addHistogramSeries({ priceFormat: { type: "volume" } });
+        s.setData(bv);
+        cellInfo.volumeChart.timeScale().setVisibleLogicalRange(cellInfo.chart.timeScale().getVisibleLogicalRange());
+      }
+    }
+
+    // Overlay indicators: KAMA + SMA200
+    if (chartData.length > 200) {
+      const sma = calcSMA(chartData, 200);
+      if (sma.length > 0) {
+        const s = cellInfo.chart.addLineSeries({ color: "#FFD700", lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+        s.setData(sma);
+      }
+    }
+    if (chartData.length > 11) {
+      const kama = calcKAMA(chartData, 10);
+      if (kama.length > 0) {
+        const s = cellInfo.chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lastValueVisible: false, priceLineVisible: false });
+        s.setData(kama);
+      }
+    }
+  } catch (e) {
+    log(`MTF grid load failed for ${cellInfo.tf}: ${e}`, "warn");
+  }
+}
+
+function resizeMTFGrid() {
+  for (const cell of mtfGridCells) {
+    if (cell.container.classList.contains("fullscreen")) continue;
+    const w = cell.chartDiv.clientWidth;
+    const ch = cell.chartDiv.clientHeight;
+    if (w > 0 && ch > 0) {
+      cell.chart.resize(w, ch);
+      cell.fisherChart.resize(cell.fisherDiv.clientWidth, cell.fisherDiv.clientHeight);
+      cell.volumeChart.resize(cell.volumeDiv.clientWidth, cell.volumeDiv.clientHeight);
+    }
+  }
+}
+
+function closeMTFGrid() {
+  mtfGridActive = false;
+  const btn = document.getElementById("btn-mtf-grid");
+  btn.textContent = "MTF Grid";
+  document.getElementById("mtf-grid-tfs").classList.add("hidden");
+
+  // Remove grid container
+  const grid = document.getElementById("mtf-grid-container");
+  if (grid) {
+    // Dispose all charts
+    for (const cell of mtfGridCells) {
+      cell.chart.remove();
+      cell.fisherChart.remove();
+      cell.volumeChart.remove();
+    }
+    grid.remove();
+  }
+  mtfGridCells = [];
+
+  // Show normal chart stack
+  document.getElementById("chart-stack").style.display = "";
+}
 
 function setupTabs() {
   // Restore previous session or create a fresh tab
