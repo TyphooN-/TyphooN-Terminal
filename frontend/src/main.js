@@ -281,18 +281,28 @@ function initChart() {
 }
 
 function setupTooltip() {
-  // Fixed data window panel (top-left of chart) — shows OHLCV + all indicator values at cursor
+  // Cursor-following tooltip — shows OHLCV + indicator values near the crosshair
   const dataWindow = document.createElement("div");
   dataWindow.id = "data-window";
   dataWindow.className = "data-window";
-  document.getElementById("chart-stack").appendChild(dataWindow);
+  document.getElementById("chart-container").appendChild(dataWindow);
 
   chart.subscribeCrosshairMove((param) => {
     if (!param.time || !param.point || param.point.x < 0) {
-      dataWindow.style.opacity = "0.3";
+      dataWindow.style.display = "none";
       return;
     }
-    dataWindow.style.opacity = "1";
+    dataWindow.style.display = "";
+    // Follow cursor — offset to avoid overlapping crosshair
+    const x = param.point.x + 16;
+    const y = param.point.y + 16;
+    const container = document.getElementById("chart-container");
+    const cw = container?.clientWidth || 800;
+    const ch = container?.clientHeight || 400;
+    // Flip to left/above if near right/bottom edge
+    dataWindow.style.left = (x + 220 > cw ? Math.max(0, param.point.x - 230) : x) + "px";
+    dataWindow.style.top = (y + 150 > ch ? Math.max(0, param.point.y - 160) : y) + "px";
+
     const lines = [];
 
     // OHLCV from candle series
