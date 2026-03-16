@@ -3,7 +3,7 @@ name = "typhoon-terminal"
 version = "0.1.0"
 edition = "2024"
 description = "Swiss army knife of risk management — charting terminal with VaR, Standard, Fixed, and Dynamic lot sizing, hedged martingale (TRIM/PROTECT), and one-click order placement via draggable SL/TP lines"
-license = "GPL-3.0"
+license = "LicenseRef-BSL-1.1"
 
 [dependencies]
 tauri = { version = "2", features = [] }

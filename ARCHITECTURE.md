@@ -79,7 +79,7 @@ TyphooN-Terminal replaces MetaTrader 5 as a local desktop trading terminal. It m
 | **Charting** | TradingView lightweight-charts: candlesticks, draggable price lines, multi-pane, real-time updates, 170KB |
 | **IPC** | Tauri commands — type-safe, async, serialized via serde |
 | **Cross-platform** | Linux (WebKitGTK), Windows (WebView2), macOS (WKWebView) |
-| **License** | MIT/Apache-2.0 (Tauri), MIT (lightweight-charts), GPL-3.0 (TyphooN-Terminal) |
+| **License** | MIT/Apache-2.0 (Tauri), MIT (lightweight-charts), Apache-2.0 (TyphooN-Terminal) |
 | **Proven pattern** | OpenAlgo Desktop, FastScalper-Tauri ship production trading apps with this stack |
 | **Build system** | Cargo (Rust) + npm (frontend) — well-understood, reliable |
 | **Testing** | Rust's built-in test framework for risk math (12 tests), frontend testable in browser |

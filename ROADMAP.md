@@ -237,7 +237,7 @@ Run strategy against cached bar data. No broker connection needed. Results: equi
 
 ## Contributing
 
-TyphooN-Terminal is GPL-3.0. Contributions welcome:
+TyphooN-Terminal is Apache-2.0. Contributions welcome:
 
 1. Fork → branch → PR
 2. Follow [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) principles

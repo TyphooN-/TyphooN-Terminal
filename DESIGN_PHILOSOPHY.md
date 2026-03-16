@@ -82,7 +82,7 @@ The Rust code mirrors the MQL5 code intentionally. A contributor familiar with `
 
 TyphooN-Terminal aims to be a community-driven alternative to proprietary trading terminals:
 
-- **GPL-3.0 license** — free to use, modify, and distribute
+- **Apache-2.0 license** — free to use, modify, and distribute; patent protection for contributors
 - **Self-contained** — single binary, no external services (except Alpaca API)
 - **Broker-agnostic architecture** — adding a new broker means implementing one Rust trait
 - **Indicator-agnostic architecture** — adding a new indicator means writing one JS function
