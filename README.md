@@ -32,7 +32,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | Full NNFX system ported from MQL5 + standard indicators (RSI, MACD, Bollinger, etc.) |
-| **Security** | 6-pass audit (50 findings): input validation, HTTP timeouts, path traversal protection, CSP, config bounds, resource limits |
+| **Security** | 10-pass audit (64 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize |
 
 ---
 
@@ -122,7 +122,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
 | [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
 | [INDICATOR_PORTING.md](INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
-| [docs/adr/](docs/adr/) | Architecture Decision Records (19 ADRs) |
+| [docs/adr/](docs/adr/) | 19 Architecture Decision Records |
 
 ### ADR Index
 

@@ -68,6 +68,11 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Button debounce | ✅ Done | All trading buttons guarded against double-fire |
 | Equity TP/SL protection | ✅ Done | Port of MQL5 EnableEquityTP/SL — auto-close all at target |
 | OS keychain credentials | ✅ Done | gnome-keyring/KWallet via `keyring` crate |
+| MTF grid view | ✅ Done | 2-5 TF grid with full indicators, double-click fullscreen |
+| Auto Fibonacci | ✅ Done | Fractal-based swing detection, 13 levels (retrace + extension) |
+| Per-broker data isolation | ✅ Done | Separate IndexedDB + cold cache per account |
+| Article images | ✅ Done | HTTPS images in news reader, click to enlarge |
+| Security hardening (10 passes) | ✅ Done | 64 findings, 58 fixed, 6 accepted |
 
 ### Tier 2 — Competitive with MT5
 
