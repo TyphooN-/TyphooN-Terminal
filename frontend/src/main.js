@@ -143,6 +143,7 @@ function closeTab(id) {
 
 let dragTabId = null;
 let dragOverTabId = null;
+let tabJustDragged = false;
 
 function renderTabs() {
   const list = document.getElementById("tab-list");
@@ -165,19 +166,24 @@ function renderTabs() {
       el.appendChild(close);
     }
 
-    el.addEventListener("click", () => switchTab(tab.id));
+    el.addEventListener("click", (e) => {
+      // Don't switch tab if we just finished a drag
+      if (tabJustDragged) { tabJustDragged = false; return; }
+      switchTab(tab.id);
+    });
 
     // Drag to reorder
     el.addEventListener("dragstart", (e) => {
       dragTabId = tab.id;
       el.style.opacity = "0.4";
       e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", tab.id.toString()); // required for Firefox
     });
     el.addEventListener("dragend", () => {
       el.style.opacity = "";
+      tabJustDragged = dragTabId !== null;
       dragTabId = null;
       dragOverTabId = null;
-      // Remove all drop indicators
       list.querySelectorAll(".chart-tab").forEach(t => {
         t.classList.remove("drag-over-left", "drag-over-right");
       });
@@ -2552,6 +2558,13 @@ async function loadChart(symbol, timeframe) {
 
     // Load news and fundamentals for this symbol (background)
     loadNewsAndFundamentals(symbol);
+
+    // If MTF grid is active, reload all cells with the new symbol
+    if (mtfGridActive && mtfGridCells.length > 0) {
+      const selectedTFs = mtfGridCells.map(c => c.tf);
+      closeMTFGrid();
+      openMTFGrid(symbol, selectedTFs);
+    }
   } catch (e) {
     log(`Chart load failed for ${symbol} @ ${timeframe}: ${e}`, "error");
     setText("connect-status-bar", `Chart error: ${e}`);
