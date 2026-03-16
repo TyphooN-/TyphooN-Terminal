@@ -1,4 +1,5 @@
 pub mod alpaca;
+pub mod tastytrade;
 
 use alpaca::{AccountInfo, AssetInfo, Bar, OrderInfo, OrderResult, PositionInfo};
 use async_trait::async_trait;
