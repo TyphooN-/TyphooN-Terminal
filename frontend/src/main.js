@@ -7508,6 +7508,37 @@ async function openMTFGrid(symbol, timeframes) {
       }
     });
 
+    // Cursor-following tooltip for this grid cell
+    const cellTooltip = document.createElement("div");
+    cellTooltip.className = "data-window";
+    cellTooltip.style.display = "none";
+    chartDiv.style.position = "relative";
+    chartDiv.appendChild(cellTooltip);
+
+    cellChart.subscribeCrosshairMove((param) => {
+      if (!param.time || !param.point || param.point.x < 0) {
+        cellTooltip.style.display = "none";
+        return;
+      }
+      cellTooltip.style.display = "";
+      const x = param.point.x + 12;
+      const y = param.point.y + 12;
+      const cw = chartDiv.clientWidth || 400;
+      const ch = chartDiv.clientHeight || 300;
+      cellTooltip.style.left = (x + 200 > cw ? Math.max(0, param.point.x - 210) : x) + "px";
+      cellTooltip.style.top = (y + 120 > ch ? Math.max(0, param.point.y - 130) : y) + "px";
+
+      const ohlc = param.seriesData.get(cellCandleSeries);
+      if (ohlc && ohlc.open !== undefined) {
+        const dp = ohlc.close > 100 ? 2 : ohlc.close > 1 ? 4 : 6;
+        cellTooltip.textContent = `O:${ohlc.open.toFixed(dp)} H:${ohlc.high.toFixed(dp)}\nL:${ohlc.low.toFixed(dp)} C:${ohlc.close.toFixed(dp)}`;
+      } else if (ohlc && ohlc.value !== undefined) {
+        cellTooltip.textContent = `${ohlc.value.toFixed(4)}`;
+      } else {
+        cellTooltip.style.display = "none";
+      }
+    });
+
     const cellInfo = { tf, chart: cellChart, candleSeries: cellCandleSeries, fisherChart: cellFisherChart, volumeChart: cellVolumeChart, container: cell, chartDiv, fisherDiv, volumeDiv };
     mtfGridCells.push(cellInfo);
 
