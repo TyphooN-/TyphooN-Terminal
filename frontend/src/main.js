@@ -7395,11 +7395,12 @@ async function loadMTFCellData(cellInfo, symbol) {
     if (chartData.length === 0) return;
 
     cellInfo.candleSeries.setData(chartData);
-    // Zoom to last ~80 bars (MT5-style visible range, not all data)
-    const visibleBars = Math.min(80, chartData.length);
+    // Zoom to recent bars — fewer for higher TFs (MT5-style)
+    const tfBars = { "1Min": 120, "5Min": 100, "15Min": 80, "30Min": 70, "1Hour": 60, "4Hour": 50, "1Day": 40, "1Week": 30, "1Month": 24 };
+    const visibleBars = Math.min(tfBars[cellInfo.tf] || 50, chartData.length);
     cellInfo.chart.timeScale().setVisibleLogicalRange({
       from: chartData.length - visibleBars,
-      to: chartData.length,
+      to: chartData.length + 2, // small right margin
     });
 
     // Fisher — color-segmented like main chart (green bullish, red bearish)
