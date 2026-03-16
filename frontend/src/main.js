@@ -533,86 +533,119 @@ function getTPPrice() { return tpLine ? tpLine.options().price : null; }
 let draggingLine = null; // "sl" | "tp" | null
 
 function setupLineDrag() {
-  const container = document.getElementById("chart-container");
-  const HIT_TOLERANCE = 8; // pixels
+  const HIT_TOLERANCE = 14; // pixels — generous for easy grabbing
+
+  // Drag info tooltip
+  const dragInfo = document.createElement("div");
+  dragInfo.id = "drag-info";
+  dragInfo.style.cssText = "position:fixed;z-index:100;background:#000e;border:1px solid #4caf50;padding:4px 8px;font-size:10px;font-family:Consolas,monospace;color:#ccc;border-radius:3px;pointer-events:none;display:none;white-space:pre;";
+  document.body.appendChild(dragInfo);
+
+  function getActiveContainer() {
+    if (mtfGridActive && mtfActiveCell) return mtfActiveCell.chartDiv;
+    return document.getElementById("chart-container");
+  }
+
+  function getActiveSeries() {
+    return getActiveCandleSeries();
+  }
 
   function getLineYCoord(line) {
-    if (!line || !candleSeries) return null;
-    const price = line.options().price;
-    const priceScale = candleSeries.priceScale();
-    // Use series coordinate conversion
-    const y = candleSeries.priceToCoordinate(price);
-    return y;
+    if (!line) return null;
+    try { return getActiveSeries().priceToCoordinate(line.options().price); } catch (_) { return null; }
   }
 
   function hitTestLine(clientY) {
+    const container = getActiveContainer();
+    if (!container) return null;
     const rect = container.getBoundingClientRect();
     const y = clientY - rect.top;
-
     const slY = slLine ? getLineYCoord(slLine) : null;
     const tpY = tpLine ? getLineYCoord(tpLine) : null;
-
     const slDist = slY !== null ? Math.abs(y - slY) : Infinity;
     const tpDist = tpY !== null ? Math.abs(y - tpY) : Infinity;
-
     if (slDist <= HIT_TOLERANCE && slDist <= tpDist) return "sl";
     if (tpDist <= HIT_TOLERANCE) return "tp";
     return null;
   }
 
-  // Double-click to start dragging
-  container.addEventListener("dblclick", (e) => {
+  function calcDragInfo(sl, tp) {
+    if (!sl || !tp || !lastPrice || lastPrice <= 0) return "";
+    const isBuy = tp > sl;
+    const slDist = isBuy ? lastPrice - sl : sl - lastPrice;
+    const tpDist = isBuy ? tp - lastPrice : lastPrice - tp;
+    const rr = slDist > 0 ? (tpDist / slDist).toFixed(2) : "—";
+    const riskPct = lastPrice > 0 ? ((slDist / lastPrice) * 100).toFixed(2) : "0";
+    const lines = [
+      `${isBuy ? "BUY" : "SELL"} @ $${lastPrice.toFixed(2)}`,
+      `SL: $${sl.toFixed(2)} (${riskPct}%)`,
+      `TP: $${tp.toFixed(2)}`,
+      `R:R = ${rr}`,
+      `SL dist: $${slDist.toFixed(2)}`,
+      `TP dist: $${tpDist.toFixed(2)}`,
+    ];
+    return lines.join("\n");
+  }
+
+  // Single mousedown near line starts drag (no double-click needed)
+  document.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return; // left click only
     const hit = hitTestLine(e.clientY);
     if (!hit) return;
     draggingLine = hit;
-    container.style.cursor = "ns-resize";
+    const container = getActiveContainer();
+    if (container) container.style.cursor = "ns-resize";
     e.preventDefault();
-    e.stopPropagation();
   });
 
-  // Drag — update line price in real-time
-  container.addEventListener("mousemove", (e) => {
+  document.addEventListener("mousemove", (e) => {
+    const container = getActiveContainer();
     if (!draggingLine) {
       // Show resize cursor when hovering near a line
       const hit = hitTestLine(e.clientY);
-      container.style.cursor = hit ? "ns-resize" : "";
+      if (container) container.style.cursor = hit ? "ns-resize" : "";
       return;
     }
+    if (!container) return;
     const rect = container.getBoundingClientRect();
     const y = e.clientY - rect.top;
-    const newPrice = candleSeries.coordinateToPrice(y);
-    if (newPrice === null || newPrice <= 0) return;
+    try {
+      const newPrice = getActiveSeries().coordinateToPrice(y);
+      if (newPrice === null || newPrice <= 0) return;
+      const line = draggingLine === "sl" ? slLine : tpLine;
+      if (line) line.applyOptions({ price: newPrice });
 
-    const line = draggingLine === "sl" ? slLine : tpLine;
-    if (line) {
-      line.applyOptions({ price: newPrice });
-    }
+      // Show live risk info tooltip near cursor
+      const sl = getSLPrice();
+      const tp = getTPPrice();
+      const info = calcDragInfo(sl, tp);
+      if (info) {
+        dragInfo.textContent = info;
+        dragInfo.style.display = "";
+        dragInfo.style.left = (e.clientX + 20) + "px";
+        dragInfo.style.top = (e.clientY - 40) + "px";
+      }
+    } catch (_) {}
   });
 
-  // Release — finalize price and sync to backend
-  container.addEventListener("mouseup", () => {
+  document.addEventListener("mouseup", () => {
     if (!draggingLine) return;
     const line = draggingLine === "sl" ? slLine : tpLine;
     if (line && currentSymbol) {
       const finalPrice = line.options().price;
       if (draggingLine === "sl") {
         invoke("set_sl_level", { symbol: currentSymbol, price: finalPrice }).catch(() => {});
-        log(`SL moved to ${finalPrice.toFixed(4)}`, "info");
+        log(`SL → $${finalPrice.toFixed(4)}`, "info");
       } else {
         invoke("set_tp_level", { symbol: currentSymbol, price: finalPrice }).catch(() => {});
-        log(`TP moved to ${finalPrice.toFixed(4)}`, "info");
+        log(`TP → $${finalPrice.toFixed(4)}`, "info");
       }
+      updateRiskRewardOverlay();
     }
     draggingLine = null;
-    container.style.cursor = "";
-  });
-
-  // Cancel drag if mouse leaves chart
-  container.addEventListener("mouseleave", () => {
-    if (draggingLine) {
-      draggingLine = null;
-      container.style.cursor = "";
-    }
+    dragInfo.style.display = "none";
+    const container = getActiveContainer();
+    if (container) container.style.cursor = "";
   });
 }
 
@@ -2702,6 +2735,7 @@ async function updateDashboard() {
     checkEquityProtection();
     checkDividendAlerts();
     syncMTFGridLivePrice();
+    updateRiskCalcPanel();
 
     // Bid/Ask spread (non-blocking — don't fail dashboard if quote fails)
     if (currentSymbol) {
@@ -7904,6 +7938,54 @@ function updateRiskRewardOverlay() {
     lossFill.setData(recent.map(d => ({ time: d.time, value: lastPrice })));
     profitFill.setData(recent.map(d => ({ time: d.time, value: tp })));
     rrOverlaySeries.push(lossFill, profitFill);
+  }
+}
+
+// ── Live Risk Calculator Panel ────────────────────────────────
+
+function updateRiskCalcPanel() {
+  const el = document.getElementById("risk-calc-info");
+  if (!el) return;
+  const sl = getSLPrice();
+  const tp = getTPPrice();
+  if (!sl || !tp || !lastPrice || lastPrice <= 0) {
+    el.textContent = "Set SL/TP to see risk";
+    el.style.color = "#555";
+    return;
+  }
+  const isBuy = tp > sl;
+  const slDist = isBuy ? lastPrice - sl : sl - lastPrice;
+  const tpDist = isBuy ? tp - lastPrice : lastPrice - tp;
+  const rr = slDist > 0 ? (tpDist / slDist) : 0;
+  const slPct = lastPrice > 0 ? (slDist / lastPrice * 100) : 0;
+  const tpPct = lastPrice > 0 ? (tpDist / lastPrice * 100) : 0;
+
+  // Estimate lot size based on current risk mode
+  const mode = document.getElementById("order-mode")?.value || "VaR";
+  let riskInfo = "";
+  if (mode === "Standard") {
+    const riskPct = 0.5; // default
+    const riskMoney = 100000 * (riskPct / 100); // assume 100K balance
+    const lots = slDist > 0 ? (riskMoney / slDist) : 0;
+    riskInfo = `~${lots.toFixed(1)} lots ($${riskMoney.toFixed(0)} risk)`;
+  } else if (mode === "Fixed") {
+    riskInfo = "Fixed lots";
+  } else {
+    riskInfo = `${mode} mode`;
+  }
+
+  el.textContent = "";
+  const lines = [
+    { text: `${isBuy ? "BUY" : "SELL"} | R:R ${rr.toFixed(2)}`, color: isBuy ? "#4caf50" : "#f44336" },
+    { text: `SL: -${slPct.toFixed(2)}% ($${slDist.toFixed(2)})`, color: "#f44" },
+    { text: `TP: +${tpPct.toFixed(2)}% ($${tpDist.toFixed(2)})`, color: "#4caf50" },
+    { text: riskInfo, color: "#888" },
+  ];
+  for (const l of lines) {
+    const d = document.createElement("div");
+    d.style.color = l.color;
+    d.textContent = l.text;
+    el.appendChild(d);
   }
 }
 
