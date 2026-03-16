@@ -163,7 +163,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [003](docs/adr/003-bar-data-caching.md) | Three-tier cache (memory + IndexedDB + zstd) |
 | [004](docs/adr/004-mtf-indicators.md) | Multi-timeframe indicator support |
 | [005](docs/adr/005-indicator-visual-parity.md) | Indicator visual parity with MT5 |
-| [006](docs/adr/006-security-hardening.md) | Security hardening (6 passes, 50 findings) |
+| [006](docs/adr/006-security-hardening.md) | Security hardening (16 passes, 72 findings) |
 | [007](docs/adr/007-bar-prefetch-strategy.md) | Background bar pre-fetch strategy |
 | [008](docs/adr/008-multi-tab-charts.md) | Multi-tab chart support |
 | [009](docs/adr/009-rate-limiter.md) | Centralized rate limiter |
