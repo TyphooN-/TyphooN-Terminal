@@ -8606,14 +8606,17 @@ async function cmdSentiment() {
     const overallSentiment = bullScore > bearScore ? "BULLISH" : bullScore < bearScore ? "BEARISH" : "NEUTRAL";
     const overallColor = bullScore > bearScore ? "#4caf50" : bullScore < bearScore ? "#f44336" : "#888";
 
-    summary.innerHTML = `
-      <div style="font-size:14px;font-weight:bold;color:${overallColor};text-align:center;">${overallSentiment}</div>
-      <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:4px;">
-        <span style="color:#4caf50;">Bullish: ${bullScore} (${bullPct}%)</span>
-        <span style="color:#f44336;">Bearish: ${bearScore} (${bearPct}%)</span>
-      </div>
-    `;
-    summary.insertBefore(meterBg, summary.lastChild);
+    const sentLabel = document.createElement("div");
+    sentLabel.style.cssText = `font-size:14px;font-weight:bold;color:${overallColor};text-align:center;`;
+    sentLabel.textContent = overallSentiment;
+    summary.appendChild(sentLabel);
+    summary.appendChild(meterBg);
+    const sentRow = document.createElement("div");
+    sentRow.style.cssText = "display:flex;justify-content:space-between;font-size:11px;margin-top:4px;";
+    const bullSpan = document.createElement("span"); bullSpan.style.color = "#4caf50"; bullSpan.textContent = `Bullish: ${bullScore} (${bullPct}%)`;
+    const bearSpan = document.createElement("span"); bearSpan.style.color = "#f44336"; bearSpan.textContent = `Bearish: ${bearScore} (${bearPct}%)`;
+    sentRow.appendChild(bullSpan); sentRow.appendChild(bearSpan);
+    summary.appendChild(sentRow);
     win.appendElement(summary);
 
     // Headline list
@@ -9019,11 +9022,10 @@ async function cmdHeatmap() {
     const totalPl = items.reduce((s, i) => s + i.pl, 0);
     const summary = document.createElement("div");
     summary.style.cssText = "padding:8px;border-top:1px solid #333;font-size:11px;display:flex;justify-content:space-between;";
-    summary.innerHTML = `
-      <span style="color:#888;">Positions: ${items.length}</span>
-      <span style="color:#888;">Total Value: $${totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-      <span style="color:${totalPl >= 0 ? "#4caf50" : "#f44336"};">P&L: ${totalPl >= 0 ? "+" : ""}$${totalPl.toFixed(2)}</span>
-    `;
+    const sp1 = document.createElement("span"); sp1.style.color = "#888"; sp1.textContent = `Positions: ${items.length}`;
+    const sp2 = document.createElement("span"); sp2.style.color = "#888"; sp2.textContent = `Total Value: $${totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+    const sp3 = document.createElement("span"); sp3.style.color = totalPl >= 0 ? "#4caf50" : "#f44336"; sp3.textContent = `P&L: ${totalPl >= 0 ? "+" : ""}$${totalPl.toFixed(2)}`;
+    summary.appendChild(sp1); summary.appendChild(sp2); summary.appendChild(sp3);
     win.appendElement(summary);
 
     log(`Heat map: ${items.length} positions, total $${totalValue.toFixed(0)}`, "ok");
