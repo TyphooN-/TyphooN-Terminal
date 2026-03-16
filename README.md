@@ -49,7 +49,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
-| **Security** | 10-pass audit (64 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize |
+| **Security** | 14-pass audit (70 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize |
 
 ---
 
@@ -139,7 +139,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
 | [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
 | [INDICATOR_PORTING.md](INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
-| [docs/adr/](docs/adr/) | 21 Architecture Decision Records |
+| [docs/adr/](docs/adr/) | 22 Architecture Decision Records |
 
 ### ADR Index
 
@@ -166,6 +166,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [019](docs/adr/019-mtf-grid-view.md) | Multi-timeframe grid view (MT5-style) |
 | [020](docs/adr/020-cache-optimization.md) | SQLite cache + LRU eviction |
 | [021](docs/adr/021-mt5-godel-parity-roadmap.md) | MT5 + Godel parity roadmap + blockers |
+| [022](docs/adr/022-tastytrade-broker.md) | Tastytrade broker integration |
 
 ---
 
@@ -207,12 +208,21 @@ cargo tauri build
 
 ## Broker
 
-Currently supports [Alpaca Markets](https://alpaca.markets/) (stocks, ETFs, crypto, options):
+Supports two brokers:
 
+### Alpaca Markets
 - Paper and live trading accounts
 - REST API for orders, positions, account info
 - Historical bar data with IEX/SIP feed support
-- Multi-timeframe data fetching for MTF indicators
+- WebSocket streaming for real-time trades/quotes
+- Options chain with full Greeks
+
+### Tastytrade
+- Paper (sandbox) and live trading
+- Stocks, options, futures, crypto
+- Session-based auth (username/password)
+- Account balances, positions, market orders
+- Sign up: https://www.tastytrade.com/
 
 ---
 

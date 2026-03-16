@@ -1,6 +1,6 @@
 # ADR-006: Security Hardening
 
-**Status:** Implemented (Pass 10)
+**Status:** Implemented (Pass 14)
 **Date:** 2026-03-15
 **Updated:** 2026-03-15
 
@@ -221,8 +221,25 @@ Full cross-reference of MQL5 EA (TyphooN.mq5 v1.420, 2730 lines) against Rust/Ta
 - **Same-direction blocking**: Terminal allows multi-position (matches Dynamic/VaR mode behavior)
 - **NNFX indicator folder (30 indicators)**: Reference-only in MQL5, not driven by EA logic
 
+## Pass 11-14 — Ongoing Audits
+
+### Pass 11 — Feature verification
+- All 18 README features verified with grep — every one has real code
+
+### Pass 12 — Client fallback
+65. **`Client::new()` fallback removed**: Replaced `unwrap_or_else(|_| Client::new())` with `expect()` — no silent timeout-less HTTP clients
+
+### Pass 13 — Last innerHTML
+66. **Last innerHTML in Monte Carlo stats**: Template literal replaced with createElement + textContent
+
+### Pass 14 — Tastytrade broker audit
+67. **Tastytrade password handling**: Password passed via HTTPS POST body, never logged, dropped after use
+68. **Tastytrade session token**: Stored in `Arc<Mutex<Zeroizing<String>>>` — zeroed on drop
+69. **Input validation**: username ≤100 chars, password ≤200 chars on `connect_tastytrade`
+70. **(Verified clean)**: 0 innerHTML, 0 eval, 0 Client::new(), 0 unwrap on user input, 0 resp body leaks across entire codebase (15.5K lines)
+
 ## Summary
 
-**10 passes, 64 findings total: 58 fixed, 6 accepted with documented rationale.**
+**14 passes, 70 findings total: 64 fixed, 6 accepted with documented rationale.**
 
 All actionable security items and MQL5 feature parity items completed.

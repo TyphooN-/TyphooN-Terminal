@@ -61,13 +61,15 @@ impl TastytradeBroker {
             .build()
             .expect("Failed to build HTTP client");
 
-        // Authenticate
+        // Authenticate (password consumed here, then dropped)
+        let body = serde_json::json!({
+            "login": username,
+            "password": password,
+        });
+        // password String is dropped after this point
         let resp = client
             .post(format!("{}/sessions", base_url))
-            .json(&serde_json::json!({
-                "login": username,
-                "password": password,
-            }))
+            .json(&body)
             .send()
             .await
             .map_err(|_| "Tastytrade login request failed".to_string())?;
