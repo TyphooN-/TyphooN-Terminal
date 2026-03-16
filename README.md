@@ -29,7 +29,9 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Screenshot Export** | Ctrl+Shift+S to clipboard with toast notification |
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
 | **CSV Export** | Export trade history as CSV |
-| **Chart Types** | Candlestick, Line, and Bar chart rendering |
+| **Chart Types** | Candlestick, Heikin-Ashi, Line, and Bar chart rendering |
+| **Risk/Reward Overlay** | Visual profit/loss zones on chart when SL/TP lines set |
+| **Trade Journal** | Log trades with notes, review history (Ctrl+K → JOURNAL) |
 | **Bid/Ask Spread** | Real-time bid/ask/spread display from Alpaca quotes |
 | **Time & Sales** | WebSocket trade stream in scrolling panel |
 | **Account Activities** | Deposits, withdrawals, dividends, fills history |

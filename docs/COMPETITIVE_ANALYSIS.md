@@ -136,12 +136,12 @@
 ### Tier A — High Impact, Achievable Now
 1. **Conditional order placement** (OCO, OTO bracket management UI)
 2. **Portfolio heat map** (sector/position size visualization)
-3. **Risk/reward overlay** (visual P&L zones on chart based on SL/TP)
+3. ~~**Risk/reward overlay**~~ ✅ DONE — visual P&L zones on chart
 4. **Multi-symbol alert dashboard** (check alerts across all watchlist symbols)
-5. **Trade journal** (log trades with notes, screenshots, emotions, review)
+5. ~~**Trade journal**~~ ✅ DONE — Ctrl+K → JOURNAL
 
 ### Tier B — Medium Impact, Moderate Effort
-6. **Heikin-Ashi candlesticks** (additional chart type)
+6. ~~**Heikin-Ashi candlesticks**~~ ✅ DONE — chart type selector
 7. **Renko/Range bars** (non-time-based charting)
 8. **Custom timeframes** (e.g., 2H, 3D, 6H)
 9. **Chart annotations** (text labels, arrows, callouts)
