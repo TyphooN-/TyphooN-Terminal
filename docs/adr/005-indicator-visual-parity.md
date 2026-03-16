@@ -29,7 +29,7 @@
 
 ## Lessons Learned
 
-See [INDICATOR_PORTING.md](../../INDICATOR_PORTING.md) for technical details on each porting challenge.
+See [INDICATOR_PORTING.md](../INDICATOR_PORTING.md) for technical details on each porting challenge.
 
 ## Key Decisions
 

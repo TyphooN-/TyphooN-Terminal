@@ -28,4 +28,4 @@ This is NOT the TradingView website/service. It's a standalone 170KB JavaScript 
 - No true sub-windows (workaround: separate chart instances)
 - TV watermark disabled via `attributionLogo: false`
 
-See [INDICATOR_PORTING.md](../../INDICATOR_PORTING.md) for all porting lessons.
+See [INDICATOR_PORTING.md](../INDICATOR_PORTING.md) for all porting lessons.

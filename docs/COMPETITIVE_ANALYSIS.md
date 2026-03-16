@@ -156,6 +156,70 @@
 
 **ALL 15 Tier A/B/C features are now implemented.**
 
+## Why Open Source Matters for Trading Software
+
+> "How can you trust your wealth if you cannot audit the code?"
+
+### The Problem with Closed-Source Trading Platforms
+
+| Platform | Source | Binary | DLL Risk | Audit |
+|---|---|---|---|---|
+| **TyphooN-Terminal** | Open (Apache-2.0) | Rust/Tauri | No DLLs | Full audit possible |
+| **MetaTrader 5** | Closed | Proprietary .exe | Requires DLLs for indicators | Cannot audit |
+| **cTrader** | Closed | .NET binary | Requires DLLs for cBots | Cannot audit |
+| **NinjaTrader** | Closed | .NET binary | Requires DLLs for strategies | Cannot audit |
+| **Godel Terminal** | Closed | Web app (SaaS) | N/A (server-side) | Cannot audit |
+| **Bloomberg** | Closed | Proprietary | N/A | Cannot audit |
+| **OpenBB** | Open (Apache-2.0) | Python | No DLLs | Full audit possible |
+
+### DLL Hell in Trading
+
+MT5, cTrader, and NinjaTrader all rely on **third-party DLLs** for indicators and strategies:
+- **MT5**: Custom indicators compiled as `.ex5` (obfuscated MQL5 bytecode) — you cannot read the code. Third-party EAs often require `#import` of opaque `.dll` files that could contain anything: keyloggers, credential theft, order manipulation.
+- **cTrader**: cBots and indicators are .NET assemblies (`.algo` files). While .NET is decompilable, most vendors obfuscate. The platform itself is closed-source .NET.
+- **NinjaTrader**: Strategies are .NET DLLs. The platform requires admin access and installs deeply into Windows. Third-party indicators are compiled binaries you can't inspect.
+
+**The risk**: You're trusting your brokerage credentials and trading capital to software you cannot verify. A malicious indicator could:
+- Exfiltrate your API keys
+- Place unauthorized orders
+- Modify your stop losses
+- Send your account data to a remote server
+
+### TyphooN-Terminal's Approach
+
+- **100% open source** — every line auditable (17,268 lines, 16 security passes)
+- **No DLLs** — pure Rust backend + JavaScript frontend, no binary dependencies
+- **Custom indicator plugins** are plain JavaScript files you can read
+- **API keys stored in OS keychain** (gnome-keyring/KWallet), not in config files
+- **CSP prevents** external script injection even if the app is compromised
+- **zeroize** crate erases credentials from memory on drop
+
+### cTrader vs TyphooN-Terminal
+
+| Feature | cTrader | TyphooN-Terminal |
+|---|---|---|
+| Open source | No | Yes (Apache-2.0) |
+| Language | C# (.NET) | Rust + JavaScript |
+| Linux native | No (Windows only) | Yes |
+| DLL required | Yes (cBots) | No |
+| Broker lock-in | Yes (per broker) | No (multi-broker) |
+| Risk management | Basic | 4 modes + VaR + martingale |
+| Strategy testing | Yes (cAlgo) | Yes (Strategy trait) |
+| Custom indicators | C# (compiled) | JavaScript (readable) |
+
+### NinjaTrader vs TyphooN-Terminal
+
+| Feature | NinjaTrader | TyphooN-Terminal |
+|---|---|---|
+| Open source | No | Yes (Apache-2.0) |
+| Cost | $1,099 lifetime or $720/yr | Free |
+| Language | C# (.NET) | Rust + JavaScript |
+| Linux native | No (Windows only) | Yes |
+| DLL required | Yes (strategies) | No |
+| Admin access | Required | Not required |
+| Data fees | $99-299/mo for CME/CBOT | Free (Alpaca IEX) |
+| Risk management | Basic | 4 modes + VaR + martingale |
+
 ### Tier D — Blocked by External Dependencies
 16. Analyst consensus (needs paid data)
 17. Short interest (needs paid data)

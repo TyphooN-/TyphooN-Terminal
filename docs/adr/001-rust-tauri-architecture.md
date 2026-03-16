@@ -22,4 +22,4 @@ Use Rust (Tauri 2.0) backend with lightweight-charts JavaScript frontend.
 - Battle-tested charting via lightweight-charts (MIT, 170KB)
 - Cross-platform via system webview (no bundled browser)
 
-See [ARCHITECTURE.md](../../ARCHITECTURE.md) for full rationale.
+See [ARCHITECTURE.md](../ARCHITECTURE.md) for full rationale.

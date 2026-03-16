@@ -149,9 +149,9 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 
 | Document | Purpose |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
-| [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
-| [INDICATOR_PORTING.md](INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
+| [DESIGN_PHILOSOPHY.md](docs/DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
+| [INDICATOR_PORTING.md](docs/INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
 | [docs/adr/](docs/adr/) | 22 Architecture Decision Records |
 
 ### ADR Index
