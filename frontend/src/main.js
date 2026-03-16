@@ -7538,6 +7538,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupButtons();
   setupKeyboard();
   setupConnect();
+  setupMenuBar();
   setupMTFGrid();
   loadAnnotations();
   setupTabs();
@@ -9311,6 +9312,77 @@ async function cmdHeatmap() {
     win.contentElement.textContent = "";
     win.setContent(`Heat map failed: ${e}`);
   }
+}
+
+function setupMenuBar() {
+  const menuActions = {
+    // File
+    "new-tab": () => document.getElementById("btn-new-tab").click(),
+    "close-tab": () => { if (activeTabId !== null) closeTab(activeTabId); },
+    "save-template": () => { const name = prompt("Template name:"); if (name) { saveChartTemplate(name); log(`Template "${name}" saved`, "ok"); } },
+    "save-profile": () => { const name = prompt("Profile name:"); if (name) { saveWorkspaceProfile(name); log(`Profile "${name}" saved`, "ok"); } },
+    "export-csv": async () => { try { const csv = await invoke("export_trade_history", { limit: 500 }); const blob = new Blob([csv], { type: "text/csv" }); const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "trades.csv"; a.click(); } catch (e) { alert(`Export failed: ${e}`); } },
+    "settings": () => cmdSettings(),
+    // View
+    "mtf-grid": () => document.getElementById("btn-mtf-grid").click(),
+    "split": () => document.getElementById("btn-split").click(),
+    "screenshot": () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "S", shiftKey: true, ctrlKey: true })); },
+    "cmd-palette": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").focus(); },
+    // Trading
+    "buy-lines": () => document.getElementById("btn-buy-lines").click(),
+    "sell-lines": () => document.getElementById("btn-sell-lines").click(),
+    "destroy-lines": () => document.getElementById("btn-destroy-lines").click(),
+    "open-trade": () => document.getElementById("btn-trade").click(),
+    "bracket": () => cmdBracketOrder(),
+    "close-all": () => document.getElementById("btn-close-all").click(),
+    "close-partial": () => document.getElementById("btn-close-partial").click(),
+    "calc": () => cmdPositionCalc(),
+    // Tools
+    "draw-trend": () => { drawingMode = "trendline"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-fib": () => { drawingMode = "fibonacci"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-ray": () => { drawingMode = "ray"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-ruler": () => { drawingMode = "ruler"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-hline": () => { drawingMode = "horizontal"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-rect": () => { drawingMode = "rectangle"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "alert": () => { if (currentSymbol && lastPrice > 0) { const dir = prompt("Direction (above/below):", "above"); if (dir) addPriceAlert(currentSymbol, lastPrice, dir); } },
+    "annotate": () => addChartAnnotation(),
+    "delete-drawing": () => { if (drawings.length > 0) { drawings.pop(); saveDrawings(); renderDrawings(); renderDrawingsExtended(); } },
+    // Research
+    "fundamentals": () => { const cmds = document.querySelectorAll(".cmd-result-item"); /* trigger via palette */ document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "DES"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
+    "news": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "NEWS"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
+    "filings": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "HDS"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
+    "insider": () => cmdInsider(),
+    "options": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "OPT"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
+    "screener": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "SCAN"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
+    "most-active": () => cmdMostActive(),
+    "sentiment": () => cmdSentiment(),
+    "patterns": () => cmdPatterns(),
+    "fred": () => cmdFRED(),
+    "ai": () => cmdAIChat(),
+    // Analysis
+    "backtest": () => openVisualBacktester(),
+    "optimize": () => openOptimizer(),
+    "montecarlo": () => cmdMonteCarlo(),
+    "correlation": () => cmdCorrelation(),
+    "portfolio": () => cmdPortfolio(),
+    "heatmap": () => cmdHeatmap(),
+    "volsurf": () => cmdVolSurf(),
+    "journal": () => cmdTradeJournal(),
+    "activities": () => cmdActivities(),
+    "alertboard": () => cmdAlertBoard(),
+  };
+
+  document.querySelectorAll(".menu-entry").forEach(entry => {
+    const action = entry.dataset.action;
+    if (action && menuActions[action]) {
+      entry.addEventListener("click", (e) => {
+        e.stopPropagation();
+        menuActions[action]();
+        // Close menu after action
+        document.querySelectorAll(".menu-dropdown").forEach(d => d.style.display = "");
+      });
+    }
+  });
 }
 
 function setupTabs() {

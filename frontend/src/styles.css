@@ -22,6 +22,63 @@ body {
 
 /* ── Tab Bar ──────────────────────────────────────────────── */
 
+/* ── Menu Bar ──────────────────────────────────────────────── */
+
+#menu-bar {
+  display: flex;
+  background: #0a0a14;
+  border-bottom: 1px solid #222;
+  font-size: 11px;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.menu-item {
+  position: relative;
+  padding: 4px 10px;
+  color: #888;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  color: #ccc;
+  background: #1a1a2e;
+}
+
+.menu-dropdown {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: #111122;
+  border: 1px solid #333;
+  min-width: 200px;
+  z-index: 2000;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+}
+
+.menu-item:hover .menu-dropdown {
+  display: block;
+}
+
+.menu-entry {
+  padding: 5px 12px;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.menu-entry:hover {
+  background: #0f3460;
+  color: #fff;
+}
+
+.menu-separator {
+  height: 1px;
+  background: #333;
+  margin: 2px 0;
+}
+
 #tab-bar {
   display: flex;
   align-items: stretch;

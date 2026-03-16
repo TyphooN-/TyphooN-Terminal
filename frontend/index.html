@@ -40,6 +40,91 @@
   </div>
 
   <div id="app">
+    <!-- Menu bar -->
+    <div id="menu-bar">
+      <div class="menu-item" data-menu="file">File
+        <div class="menu-dropdown">
+          <div class="menu-entry" data-action="new-tab">New Tab (Ctrl+T)</div>
+          <div class="menu-entry" data-action="close-tab">Close Tab (Ctrl+W)</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="save-template">Save Template</div>
+          <div class="menu-entry" data-action="save-profile">Save Profile</div>
+          <div class="menu-entry" data-action="export-csv">Export Trade History (CSV)</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="settings">Settings (API Keys)</div>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="view">View
+        <div class="menu-dropdown">
+          <div class="menu-entry" data-action="mtf-grid">MTF Grid</div>
+          <div class="menu-entry" data-action="split">Split View</div>
+          <div class="menu-entry" data-action="screenshot">Screenshot (Ctrl+Shift+S)</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="cmd-palette">Command Palette (Ctrl+K)</div>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="trading">Trading
+        <div class="menu-dropdown">
+          <div class="menu-entry" data-action="buy-lines">Buy Lines (B)</div>
+          <div class="menu-entry" data-action="sell-lines">Sell Lines (S)</div>
+          <div class="menu-entry" data-action="destroy-lines">Destroy Lines (D)</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="open-trade">Open Trade (T)</div>
+          <div class="menu-entry" data-action="bracket">Bracket Order</div>
+          <div class="menu-entry" data-action="close-all">Close All (C)</div>
+          <div class="menu-entry" data-action="close-partial">Close Partial (P)</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="calc">Position Calculator</div>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="tools">Tools
+        <div class="menu-dropdown">
+          <div class="menu-entry" data-action="draw-trend">Trend Line (L)</div>
+          <div class="menu-entry" data-action="draw-fib">Fibonacci (F)</div>
+          <div class="menu-entry" data-action="draw-ray">Ray (E)</div>
+          <div class="menu-entry" data-action="draw-ruler">Ruler (J)</div>
+          <div class="menu-entry" data-action="draw-hline">Horizontal Line (N)</div>
+          <div class="menu-entry" data-action="draw-rect">Rectangle (R)</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="alert">Set Alert (A)</div>
+          <div class="menu-entry" data-action="annotate">Annotate</div>
+          <div class="menu-entry" data-action="delete-drawing">Delete Last Drawing (X)</div>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="research">Research
+        <div class="menu-dropdown">
+          <div class="menu-entry" data-action="fundamentals">Fundamentals (DES)</div>
+          <div class="menu-entry" data-action="news">News</div>
+          <div class="menu-entry" data-action="filings">SEC Filings</div>
+          <div class="menu-entry" data-action="insider">Insider Trading</div>
+          <div class="menu-entry" data-action="options">Options Chain (OPT)</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="screener">Stock Screener (SCAN)</div>
+          <div class="menu-entry" data-action="most-active">Most Active (MOST)</div>
+          <div class="menu-entry" data-action="sentiment">Sentiment</div>
+          <div class="menu-entry" data-action="patterns">Pattern Recognition</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="fred">FRED Economic Data</div>
+          <div class="menu-entry" data-action="ai">AI Assistant</div>
+        </div>
+      </div>
+      <div class="menu-item" data-menu="analysis">Analysis
+        <div class="menu-dropdown">
+          <div class="menu-entry" data-action="backtest">Backtester</div>
+          <div class="menu-entry" data-action="optimize">Optimizer</div>
+          <div class="menu-entry" data-action="montecarlo">Monte Carlo</div>
+          <div class="menu-entry" data-action="correlation">Correlation Matrix</div>
+          <div class="menu-entry" data-action="portfolio">Portfolio Breakdown</div>
+          <div class="menu-entry" data-action="heatmap">Portfolio Heat Map</div>
+          <div class="menu-entry" data-action="volsurf">Volatility Surface</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="journal">Trade Journal</div>
+          <div class="menu-entry" data-action="activities">Account Activities</div>
+          <div class="menu-entry" data-action="alertboard">Alert Dashboard</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Tab bar -->
     <div id="tab-bar">
       <div id="tab-list"></div>
