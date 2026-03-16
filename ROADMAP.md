@@ -87,7 +87,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Trade history export (CSV) | ✅ Done | Export closed orders as CSV via Tauri command |
 | WebSocket streaming | ✅ Done | Real-time trades/quotes via Alpaca WS, poll_stream command |
 | Time & Sales | ✅ Done | Via WebSocket trade stream subscription |
-| **All 38+ MT5 indicators** | 🔲 Deferred | Current 20 indicators cover NNFX + standard; remaining are niche |
+| 30 indicators | ✅ Done | NNFX (9) + Standard (11) + Extended (10: Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
 | Custom indicator plugin system | ✅ Done | Load/save/list JS plugins from ~/.config/typhoon-terminal/indicators/ |
 
 ### Tier 3 — Godel Terminal Features

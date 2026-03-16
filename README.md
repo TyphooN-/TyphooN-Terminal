@@ -31,7 +31,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **CSV Export** | Export trade history as CSV |
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
-| **Indicators** | Full NNFX system ported from MQL5 + standard indicators (RSI, MACD, Bollinger, etc.) |
+| **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
 | **Security** | 10-pass audit (64 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize |
 
 ---
@@ -67,7 +67,7 @@ Ported from the [MQL5-NNFX-Risk_Management_System](https://github.com/TyphooN-/M
 
 ### Standard Indicators (disabled by default)
 
-EMA (50/200), SMA (50), DEMA (21), RSI (14), MACD (12/26/9), Bollinger (20), ATR (14), VWAP, RVOL (10), Volume
+EMA (50/200), SMA (50), DEMA (21), RSI (14), MACD (12/26/9), Bollinger (20), ATR (14), VWAP, RVOL (10), Volume, Stochastic (14/3/3), CCI (20), ADX (14), Williams %R (14), Ichimoku Cloud, Parabolic SAR, OBV, Momentum (10), WMA (20), HMA (20)
 
 ---
 

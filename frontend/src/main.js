@@ -830,6 +830,200 @@ function calcVWAP(data) {
   return result;
 }
 
+// ── Stochastic Oscillator ────────────────────────────────────
+function calcStochastic(data, kPeriod = 14, dPeriod = 3, smooth = 3) {
+  const result = { k: [], d: [] };
+  if (data.length < kPeriod + smooth + dPeriod) return result;
+  const rawK = [];
+  for (let i = kPeriod - 1; i < data.length; i++) {
+    let hi = -Infinity, lo = Infinity;
+    for (let j = i - kPeriod + 1; j <= i; j++) { hi = Math.max(hi, data[j].high); lo = Math.min(lo, data[j].low); }
+    rawK.push({ time: data[i].time, value: hi !== lo ? ((data[i].close - lo) / (hi - lo)) * 100 : 50 });
+  }
+  // Smooth %K
+  const kSmooth = [];
+  for (let i = smooth - 1; i < rawK.length; i++) {
+    let sum = 0;
+    for (let j = 0; j < smooth; j++) sum += rawK[i - j].value;
+    kSmooth.push({ time: rawK[i].time, value: sum / smooth });
+  }
+  // %D = SMA of %K
+  for (let i = dPeriod - 1; i < kSmooth.length; i++) {
+    let sum = 0;
+    for (let j = 0; j < dPeriod; j++) sum += kSmooth[i - j].value;
+    result.d.push({ time: kSmooth[i].time, value: sum / dPeriod });
+  }
+  result.k = kSmooth;
+  return result;
+}
+
+// ── CCI (Commodity Channel Index) ────────────────────────────
+function calcCCI(data, period = 20) {
+  const result = [];
+  if (data.length < period) return result;
+  for (let i = period - 1; i < data.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += (data[j].high + data[j].low + data[j].close) / 3;
+    const mean = sum / period;
+    let devSum = 0;
+    for (let j = i - period + 1; j <= i; j++) devSum += Math.abs((data[j].high + data[j].low + data[j].close) / 3 - mean);
+    const meanDev = devSum / period;
+    const tp = (data[i].high + data[i].low + data[i].close) / 3;
+    result.push({ time: data[i].time, value: meanDev !== 0 ? (tp - mean) / (0.015 * meanDev) : 0 });
+  }
+  return result;
+}
+
+// ── ADX (Average Directional Index) ──────────────────────────
+function calcADX(data, period = 14) {
+  const result = { adx: [], diPlus: [], diMinus: [] };
+  if (data.length < period * 2 + 1) return result;
+  const tr = [], dmPlus = [], dmMinus = [];
+  for (let i = 1; i < data.length; i++) {
+    tr.push(Math.max(data[i].high - data[i].low, Math.abs(data[i].high - data[i-1].close), Math.abs(data[i].low - data[i-1].close)));
+    const upMove = data[i].high - data[i-1].high;
+    const downMove = data[i-1].low - data[i].low;
+    dmPlus.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    dmMinus.push(downMove > upMove && downMove > 0 ? downMove : 0);
+  }
+  let atr = tr.slice(0, period).reduce((a,b) => a+b, 0) / period;
+  let sdmp = dmPlus.slice(0, period).reduce((a,b) => a+b, 0) / period;
+  let sdmm = dmMinus.slice(0, period).reduce((a,b) => a+b, 0) / period;
+  const dxArr = [];
+  for (let i = period; i < tr.length; i++) {
+    atr = (atr * (period-1) + tr[i]) / period;
+    sdmp = (sdmp * (period-1) + dmPlus[i]) / period;
+    sdmm = (sdmm * (period-1) + dmMinus[i]) / period;
+    const dip = atr > 0 ? (sdmp / atr) * 100 : 0;
+    const dim = atr > 0 ? (sdmm / atr) * 100 : 0;
+    const dx = (dip + dim) > 0 ? Math.abs(dip - dim) / (dip + dim) * 100 : 0;
+    dxArr.push(dx);
+    result.diPlus.push({ time: data[i+1].time, value: dip });
+    result.diMinus.push({ time: data[i+1].time, value: dim });
+  }
+  // ADX = smoothed DX
+  if (dxArr.length >= period) {
+    let adx = dxArr.slice(0, period).reduce((a,b) => a+b, 0) / period;
+    for (let i = period; i < dxArr.length; i++) {
+      adx = (adx * (period-1) + dxArr[i]) / period;
+      result.adx.push({ time: result.diPlus[i].time, value: adx });
+    }
+  }
+  return result;
+}
+
+// ── Williams %R ──────────────────────────────────────────────
+function calcWilliamsR(data, period = 14) {
+  const result = [];
+  if (data.length < period) return result;
+  for (let i = period - 1; i < data.length; i++) {
+    let hi = -Infinity, lo = Infinity;
+    for (let j = i - period + 1; j <= i; j++) { hi = Math.max(hi, data[j].high); lo = Math.min(lo, data[j].low); }
+    result.push({ time: data[i].time, value: hi !== lo ? ((hi - data[i].close) / (hi - lo)) * -100 : -50 });
+  }
+  return result;
+}
+
+// ── Ichimoku Cloud ───────────────────────────────────────────
+function calcIchimoku(data, tenkan = 9, kijun = 26, senkou = 52) {
+  const result = { tenkanSen: [], kijunSen: [], senkouA: [], senkouB: [], chikou: [] };
+  if (data.length < senkou) return result;
+  const midHL = (start, len) => {
+    let hi = -Infinity, lo = Infinity;
+    for (let i = start; i < start + len && i < data.length; i++) { hi = Math.max(hi, data[i].high); lo = Math.min(lo, data[i].low); }
+    return (hi + lo) / 2;
+  };
+  for (let i = senkou - 1; i < data.length; i++) {
+    const ts = midHL(i - tenkan + 1, tenkan);
+    const ks = midHL(i - kijun + 1, kijun);
+    const sb = midHL(i - senkou + 1, senkou);
+    result.tenkanSen.push({ time: data[i].time, value: ts });
+    result.kijunSen.push({ time: data[i].time, value: ks });
+    result.senkouA.push({ time: data[i].time, value: (ts + ks) / 2 });
+    result.senkouB.push({ time: data[i].time, value: sb });
+    if (i >= kijun) result.chikou.push({ time: data[i].time, value: data[i - kijun].close });
+  }
+  return result;
+}
+
+// ── Parabolic SAR ────────────────────────────────────────────
+function calcParabolicSAR(data, step = 0.02, maxStep = 0.2) {
+  const result = [];
+  if (data.length < 2) return result;
+  let isLong = data[1].close > data[0].close;
+  let sar = isLong ? data[0].low : data[0].high;
+  let ep = isLong ? data[1].high : data[1].low;
+  let af = step;
+  for (let i = 1; i < data.length; i++) {
+    sar = sar + af * (ep - sar);
+    if (isLong) {
+      if (i >= 2) sar = Math.min(sar, data[i-1].low, data[i-2] ? data[i-2].low : data[i-1].low);
+      if (data[i].low < sar) { isLong = false; sar = ep; ep = data[i].low; af = step; }
+      else if (data[i].high > ep) { ep = data[i].high; af = Math.min(af + step, maxStep); }
+    } else {
+      if (i >= 2) sar = Math.max(sar, data[i-1].high, data[i-2] ? data[i-2].high : data[i-1].high);
+      if (data[i].high > sar) { isLong = true; sar = ep; ep = data[i].high; af = step; }
+      else if (data[i].low < ep) { ep = data[i].low; af = Math.min(af + step, maxStep); }
+    }
+    result.push({ time: data[i].time, value: sar, color: isLong ? "#4caf50" : "#f44336" });
+  }
+  return result;
+}
+
+// ── OBV (On-Balance Volume) ──────────────────────────────────
+function calcOBV(data) {
+  const result = [];
+  let obv = 0;
+  for (let i = 0; i < data.length; i++) {
+    if (i > 0) {
+      if (data[i].close > data[i-1].close) obv += (data[i].volume || 0);
+      else if (data[i].close < data[i-1].close) obv -= (data[i].volume || 0);
+    }
+    result.push({ time: data[i].time, value: obv });
+  }
+  return result;
+}
+
+// ── Momentum ─────────────────────────────────────────────────
+function calcMomentum(data, period = 10) {
+  const result = [];
+  for (let i = period; i < data.length; i++) {
+    result.push({ time: data[i].time, value: data[i].close - data[i - period].close });
+  }
+  return result;
+}
+
+// ── WMA (Weighted Moving Average) ────────────────────────────
+function calcWMA(data, period = 20) {
+  const result = [];
+  if (data.length < period) return result;
+  const denom = (period * (period + 1)) / 2;
+  for (let i = period - 1; i < data.length; i++) {
+    let sum = 0;
+    for (let j = 0; j < period; j++) sum += data[i - period + 1 + j].close * (j + 1);
+    result.push({ time: data[i].time, value: sum / denom });
+  }
+  return result;
+}
+
+// ── HMA (Hull Moving Average) ────────────────────────────────
+function calcHMA(data, period = 20) {
+  if (data.length < period) return [];
+  const half = Math.floor(period / 2);
+  const sqrtP = Math.floor(Math.sqrt(period));
+  const wmaHalf = calcWMA(data, half);
+  const wmaFull = calcWMA(data, period);
+  if (wmaHalf.length === 0 || wmaFull.length === 0) return [];
+  // 2×WMA(half) - WMA(full)
+  const diff = [];
+  const offset = wmaHalf.length - wmaFull.length;
+  for (let i = 0; i < wmaFull.length; i++) {
+    diff.push({ time: wmaFull[i].time, close: 2 * wmaHalf[i + offset].value - wmaFull[i].value });
+  }
+  const hma = calcWMA(diff.map(d => ({ ...d, high: d.close, low: d.close, open: d.close })), sqrtP);
+  return hma;
+}
+
 // ── BetterVolume ────────────────────────────────────────────
 // Exact port of BetterVolume.mqh — Emini-Watch classification
 // Colors: Yellow=LowVol, Red=ClimaxUp, White=ClimaxDn, Green=Churn, Magenta=Climax+Churn, SteelBlue=Normal
@@ -1221,6 +1415,13 @@ function applyIndicators(chartData) {
   const lastTime = chartData.length > 0 ? chartData[chartData.length - 1].time : Infinity;
   // Helper: clip any data array to not exceed last candle time
   const clip = (data) => data.filter(d => d.time <= lastTime);
+  // Helper: add a simple line series overlay
+  const addLine = (color, width, data, seriesKey) => {
+    if (!data || data.length < 2) return;
+    const s = chart.addLineSeries({ color, lineWidth: width, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    s.setData(data);
+    if (seriesKey) indicatorSeries[seriesKey] = s;
+  };
 
   for (const cb of checkboxes) {
     const ind = cb.dataset.ind;
@@ -1524,6 +1725,85 @@ function applyIndicators(chartData) {
         color: d.close >= d.open ? "#26a69a80" : "#ef535080",
       })));
       indicatorSeries[key] = s;
+
+    } else if (ind === "stochastic" && chartData.length > period + 10) {
+      const st = calcStochastic(chartData, period, 3, 3);
+      if (st.k.length > 0) {
+        const sk = chart.addLineSeries({ color: "#2196f3", lineWidth: 1, priceScaleId: "stoch", lastValueVisible: false, priceLineVisible: false });
+        const sd = chart.addLineSeries({ color: "#ff9800", lineWidth: 1, priceScaleId: "stoch", lastValueVisible: false, priceLineVisible: false });
+        chart.priceScale("stoch").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+        sk.setData(clip(st.k)); sd.setData(clip(st.d));
+        indicatorSeries[key + "_k"] = sk; indicatorSeries[key + "_d"] = sd;
+      }
+
+    } else if (ind === "cci" && chartData.length > period) {
+      const cci = calcCCI(chartData, period);
+      const s = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, priceScaleId: "cci", lastValueVisible: false, priceLineVisible: false });
+      chart.priceScale("cci").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+      s.setData(clip(cci)); indicatorSeries[key] = s;
+
+    } else if (ind === "adx" && chartData.length > period * 3) {
+      const adx = calcADX(chartData, period);
+      if (adx.adx.length > 0) {
+        const sa = chart.addLineSeries({ color: "#ff9800", lineWidth: 1.5, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
+        const sp = chart.addLineSeries({ color: "#4caf50", lineWidth: 1, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
+        const sm = chart.addLineSeries({ color: "#f44336", lineWidth: 1, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
+        chart.priceScale("adx").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+        sa.setData(clip(adx.adx)); sp.setData(clip(adx.diPlus)); sm.setData(clip(adx.diMinus));
+        indicatorSeries[key + "_adx"] = sa; indicatorSeries[key + "_dip"] = sp; indicatorSeries[key + "_dim"] = sm;
+      }
+
+    } else if (ind === "williams" && chartData.length > period) {
+      const wr = calcWilliamsR(chartData, period);
+      const s = chart.addLineSeries({ color: "#e91e63", lineWidth: 1, priceScaleId: "wr", lastValueVisible: false, priceLineVisible: false });
+      chart.priceScale("wr").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+      s.setData(clip(wr)); indicatorSeries[key] = s;
+
+    } else if (ind === "ichimoku" && chartData.length > 52) {
+      const ich = calcIchimoku(chartData);
+      addLine("#2196f3", 1, clip(ich.tenkanSen), "ich_tenkan");
+      addLine("#f44336", 1, clip(ich.kijunSen), "ich_kijun");
+      addLine("#4caf50", 1, clip(ich.senkouA), "ich_sa");
+      addLine("#ff9800", 1, clip(ich.senkouB), "ich_sb");
+      if (ich.chikou.length > 0) addLine("#9c27b0", 1, clip(ich.chikou), "ich_chikou");
+      // Cloud fill
+      if (ich.senkouA.length > 1 && ich.senkouB.length > 1) {
+        const fill = chart.addBaselineSeries({
+          topFillColor1: "#4caf5020", topFillColor2: "#4caf5020",
+          bottomFillColor1: "#ff980020", bottomFillColor2: "#ff980020",
+          topLineColor: "transparent", bottomLineColor: "transparent",
+          lineWidth: 0, baseValue: { type: "price", price: 0 },
+          lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+        });
+        // Use senkouB as baseline, senkouA as value
+        fill.setData(clip(ich.senkouA));
+        indicatorSeries.ich_cloud = fill;
+      }
+
+    } else if (ind === "psar" && chartData.length > 2) {
+      const psar = calcParabolicSAR(chartData);
+      const s = chart.addLineSeries({ color: "#ffeb3b", lineWidth: 0, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 1.5 });
+      s.setData(clip(psar)); indicatorSeries[key] = s;
+
+    } else if (ind === "obv") {
+      const obv = calcOBV(chartData);
+      const s = chart.addLineSeries({ color: "#00bcd4", lineWidth: 1, priceScaleId: "obv", lastValueVisible: false, priceLineVisible: false });
+      chart.priceScale("obv").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+      s.setData(clip(obv)); indicatorSeries[key] = s;
+
+    } else if (ind === "momentum" && chartData.length > period) {
+      const mom = calcMomentum(chartData, period);
+      const s = chart.addLineSeries({ color: "#ff5722", lineWidth: 1, priceScaleId: "mom", lastValueVisible: false, priceLineVisible: false });
+      chart.priceScale("mom").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+      s.setData(clip(mom)); indicatorSeries[key] = s;
+
+    } else if (ind === "wma" && chartData.length > period) {
+      const wma = calcWMA(chartData, period);
+      addLine("#ff4081", 1, clip(wma), key);
+
+    } else if (ind === "hma" && chartData.length > period) {
+      const hma = calcHMA(chartData, period);
+      addLine("#00e5ff", 1.5, clip(hma), key);
 
     } else if (ind === "mtf-ma") {
       // MTF_MA: SMA from current chart + higher timeframes
