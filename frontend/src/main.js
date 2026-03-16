@@ -2314,6 +2314,7 @@ async function loadChart(symbol, timeframe) {
     // Load MTF data for multi-timeframe indicators, then apply all + update grid
     loadMTFData(symbol).then(() => {
       applyIndicators(chartData);
+      renderAnnotations();
       updateMTFGrid();
     }).catch(() => applyIndicators(chartData));
 
@@ -2543,7 +2544,9 @@ function updateNextBarTime() {
   const h = Math.floor(remaining / 3600);
   const m = Math.floor((remaining % 3600) / 60);
   const s = remaining % 60;
-  setText("info-time", `Next bar: ${h > 0 ? `${h}H ${m}M ${s}s` : m > 0 ? `${m}M ${s}s` : `${s}s`}`);
+  const regime = currentChartData.length > 40 ? detectRegime(currentChartData) : "";
+  const regimeLabel = regime ? ` [${regime.toUpperCase()}]` : "";
+  setText("info-time", `Next bar: ${h > 0 ? `${h}H ${m}M ${s}s` : m > 0 ? `${m}M ${s}s` : `${s}s`}${regimeLabel}`);
 }
 
 function setText(id, text) {
@@ -4408,6 +4411,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "MONTECARLO", desc: "Monte Carlo Risk of Ruin", action: cmdMonteCarlo },
   { name: "ALERTS", desc: "Multi-Condition Alert Manager", action: cmdMultiAlerts },
   { name: "JOURNAL", desc: "Trade Journal (log & review)", action: cmdTradeJournal },
+  { name: "CALC", desc: "Position Sizing Calculator", action: cmdPositionCalc },
+  { name: "ANNOTATE", desc: "Add chart annotation", action: addChartAnnotation },
   { name: "SETTINGS", desc: "API Keys & Configuration", action: cmdSettings },
   { name: "FRED", desc: "FRED Economic Data (rates, CPI, GDP)", action: cmdFRED },
   { name: "AI", desc: "AI Trading Assistant (Claude/GPT)", action: cmdAIChat },
@@ -7227,6 +7232,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupKeyboard();
   setupConnect();
   setupMTFGrid();
+  loadAnnotations();
   setupTabs();
   setupTemplates();
   setupProfiles();
@@ -7674,7 +7680,6 @@ function cmdTradeJournal() {
   symbolInp.style.cssText = "width:70px;background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
   const sideInp = document.createElement("select");
   sideInp.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;";
-  sideInp.innerHTML = "";
   for (const v of ["BUY","SELL"]) { const o = document.createElement("option"); o.value = v; o.textContent = v; sideInp.appendChild(o); }
   const noteInp = document.createElement("input");
   noteInp.placeholder = "Notes (setup, emotion, reason)";
@@ -7753,6 +7758,152 @@ function calcHeikinAshi(data) {
     prevHA = { open: haOpen, close: haClose };
   }
   return result;
+}
+
+// ── Position Sizing Calculator ────────────────────────────────
+
+function cmdPositionCalc() {
+  const win = createWindow({ title: "Position Sizing Calculator", width: 400, height: 350 });
+  const c = document.createElement("div");
+  c.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:4px;font-size:11px;";
+
+  const fields = [
+    { id: "pc-balance", label: "Account Balance ($)", value: "100000" },
+    { id: "pc-risk-pct", label: "Risk per Trade (%)", value: "0.5" },
+    { id: "pc-entry", label: "Entry Price", value: lastPrice ? lastPrice.toFixed(2) : "100" },
+    { id: "pc-sl", label: "Stop Loss Price", value: getSLPrice()?.toFixed(2) || "95" },
+  ];
+  const inputs = {};
+  for (const f of fields) {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    const lbl = document.createElement("span");
+    lbl.style.color = "#888";
+    lbl.textContent = f.label;
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.step = "0.01";
+    inp.value = f.value;
+    inp.style.cssText = "width:120px;background:#111;color:#fff;border:1px solid #555;padding:4px;font-family:inherit;text-align:right;";
+    row.appendChild(lbl);
+    row.appendChild(inp);
+    c.appendChild(row);
+    inputs[f.id] = inp;
+  }
+
+  const resultDiv = document.createElement("div");
+  resultDiv.style.cssText = "margin-top:8px;padding:8px;background:#111;border:1px solid #333;border-radius:4px;";
+  c.appendChild(resultDiv);
+
+  const calc = () => {
+    const balance = parseFloat(inputs["pc-balance"].value) || 0;
+    const riskPct = parseFloat(inputs["pc-risk-pct"].value) || 0;
+    const entry = parseFloat(inputs["pc-entry"].value) || 0;
+    const sl = parseFloat(inputs["pc-sl"].value) || 0;
+    const slDist = Math.abs(entry - sl);
+    const riskMoney = balance * (riskPct / 100);
+    const lots = slDist > 0 ? riskMoney / slDist : 0;
+    const tp = getSLPrice() && getTPPrice() ? getTPPrice() : entry + slDist * 2;
+    const tpDist = Math.abs(tp - entry);
+    const rr = slDist > 0 ? tpDist / slDist : 0;
+    resultDiv.textContent = "";
+    const lines = [
+      `Risk Amount: $${riskMoney.toFixed(2)}`,
+      `SL Distance: $${slDist.toFixed(4)}`,
+      `Position Size: ${lots.toFixed(2)} shares`,
+      `Position Value: $${(lots * entry).toFixed(2)}`,
+      `R:R Ratio: ${rr.toFixed(2)}`,
+      `Max Loss: $${riskMoney.toFixed(2)}`,
+      `Max Profit (${rr.toFixed(1)}R): $${(riskMoney * rr).toFixed(2)}`,
+    ];
+    for (const line of lines) {
+      const d = document.createElement("div");
+      d.style.cssText = "padding:2px 0;color:#ccc;";
+      d.textContent = line;
+      resultDiv.appendChild(d);
+    }
+  };
+
+  for (const inp of Object.values(inputs)) inp.addEventListener("input", calc);
+  calc();
+
+  const calcBtn = document.createElement("button");
+  calcBtn.textContent = "Calculate";
+  calcBtn.style.cssText = "padding:6px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;font-family:inherit;";
+  calcBtn.addEventListener("click", calc);
+  c.appendChild(calcBtn);
+
+  win.contentElement.textContent = "";
+  win.appendElement(c);
+}
+
+// ── Chart Annotations (text labels) ──────────────────────────
+
+let chartAnnotations = [];
+const ANNOTATIONS_KEY = "typhoon_annotations";
+
+function loadAnnotations() {
+  try { chartAnnotations = JSON.parse(localStorage.getItem(ANNOTATIONS_KEY) || "[]"); } catch { chartAnnotations = []; }
+}
+function saveAnnotations() { localStorage.setItem(ANNOTATIONS_KEY, JSON.stringify(chartAnnotations)); }
+
+function addChartAnnotation() {
+  const text = prompt("Annotation text:");
+  if (!text) return;
+  if (!currentChartData || currentChartData.length === 0) return;
+  // Place at center of visible range, at last price
+  const lastBar = currentChartData[currentChartData.length - 1];
+  chartAnnotations.push({
+    time: lastBar.time,
+    price: lastPrice,
+    text,
+    symbol: currentSymbol,
+  });
+  saveAnnotations();
+  renderAnnotations();
+  log(`Annotation added: "${text}"`, "ok");
+}
+
+function renderAnnotations() {
+  // Annotations rendered on the drawing canvas overlay
+  if (!drawCanvas) return;
+  // They'll be drawn in the next renderDrawings call — add to drawings array
+  // For simplicity, use markers on the candleSeries
+  const markers = chartAnnotations
+    .filter(a => a.symbol === currentSymbol)
+    .map(a => ({
+      time: a.time,
+      position: "aboveBar",
+      color: "#ffeb3b",
+      shape: "arrowDown",
+      text: a.text,
+    }));
+  try { candleSeries.setMarkers(markers); } catch (_) {}
+}
+
+// ── Regime Detection (trending/ranging/choppy) ───────────────
+
+function detectRegime(data, period = 20) {
+  if (!data || data.length < period * 2) return "unknown";
+  const recent = data.slice(-period);
+  const closes = recent.map(d => d.close);
+
+  // ADX-based: high ADX = trending, low ADX = ranging
+  const adxData = calcADX(data, 14);
+  if (adxData.adx.length > 0) {
+    const lastADX = adxData.adx[adxData.adx.length - 1].value;
+    if (lastADX > 25) return "trending";
+    if (lastADX < 15) return "ranging";
+    return "choppy";
+  }
+
+  // Fallback: simple volatility comparison
+  const mean = closes.reduce((a, b) => a + b, 0) / closes.length;
+  const variance = closes.reduce((a, c) => a + (c - mean) ** 2, 0) / closes.length;
+  const cv = Math.sqrt(variance) / mean; // coefficient of variation
+  if (cv > 0.03) return "trending";
+  if (cv < 0.01) return "ranging";
+  return "choppy";
 }
 
 function closeMTFGrid() {

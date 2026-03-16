@@ -32,6 +32,9 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Chart Types** | Candlestick, Heikin-Ashi, Line, and Bar chart rendering |
 | **Risk/Reward Overlay** | Visual profit/loss zones on chart when SL/TP lines set |
 | **Trade Journal** | Log trades with notes, review history (Ctrl+K → JOURNAL) |
+| **Position Calculator** | Risk-based sizing with R:R ratio (Ctrl+K → CALC) |
+| **Chart Annotations** | Text markers on chart bars (Ctrl+K → ANNOTATE) |
+| **Regime Detection** | ADX-based trending/ranging/choppy state in dashboard |
 | **Bid/Ask Spread** | Real-time bid/ask/spread display from Alpaca quotes |
 | **Time & Sales** | WebSocket trade stream in scrolling panel |
 | **Account Activities** | Deposits, withdrawals, dividends, fills history |

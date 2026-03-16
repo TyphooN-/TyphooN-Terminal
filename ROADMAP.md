@@ -146,6 +146,9 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Heikin-Ashi candlesticks | ✅ Done | Additional chart type with smoothed OHLC |
 | Risk/reward overlay | ✅ Done | Visual P&L zones when SL/TP set (green profit, red loss) |
 | Trade journal | ✅ Done | Ctrl+K → JOURNAL, log trades with notes, persistent |
+| Position sizing calculator | ✅ Done | Ctrl+K → CALC, risk/entry/SL → lot size + R:R |
+| Chart annotations | ✅ Done | Ctrl+K → ANNOTATE, text markers on chart |
+| Regime detection | ✅ Done | ADX-based trending/ranging/choppy in timer bar |
 | FRED economic data | ✅ Done | Fed Funds, CPI, GDP, Treasury yields, VIX, M2 (user provides free API key) |
 | AI trading assistant | ✅ Done | Claude (Anthropic) or GPT (OpenAI) chat with market context |
 | Settings panel | ✅ Done | Ctrl+K → SETTINGS for API key management |

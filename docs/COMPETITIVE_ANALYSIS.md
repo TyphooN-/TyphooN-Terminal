@@ -144,15 +144,15 @@
 6. ~~**Heikin-Ashi candlesticks**~~ ✅ DONE — chart type selector
 7. **Renko/Range bars** (non-time-based charting)
 8. **Custom timeframes** (e.g., 2H, 3D, 6H)
-9. **Chart annotations** (text labels, arrows, callouts)
-10. **Position sizing calculator** (standalone tool with risk scenarios)
+9. ~~**Chart annotations**~~ ✅ DONE — Ctrl+K → ANNOTATE, markers on chart
+10. ~~**Position sizing calculator**~~ ✅ DONE — Ctrl+K → CALC
 
 ### Tier C — Differentiators (Unique Features)
 11. **AI-powered trade review** ("analyze my last 10 trades" using AI chat context)
 12. **Pattern recognition** (auto-detect head & shoulders, double top/bottom, wedges)
 13. **Sentiment analysis** (aggregate news sentiment per symbol)
 14. **Volatility surface** (options IV surface visualization)
-15. **Regime detection** (trending/ranging/choppy market state classifier)
+15. ~~**Regime detection**~~ ✅ DONE — ADX-based trending/ranging/choppy shown in timer
 
 ### Tier D — Blocked by External Dependencies
 16. Analyst consensus (needs paid data)
