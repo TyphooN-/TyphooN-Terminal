@@ -1652,14 +1652,29 @@ function setMTFDot(id, state) {
 }
 
 // ══════════════════════════════════════════════════════════════
-// THREE-TIER BAR CACHE
-//   Hot:  In-memory (instant, 1-min TTL for freshness)
-//   Warm: IndexedDB (50MB+, survives restarts, structured)
-//   Cold: zstd-compressed files via Rust (unlimited, persistent)
+// FOUR-TIER BAR CACHE (with LRU eviction)
+//   Hot:  In-memory LRU (instant, 1-min TTL, max 200 entries)
+//   Warm: IndexedDB (50MB+, survives restarts)
+//   SQL:  SQLite via Rust (unlimited, zstd-compressed, WAL mode)
+//   Cold: zstd-compressed files via Rust (legacy, persistent)
 // ══════════════════════════════════════════════════════════════
 
-const barCache = {}; // Hot: "SYMBOL:TF" → { data: [], timestamp: Date }
+const barCache = {}; // Hot: "SYMBOL:TF" → { data: [], timestamp: Date, lastAccess: Date }
 const CACHE_TTL_MS = 60 * 1000; // 1 minute — fresh threshold
+const CACHE_MAX_ENTRIES = 200; // LRU eviction threshold
+
+// LRU eviction: remove least-recently-accessed entries when cache exceeds max
+function evictLRU() {
+  const keys = Object.keys(barCache);
+  if (keys.length <= CACHE_MAX_ENTRIES) return;
+  // Sort by lastAccess ascending (oldest first)
+  keys.sort((a, b) => (barCache[a].lastAccess || 0) - (barCache[b].lastAccess || 0));
+  const toRemove = keys.length - CACHE_MAX_ENTRIES;
+  for (let i = 0; i < toRemove; i++) {
+    delete barCache[keys[i]];
+  }
+  log(`LRU evicted ${toRemove} cache entries (${keys.length} → ${CACHE_MAX_ENTRIES})`, "info");
+}
 let idb = null; // Warm: IndexedDB handle
 
 function getCacheKey(symbol, tf) { return `${symbol}:${tf}`; }
@@ -1727,7 +1742,7 @@ async function coldLoad(key) {
 
 // ── Unified Cache Operations ────────────────────────────────
 
-// Load from all tiers on startup: cold → warm → hot
+// Load from all tiers on startup: SQLite → IndexedDB → cold → hot
 async function loadBarCacheFromDisk() {
   try {
     await openIndexedDB();
@@ -1740,7 +1755,7 @@ async function loadBarCacheFromDisk() {
         req.onsuccess = () => {
           for (const entry of req.result || []) {
             if (entry.key && entry.data) {
-              barCache[entry.key] = { data: entry.data, timestamp: entry.timestamp || 0 };
+              barCache[entry.key] = { data: entry.data, timestamp: entry.timestamp || 0, lastAccess: Date.now() };
             }
           }
           resolve();
@@ -1748,25 +1763,16 @@ async function loadBarCacheFromDisk() {
         req.onerror = () => resolve();
       });
     }
-    const count = Object.keys(barCache).length;
-    if (count > 0) log(`Loaded ${count} cached bar sets from IndexedDB`, "info");
+    const idbCount = Object.keys(barCache).length;
+    if (idbCount > 0) log(`Loaded ${idbCount} cached bar sets from IndexedDB`, "info");
 
-    // Also check cold cache for anything not in warm
+    // Try SQLite cache stats
     try {
-      const coldList = JSON.parse(await invoke("list_cold_cache"));
-      let coldLoaded = 0;
-      for (const entry of coldList) {
-        if (!barCache[entry.key]) {
-          const data = await coldLoad(entry.key);
-          if (data) {
-            barCache[entry.key] = { data, timestamp: Date.now() - 3600000 }; // mark as stale
-            await idbPut(entry.key, data, Date.now() - 3600000); // promote to warm
-            coldLoaded++;
-          }
-        }
-      }
-      if (coldLoaded > 0) log(`Promoted ${coldLoaded} cold cache entries to warm`, "info");
+      const stats = JSON.parse(await invoke("db_cache_stats"));
+      log(`SQLite cache: ${stats.bar_entries} bar sets, ${stats.kv_entries} KV entries, ${stats.total_compressed_mb.toFixed(1)}MB compressed`, "info");
     } catch (_) {}
+
+    evictLRU();
   } catch (e) {
     log(`Cache init: ${e}`, "warn");
   }
@@ -1775,10 +1781,13 @@ async function loadBarCacheFromDisk() {
 // Save to all tiers: hot → warm → cold (async, non-blocking)
 function saveBarCacheToDisk(cacheKey, data) {
   const ts = Date.now();
-  barCache[cacheKey] = { data, timestamp: ts };
+  barCache[cacheKey] = { data, timestamp: ts, lastAccess: ts };
+  evictLRU();
   // Warm (IndexedDB) — async, fire-and-forget
   idbPut(cacheKey, data, ts);
-  // Cold (zstd file) — async, fire-and-forget
+  // SQL (SQLite via Rust) — async, fire-and-forget
+  invoke("db_cache_put", { key: `${activeBrokerId}:${cacheKey}`, data: JSON.stringify(data), kind: "bars" }).catch(() => {});
+  // Cold (zstd file) — async, fire-and-forget (legacy)
   coldSave(cacheKey, data);
 }
 

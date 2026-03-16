@@ -22,6 +22,7 @@ use core::risk::{self, OrderMode, RiskConfig, SymbolSpec};
 use core::var;
 use core::margin;
 use core::backtest::{self as backtest_engine, SMACrossStrategy, BacktestResult, BarByBarResult};
+use core::cache::SqliteCache;
 use core::screener::{self as screener_engine, ScreenerFilter, ScreenerSymbol};
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
 use std::sync::Arc;
@@ -43,6 +44,8 @@ struct AppState {
     /// Account protection: equity TP/SL (port of MQL5 EnableEquityTP/SL).
     equity_tp: Option<f64>,
     equity_sl: Option<f64>,
+    /// SQLite cache for unlimited structured storage.
+    db_cache: Option<SqliteCache>,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -1197,6 +1200,63 @@ async fn send_ntfy_notification(
     notifications::send_ntfy(&topic, &message).await
 }
 
+// ── SQLite Cache Commands ───────────────────────────────────────
+
+#[tauri::command]
+async fn db_cache_put(state: State<'_, SharedState>, key: String, data: String, kind: Option<String>) -> Result<(), String> {
+    if key.len() > 500 { return Err("Key too long".into()); }
+    if data.len() > 50 * 1024 * 1024 { return Err("Data too large".into()); }
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    let kind = kind.unwrap_or_else(|| "kv".to_string());
+    if kind == "bars" {
+        cache.put_bars(&key, &data)
+    } else {
+        cache.put_kv(&key, &data)
+    }
+}
+
+#[tauri::command]
+async fn db_cache_get(state: State<'_, SharedState>, key: String, kind: Option<String>) -> Result<String, String> {
+    if key.len() > 500 { return Err("Key too long".into()); }
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    let kind = kind.unwrap_or_else(|| "kv".to_string());
+    if kind == "bars" {
+        match cache.get_bars(&key)? {
+            Some((json, _ts)) => Ok(json),
+            None => Err("Not in cache".into()),
+        }
+    } else {
+        match cache.get_kv(&key)? {
+            Some(json) => Ok(json),
+            None => Err("Not in cache".into()),
+        }
+    }
+}
+
+#[tauri::command]
+async fn db_cache_stats(state: State<'_, SharedState>) -> Result<String, String> {
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    let (bars, kvs, size) = cache.stats()?;
+    Ok(serde_json::to_string(&serde_json::json!({
+        "bar_entries": bars,
+        "kv_entries": kvs,
+        "total_compressed_bytes": size,
+        "total_compressed_mb": (size as f64) / (1024.0 * 1024.0),
+    })).unwrap())
+}
+
+#[tauri::command]
+async fn db_cache_evict(state: State<'_, SharedState>, max_age_days: Option<i64>) -> Result<String, String> {
+    let max_age = max_age_days.unwrap_or(30) * 86400; // default 30 days
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    let deleted = cache.evict_old(max_age)?;
+    Ok(format!("Evicted {deleted} entries older than {} days", max_age / 86400))
+}
+
 // ── Cold Cache (zstd-compressed files on disk) ──────────────────
 
 fn get_cache_dir() -> std::path::PathBuf {
@@ -1559,6 +1619,20 @@ fn main() {
         stream_rx: None,
         equity_tp: None,
         equity_sl: None,
+        db_cache: {
+            let cache_dir = get_cache_dir();
+            let db_path = cache_dir.join("typhoon_cache.db");
+            match SqliteCache::open(&db_path) {
+                Ok(cache) => {
+                    tracing::info!("SQLite cache opened: {:?}", db_path);
+                    Some(cache)
+                }
+                Err(e) => {
+                    tracing::warn!("SQLite cache failed: {e}. Falling back to zstd files.");
+                    None
+                }
+            }
+        },
     }));
 
     tauri::Builder::default()
@@ -1622,7 +1696,12 @@ fn main() {
             // Articles & cache management
             fetch_article,
             clear_symbol_cache,
-            // Cold cache (zstd)
+            // SQLite cache
+            db_cache_put,
+            db_cache_get,
+            db_cache_stats,
+            db_cache_evict,
+            // Cold cache (zstd files — legacy)
             save_cold_cache,
             load_cold_cache,
             list_cold_cache,
