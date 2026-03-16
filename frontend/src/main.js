@@ -64,6 +64,7 @@ let currentTimeframe = "1Hour";
 let lastPrice = 0;
 let mtfData = {};
 let currentChartData = []; // full chartData with volume — candleSeries.data() drops volume
+let activeBrokerId = "default"; // per-broker data isolation — set on connect
 
 // ── Tab State ───────────────────────────────────────────────
 
@@ -439,12 +440,13 @@ let drawings = []; // [{ type: "trendline"|"fibonacci", p1, p2 }]
 let drawingMode = null; // null | "trendline" | "fibonacci"
 let drawingAnchor = null; // first click point { time, price }
 let drawCanvas = null;
-const DRAWINGS_KEY = "typhoon_drawings";
+// Per-broker localStorage key — drawings are symbol-specific, so broker-scoped
+function getDrawingsKey() { return `typhoon_drawings_${activeBrokerId}`; }
 
 function loadDrawings() {
-  try { drawings = JSON.parse(localStorage.getItem(DRAWINGS_KEY) || "[]"); } catch { drawings = []; }
+  try { drawings = JSON.parse(localStorage.getItem(getDrawingsKey()) || "[]"); } catch { drawings = []; }
 }
-function saveDrawings() { localStorage.setItem(DRAWINGS_KEY, JSON.stringify(drawings)); }
+function saveDrawings() { localStorage.setItem(getDrawingsKey(), JSON.stringify(drawings)); }
 
 function setupDrawingCanvas() {
   const container = document.getElementById("chart-container");
@@ -1655,11 +1657,12 @@ let idb = null; // Warm: IndexedDB handle
 
 function getCacheKey(symbol, tf) { return `${symbol}:${tf}`; }
 
-// ── IndexedDB (Warm Cache) ──────────────────────────────────
+// ── IndexedDB (Warm Cache) — per-broker database ────────────
 
 function openIndexedDB() {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open("typhoon_bars", 1);
+    const dbName = `typhoon_bars_${activeBrokerId}`;
+    const req = indexedDB.open(dbName, 1);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains("bars")) {
@@ -1695,15 +1698,22 @@ async function idbPut(key, data, timestamp) {
 
 async function coldSave(key, data) {
   try {
-    await invoke("save_cold_cache", { key, data: JSON.stringify(data) });
+    const brokerKey = `${activeBrokerId}/${key}`;
+    await invoke("save_cold_cache", { key: brokerKey, data: JSON.stringify(data) });
   } catch (_) {}
 }
 
 async function coldLoad(key) {
   try {
-    const json = await invoke("load_cold_cache", { key });
+    const brokerKey = `${activeBrokerId}/${key}`;
+    const json = await invoke("load_cold_cache", { key: brokerKey });
     return JSON.parse(json);
   } catch (_) {
+    // Fallback: try legacy key without broker prefix
+    try {
+      const json = await invoke("load_cold_cache", { key });
+      return JSON.parse(json);
+    } catch (_) {}
     return null;
   }
 }
@@ -1931,27 +1941,31 @@ async function loadChart(symbol, timeframe) {
 
 const ALL_TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week"];
 
+const prefetchInProgress = new Set(); // prevent duplicate prefetch runs per symbol
+
 async function prefetchAllTimeframes(symbol, currentTF, limit) {
+  if (prefetchInProgress.has(symbol)) return; // already prefetching this symbol
+  prefetchInProgress.add(symbol);
+
   const toFetch = ALL_TIMEFRAMES.filter(tf => tf !== currentTF);
-  log(`Pre-fetching ${toFetch.length} timeframes for ${symbol}...`, "info");
+  let fetched = 0;
   for (const tf of toFetch) {
     const cacheKey = getCacheKey(symbol, tf);
     const cached = barCache[cacheKey];
-    // Skip if already cached and fresh
-    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS * 60) continue; // 60× TTL for prefetch (1 hour)
+    // Skip if already cached (any data at all — don't re-fetch)
+    if (cached && cached.data && cached.data.length > 0) continue;
     try {
-      const barsJson = await invoke("get_bars", { symbol, timeframe: tf, limit });
+      const barsJson = await invoke("get_bars", { symbol, timeframe: tf, limit: Math.min(limit, 1000) });
       const bars = JSON.parse(barsJson);
       if (bars.length > 0) {
         barCache[cacheKey] = { data: bars, timestamp: Date.now() };
         saveBarCacheToDisk(cacheKey, bars);
-        log(`Pre-cached ${symbol} @ ${tf}: ${bars.length} bars`, "info");
+        fetched++;
       }
-    } catch (_) {
-      // Silent fail on prefetch — not critical
-    }
+    } catch (_) {}
   }
-  log(`Pre-fetch complete for ${symbol}`, "ok");
+  if (fetched > 0) log(`Pre-cached ${fetched} timeframes for ${symbol}`, "ok");
+  prefetchInProgress.delete(symbol);
 }
 
 let lastBarTime = 0;
@@ -2687,6 +2701,9 @@ function setupConnect() {
       const result = await invoke("connect", { apiKey, secretKey, paper });
       const acct = JSON.parse(result);
 
+      // Set broker ID for per-broker data isolation
+      activeBrokerId = (accountName || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
+
       // Save credentials to OS keychain if requested
       if (saveCredentials && accountName) {
         await saveCredentials(accountName, apiKey, secretKey, accountType);
@@ -2737,6 +2754,7 @@ function setupConnect() {
       }
       const paper = acctMeta.type === "paper";
       try {
+        activeBrokerId = (acctMeta.name || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
         const result = await invoke("connect", { apiKey: creds.apiKey, secretKey: creds.secretKey, paper });
         const parsed = JSON.parse(result);
         const typeLabel = paper ? "Paper" : "LIVE";
