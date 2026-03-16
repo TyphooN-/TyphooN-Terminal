@@ -1,6 +1,6 @@
 # ADR-006: Security Hardening
 
-**Status:** Implemented (Pass 14)
+**Status:** Implemented (Pass 16)
 **Date:** 2026-03-15
 **Updated:** 2026-03-15
 
@@ -240,6 +240,12 @@ Full cross-reference of MQL5 EA (TyphooN.mq5 v1.420, 2730 lines) against Rust/Ta
 
 ## Summary
 
-**14 passes, 70 findings total: 64 fixed, 6 accepted with documented rationale.**
+### Pass 15 — innerHTML fix
+71. **innerHTML in trade journal select**: Unnecessary `innerHTML = ""` on freshly-created element removed
+
+### Pass 16 — Agent code review
+72. **2 innerHTML in sentiment/heatmap summaries**: Agent-introduced template literals in sentiment overallSentiment display and heatmap position summary. Replaced with createElement + textContent
+
+**16 passes, 72 findings total: 66 fixed, 6 accepted with documented rationale.**
 
 All actionable security items and MQL5 feature parity items completed.
