@@ -2558,7 +2558,7 @@ async function prefetchAllTimeframes(symbol, currentTF, limit) {
 let lastBarTime = 0;
 
 async function updateLatestBar(symbol, timeframe) {
-  if (symbol !== currentSymbol || timeframe !== currentTimeframe) return;
+  if (symbol !== currentSymbol) return;
   // Use base timeframe for custom TFs
   const customTF = CUSTOM_TIMEFRAME_MAP[timeframe];
   const fetchTF = customTF ? customTF.base : timeframe;
@@ -2575,12 +2575,18 @@ async function updateLatestBar(symbol, timeframe) {
       low: latest.low,
       close: latest.close,
     };
-    if (currentChartType === "line") {
-      candleSeries.update({ time: bar.time, value: bar.close });
-    } else {
-      candleSeries.update(bar);
-    }
+    // Always update lastPrice (used by dashboard, alerts, MTF sync)
     lastPrice = bar.close;
+    // Only update main chart series if it's visible (not in MTF grid mode)
+    if (!mtfGridActive) {
+      try {
+        if (currentChartType === "line") {
+          candleSeries.update({ time: bar.time, value: bar.close });
+        } else {
+          candleSeries.update(bar);
+        }
+      } catch (_) {}
+    }
 
     // If a NEW bar has printed (different timestamp), refresh all indicators
     if (barTime !== lastBarTime && lastBarTime !== 0) {
@@ -2594,6 +2600,8 @@ async function updateLatestBar(symbol, timeframe) {
       applyIndicators(currentChartData);
     }
     lastBarTime = barTime;
+    // Sync MTF grid cells with latest price
+    syncMTFGridLivePrice();
   } catch (_) {}
 }
 
