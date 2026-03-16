@@ -65,6 +65,9 @@ let lastPrice = 0;
 let mtfData = {};
 let currentChartData = []; // full chartData with volume — candleSeries.data() drops volume
 let activeBrokerId = "default"; // per-broker data isolation — set on connect
+let currentChartType = "candles"; // "candles" | "line" | "bars"
+let orderPriceLines = []; // pending order visualization lines on chart
+let lastTradePrice = 0; // for T&S uptick/downtick detection
 
 // ── Tab State ───────────────────────────────────────────────
 
@@ -306,6 +309,62 @@ function setupTooltip() {
       tooltip.classList.add("hidden");
     }
   });
+}
+
+// ── Chart Type Switching ─────────────────────────────────────
+
+function rebuildMainSeries(chartType) {
+  // Save existing SL/TP line prices
+  const slPrice = slLine ? slLine.options().price : null;
+  const tpPrice = tpLine ? tpLine.options().price : null;
+
+  // Remove old series (this also removes its price lines)
+  if (candleSeries) {
+    slLine = null;
+    tpLine = null;
+    chart.removeSeries(candleSeries);
+  }
+
+  // Create new series based on type
+  if (chartType === "line") {
+    candleSeries = chart.addLineSeries({
+      color: "#2196f3",
+      lineWidth: 2,
+    });
+  } else if (chartType === "bars") {
+    candleSeries = chart.addBarSeries({
+      upColor: "#00ff00",
+      downColor: "#ff0000",
+    });
+  } else {
+    // Default: candlestick
+    candleSeries = chart.addCandlestickSeries({
+      upColor: "#00ff00",
+      downColor: "#ff0000",
+      borderDownColor: "#ff0000",
+      borderUpColor: "#00ff00",
+      wickDownColor: "#ff0000",
+      wickUpColor: "#00ff00",
+    });
+  }
+
+  currentChartType = chartType;
+
+  // Re-set data if available
+  if (currentChartData && currentChartData.length > 0) {
+    if (chartType === "line") {
+      candleSeries.setData(currentChartData.map(d => ({ time: d.time, value: d.close })));
+    } else {
+      candleSeries.setData(currentChartData);
+    }
+  }
+
+  // Restore SL/TP lines
+  if (slPrice) createSLLine(slPrice);
+  if (tpPrice) createTPLine(tpPrice);
+
+  // Re-apply order price lines
+  updateOrderPriceLines();
 }
 
 // ── SL/TP Lines ─────────────────────────────────────────────
@@ -2156,8 +2215,12 @@ async function loadChart(symbol, timeframe) {
                   time: Math.floor(new Date(b.timestamp).getTime() / 1000),
                   open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
                 }));
-                candleSeries.setData(freshChartData);
                 currentChartData = freshChartData;
+                if (currentChartType === "line") {
+                  candleSeries.setData(freshChartData.map(d => ({ time: d.time, value: d.close })));
+                } else {
+                  candleSeries.setData(freshChartData);
+                }
                 lastPrice = freshChartData[freshChartData.length - 1].close;
                 log(`${symbol} @ ${timeframe}: refreshed to ${freshBars.length} bars`, "ok");
               }
@@ -2201,8 +2264,12 @@ async function loadChart(symbol, timeframe) {
       return;
     }
 
-    candleSeries.setData(chartData);
     currentChartData = chartData; // preserve volume for indicators
+    if (currentChartType === "line") {
+      candleSeries.setData(chartData.map(d => ({ time: d.time, value: d.close })));
+    } else {
+      candleSeries.setData(chartData);
+    }
     chart.timeScale().fitContent();
     currentSymbol = symbol;
     currentTimeframe = timeframe;
@@ -2281,7 +2348,11 @@ async function updateLatestBar(symbol, timeframe) {
       low: latest.low,
       close: latest.close,
     };
-    candleSeries.update(bar);
+    if (currentChartType === "line") {
+      candleSeries.update({ time: bar.time, value: bar.close });
+    } else {
+      candleSeries.update(bar);
+    }
     lastPrice = bar.close;
 
     // If a NEW bar has printed (different timestamp), refresh all indicators
@@ -2390,8 +2461,20 @@ async function updateDashboard() {
 
     updateNextBarTime();
     updatePositionsPanel();
+    updateOrderPriceLines();
     checkAlerts();
     checkEquityProtection();
+
+    // Bid/Ask spread (non-blocking — don't fail dashboard if quote fails)
+    if (currentSymbol) {
+      invoke("get_latest_quote", { symbol: currentSymbol }).then(json => {
+        const q = JSON.parse(json);
+        const spreadEl = document.getElementById("bid-ask-spread");
+        if (spreadEl && q.bid > 0 && q.ask > 0) {
+          spreadEl.textContent = `Bid: ${q.bid.toFixed(4)} | Ask: ${q.ask.toFixed(4)} | Spread: ${q.spread.toFixed(4)}`;
+        }
+      }).catch(() => {});
+    }
   } catch (_) {}
 }
 
@@ -2548,6 +2631,11 @@ function setupButtons() {
   // Auto-load on timeframe or bar count change
   document.getElementById("timeframe-select").addEventListener("change", triggerLoad);
   document.getElementById("bar-count").addEventListener("change", triggerLoad);
+
+  // Chart type selector
+  document.getElementById("chart-type-select").addEventListener("change", (e) => {
+    rebuildMainSeries(e.target.value);
+  });
 
   // Buy Lines: SL = lowest visible, TP = highest visible
   document.getElementById("btn-buy-lines").addEventListener("click", () => {
@@ -3857,6 +3945,275 @@ function setupProfiles() {
 // FEATURE 3: Command Palette (Bloomberg/Godel-style)
 // ══════════════════════════════════════════════════════════════
 
+// ── Time & Sales Panel ──────────────────────────────────────
+
+let tsWindow = null;
+let tsTradeList = []; // capped at 200
+let tsPollInterval = null;
+
+function cmdTimeSales() {
+  if (tsWindow) {
+    try { tsWindow.close(); } catch (_) {}
+  }
+  tsTradeList = [];
+  lastTradePrice = 0;
+
+  tsWindow = createWindow({
+    title: `${currentSymbol || "?"} — Time & Sales`,
+    type: "custom",
+    width: 380,
+    height: 500,
+    onClose: () => {
+      if (tsPollInterval) { clearInterval(tsPollInterval); tsPollInterval = null; }
+      tsWindow = null;
+    },
+  });
+
+  // Header row
+  const header = document.createElement("div");
+  header.style.cssText = "display:flex;justify-content:space-between;padding:4px 8px;color:#888;font-size:10px;border-bottom:1px solid #333;font-family:Consolas,monospace;";
+  const hTime = document.createElement("span"); hTime.textContent = "TIME";
+  const hPrice = document.createElement("span"); hPrice.textContent = "PRICE";
+  const hSize = document.createElement("span"); hSize.textContent = "SIZE";
+  header.appendChild(hTime);
+  header.appendChild(hPrice);
+  header.appendChild(hSize);
+  tsWindow.appendElement(header);
+
+  const listEl = document.createElement("div");
+  listEl.id = "ts-trade-list";
+  listEl.style.cssText = "overflow-y:auto;max-height:calc(100% - 30px);font-family:Consolas,monospace;font-size:11px;";
+  tsWindow.appendElement(listEl);
+
+  // Poll stream for trades
+  if (tsPollInterval) clearInterval(tsPollInterval);
+  tsPollInterval = setInterval(async () => {
+    try {
+      const json = await invoke("poll_stream");
+      const messages = JSON.parse(json);
+      for (const msg of messages) {
+        if (msg.Trade) {
+          const t = msg.Trade;
+          const isUp = t.price >= lastTradePrice;
+          lastTradePrice = t.price;
+
+          tsTradeList.unshift({
+            time: t.timestamp ? t.timestamp.substring(11, 19) : "",
+            price: t.price,
+            size: t.size,
+            up: isUp,
+          });
+          if (tsTradeList.length > 200) tsTradeList.length = 200;
+        }
+      }
+      renderTSList(listEl);
+    } catch (_) {}
+  }, 250);
+}
+
+function renderTSList(listEl) {
+  // Only re-render if there are new trades (check child count)
+  while (listEl.children.length > tsTradeList.length) {
+    listEl.removeChild(listEl.lastChild);
+  }
+  for (let i = 0; i < tsTradeList.length; i++) {
+    const t = tsTradeList[i];
+    let row = listEl.children[i];
+    if (!row) {
+      row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:space-between;padding:1px 8px;";
+      const sTime = document.createElement("span"); sTime.className = "ts-time";
+      sTime.style.cssText = "color:#888;min-width:65px;";
+      const sPrice = document.createElement("span"); sPrice.className = "ts-price";
+      sPrice.style.cssText = "min-width:80px;text-align:right;";
+      const sSize = document.createElement("span"); sSize.className = "ts-size";
+      sSize.style.cssText = "color:#ccc;min-width:60px;text-align:right;";
+      row.appendChild(sTime);
+      row.appendChild(sPrice);
+      row.appendChild(sSize);
+      listEl.appendChild(row);
+    }
+    row.children[0].textContent = t.time;
+    row.children[1].textContent = t.price.toFixed(4);
+    row.children[1].style.color = t.up ? "#4caf50" : "#f44336";
+    row.children[2].textContent = t.size.toFixed(2);
+  }
+}
+
+// ── Account Activities Window ───────────────────────────────
+
+async function cmdActivities() {
+  const win = createWindow({
+    title: "Account Activities",
+    type: "custom",
+    width: 550,
+    height: 500,
+  });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Loading activities...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  try {
+    const json = await invoke("get_account_activities", { activityTypes: "", limit: 100 });
+    const activities = JSON.parse(json);
+    win.contentElement.textContent = "";
+
+    if (!activities || activities.length === 0) {
+      win.setContent("No activities found.");
+      return;
+    }
+
+    // Category filter buttons
+    const filterBar = document.createElement("div");
+    filterBar.style.cssText = "display:flex;gap:4px;padding:6px 0;border-bottom:1px solid #333;flex-wrap:wrap;";
+    const categories = ["ALL", "FILL", "DIV", "CSD", "CSW"];
+    let activeFilter = "ALL";
+    const filterBtns = [];
+
+    for (const cat of categories) {
+      const btn = document.createElement("button");
+      btn.textContent = cat;
+      btn.style.cssText = "background:#1a1a2e;border:1px solid #333;color:#aaa;font-size:10px;padding:2px 8px;cursor:pointer;font-family:Consolas,monospace;border-radius:2px;";
+      if (cat === "ALL") btn.style.color = "#fff";
+      btn.addEventListener("click", () => {
+        activeFilter = cat;
+        filterBtns.forEach(b => b.style.color = "#aaa");
+        btn.style.color = "#fff";
+        renderActivities();
+      });
+      filterBtns.push(btn);
+      filterBar.appendChild(btn);
+    }
+    win.appendElement(filterBar);
+
+    const listEl = document.createElement("div");
+    listEl.style.cssText = "overflow-y:auto;max-height:calc(100% - 50px);";
+    win.appendElement(listEl);
+
+    function renderActivities() {
+      listEl.textContent = "";
+      const filtered = activeFilter === "ALL" ? activities : activities.filter(a => a.activity_type === activeFilter);
+      for (const a of filtered) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #111;font-size:11px;";
+
+        const left = document.createElement("div");
+        left.style.cssText = "display:flex;flex-direction:column;";
+        const desc = document.createElement("span");
+        desc.style.color = "#ccc";
+        desc.textContent = a.description;
+        const date = document.createElement("span");
+        date.style.cssText = "color:#666;font-size:9px;";
+        date.textContent = (a.date || "").substring(0, 19).replace("T", " ");
+        left.appendChild(desc);
+        left.appendChild(date);
+
+        const badge = document.createElement("span");
+        badge.style.cssText = "font-size:9px;padding:2px 6px;border-radius:2px;align-self:center;";
+        const typeColors = { FILL: "#2196f3", DIV: "#4caf50", CSD: "#ff9800", CSW: "#f44336" };
+        badge.style.background = typeColors[a.activity_type] || "#555";
+        badge.style.color = "#fff";
+        badge.textContent = a.activity_type;
+
+        row.appendChild(left);
+        row.appendChild(badge);
+        listEl.appendChild(row);
+      }
+    }
+    renderActivities();
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load activities: ${e}`);
+  }
+}
+
+// ── Insider Trading Window ──────────────────────────────────
+
+async function cmdInsider() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({
+    title: `${currentSymbol} — Insider Trading (Form 4)`,
+    type: "custom",
+    width: 600,
+    height: 450,
+  });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching SEC Form 4 filings...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  try {
+    const json = await invoke("get_insider_trades", { symbol: currentSymbol });
+    const trades = JSON.parse(json);
+    win.contentElement.textContent = "";
+
+    if (!trades || trades.length === 0) {
+      win.setContent("No insider trading filings found for this symbol.");
+      return;
+    }
+
+    // Table header
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #333;color:#888;font-size:10px;font-family:Consolas,monospace;";
+    const cols = ["Date", "Owner", "Type", "Link"];
+    for (const c of cols) {
+      const span = document.createElement("span");
+      span.textContent = c;
+      span.style.flex = c === "Owner" ? "2" : "1";
+      header.appendChild(span);
+    }
+    win.appendElement(header);
+
+    const listEl = document.createElement("div");
+    listEl.style.cssText = "overflow-y:auto;max-height:calc(100% - 40px);";
+    win.appendElement(listEl);
+
+    for (const t of trades) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #111;font-size:11px;color:#ccc;";
+
+      const date = document.createElement("span");
+      date.style.flex = "1";
+      date.textContent = t.filing_date;
+
+      const owner = document.createElement("span");
+      owner.style.flex = "2";
+      owner.textContent = t.owner_name || "—";
+      owner.style.cssText += "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+
+      const type = document.createElement("span");
+      type.style.flex = "1";
+      type.textContent = t.transaction_type;
+
+      const link = document.createElement("span");
+      link.style.flex = "1";
+      if (t.form_url) {
+        const a = document.createElement("a");
+        a.textContent = "View";
+        a.style.cssText = "color:#2196f3;cursor:pointer;text-decoration:underline;font-size:10px;";
+        a.addEventListener("click", () => {
+          openArticleInline(t.form_url, `Form 4 — ${t.owner_name}`);
+        });
+        link.appendChild(a);
+      }
+
+      row.appendChild(date);
+      row.appendChild(owner);
+      row.appendChild(type);
+      row.appendChild(link);
+      listEl.appendChild(row);
+    }
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load insider trades: ${e}`);
+  }
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "DES", desc: "Description / Fundamentals", action: cmdDescription },
   { name: "NEWS", desc: "News headlines", action: cmdNews },
@@ -3871,6 +4228,9 @@ const CMD_PALETTE_COMMANDS = [
   { name: "HIST", desc: "Trade History / Orders", action: cmdHistory },
   { name: "QM", desc: "Quote Monitor / Watchlist", action: cmdWatchlist },
   { name: "CAL", desc: "Economic Calendar", action: cmdCalendar },
+  { name: "T&S", desc: "Time & Sales (live trades)", action: cmdTimeSales },
+  { name: "ACTIVITIES", desc: "Account activities (fills, dividends, deposits)", action: cmdActivities },
+  { name: "INSIDER", desc: "Insider trading (SEC Form 4)", action: cmdInsider },
   { name: "TILE", desc: "Tile all floating windows", action: () => tileWindows() },
   { name: "CLOSE", desc: "Close all floating windows", action: () => closeAllWindows() },
 ];
@@ -5529,6 +5889,189 @@ function patchRenderDrawings() {
 
 // ── Init ────────────────────────────────────────────────────
 
+// ── Right-Click Context Menu ─────────────────────────────────
+
+function setupChartContextMenu() {
+  const container = document.getElementById("chart-container");
+  let contextMenu = null;
+
+  function removeMenu() {
+    if (contextMenu) {
+      contextMenu.remove();
+      contextMenu = null;
+    }
+  }
+
+  document.addEventListener("click", removeMenu);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") removeMenu(); });
+
+  container.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    removeMenu();
+
+    // Get price at click position
+    const rect = container.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const clickPrice = candleSeries ? candleSeries.coordinateToPrice(y) : null;
+
+    contextMenu = document.createElement("div");
+    contextMenu.className = "chart-context-menu";
+    contextMenu.style.cssText = "position:fixed;z-index:9999;background:#1a1a2e;border:1px solid #333;border-radius:4px;padding:4px 0;min-width:180px;font-size:11px;font-family:Consolas,monospace;box-shadow:0 4px 12px rgba(0,0,0,0.5);";
+    contextMenu.style.left = e.clientX + "px";
+    contextMenu.style.top = e.clientY + "px";
+
+    const items = [
+      { label: "Buy Lines", action: () => {
+        if (!currentChartData || currentChartData.length === 0) return;
+        const recent = currentChartData.slice(-50);
+        createSLLine(Math.min(...recent.map(d => d.low)));
+        createTPLine(Math.max(...recent.map(d => d.high)));
+      }},
+      { label: "Sell Lines", action: () => {
+        if (!currentChartData || currentChartData.length === 0) return;
+        const recent = currentChartData.slice(-50);
+        createSLLine(Math.max(...recent.map(d => d.high)));
+        createTPLine(Math.min(...recent.map(d => d.low)));
+      }},
+      { label: "Destroy Lines", action: () => { removeSLLine(); removeTPLine(); } },
+      { type: "separator" },
+      { label: "Draw Trend Line", action: () => {
+        drawingMode = "trendline";
+        drawingAnchor = null;
+        container.style.cursor = "crosshair";
+        log("Click two points for trend line", "info");
+      }},
+      { label: "Draw Fibonacci", action: () => {
+        drawingMode = "fibonacci";
+        drawingAnchor = null;
+        container.style.cursor = "crosshair";
+        log("Click two points for Fibonacci retracement", "info");
+      }},
+      { type: "separator" },
+      { label: "Set Alert", action: () => {
+        if (clickPrice && clickPrice > 0) {
+          const price = clickPrice;
+          // Use the existing alerts system if available
+          if (typeof addPriceAlert === "function") {
+            addPriceAlert(currentSymbol, price, price > lastPrice ? "above" : "below");
+          } else {
+            log(`Alert price: ${price.toFixed(4)} (alerts system not loaded)`, "info");
+          }
+        }
+      }},
+      { label: "Copy Price", action: () => {
+        if (clickPrice && clickPrice > 0) {
+          navigator.clipboard.writeText(clickPrice.toFixed(6)).then(() => {
+            log(`Copied price ${clickPrice.toFixed(6)} to clipboard`, "ok");
+          }).catch(() => {
+            log(`Price: ${clickPrice.toFixed(6)}`, "info");
+          });
+        }
+      }},
+    ];
+
+    for (const item of items) {
+      if (item.type === "separator") {
+        const sep = document.createElement("div");
+        sep.style.cssText = "height:1px;background:#333;margin:4px 0;";
+        contextMenu.appendChild(sep);
+        continue;
+      }
+      const row = document.createElement("div");
+      row.style.cssText = "padding:5px 14px;color:#ccc;cursor:pointer;";
+      row.textContent = item.label;
+      row.addEventListener("mouseenter", () => { row.style.background = "#2a2a4e"; });
+      row.addEventListener("mouseleave", () => { row.style.background = ""; });
+      row.addEventListener("click", () => {
+        removeMenu();
+        item.action();
+      });
+      contextMenu.appendChild(row);
+    }
+
+    document.body.appendChild(contextMenu);
+
+    // Adjust position if menu goes off screen
+    const menuRect = contextMenu.getBoundingClientRect();
+    if (menuRect.right > window.innerWidth) {
+      contextMenu.style.left = (window.innerWidth - menuRect.width - 4) + "px";
+    }
+    if (menuRect.bottom > window.innerHeight) {
+      contextMenu.style.top = (window.innerHeight - menuRect.height - 4) + "px";
+    }
+  });
+}
+
+// ── Pending Order Visualization on Chart ────────────────────
+
+function setupOrderPriceLines() {
+  // No-op init — lines are created/updated in updateOrderPriceLines()
+}
+
+async function updateOrderPriceLines() {
+  // Remove old order lines
+  if (candleSeries) {
+    for (const line of orderPriceLines) {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    }
+  }
+  orderPriceLines = [];
+
+  // Only draw if we have a series and are connected
+  if (!candleSeries || !currentSymbol) return;
+
+  try {
+    const json = await invoke("get_open_orders");
+    const orders = JSON.parse(json);
+
+    for (const o of orders) {
+      // Only show orders for the current symbol
+      const orderSymbol = o.symbol || "";
+      if (orderSymbol !== currentSymbol && orderSymbol !== currentSymbol.replace("/", "")) continue;
+
+      let price = null;
+      let color = "#2196f3"; // default blue for limit
+      let title = "";
+
+      if (o.order_type === "limit" && o.limit_price) {
+        price = parseFloat(o.limit_price);
+        color = "#2196f3"; // blue
+        title = `LMT ${o.side.toUpperCase()} ${o.qty}`;
+      } else if (o.order_type === "stop" && o.stop_price) {
+        price = parseFloat(o.stop_price);
+        color = "#ff9800"; // orange
+        title = `STP ${o.side.toUpperCase()} ${o.qty}`;
+      } else if (o.order_type === "stop_limit") {
+        // Show stop price as the trigger
+        price = parseFloat(o.stop_price || o.limit_price);
+        color = "#9c27b0"; // purple
+        title = `S/L ${o.side.toUpperCase()} ${o.qty}`;
+      } else if (o.order_type === "trailing_stop") {
+        // Trail stops may not have a fixed price yet
+        if (o.stop_price) {
+          price = parseFloat(o.stop_price);
+          color = "#ff9800";
+          title = `TRAIL ${o.side.toUpperCase()} ${o.qty}`;
+        }
+      }
+
+      if (price && price > 0 && isFinite(price)) {
+        try {
+          const line = candleSeries.createPriceLine({
+            price,
+            color,
+            lineWidth: 1,
+            lineStyle: 2, // dashed
+            axisLabelVisible: true,
+            title,
+          });
+          orderPriceLines.push(line);
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   loadBarCacheFromDisk().then(() => migrateLocalStorageCache());
   initChart();
@@ -5556,6 +6099,8 @@ document.addEventListener("DOMContentLoaded", () => {
   setupSplitButton();
   setupScreenshotShortcut();
   setupCustomPluginUI();
+  setupChartContextMenu();
+  setupOrderPriceLines();
 
   // Auto-save session periodically and on shutdown
   setInterval(saveSession, 30000); // every 30s

@@ -122,9 +122,44 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Visual backtester | ✅ Done | Bar-by-bar replay with equity curve in floating window |
 | Genetic optimization | ✅ Done | Grid search over SMA periods, sortable results table |
 | DOM / Level 2 | ✅ Done | Crypto orderbook from Alpaca, bid/ask depth display |
-| **Options flow analysis** | 🔲 Deferred | Needs unusual activity data source |
-| **Plugin marketplace** | 🔲 Deferred | Needs community infrastructure |
-| **Pure Rust GUI migration** | 🔲 Deferred | Egui/Iced — long-term goal |
+| Line/Bar chart types | ✅ Done | Candles/Line/Bars selector |
+| Bid/Ask spread display | ✅ Done | Latest quote in dashboard |
+| Time & Sales panel | ✅ Done | WebSocket trade stream in floating window |
+| Account activities history | ✅ Done | Deposits, dividends, fills from Alpaca |
+| Insider trading (Form 4) | ✅ Done | SEC EDGAR Form 4 via command palette |
+| Right-click context menu | ✅ Done | Draw, alert, copy price from chart |
+| Pending order visualization | ✅ Done | Open orders as colored lines on chart |
+| **Options flow analysis** | 🔲 Blocked | Needs paid data source (FlowAlgo, Unusual Whales) |
+| **Plugin marketplace** | 🔲 Blocked | Needs distribution infrastructure |
+| **Pure Rust GUI migration** | 🔲 Blocked | Egui/Iced — long-term architectural goal |
+
+### Future — Implementable (Not Yet Started)
+
+| Feature | Effort | Notes |
+|---|---|---|
+| Data Window (indicator readout at cursor) | 4h | Aggregate all indicator values per bar |
+| Drawing object properties panel | 8h | Select + edit drawn objects |
+| Portfolio breakdown by sector | 6h | Pie/bar chart of positions by sector |
+| Multi-condition alerts | 8h | "When RSI > 70" or "KAMA crosses SMA200" |
+| Walk-forward testing | 12h | In-sample/out-of-sample backtesting |
+| Monte Carlo risk of ruin | 6h | Simulate P&L distribution |
+| Earnings calendar with estimates | 4h | Yahoo Finance or Alpaca data |
+| Dividend/corporate action alerts | 3h | Alpaca corporate action signals |
+| Congress trading data | 8h | Congress API free tier |
+| Correlation matrix | 6h | Rolling correlation heatmap |
+
+### Blocked — Needs External Resources
+
+| Feature | Blocker |
+|---|---|
+| Analyst recommendations (ANR) | No free consensus API |
+| Short interest (SI) | No free real-time API |
+| Dark pool / options flow | No free data source |
+| World equity indices | Alpaca is US-only |
+| Forex currency matrix | Alpaca has crypto not forex |
+| Historical market stats | Needs user's FRED API key |
+| AI chat | Needs LLM API key |
+| Community chat | Needs WebSocket server |
 
 ---
 

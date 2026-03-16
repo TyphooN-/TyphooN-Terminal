@@ -29,6 +29,13 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Screenshot Export** | Ctrl+Shift+S to clipboard with toast notification |
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
 | **CSV Export** | Export trade history as CSV |
+| **Chart Types** | Candlestick, Line, and Bar chart rendering |
+| **Bid/Ask Spread** | Real-time bid/ask/spread display from Alpaca quotes |
+| **Time & Sales** | WebSocket trade stream in scrolling panel |
+| **Account Activities** | Deposits, withdrawals, dividends, fills history |
+| **Insider Trading** | SEC Form 4 filings via EDGAR (command palette: INSIDER) |
+| **Context Menu** | Right-click chart for drawing tools, alerts, copy price |
+| **Pending Orders on Chart** | Open orders visualized as colored price lines |
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
@@ -122,7 +129,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
 | [DESIGN_PHILOSOPHY.md](DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
 | [INDICATOR_PORTING.md](INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
-| [docs/adr/](docs/adr/) | 19 Architecture Decision Records |
+| [docs/adr/](docs/adr/) | 21 Architecture Decision Records |
 
 ### ADR Index
 
@@ -147,6 +154,8 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [017](docs/adr/017-drawing-tools.md) | Drawing tools (trend lines + Fibonacci) |
 | [018](docs/adr/018-mql5-feature-parity.md) | MQL5 feature parity audit |
 | [019](docs/adr/019-mtf-grid-view.md) | Multi-timeframe grid view (MT5-style) |
+| [020](docs/adr/020-cache-optimization.md) | SQLite cache + LRU eviction |
+| [021](docs/adr/021-mt5-godel-parity-roadmap.md) | MT5 + Godel parity roadmap + blockers |
 
 ---
 

@@ -1481,6 +1481,228 @@ impl AlpacaBroker {
         }))
     }
 
+    // ── Latest Quote ────────────────────────────────────────────────
+
+    /// Fetch the latest bid/ask quote for a symbol.
+    pub async fn get_latest_quote(&self, symbol: &str) -> Result<LatestQuote, String> {
+        self.rate_limiter.wait().await;
+        let is_crypto = symbol.contains('/');
+
+        let (url, query) = if is_crypto {
+            (
+                format!("{}/v1beta3/crypto/us/latest/quotes", DATA_BASE),
+                vec![("symbols", symbol.to_string())],
+            )
+        } else {
+            (
+                format!("{}/v2/stocks/{}/quotes/latest", DATA_BASE, symbol),
+                vec![],
+            )
+        };
+
+        let mut req = self.client.get(&url).headers(self.headers());
+        for (k, v) in &query {
+            req = req.query(&[(k, v)]);
+        }
+
+        let resp = req.send().await
+            .map_err(|e| format!("Quote request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let _ = resp.text().await;
+            return Err(format!("Quote request failed: HTTP {}", status));
+        }
+
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Quote parse failed: {e}"))?;
+
+        // Crypto returns { "quotes": { "BTC/USD": { ... } } }
+        // Stock returns { "quote": { ... } }
+        let q = if is_crypto {
+            let sym_key = symbol;
+            json["quotes"][sym_key].clone()
+        } else {
+            json["quote"].clone()
+        };
+
+        let bid = q["bp"].as_f64().unwrap_or(0.0);
+        let ask = q["ap"].as_f64().unwrap_or(0.0);
+
+        Ok(LatestQuote {
+            symbol: symbol.to_string(),
+            bid,
+            ask,
+            bid_size: q["bs"].as_f64().unwrap_or(0.0),
+            ask_size: q["as"].as_f64().unwrap_or(0.0),
+            spread: ask - bid,
+            timestamp: q["t"].as_str().unwrap_or("").to_string(),
+        })
+    }
+
+    // ── Account Activities ───────────────────────────────────────────
+
+    /// Fetch account activities (fills, dividends, deposits, etc.)
+    pub async fn get_account_activities(&self, activity_types: &str, limit: u32) -> Result<Vec<AccountActivity>, String> {
+        let url = if activity_types.is_empty() {
+            format!("{}/v2/account/activities", self.base_url)
+        } else {
+            format!("{}/v2/account/activities/{}", self.base_url, activity_types)
+        };
+
+        let resp = self.client
+            .get(&url)
+            .headers(self.headers())
+            .query(&[("direction", "desc"), ("page_size", &limit.to_string())])
+            .send()
+            .await
+            .map_err(|e| format!("Activities request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let _ = resp.text().await;
+            return Err(format!("Activities request failed: HTTP {}", status));
+        }
+
+        let json: Vec<serde_json::Value> = resp.json().await
+            .map_err(|e| format!("Activities parse failed: {e}"))?;
+
+        Ok(json.iter().map(|a| {
+            let activity_type = a["activity_type"].as_str().unwrap_or("").to_string();
+            let description = match activity_type.as_str() {
+                "FILL" => format!("{} {} {} @ {}",
+                    a["side"].as_str().unwrap_or(""),
+                    a["qty"].as_str().unwrap_or("0"),
+                    a["symbol"].as_str().unwrap_or(""),
+                    a["price"].as_str().unwrap_or("?")),
+                "DIV" | "DIVCGL" | "DIVCGS" | "DIVNRA" | "DIVROC" | "DIVTXEX" =>
+                    format!("Dividend {} ${}", a["symbol"].as_str().unwrap_or(""), a["net_amount"].as_str().unwrap_or("0")),
+                "CSD" => format!("Deposit ${}", a["net_amount"].as_str().unwrap_or("0")),
+                "CSW" => format!("Withdrawal ${}", a["net_amount"].as_str().unwrap_or("0")),
+                _ => format!("{} {}", activity_type, a["symbol"].as_str().unwrap_or("")),
+            };
+            AccountActivity {
+                id: a["id"].as_str().unwrap_or("").to_string(),
+                activity_type,
+                symbol: a["symbol"].as_str().map(|s| s.to_string()),
+                side: a["side"].as_str().map(|s| s.to_string()),
+                qty: a["qty"].as_str().map(|s| s.to_string()),
+                price: a["price"].as_str().map(|s| s.to_string()),
+                net_amount: a["net_amount"].as_str().map(|s| s.to_string()),
+                date: a["transaction_time"].as_str()
+                    .or_else(|| a["date"].as_str())
+                    .unwrap_or("").to_string(),
+                description,
+            }
+        }).collect())
+    }
+
+    // ── Insider Trading (SEC Form 4) ─────────────────────────────────
+
+    /// Fetch insider trades for a ticker via SEC EDGAR (Form 4 filings).
+    pub async fn get_insider_trades(ticker: &str) -> Result<Vec<InsiderTrade>, String> {
+        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err("Invalid ticker for SEC lookup".to_string());
+        }
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| format!("HTTP client error: {e}"))?;
+
+        // Step 1: Look up CIK from ticker
+        let tickers_resp = client
+            .get("https://www.sec.gov/files/company_tickers.json")
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|_| "SEC ticker map request failed".to_string())?;
+
+        let tickers: serde_json::Value = tickers_resp.json().await
+            .map_err(|_| "SEC ticker map parse failed".to_string())?;
+
+        let upper_ticker = ticker.to_uppercase();
+        let mut cik: Option<u64> = None;
+        if let Some(obj) = tickers.as_object() {
+            for (_, v) in obj {
+                if v["ticker"].as_str() == Some(&upper_ticker) {
+                    cik = v["cik_str"].as_u64()
+                        .or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()));
+                    break;
+                }
+            }
+        }
+
+        let cik = cik.ok_or_else(|| format!("CIK not found for {ticker}"))?;
+        let cik_padded = format!("{:010}", cik);
+
+        // Step 2: Fetch submissions (includes all recent filings)
+        let subs_resp = client
+            .get(format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded))
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|e| format!("SEC submissions fetch failed: {e}"))?;
+
+        if !subs_resp.status().is_success() {
+            return Err(format!("SEC submissions: HTTP {}", subs_resp.status()));
+        }
+
+        let subs: serde_json::Value = subs_resp.json().await
+            .map_err(|e| format!("SEC submissions parse failed: {e}"))?;
+
+        // Step 3: Filter for Form 4 filings from recent filings
+        let recent = &subs["filings"]["recent"];
+        let forms = recent["form"].as_array();
+        let dates = recent["filingDate"].as_array();
+        let accessions = recent["accessionNumber"].as_array();
+        let primary_docs = recent["primaryDocument"].as_array();
+
+        let mut insider_trades = Vec::new();
+
+        if let (Some(forms), Some(dates), Some(accessions), Some(_docs)) =
+            (forms, dates, accessions, primary_docs)
+        {
+            for i in 0..forms.len().min(200) {
+                let form = forms[i].as_str().unwrap_or("");
+                if form != "4" { continue; }
+                if insider_trades.len() >= 50 { break; }
+
+                let filing_date = dates[i].as_str().unwrap_or("").to_string();
+                let accession = accessions[i].as_str().unwrap_or("").to_string();
+
+                // Parse owner name from the filing index
+                // For efficiency, we extract basic info from the submissions JSON
+                let owner_name = subs["filings"]["recent"]["reportOwner"]
+                    .as_array()
+                    .and_then(|arr| arr.get(i))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown")
+                    .to_string();
+
+                let form_url = format!(
+                    "https://www.sec.gov/Archives/edgar/data/{}/{}",
+                    cik,
+                    accession.replace('-', "")
+                );
+
+                insider_trades.push(InsiderTrade {
+                    filing_date: filing_date.clone(),
+                    report_date: filing_date,
+                    owner_name,
+                    owner_title: String::new(),
+                    transaction_type: "Form 4".to_string(),
+                    shares: 0.0,
+                    price_per_share: 0.0,
+                    total_value: 0.0,
+                    shares_owned_after: 0.0,
+                    form_url,
+                });
+            }
+        }
+
+        Ok(insider_trades)
+    }
+
     // ── WebSocket Streaming ─────────────────────────────────────────
 
     /// Start a WebSocket connection to Alpaca's real-time data stream.
@@ -1611,6 +1833,46 @@ pub struct StreamQuote {
     pub bid_size: f64,
     pub ask_size: f64,
     pub timestamp: String,
+}
+
+// ── Quote / Activity / Insider Types ────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatestQuote {
+    pub symbol: String,
+    pub bid: f64,
+    pub ask: f64,
+    pub bid_size: f64,
+    pub ask_size: f64,
+    pub spread: f64,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountActivity {
+    pub id: String,
+    pub activity_type: String,
+    pub symbol: Option<String>,
+    pub side: Option<String>,
+    pub qty: Option<String>,
+    pub price: Option<String>,
+    pub net_amount: Option<String>,
+    pub date: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InsiderTrade {
+    pub filing_date: String,
+    pub report_date: String,
+    pub owner_name: String,
+    pub owner_title: String,
+    pub transaction_type: String,
+    pub shares: f64,
+    pub price_per_share: f64,
+    pub total_value: f64,
+    pub shares_owned_after: f64,
+    pub form_url: String,
 }
 
 // ── Options Types ───────────────────────────────────────────────────

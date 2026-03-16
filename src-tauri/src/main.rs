@@ -930,6 +930,48 @@ async fn get_company_fundamentals(symbol: String) -> Result<String, String> {
     Ok(serde_json::to_string(&result).unwrap())
 }
 
+// ── Bid/Ask Quote Command ────────────────────────────────────────────
+
+#[tauri::command]
+async fn get_latest_quote(state: State<'_, SharedState>, symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let quote = broker.get_latest_quote(&symbol).await?;
+    Ok(serde_json::to_string(&quote).unwrap())
+}
+
+// ── Account Activities Command ──────────────────────────────────────
+
+#[tauri::command]
+async fn get_account_activities(
+    state: State<'_, SharedState>,
+    activity_types: String,
+    limit: u32,
+) -> Result<String, String> {
+    // Validate activity_types: comma-separated alphanumeric codes
+    if activity_types.len() > 200 {
+        return Err("Activity types string too long".into());
+    }
+    if !activity_types.is_empty() && !activity_types.chars().all(|c| c.is_ascii_alphanumeric() || c == ',') {
+        return Err("Invalid activity types format".into());
+    }
+    let limit = limit.min(200);
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let activities = broker.get_account_activities(&activity_types, limit).await?;
+    Ok(serde_json::to_string(&activities).unwrap())
+}
+
+// ── Insider Trading Command ─────────────────────────────────────────
+
+#[tauri::command]
+async fn get_insider_trades(symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    let trades = broker::alpaca::AlpacaBroker::get_insider_trades(&symbol).await?;
+    Ok(serde_json::to_string(&trades).unwrap())
+}
+
 /// Fetch article content from URL, return as text. For in-app reading.
 /// Hardened: HTTPS only, 10s timeout, 2MB max response.
 #[tauri::command]
@@ -1693,6 +1735,10 @@ fn main() {
             get_corporate_actions,
             get_sec_filings,
             get_company_fundamentals,
+            // Bid/Ask, Activities, Insider
+            get_latest_quote,
+            get_account_activities,
+            get_insider_trades,
             // Articles & cache management
             fetch_article,
             clear_symbol_cache,

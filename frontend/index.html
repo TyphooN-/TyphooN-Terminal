@@ -58,6 +58,11 @@
         <option value="1Week">W1</option>
         <option value="1Month" selected>MN</option>
       </select>
+      <select id="chart-type-select">
+        <option value="candles" selected>Candles</option>
+        <option value="line">Line</option>
+        <option value="bars">Bars</option>
+      </select>
       <select id="bar-count">
         <option value="500">500</option>
         <option value="1000">1K</option>
@@ -77,6 +82,7 @@
       </span>
       <span id="loading-indicator" class="loading hidden">Loading...</span>
       <span id="connect-status-bar" class="status-bar"></span>
+      <span id="bid-ask-spread" class="info-label" style="font-size:10px;color:#888;"></span>
       <span id="account-info" class="info-label"></span>
     </div>
 
