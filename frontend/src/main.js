@@ -228,6 +228,10 @@ function initChart() {
     crosshair: { mode: CrosshairMode.Normal },
   });
 
+  // Lock Fisher/Volume sub-panes — no independent scrolling/zooming
+  fisherChart.applyOptions({ handleScroll: false, handleScale: false });
+  volumeChart.applyOptions({ handleScroll: false, handleScale: false });
+
   // Sync time scales: when main chart scrolls, sub-panes follow
   let syncing = false;
   chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
@@ -5379,7 +5383,11 @@ async function openMTFGrid(symbol, timeframes) {
       crosshair: { mode: CrosshairMode.Normal },
     });
 
-    // Sync Fisher/Volume time scale with main
+    // Lock Fisher/Volume time scales to main chart — disable independent scrolling
+    cellFisherChart.applyOptions({ handleScroll: false, handleScale: false });
+    cellVolumeChart.applyOptions({ handleScroll: false, handleScale: false });
+
+    // Sync Fisher/Volume time scale with main (persistent — fires on every scroll/zoom)
     cellChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (range) {
         cellFisherChart.timeScale().setVisibleLogicalRange(range);
