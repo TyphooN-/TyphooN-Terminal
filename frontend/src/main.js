@@ -5366,9 +5366,11 @@ async function openMTFGrid(symbol, timeframes) {
         cellVolumeChart.resize(window.innerWidth, 40);
       }
     });
+  }
 
-    // Load data
-    loadMTFCellData(cellInfo, symbol);
+  // Load data SEQUENTIALLY to avoid rate limit (cache-first)
+  for (const cellInfo of mtfGridCells) {
+    await loadMTFCellData(cellInfo, symbol);
   }
 
   // Initial resize
@@ -5381,14 +5383,18 @@ async function openMTFGrid(symbol, timeframes) {
 
 async function loadMTFCellData(cellInfo, symbol) {
   try {
-    const limit = parseInt(document.getElementById("bar-count").value) || 1000;
+    // MTF grid uses smaller limit to avoid rate limit hammering
+    const limit = 1000;
     const cacheKey = getCacheKey(symbol, cellInfo.tf);
     let bars;
 
+    // Prefer cache — background pre-fetch should have all TFs cached
     const cached = barCache[cacheKey];
     if (cached && cached.data && cached.data.length > 0) {
       bars = cached.data;
+      log(`MTF grid ${cellInfo.tf}: ${bars.length} bars from cache`, "info");
     } else {
+      log(`MTF grid ${cellInfo.tf}: fetching (not cached)...`, "info");
       const barsJson = await invoke("get_bars", { symbol, timeframe: cellInfo.tf, limit });
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
