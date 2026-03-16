@@ -40,6 +40,9 @@ struct AppState {
     symbols: Vec<(String, String)>, // (symbol, name)
     /// Active WebSocket stream receiver.
     stream_rx: Option<tokio::sync::mpsc::Receiver<StreamMessage>>,
+    /// Account protection: equity TP/SL (port of MQL5 EnableEquityTP/SL).
+    equity_tp: Option<f64>,
+    equity_sl: Option<f64>,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -841,6 +844,54 @@ async fn get_margin_info(state: State<'_, SharedState>) -> Result<String, String
     })).unwrap())
 }
 
+// ── Account Protection (Equity TP/SL — port of MQL5 EnableEquityTP/SL) ──
+
+#[tauri::command]
+async fn set_equity_protection(
+    state: State<'_, SharedState>,
+    equity_tp: Option<f64>,
+    equity_sl: Option<f64>,
+) -> Result<(), String> {
+    if let Some(tp) = equity_tp {
+        if !tp.is_finite() || tp <= 0.0 { return Err("Invalid equity TP".into()); }
+    }
+    if let Some(sl) = equity_sl {
+        if !sl.is_finite() || sl <= 0.0 { return Err("Invalid equity SL".into()); }
+    }
+    let mut s = state.lock().await;
+    s.equity_tp = equity_tp;
+    s.equity_sl = equity_sl;
+    tracing::info!("Equity protection set: TP={:?}, SL={:?}", equity_tp, equity_sl);
+    Ok(())
+}
+
+#[tauri::command]
+async fn check_equity_protection(state: State<'_, SharedState>) -> Result<String, String> {
+    let s = state.lock().await;
+    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let account = broker.get_account().await?;
+
+    let mut triggered = String::new();
+
+    if let Some(tp) = s.equity_tp {
+        if account.equity >= tp {
+            triggered = format!("EQUITY_TP: equity ${:.2} >= target ${:.2}", account.equity, tp);
+        }
+    }
+    if let Some(sl) = s.equity_sl {
+        if account.equity <= sl {
+            triggered = format!("EQUITY_SL: equity ${:.2} <= floor ${:.2}", account.equity, sl);
+        }
+    }
+
+    Ok(serde_json::to_string(&serde_json::json!({
+        "equity": account.equity,
+        "equity_tp": s.equity_tp,
+        "equity_sl": s.equity_sl,
+        "triggered": if triggered.is_empty() { None } else { Some(&triggered) },
+    })).unwrap())
+}
+
 // ── News & Events ───────────────────────────────────────────────
 
 #[tauri::command]
@@ -1506,6 +1557,8 @@ fn main() {
         tp_levels: std::collections::HashMap::new(),
         symbols: Vec::new(),
         stream_rx: None,
+        equity_tp: None,
+        equity_sl: None,
     }));
 
     tauri::Builder::default()
@@ -1556,6 +1609,9 @@ fn main() {
             open_martingale_hedge,
             // Margin
             get_margin_info,
+            // Account Protection
+            set_equity_protection,
+            check_equity_protection,
             // Notifications
             send_discord_notification,
             // News, Events & Fundamentals

@@ -66,6 +66,8 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Open positions panel | ✅ Done | Live P/L, one-click close, click to switch chart |
 | Zeroize API keys | ✅ Done | `zeroize` crate for memory cleanup on drop |
 | Button debounce | ✅ Done | All trading buttons guarded against double-fire |
+| Equity TP/SL protection | ✅ Done | Port of MQL5 EnableEquityTP/SL — auto-close all at target |
+| OS keychain credentials | ✅ Done | gnome-keyring/KWallet via `keyring` crate |
 
 ### Tier 2 — Competitive with MT5
 

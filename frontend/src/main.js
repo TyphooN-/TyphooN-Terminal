@@ -1929,6 +1929,22 @@ async function updateDashboard() {
     updateNextBarTime();
     updatePositionsPanel();
     checkAlerts();
+    checkEquityProtection();
+  } catch (_) {}
+}
+
+// ── Equity TP/SL Protection (port of MQL5 EnableEquityTP/SL) ──
+async function checkEquityProtection() {
+  try {
+    const json = await invoke("check_equity_protection");
+    const result = JSON.parse(json);
+    if (result.triggered) {
+      log(`EQUITY PROTECTION TRIGGERED: ${result.triggered}`, "warn");
+      if (confirm(`${result.triggered}\n\nClose ALL positions now?`)) {
+        await invoke("close_all");
+        log("All positions closed by equity protection", "warn");
+      }
+    }
   } catch (_) {}
 }
 
