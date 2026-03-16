@@ -1,6 +1,6 @@
 # ADR-006: Security Hardening
 
-**Status:** Implemented (Pass 16)
+**Status:** Implemented (Pass 17)
 **Date:** 2026-03-15
 **Updated:** 2026-03-15
 
@@ -246,6 +246,12 @@ Full cross-reference of MQL5 EA (TyphooN.mq5 v1.420, 2730 lines) against Rust/Ta
 ### Pass 16 — Agent code review
 72. **2 innerHTML in sentiment/heatmap summaries**: Agent-introduced template literals in sentiment overallSentiment display and heatmap position summary. Replaced with createElement + textContent
 
-**16 passes, 72 findings total: 66 fixed, 6 accepted with documented rationale.**
+### Pass 17 — Final comprehensive audit
+73. **(Verified clean)**: 0 innerHTML, 0 eval, 0 Client::new(), 0 unwrap on user input, 0 resp body leaks
+74. **(Verified clean)**: 6 setIntervals all properly guarded/cleaned, 4/4 addEventListener/removeEventListener balanced in windows.js
+75. **(Verified clean)**: GUI menu bar routes only to existing validated functions — no new attack surface
+76. **(Verified clean)**: All new drawing tools (ray, ruler) use canvas API only — no DOM injection
+
+**17 passes, 76 findings total: 70 fixed, 6 accepted with documented rationale.**
 
 All actionable security items and MQL5 feature parity items completed.

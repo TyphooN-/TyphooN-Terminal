@@ -158,6 +158,12 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Portfolio heat map | ✅ Done | Ctrl+K → HEATMAP, finviz-style colored boxes |
 | Custom timeframes | ✅ Done | 2H, 3H, 6H, 2D, 3D via bar aggregation |
 | Renko bars | ✅ Done | ATR-based Renko chart type |
+| GUI menu bar | ✅ Done | File/View/Trading/Tools/Research/Analysis (50+ entries) |
+| Draggable tab reordering | ✅ Done | Drag-and-drop, unique feature vs all competitors |
+| Ray + Ruler drawing tools | ✅ Done | TradingView-style ray and measurement |
+| Improved SL/TP drag | ✅ Done | Single-click grab, live risk tooltip, MTF grid support |
+| MTF grid trading | ✅ Done | Click cell to select, SL/TP on active cell |
+| Live price sync (MTF) | ✅ Done | All grid cells show same current price |
 | FRED economic data | ✅ Done | Fed Funds, CPI, GDP, Treasury yields, VIX, M2 (user provides free API key) |
 | AI trading assistant | ✅ Done | Claude (Anthropic) or GPT (OpenAI) chat with market context |
 | Settings panel | ✅ Done | Ctrl+K → SETTINGS for API key management |

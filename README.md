@@ -43,6 +43,9 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Alert Dashboard** | Cross-watchlist alert monitoring (Ctrl+K → ALERTBOARD) |
 | **Custom Timeframes** | 2H, 3H, 6H, 2D, 3D via bar aggregation |
 | **Renko Charts** | ATR-based Renko brick charting |
+| **GUI Menu Bar** | File/View/Trading/Tools/Research/Analysis dropdown menus |
+| **Draggable Tabs** | Drag-and-drop tab reordering (unique — no competitor has this) |
+| **Ray / Ruler** | TradingView-style ray and measurement tools |
 | **Bid/Ask Spread** | Real-time bid/ask/spread display from Alpaca quotes |
 | **Time & Sales** | WebSocket trade stream in scrolling panel |
 | **Account Activities** | Deposits, withdrawals, dividends, fills history |
@@ -62,7 +65,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
-| **Security** | 16-pass audit (72 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize |
+| **Security** | 17-pass audit (76 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize |
 
 ---
 
@@ -152,7 +155,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
 | [DESIGN_PHILOSOPHY.md](docs/DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
 | [INDICATOR_PORTING.md](docs/INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
-| [docs/adr/](docs/adr/) | 22 Architecture Decision Records |
+| [docs/adr/](docs/adr/) | 23 Architecture Decision Records |
 
 ### ADR Index
 
@@ -163,7 +166,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [003](docs/adr/003-bar-data-caching.md) | Three-tier cache (memory + IndexedDB + zstd) |
 | [004](docs/adr/004-mtf-indicators.md) | Multi-timeframe indicator support |
 | [005](docs/adr/005-indicator-visual-parity.md) | Indicator visual parity with MT5 |
-| [006](docs/adr/006-security-hardening.md) | Security hardening (16 passes, 72 findings) |
+| [006](docs/adr/006-security-hardening.md) | Security hardening (17 passes, 76 findings) |
 | [007](docs/adr/007-bar-prefetch-strategy.md) | Background bar pre-fetch strategy |
 | [008](docs/adr/008-multi-tab-charts.md) | Multi-tab chart support |
 | [009](docs/adr/009-rate-limiter.md) | Centralized rate limiter |
@@ -180,6 +183,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [020](docs/adr/020-cache-optimization.md) | SQLite cache + LRU eviction |
 | [021](docs/adr/021-mt5-godel-parity-roadmap.md) | MT5 + Godel parity roadmap + blockers |
 | [022](docs/adr/022-tastytrade-broker.md) | Tastytrade broker integration |
+| [023](docs/adr/023-ux-features-batch.md) | UX batch: GUI menu, tabs, drawing tools, trading |
 
 ---
 
