@@ -7484,8 +7484,15 @@ async function loadMTFCellData(cellInfo, symbol) {
       s.setData(data);
     };
 
-    // SMA 200 (yellow)
-    if (chartData.length > 200) addLine("#FFD700", 1, calcSMA(chartData, 200));
+    // SMA 200 (yellow) — fall back to SMA 100 if insufficient data
+    if (chartData.length > 200) {
+      addLine("#FFD700", 1, calcSMA(chartData, 200));
+    } else if (chartData.length > 100) {
+      addLine("#FFD700", 1, calcSMA(chartData, 100));
+    }
+
+    // SMA 100 (magenta) if enough data
+    if (chartData.length > 100) addLine("#FF00FF", 1, calcSMA(chartData, 100));
 
     // KAMA (white)
     if (chartData.length > 11) addLine("#FFFFFF", 2, calcKAMA(chartData, 10));
@@ -7506,15 +7513,29 @@ async function loadMTFCellData(cellInfo, symbol) {
       addLine("#FFFFFF88", 1, pcl.lows);
     }
 
-    // Supply/Demand zones (simplified — just top/bottom lines)
+    // Supply/Demand zones (filled rectangles matching main chart)
     if (chartData.length > 12) {
       const zones = calcSupplyDemandZones(chartData);
-      for (const z of zones.slice(-10)) { // last 10 zones only for grid cells
-        const color = z.type === "supply" ? "#87CEEB44" : "#8FBC8F44";
+      for (const z of zones.slice(-8)) {
+        const zoneColor = z.type === "supply" ? "#87CEEB" : "#8FBC8F";
+        const fillColor = zoneColor + "30";
+        const lineColor = zoneColor + "88";
         const zoneBars = chartData.filter(d => d.time >= z.startTime);
         if (zoneBars.length < 2) continue;
-        addLine(color, 1, zoneBars.map(d => ({ time: d.time, value: z.high })));
-        addLine(color, 1, zoneBars.map(d => ({ time: d.time, value: z.low })));
+        // Top + bottom lines
+        const topS = cellInfo.chart.addLineSeries({ color: lineColor, lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        topS.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
+        const botS = cellInfo.chart.addLineSeries({ color: lineColor, lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        botS.setData(zoneBars.map(d => ({ time: d.time, value: z.low })));
+        // Fill between
+        const fill = cellInfo.chart.addBaselineSeries({
+          topFillColor1: fillColor, topFillColor2: fillColor,
+          bottomFillColor1: fillColor, bottomFillColor2: fillColor,
+          topLineColor: "transparent", bottomLineColor: "transparent",
+          lineWidth: 0, baseValue: { type: "price", price: z.low },
+          lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+        });
+        fill.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
       }
     }
 
