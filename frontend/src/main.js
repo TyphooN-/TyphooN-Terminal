@@ -368,6 +368,15 @@ function rebuildMainSeries(chartType) {
       wickDownColor: "#ff1744",
       wickUpColor: "#00e676",
     });
+  } else if (chartType === "renko") {
+    candleSeries = chart.addCandlestickSeries({
+      upColor: "#00e676",
+      downColor: "#ff1744",
+      borderDownColor: "#00e676",
+      borderUpColor: "#00e676",
+      wickDownColor: "#ff1744",
+      wickUpColor: "#00e676",
+    });
   } else {
     // Default: candlestick
     candleSeries = chart.addCandlestickSeries({
@@ -388,6 +397,12 @@ function rebuildMainSeries(chartType) {
       candleSeries.setData(currentChartData.map(d => ({ time: d.time, value: d.close })));
     } else if (chartType === "heikin-ashi") {
       candleSeries.setData(calcHeikinAshi(currentChartData));
+    } else if (chartType === "renko") {
+      const brickSize = getRenkoBrickSize(currentChartData);
+      const renkoBricks = calcRenko(currentChartData, brickSize);
+      if (renkoBricks.length > 0) {
+        candleSeries.setData(renkoBricks);
+      }
     } else {
       candleSeries.setData(currentChartData);
     }
@@ -2209,6 +2224,81 @@ function updateLoadingIndicator() {
   }
 }
 
+// ── Custom Timeframe Aggregation ─────────────────────────────
+
+// Aggregate bars by a factor (e.g., factor=2 combines every 2 bars into 1)
+function aggregateBars(bars, factor) {
+  if (factor <= 1 || !bars || bars.length === 0) return bars;
+  const result = [];
+  for (let i = 0; i < bars.length; i += factor) {
+    const chunk = bars.slice(i, i + factor);
+    if (chunk.length === 0) break;
+    const agg = {
+      time: chunk[0].time,
+      open: chunk[0].open,
+      high: Math.max(...chunk.map(b => b.high)),
+      low: Math.min(...chunk.map(b => b.low)),
+      close: chunk[chunk.length - 1].close,
+      volume: chunk.reduce((s, b) => s + (b.volume || 0), 0),
+    };
+    result.push(agg);
+  }
+  return result;
+}
+
+// Custom timeframe map: custom TF -> { base TF, aggregation factor }
+const CUSTOM_TIMEFRAME_MAP = {
+  "2Hour":  { base: "1Hour", factor: 2 },
+  "3Hour":  { base: "1Hour", factor: 3 },
+  "6Hour":  { base: "1Hour", factor: 6 },
+  "2Day":   { base: "1Day",  factor: 2 },
+  "3Day":   { base: "1Day",  factor: 3 },
+};
+
+// ── Renko Calculation ────────────────────────────────────────
+
+function calcRenko(data, brickSize) {
+  if (!data || data.length === 0 || brickSize <= 0) return [];
+  const bricks = [];
+  let lastClose = data[0].close;
+  let direction = 0;
+  for (let i = 1; i < data.length; i++) {
+    const price = data[i].close;
+    const diff = price - lastClose;
+    if (Math.abs(diff) >= brickSize) {
+      const numBricks = Math.floor(Math.abs(diff) / brickSize);
+      const newDir = diff > 0 ? 1 : -1;
+      if (direction !== 0 && newDir !== direction && Math.abs(diff) < brickSize * 2) continue;
+      for (let b = 0; b < numBricks; b++) {
+        const brickOpen = lastClose + (newDir > 0 ? b * brickSize : -b * brickSize);
+        const brickClose = brickOpen + newDir * brickSize;
+        bricks.push({
+          time: data[i].time,
+          open: Math.min(brickOpen, brickClose),
+          high: Math.max(brickOpen, brickClose),
+          low: Math.min(brickOpen, brickClose),
+          close: newDir > 0 ? Math.max(brickOpen, brickClose) : Math.min(brickOpen, brickClose),
+        });
+        lastClose = brickClose;
+      }
+      direction = newDir;
+    }
+  }
+  const seen = {};
+  for (const brick of bricks) {
+    while (seen[brick.time]) brick.time += 1;
+    seen[brick.time] = true;
+  }
+  return bricks;
+}
+
+function getRenkoBrickSize(data) {
+  const atrValues = calcATR(data, 14);
+  if (atrValues.length > 0) return atrValues[atrValues.length - 1].value;
+  if (data.length > 0) return (data.reduce((s, d) => s + d.close, 0) / data.length) * 0.01;
+  return 1;
+}
+
 // ── Load Chart Data ─────────────────────────────────────────
 
 let liveBarInterval = null;
@@ -2221,15 +2311,22 @@ async function loadChart(symbol, timeframe) {
   currentTimeframe = timeframe;
   const loadTabId = activeTabId; // capture which tab initiated this load
 
+  // Custom timeframe support: resolve to base TF + aggregation factor
+  const customTF = CUSTOM_TIMEFRAME_MAP[timeframe];
+  const fetchTimeframe = customTF ? customTF.base : timeframe;
+  const aggFactor = customTF ? customTF.factor : 1;
+
   try {
     const limit = parseInt(document.getElementById("bar-count").value) || 1000;
-    const cacheKey = getCacheKey(symbol, timeframe);
+    // For custom TFs, fetch more bars to compensate for aggregation
+    const fetchLimit = aggFactor > 1 ? limit * aggFactor : limit;
+    const cacheKey = getCacheKey(symbol, fetchTimeframe);
     let bars;
 
     // Strategy: show cached data IMMEDIATELY, then refresh in background
     const cached = barCache[cacheKey];
     const isFresh = cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS;
-    const hasEnough = cached && cached.data && cached.data.length >= limit * 0.5;
+    const hasEnough = cached && cached.data && cached.data.length >= fetchLimit * 0.5;
 
     if (hasEnough) {
       // Display cached data instantly
@@ -2240,25 +2337,31 @@ async function loadChart(symbol, timeframe) {
         // Refresh in background — will update chart when done
         (async () => {
           try {
-            const freshJson = await invoke("get_bars", { symbol, timeframe, limit });
+            const freshJson = await invoke("get_bars", { symbol, timeframe: fetchTimeframe, limit: fetchLimit });
             const freshBars = JSON.parse(freshJson);
             if (freshBars.length > 0) {
               barCache[cacheKey] = { data: freshBars, timestamp: Date.now() };
               saveBarCacheToDisk(cacheKey, freshBars);
               // If still on same tab/symbol, update chart
               if (currentSymbol === symbol && currentTimeframe === timeframe) {
-                const freshChartData = freshBars.map(b => ({
+                let freshChartData = freshBars.map(b => ({
                   time: Math.floor(new Date(b.timestamp).getTime() / 1000),
                   open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
                 }));
+                if (aggFactor > 1) freshChartData = aggregateBars(freshChartData, aggFactor);
                 currentChartData = freshChartData;
                 if (currentChartType === "line") {
                   candleSeries.setData(freshChartData.map(d => ({ time: d.time, value: d.close })));
+                } else if (currentChartType === "renko") {
+                  const brickSize = getRenkoBrickSize(freshChartData);
+                  candleSeries.setData(calcRenko(freshChartData, brickSize));
+                } else if (currentChartType === "heikin-ashi") {
+                  candleSeries.setData(calcHeikinAshi(freshChartData));
                 } else {
                   candleSeries.setData(freshChartData);
                 }
                 lastPrice = freshChartData[freshChartData.length - 1].close;
-                log(`${symbol} @ ${timeframe}: refreshed to ${freshBars.length} bars`, "ok");
+                log(`${symbol} @ ${timeframe}: refreshed to ${freshChartData.length} bars`, "ok");
               }
             }
           } catch (_) {}
@@ -2266,7 +2369,7 @@ async function loadChart(symbol, timeframe) {
       }
     } else {
       // No usable cache — fetch synchronously
-      const barsJson = await invoke("get_bars", { symbol, timeframe, limit });
+      const barsJson = await invoke("get_bars", { symbol, timeframe: fetchTimeframe, limit: fetchLimit });
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
       saveBarCacheToDisk(cacheKey, bars);
@@ -2277,7 +2380,7 @@ async function loadChart(symbol, timeframe) {
       }
     }
 
-    const chartData = bars.map((b) => ({
+    let chartData = bars.map((b) => ({
       time: Math.floor(new Date(b.timestamp).getTime() / 1000),
       open: b.open,
       high: b.high,
@@ -2285,6 +2388,12 @@ async function loadChart(symbol, timeframe) {
       close: b.close,
       volume: b.volume,
     }));
+
+    // Apply custom timeframe aggregation
+    if (aggFactor > 1) {
+      chartData = aggregateBars(chartData, aggFactor);
+      log(`${symbol} @ ${timeframe}: aggregated ${aggFactor}x from ${fetchTimeframe} → ${chartData.length} bars`, "info");
+    }
 
     if (chartData.length === 0) {
       log(`No bars returned for ${symbol} @ ${timeframe}`, "warn");
@@ -2303,6 +2412,13 @@ async function loadChart(symbol, timeframe) {
     currentChartData = chartData; // preserve volume for indicators
     if (currentChartType === "line") {
       candleSeries.setData(chartData.map(d => ({ time: d.time, value: d.close })));
+    } else if (currentChartType === "renko") {
+      const brickSize = getRenkoBrickSize(chartData);
+      const renkoBricks = calcRenko(chartData, brickSize);
+      if (renkoBricks.length > 0) candleSeries.setData(renkoBricks);
+      else candleSeries.setData(chartData);
+    } else if (currentChartType === "heikin-ashi") {
+      candleSeries.setData(calcHeikinAshi(chartData));
     } else {
       candleSeries.setData(chartData);
     }
@@ -2372,8 +2488,11 @@ let lastBarTime = 0;
 
 async function updateLatestBar(symbol, timeframe) {
   if (symbol !== currentSymbol || timeframe !== currentTimeframe) return;
+  // Use base timeframe for custom TFs
+  const customTF = CUSTOM_TIMEFRAME_MAP[timeframe];
+  const fetchTF = customTF ? customTF.base : timeframe;
   try {
-    const barsJson = await invoke("get_bars", { symbol, timeframe, limit: 5 });
+    const barsJson = await invoke("get_bars", { symbol, timeframe: fetchTF, limit: 5 });
     const bars = JSON.parse(barsJson);
     if (bars.length === 0) return;
     const latest = bars[bars.length - 1];
@@ -4415,7 +4534,13 @@ const CMD_PALETTE_COMMANDS = [
   { name: "ANNOTATE", desc: "Add chart annotation", action: addChartAnnotation },
   { name: "SETTINGS", desc: "API Keys & Configuration", action: cmdSettings },
   { name: "FRED", desc: "FRED Economic Data (rates, CPI, GDP)", action: cmdFRED },
-  { name: "AI", desc: "AI Trading Assistant (Claude/GPT)", action: cmdAIChat },
+  { name: "AI", desc: "AI Trading Assistant (Claude/GPT) + Trade Review", action: cmdAIChatWithReview },
+  { name: "ALERTBOARD", desc: "Multi-symbol alert dashboard (watchlist)", action: cmdAlertBoard },
+  { name: "PATTERNS", desc: "Pattern recognition (Double Top/Bottom, H&S)", action: cmdPatterns },
+  { name: "SENTIMENT", desc: "News sentiment analysis", action: cmdSentiment },
+  { name: "VOLSURF", desc: "Volatility surface (options IV grid)", action: cmdVolSurf },
+  { name: "BRACKET", desc: "Conditional bracket/OCO order placement", action: cmdBracketOrder },
+  { name: "HEATMAP", desc: "Portfolio heat map (daily P&L)", action: cmdHeatmap },
   { name: "TILE", desc: "Tile all floating windows", action: () => tileWindows() },
   { name: "CLOSE", desc: "Close all floating windows", action: () => closeAllWindows() },
 ];
@@ -8041,6 +8166,871 @@ function cmdAIChat() {
   inp.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
   ir.appendChild(inp); ir.appendChild(sendBtn); c.appendChild(ir);
   win.contentElement.textContent = ""; win.appendElement(c);
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Multi-Symbol Alert Dashboard (ALERTBOARD)
+// ══════════════════════════════════════════════════════════════
+
+async function cmdAlertBoard() {
+  const win = createWindow({ title: "Alert Dashboard", width: 650, height: 450 });
+  win.contentElement.textContent = "";
+
+  const watchlist = getWatchlist();
+  if (watchlist.length === 0) {
+    win.setContent("No watchlist symbols. Add symbols via QM (Quote Monitor) first.");
+    return;
+  }
+
+  const allAlerts = [...priceAlerts, ...multiConditionAlerts];
+  if (allAlerts.length === 0) {
+    win.setContent("No alerts configured. Use ALERTS to set price or indicator alerts first.");
+    return;
+  }
+
+  const loading = document.createElement("div");
+  loading.textContent = "Checking alerts across watchlist...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  const table = document.createElement("table");
+  table.className = "fw-table";
+  table.style.cssText = "width:100%;font-size:10px;border-collapse:collapse;";
+  const thead = document.createElement("tr");
+  for (const h of ["Symbol", "Price", "Alert Level", "Direction", "Status"]) {
+    const th = document.createElement("td");
+    th.style.cssText = "color:#888;font-weight:bold;font-size:10px;padding:4px 6px;border-bottom:1px solid #333;";
+    th.textContent = h;
+    thead.appendChild(th);
+  }
+  table.appendChild(thead);
+
+  for (const sym of watchlist) {
+    let price = 0;
+    try {
+      const qJson = await invoke("get_latest_quote", { symbol: sym });
+      const q = typeof qJson === "string" ? JSON.parse(qJson) : qJson;
+      price = q.last || q.price || q.close || q.ap || 0;
+    } catch (_) {}
+
+    const symbolAlerts = allAlerts.filter(a => a.symbol === sym);
+    if (symbolAlerts.length === 0) {
+      // Show symbol with no alerts
+      const tr = document.createElement("tr");
+      const tdSym = document.createElement("td"); tdSym.textContent = sym; tdSym.style.cssText = "padding:4px 6px;color:#8cf;cursor:pointer;";
+      tdSym.addEventListener("click", () => { document.getElementById("symbol-input").value = sym; triggerLoad(); });
+      const tdPrice = document.createElement("td"); tdPrice.textContent = price ? `$${price.toFixed(2)}` : "N/A"; tdPrice.style.cssText = "padding:4px 6px;color:#ccc;";
+      const tdLevel = document.createElement("td"); tdLevel.textContent = "—"; tdLevel.style.cssText = "padding:4px 6px;color:#555;";
+      const tdDir = document.createElement("td"); tdDir.textContent = "—"; tdDir.style.cssText = "padding:4px 6px;color:#555;";
+      const tdStatus = document.createElement("td"); tdStatus.textContent = "No alerts"; tdStatus.style.cssText = "padding:4px 6px;color:#555;";
+      tr.appendChild(tdSym); tr.appendChild(tdPrice); tr.appendChild(tdLevel); tr.appendChild(tdDir); tr.appendChild(tdStatus);
+      table.appendChild(tr);
+      continue;
+    }
+
+    for (const a of symbolAlerts) {
+      const tr = document.createElement("tr");
+      const tdSym = document.createElement("td"); tdSym.textContent = sym; tdSym.style.cssText = "padding:4px 6px;color:#8cf;cursor:pointer;";
+      tdSym.addEventListener("click", () => { document.getElementById("symbol-input").value = sym; triggerLoad(); });
+      const tdPrice = document.createElement("td"); tdPrice.textContent = price ? `$${price.toFixed(2)}` : "N/A"; tdPrice.style.cssText = "padding:4px 6px;color:#ccc;";
+
+      let alertLevel = "—";
+      let direction = "—";
+      let triggered = a.triggered || false;
+
+      if (a.price !== undefined) {
+        // Price alert
+        alertLevel = `$${a.price.toFixed(2)}`;
+        direction = a.direction || "above";
+        if (price > 0) {
+          if (a.direction === "above" && price >= a.price) triggered = true;
+          if (a.direction === "below" && price <= a.price) triggered = true;
+        }
+      } else if (a.condition) {
+        // Multi-condition alert
+        alertLevel = a.condition;
+        direction = "indicator";
+      }
+
+      const tdLevel = document.createElement("td"); tdLevel.textContent = alertLevel; tdLevel.style.cssText = "padding:4px 6px;color:#ffeb3b;";
+      const tdDir = document.createElement("td"); tdDir.textContent = direction; tdDir.style.cssText = "padding:4px 6px;color:#888;";
+      const tdStatus = document.createElement("td");
+      tdStatus.textContent = triggered ? "TRIGGERED" : "Watching";
+      tdStatus.style.cssText = `padding:4px 6px;font-weight:bold;color:${triggered ? "#f44336" : "#4caf50"};`;
+      tr.appendChild(tdSym); tr.appendChild(tdPrice); tr.appendChild(tdLevel); tr.appendChild(tdDir); tr.appendChild(tdStatus);
+      table.appendChild(tr);
+    }
+  }
+
+  win.contentElement.textContent = "";
+  const refreshBtn = document.createElement("button");
+  refreshBtn.textContent = "Refresh";
+  refreshBtn.style.cssText = "margin:4px;padding:4px 12px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:10px;";
+  refreshBtn.addEventListener("click", () => { win.close(); cmdAlertBoard(); });
+  win.appendElement(refreshBtn);
+  win.appendElement(table);
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: AI-Powered Trade Review (extends cmdAIChat)
+// ══════════════════════════════════════════════════════════════
+
+// Extend the AI chat window — override cmdAIChat to add "Review My Trades" button
+const _originalCmdAIChat = cmdAIChat;
+
+// We redefine cmdAIChat below; the original is captured above
+function cmdAIChatWithReview() {
+  const s = loadSettings();
+  if (!s.aiApiKey) { alert("AI API key required. Ctrl+K -> SETTINGS.\nAnthropic: https://console.anthropic.com/"); return; }
+  const win = createWindow({ title: "AI Trading Assistant", width: 500, height: 460 });
+  const c = document.createElement("div"); c.style.cssText = "display:flex;flex-direction:column;height:100%;";
+  const msgs = document.createElement("div"); msgs.style.cssText = "flex:1;overflow-y:auto;padding:4px;font-size:11px;line-height:1.5;";
+  c.appendChild(msgs);
+  const addMsg = (role, text) => {
+    const d = document.createElement("div");
+    d.style.cssText = `margin:4px 0;padding:6px 8px;border-radius:4px;white-space:pre-wrap;${role === "user" ? "background:#1a3a5a;color:#8cf;text-align:right;" : "background:#111;color:#ccc;"}`;
+    d.textContent = text; msgs.appendChild(d); msgs.scrollTop = msgs.scrollHeight;
+  };
+  addMsg("assistant", `Connected to ${s.aiProvider || "anthropic"}. Ask about positions, risk, or market analysis.`);
+
+  // "Review My Trades" button
+  const reviewBtn = document.createElement("button");
+  reviewBtn.textContent = "Review My Trades";
+  reviewBtn.style.cssText = "margin:4px;padding:6px 12px;background:#3a0f60;color:#c8f;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:11px;";
+  reviewBtn.addEventListener("click", async () => {
+    const journal = loadJournal();
+    const backtestTrades = window._lastBacktestTrades || [];
+
+    let tradeList = [];
+    if (journal.length > 0) {
+      const recent = journal.slice(0, 20);
+      tradeList = recent.map(e => `${e.date} ${e.side} ${e.symbol} @ $${e.price?.toFixed?.(2) || "?"} SL:${e.sl || "?"} TP:${e.tp || "?"} Note: ${e.note || "none"}`);
+    }
+    if (backtestTrades.length > 0) {
+      const btRecent = backtestTrades.slice(-20);
+      for (const t of btRecent) {
+        const pnl = t.pnl || t.profit || 0;
+        tradeList.push(`[Backtest] ${t.side || "?"} ${t.symbol || currentSymbol} entry:${t.entry?.toFixed?.(2) || "?"} exit:${t.exit?.toFixed?.(2) || "?"} PnL: $${pnl.toFixed(2)}`);
+      }
+    }
+
+    if (tradeList.length === 0) {
+      addMsg("assistant", "No trades found. Use the Trade Journal (JOURNAL) to log trades, or run a backtest first.");
+      return;
+    }
+
+    const prompt = `Here are my last ${tradeList.length} trades:\n${tradeList.join("\n")}\n\nAnalyze my trading patterns, strengths, and weaknesses. Identify any recurring mistakes, risk management issues, and suggest improvements.`;
+    addMsg("user", `Review My Trades (${tradeList.length} trades)`);
+    addMsg("assistant", "Analyzing your trade history...");
+
+    try {
+      const ctx = `Symbol: ${currentSymbol}, TF: ${currentTimeframe}, Price: $${lastPrice}`;
+      const reply = await invoke("ai_chat", { apiKey: s.aiApiKey, provider: s.aiProvider || "anthropic", model: s.aiModel || "", message: prompt, context: ctx });
+      msgs.lastChild.textContent = reply;
+    } catch (e) { msgs.lastChild.textContent = `Error: ${e}`; msgs.lastChild.style.color = "#f44"; }
+  });
+  c.appendChild(reviewBtn);
+
+  const ir = document.createElement("div"); ir.style.cssText = "display:flex;gap:4px;padding:4px 0;";
+  const inp = document.createElement("input"); inp.placeholder = "Ask about market, positions, risk...";
+  inp.style.cssText = "flex:1;background:#111;color:#fff;border:1px solid #555;padding:6px;font-family:inherit;font-size:11px;";
+  const sendBtn = document.createElement("button"); sendBtn.textContent = "Send";
+  sendBtn.style.cssText = "padding:6px 12px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;font-family:inherit;";
+  const send = async () => {
+    const msg = inp.value.trim(); if (!msg) return; inp.value = "";
+    addMsg("user", msg); addMsg("assistant", "Thinking...");
+    try {
+      const ctx = `Symbol: ${currentSymbol}, TF: ${currentTimeframe}, Price: $${lastPrice}, SL: ${getSLPrice() || "none"}, TP: ${getTPPrice() || "none"}`;
+      const reply = await invoke("ai_chat", { apiKey: s.aiApiKey, provider: s.aiProvider || "anthropic", model: s.aiModel || "", message: msg, context: ctx });
+      msgs.lastChild.textContent = reply;
+    } catch (e) { msgs.lastChild.textContent = `Error: ${e}`; msgs.lastChild.style.color = "#f44"; }
+  };
+  sendBtn.addEventListener("click", send);
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  ir.appendChild(inp); ir.appendChild(sendBtn); c.appendChild(ir);
+  win.contentElement.textContent = ""; win.appendElement(c);
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Pattern Recognition (Double Top/Bottom, Head & Shoulders)
+// ══════════════════════════════════════════════════════════════
+
+function detectPatterns(data) {
+  const patterns = [];
+  if (!data || data.length < 20) return patterns;
+
+  const TOLERANCE = 0.02; // 2%
+
+  // Find local highs and lows (window of 5 bars)
+  const localHighs = [];
+  const localLows = [];
+  for (let i = 2; i < data.length - 2; i++) {
+    if (data[i].high >= data[i-1].high && data[i].high >= data[i-2].high &&
+        data[i].high >= data[i+1].high && data[i].high >= data[i+2].high) {
+      localHighs.push({ idx: i, price: data[i].high });
+    }
+    if (data[i].low <= data[i-1].low && data[i].low <= data[i-2].low &&
+        data[i].low <= data[i+1].low && data[i].low <= data[i+2].low) {
+      localLows.push({ idx: i, price: data[i].low });
+    }
+  }
+
+  // Double Top: two highs within 2% with a valley between
+  for (let i = 0; i < localHighs.length - 1; i++) {
+    const h1 = localHighs[i];
+    for (let j = i + 1; j < localHighs.length; j++) {
+      const h2 = localHighs[j];
+      if (h2.idx - h1.idx < 5 || h2.idx - h1.idx > 80) continue;
+      const diff = Math.abs(h1.price - h2.price) / Math.max(h1.price, h2.price);
+      if (diff > TOLERANCE) continue;
+      // Check for a valley between them
+      let minBetween = Infinity;
+      for (let k = h1.idx + 1; k < h2.idx; k++) {
+        if (data[k].low < minBetween) minBetween = data[k].low;
+      }
+      const avgHigh = (h1.price + h2.price) / 2;
+      if (minBetween < avgHigh * 0.97) {
+        patterns.push({ type: "Double Top", startIdx: h1.idx, endIdx: h2.idx, price: avgHigh });
+        break;
+      }
+    }
+  }
+
+  // Double Bottom: two lows within 2% with a peak between
+  for (let i = 0; i < localLows.length - 1; i++) {
+    const l1 = localLows[i];
+    for (let j = i + 1; j < localLows.length; j++) {
+      const l2 = localLows[j];
+      if (l2.idx - l1.idx < 5 || l2.idx - l1.idx > 80) continue;
+      const diff = Math.abs(l1.price - l2.price) / Math.max(l1.price, l2.price);
+      if (diff > TOLERANCE) continue;
+      // Check for a peak between them
+      let maxBetween = -Infinity;
+      for (let k = l1.idx + 1; k < l2.idx; k++) {
+        if (data[k].high > maxBetween) maxBetween = data[k].high;
+      }
+      const avgLow = (l1.price + l2.price) / 2;
+      if (maxBetween > avgLow * 1.03) {
+        patterns.push({ type: "Double Bottom", startIdx: l1.idx, endIdx: l2.idx, price: avgLow });
+        break;
+      }
+    }
+  }
+
+  // Head & Shoulders: higher high flanked by two lower highs
+  for (let i = 0; i < localHighs.length - 2; i++) {
+    const left = localHighs[i];
+    for (let j = i + 1; j < localHighs.length - 1; j++) {
+      const head = localHighs[j];
+      if (head.price <= left.price) continue;
+      for (let k = j + 1; k < localHighs.length; k++) {
+        const right = localHighs[k];
+        if (right.idx - left.idx > 120) break;
+        if (right.price >= head.price) continue;
+        // Left and right shoulders should be roughly similar height (within 5%)
+        const shoulderDiff = Math.abs(left.price - right.price) / Math.max(left.price, right.price);
+        if (shoulderDiff > 0.05) continue;
+        // Head must be notably higher than shoulders
+        if (head.price < left.price * 1.02) continue;
+        patterns.push({ type: "Head & Shoulders", startIdx: left.idx, endIdx: right.idx, price: head.price });
+        break;
+      }
+      if (patterns.some(p => p.type === "Head & Shoulders" && p.startIdx === left.idx)) break;
+    }
+  }
+
+  return patterns;
+}
+
+function cmdPatterns() {
+  if (!currentChartData || currentChartData.length < 20) {
+    log("Not enough data for pattern detection", "warn");
+    return;
+  }
+
+  const patterns = detectPatterns(currentChartData);
+
+  if (patterns.length === 0) {
+    log("No patterns detected in current chart data", "info");
+    const win = createWindow({ title: `${currentSymbol} — Patterns`, width: 350, height: 200 });
+    win.setContent("No Double Top, Double Bottom, or Head & Shoulders patterns detected in the current data.");
+    return;
+  }
+
+  // Draw markers on chart
+  const markers = [];
+  const colorMap = {
+    "Double Top": "#f44336",
+    "Double Bottom": "#4caf50",
+    "Head & Shoulders": "#ff9800",
+  };
+  const shapeMap = {
+    "Double Top": "arrowDown",
+    "Double Bottom": "arrowUp",
+    "Head & Shoulders": "arrowDown",
+  };
+
+  for (const p of patterns) {
+    markers.push({
+      time: currentChartData[p.startIdx].time,
+      position: p.type === "Double Bottom" ? "belowBar" : "aboveBar",
+      color: colorMap[p.type] || "#fff",
+      shape: shapeMap[p.type] || "circle",
+      text: p.type,
+    });
+    if (p.endIdx !== p.startIdx) {
+      markers.push({
+        time: currentChartData[p.endIdx].time,
+        position: p.type === "Double Bottom" ? "belowBar" : "aboveBar",
+        color: colorMap[p.type] || "#fff",
+        shape: shapeMap[p.type] || "circle",
+        text: p.type,
+      });
+    }
+  }
+
+  // Sort markers by time (required by lightweight-charts)
+  markers.sort((a, b) => a.time - b.time);
+  candleSeries.setMarkers(markers);
+
+  // Show summary window
+  const win = createWindow({ title: `${currentSymbol} — Patterns (${patterns.length})`, width: 450, height: 300 });
+  win.contentElement.textContent = "";
+  const table = document.createElement("table");
+  table.className = "fw-table";
+  table.style.cssText = "width:100%;font-size:10px;border-collapse:collapse;";
+  const thead = document.createElement("tr");
+  for (const h of ["Pattern", "Start Bar", "End Bar", "Price Level"]) {
+    const th = document.createElement("td");
+    th.style.cssText = "color:#888;font-weight:bold;font-size:10px;padding:4px 6px;border-bottom:1px solid #333;";
+    th.textContent = h;
+    thead.appendChild(th);
+  }
+  table.appendChild(thead);
+
+  for (const p of patterns) {
+    const tr = document.createElement("tr");
+    const tdType = document.createElement("td");
+    tdType.textContent = p.type;
+    tdType.style.cssText = `padding:4px 6px;color:${colorMap[p.type] || "#ccc"};font-weight:bold;`;
+    const tdStart = document.createElement("td");
+    tdStart.textContent = new Date(currentChartData[p.startIdx].time * 1000).toLocaleDateString();
+    tdStart.style.cssText = "padding:4px 6px;color:#ccc;";
+    const tdEnd = document.createElement("td");
+    tdEnd.textContent = new Date(currentChartData[p.endIdx].time * 1000).toLocaleDateString();
+    tdEnd.style.cssText = "padding:4px 6px;color:#ccc;";
+    const tdPrice = document.createElement("td");
+    tdPrice.textContent = `$${p.price.toFixed(2)}`;
+    tdPrice.style.cssText = "padding:4px 6px;color:#ffeb3b;";
+    tr.appendChild(tdType); tr.appendChild(tdStart); tr.appendChild(tdEnd); tr.appendChild(tdPrice);
+    table.appendChild(tr);
+  }
+
+  win.appendElement(table);
+
+  const clearBtn = document.createElement("button");
+  clearBtn.textContent = "Clear Markers";
+  clearBtn.style.cssText = "margin:8px 4px;padding:4px 12px;background:#3a0a0a;color:#f44;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:10px;";
+  clearBtn.addEventListener("click", () => { candleSeries.setMarkers([]); log("Pattern markers cleared", "info"); });
+  win.appendElement(clearBtn);
+
+  log(`Detected ${patterns.length} pattern(s) on ${currentSymbol}`, "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Sentiment Analysis
+// ══════════════════════════════════════════════════════════════
+
+async function cmdSentiment() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Sentiment Analysis`, width: 550, height: 450 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching news for sentiment analysis...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  const POSITIVE_WORDS = ["surge", "rally", "gain", "beat", "upgrade", "bullish", "record", "soar"];
+  const NEGATIVE_WORDS = ["crash", "drop", "miss", "downgrade", "bearish", "plunge", "sell-off", "decline"];
+
+  try {
+    const json = await invoke("get_news", { symbol: currentSymbol, limit: 30 });
+    const articles = JSON.parse(json);
+    win.contentElement.textContent = "";
+
+    if (!articles || articles.length === 0) {
+      win.setContent("No news available for sentiment analysis.");
+      return;
+    }
+
+    let bullScore = 0;
+    let bearScore = 0;
+    const analyzed = [];
+
+    for (const article of articles) {
+      const headline = (article.headline || article.title || "").toLowerCase();
+      let artBull = 0;
+      let artBear = 0;
+      for (const w of POSITIVE_WORDS) {
+        if (headline.includes(w)) artBull++;
+      }
+      for (const w of NEGATIVE_WORDS) {
+        if (headline.includes(w)) artBear++;
+      }
+      bullScore += artBull;
+      bearScore += artBear;
+      analyzed.push({
+        headline: article.headline || article.title || "",
+        date: (article.created_at || "").substring(0, 16).replace("T", " "),
+        source: article.source || "",
+        bull: artBull,
+        bear: artBear,
+      });
+    }
+
+    const totalSignals = bullScore + bearScore;
+    const bullPct = totalSignals > 0 ? Math.round((bullScore / totalSignals) * 100) : 50;
+    const bearPct = totalSignals > 0 ? Math.round((bearScore / totalSignals) * 100) : 50;
+
+    // Summary header
+    const summary = document.createElement("div");
+    summary.style.cssText = "padding:12px;border-bottom:1px solid #333;";
+
+    const meterBg = document.createElement("div");
+    meterBg.style.cssText = "height:24px;background:#3a0a0a;border-radius:4px;overflow:hidden;margin:8px 0;";
+    const meterFill = document.createElement("div");
+    meterFill.style.cssText = `height:100%;width:${bullPct}%;background:linear-gradient(90deg, #4caf50, #8bc34a);border-radius:4px 0 0 4px;transition:width 0.3s;`;
+    meterBg.appendChild(meterFill);
+
+    const overallSentiment = bullScore > bearScore ? "BULLISH" : bullScore < bearScore ? "BEARISH" : "NEUTRAL";
+    const overallColor = bullScore > bearScore ? "#4caf50" : bullScore < bearScore ? "#f44336" : "#888";
+
+    summary.innerHTML = `
+      <div style="font-size:14px;font-weight:bold;color:${overallColor};text-align:center;">${overallSentiment}</div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;margin-top:4px;">
+        <span style="color:#4caf50;">Bullish: ${bullScore} (${bullPct}%)</span>
+        <span style="color:#f44336;">Bearish: ${bearScore} (${bearPct}%)</span>
+      </div>
+    `;
+    summary.insertBefore(meterBg, summary.lastChild);
+    win.appendElement(summary);
+
+    // Headline list
+    const listDiv = document.createElement("div");
+    listDiv.style.cssText = "overflow-y:auto;max-height:300px;";
+    for (const a of analyzed) {
+      const row = document.createElement("div");
+      row.style.cssText = "padding:4px 8px;border-bottom:1px solid #111;font-size:10px;";
+      let hlColor = "#888";
+      if (a.bull > 0 && a.bear === 0) hlColor = "#4caf50";
+      else if (a.bear > 0 && a.bull === 0) hlColor = "#f44336";
+      else if (a.bull > 0 && a.bear > 0) hlColor = "#ff9800";
+
+      const dateSpan = document.createElement("div");
+      dateSpan.style.cssText = "color:#555;font-size:9px;";
+      dateSpan.textContent = `${a.date} | ${a.source}`;
+      const hlSpan = document.createElement("div");
+      hlSpan.style.cssText = `color:${hlColor};margin-top:2px;`;
+      hlSpan.textContent = a.headline;
+      row.appendChild(dateSpan);
+      row.appendChild(hlSpan);
+      listDiv.appendChild(row);
+    }
+    win.appendElement(listDiv);
+
+    log(`Sentiment for ${currentSymbol}: ${overallSentiment} (Bull:${bullScore} Bear:${bearScore})`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Sentiment analysis failed: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Volatility Surface (Options IV Grid)
+// ══════════════════════════════════════════════════════════════
+
+async function cmdVolSurf() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Volatility Surface`, width: 700, height: 500 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching options chain for volatility surface...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  // Calculate next 3 monthly expiration dates (3rd Friday of next 3 months)
+  function getMonthlyExpirations(count) {
+    const expirations = [];
+    const now = new Date();
+    let month = now.getMonth();
+    let year = now.getFullYear();
+    for (let i = 0; i < count + 1; i++) {
+      if (i > 0 || now.getDate() > 20) {
+        month++;
+        if (month > 11) { month = 0; year++; }
+      }
+      // 3rd Friday: find first Friday, add 14 days
+      const firstDay = new Date(year, month, 1).getDay();
+      const firstFriday = firstDay <= 5 ? (5 - firstDay + 1) : (12 - firstDay + 1);
+      const thirdFriday = firstFriday + 14;
+      const expDate = new Date(year, month, thirdFriday);
+      if (expDate > now) {
+        expirations.push(expDate.toISOString().slice(0, 10));
+      }
+      if (expirations.length >= count) break;
+    }
+    return expirations;
+  }
+
+  const expirations = getMonthlyExpirations(3);
+
+  try {
+    const allData = {};
+    const allStrikes = new Set();
+
+    for (const exp of expirations) {
+      try {
+        const json = await invoke("get_options", { symbol: currentSymbol, expiration: exp });
+        const chain = typeof json === "string" ? JSON.parse(json) : json;
+        const options = Array.isArray(chain) ? chain : (chain.options || chain.calls || []);
+        allData[exp] = {};
+        for (const opt of options) {
+          const strike = opt.strike || opt.strike_price;
+          const iv = opt.implied_volatility || opt.iv || opt.impliedVolatility || 0;
+          if (strike && iv > 0) {
+            allStrikes.add(strike);
+            allData[exp][strike] = iv;
+          }
+        }
+      } catch (_) {
+        allData[exp] = {};
+      }
+    }
+
+    win.contentElement.textContent = "";
+
+    const sortedStrikes = [...allStrikes].sort((a, b) => a - b);
+
+    if (sortedStrikes.length === 0) {
+      win.setContent("No options data available for volatility surface. This symbol may not have listed options.");
+      return;
+    }
+
+    // Filter strikes to +/- 20% of current price
+    const priceLow = lastPrice * 0.8;
+    const priceHigh = lastPrice * 1.2;
+    const filteredStrikes = sortedStrikes.filter(s => s >= priceLow && s <= priceHigh);
+    const displayStrikes = filteredStrikes.length > 0 ? filteredStrikes : sortedStrikes.slice(0, 30);
+
+    // Build table
+    const table = document.createElement("table");
+    table.className = "fw-table";
+    table.style.cssText = "width:100%;font-size:10px;border-collapse:collapse;";
+
+    // Header row
+    const thead = document.createElement("tr");
+    const thStrike = document.createElement("td");
+    thStrike.textContent = "Strike";
+    thStrike.style.cssText = "color:#888;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;position:sticky;left:0;background:#0a0a1a;";
+    thead.appendChild(thStrike);
+    for (const exp of expirations) {
+      const th = document.createElement("td");
+      th.textContent = exp;
+      th.style.cssText = "color:#888;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;text-align:center;";
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+
+    // Find IV range for color coding
+    let minIV = Infinity, maxIV = 0;
+    for (const exp of expirations) {
+      for (const s of displayStrikes) {
+        const iv = allData[exp]?.[s];
+        if (iv > 0) {
+          minIV = Math.min(minIV, iv);
+          maxIV = Math.max(maxIV, iv);
+        }
+      }
+    }
+    if (minIV === Infinity) minIV = 0;
+
+    // Data rows
+    for (const strike of displayStrikes) {
+      const tr = document.createElement("tr");
+      const tdStrike = document.createElement("td");
+      tdStrike.textContent = `$${strike}`;
+      tdStrike.style.cssText = `padding:3px 6px;color:${Math.abs(strike - lastPrice) / lastPrice < 0.02 ? "#ffeb3b" : "#ccc"};font-weight:bold;position:sticky;left:0;background:#0a0a1a;`;
+      tr.appendChild(tdStrike);
+
+      for (const exp of expirations) {
+        const td = document.createElement("td");
+        const iv = allData[exp]?.[strike];
+        if (iv > 0) {
+          const ivPct = (iv * 100).toFixed(1);
+          td.textContent = `${ivPct}%`;
+          // Color: green (low) -> yellow (mid) -> red (high)
+          const ratio = maxIV > minIV ? (iv - minIV) / (maxIV - minIV) : 0.5;
+          let r, g;
+          if (ratio < 0.5) {
+            r = Math.round(ratio * 2 * 255);
+            g = 255;
+          } else {
+            r = 255;
+            g = Math.round((1 - (ratio - 0.5) * 2) * 255);
+          }
+          td.style.cssText = `padding:3px 6px;text-align:center;color:rgb(${r},${g},0);background:rgba(${r},${g},0,0.08);`;
+        } else {
+          td.textContent = "—";
+          td.style.cssText = "padding:3px 6px;text-align:center;color:#333;";
+        }
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = "overflow:auto;max-height:420px;";
+    wrapper.appendChild(table);
+    win.appendElement(wrapper);
+
+    log(`Vol surface: ${displayStrikes.length} strikes x ${expirations.length} expirations`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Volatility surface failed: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Conditional Bracket/OCO Order Placement UI
+// ══════════════════════════════════════════════════════════════
+
+function cmdBracketOrder() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Bracket/OCO Order`, width: 420, height: 380 });
+  win.contentElement.textContent = "";
+  const c = document.createElement("div");
+  c.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:8px;font-size:11px;";
+
+  const sl = getSLPrice();
+  const tp = getTPPrice();
+  const side = (sl && tp && sl < lastPrice) ? "buy" : "sell";
+
+  const fields = [
+    { id: "brk-symbol", label: "Symbol", value: currentSymbol, disabled: true },
+    { id: "brk-side", label: "Side", type: "select", options: ["buy", "sell"], value: side },
+    { id: "brk-entry", label: "Entry Price", value: lastPrice ? lastPrice.toFixed(4) : "" },
+    { id: "brk-tp", label: "Take Profit", value: tp ? tp.toFixed(4) : "" },
+    { id: "brk-sl", label: "Stop Loss", value: sl ? sl.toFixed(4) : "" },
+    { id: "brk-qty", label: "Quantity", value: "1" },
+  ];
+
+  const inputs = {};
+  for (const f of fields) {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;align-items:center;gap:8px;";
+    const lbl = document.createElement("label");
+    lbl.textContent = f.label;
+    lbl.style.cssText = "width:90px;color:#888;font-size:10px;";
+    row.appendChild(lbl);
+
+    let inp;
+    if (f.type === "select") {
+      inp = document.createElement("select");
+      inp.style.cssText = "flex:1;background:#111;color:#fff;border:1px solid #555;padding:4px;font-family:inherit;font-size:11px;";
+      for (const opt of f.options) {
+        const o = document.createElement("option");
+        o.value = opt; o.textContent = opt.toUpperCase();
+        if (opt === f.value) o.selected = true;
+        inp.appendChild(o);
+      }
+    } else {
+      inp = document.createElement("input");
+      inp.type = "text";
+      inp.value = f.value || "";
+      inp.style.cssText = "flex:1;background:#111;color:#fff;border:1px solid #555;padding:4px;font-family:inherit;font-size:11px;";
+      if (f.disabled) inp.disabled = true;
+    }
+    inputs[f.id] = inp;
+    row.appendChild(inp);
+    c.appendChild(row);
+  }
+
+  const statusDiv = document.createElement("div");
+  statusDiv.style.cssText = "color:#888;font-size:10px;min-height:20px;";
+  c.appendChild(statusDiv);
+
+  // Place Bracket button
+  const bracketBtn = document.createElement("button");
+  bracketBtn.textContent = "Place Bracket Order (Entry + TP + SL)";
+  bracketBtn.style.cssText = "padding:8px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:11px;font-weight:bold;";
+  bracketBtn.addEventListener("click", async () => {
+    const qty = parseInt(inputs["brk-qty"].value) || 0;
+    const tpPrice = parseFloat(inputs["brk-tp"].value) || 0;
+    const slPrice = parseFloat(inputs["brk-sl"].value) || 0;
+    const orderSide = inputs["brk-side"].value;
+    if (qty <= 0) { statusDiv.textContent = "Invalid quantity"; statusDiv.style.color = "#f44"; return; }
+    if (tpPrice <= 0 || slPrice <= 0) { statusDiv.textContent = "TP and SL prices required"; statusDiv.style.color = "#f44"; return; }
+
+    const confirmMsg = `Place BRACKET: ${orderSide.toUpperCase()} ${qty}x ${currentSymbol}\nTP: $${tpPrice} | SL: $${slPrice}`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      statusDiv.textContent = "Placing bracket order..."; statusDiv.style.color = "#888";
+      await invoke("place_bracket_order", { symbol: currentSymbol, qty, side: orderSide, tpPrice, slPrice });
+      statusDiv.textContent = "Bracket order placed successfully!"; statusDiv.style.color = "#4caf50";
+      log(`Bracket: ${orderSide} ${qty}x ${currentSymbol} TP:${tpPrice} SL:${slPrice}`, "ok");
+    } catch (e) { statusDiv.textContent = `Error: ${e}`; statusDiv.style.color = "#f44"; }
+  });
+  c.appendChild(bracketBtn);
+
+  // Place OCO button (TP + SL only, no entry)
+  const ocoBtn = document.createElement("button");
+  ocoBtn.textContent = "Place OCO (TP Limit + SL Stop only)";
+  ocoBtn.style.cssText = "padding:8px;background:#3a0f60;color:#c8f;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:11px;";
+  ocoBtn.addEventListener("click", async () => {
+    const qty = parseInt(inputs["brk-qty"].value) || 0;
+    const tpPrice = parseFloat(inputs["brk-tp"].value) || 0;
+    const slPrice = parseFloat(inputs["brk-sl"].value) || 0;
+    const orderSide = inputs["brk-side"].value;
+    // For OCO exit: if position is long, TP is sell limit, SL is sell stop
+    const exitSide = orderSide === "buy" ? "sell" : "buy";
+    if (qty <= 0) { statusDiv.textContent = "Invalid quantity"; statusDiv.style.color = "#f44"; return; }
+    if (tpPrice <= 0 || slPrice <= 0) { statusDiv.textContent = "TP and SL prices required"; statusDiv.style.color = "#f44"; return; }
+
+    const confirmMsg = `Place OCO exits for ${orderSide.toUpperCase()} position:\n${exitSide.toUpperCase()} LIMIT @ $${tpPrice} (TP)\n${exitSide.toUpperCase()} STOP @ $${slPrice} (SL)\nQty: ${qty}x ${currentSymbol}`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      statusDiv.textContent = "Placing OCO orders..."; statusDiv.style.color = "#888";
+      await invoke("place_limit_order", { symbol: currentSymbol, qty, side: exitSide, limitPrice: tpPrice, tif: "gtc" });
+      await invoke("place_stop_order", { symbol: currentSymbol, qty, side: exitSide, stopPrice: slPrice, tif: "gtc" });
+      statusDiv.textContent = "OCO orders placed (TP limit + SL stop)!"; statusDiv.style.color = "#4caf50";
+      log(`OCO: ${exitSide} limit@${tpPrice} + stop@${slPrice} ${qty}x ${currentSymbol}`, "ok");
+    } catch (e) { statusDiv.textContent = `Error: ${e}`; statusDiv.style.color = "#f44"; }
+  });
+  c.appendChild(ocoBtn);
+
+  win.contentElement.textContent = "";
+  win.appendElement(c);
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Portfolio Heat Map
+// ══════════════════════════════════════════════════════════════
+
+async function cmdHeatmap() {
+  const win = createWindow({ title: "Portfolio Heat Map", width: 600, height: 450 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Loading positions for heat map...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+
+    if (!positions || positions.length === 0) {
+      win.contentElement.textContent = "";
+      win.setContent("No open positions for heat map.");
+      return;
+    }
+
+    // Calculate daily P&L % for each position
+    const items = [];
+    let totalValue = 0;
+    for (const p of positions) {
+      const mv = Math.abs(p.market_value || p.qty * (p.current_price || 0));
+      const unrealizedPl = p.unrealized_pl || p.unrealized_plpc * mv || 0;
+      const costBasis = mv - unrealizedPl;
+      const pctChange = costBasis > 0 ? (unrealizedPl / costBasis) * 100 : 0;
+      const dailyPl = p.unrealized_intraday_pl || unrealizedPl;
+      const dailyPct = p.unrealized_intraday_plpc ? p.unrealized_intraday_plpc * 100 : pctChange;
+
+      items.push({
+        symbol: p.symbol,
+        value: mv,
+        pctChange: dailyPct,
+        pl: dailyPl,
+        qty: p.qty,
+        price: p.current_price || 0,
+      });
+      totalValue += mv;
+    }
+
+    win.contentElement.textContent = "";
+
+    // Build finviz-style heat map grid
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:flex;flex-wrap:wrap;gap:3px;padding:8px;";
+
+    // Find max absolute % for scaling
+    const maxPct = Math.max(...items.map(i => Math.abs(i.pctChange)), 1);
+
+    for (const item of items) {
+      // Size proportional to market value (min 60px, max 180px)
+      const sizeFactor = totalValue > 0 ? item.value / totalValue : 1 / items.length;
+      const boxSize = Math.max(60, Math.min(180, Math.round(sizeFactor * 500 + 60)));
+
+      const box = document.createElement("div");
+      const intensity = Math.min(Math.abs(item.pctChange) / maxPct, 1);
+      let bgColor;
+      if (item.pctChange > 0) {
+        const g = Math.round(100 + intensity * 155);
+        bgColor = `rgba(0, ${g}, 0, ${0.3 + intensity * 0.5})`;
+      } else if (item.pctChange < 0) {
+        const r = Math.round(100 + intensity * 155);
+        bgColor = `rgba(${r}, 0, 0, ${0.3 + intensity * 0.5})`;
+      } else {
+        bgColor = "rgba(128, 128, 128, 0.2)";
+      }
+
+      box.style.cssText = `width:${boxSize}px;height:${boxSize * 0.6}px;background:${bgColor};border:1px solid #333;border-radius:4px;display:flex;flex-direction:column;justify-content:center;align-items:center;cursor:pointer;padding:4px;`;
+      box.addEventListener("click", () => {
+        document.getElementById("symbol-input").value = item.symbol;
+        triggerLoad();
+      });
+
+      const symEl = document.createElement("div");
+      symEl.textContent = item.symbol;
+      symEl.style.cssText = "font-size:12px;font-weight:bold;color:#fff;";
+
+      const pctEl = document.createElement("div");
+      const sign = item.pctChange >= 0 ? "+" : "";
+      pctEl.textContent = `${sign}${item.pctChange.toFixed(2)}%`;
+      pctEl.style.cssText = `font-size:14px;font-weight:bold;color:${item.pctChange >= 0 ? "#4caf50" : "#f44336"};`;
+
+      const valEl = document.createElement("div");
+      valEl.textContent = `$${item.value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+      valEl.style.cssText = "font-size:9px;color:#888;";
+
+      box.appendChild(symEl);
+      box.appendChild(pctEl);
+      box.appendChild(valEl);
+      grid.appendChild(box);
+    }
+
+    win.appendElement(grid);
+
+    // Summary row
+    const totalPl = items.reduce((s, i) => s + i.pl, 0);
+    const summary = document.createElement("div");
+    summary.style.cssText = "padding:8px;border-top:1px solid #333;font-size:11px;display:flex;justify-content:space-between;";
+    summary.innerHTML = `
+      <span style="color:#888;">Positions: ${items.length}</span>
+      <span style="color:#888;">Total Value: $${totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+      <span style="color:${totalPl >= 0 ? "#4caf50" : "#f44336"};">P&L: ${totalPl >= 0 ? "+" : ""}$${totalPl.toFixed(2)}</span>
+    `;
+    win.appendElement(summary);
+
+    log(`Heat map: ${items.length} positions, total $${totalValue.toFixed(0)}`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Heat map failed: ${e}`);
+  }
 }
 
 function setupTabs() {

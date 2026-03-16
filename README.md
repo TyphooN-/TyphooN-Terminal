@@ -35,6 +35,14 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Position Calculator** | Risk-based sizing with R:R ratio (Ctrl+K → CALC) |
 | **Chart Annotations** | Text markers on chart bars (Ctrl+K → ANNOTATE) |
 | **Regime Detection** | ADX-based trending/ranging/choppy state in dashboard |
+| **Pattern Recognition** | Auto-detect double top/bottom, head & shoulders (Ctrl+K → PATTERNS) |
+| **Sentiment Analysis** | Keyword-based bullish/bearish scoring from news (Ctrl+K → SENTIMENT) |
+| **Volatility Surface** | Options IV heatmap by strike×expiry (Ctrl+K → VOLSURF) |
+| **Portfolio Heat Map** | Finviz-style colored boxes by P&L (Ctrl+K → HEATMAP) |
+| **Bracket Order UI** | Visual OCO/bracket order placement (Ctrl+K → BRACKET) |
+| **Alert Dashboard** | Cross-watchlist alert monitoring (Ctrl+K → ALERTBOARD) |
+| **Custom Timeframes** | 2H, 3H, 6H, 2D, 3D via bar aggregation |
+| **Renko Charts** | ATR-based Renko brick charting |
 | **Bid/Ask Spread** | Real-time bid/ask/spread display from Alpaca quotes |
 | **Time & Sales** | WebSocket trade stream in scrolling panel |
 | **Account Activities** | Deposits, withdrawals, dividends, fills history |

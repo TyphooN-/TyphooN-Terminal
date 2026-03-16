@@ -149,6 +149,15 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Position sizing calculator | ✅ Done | Ctrl+K → CALC, risk/entry/SL → lot size + R:R |
 | Chart annotations | ✅ Done | Ctrl+K → ANNOTATE, text markers on chart |
 | Regime detection | ✅ Done | ADX-based trending/ranging/choppy in timer bar |
+| Multi-symbol alert dashboard | ✅ Done | Ctrl+K → ALERTBOARD, cross-watchlist alert check |
+| AI trade review | ✅ Done | "Review My Trades" button in AI chat |
+| Pattern recognition | ✅ Done | Ctrl+K → PATTERNS, double top/bottom + H&S detection |
+| Sentiment analysis | ✅ Done | Ctrl+K → SENTIMENT, keyword-based bullish/bearish score |
+| Volatility surface | ✅ Done | Ctrl+K → VOLSURF, strike×expiry IV heatmap |
+| Bracket order UI | ✅ Done | Ctrl+K → BRACKET, visual OCO/bracket placement |
+| Portfolio heat map | ✅ Done | Ctrl+K → HEATMAP, finviz-style colored boxes |
+| Custom timeframes | ✅ Done | 2H, 3H, 6H, 2D, 3D via bar aggregation |
+| Renko bars | ✅ Done | ATR-based Renko chart type |
 | FRED economic data | ✅ Done | Fed Funds, CPI, GDP, Treasury yields, VIX, M2 (user provides free API key) |
 | AI trading assistant | ✅ Done | Claude (Anthropic) or GPT (OpenAI) chat with market context |
 | Settings panel | ✅ Done | Ctrl+K → SETTINGS for API key management |

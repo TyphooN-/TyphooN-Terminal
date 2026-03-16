@@ -134,25 +134,27 @@
 ## Future Feature Priorities (Ranked by Impact)
 
 ### Tier A — High Impact, Achievable Now
-1. **Conditional order placement** (OCO, OTO bracket management UI)
-2. **Portfolio heat map** (sector/position size visualization)
+1. ~~**Conditional order placement**~~ ✅ DONE — Ctrl+K → BRACKET (OCO + bracket)
+2. ~~**Portfolio heat map**~~ ✅ DONE — Ctrl+K → HEATMAP (finviz-style)
 3. ~~**Risk/reward overlay**~~ ✅ DONE — visual P&L zones on chart
-4. **Multi-symbol alert dashboard** (check alerts across all watchlist symbols)
+4. ~~**Multi-symbol alert dashboard**~~ ✅ DONE — Ctrl+K → ALERTBOARD
 5. ~~**Trade journal**~~ ✅ DONE — Ctrl+K → JOURNAL
 
 ### Tier B — Medium Impact, Moderate Effort
 6. ~~**Heikin-Ashi candlesticks**~~ ✅ DONE — chart type selector
-7. **Renko/Range bars** (non-time-based charting)
-8. **Custom timeframes** (e.g., 2H, 3D, 6H)
+7. ~~**Renko/Range bars**~~ ✅ DONE — ATR-based Renko in chart type selector
+8. ~~**Custom timeframes**~~ ✅ DONE — 2H, 3H, 6H, 2D, 3D via aggregation
 9. ~~**Chart annotations**~~ ✅ DONE — Ctrl+K → ANNOTATE, markers on chart
 10. ~~**Position sizing calculator**~~ ✅ DONE — Ctrl+K → CALC
 
 ### Tier C — Differentiators (Unique Features)
-11. **AI-powered trade review** ("analyze my last 10 trades" using AI chat context)
-12. **Pattern recognition** (auto-detect head & shoulders, double top/bottom, wedges)
-13. **Sentiment analysis** (aggregate news sentiment per symbol)
-14. **Volatility surface** (options IV surface visualization)
-15. ~~**Regime detection**~~ ✅ DONE — ADX-based trending/ranging/choppy shown in timer
+11. ~~**AI-powered trade review**~~ ✅ DONE — "Review My Trades" in AI chat
+12. ~~**Pattern recognition**~~ ✅ DONE — Ctrl+K → PATTERNS (double top/bottom, H&S)
+13. ~~**Sentiment analysis**~~ ✅ DONE — Ctrl+K → SENTIMENT (keyword scoring)
+14. ~~**Volatility surface**~~ ✅ DONE — Ctrl+K → VOLSURF (strike×expiry IV grid)
+15. ~~**Regime detection**~~ ✅ DONE — ADX-based trending/ranging/choppy in timer
+
+**ALL 15 Tier A/B/C features are now implemented.**
 
 ### Tier D — Blocked by External Dependencies
 16. Analyst consensus (needs paid data)
