@@ -104,6 +104,21 @@
 4. **Integrated NNFX system** — Full No Nonsense Forex system ported from MQL5 with exact visual parity.
 5. **Multi-broker + multi-timeframe** — Alpaca + Tastytrade with 2-5 TF grid view per symbol.
 6. **Local-first with cloud data** — Runs locally (no SaaS), caches everything in SQLite, works offline with cached data.
+7. **Draggable tab reordering** — Drag tabs to rearrange. Godel Terminal doesn't support this (tabs are fixed order, very annoying). MT5 doesn't support it either (chart windows, not tabs).
+
+## UX Advantages Over Competitors
+
+| Feature | TT | MT5 | GT | cTrader | NinjaTrader |
+|---|---|---|---|---|---|
+| Drag-reorder tabs | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Ctrl+K command palette | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Right-click context menu | ✅ | ✅ | ❌ | ✅ | ✅ |
+| Keyboard shortcuts (15+) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Custom timeframes (2H, 3H, 6H) | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Heikin-Ashi + Renko | ✅ | ✅ | ❌ | ✅ | ✅ |
+| AI assistant | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Trade journal | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Risk/reward overlay | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ## Where TyphooN-Terminal TRAILS
 

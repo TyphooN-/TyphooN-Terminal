@@ -141,12 +141,17 @@ function closeTab(id) {
   renderTabs();
 }
 
+let dragTabId = null;
+let dragOverTabId = null;
+
 function renderTabs() {
   const list = document.getElementById("tab-list");
   list.textContent = "";
   for (const tab of tabs) {
     const el = document.createElement("div");
     el.className = `chart-tab${tab.id === activeTabId ? " active" : ""}`;
+    el.draggable = true;
+    el.dataset.tabId = tab.id;
 
     const label = document.createElement("span");
     label.textContent = tab.symbol || "New";
@@ -161,6 +166,56 @@ function renderTabs() {
     }
 
     el.addEventListener("click", () => switchTab(tab.id));
+
+    // Drag to reorder
+    el.addEventListener("dragstart", (e) => {
+      dragTabId = tab.id;
+      el.style.opacity = "0.4";
+      e.dataTransfer.effectAllowed = "move";
+    });
+    el.addEventListener("dragend", () => {
+      el.style.opacity = "";
+      dragTabId = null;
+      dragOverTabId = null;
+      // Remove all drop indicators
+      list.querySelectorAll(".chart-tab").forEach(t => {
+        t.classList.remove("drag-over-left", "drag-over-right");
+      });
+    });
+    el.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (dragTabId === null || dragTabId === tab.id) return;
+      // Show drop indicator
+      const rect = el.getBoundingClientRect();
+      const midX = rect.left + rect.width / 2;
+      list.querySelectorAll(".chart-tab").forEach(t => {
+        t.classList.remove("drag-over-left", "drag-over-right");
+      });
+      if (e.clientX < midX) {
+        el.classList.add("drag-over-left");
+      } else {
+        el.classList.add("drag-over-right");
+      }
+      dragOverTabId = tab.id;
+    });
+    el.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (dragTabId === null || dragTabId === tab.id) return;
+      // Reorder tabs array
+      const fromIdx = tabs.findIndex(t => t.id === dragTabId);
+      const toIdx = tabs.findIndex(t => t.id === tab.id);
+      if (fromIdx < 0 || toIdx < 0) return;
+      const [moved] = tabs.splice(fromIdx, 1);
+      // Insert before or after based on cursor position
+      const rect = el.getBoundingClientRect();
+      const midX = rect.left + rect.width / 2;
+      const insertIdx = e.clientX < midX ? toIdx : toIdx + (fromIdx < toIdx ? 0 : 1);
+      tabs.splice(Math.min(insertIdx, tabs.length), 0, moved);
+      renderTabs();
+      log(`Tab reordered: ${moved.symbol || "New"}`, "info");
+    });
+
     list.appendChild(el);
   }
 }

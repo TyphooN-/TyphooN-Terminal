@@ -71,6 +71,11 @@ body {
 
 .chart-tab .tab-close:hover { color: #f44; }
 
+.chart-tab[draggable="true"] { cursor: grab; }
+.chart-tab[draggable="true"]:active { cursor: grabbing; }
+.chart-tab.drag-over-left { border-left: 2px solid #4caf50; }
+.chart-tab.drag-over-right { border-right: 2px solid #4caf50; }
+
 .tab-add {
   background: none;
   border: none;
