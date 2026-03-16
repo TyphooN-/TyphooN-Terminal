@@ -5362,7 +5362,7 @@ async function openMTFGrid(symbol, timeframes) {
     });
 
     const cellFisherChart = createChart(fisherDiv, {
-      width: 100, height: 50,
+      width: 100, height: 70,
       layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
       grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
       rightPriceScale: { borderColor: "#333" },
@@ -5371,7 +5371,7 @@ async function openMTFGrid(symbol, timeframes) {
     });
 
     const cellVolumeChart = createChart(volumeDiv, {
-      width: 100, height: 40,
+      width: 100, height: 55,
       layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
       grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
       rightPriceScale: { borderColor: "#333" },
@@ -5485,19 +5485,59 @@ async function loadMTFCellData(cellInfo, symbol) {
       }
     }
 
-    // Overlay indicators: KAMA + SMA200
-    if (chartData.length > 200) {
-      const sma = calcSMA(chartData, 200);
-      if (sma.length > 0) {
-        const s = cellInfo.chart.addLineSeries({ color: "#FFD700", lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
-        s.setData(sma);
+    // ── Full indicator set (matches main chart NNFX system) ──
+    const addLine = (color, width, data) => {
+      if (data.length < 2) return;
+      const s = cellInfo.chart.addLineSeries({ color, lineWidth: width, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+      s.setData(data);
+    };
+
+    // SMA 200 (yellow)
+    if (chartData.length > 200) addLine("#FFD700", 1, calcSMA(chartData, 200));
+
+    // KAMA (white)
+    if (chartData.length > 11) addLine("#FFFFFF", 2, calcKAMA(chartData, 10));
+
+    // ATR Projection (yellow bands)
+    if (chartData.length > 15) {
+      const atrp = calcATRProjection(chartData, 14);
+      if (atrp.upper.length > 0) {
+        addLine("#FFFF00", 1, atrp.upper);
+        addLine("#FFFF00", 1, atrp.lower);
       }
     }
-    if (chartData.length > 11) {
-      const kama = calcKAMA(chartData, 10);
-      if (kama.length > 0) {
-        const s = cellInfo.chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lastValueVisible: false, priceLineVisible: false });
-        s.setData(kama);
+
+    // Previous Candle Levels (white)
+    if (chartData.length > 1) {
+      const pcl = calcPrevCandleLevels(chartData);
+      addLine("#FFFFFF88", 1, pcl.highs);
+      addLine("#FFFFFF88", 1, pcl.lows);
+    }
+
+    // Supply/Demand zones (simplified — just top/bottom lines)
+    if (chartData.length > 12) {
+      const zones = calcSupplyDemandZones(chartData);
+      for (const z of zones.slice(-10)) { // last 10 zones only for grid cells
+        const color = z.type === "supply" ? "#87CEEB44" : "#8FBC8F44";
+        const zoneBars = chartData.filter(d => d.time >= z.startTime);
+        if (zoneBars.length < 2) continue;
+        addLine(color, 1, zoneBars.map(d => ({ time: d.time, value: z.high })));
+        addLine(color, 1, zoneBars.map(d => ({ time: d.time, value: z.low })));
+      }
+    }
+
+    // Auto Fibonacci
+    if (chartData.length > 30) {
+      const fib = calcAutoFibonacci(chartData);
+      if (fib) {
+        const fibBars = chartData.filter(d => d.time >= fib.startTime);
+        if (fibBars.length >= 2) {
+          const keyLevels = fib.levels.filter(l => ["38.2%", "50%", "61.8%", "161.8%"].includes(l.label));
+          const colors = { "38.2%": "#ffeb3b", "50%": "#8bc34a", "61.8%": "#00bcd4", "161.8%": "#ff5722" };
+          for (const level of keyLevels) {
+            addLine(colors[level.label] || "#888", 0.8, fibBars.map(d => ({ time: d.time, value: level.price })));
+          }
+        }
       }
     }
   } catch (e) {
