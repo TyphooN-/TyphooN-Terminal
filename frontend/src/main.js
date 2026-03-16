@@ -3060,6 +3060,16 @@ function setupConnect() {
   populateAccountDropdown();
 
   // When saved account selected, fill form (async — loads from keychain)
+  // Update placeholders when broker changes
+  const brokerSel = document.getElementById("broker-select");
+  if (brokerSel) {
+    brokerSel.addEventListener("change", () => {
+      const isTasty = brokerSel.value === "tastytrade";
+      document.getElementById("api-key").placeholder = isTasty ? "Username / Email" : "API Key";
+      document.getElementById("secret-key").placeholder = isTasty ? "Password" : "Secret Key";
+    });
+  }
+
   document.getElementById("saved-accounts").addEventListener("change", (e) => {
     fillFormFromAccount(e.target.value);
   });
@@ -3091,6 +3101,7 @@ function setupConnect() {
 
   // Connect button
   document.getElementById("btn-connect").addEventListener("click", async () => {
+    const brokerType = document.getElementById("broker-select")?.value || "alpaca";
     const apiKey = document.getElementById("api-key").value.trim();
     const secretKey = document.getElementById("secret-key").value.trim();
     const accountType = document.getElementById("account-type").value;
@@ -3099,19 +3110,24 @@ function setupConnect() {
     const paper = accountType === "paper";
 
     if (!apiKey || !secretKey) {
-      status.textContent = "API Key and Secret Key are required";
+      status.textContent = brokerType === "tastytrade" ? "Username and Password required" : "API Key and Secret Key required";
       return;
     }
 
-    status.textContent = "Connecting...";
+    status.textContent = `Connecting to ${brokerType}...`;
     status.style.color = "#ff8";
 
     try {
-      const result = await invoke("connect", { apiKey, secretKey, paper });
+      let result;
+      if (brokerType === "tastytrade") {
+        result = await invoke("connect_tastytrade", { username: apiKey, password: secretKey, isSandbox: paper });
+      } else {
+        result = await invoke("connect", { apiKey, secretKey, paper });
+      }
       const acct = JSON.parse(result);
 
       // Set broker ID for per-broker data isolation
-      activeBrokerId = (accountName || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
+      activeBrokerId = `${brokerType}_${(accountName || "default").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 
       // Save credentials to OS keychain if requested
       if (saveCredentials && accountName) {

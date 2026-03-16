@@ -107,8 +107,8 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | MOST — Most active | ✅ Done | Alpaca screener most-actives + top movers endpoints |
 | **WEI — World equity indices** | 🔲 Deferred | Alpaca is US-only |
 | **FX — Currency matrix** | 🔲 Deferred | Needs forex data source |
-| **HMS — Historical market stats** | 🔲 Deferred | Needs FRED API key |
-| **AI chat** | 🔲 Deferred | Needs LLM API integration |
+| HMS — Historical market stats (FRED) | ✅ Done | Ctrl+K → FRED (user provides free API key) |
+| AI chat | ✅ Done | Ctrl+K → AI (Claude/GPT with market context) |
 | **Community chat** | 🔲 Deferred | Needs server infrastructure |
 
 ### Tier 4 — Advanced / Long-Term
