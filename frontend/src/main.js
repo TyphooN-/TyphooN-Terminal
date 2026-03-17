@@ -1738,7 +1738,17 @@ const MTF_MA_COLORS = {
   "1Week": "#FF00FF",  // Magenta
 };
 
-const MTF_LABELS = { "5Min": "M5", "10Min": "M10", "15Min": "M15", "20Min": "M20", "30Min": "M30", "40Min": "M40", "45Min": "M45", "50Min": "M50", "1Hour": "H1", "2Hour": "H2", "3Hour": "H3", "4Hour": "H4", "5Hour": "H5", "6Hour": "H6", "7Hour": "H7", "8Hour": "H8", "9Hour": "H9", "10Hour": "H10", "11Hour": "H11", "12Hour": "H12", "1Day": "D1", "1Week": "W1", "1Month": "MN1" };
+// Auto-generate TF labels for all supported timeframes
+const MTF_LABELS = (() => {
+  const m = {};
+  for (let i of [1,5,10,15,20,30,40,45,50,55]) m[`${i}Min`] = `M${i}`;
+  for (let i = 1; i <= 23; i++) m[`${i}Hour`] = `H${i}`;
+  for (let i = 1; i <= 13; i++) m[`${i}Day`] = `D${i}`;
+  for (let i = 1; i <= 3; i++) m[`${i}Week`] = `W${i}`;
+  for (let i = 1; i <= 11; i++) m[`${i}Month`] = `MN${i}`;
+  for (let i = 1; i <= 33; i++) m[`${i}Year`] = `Y${i}`;
+  return m;
+})();
 
 async function loadMTFData(symbol) {
   try {
@@ -2566,23 +2576,96 @@ function aggregateBars(bars, factor) {
 
 // Custom timeframe map: custom TF -> { base TF, aggregation factor }
 const CUSTOM_TIMEFRAME_MAP = {
+  // Minutes (base: 5Min or 15Min)
   "10Min":  { base: "5Min",  factor: 2 },
   "20Min":  { base: "5Min",  factor: 4 },
   "40Min":  { base: "5Min",  factor: 8 },
   "45Min":  { base: "15Min", factor: 3 },
   "50Min":  { base: "5Min",  factor: 10 },
+  "55Min":  { base: "5Min",  factor: 11 },
+  // Hours (base: 1Hour or 4Hour)
   "2Hour":  { base: "1Hour", factor: 2 },
   "3Hour":  { base: "1Hour", factor: 3 },
-  "6Hour":  { base: "1Hour", factor: 6 },
   "5Hour":  { base: "1Hour", factor: 5 },
+  "6Hour":  { base: "1Hour", factor: 6 },
   "7Hour":  { base: "1Hour", factor: 7 },
   "8Hour":  { base: "4Hour", factor: 2 },
   "9Hour":  { base: "1Hour", factor: 9 },
   "10Hour": { base: "1Hour", factor: 10 },
   "11Hour": { base: "1Hour", factor: 11 },
   "12Hour": { base: "4Hour", factor: 3 },
+  "13Hour": { base: "1Hour", factor: 13 },
+  "14Hour": { base: "1Hour", factor: 14 },
+  "15Hour": { base: "1Hour", factor: 15 },
+  "16Hour": { base: "4Hour", factor: 4 },
+  "17Hour": { base: "1Hour", factor: 17 },
+  "18Hour": { base: "1Hour", factor: 18 },
+  "19Hour": { base: "1Hour", factor: 19 },
+  "20Hour": { base: "4Hour", factor: 5 },
+  "21Hour": { base: "1Hour", factor: 21 },
+  "22Hour": { base: "1Hour", factor: 22 },
+  "23Hour": { base: "1Hour", factor: 23 },
+  // Days (base: 1Day)
   "2Day":   { base: "1Day",  factor: 2 },
   "3Day":   { base: "1Day",  factor: 3 },
+  "4Day":   { base: "1Day",  factor: 4 },
+  "5Day":   { base: "1Day",  factor: 5 },
+  "6Day":   { base: "1Day",  factor: 6 },
+  "7Day":   { base: "1Day",  factor: 7 },
+  "8Day":   { base: "1Day",  factor: 8 },
+  "9Day":   { base: "1Day",  factor: 9 },
+  "10Day":  { base: "1Day",  factor: 10 },
+  "11Day":  { base: "1Day",  factor: 11 },
+  "12Day":  { base: "1Day",  factor: 12 },
+  "13Day":  { base: "1Day",  factor: 13 },
+  // Weeks (base: 1Week)
+  "2Week":  { base: "1Week", factor: 2 },
+  "3Week":  { base: "1Week", factor: 3 },
+  // Months (base: 1Month)
+  "2Month": { base: "1Month", factor: 2 },
+  "3Month": { base: "1Month", factor: 3 },
+  "4Month": { base: "1Month", factor: 4 },
+  "5Month": { base: "1Month", factor: 5 },
+  "6Month": { base: "1Month", factor: 6 },
+  "7Month": { base: "1Month", factor: 7 },
+  "8Month": { base: "1Month", factor: 8 },
+  "9Month": { base: "1Month", factor: 9 },
+  "10Month": { base: "1Month", factor: 10 },
+  "11Month": { base: "1Month", factor: 11 },
+  // Years (base: 1Month aggregated)
+  "1Year":  { base: "1Month", factor: 12 },
+  "2Year":  { base: "1Month", factor: 24 },
+  "3Year":  { base: "1Month", factor: 36 },
+  "4Year":  { base: "1Month", factor: 48 },
+  "5Year":  { base: "1Month", factor: 60 },
+  "6Year":  { base: "1Month", factor: 72 },
+  "7Year":  { base: "1Month", factor: 84 },
+  "8Year":  { base: "1Month", factor: 96 },
+  "9Year":  { base: "1Month", factor: 108 },
+  "10Year": { base: "1Month", factor: 120 },
+  "11Year": { base: "1Month", factor: 132 },
+  "12Year": { base: "1Month", factor: 144 },
+  "13Year": { base: "1Month", factor: 156 },
+  "14Year": { base: "1Month", factor: 168 },
+  "15Year": { base: "1Month", factor: 180 },
+  "16Year": { base: "1Month", factor: 192 },
+  "17Year": { base: "1Month", factor: 204 },
+  "18Year": { base: "1Month", factor: 216 },
+  "19Year": { base: "1Month", factor: 228 },
+  "20Year": { base: "1Month", factor: 240 },
+  "21Year": { base: "1Month", factor: 252 },
+  "22Year": { base: "1Month", factor: 264 },
+  "23Year": { base: "1Month", factor: 276 },
+  "24Year": { base: "1Month", factor: 288 },
+  "25Year": { base: "1Month", factor: 300 },
+  "26Year": { base: "1Month", factor: 312 },
+  "27Year": { base: "1Month", factor: 324 },
+  "28Year": { base: "1Month", factor: 336 },
+  "29Year": { base: "1Month", factor: 348 },
+  "30Year": { base: "1Month", factor: 360 },
+  "31Year": { base: "1Month", factor: 372 },
+  "32Year": { base: "1Month", factor: 384 },
+  "33Year": { base: "1Month", factor: 396 },
 };
 
 // ── Renko Calculation ────────────────────────────────────────
@@ -8304,7 +8387,7 @@ async function openMTFGrid(symbol, timeframes) {
   gridContainer.className = `grid-${Math.min(count, 8)}`;
   chartStack.parentElement.insertBefore(gridContainer, chartStack);
 
-  const tfLabels = { "1Min": "M1", "5Min": "M5", "10Min": "M10", "15Min": "M15", "20Min": "M20", "30Min": "M30", "40Min": "M40", "45Min": "M45", "50Min": "M50", "1Hour": "H1", "2Hour": "H2", "3Hour": "H3", "4Hour": "H4", "5Hour": "H5", "6Hour": "H6", "7Hour": "H7", "8Hour": "H8", "9Hour": "H9", "10Hour": "H10", "11Hour": "H11", "12Hour": "H12", "1Day": "D1", "2Day": "2D", "3Day": "3D", "1Week": "W1", "1Month": "MN1" };
+  const tfLabels = MTF_LABELS; // Use shared auto-generated labels
 
   for (const tf of timeframes) {
     const cell = document.createElement("div");
