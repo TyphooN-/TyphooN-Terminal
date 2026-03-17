@@ -446,12 +446,27 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Orders request failed: {e}"))?;
 
-        let json: Vec<serde_json::Value> = resp
+        if !resp.status().is_success() {
+            let status_code = resp.status();
+            let _ = resp.text().await;
+            return Err(format!("Orders request failed: HTTP {status_code}"));
+        }
+
+        // Parse as generic Value first — handle both array and error responses
+        let json: serde_json::Value = resp
             .json()
             .await
             .map_err(|e| format!("Orders parse failed: {e}"))?;
 
-        Ok(json.iter().map(Self::parse_order_info).collect())
+        let orders = match json.as_array() {
+            Some(arr) => arr.iter().map(Self::parse_order_info).collect(),
+            None => {
+                // Alpaca might return an object with a message on error
+                tracing::warn!("Orders response was not an array: {}", json);
+                vec![]
+            }
+        };
+        Ok(orders)
     }
 
     /// Modify a pending order.
