@@ -172,6 +172,12 @@ function invoke(cmd, args) {
   });
 }
 
+/// Silent invoke — no log on success or failure. Used for optional/expected-fail calls.
+function invokeQuiet(cmd, args) {
+  if (!window.__TAURI__ || !window.__TAURI__.core) return Promise.reject("Tauri not loaded");
+  return window.__TAURI__.core.invoke(cmd, args);
+}
+
 // ── State ───────────────────────────────────────────────────
 
 let chart = null;
@@ -3575,15 +3581,24 @@ async function saveCredentials(accountName, apiKey, secretKey, accountType) {
 }
 
 async function loadCredentials(accountName) {
-  // Try OS keychain first
+  // Try OS keychain first (quiet — expected to fail for unmigrated accounts)
   try {
-    const json = await invoke("keychain_load", { accountName });
+    const json = await invokeQuiet("keychain_load", { accountName });
     return JSON.parse(json); // { apiKey, secretKey }
   } catch (_) {
     // Fallback: check localStorage for legacy entries with keys
     const accounts = loadSavedAccounts();
     const acct = accounts.find(a => a.name === accountName);
-    if (acct && acct.apiKey) return { apiKey: acct.apiKey, secretKey: acct.secretKey };
+    if (acct && acct.apiKey) {
+      // Auto-migrate legacy credentials to OS keychain
+      try {
+        await invokeQuiet("keychain_save", { accountName, apiKey: acct.apiKey, secretKey: acct.secretKey });
+        log(`Migrated "${accountName}" credentials to OS keychain`, "ok");
+        // Strip keys from localStorage (keep metadata only)
+        saveAccountMetadata(accounts);
+      } catch (_) {}
+      return { apiKey: acct.apiKey, secretKey: acct.secretKey };
+    }
     return null;
   }
 }
