@@ -2413,55 +2413,77 @@ async function idbPut(key, data, timestamp) {
 
 // ── Cold Cache (zstd via Rust) ──────────────────────────────
 
+/// Save to SQLite KV cache (replaces legacy coldSave/zstd files).
 async function coldSave(key, data) {
   try {
     const brokerKey = `${activeBrokerId}/${key}`;
-    await invoke("save_cold_cache", { key: brokerKey, data: JSON.stringify(data) });
+    await invokeQuiet("db_cache_put", { key: brokerKey, data: JSON.stringify(data), kind: "kv" });
   } catch (_) {}
 }
 
+/// Load from SQLite KV cache. Falls back to legacy zstd files for migration.
 async function coldLoad(key) {
+  const brokerKey = `${activeBrokerId}/${key}`;
+  // Try SQLite KV first (current format)
   try {
-    const brokerKey = `${activeBrokerId}/${key}`;
-    const json = await invoke("load_cold_cache", { key: brokerKey });
+    const json = await invokeQuiet("db_cache_get", { key: brokerKey, kind: "kv" });
     return JSON.parse(json);
-  } catch (_) {
-    // Fallback: try legacy key without broker prefix
-    try {
-      const json = await invoke("load_cold_cache", { key });
-      return JSON.parse(json);
-    } catch (_) {}
-    return null;
-  }
+  } catch (_) {}
+  // Fallback: try legacy zstd files and migrate to SQLite
+  try {
+    const json = await invokeQuiet("load_cold_cache", { key: brokerKey });
+    const data = JSON.parse(json);
+    // Auto-migrate to SQLite KV
+    await invokeQuiet("db_cache_put", { key: brokerKey, data: JSON.stringify(data), kind: "kv" });
+    return data;
+  } catch (_) {}
+  // Fallback: try legacy key without broker prefix
+  try {
+    const json = await invokeQuiet("load_cold_cache", { key });
+    const data = JSON.parse(json);
+    await invokeQuiet("db_cache_put", { key: brokerKey, data: JSON.stringify(data), kind: "kv" });
+    return data;
+  } catch (_) {}
+  return null;
 }
 
 // ── Unified Cache Operations ────────────────────────────────
 
-// Load from all tiers on startup: SQLite → IndexedDB → cold → hot
+// Load bar cache from SQLite on startup. Migrates legacy IndexedDB entries.
 async function loadBarCacheFromDisk() {
   try {
-    await openIndexedDB();
-    // Load from IndexedDB (warm) into hot cache
-    if (idb) {
-      const tx = idb.transaction("bars", "readonly");
-      const store = tx.objectStore("bars");
-      const req = store.getAll();
-      await new Promise((resolve) => {
-        req.onsuccess = () => {
-          for (const entry of req.result || []) {
-            if (entry.key && entry.data) {
-              barCache[entry.key] = { data: entry.data, timestamp: entry.timestamp || 0, lastAccess: Date.now() };
+    // Migrate legacy IndexedDB entries to SQLite
+    try {
+      await openIndexedDB();
+      if (idb) {
+        const tx = idb.transaction("bars", "readonly");
+        const store = tx.objectStore("bars");
+        const req = store.getAll();
+        await new Promise((resolve) => {
+          req.onsuccess = async () => {
+            let migrated = 0;
+            for (const entry of req.result || []) {
+              if (entry.key && entry.data) {
+                barCache[entry.key] = { data: entry.data, timestamp: entry.timestamp || 0, lastAccess: Date.now() };
+                // Migrate to SQLite
+                try {
+                  await invokeQuiet("db_cache_put", {
+                    key: `${activeBrokerId}:${entry.key}`,
+                    data: JSON.stringify(entry.data), kind: "bars",
+                  });
+                  migrated++;
+                } catch (_) {}
+              }
             }
-          }
-          resolve();
-        };
-        req.onerror = () => resolve();
-      });
-    }
-    const idbCount = Object.keys(barCache).length;
-    if (idbCount > 0) log(`Loaded ${idbCount} cached bar sets from IndexedDB`, "info");
+            if (migrated > 0) log(`Migrated ${migrated} bar sets from IndexedDB to SQLite`, "ok");
+            resolve();
+          };
+          req.onerror = () => resolve();
+        });
+      }
+    } catch (_) {}
 
-    // Try SQLite cache stats
+    // Show SQLite cache stats
     try {
       const stats = JSON.parse(await invoke("db_cache_stats"));
       log(`SQLite cache: ${stats.bar_entries} bar sets, ${stats.kv_entries} KV entries, ${stats.total_compressed_mb.toFixed(1)}MB compressed`, "info");
@@ -2473,20 +2495,17 @@ async function loadBarCacheFromDisk() {
   }
 }
 
-// Save to all tiers: hot → warm → cold (async, non-blocking)
+// Save bar data: hot (memory) + SQLite (binary+zstd, persistent).
+// IndexedDB and cold zstd files are legacy — reads still supported for migration.
 function saveBarCacheToDisk(cacheKey, data) {
   const ts = Date.now();
   barCache[cacheKey] = { data, timestamp: ts, lastAccess: ts };
   evictLRU();
-  // Warm (IndexedDB) — async, fire-and-forget
-  idbPut(cacheKey, data, ts);
-  // SQL (SQLite via Rust) — async, fire-and-forget
-  invoke("db_cache_put", { key: `${activeBrokerId}:${cacheKey}`, data: JSON.stringify(data), kind: "bars" }).catch(() => {});
-  // Cold (zstd file) — async, fire-and-forget (legacy)
-  coldSave(cacheKey, data);
+  // SQLite (binary packed + zstd compressed) — single persistent store
+  invokeQuiet("db_cache_put", { key: `${activeBrokerId}:${cacheKey}`, data: JSON.stringify(data), kind: "bars" }).catch(() => {});
 }
 
-// Migrate old localStorage cache to IndexedDB on first run
+// Migrate old localStorage bar cache to SQLite on first run
 async function migrateLocalStorageCache() {
   const BAR_CACHE_PREFIX = "typhoon_bars_";
   let migrated = 0;
@@ -2497,15 +2516,19 @@ async function migrateLocalStorageCache() {
         const stored = JSON.parse(localStorage.getItem(key));
         if (stored && stored.data) {
           const cacheKey = key.substring(BAR_CACHE_PREFIX.length);
-          await idbPut(cacheKey, stored.data, stored.timestamp || 0);
           barCache[cacheKey] = { data: stored.data, timestamp: stored.timestamp || 0 };
+          // Migrate directly to SQLite (skip IndexedDB)
+          await invokeQuiet("db_cache_put", {
+            key: `${activeBrokerId}:${cacheKey}`,
+            data: JSON.stringify(stored.data), kind: "bars",
+          }).catch(() => {});
           migrated++;
         }
         localStorage.removeItem(key); // clean up old format
       } catch (_) {}
     }
   }
-  if (migrated > 0) log(`Migrated ${migrated} cache entries from localStorage to IndexedDB`, "ok");
+  if (migrated > 0) log(`Migrated ${migrated} cache entries from localStorage to SQLite`, "ok");
 }
 
 // ── Load Queue (shows all symbols loading across tabs) ──────
@@ -3556,19 +3579,13 @@ function saveAccountMetadata(accounts) {
 }
 
 async function saveCredentials(accountName, apiKey, secretKey, accountType) {
-  // Save keys to OS keychain
+  // Save keys to OS keychain — no localStorage fallback (security)
   try {
     await invoke("keychain_save", { accountName, apiKey, secretKey });
     log(`Credentials saved to OS keychain for "${accountName}"`, "ok");
   } catch (e) {
-    log(`Keychain save failed (${e}), falling back to localStorage`, "warn");
-    // Fallback: save in localStorage (legacy behavior)
-    const accounts = loadSavedAccounts();
-    const existing = accounts.findIndex(a => a.name === accountName);
-    const entry = { name: accountName, apiKey, secretKey, type: accountType };
-    if (existing >= 0) accounts[existing] = entry;
-    else accounts.push(entry);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
+    log(`Keychain save failed: ${e}`, "error");
+    alert(`Failed to save credentials to OS keychain: ${e}\nEnsure gnome-keyring or KWallet is running.`);
     return;
   }
   // Save metadata (no keys) in localStorage
