@@ -3598,11 +3598,13 @@ async function saveCredentials(accountName, apiKey, secretKey, accountType) {
 }
 
 async function loadCredentials(accountName) {
-  // Try OS keychain first (quiet — expected to fail for unmigrated accounts)
+  // Try OS keychain first
   try {
     const json = await invokeQuiet("keychain_load", { accountName });
-    return JSON.parse(json); // { apiKey, secretKey }
-  } catch (_) {
+    const parsed = JSON.parse(json);
+    if (parsed && parsed.apiKey) return parsed;
+  } catch (e) {
+    log(`Keychain load for "${accountName}": ${e}`, "info");
     // Fallback: check localStorage for legacy entries with keys
     const accounts = loadSavedAccounts();
     const acct = accounts.find(a => a.name === accountName);
