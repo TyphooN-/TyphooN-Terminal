@@ -2401,17 +2401,7 @@ async function idbGet(key) {
   });
 }
 
-async function idbPut(key, data, timestamp) {
-  if (!idb) return;
-  return new Promise((resolve) => {
-    const tx = idb.transaction("bars", "readwrite");
-    tx.objectStore("bars").put({ key, data, timestamp });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
-}
-
-// ── Cold Cache (zstd via Rust) ──────────────────────────────
+// ── SQLite KV Cache (replaces legacy IndexedDB + cold zstd files) ────
 
 /// Save to SQLite KV cache (replaces legacy coldSave/zstd files).
 async function coldSave(key, data) {
@@ -7445,122 +7435,7 @@ async function refreshWatchlist(tableBody) {
 
 // ══════════════════════════════════════════════════════════════
 // FEATURE 5: Multi-chart layouts (Split View)
-// ══════════════════════════════════════════════════════════════
-
-let splitActive = false;
-let splitChart = null;
-let splitCandleSeries = null;
-let splitSymbol = "";
-let splitContainer = null;
-
-function activateSplit(symbol) {
-  if (splitActive) deactivateSplit();
-  const chartStack = document.getElementById("chart-stack");
-
-  // Create split container
-  splitContainer = document.createElement("div");
-  splitContainer.id = "split-chart-container";
-  chartStack.appendChild(splitContainer);
-  chartStack.classList.add("split-mode");
-
-  splitChart = createChart(splitContainer, {
-    width: splitContainer.clientWidth,
-    height: splitContainer.clientHeight,
-    layout: {
-      background: { color: "#000000" },
-      textColor: "#d1d4dc",
-      fontFamily: "Consolas, Courier New, monospace",
-      attributionLogo: false,
-    },
-    grid: {
-      vertLines: { color: "#333333", style: 3 },
-      horzLines: { color: "#333333", style: 3 },
-    },
-    crosshair: { mode: CrosshairMode.Normal },
-    rightPriceScale: { borderColor: "#333" },
-    timeScale: { borderColor: "#333", timeVisible: true },
-  });
-
-  splitCandleSeries = splitChart.addCandlestickSeries({
-    upColor: "#00ff00",
-    downColor: "#ff0000",
-    borderDownColor: "#ff0000",
-    borderUpColor: "#00ff00",
-    wickDownColor: "#ff0000",
-    wickUpColor: "#00ff00",
-  });
-
-  const ro = new ResizeObserver(() => {
-    if (splitChart && splitContainer) {
-      splitChart.resize(splitContainer.clientWidth, splitContainer.clientHeight);
-    }
-  });
-  ro.observe(splitContainer);
-
-  splitActive = true;
-  splitSymbol = symbol;
-
-  // Load data for split chart
-  loadSplitChart(symbol);
-  log(`Split view activated: ${symbol}`, "ok");
-}
-
-async function loadSplitChart(symbol) {
-  if (!splitChart || !splitCandleSeries) return;
-  try {
-    const tf = document.getElementById("timeframe-select").value;
-    const limit = parseInt(document.getElementById("bar-count").value) || 1000;
-    const cacheKey = getCacheKey(symbol, tf);
-    let bars;
-    const cached = barCache[cacheKey];
-    if (cached && cached.data) {
-      bars = cached.data;
-    } else {
-      const barsJson = await invoke("get_bars", { symbol, timeframe: tf, limit });
-      bars = JSON.parse(barsJson);
-    }
-    const chartData = bars.map(b => ({
-      time: Math.floor(new Date(b.timestamp).getTime() / 1000),
-      open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
-    }));
-    splitCandleSeries.setData(chartData);
-    splitChart.timeScale().fitContent();
-  } catch (e) {
-    log(`Split chart load failed: ${e}`, "error");
-  }
-}
-
-function deactivateSplit() {
-  if (!splitActive) return;
-  const chartStack = document.getElementById("chart-stack");
-  chartStack.classList.remove("split-mode");
-  if (splitChart) { splitChart.remove(); splitChart = null; splitCandleSeries = null; }
-  if (splitContainer) { splitContainer.remove(); splitContainer = null; }
-  splitActive = false;
-  splitSymbol = "";
-  // Resize main chart
-  const container = document.getElementById("chart-container");
-  chart.resize(container.clientWidth, container.clientHeight);
-  log("Split view deactivated", "info");
-}
-
-function setupSplitButton() {
-  const btn = document.getElementById("btn-split");
-  if (!btn) return;
-  btn.addEventListener("click", () => {
-    if (splitActive) {
-      deactivateSplit();
-      btn.textContent = "Split";
-      btn.style.color = "#8cf";
-    } else {
-      const sym = prompt("Symbol for split panel:", currentSymbol || "SPY");
-      if (!sym) return;
-      activateSplit(sym.toUpperCase());
-      btn.textContent = "Unsplit";
-      btn.style.color = "#f88";
-    }
-  });
-}
+// (Split view removed — MTF Grid covers all multi-chart layouts)
 
 // ══════════════════════════════════════════════════════════════
 // FEATURE 6: Chart Screenshot Export (Ctrl+Shift+S)
@@ -8350,7 +8225,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupTemplates();
   setupProfiles();
   setupCommandPalette();
-  setupSplitButton();
+  // setupSplitButton removed — MTF Grid covers all multi-chart layouts
   setupScreenshotShortcut();
   setupCustomPluginUI();
   setupChartContextMenu();
@@ -8419,7 +8294,7 @@ async function openMTFGrid(symbol, timeframes) {
   const gridContainer = document.createElement("div");
   gridContainer.id = "mtf-grid-container";
   const count = timeframes.length;
-  gridContainer.className = `grid-${Math.min(count, 5)}`;
+  gridContainer.className = `grid-${Math.min(count, 8)}`;
   chartStack.parentElement.insertBefore(gridContainer, chartStack);
 
   const tfLabels = { "1Min": "M1", "5Min": "M5", "10Min": "M10", "15Min": "M15", "20Min": "M20", "30Min": "M30", "45Min": "M45", "1Hour": "H1", "2Hour": "H2", "3Hour": "H3", "4Hour": "H4", "6Hour": "H6", "8Hour": "H8", "12Hour": "H12", "1Day": "D1", "2Day": "2D", "3Day": "3D", "1Week": "W1", "1Month": "MN1" };
@@ -10170,7 +10045,7 @@ function setupMenuBar() {
     "settings": () => cmdSettings(),
     // View
     "mtf-grid": () => document.getElementById("btn-mtf-grid").click(),
-    "split": () => document.getElementById("btn-split").click(),
+    // "split" removed — MTF Grid covers all multi-chart layouts
     "screenshot": () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "S", shiftKey: true, ctrlKey: true })); },
     "cmd-palette": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").focus(); },
     // Trading

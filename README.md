@@ -25,7 +25,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Chart Templates** | Save/load indicator configs and order mode |
 | **Workspace Profiles** | Save/load entire layout (tabs, indicators, pane sizes) |
 | **Drawing Tools** | Trend lines, Fibonacci, horizontal lines, rectangles, channels |
-| **Multi-Chart Layouts** | Split view + MTF grid (2-5 timeframes with Fisher/BetterVolume per cell) |
+| **Multi-Chart Layouts** | MTF grid (2-5 timeframes with full NNFX indicators per cell) |
 | **Screenshot Export** | Ctrl+Shift+S to clipboard with toast notification |
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
 | **CSV Export** | Export trade history as CSV |

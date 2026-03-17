@@ -57,7 +57,7 @@
       <div class="menu-item" data-menu="view">View
         <div class="menu-dropdown">
           <div class="menu-entry" data-action="mtf-grid">MTF Grid</div>
-          <div class="menu-entry" data-action="split">Split View</div>
+          <!-- Split View removed — MTF Grid covers all multi-chart layouts -->
           <div class="menu-entry" data-action="screenshot">Screenshot (Ctrl+Shift+S)</div>
           <div class="menu-separator"></div>
           <div class="menu-entry" data-action="cmd-palette">Command Palette (Ctrl+K)</div>
@@ -174,9 +174,12 @@
         <option value="10000">10K</option>
         <option value="50000" selected>Max</option>
       </select>
-      <button id="btn-split" style="background:#0f3460;border:1px solid #555;color:#8cf;font-size:10px;padding:3px 8px;cursor:pointer;font-family:inherit;">Split</button>
+      <!-- Split view removed — MTF Grid covers all multi-chart layouts -->
       <button id="btn-mtf-grid" style="background:#3a0f60;border:1px solid #555;color:#c8f;font-size:10px;padding:3px 8px;cursor:pointer;font-family:inherit;">MTF Grid</button>
       <span id="mtf-grid-tfs" class="hidden" style="font-size:10px;">
+        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="5Min" /> M5</label>
+        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="15Min" /> M15</label>
+        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="30Min" /> M30</label>
         <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Hour" /> H1</label>
         <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="4Hour" checked /> H4</label>
         <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Day" checked /> D1</label>

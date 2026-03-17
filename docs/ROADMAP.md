@@ -114,7 +114,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 |---|---|---|
 | Multi-broker support | ✅ Done | BrokerTrait with async methods, AlpacaBroker impl |
 | Push notifications (mobile) | ✅ Done | Pushover + ntfy.sh integration |
-| Multi-chart layouts | ✅ Done | Split view with independent symbols |
+| Multi-chart layouts | ✅ Done | MTF Grid view (2-5 TFs with full indicators per cell) |
 | Chart screenshot export | ✅ Done | Ctrl+Shift+S, copy to clipboard + toast |
 | Visual backtester | ✅ Done | Bar-by-bar replay with equity curve in floating window |
 | Genetic optimization | ✅ Done | Grid search over SMA periods, sortable results table |

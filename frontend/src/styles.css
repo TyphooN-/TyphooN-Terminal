@@ -989,6 +989,9 @@ select option {
 #mtf-grid-container.grid-3 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 #mtf-grid-container.grid-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 #mtf-grid-container.grid-5 { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#mtf-grid-container.grid-6 { grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#mtf-grid-container.grid-7 { grid-template-columns: 1fr 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
+#mtf-grid-container.grid-8 { grid-template-columns: 1fr 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; }
 
 .mtf-grid-cell {
   background: #000;
@@ -1035,32 +1038,6 @@ select option {
   top: 0; left: 0; right: 0; bottom: 0;
   z-index: 1500;
 }
-
-#chart-stack.split-mode {
-  flex-direction: row;
-}
-
-#chart-stack.split-mode #chart-container {
-  flex: 1;
-  min-width: 0;
-}
-
-#split-chart-container {
-  flex: 1;
-  background: #000000;
-  position: relative;
-  min-width: 0;
-  border-left: 2px solid #333;
-}
-
-.split-divider {
-  width: 4px;
-  background: #222;
-  cursor: ew-resize;
-  flex: none;
-}
-
-.split-divider:hover { background: #4caf50; }
 
 /* ── Watchlist / Quote Monitor ──────────────────────────── */
 
