@@ -144,26 +144,61 @@ fn is_valid_account_name(name: &str) -> bool {
         && !name.contains("..")
 }
 
-/// Derive a machine-specific AES-256 key from hostname + username + app salt.
-/// This ensures credentials are only decryptable on the same machine.
+/// Persistent salt file path — created once, reused forever.
+/// 32 random bytes stored in ~/.config/typhoon-terminal/.cred_salt
+fn get_or_create_salt() -> [u8; 32] {
+    use rand::RngCore;
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let salt_path = std::path::PathBuf::from(home)
+        .join(".config").join("typhoon-terminal").join(".cred_salt");
+
+    // Try to read existing salt
+    if let Ok(bytes) = std::fs::read(&salt_path) {
+        if bytes.len() == 32 {
+            let mut salt = [0u8; 32];
+            salt.copy_from_slice(&bytes);
+            return salt;
+        }
+    }
+
+    // Generate new random salt and persist it
+    let mut salt = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut salt);
+    std::fs::create_dir_all(salt_path.parent().unwrap()).ok();
+    std::fs::write(&salt_path, &salt).ok();
+    tracing::info!("Generated new credential encryption salt");
+    salt
+}
+
+/// Derive AES-256 key using PBKDF2-HMAC-SHA256 (100K iterations).
+/// Input: machine hostname + username + persistent random salt.
+/// 100K iterations makes brute-force attacks computationally expensive
+/// while adding <50ms to each encrypt/decrypt (imperceptible to user).
 fn derive_encryption_key() -> [u8; 32] {
-    use sha2::{Sha256, Digest};
     let hostname = std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("HOST"))
         .unwrap_or_else(|_| "typhoon".to_string());
     let username = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "default".to_string());
-    let mut hasher = Sha256::new();
-    hasher.update(b"TyphooN-Terminal-v1-");
-    hasher.update(hostname.as_bytes());
-    hasher.update(b"-");
-    hasher.update(username.as_bytes());
-    hasher.update(b"-credential-key");
-    hasher.finalize().into()
+    let salt = get_or_create_salt();
+
+    // Combine machine-specific info into password material
+    let password = format!("TyphooN-Terminal-v2-{hostname}-{username}-credential-key");
+
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(
+        password.as_bytes(),
+        &salt,
+        100_000, // 100K iterations — ~30ms on modern hardware
+        &mut key,
+    );
+    key
 }
 
 /// Encrypt plaintext with AES-256-GCM. Returns base64(nonce + ciphertext).
+/// Nonce: 12 random bytes (unique per encryption).
+/// Key: PBKDF2-HMAC-SHA256(hostname+username, random_salt, 100K iterations).
 fn encrypt_credential(plaintext: &str) -> Result<String, String> {
     use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
     use aes_gcm::Nonce;
@@ -177,7 +212,6 @@ fn encrypt_credential(plaintext: &str) -> Result<String, String> {
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
         .map_err(|e| format!("Encryption failed: {e}"))?;
-    // Prepend nonce to ciphertext
     let mut combined = nonce_bytes.to_vec();
     combined.extend(ciphertext);
     Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &combined))
