@@ -833,7 +833,19 @@ impl AlpacaBroker {
             format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
         };
 
-        // Go back far enough to cover requested bars
+        // Go back far enough to cover requested bars — scale lookback by limit
+        // to avoid fetching 10 years of data when only 5 bars are needed
+        let days_per_bar: i64 = match actual_tf {
+            "1Min" => 1,       // ~390 bars/day
+            "5Min" => 1,       // ~78 bars/day
+            "15Min" => 1,      // ~26 bars/day
+            "30Min" => 1,      // ~13 bars/day
+            "1Hour" => 1,      // ~7 bars/day
+            "4Hour" => 1,      // ~2 bars/day
+            "1Day" => 2,       // 1 bar/day (weekends need 2x)
+            "1Week" => 10,     // 1 bar/week
+            _ => 2,
+        };
         let max_lookback_days = match actual_tf {
             "1Min" => 7,
             "5Min" | "15Min" | "30Min" => 30,
@@ -843,7 +855,10 @@ impl AlpacaBroker {
             "1Week" => 7300,
             _ => 1825,
         };
-        let earliest_start = chrono::Utc::now() - chrono::Duration::days(max_lookback_days);
+        // For small requests, use a proportional lookback instead of max
+        let proportional_days = (actual_limit as i64 * days_per_bar).max(7);
+        let lookback_days = proportional_days.min(max_lookback_days);
+        let earliest_start = chrono::Utc::now() - chrono::Duration::days(lookback_days);
 
         let mut last_error = String::new();
 

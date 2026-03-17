@@ -2854,7 +2854,6 @@ async function updateDashboard() {
     checkMultiConditionAlerts();
     checkEquityProtection();
     checkDividendAlerts();
-    checkWatchlistSMA200Alerts();
     syncMTFGridLivePrice();
     updateRiskCalcPanel();
 
@@ -8155,6 +8154,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Auto-save session periodically and on shutdown
   setInterval(saveSession, 30000); // every 30s
+  setInterval(checkWatchlistSMA200Alerts, 300000); // every 5min
   window.addEventListener("beforeunload", saveSession);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") saveSession();
