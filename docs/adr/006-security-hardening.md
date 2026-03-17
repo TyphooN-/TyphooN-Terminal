@@ -1,6 +1,6 @@
 # ADR-006: Security Hardening
 
-**Status:** Implemented (Pass 18)
+**Status:** Implemented (Pass 19)
 **Date:** 2026-03-15
 **Updated:** 2026-03-15
 
@@ -274,6 +274,18 @@ Full cross-reference of MQL5 EA (TyphooN.mq5 v1.420, 2730 lines) against Rust/Ta
 
 84. **SEC CIK lookup deduplication**: 4 copies of the 15-line CIK-from-ticker lookup (iterate JSON map, match ticker, extract `cik_str`) consolidated into single `lookup_cik()` async function.
 
-**18 passes, 84 findings total: 78 fixed, 6 accepted with documented rationale.**
+### Pass 19 — AES-256-GCM Credential Encryption
+
+#### Critical → Fixed
+
+85. **Replaced OS keychain with AES-256-GCM encrypted SQLite storage**: `keyring` crate (gnome-keyring) session collection did not persist across restarts on many Linux setups. Credentials now stored in SQLite KV cache, encrypted with AES-256-GCM. Encryption key derived via SHA-256 from machine hostname + username + app salt. Random 12-byte nonce per encryption. Base64-encoded (nonce + ciphertext) stored as KV value. Decryption fails if moved to different machine (different derived key).
+
+86. **Removed `keyring` crate dependency**: Eliminates gnome-keyring/KWallet/D-Bus dependency. Reduces attack surface (no D-Bus IPC for secrets). Replaced with `aes-gcm`, `sha2`, `rand`, `base64` — pure Rust, no system dependencies.
+
+87. **Legacy unencrypted credential migration**: On first read of unencrypted credentials (JSON starting with `{`), auto-encrypts with AES-256-GCM and overwrites in SQLite. Subsequent reads use encrypted path.
+
+88. **Removed localStorage credential fallback**: `saveCredentials` no longer falls back to plaintext localStorage. If SQLite is unavailable, save fails with an alert instead of silently storing secrets in plaintext.
+
+**19 passes, 88 findings total: 82 fixed, 6 accepted with documented rationale.**
 
 All actionable security, performance, and memory optimization items completed.

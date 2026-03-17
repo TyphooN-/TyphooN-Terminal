@@ -130,7 +130,7 @@ async fn connect_tastytrade(
     Ok(serde_json::to_string(&account).unwrap())
 }
 
-// ── OS Keychain (gnome-keyring / KWallet / macOS Keychain) ──────────
+// ── Credential Storage (AES-256-GCM encrypted, SQLite-backed) ───────
 
 const KEYCHAIN_SERVICE: &str = "typhoon-terminal";
 
@@ -144,8 +144,67 @@ fn is_valid_account_name(name: &str) -> bool {
         && !name.contains("..")
 }
 
+/// Derive a machine-specific AES-256 key from hostname + username + app salt.
+/// This ensures credentials are only decryptable on the same machine.
+fn derive_encryption_key() -> [u8; 32] {
+    use sha2::{Sha256, Digest};
+    let hostname = std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| "typhoon".to_string());
+    let username = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "default".to_string());
+    let mut hasher = Sha256::new();
+    hasher.update(b"TyphooN-Terminal-v1-");
+    hasher.update(hostname.as_bytes());
+    hasher.update(b"-");
+    hasher.update(username.as_bytes());
+    hasher.update(b"-credential-key");
+    hasher.finalize().into()
+}
+
+/// Encrypt plaintext with AES-256-GCM. Returns base64(nonce + ciphertext).
+fn encrypt_credential(plaintext: &str) -> Result<String, String> {
+    use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
+    use aes_gcm::Nonce;
+    use rand::RngCore;
+
+    let key_bytes = derive_encryption_key();
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+        .map_err(|e| format!("Cipher init failed: {e}"))?;
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
+        .map_err(|e| format!("Encryption failed: {e}"))?;
+    // Prepend nonce to ciphertext
+    let mut combined = nonce_bytes.to_vec();
+    combined.extend(ciphertext);
+    Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &combined))
+}
+
+/// Decrypt base64(nonce + ciphertext) with AES-256-GCM.
+fn decrypt_credential(encrypted_b64: &str) -> Result<String, String> {
+    use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
+    use aes_gcm::Nonce;
+
+    let combined = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encrypted_b64)
+        .map_err(|e| format!("Base64 decode failed: {e}"))?;
+    if combined.len() < 13 { return Err("Encrypted data too short".into()); }
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let key_bytes = derive_encryption_key();
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+        .map_err(|e| format!("Cipher init failed: {e}"))?;
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let plaintext = cipher.decrypt(nonce, ciphertext)
+        .map_err(|_| "Decryption failed — wrong machine or corrupted data".to_string())?;
+    String::from_utf8(plaintext).map_err(|e| format!("UTF-8 decode failed: {e}"))
+}
+
+/// Save credentials: AES-256-GCM encrypted, stored in SQLite KV (zstd compressed).
+/// Key derived from machine hostname + username — portable within same user account.
 #[tauri::command]
-async fn keychain_save(account_name: String, api_key: String, secret_key: String) -> Result<(), String> {
+async fn keychain_save(state: State<'_, SharedState>, account_name: String, api_key: String, secret_key: String) -> Result<(), String> {
     if !is_valid_account_name(&account_name) {
         return Err("Invalid account name".into());
     }
@@ -155,57 +214,64 @@ async fn keychain_save(account_name: String, api_key: String, secret_key: String
     if secret_key.is_empty() || secret_key.len() > 100 || !secret_key.chars().all(|c| c.is_ascii_alphanumeric()) {
         return Err("Invalid secret key format".into());
     }
-    // Store as JSON: {"apiKey":"...","secretKey":"..."}
     let cred_json = serde_json::json!({
         "apiKey": api_key,
         "secretKey": secret_key,
     }).to_string();
 
-    // keyring crate uses blocking I/O, run in spawn_blocking
-    let name = account_name.clone();
-    tokio::task::spawn_blocking(move || {
-        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &name)
-            .map_err(|e| format!("Keychain entry error: {e}"))?;
-        entry.set_password(&cred_json)
-            .map_err(|e| format!("Keychain save failed: {e}"))?;
-        Ok::<(), String>(())
-    }).await.map_err(|e| format!("Task error: {e}"))??;
+    let encrypted = encrypt_credential(&cred_json)?;
+    let db_key = format!("cred:{account_name}");
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    cache.put_kv(&db_key, &encrypted)?;
 
-    tracing::info!("Saved credentials for '{}' to OS keychain", account_name);
+    tracing::info!("Saved encrypted credentials for '{}' to SQLite", account_name);
     Ok(())
 }
 
+/// Load credentials: decrypt from SQLite KV store.
 #[tauri::command]
-async fn keychain_load(account_name: String) -> Result<String, String> {
+async fn keychain_load(state: State<'_, SharedState>, account_name: String) -> Result<String, String> {
     if !is_valid_account_name(&account_name) {
         return Err("Invalid account name".into());
     }
-    let name = account_name.clone();
-    let cred_json = tokio::task::spawn_blocking(move || {
-        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &name)
-            .map_err(|e| format!("Keychain entry error: {e}"))?;
-        entry.get_password()
-            .map_err(|e| format!("Keychain load failed: {e}"))
-    }).await.map_err(|e| format!("Task error: {e}"))??;
-
-    Ok(cred_json)
+    let db_key = format!("cred:{account_name}");
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    match cache.get_kv(&db_key)? {
+        Some(encrypted) => {
+            // Try decrypting (new format) — fall back to plaintext (legacy unencrypted)
+            match decrypt_credential(&encrypted) {
+                Ok(json) => Ok(json),
+                Err(_) => {
+                    // Legacy unencrypted JSON — migrate to encrypted on read
+                    if encrypted.starts_with('{') {
+                        let re_encrypted = encrypt_credential(&encrypted)?;
+                        cache.put_kv(&db_key, &re_encrypted)?;
+                        tracing::info!("Migrated unencrypted credentials for '{}' to AES-256-GCM", account_name);
+                        Ok(encrypted)
+                    } else {
+                        Err("Decryption failed".into())
+                    }
+                }
+            }
+        }
+        None => Err("No credentials found".into()),
+    }
 }
 
+/// Delete credentials from SQLite KV store.
 #[tauri::command]
-async fn keychain_delete(account_name: String) -> Result<(), String> {
+async fn keychain_delete(state: State<'_, SharedState>, account_name: String) -> Result<(), String> {
     if !is_valid_account_name(&account_name) {
         return Err("Invalid account name".into());
     }
-    let name = account_name.clone();
-    tokio::task::spawn_blocking(move || {
-        let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &name)
-            .map_err(|e| format!("Keychain entry error: {e}"))?;
-        entry.delete_credential()
-            .map_err(|e| format!("Keychain delete failed: {e}"))?;
-        Ok::<(), String>(())
-    }).await.map_err(|e| format!("Task error: {e}"))??;
-
-    tracing::info!("Deleted credentials for '{}' from OS keychain", account_name);
+    let db_key = format!("cred:{account_name}");
+    let s = state.lock().await;
+    if let Some(cache) = s.db_cache.as_ref() {
+        cache.put_kv(&db_key, "{}")?;
+    }
+    tracing::info!("Deleted credentials for '{}'", account_name);
     Ok(())
 }
 

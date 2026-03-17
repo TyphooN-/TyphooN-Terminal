@@ -72,7 +72,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Multi-Broker Trait** | BrokerTrait abstraction for Alpaca + Tastytrade |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
-| **Security** | 18-pass audit (84 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize, async lock optimization |
+| **Security** | 19-pass audit (88 findings): AES-256-GCM credential encryption, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
 
 ---
 

@@ -20,8 +20,13 @@ zeroize = { version = "1", features = ["derive"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
 async-trait = "0.1"
-keyring = "3"
+# keyring removed — gnome-keyring session collection doesn't persist on all Linux setups.
+# Replaced with AES-256-GCM encrypted SQLite storage (aes-gcm + sha2 + rand).
 rusqlite = { version = "0.32", features = ["bundled"] }
+aes-gcm = "0.10"
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
