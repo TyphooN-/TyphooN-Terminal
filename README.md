@@ -70,7 +70,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Headless CLI** | `--backtest` mode: run strategies from command line, no GUI needed (VPS/SSH) |
 | **Community Chat** | Matrix protocol chat via Ctrl+K → CHAT, no server needed |
 | **Multi-Broker Trait** | BrokerTrait abstraction for Alpaca + Tastytrade |
-| **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
+| **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), AES-256-GCM encrypted credential storage |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
 | **Security** | 19-pass audit (88 findings): AES-256-GCM credential encryption, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
 

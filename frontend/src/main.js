@@ -3645,7 +3645,7 @@ function setupKeyboard() {
 const STORAGE_KEY = "typhoon_accounts";
 
 // localStorage stores ONLY { name, type } — no keys/secrets.
-// Actual credentials stored in OS keychain (gnome-keyring / KWallet / macOS Keychain).
+// Actual credentials stored in encrypted storage (AES-256-GCM encrypted SQLite).
 function loadSavedAccounts() {
   try {
     return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
@@ -3659,13 +3659,13 @@ function saveAccountMetadata(accounts) {
 }
 
 async function saveCredentials(accountName, apiKey, secretKey, accountType) {
-  // Save keys to OS keychain — no localStorage fallback (security)
+  // Save keys to encrypted storage — no localStorage fallback (security)
   try {
     await invoke("keychain_save", { accountName, apiKey, secretKey });
-    log(`Credentials saved to OS keychain for "${accountName}"`, "ok");
+    log(`Credentials saved to encrypted storage for "${accountName}"`, "ok");
   } catch (e) {
     log(`Keychain save failed: ${e}`, "error");
-    alert(`Failed to save credentials to OS keychain: ${e}\nEnsure gnome-keyring or KWallet is running.`);
+    alert(`Failed to save credentials to encrypted storage: ${e}\nSQLite cache may not be available.`);
     return;
   }
   // Save metadata (no keys) in localStorage
@@ -3678,7 +3678,7 @@ async function saveCredentials(accountName, apiKey, secretKey, accountType) {
 }
 
 async function loadCredentials(accountName) {
-  // Try OS keychain first
+  // Try encrypted storage first
   try {
     const json = await invokeQuiet("keychain_load", { accountName });
     const parsed = JSON.parse(json);
@@ -3689,10 +3689,10 @@ async function loadCredentials(accountName) {
     const accounts = loadSavedAccounts();
     const acct = accounts.find(a => a.name === accountName);
     if (acct && acct.apiKey) {
-      // Auto-migrate legacy credentials to OS keychain
+      // Auto-migrate legacy credentials to encrypted storage
       try {
         await invokeQuiet("keychain_save", { accountName, apiKey: acct.apiKey, secretKey: acct.secretKey });
-        log(`Migrated "${accountName}" credentials to OS keychain`, "ok");
+        log(`Migrated "${accountName}" credentials to encrypted storage`, "ok");
         // Strip keys from localStorage (keep metadata only)
         saveAccountMetadata(accounts);
       } catch (_) {}
@@ -3824,7 +3824,7 @@ function setupConnect() {
       // Set broker ID for per-broker data isolation
       activeBrokerId = `${brokerType}_${(accountName || "default").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 
-      // Save credentials to OS keychain if requested
+      // Save credentials to encrypted storage if requested
       if (shouldSaveCreds && accountName) {
         await saveCredentials(accountName, apiKey, secretKey, accountType);
         populateAccountDropdown();
@@ -3856,7 +3856,7 @@ function setupConnect() {
     if (e.key === "Enter") document.getElementById("btn-connect").click();
   });
 
-  // Auto-connect if saved account exists (load keys from OS keychain)
+  // Auto-connect if saved account exists (load keys from encrypted storage)
   const accounts = loadSavedAccounts();
   if (accounts.length >= 1) {
     const acctMeta = accounts[0];
@@ -8575,9 +8575,12 @@ async function openMTFGrid(symbol, timeframes) {
 
 async function loadMTFCellData(cellInfo, symbol) {
   try {
-    // MTF grid uses smaller limit to avoid rate limit hammering
-    const limit = 1000;
-    const cacheKey = getCacheKey(symbol, cellInfo.tf);
+    // Resolve custom timeframes (H12 → 4Hour × 3, etc.)
+    const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
+    const fetchTF = customTF ? customTF.base : cellInfo.tf;
+    const aggFactor = customTF ? customTF.factor : 1;
+    const limit = aggFactor > 1 ? 1000 * aggFactor : 1000;
+    const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
 
     // Prefer cache — background pre-fetch should have all TFs cached
@@ -8586,16 +8589,21 @@ async function loadMTFCellData(cellInfo, symbol) {
       bars = cached.data;
       log(`MTF grid ${cellInfo.tf}: ${bars.length} bars from cache`, "info");
     } else {
-      log(`MTF grid ${cellInfo.tf}: fetching (not cached)...`, "info");
-      const barsJson = await invoke("get_bars", { symbol, timeframe: cellInfo.tf, limit });
+      log(`MTF grid ${cellInfo.tf}: fetching ${fetchTF} (not cached)...`, "info");
+      const barsJson = await invoke("get_bars", { symbol, timeframe: fetchTF, limit });
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
     }
 
-    const chartData = bars.map(b => ({
+    let chartData = bars.map(b => ({
       time: Math.floor(new Date(b.timestamp).getTime() / 1000),
       open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
     }));
+
+    // Aggregate if custom timeframe
+    if (aggFactor > 1) {
+      chartData = aggregateBars(chartData, aggFactor);
+    }
 
     if (chartData.length === 0) return;
 
