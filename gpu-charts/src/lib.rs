@@ -100,6 +100,17 @@ void main() { frag_color = u_grid_color; }
 // CHART ENGINE
 // ══════════════════════════════════════════════════════════════
 
+/// Chart rendering mode.
+#[wasm_bindgen]
+#[derive(Clone, Copy, PartialEq)]
+pub enum ChartType {
+    Candles = 0,
+    HeikinAshi = 1,
+    Line = 2,
+    Bars = 3,     // OHLC bars
+    Renko = 4,
+}
+
 #[wasm_bindgen]
 pub struct GpuChart {
     gl: GL,
@@ -122,13 +133,18 @@ pub struct GpuChart {
     // Buffers
     candle_vbo: WebGlBuffer,
     candle_vertex_count: i32,
+    // Line chart buffer (separate from candle VBO)
+    line_chart_vbo: WebGlBuffer,
+    line_chart_count: i32,
+    // Chart type
+    chart_type: ChartType,
     // View state
     min_price: f64,
     max_price: f64,
     visible_start: f64,
     visible_end: f64,
     total_bars: usize,
-    // Bar data (kept for interaction)
+    // Bar data (kept for interaction + Heikin-Ashi/Renko computation)
     bar_opens: Vec<f32>,
     bar_highs: Vec<f32>,
     bar_lows: Vec<f32>,
@@ -173,6 +189,7 @@ impl GpuChart {
         let grid_color = gl.get_uniform_location(&grid_program, "u_grid_color").unwrap();
 
         let candle_vbo = gl.create_buffer().ok_or("Failed to create buffer")?;
+        let line_chart_vbo = gl.create_buffer().ok_or("Failed to create line chart buffer")?;
         let grid_vbo = gl.create_buffer().ok_or("Failed to create grid buffer")?;
 
         // Dark background
@@ -188,6 +205,8 @@ impl GpuChart {
             line_price_range, line_time_range, line_color,
             grid_color,
             candle_vbo, candle_vertex_count: 0,
+            line_chart_vbo, line_chart_count: 0,
+            chart_type: ChartType::Candles,
             min_price: 0.0, max_price: 100.0,
             visible_start: 0.0, visible_end: 100.0,
             total_bars: 0,
@@ -229,8 +248,17 @@ impl GpuChart {
         self.visible_start = if n > 100 { (n - 100) as f64 } else { 0.0 };
         self.visible_end = n as f64 + 2.0;
 
-        self.build_candle_geometry();
+        self.rebuild_geometry();
         self.build_grid_geometry();
+    }
+
+    /// Set chart type: Candles, HeikinAshi, Line, Bars, Renko.
+    #[wasm_bindgen]
+    pub fn set_chart_type(&mut self, ct: ChartType) {
+        self.chart_type = ct;
+        if self.total_bars > 0 {
+            self.rebuild_geometry();
+        }
     }
 
     /// Set visible range (bar indices).
@@ -330,13 +358,13 @@ impl GpuChart {
         self.gl.viewport(0, 0, w, h);
         self.gl.clear(GL::COLOR_BUFFER_BIT);
 
-        // Draw grid
         self.render_grid();
 
-        // Draw candlesticks
-        self.render_candles(w, h);
+        match self.chart_type {
+            ChartType::Line => self.render_line_chart(),
+            _ => self.render_candles(w, h), // Candles, HeikinAshi, Bars, Renko all use candle geometry
+        }
 
-        // Draw indicator lines
         self.render_lines();
     }
 
@@ -363,6 +391,194 @@ impl GpuChart {
 // ── Internal methods ────────────────────────────────────────────
 
 impl GpuChart {
+    /// Rebuild geometry for the current chart type.
+    fn rebuild_geometry(&mut self) {
+        match self.chart_type {
+            ChartType::Candles => self.build_candle_geometry(),
+            ChartType::HeikinAshi => self.build_heikin_ashi_geometry(),
+            ChartType::Line => self.build_line_chart_geometry(),
+            ChartType::Bars => self.build_ohlc_bars_geometry(),
+            ChartType::Renko => self.build_renko_geometry(),
+        }
+    }
+
+    /// Render line chart (simple close-price line).
+    fn render_line_chart(&self) {
+        if self.line_chart_count < 2 { return; }
+        self.gl.use_program(Some(&self.line_program));
+        self.gl.uniform2f(Some(&self.line_price_range), self.min_price as f32, self.max_price as f32);
+        self.gl.uniform2f(Some(&self.line_time_range), self.visible_start as f32, self.visible_end as f32);
+        self.gl.uniform4f(Some(&self.line_color), 0.30, 0.69, 0.31, 1.0); // green line
+        self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&self.line_chart_vbo));
+        self.gl.enable_vertex_attrib_array(0);
+        self.gl.vertex_attrib_pointer_with_i32(0, 2, GL::FLOAT, false, 0, 0);
+        self.gl.draw_arrays(GL::LINE_STRIP, 0, self.line_chart_count);
+    }
+
+    /// Build line chart geometry (close prices as LINE_STRIP).
+    fn build_line_chart_geometry(&mut self) {
+        let n = self.total_bars;
+        let mut vertices: Vec<f32> = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            vertices.push(i as f32);
+            vertices.push(self.bar_closes[i]);
+        }
+        self.line_chart_count = n as i32;
+        self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&self.line_chart_vbo));
+        unsafe {
+            let buf = js_sys::Float32Array::view(&vertices);
+            self.gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &buf, GL::STATIC_DRAW);
+        }
+    }
+
+    /// Build Heikin-Ashi geometry — smoothed candles.
+    /// HA Close = (O+H+L+C)/4, HA Open = (prev_HA_O + prev_HA_C)/2
+    /// HA High = max(H, HA_O, HA_C), HA Low = min(L, HA_O, HA_C)
+    fn build_heikin_ashi_geometry(&mut self) {
+        let n = self.total_bars;
+        if n == 0 { return; }
+        let mut ha_o = Vec::with_capacity(n);
+        let mut ha_h = Vec::with_capacity(n);
+        let mut ha_l = Vec::with_capacity(n);
+        let mut ha_c = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let c = (self.bar_opens[i] + self.bar_highs[i] + self.bar_lows[i] + self.bar_closes[i]) / 4.0;
+            let o = if i == 0 {
+                (self.bar_opens[0] + self.bar_closes[0]) / 2.0
+            } else {
+                (ha_o[i - 1] + ha_c[i - 1]) / 2.0
+            };
+            let h = self.bar_highs[i].max(o).max(c);
+            let l = self.bar_lows[i].min(o).min(c);
+            ha_o.push(o);
+            ha_h.push(h);
+            ha_l.push(l);
+            ha_c.push(c);
+        }
+
+        // Build geometry using HA values (same structure as regular candles)
+        let mut vertices: Vec<f32> = Vec::with_capacity(n * 10 * 3);
+        for i in 0..n {
+            let x = i as f32;
+            let o = ha_o[i];
+            let h = ha_h[i];
+            let l = ha_l[i];
+            let c = ha_c[i];
+            let bullish = if c >= o { 1.0f32 } else { 0.0 };
+            let body_top = o.max(c);
+            let body_bot = o.min(c);
+            let hw = 0.35;
+            vertices.extend_from_slice(&[x - hw, body_top, bullish, x + hw, body_top, bullish, x + hw, body_bot, bullish]);
+            vertices.extend_from_slice(&[x - hw, body_top, bullish, x + hw, body_bot, bullish, x - hw, body_bot, bullish]);
+            vertices.extend_from_slice(&[x, body_top, 0.5, x, h, 0.5]);
+            vertices.extend_from_slice(&[x, body_bot, 0.5, x, l, 0.5]);
+        }
+        self.candle_vertex_count = (n * 10) as i32;
+        self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&self.candle_vbo));
+        unsafe {
+            let buf = js_sys::Float32Array::view(&vertices);
+            self.gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &buf, GL::STATIC_DRAW);
+        }
+    }
+
+    /// Build OHLC bars geometry — vertical line (H-L) + left tick (O) + right tick (C).
+    fn build_ohlc_bars_geometry(&mut self) {
+        let n = self.total_bars;
+        // Each bar: 6 vertices (3 lines × 2 vertices each)
+        let mut vertices: Vec<f32> = Vec::with_capacity(n * 6 * 3);
+        for i in 0..n {
+            let x = i as f32;
+            let o = self.bar_opens[i];
+            let h = self.bar_highs[i];
+            let l = self.bar_lows[i];
+            let c = self.bar_closes[i];
+            let bullish = if c >= o { 1.0f32 } else { 0.0 };
+            let hw = 0.3;
+            // Vertical line: high to low
+            vertices.extend_from_slice(&[x, h, bullish, x, l, bullish]);
+            // Left tick: open
+            vertices.extend_from_slice(&[x - hw, o, bullish, x, o, bullish]);
+            // Right tick: close
+            vertices.extend_from_slice(&[x, c, bullish, x + hw, c, bullish]);
+        }
+        self.candle_vertex_count = (n * 6) as i32;
+        self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&self.candle_vbo));
+        unsafe {
+            let buf = js_sys::Float32Array::view(&vertices);
+            self.gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &buf, GL::STATIC_DRAW);
+        }
+    }
+
+    /// Build Renko geometry — fixed-size bricks based on ATR.
+    fn build_renko_geometry(&mut self) {
+        let n = self.total_bars;
+        if n < 15 { return; }
+        // Calculate ATR(14) for brick size
+        let period = 14;
+        let mut trs = Vec::with_capacity(n);
+        for i in 1..n {
+            let tr = (self.bar_highs[i] - self.bar_lows[i])
+                .max((self.bar_highs[i] - self.bar_closes[i - 1]).abs())
+                .max((self.bar_lows[i] - self.bar_closes[i - 1]).abs());
+            trs.push(tr);
+        }
+        let mut atr = trs[..period.min(trs.len())].iter().sum::<f32>() / period as f32;
+        for i in period..trs.len() {
+            atr = (atr * (period as f32 - 1.0) + trs[i]) / period as f32;
+        }
+        let brick_size = atr;
+        if brick_size <= 0.0 { return; }
+
+        // Generate bricks
+        struct Brick { x: f32, top: f32, bot: f32, bull: bool }
+        let mut bricks: Vec<Brick> = Vec::new();
+        let mut base = self.bar_closes[0];
+        let mut brick_x = 0.0f32;
+        for i in 1..n {
+            let price = self.bar_closes[i];
+            while price >= base + brick_size {
+                bricks.push(Brick { x: brick_x, top: base + brick_size, bot: base, bull: true });
+                base += brick_size;
+                brick_x += 1.0;
+            }
+            while price <= base - brick_size {
+                bricks.push(Brick { x: brick_x, top: base, bot: base - brick_size, bull: false });
+                base -= brick_size;
+                brick_x += 1.0;
+            }
+        }
+
+        self.total_bars = bricks.len();
+        if bricks.is_empty() { self.candle_vertex_count = 0; return; }
+
+        // Update price range for renko
+        let mut min_p = f32::MAX;
+        let mut max_p = f32::MIN;
+        for b in &bricks { min_p = min_p.min(b.bot); max_p = max_p.max(b.top); }
+        let padding = (max_p - min_p) * 0.05;
+        self.min_price = (min_p - padding) as f64;
+        self.max_price = (max_p + padding) as f64;
+        self.visible_start = if bricks.len() > 100 { (bricks.len() - 100) as f64 } else { 0.0 };
+        self.visible_end = bricks.len() as f64 + 2.0;
+
+        // Build box geometry (no wicks for Renko)
+        let mut vertices: Vec<f32> = Vec::with_capacity(bricks.len() * 6 * 3);
+        for b in &bricks {
+            let bullish = if b.bull { 1.0f32 } else { 0.0 };
+            let hw = 0.4;
+            vertices.extend_from_slice(&[b.x - hw, b.top, bullish, b.x + hw, b.top, bullish, b.x + hw, b.bot, bullish]);
+            vertices.extend_from_slice(&[b.x - hw, b.top, bullish, b.x + hw, b.bot, bullish, b.x - hw, b.bot, bullish]);
+        }
+        self.candle_vertex_count = (bricks.len() * 6) as i32;
+        self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&self.candle_vbo));
+        unsafe {
+            let buf = js_sys::Float32Array::view(&vertices);
+            self.gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &buf, GL::STATIC_DRAW);
+        }
+    }
+
+    /// Build standard candlestick geometry.
     fn build_candle_geometry(&mut self) {
         let n = self.total_bars;
         // Each candle: 6 vertices for body (2 triangles) + 4 vertices for wicks (2 lines)
@@ -451,30 +667,34 @@ impl GpuChart {
         self.gl.uniform2f(Some(&self.candle_price_range), self.min_price as f32, self.max_price as f32);
         self.gl.uniform2f(Some(&self.candle_time_range), self.visible_start as f32, self.visible_end as f32);
         self.gl.uniform1f(Some(&self.candle_width), 0.7);
-
-        // Colors: green bullish, red bearish, gray wicks
-        self.gl.uniform3f(Some(&self.candle_bull_color), 0.30, 0.69, 0.31); // #4caf50
-        self.gl.uniform3f(Some(&self.candle_bear_color), 0.96, 0.26, 0.21); // #f44336
+        self.gl.uniform3f(Some(&self.candle_bull_color), 0.30, 0.69, 0.31);
+        self.gl.uniform3f(Some(&self.candle_bear_color), 0.96, 0.26, 0.21);
         self.gl.uniform3f(Some(&self.candle_wick_color), 0.6, 0.6, 0.6);
 
         self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&self.candle_vbo));
-
-        // Position: vec2 at offset 0
         self.gl.enable_vertex_attrib_array(0);
         self.gl.vertex_attrib_pointer_with_i32(0, 2, GL::FLOAT, false, 12, 0);
-
-        // Color flag: float at offset 8
         self.gl.enable_vertex_attrib_array(1);
         self.gl.vertex_attrib_pointer_with_i32(1, 1, GL::FLOAT, false, 12, 8);
 
-        // Draw bodies (triangles) — first 6 vertices per candle
-        let body_count = (self.total_bars * 6) as i32;
-        self.gl.draw_arrays(GL::TRIANGLES, 0, body_count);
-
-        // Draw wicks (lines) — next 4 vertices per candle
-        for i in 0..self.total_bars {
-            let offset = (i * 10 + 6) as i32;
-            self.gl.draw_arrays(GL::LINES, offset, 4);
+        match self.chart_type {
+            ChartType::Bars => {
+                // OHLC bars: all lines (3 lines × 2 vertices = 6 per bar)
+                self.gl.draw_arrays(GL::LINES, 0, self.candle_vertex_count);
+            }
+            ChartType::Renko => {
+                // Renko: triangles only (6 per brick, no wicks)
+                self.gl.draw_arrays(GL::TRIANGLES, 0, self.candle_vertex_count);
+            }
+            _ => {
+                // Candles / Heikin-Ashi: triangles (body) + lines (wicks)
+                let body_count = (self.total_bars * 6) as i32;
+                self.gl.draw_arrays(GL::TRIANGLES, 0, body_count);
+                for i in 0..self.total_bars {
+                    let offset = (i * 10 + 6) as i32;
+                    self.gl.draw_arrays(GL::LINES, offset, 4);
+                }
+            }
         }
     }
 

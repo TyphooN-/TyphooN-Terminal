@@ -1,5 +1,17 @@
 /* @ts-self-types="./typhoon_gpu_charts.d.ts" */
 
+/**
+ * Chart rendering mode.
+ * @enum {0 | 1 | 2 | 3 | 4}
+ */
+export const ChartType = Object.freeze({
+    Candles: 0, "0": "Candles",
+    HeikinAshi: 1, "1": "HeikinAshi",
+    Line: 2, "2": "Line",
+    Bars: 3, "3": "Bars",
+    Renko: 4, "4": "Renko",
+});
+
 export class GpuChart {
     __destroy_into_raw() {
         const ptr = this.__wbg_ptr;
@@ -91,6 +103,13 @@ export class GpuChart {
      */
     scroll(delta) {
         wasm.gpuchart_scroll(this.__wbg_ptr, delta);
+    }
+    /**
+     * Set chart type: Candles, HeikinAshi, Line, Bars, Renko.
+     * @param {ChartType} ct
+     */
+    set_chart_type(ct) {
+        wasm.gpuchart_set_chart_type(this.__wbg_ptr, ct);
     }
     /**
      * Load OHLCV bar data (flat f64 array: [O,H,L,C,V, O,H,L,C,V, ...]).

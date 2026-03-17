@@ -50,23 +50,33 @@ async function loadGpuChart() {
   }
 }
 
-function activateGpuChart(chartData) {
+// Map frontend chart type names to GPU ChartType enum values
+const GPU_CHART_TYPES = {
+  "gpu": 0,           // Candles (default GPU)
+  "gpu-heikin": 1,    // Heikin-Ashi
+  "gpu-line": 2,      // Line
+  "gpu-bars": 3,      // OHLC Bars
+  "gpu-renko": 4,     // Renko
+};
+
+function activateGpuChart(chartData, gpuType) {
   const canvas = document.getElementById("gpu-chart-canvas");
   const container = document.getElementById("chart-container");
   if (!canvas || !container || !gpuChartModule) return;
 
-  // Show GPU canvas, hide lightweight-charts
   canvas.style.display = "block";
   canvas.width = container.clientWidth;
   canvas.height = container.clientHeight;
 
-  // Create or reuse GPU chart instance
   if (!gpuChartInstance) {
     gpuChartInstance = new gpuChartModule.GpuChart("gpu-chart-canvas");
   }
   gpuChartInstance.resize(canvas.width, canvas.height);
 
-  // Load data
+  // Set chart type before loading data
+  const typeId = GPU_CHART_TYPES[gpuType] ?? 0;
+  gpuChartInstance.set_chart_type(typeId);
+
   const flat = packBarsForWasm(chartData);
   gpuChartInstance.set_data(flat);
 
@@ -607,12 +617,12 @@ function rebuildMainSeries(chartType) {
       if (renkoBricks.length > 0) {
         candleSeries.setData(renkoBricks);
       }
-    } else if (chartType === "gpu") {
-      // GPU chart: use WebGL2 renderer
+    } else if (chartType.startsWith("gpu")) {
+      // GPU chart: use WebGL2 renderer (all chart types)
       deactivateGpuChart();
       loadGpuChart().then(() => {
         if (gpuChartModule && currentChartData.length > 0) {
-          activateGpuChart(currentChartData);
+          activateGpuChart(currentChartData, chartType);
         }
       });
     } else {
@@ -621,7 +631,7 @@ function rebuildMainSeries(chartType) {
   }
 
   // Deactivate GPU chart if switching away from it
-  if (chartType !== "gpu") deactivateGpuChart();
+  if (!chartType.startsWith("gpu")) deactivateGpuChart();
 
   // Restore SL/TP lines
   if (slPrice) createSLLine(slPrice);
