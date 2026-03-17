@@ -127,7 +127,11 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Right-click context menu | ✅ Done | Draw, alert, copy price from chart |
 | Pending order visualization | ✅ Done | Open orders as colored lines on chart |
 | **Options flow analysis** | 🔲 Blocked | Needs paid data source (FlowAlgo, Unusual Whales) |
+| **Wasm indicator engine** | ✅ Done | 32KB Wasm binary — SMA/EMA/KAMA/RSI/Fisher/ATR/MACD/Bollinger + grid optimizer |
+| **Binary bar storage** | ✅ Done | Packed f64 format (48 bytes/bar) + zstd — 3-5x smaller than JSON |
+| **Headless CLI backtest** | ✅ Done | `--backtest` flag — run strategies from command line, no GUI |
 | **Plugin marketplace** | 🔲 Blocked | Needs distribution infrastructure |
+| **GPU chart rendering (wgpu)** | 🔲 Planned | WebGPU/Vulkan/Metal — 1M+ candles at 60fps |
 | **Pure Rust GUI migration** | 🔲 Blocked | Egui/Iced — long-term architectural goal |
 
 | Data Window | ✅ Done | Fixed panel: OHLCV + all indicator values at cursor |

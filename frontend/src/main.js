@@ -3,11 +3,44 @@
  *
  * Lightweight-charts candlestick rendering with draggable SL/TP lines.
  * Communicates with Rust backend via Tauri invoke().
+ * Wasm indicator engine for high-performance optimization (32KB).
  *
  * Matches TyphooN EA workflow:
  * 1. Drag SL/TP lines to desired levels
  * 2. Click "Open Trade" — system calculates lots and places order
  */
+
+// ── Wasm Indicator Engine (lazy-loaded, 32KB) ───────────────
+let wasmReady = false;
+let wasmModule = null;
+
+async function loadWasm() {
+  if (wasmReady) return wasmModule;
+  try {
+    const mod = await import("./wasm_indicators.js");
+    await mod.default(); // init wasm
+    wasmModule = mod;
+    wasmReady = true;
+    console.log("Wasm indicator engine loaded (32KB)");
+    return mod;
+  } catch (e) {
+    console.warn("Wasm load failed, falling back to JS:", e);
+    return null;
+  }
+}
+
+/// Pack chart bars into flat f64 array for Wasm interop.
+function packBarsForWasm(bars) {
+  const flat = new Float64Array(bars.length * 5);
+  for (let i = 0; i < bars.length; i++) {
+    flat[i * 5] = bars[i].open;
+    flat[i * 5 + 1] = bars[i].high;
+    flat[i * 5 + 2] = bars[i].low;
+    flat[i * 5 + 3] = bars[i].close;
+    flat[i * 5 + 4] = bars[i].volume || 0;
+  }
+  return flat;
+}
 
 import { createChart, CrosshairMode } from "lightweight-charts";
 import { createWindow, openArticleWindow, openFundamentalsWindow, openFilingsWindow, tileWindows, closeAllWindows } from "./windows.js";
@@ -6899,22 +6932,56 @@ function openOptimizer() {
     resultsDiv.textContent = "Running optimization...";
     resultsDiv.style.color = "#888";
 
+    const optSymbol = symInp.value.trim().toUpperCase() || sym;
+    const fastMin = parseInt(fMin.inp.value) || 5;
+    const fastMax = parseInt(fMax.inp.value) || 50;
+    const slowMin = parseInt(sMin.inp.value) || 20;
+    const slowMax = parseInt(sMax.inp.value) || 200;
+
     try {
-      const json = await invoke("run_optimization", {
-        symbol: symInp.value.trim().toUpperCase() || sym,
-        timeframe: tf,
-        fast_min: parseInt(fMin.inp.value) || 5,
-        fast_max: parseInt(fMax.inp.value) || 50,
-        slow_min: parseInt(sMin.inp.value) || 20,
-        slow_max: parseInt(sMax.inp.value) || 200,
-      });
-      const result = typeof json === "string" ? JSON.parse(json) : json;
-      lastResults = Array.isArray(result) ? result : (result.results || []);
-      sortCol = "pnl";
-      sortAsc = false;
-      const sorted = [...lastResults].sort((a, b) => (b.pnl ?? 0) - (a.pnl ?? 0));
-      resultsDiv.style.color = "";
-      renderOptResults(sorted);
+      // Try Wasm-accelerated optimization first (50-100x faster)
+      const wasm = await loadWasm();
+      const cacheKey = getCacheKey(optSymbol, tf);
+      const cached = barCache[cacheKey];
+
+      if (wasm && cached && cached.data && cached.data.length > 0) {
+        const t0 = performance.now();
+        const chartData = cached.data.map(b => ({
+          open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0,
+        }));
+        const flat = packBarsForWasm(chartData);
+        const raw = wasm.wasm_optimize_sma(flat, fastMin, fastMax, slowMin, slowMax, 100000, 50);
+        // Unpack: 6 values per result [fast, slow, pnl, win_rate, pf, trades]
+        lastResults = [];
+        for (let i = 0; i < raw.length; i += 6) {
+          lastResults.push({
+            fast_period: raw[i], slow_period: raw[i + 1],
+            total_pnl: raw[i + 2], win_rate: raw[i + 3],
+            profit_factor: raw[i + 4], total_trades: raw[i + 5],
+          });
+        }
+        const elapsed = (performance.now() - t0).toFixed(0);
+        log(`Wasm optimizer: ${lastResults.length} results in ${elapsed}ms (${((fastMax-fastMin+1)*(slowMax-slowMin+1))} combos)`, "ok");
+        sortCol = "pnl";
+        sortAsc = false;
+        const sorted = [...lastResults].sort((a, b) => (b.total_pnl ?? 0) - (a.total_pnl ?? 0));
+        resultsDiv.style.color = "";
+        renderOptResults(sorted);
+      } else {
+        // Fallback: Rust backend optimizer
+        const json = await invoke("run_optimization", {
+          symbol: optSymbol, timeframe: tf,
+          fast_min: fastMin, fast_max: fastMax,
+          slow_min: slowMin, slow_max: slowMax,
+        });
+        const result = typeof json === "string" ? JSON.parse(json) : json;
+        lastResults = Array.isArray(result) ? result : (result.results || []);
+        sortCol = "pnl";
+        sortAsc = false;
+        const sorted = [...lastResults].sort((a, b) => (b.total_pnl ?? 0) - (a.total_pnl ?? 0));
+        resultsDiv.style.color = "";
+        renderOptResults(sorted);
+      }
     } catch (e) {
       resultsDiv.textContent = `Optimization failed: ${e}`;
       resultsDiv.style.color = "#f44";
@@ -8121,6 +8188,7 @@ async function updateOrderPriceLines() {
 
 document.addEventListener("DOMContentLoaded", () => {
   loadBarCacheFromDisk().then(() => migrateLocalStorageCache());
+  loadWasm(); // Preload 32KB Wasm indicator engine
   initChart();
   setupDrawingCanvas();
   loadDrawings();
