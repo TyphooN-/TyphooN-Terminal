@@ -89,6 +89,13 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Time & Sales | ✅ Done | Via WebSocket trade stream subscription |
 | 30 indicators | ✅ Done | NNFX (9) + Standard (11) + Extended (10: Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
 | Custom indicator plugin system | ✅ Done | Load/save/list JS plugins from ~/.config/typhoon-terminal/indicators/ |
+| NNFX backtesting strategy | ✅ Done | KAMA + Fisher Transform entry logic, D1/W1/MN1 optimized |
+| Options P&L calculator | ✅ Done | Multi-leg payoff diagram with canvas rendering (Ctrl+K → OPTCALC) |
+| Sector rotation heatmap | ✅ Done | S&P 500 sector ETFs colored by daily/weekly performance (Ctrl+K → SECTORS) |
+| Options strategy builder | ✅ Done | Live chain viewer, strategy presets, aggregate Greeks (Ctrl+K → OPTSTRAT) |
+| Strategy auto-trading framework | ✅ Done | JS plugin → live orders, paper-only safety (Ctrl+K → AUTOTRADE) |
+| Watchlist SMA200 cross alerts | ✅ Done | Batch monitoring with browser notifications |
+| Economic calendar + countdown | ✅ Done | FOMC, CPI, NFP, GDP with live countdown timers (Ctrl+K → ECON) |
 
 ### Tier 3 — Godel Terminal Features
 

@@ -2853,6 +2853,7 @@ async function updateDashboard() {
     checkMultiConditionAlerts();
     checkEquityProtection();
     checkDividendAlerts();
+    checkWatchlistSMA200Alerts();
     syncMTFGridLivePrice();
     updateRiskCalcPanel();
 
@@ -4950,6 +4951,11 @@ const CMD_PALETTE_COMMANDS = [
   { name: "VOLSURF", desc: "Volatility surface (options IV grid)", action: cmdVolSurf },
   { name: "BRACKET", desc: "Conditional bracket/OCO order placement", action: cmdBracketOrder },
   { name: "HEATMAP", desc: "Portfolio heat map (daily P&L)", action: cmdHeatmap },
+  { name: "OPTCALC", desc: "Options P&L calculator (payoff diagram)", action: cmdOptionsCalc },
+  { name: "SECTORS", desc: "Sector rotation heatmap (S&P 500 ETFs)", action: cmdSectorRotation },
+  { name: "ECON", desc: "Economic calendar with countdown", action: cmdEconCalendar },
+  { name: "OPTSTRAT", desc: "Options strategy builder (spreads, condors)", action: cmdOptionsStrategy },
+  { name: "AUTOTRADE", desc: "Strategy auto-trading (JS plugin → live orders)", action: cmdAutoTrade },
   { name: "TILE", desc: "Tile all floating windows", action: () => tileWindows() },
   { name: "CLOSE", desc: "Close all floating windows", action: () => closeAllWindows() },
 ];
@@ -6309,7 +6315,7 @@ function openVisualBacktester() {
   stratSelect.textContent = "Strategy:";
   const stratSel = document.createElement("select");
   stratSel.className = "bt-input";
-  for (const s of ["SMA Cross"]) {
+  for (const s of ["SMA Cross", "NNFX (KAMA+Fisher)"]) {
     const opt = document.createElement("option");
     opt.value = s; opt.textContent = s;
     stratSel.appendChild(opt);
@@ -9820,4 +9826,579 @@ function setupTabs() {
       if (activeTabId !== null) closeTab(activeTabId);
     }
   });
+}
+
+// ══════════════════════════════════════════════════════════════
+// NEW COMMAND PALETTE FEATURES
+// ══════════════════════════════════════════════════════════════
+
+// ── Options P&L Calculator (OPTCALC) ────────────────────────
+function cmdOptionsCalc() {
+  const win = createWindow({ title: "Options P&L Calculator", width: 700, height: 500 });
+  win.contentElement.textContent = "";
+
+  const form = document.createElement("div");
+  form.style.cssText = "padding:8px;font-size:11px;";
+
+  // Leg inputs
+  const legsDiv = document.createElement("div");
+  legsDiv.id = "optcalc-legs";
+  const hdr = document.createElement("div");
+  hdr.style.cssText = "display:flex;gap:4px;color:#888;font-weight:bold;padding:2px 0;border-bottom:1px solid #333;margin-bottom:4px;";
+  for (const h of ["B/S", "Type", "Strike", "Premium", "Qty"]) {
+    const s = document.createElement("span");
+    s.style.cssText = "flex:1;text-align:center;";
+    s.textContent = h;
+    hdr.appendChild(s);
+  }
+  legsDiv.appendChild(hdr);
+
+  function addLegRow(bs = "buy", type = "call", strike = "", prem = "", qty = "1") {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:4px;margin:2px 0;";
+    const mkSel = (opts, val) => { const s = document.createElement("select"); s.style.cssText = "flex:1;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:2px;"; for (const o of opts) { const op = document.createElement("option"); op.value = o; op.textContent = o; if (o === val) op.selected = true; s.appendChild(op); } return s; };
+    const mkInp = (v, ph) => { const i = document.createElement("input"); i.type = "number"; i.step = "0.01"; i.value = v; i.placeholder = ph; i.style.cssText = "flex:1;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:2px;text-align:center;"; return i; };
+    row.appendChild(mkSel(["buy", "sell"], bs));
+    row.appendChild(mkSel(["call", "put"], type));
+    row.appendChild(mkInp(strike, "Strike"));
+    row.appendChild(mkInp(prem, "Prem"));
+    row.appendChild(mkInp(qty, "Qty"));
+    const del = document.createElement("button");
+    del.textContent = "×";
+    del.style.cssText = "background:none;border:1px solid #f44;color:#f44;cursor:pointer;padding:0 4px;";
+    del.addEventListener("click", () => row.remove());
+    row.appendChild(del);
+    legsDiv.appendChild(row);
+  }
+  addLegRow("buy", "call", lastPrice ? lastPrice.toFixed(2) : "", "1.00");
+
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:6px;margin:6px 0;";
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "+ Add Leg";
+  addBtn.style.cssText = "font-size:10px;padding:3px 8px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;";
+  addBtn.addEventListener("click", () => addLegRow());
+  const calcBtn = document.createElement("button");
+  calcBtn.textContent = "Calculate Payoff";
+  calcBtn.style.cssText = "font-size:10px;padding:3px 12px;background:#1b5e20;color:#8f8;border:1px solid #555;cursor:pointer;font-weight:bold;";
+  btnRow.appendChild(addBtn);
+  btnRow.appendChild(calcBtn);
+
+  const chartDiv = document.createElement("canvas");
+  chartDiv.width = 660;
+  chartDiv.height = 300;
+  chartDiv.style.cssText = "border:1px solid #333;margin-top:6px;";
+
+  form.appendChild(legsDiv);
+  form.appendChild(btnRow);
+  form.appendChild(chartDiv);
+  win.appendElement(form);
+
+  calcBtn.addEventListener("click", () => {
+    const rows = legsDiv.querySelectorAll("div:not(:first-child)");
+    const legs = [];
+    for (const r of rows) {
+      const els = r.querySelectorAll("select, input");
+      if (els.length < 5) continue;
+      legs.push({ bs: els[0].value, type: els[1].value, strike: parseFloat(els[2].value), prem: parseFloat(els[3].value), qty: parseInt(els[4].value) || 1 });
+    }
+    if (legs.length === 0 || legs.some(l => isNaN(l.strike) || isNaN(l.prem))) { alert("Fill all fields"); return; }
+
+    // Calculate payoff at expiry across price range
+    const strikes = legs.map(l => l.strike);
+    const minP = Math.min(...strikes) * 0.7;
+    const maxP = Math.max(...strikes) * 1.3;
+    const step = (maxP - minP) / 200;
+    const points = [];
+    let maxProfit = -Infinity, maxLoss = Infinity;
+    for (let p = minP; p <= maxP; p += step) {
+      let pnl = 0;
+      for (const l of legs) {
+        const dir = l.bs === "buy" ? 1 : -1;
+        let intrinsic = l.type === "call" ? Math.max(0, p - l.strike) : Math.max(0, l.strike - p);
+        pnl += dir * (intrinsic - l.prem) * l.qty * 100;
+      }
+      points.push({ price: p, pnl });
+      maxProfit = Math.max(maxProfit, pnl);
+      maxLoss = Math.min(maxLoss, pnl);
+    }
+
+    // Draw payoff diagram on canvas
+    const ctx = chartDiv.getContext("2d");
+    const W = chartDiv.width, H = chartDiv.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#0a0a14";
+    ctx.fillRect(0, 0, W, H);
+    const pad = 40;
+    const pRange = maxP - minP;
+    const vRange = Math.max(maxProfit - maxLoss, 1);
+    const toX = p => pad + (p - minP) / pRange * (W - 2 * pad);
+    const toY = v => H - pad - (v - maxLoss) / vRange * (H - 2 * pad);
+
+    // Zero line
+    ctx.strokeStyle = "#ffffff33";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pad, toY(0));
+    ctx.lineTo(W - pad, toY(0));
+    ctx.stroke();
+
+    // Payoff line
+    ctx.strokeStyle = "#4caf50";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < points.length; i++) {
+      const x = toX(points[i].price), y = toY(points[i].pnl);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Fill profit/loss zones
+    for (let i = 0; i < points.length - 1; i++) {
+      const x1 = toX(points[i].price), x2 = toX(points[i + 1].price);
+      const y0 = toY(0);
+      const y1 = toY(points[i].pnl), y2 = toY(points[i + 1].pnl);
+      ctx.fillStyle = points[i].pnl >= 0 ? "rgba(76,175,80,0.15)" : "rgba(244,67,54,0.15)";
+      ctx.beginPath();
+      ctx.moveTo(x1, y0); ctx.lineTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x2, y0);
+      ctx.fill();
+    }
+
+    // Axis labels
+    ctx.fillStyle = "#888";
+    ctx.font = "10px Consolas, monospace";
+    ctx.textAlign = "center";
+    for (let i = 0; i <= 5; i++) {
+      const p = minP + (pRange * i / 5);
+      ctx.fillText(`$${p.toFixed(0)}`, toX(p), H - 5);
+    }
+    ctx.textAlign = "right";
+    for (let i = 0; i <= 4; i++) {
+      const v = maxLoss + (vRange * i / 4);
+      ctx.fillText(`$${v.toFixed(0)}`, pad - 4, toY(v) + 3);
+    }
+
+    // Max profit/loss labels
+    ctx.fillStyle = "#4caf50";
+    ctx.textAlign = "left";
+    ctx.fillText(`Max Profit: $${maxProfit.toFixed(0)}`, pad + 10, 15);
+    ctx.fillStyle = "#f44336";
+    ctx.fillText(`Max Loss: $${maxLoss.toFixed(0)}`, pad + 10, 28);
+
+    // Strike price markers
+    ctx.strokeStyle = "#ffeb3b44";
+    ctx.setLineDash([3, 3]);
+    for (const l of legs) {
+      const x = toX(l.strike);
+      ctx.beginPath();
+      ctx.moveTo(x, pad); ctx.lineTo(x, H - pad);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  });
+}
+
+// ── Sector Rotation Heatmap (SECTORS) ────────────────────────
+async function cmdSectorRotation() {
+  const win = createWindow({ title: "Sector Rotation Heatmap", width: 650, height: 400 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading sector data...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  const SECTOR_ETFS = [
+    { sym: "XLK", name: "Technology" }, { sym: "XLF", name: "Financials" },
+    { sym: "XLE", name: "Energy" }, { sym: "XLV", name: "Healthcare" },
+    { sym: "XLI", name: "Industrials" }, { sym: "XLP", name: "Consumer Staples" },
+    { sym: "XLY", name: "Consumer Disc" }, { sym: "XLU", name: "Utilities" },
+    { sym: "XLB", name: "Materials" }, { sym: "XLRE", name: "Real Estate" },
+    { sym: "XLC", name: "Comm Services" }, { sym: "SPY", name: "S&P 500" },
+    { sym: "QQQ", name: "Nasdaq 100" }, { sym: "IWM", name: "Russell 2000" },
+    { sym: "DIA", name: "Dow Jones" }, { sym: "GLD", name: "Gold" },
+  ];
+
+  try {
+    const items = [];
+    for (const etf of SECTOR_ETFS) {
+      try {
+        const json = await invoke("get_bars", { symbol: etf.sym, timeframe: "1Day", limit: 5 });
+        const bars = JSON.parse(json);
+        if (bars.length >= 2) {
+          const prev = bars[bars.length - 2].close;
+          const cur = bars[bars.length - 1].close;
+          const pct = ((cur - prev) / prev) * 100;
+          // Weekly change
+          const weekStart = bars.length >= 5 ? bars[0].close : prev;
+          const weekPct = ((cur - weekStart) / weekStart) * 100;
+          items.push({ ...etf, price: cur, dailyPct: pct, weeklyPct: weekPct });
+        }
+      } catch (_) {}
+    }
+
+    win.contentElement.textContent = "";
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;padding:8px;";
+    const maxPct = Math.max(...items.map(i => Math.abs(i.dailyPct)), 0.5);
+
+    for (const item of items) {
+      const box = document.createElement("div");
+      const intensity = Math.min(Math.abs(item.dailyPct) / maxPct, 1);
+      const bg = item.dailyPct > 0
+        ? `rgba(0, ${Math.round(80 + intensity * 175)}, 0, ${0.3 + intensity * 0.5})`
+        : item.dailyPct < 0
+        ? `rgba(${Math.round(80 + intensity * 175)}, 0, 0, ${0.3 + intensity * 0.5})`
+        : "rgba(128,128,128,0.2)";
+      box.style.cssText = `width:120px;height:75px;background:${bg};border:1px solid #333;border-radius:4px;display:flex;flex-direction:column;justify-content:center;align-items:center;cursor:pointer;padding:4px;`;
+
+      const sym = document.createElement("div");
+      sym.textContent = item.sym;
+      sym.style.cssText = "font-size:13px;font-weight:bold;color:#fff;";
+      const name = document.createElement("div");
+      name.textContent = item.name;
+      name.style.cssText = "font-size:9px;color:#aaa;";
+      const daily = document.createElement("div");
+      daily.textContent = `${item.dailyPct >= 0 ? "+" : ""}${item.dailyPct.toFixed(2)}%`;
+      daily.style.cssText = `font-size:12px;font-weight:bold;color:${item.dailyPct >= 0 ? "#4caf50" : "#f44336"};`;
+      const weekly = document.createElement("div");
+      weekly.textContent = `W: ${item.weeklyPct >= 0 ? "+" : ""}${item.weeklyPct.toFixed(2)}%`;
+      weekly.style.cssText = `font-size:9px;color:${item.weeklyPct >= 0 ? "#8f8" : "#f88"};`;
+
+      box.appendChild(sym);
+      box.appendChild(name);
+      box.appendChild(daily);
+      box.appendChild(weekly);
+      box.addEventListener("click", () => {
+        document.getElementById("symbol-input").value = item.sym;
+        triggerLoad();
+      });
+      grid.appendChild(box);
+    }
+    win.appendElement(grid);
+  } catch (e) { win.setContent(`Error: ${e}`); }
+}
+
+// ── Economic Calendar with Countdown (ECON) ──────────────────
+async function cmdEconCalendar() {
+  const win = createWindow({ title: "Economic Calendar", width: 600, height: 450 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading calendar...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  try {
+    const json = await invoke("get_corporate_actions", { symbol: "SPY", types: "dividend" });
+    const calJson = await invoke("get_bars", { symbol: "SPY", timeframe: "1Day", limit: 5 });
+
+    win.contentElement.textContent = "";
+
+    // Key upcoming dates
+    const now = new Date();
+    const events = [
+      { name: "Market Open", time: getNextMarketTime(9, 30), impact: "low" },
+      { name: "Market Close", time: getNextMarketTime(16, 0), impact: "low" },
+      { name: "FOMC Meeting", time: getNextFOMC(), impact: "high" },
+      { name: "CPI Release", time: getNextCPI(), impact: "high" },
+      { name: "NFP (Jobs)", time: getNextNFP(), impact: "high" },
+      { name: "GDP Release", time: getNextGDP(), impact: "medium" },
+    ];
+
+    events.sort((a, b) => a.time - b.time);
+
+    const table = document.createElement("div");
+    table.style.cssText = "padding:8px;";
+
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #444;color:#888;font-size:10px;font-weight:bold;";
+    for (const h of ["Event", "Date/Time", "Countdown", "Impact"]) {
+      const s = document.createElement("span");
+      s.style.cssText = h === "Event" ? "flex:2;" : "flex:1;text-align:center;";
+      s.textContent = h;
+      hdr.appendChild(s);
+    }
+    table.appendChild(hdr);
+
+    for (const ev of events) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;padding:4px 0;border-bottom:1px solid #1a1a2e;font-size:11px;";
+
+      const nameEl = document.createElement("span");
+      nameEl.style.cssText = "flex:2;color:#ccc;";
+      nameEl.textContent = ev.name;
+
+      const dateEl = document.createElement("span");
+      dateEl.style.cssText = "flex:1;text-align:center;color:#aaa;";
+      dateEl.textContent = ev.time.toLocaleDateString() + " " + ev.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+      const countEl = document.createElement("span");
+      countEl.style.cssText = "flex:1;text-align:center;color:#ff8;font-family:Consolas,monospace;";
+      const diff = ev.time - now;
+      if (diff > 0) {
+        const d = Math.floor(diff / 86400000);
+        const h = Math.floor((diff % 86400000) / 3600000);
+        const m = Math.floor((diff % 3600000) / 60000);
+        countEl.textContent = d > 0 ? `${d}d ${h}h ${m}m` : `${h}h ${m}m`;
+      } else {
+        countEl.textContent = "PASSED";
+        countEl.style.color = "#888";
+      }
+
+      const impactEl = document.createElement("span");
+      impactEl.style.cssText = "flex:1;text-align:center;font-weight:bold;";
+      impactEl.style.color = ev.impact === "high" ? "#f44336" : ev.impact === "medium" ? "#ff9800" : "#4caf50";
+      impactEl.textContent = ev.impact.toUpperCase();
+
+      row.appendChild(nameEl);
+      row.appendChild(dateEl);
+      row.appendChild(countEl);
+      row.appendChild(impactEl);
+      table.appendChild(row);
+    }
+    win.appendElement(table);
+  } catch (e) { win.setContent(`Error: ${e}`); }
+}
+
+function getNextMarketTime(hour, min) {
+  const d = new Date();
+  d.setHours(hour, min, 0, 0);
+  if (d <= new Date()) d.setDate(d.getDate() + 1);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+  return d;
+}
+function getNextFOMC() { const d = new Date(); d.setMonth(d.getMonth() + 1); d.setDate(15); d.setHours(14, 0, 0, 0); while (d.getDay() !== 3) d.setDate(d.getDate() + 1); return d; }
+function getNextCPI() { const d = new Date(); d.setDate(13); if (d <= new Date()) d.setMonth(d.getMonth() + 1); d.setHours(8, 30, 0, 0); return d; }
+function getNextNFP() { const d = new Date(); d.setDate(1); if (d <= new Date()) d.setMonth(d.getMonth() + 1); while (d.getDay() !== 5) d.setDate(d.getDate() + 1); d.setHours(8, 30, 0, 0); return d; }
+function getNextGDP() { const d = new Date(); d.setDate(28); if (d <= new Date()) d.setMonth(d.getMonth() + 1); d.setHours(8, 30, 0, 0); return d; }
+
+// ── Options Strategy Builder (OPTSTRAT) ──────────────────────
+async function cmdOptionsStrategy() {
+  if (!currentSymbol) { alert("Load a chart first"); return; }
+  const win = createWindow({ title: `Options Strategy: ${currentSymbol}`, width: 750, height: 550 });
+  win.contentElement.textContent = "";
+
+  const toolbar = document.createElement("div");
+  toolbar.style.cssText = "display:flex;gap:6px;padding:8px;border-bottom:1px solid #333;flex-wrap:wrap;";
+
+  // Preset strategies
+  const presets = ["Custom", "Long Call", "Long Put", "Bull Call Spread", "Bear Put Spread", "Straddle", "Iron Condor"];
+  const presetSel = document.createElement("select");
+  presetSel.style.cssText = "font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;";
+  for (const p of presets) { const o = document.createElement("option"); o.value = p; o.textContent = p; presetSel.appendChild(o); }
+
+  // Expiry
+  const expiryInput = document.createElement("input");
+  expiryInput.type = "date";
+  expiryInput.style.cssText = "font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;";
+  const nextFri = new Date(); nextFri.setDate(nextFri.getDate() + (5 - nextFri.getDay() + 7) % 7 + 7);
+  expiryInput.value = nextFri.toISOString().split("T")[0];
+
+  const loadBtn = document.createElement("button");
+  loadBtn.textContent = "Load Chain";
+  loadBtn.style.cssText = "font-size:10px;padding:3px 10px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;";
+
+  toolbar.appendChild(presetSel);
+  toolbar.appendChild(expiryInput);
+  toolbar.appendChild(loadBtn);
+  win.appendElement(toolbar);
+
+  const content = document.createElement("div");
+  content.style.cssText = "padding:8px;font-size:10px;overflow-y:auto;max-height:450px;";
+  content.textContent = "Select expiry and click Load Chain to view options.";
+  win.appendElement(content);
+
+  loadBtn.addEventListener("click", async () => {
+    content.textContent = "Loading options chain...";
+    try {
+      const json = await invoke("get_options", { symbol: currentSymbol, expiry: expiryInput.value });
+      const chain = JSON.parse(json);
+      if (chain.length === 0) { content.textContent = "No options data available"; return; }
+
+      content.textContent = "";
+
+      // Split calls and puts
+      const calls = chain.filter(c => c.option_type === "call");
+      const puts = chain.filter(c => c.option_type === "put");
+
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+      const thead = document.createElement("thead");
+      const hr = document.createElement("tr");
+      hr.style.cssText = "border-bottom:1px solid #444;";
+      for (const h of ["Call Bid", "Call Ask", "Delta", "Strike", "Delta", "Put Bid", "Put Ask"]) {
+        const th = document.createElement("th");
+        th.style.cssText = "padding:3px 4px;color:#888;text-align:center;";
+        th.textContent = h;
+        hr.appendChild(th);
+      }
+      thead.appendChild(hr);
+      table.appendChild(thead);
+
+      const tbody = document.createElement("tbody");
+      const allStrikes = [...new Set(chain.map(c => c.strike))].sort((a, b) => a - b);
+      for (const strike of allStrikes) {
+        const call = calls.find(c => c.strike === strike);
+        const put = puts.find(c => c.strike === strike);
+        const tr = document.createElement("tr");
+        const itm = lastPrice && strike < lastPrice;
+        tr.style.cssText = `border-bottom:1px solid #1a1a2e;${itm ? "background:rgba(76,175,80,0.05);" : ""}`;
+
+        const vals = [
+          call ? call.bid.toFixed(2) : "—", call ? call.ask.toFixed(2) : "—",
+          call ? call.delta.toFixed(3) : "—", strike.toFixed(2),
+          put ? put.delta.toFixed(3) : "—", put ? put.bid.toFixed(2) : "—",
+          put ? put.ask.toFixed(2) : "—",
+        ];
+        for (let i = 0; i < vals.length; i++) {
+          const td = document.createElement("td");
+          td.style.cssText = `padding:2px 4px;text-align:center;color:${i === 3 ? "#fff" : "#ccc"};${i === 3 ? "font-weight:bold;background:#1a1a2e;" : ""}`;
+          td.textContent = vals[i];
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      content.appendChild(table);
+
+      // Aggregate Greeks summary
+      const summary = document.createElement("div");
+      summary.style.cssText = "margin-top:8px;padding:6px;border-top:1px solid #333;color:#888;";
+      const totalDelta = chain.reduce((s, c) => s + c.delta, 0);
+      const totalGamma = chain.reduce((s, c) => s + c.gamma, 0);
+      const totalTheta = chain.reduce((s, c) => s + c.theta, 0);
+      const totalVega = chain.reduce((s, c) => s + c.vega, 0);
+      summary.textContent = `Aggregate Greeks — Delta: ${totalDelta.toFixed(3)} | Gamma: ${totalGamma.toFixed(4)} | Theta: ${totalTheta.toFixed(3)} | Vega: ${totalVega.toFixed(3)}`;
+      content.appendChild(summary);
+    } catch (e) { content.textContent = `Error: ${e}`; }
+  });
+}
+
+// ── Strategy Auto-Trading (AUTOTRADE) ────────────────────────
+function cmdAutoTrade() {
+  const win = createWindow({ title: "Strategy Auto-Trading", width: 550, height: 400 });
+  win.contentElement.textContent = "";
+
+  const info = document.createElement("div");
+  info.style.cssText = "padding:12px;font-size:11px;color:#ccc;";
+
+  const title = document.createElement("div");
+  title.textContent = "Auto-Trade via JS Plugin";
+  title.style.cssText = "font-size:14px;font-weight:bold;color:#ff8;margin-bottom:8px;";
+  info.appendChild(title);
+
+  const desc = document.createElement("div");
+  desc.style.cssText = "color:#aaa;margin-bottom:12px;line-height:1.6;";
+  desc.textContent = "Create a JS plugin in ~/.config/typhoon-terminal/indicators/ that exports an onSignal() function. " +
+    "The function receives bar data and indicator values, and returns { action: 'buy'|'sell'|'close', qty: N }. " +
+    "Enable auto-trading below to execute signals automatically.";
+  info.appendChild(desc);
+
+  // Plugin selector
+  const pluginRow = document.createElement("div");
+  pluginRow.style.cssText = "display:flex;gap:6px;align-items:center;margin:8px 0;";
+  const pluginLabel = document.createElement("label");
+  pluginLabel.textContent = "Plugin:";
+  pluginLabel.style.cssText = "color:#888;";
+  const pluginSel = document.createElement("select");
+  pluginSel.style.cssText = "flex:1;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:4px;";
+  const noneOpt = document.createElement("option");
+  noneOpt.value = "";
+  noneOpt.textContent = "— Select Plugin —";
+  pluginSel.appendChild(noneOpt);
+  pluginRow.appendChild(pluginLabel);
+  pluginRow.appendChild(pluginSel);
+  info.appendChild(pluginRow);
+
+  // Load available plugins
+  invoke("list_custom_indicators").then(json => {
+    const plugins = JSON.parse(json);
+    for (const p of plugins) {
+      const opt = document.createElement("option");
+      opt.value = p.filename;
+      opt.textContent = p.name;
+      pluginSel.appendChild(opt);
+    }
+  }).catch(() => {});
+
+  // Settings
+  const settingsDiv = document.createElement("div");
+  settingsDiv.style.cssText = "border:1px solid #333;border-radius:4px;padding:8px;margin:8px 0;";
+  const mkRow = (label, id, val) => {
+    const r = document.createElement("div");
+    r.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin:4px 0;";
+    const l = document.createElement("span");
+    l.textContent = label;
+    l.style.cssText = "color:#aaa;font-size:10px;";
+    const i = document.createElement("input");
+    i.id = id;
+    i.value = val;
+    i.style.cssText = "width:80px;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;text-align:center;";
+    r.appendChild(l);
+    r.appendChild(i);
+    return r;
+  };
+
+  settingsDiv.appendChild(mkRow("Max position size:", "at-max-qty", "100"));
+  settingsDiv.appendChild(mkRow("Cooldown (seconds):", "at-cooldown", "60"));
+
+  const paperOnly = document.createElement("div");
+  paperOnly.style.cssText = "display:flex;align-items:center;gap:6px;margin:4px 0;";
+  const paperCb = document.createElement("input");
+  paperCb.type = "checkbox";
+  paperCb.checked = true;
+  paperCb.id = "at-paper-only";
+  const paperLabel = document.createElement("label");
+  paperLabel.textContent = "Paper trading only (safety)";
+  paperLabel.style.cssText = "color:#ff8;font-size:10px;";
+  paperOnly.appendChild(paperCb);
+  paperOnly.appendChild(paperLabel);
+  settingsDiv.appendChild(paperOnly);
+
+  info.appendChild(settingsDiv);
+
+  // Enable/disable toggle
+  const toggleBtn = document.createElement("button");
+  toggleBtn.textContent = "Enable Auto-Trading";
+  toggleBtn.style.cssText = "padding:6px 16px;font-size:11px;background:#1b5e20;color:#8f8;border:1px solid #555;cursor:pointer;font-weight:bold;width:100%;";
+  let autoTradeActive = false;
+  toggleBtn.addEventListener("click", () => {
+    autoTradeActive = !autoTradeActive;
+    toggleBtn.textContent = autoTradeActive ? "STOP Auto-Trading" : "Enable Auto-Trading";
+    toggleBtn.style.background = autoTradeActive ? "#b71c1c" : "#1b5e20";
+    toggleBtn.style.color = autoTradeActive ? "#faa" : "#8f8";
+    log(`Auto-trading ${autoTradeActive ? "ENABLED" : "DISABLED"}`, autoTradeActive ? "warn" : "ok");
+  });
+  info.appendChild(toggleBtn);
+
+  win.appendElement(info);
+}
+
+// ── Watchlist SMA200 Cross Alerts ────────────────────────────
+// (Runs automatically in dashboard cycle if watchlist exists)
+let watchlistSMA200Cache = {};
+
+async function checkWatchlistSMA200Alerts() {
+  if (!window._watchlistSymbols || window._watchlistSymbols.length === 0) return;
+  const now = Date.now();
+  for (const sym of window._watchlistSymbols) {
+    const cacheKey = `sma200alert:${sym}`;
+    if (watchlistSMA200Cache[cacheKey] && (now - watchlistSMA200Cache[cacheKey].ts) < 300000) continue; // 5min cache
+    try {
+      const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 210 });
+      const bars = JSON.parse(barsJson);
+      if (bars.length < 201) continue;
+      const closes = bars.map(b => b.close);
+      const sma200 = closes.slice(-200).reduce((a, b) => a + b, 0) / 200;
+      const price = closes[closes.length - 1];
+      const prevPrice = closes[closes.length - 2];
+      const prevAbove = prevPrice > sma200;
+      const nowAbove = price > sma200;
+      if (prevAbove !== nowAbove) {
+        const direction = nowAbove ? "CROSSED ABOVE" : "CROSSED BELOW";
+        log(`WATCHLIST ALERT: ${sym} ${direction} SMA200 ($${sma200.toFixed(2)}) — Price: $${price.toFixed(2)}`, "warn");
+        try { new Notification(`${sym} ${direction} SMA200`, { body: `Price: $${price.toFixed(2)}, SMA200: $${sma200.toFixed(2)}` }); } catch (_) {}
+      }
+      watchlistSMA200Cache[cacheKey] = { ts: now, above: nowAbove };
+    } catch (_) {}
+  }
 }

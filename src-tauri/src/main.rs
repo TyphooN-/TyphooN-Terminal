@@ -22,7 +22,7 @@ use broker::tastytrade::TastytradeBroker;
 use core::risk::{self, OrderMode, RiskConfig, SymbolSpec};
 use core::var;
 use core::margin;
-use core::backtest::{self as backtest_engine, SMACrossStrategy, BacktestResult, BarByBarResult};
+use core::backtest::{self as backtest_engine, SMACrossStrategy, NNFXStrategy, BacktestResult, BarByBarResult};
 use core::cache::SqliteCache;
 use core::screener::{self as screener_engine, ScreenerFilter, ScreenerSymbol};
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
@@ -1283,7 +1283,13 @@ async fn run_backtest(
             let mut strat = SMACrossStrategy::new(fast, slow);
             backtest_engine::run_backtest(&bars, &mut strat, equity)
         }
-        _ => return Err(format!("Unknown strategy: {strategy}. Available: sma_cross")),
+        "nnfx" | "NNFX" | "NNFX (KAMA+Fisher)" => {
+            let kama = fast_period.unwrap_or(10);
+            let fisher = slow_period.unwrap_or(32);
+            let mut strat = NNFXStrategy::new(kama, fisher);
+            backtest_engine::run_backtest(&bars, &mut strat, equity)
+        }
+        _ => return Err(format!("Unknown strategy: {strategy}. Available: sma_cross, nnfx")),
     };
 
     Ok(serde_json::to_string(&result).unwrap())
@@ -1813,7 +1819,13 @@ async fn run_bar_by_bar_backtest(
             let mut strat = SMACrossStrategy::new(fast, slow);
             backtest_engine::bar_by_bar_backtest(&bars, &mut strat, equity)
         }
-        _ => return Err(format!("Unknown strategy: {strategy}. Available: sma_cross")),
+        "nnfx" | "NNFX" | "NNFX (KAMA+Fisher)" => {
+            let kama = fast_period.unwrap_or(10);
+            let fisher = slow_period.unwrap_or(32);
+            let mut strat = NNFXStrategy::new(kama, fisher);
+            backtest_engine::bar_by_bar_backtest(&bars, &mut strat, equity)
+        }
+        _ => return Err(format!("Unknown strategy: {strategy}. Available: sma_cross, nnfx")),
     };
 
     Ok(serde_json::to_string(&result).unwrap())

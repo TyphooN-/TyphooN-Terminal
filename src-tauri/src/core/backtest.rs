@@ -202,6 +202,95 @@ impl Strategy for SMACrossStrategy {
     }
 }
 
+// ── NNFX Strategy (KAMA + Fisher Transform) ──────────────────────────
+//
+// Entry: KAMA crosses price (trend) + Fisher confirms direction
+// Exit: Opposite signal or Fisher reversal
+// Uses the same NNFX indicators as the main chart system.
+
+pub struct NNFXStrategy {
+    pub kama_period: usize,
+    pub fisher_period: usize,
+    kama_prev: f64,
+    fisher_prev: f64,
+}
+
+impl NNFXStrategy {
+    pub fn new(kama_period: usize, fisher_period: usize) -> Self {
+        Self { kama_period, fisher_period, kama_prev: 0.0, fisher_prev: 0.0 }
+    }
+}
+
+fn kama_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
+    if end + 1 < period + 1 { return None; }
+    let fast_sc = 2.0 / 3.0;  // fast=2
+    let slow_sc = 2.0 / 31.0; // slow=30
+    let start = end + 1 - (period + 1);
+    let mut kama = bars[start].open;
+    for i in (start + 1)..=end {
+        let direction = (bars[i].open - bars[i.saturating_sub(period)].open).abs();
+        let mut volatility = 0.0;
+        for j in (i.saturating_sub(period - 1))..=i {
+            if j > 0 { volatility += (bars[j].open - bars[j - 1].open).abs(); }
+        }
+        let er = if volatility > 1e-10 { direction / volatility } else { 0.0 };
+        let sc = (er * (fast_sc - slow_sc) + slow_sc).powi(2);
+        kama += sc * (bars[i].open - kama);
+    }
+    Some(kama)
+}
+
+fn fisher_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
+    if end + 1 < period { return None; }
+    let start = end + 1 - period;
+    let mut highest = f64::MIN;
+    let mut lowest = f64::MAX;
+    for i in start..=end {
+        let mid = (bars[i].high + bars[i].low) / 2.0;
+        highest = highest.max(mid);
+        lowest = lowest.min(mid);
+    }
+    let range = highest - lowest;
+    if range < 1e-10 { return Some(0.0); }
+    let mid = (bars[end].high + bars[end].low) / 2.0;
+    let raw = 2.0 * ((mid - lowest) / range - 0.5);
+    let clamped = raw.clamp(-0.999, 0.999);
+    Some(0.5 * ((1.0 + clamped) / (1.0 - clamped)).ln())
+}
+
+impl Strategy for NNFXStrategy {
+    fn on_bar(&mut self, _bar: &Bar, index: usize, bars: &[Bar]) -> Option<Signal> {
+        let kama_now = kama_at(bars, index, self.kama_period)?;
+        let fisher_now = fisher_at(bars, index, self.fisher_period)?;
+
+        if index < 1 || self.kama_prev == 0.0 {
+            self.kama_prev = kama_now;
+            self.fisher_prev = fisher_now;
+            return None;
+        }
+
+        let price = bars[index].close;
+        let prev_price = bars[index - 1].close;
+        let signal = if prev_price <= self.kama_prev && price > kama_now && fisher_now > 0.0 {
+            // Price crosses above KAMA + Fisher bullish → Buy
+            Some(Signal::Buy)
+        } else if prev_price >= self.kama_prev && price < kama_now && fisher_now < 0.0 {
+            // Price crosses below KAMA + Fisher bearish → Sell
+            Some(Signal::Sell)
+        } else {
+            None
+        };
+
+        self.kama_prev = kama_now;
+        self.fisher_prev = fisher_now;
+        signal
+    }
+
+    fn name(&self) -> &str {
+        "NNFX (KAMA+Fisher)"
+    }
+}
+
 // ── Backtest Engine ─────────────────────────────────────────────────
 
 // ── Bar-by-bar State (for visual replay) ────────────────────────

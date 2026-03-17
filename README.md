@@ -62,6 +62,11 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Earnings Calendar** | Corporate actions table via command palette |
 | **FRED Economic Data** | Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply (free API key) |
 | **AI Trading Assistant** | Claude (Anthropic) or GPT (OpenAI) with market context |
+| **NNFX Strategy** | KAMA + Fisher Transform backtesting strategy — optimized for D1/W1/MN1 |
+| **Options P&L Calc** | Multi-leg payoff diagram with canvas rendering (Ctrl+K → OPTCALC) |
+| **Sector Rotation** | S&P 500 sector ETF heatmap with daily/weekly % (Ctrl+K → SECTORS) |
+| **Options Strategy** | Live chain viewer, presets (spreads, condors), aggregate Greeks (Ctrl+K → OPTSTRAT) |
+| **Auto-Trading** | JS plugin → live order execution, paper-only safety (Ctrl+K → AUTOTRADE) |
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
@@ -185,6 +190,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [022](docs/adr/022-tastytrade-broker.md) | Tastytrade broker integration |
 | [023](docs/adr/023-ux-features-batch.md) | UX batch: GUI menu, tabs, drawing tools, trading |
 | [024](docs/adr/024-charting-engine-race-conditions.md) | Charting engine race conditions — cross-symbol contamination |
+| [025](docs/adr/025-new-features-batch-2.md) | Feature batch 2: NNFX strategy, options tools, sectors, auto-trading |
 
 ---
 
