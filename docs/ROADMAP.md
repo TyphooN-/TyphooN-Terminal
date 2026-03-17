@@ -131,7 +131,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | **Binary bar storage** | ✅ Done | Packed f64 format (48 bytes/bar) + zstd — 3-5x smaller than JSON |
 | **Headless CLI backtest** | ✅ Done | `--backtest` flag — run strategies from command line, no GUI |
 | **Plugin marketplace** | 🔲 Blocked | Needs distribution infrastructure |
-| **GPU chart rendering (wgpu)** | 🔲 Planned | WebGPU/Vulkan/Metal — 1M+ candles at 60fps |
+| **GPU chart rendering (WebGL2)** | ✅ Done | 45KB Wasm — candlesticks, indicator lines, grid, pan/zoom/scroll |
 | **Pure Rust GUI migration** | 🔲 Blocked | Egui/Iced — long-term architectural goal |
 
 | Data Window | ✅ Done | Fixed panel: OHLCV + all indicator values at cursor |

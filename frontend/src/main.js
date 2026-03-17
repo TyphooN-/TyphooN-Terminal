@@ -29,6 +29,96 @@ async function loadWasm() {
   }
 }
 
+// ── GPU Chart Engine (WebGL2, lazy-loaded, 45KB) ────────────
+let gpuChartReady = false;
+let gpuChartModule = null;
+let gpuChartInstance = null;
+let gpuAnimFrame = null;
+
+async function loadGpuChart() {
+  if (gpuChartReady) return gpuChartModule;
+  try {
+    const mod = await import("./gpu_charts.js");
+    await mod.default(); // init wasm
+    gpuChartModule = mod;
+    gpuChartReady = true;
+    console.log("GPU chart engine loaded (45KB WebGL2)");
+    return mod;
+  } catch (e) {
+    console.warn("GPU chart load failed:", e);
+    return null;
+  }
+}
+
+function activateGpuChart(chartData) {
+  const canvas = document.getElementById("gpu-chart-canvas");
+  const container = document.getElementById("chart-container");
+  if (!canvas || !container || !gpuChartModule) return;
+
+  // Show GPU canvas, hide lightweight-charts
+  canvas.style.display = "block";
+  canvas.width = container.clientWidth;
+  canvas.height = container.clientHeight;
+
+  // Create or reuse GPU chart instance
+  if (!gpuChartInstance) {
+    gpuChartInstance = new gpuChartModule.GpuChart("gpu-chart-canvas");
+  }
+  gpuChartInstance.resize(canvas.width, canvas.height);
+
+  // Load data
+  const flat = packBarsForWasm(chartData);
+  gpuChartInstance.set_data(flat);
+
+  // Add SMA 200 as indicator line (if enough data)
+  gpuChartInstance.clear_lines();
+  if (chartData.length > 200) {
+    const sma = [];
+    for (let i = 199; i < chartData.length; i++) {
+      let sum = 0;
+      for (let j = i - 199; j <= i; j++) sum += chartData[j].close;
+      sma.push(sum / 200);
+    }
+    gpuChartInstance.add_line(new Float64Array(sma), 1.0, 0.84, 0.0, 1.0); // gold
+  }
+
+  // Render loop
+  if (gpuAnimFrame) cancelAnimationFrame(gpuAnimFrame);
+  function renderLoop() {
+    gpuChartInstance.render();
+    gpuAnimFrame = requestAnimationFrame(renderLoop);
+  }
+  renderLoop();
+
+  // Mouse interaction: scroll to pan, wheel to zoom
+  canvas.onwheel = (e) => {
+    e.preventDefault();
+    if (e.ctrlKey) {
+      gpuChartInstance.zoom(e.deltaY > 0 ? 0.9 : 1.1, e.offsetX / canvas.width);
+    } else {
+      gpuChartInstance.scroll(e.deltaY > 0 ? 5 : -5);
+    }
+  };
+  let dragging = false, dragStartX = 0;
+  canvas.onmousedown = (e) => { dragging = true; dragStartX = e.offsetX; };
+  canvas.onmousemove = (e) => {
+    if (dragging) {
+      const dx = e.offsetX - dragStartX;
+      const barDelta = -dx / (canvas.width / gpuChartInstance.visible_bars());
+      gpuChartInstance.scroll(barDelta);
+      dragStartX = e.offsetX;
+    }
+  };
+  canvas.onmouseup = () => { dragging = false; };
+  canvas.onmouseleave = () => { dragging = false; };
+}
+
+function deactivateGpuChart() {
+  const canvas = document.getElementById("gpu-chart-canvas");
+  if (canvas) canvas.style.display = "none";
+  if (gpuAnimFrame) { cancelAnimationFrame(gpuAnimFrame); gpuAnimFrame = null; }
+}
+
 /// Pack chart bars into flat f64 array for Wasm interop.
 function packBarsForWasm(bars) {
   const flat = new Float64Array(bars.length * 5);
@@ -511,10 +601,21 @@ function rebuildMainSeries(chartType) {
       if (renkoBricks.length > 0) {
         candleSeries.setData(renkoBricks);
       }
+    } else if (chartType === "gpu") {
+      // GPU chart: use WebGL2 renderer
+      deactivateGpuChart();
+      loadGpuChart().then(() => {
+        if (gpuChartModule && currentChartData.length > 0) {
+          activateGpuChart(currentChartData);
+        }
+      });
     } else {
       candleSeries.setData(currentChartData);
     }
   }
+
+  // Deactivate GPU chart if switching away from it
+  if (chartType !== "gpu") deactivateGpuChart();
 
   // Restore SL/TP lines
   if (slPrice) createSLLine(slPrice);

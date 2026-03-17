@@ -164,6 +164,7 @@
         <option value="line">Line</option>
         <option value="bars">Bars</option>
         <option value="renko">Renko</option>
+        <option value="gpu">GPU (WebGL2)</option>
       </select>
       <select id="bar-count">
         <option value="500">500</option>
@@ -193,6 +194,7 @@
       <!-- Chart area with sub-panes -->
       <div id="chart-stack">
         <div id="chart-container"></div>
+        <canvas id="gpu-chart-canvas" style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;"></canvas>
         <div class="pane-resizer" data-above="chart-container" data-below="fisher-pane"></div>
         <div id="fisher-pane" class="sub-pane"></div>
         <div class="pane-resizer" data-above="fisher-pane" data-below="volume-pane"></div>

@@ -1,6 +1,6 @@
 # ADR-027: Binary Bar Storage, Wasm Indicators, GPU Chart Architecture
 
-**Status:** Partially Implemented
+**Status:** Implemented
 **Date:** 2026-03-17
 
 ## 1. Binary Bar Storage (IMPLEMENTED)
@@ -94,7 +94,7 @@ wasm-pack build --target web --release
 # Output: pkg/typhoon_indicators_bg.wasm (32KB)
 ```
 
-## 3. GPU-Accelerated Charts via wgpu (PLANNED)
+## 3. GPU-Accelerated Charts via WebGL2 (IMPLEMENTED)
 
 ### Vision
 Replace lightweight-charts with a custom wgpu-based renderer capable of:
