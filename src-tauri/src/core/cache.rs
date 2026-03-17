@@ -1,12 +1,76 @@
 //! SQLite-backed cache for unlimited structured storage.
 //!
 //! Replaces IndexedDB's ~50MB limit with SQLite (no practical limit).
-//! Stores bar data, fundamentals, news, and any JSON-serializable data.
-//! Compressed with zstd before storage for ~10x space savings.
+//! Bar data uses packed binary format (44 bytes/bar) + zstd compression.
+//! KV data uses JSON + zstd compression.
+//! Binary format: [u32 bar_count][per bar: i64 timestamp_ms, f64 OHLCV]
 
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+/// Magic bytes to identify binary bar format (vs legacy JSON).
+const BAR_BINARY_MAGIC: &[u8; 4] = b"TTBR"; // TyphooN Terminal Bar Record
+/// Bytes per bar in binary format: i64 timestamp + 5×f64 (OHLCV) = 48 bytes
+const BYTES_PER_BAR: usize = 8 + 5 * 8; // 48
+
+/// Pack bars from JSON into binary format for efficient storage.
+/// Format: [4-byte magic][u32 count][per bar: i64 ts_ms, f64 O, f64 H, f64 L, f64 C, f64 V]
+fn pack_bars(json_data: &str) -> Result<Vec<u8>, String> {
+    let bars: Vec<serde_json::Value> = serde_json::from_str(json_data)
+        .map_err(|e| format!("JSON parse failed: {e}"))?;
+    let count = bars.len() as u32;
+    let mut buf = Vec::with_capacity(4 + 4 + bars.len() * BYTES_PER_BAR);
+    buf.extend_from_slice(BAR_BINARY_MAGIC);
+    buf.extend_from_slice(&count.to_le_bytes());
+    for bar in &bars {
+        // Parse timestamp string to epoch milliseconds
+        let ts_str = bar["timestamp"].as_str().unwrap_or("");
+        let ts_ms = chrono::DateTime::parse_from_rfc3339(ts_str)
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(0i64);
+        buf.extend_from_slice(&ts_ms.to_le_bytes());
+        buf.extend_from_slice(&bar["open"].as_f64().unwrap_or(0.0).to_le_bytes());
+        buf.extend_from_slice(&bar["high"].as_f64().unwrap_or(0.0).to_le_bytes());
+        buf.extend_from_slice(&bar["low"].as_f64().unwrap_or(0.0).to_le_bytes());
+        buf.extend_from_slice(&bar["close"].as_f64().unwrap_or(0.0).to_le_bytes());
+        buf.extend_from_slice(&bar["volume"].as_f64().unwrap_or(0.0).to_le_bytes());
+    }
+    Ok(buf)
+}
+
+/// Unpack binary bars back to JSON string for frontend consumption.
+fn unpack_bars(data: &[u8]) -> Result<String, String> {
+    if data.len() < 8 || &data[0..4] != BAR_BINARY_MAGIC {
+        return Err("Not binary bar format".into());
+    }
+    let count = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
+    let expected = 8 + count * BYTES_PER_BAR;
+    if data.len() < expected {
+        return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
+    }
+
+    let mut bars = Vec::with_capacity(count);
+    for i in 0..count {
+        let offset = 8 + i * BYTES_PER_BAR;
+        let ts_ms = i64::from_le_bytes(data[offset..offset+8].try_into().unwrap());
+        let open = f64::from_le_bytes(data[offset+8..offset+16].try_into().unwrap());
+        let high = f64::from_le_bytes(data[offset+16..offset+24].try_into().unwrap());
+        let low = f64::from_le_bytes(data[offset+24..offset+32].try_into().unwrap());
+        let close = f64::from_le_bytes(data[offset+32..offset+40].try_into().unwrap());
+        let volume = f64::from_le_bytes(data[offset+40..offset+48].try_into().unwrap());
+
+        // Convert epoch ms back to RFC3339 timestamp
+        let dt = chrono::DateTime::from_timestamp_millis(ts_ms)
+            .unwrap_or_default();
+        bars.push(serde_json::json!({
+            "timestamp": dt.to_rfc3339(),
+            "open": open, "high": high, "low": low, "close": close, "volume": volume,
+        }));
+    }
+
+    serde_json::to_string(&bars).map_err(|e| format!("JSON serialize failed: {e}"))
+}
 
 /// Thread-safe SQLite cache manager.
 pub struct SqliteCache {
@@ -49,12 +113,14 @@ impl SqliteCache {
         Ok(Self { conn: Mutex::new(conn) })
     }
 
-    /// Store compressed bar data.
+    /// Store bar data in packed binary format + zstd compression.
+    /// Binary format is ~3-5x smaller than JSON before compression.
     pub fn put_bars(&self, key: &str, json_data: &str) -> Result<(), String> {
-        let compressed = zstd::encode_all(json_data.as_bytes(), 3)
+        let binary = pack_bars(json_data)?;
+        let bar_count = u32::from_le_bytes(binary[4..8].try_into().unwrap()) as i64;
+        let compressed = zstd::encode_all(binary.as_slice(), 3)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
-        let bar_count = json_data.matches("\"timestamp\"").count() as i64;
 
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         conn.execute(
@@ -64,7 +130,7 @@ impl SqliteCache {
         Ok(())
     }
 
-    /// Load compressed bar data.
+    /// Load bar data — handles both binary (new) and JSON (legacy) formats.
     pub fn get_bars(&self, key: &str) -> Result<Option<(String, i64)>, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut stmt = conn.prepare(
@@ -81,8 +147,14 @@ impl SqliteCache {
             Ok((compressed, timestamp)) => {
                 let decompressed = zstd::decode_all(compressed.as_slice())
                     .map_err(|e| format!("zstd decompress failed: {e}"))?;
-                let json = String::from_utf8(decompressed)
-                    .map_err(|e| format!("UTF-8 decode failed: {e}"))?;
+                // Detect format: binary starts with TTBR magic, legacy is UTF-8 JSON
+                let json = if decompressed.len() >= 4 && &decompressed[0..4] == BAR_BINARY_MAGIC {
+                    unpack_bars(&decompressed)?
+                } else {
+                    // Legacy JSON format — read as-is
+                    String::from_utf8(decompressed)
+                        .map_err(|e| format!("UTF-8 decode failed: {e}"))?
+                };
                 Ok(Some((json, timestamp)))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),

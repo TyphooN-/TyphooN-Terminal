@@ -194,6 +194,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [024](docs/adr/024-charting-engine-race-conditions.md) | Charting engine race conditions — cross-symbol contamination |
 | [025](docs/adr/025-new-features-batch-2.md) | Feature batch 2: NNFX strategy, options tools, sectors, auto-trading |
 | [026](docs/adr/026-architecture-future.md) | Architecture: headless CLI, WebWorker/Wasm plans, Pine Script analysis |
+| [027](docs/adr/027-binary-storage-wasm-gpu.md) | Binary bar storage, Wasm indicator engine, GPU chart architecture |
 
 ---
 
