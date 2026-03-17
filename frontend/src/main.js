@@ -3719,7 +3719,7 @@ function setupConnect() {
     const secretKey = document.getElementById("secret-key").value.trim();
     const accountType = document.getElementById("account-type").value;
     const accountName = document.getElementById("account-name").value.trim();
-    const saveCredentials = document.getElementById("save-credentials").checked;
+    const shouldSaveCreds = document.getElementById("save-credentials").checked;
     const paper = accountType === "paper";
 
     if (!apiKey || !secretKey) {
@@ -3743,7 +3743,7 @@ function setupConnect() {
       activeBrokerId = `${brokerType}_${(accountName || "default").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 
       // Save credentials to OS keychain if requested
-      if (saveCredentials && accountName) {
+      if (shouldSaveCreds && accountName) {
         await saveCredentials(accountName, apiKey, secretKey, accountType);
         populateAccountDropdown();
       }
