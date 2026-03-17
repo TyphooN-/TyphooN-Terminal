@@ -4921,7 +4921,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "DES", desc: "Description / Fundamentals", action: cmdDescription },
   { name: "NEWS", desc: "News headlines", action: cmdNews },
   { name: "FA", desc: "Financial Analysis (income, balance, cash flow)", action: cmdFinancialAnalysis },
-  { name: "OPT", desc: "Options chain (coming soon)", action: cmdOptions },
+  { name: "OPT", desc: "Options chain (Greeks, bid/ask, strike)", action: cmdOptions },
   { name: "SCAN", desc: "Screener / Scanner", action: cmdScreener },
   { name: "HDS", desc: "Institutional Holders", action: cmdInstitutionalHolders },
   { name: "MOST", desc: "Most Active stocks", action: cmdMostActive },

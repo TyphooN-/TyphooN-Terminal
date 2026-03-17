@@ -12,16 +12,6 @@ Replace both MetaTrader 5 and Godel Terminal with a single open-source desktop t
 - **Alpaca** — Stocks, ETFs, Options, Crypto (free paper trading, IEX data)
 - **Tastytrade** — Stocks, Options, Futures, Crypto (free paper trading, session auth)
 
-### Planned (Priority Order)
-
-| Broker | Asset Classes | Paper | API Quality | Barrier | Priority |
-|---|---|---|---|---|---|
-| **Public.com** | Stocks, ETFs, Options, Crypto | Unclear | New | None | MEDIUM |
-| **Webull** | Stocks, Options, Futures, Crypto | Yes | Good | 1-3 day approval | MEDIUM |
-| **Tradier** | Stocks, Options | Yes | Good | None | LOW |
-| **Schwab** | Stocks, Options | Yes | Decent | 7-day token refresh | LOW |
-| **IBKR** | Everything (150+ exchanges) | Yes | Excellent | $10K deposit | LOW |
-
 ### Architecture
 Each broker implements a Rust trait. Adding a new broker means one new file — no changes to risk engine, indicators, or UI.
 
