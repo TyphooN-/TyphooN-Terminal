@@ -1738,7 +1738,7 @@ const MTF_MA_COLORS = {
   "1Week": "#FF00FF",  // Magenta
 };
 
-const MTF_LABELS = { "15Min": "M15", "30Min": "M30", "1Hour": "H1", "2Hour": "H2", "3Hour": "H3", "4Hour": "H4", "6Hour": "H6", "8Hour": "H8", "12Hour": "H12", "1Day": "D1", "1Week": "W1", "1Month": "MN1" };
+const MTF_LABELS = { "5Min": "M5", "10Min": "M10", "15Min": "M15", "20Min": "M20", "30Min": "M30", "40Min": "M40", "45Min": "M45", "50Min": "M50", "1Hour": "H1", "2Hour": "H2", "3Hour": "H3", "4Hour": "H4", "5Hour": "H5", "6Hour": "H6", "7Hour": "H7", "8Hour": "H8", "9Hour": "H9", "10Hour": "H10", "11Hour": "H11", "12Hour": "H12", "1Day": "D1", "1Week": "W1", "1Month": "MN1" };
 
 async function loadMTFData(symbol) {
   try {
@@ -2568,11 +2568,18 @@ function aggregateBars(bars, factor) {
 const CUSTOM_TIMEFRAME_MAP = {
   "10Min":  { base: "5Min",  factor: 2 },
   "20Min":  { base: "5Min",  factor: 4 },
+  "40Min":  { base: "5Min",  factor: 8 },
   "45Min":  { base: "15Min", factor: 3 },
+  "50Min":  { base: "5Min",  factor: 10 },
   "2Hour":  { base: "1Hour", factor: 2 },
   "3Hour":  { base: "1Hour", factor: 3 },
   "6Hour":  { base: "1Hour", factor: 6 },
+  "5Hour":  { base: "1Hour", factor: 5 },
+  "7Hour":  { base: "1Hour", factor: 7 },
   "8Hour":  { base: "4Hour", factor: 2 },
+  "9Hour":  { base: "1Hour", factor: 9 },
+  "10Hour": { base: "1Hour", factor: 10 },
+  "11Hour": { base: "1Hour", factor: 11 },
   "12Hour": { base: "4Hour", factor: 3 },
   "2Day":   { base: "1Day",  factor: 2 },
   "3Day":   { base: "1Day",  factor: 3 },
@@ -8297,7 +8304,7 @@ async function openMTFGrid(symbol, timeframes) {
   gridContainer.className = `grid-${Math.min(count, 8)}`;
   chartStack.parentElement.insertBefore(gridContainer, chartStack);
 
-  const tfLabels = { "1Min": "M1", "5Min": "M5", "10Min": "M10", "15Min": "M15", "20Min": "M20", "30Min": "M30", "45Min": "M45", "1Hour": "H1", "2Hour": "H2", "3Hour": "H3", "4Hour": "H4", "6Hour": "H6", "8Hour": "H8", "12Hour": "H12", "1Day": "D1", "2Day": "2D", "3Day": "3D", "1Week": "W1", "1Month": "MN1" };
+  const tfLabels = { "1Min": "M1", "5Min": "M5", "10Min": "M10", "15Min": "M15", "20Min": "M20", "30Min": "M30", "40Min": "M40", "45Min": "M45", "50Min": "M50", "1Hour": "H1", "2Hour": "H2", "3Hour": "H3", "4Hour": "H4", "5Hour": "H5", "6Hour": "H6", "7Hour": "H7", "8Hour": "H8", "9Hour": "H9", "10Hour": "H10", "11Hour": "H11", "12Hour": "H12", "1Day": "D1", "2Day": "2D", "3Day": "3D", "1Week": "W1", "1Month": "MN1" };
 
   for (const tf of timeframes) {
     const cell = document.createElement("div");
