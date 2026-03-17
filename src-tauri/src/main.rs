@@ -2175,6 +2175,114 @@ async fn save_custom_indicator(name: String, source: String) -> Result<String, S
     }).to_string())
 }
 
+/// Headless CLI backtest mode — run strategies without GUI.
+/// Usage: typhoon-terminal --backtest --symbol SMCI --timeframe 1Day --strategy nnfx
+///        [--fast 10] [--slow 32] [--equity 100000] [--limit 5000]
+fn run_headless_backtest(args: &[String]) {
+    let get_arg = |name: &str| -> Option<String> {
+        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+    };
+
+    let api_key = std::env::var("ALPACA_API_KEY").unwrap_or_default();
+    let secret_key = std::env::var("ALPACA_SECRET_KEY").unwrap_or_default();
+    let symbol = get_arg("--symbol").unwrap_or_else(|| "SPY".to_string());
+    let timeframe = get_arg("--timeframe").unwrap_or_else(|| "1Day".to_string());
+    let strategy = get_arg("--strategy").unwrap_or_else(|| "nnfx".to_string());
+    let fast = get_arg("--fast").and_then(|s| s.parse().ok()).unwrap_or(10);
+    let slow = get_arg("--slow").and_then(|s| s.parse().ok()).unwrap_or(32);
+    let equity = get_arg("--equity").and_then(|s| s.parse().ok()).unwrap_or(100_000.0);
+    let limit = get_arg("--limit").and_then(|s| s.parse().ok()).unwrap_or(5000u32);
+    let paper = !args.iter().any(|a| a == "--live");
+
+    println!("═══════════════════════════════════════════════════════");
+    println!("  TyphooN Terminal — Headless Backtest");
+    println!("═══════════════════════════════════════════════════════");
+    println!("  Symbol:    {symbol}");
+    println!("  Timeframe: {timeframe}");
+    println!("  Strategy:  {strategy}");
+    println!("  Params:    fast={fast}, slow={slow}");
+    println!("  Equity:    ${equity:.2}");
+    println!("  Bars:      {limit}");
+    println!("═══════════════════════════════════════════════════════");
+
+    if api_key.is_empty() || secret_key.is_empty() {
+        eprintln!("ERROR: Set ALPACA_API_KEY and ALPACA_SECRET_KEY environment variables");
+        std::process::exit(1);
+    }
+
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    rt.block_on(async {
+        let broker = broker::alpaca::AlpacaBroker::new(api_key, secret_key, paper);
+
+        // Verify connection
+        match broker.get_account().await {
+            Ok(acct) => println!("  Account:   ${:.2} equity, ${:.2} cash", acct.equity, acct.cash),
+            Err(e) => { eprintln!("ERROR: {e}"); std::process::exit(1); }
+        }
+
+        println!("  Fetching bars...");
+        let bars = match broker.get_bars(&symbol, &timeframe, limit).await {
+            Ok(b) => b,
+            Err(e) => { eprintln!("ERROR: {e}"); std::process::exit(1); }
+        };
+        println!("  Loaded {} bars", bars.len());
+
+        if bars.len() < 50 {
+            eprintln!("ERROR: Insufficient data ({} bars, need 50+)", bars.len());
+            std::process::exit(1);
+        }
+
+        println!("  Running backtest...\n");
+
+        let result = match strategy.as_str() {
+            "sma_cross" | "sma" => {
+                let mut strat = SMACrossStrategy::new(fast, slow);
+                backtest_engine::run_backtest(&bars, &mut strat, equity)
+            }
+            "nnfx" | "NNFX" => {
+                let mut strat = NNFXStrategy::new(fast, slow);
+                backtest_engine::run_backtest(&bars, &mut strat, equity)
+            }
+            _ => {
+                eprintln!("ERROR: Unknown strategy '{strategy}'. Available: sma_cross, nnfx");
+                std::process::exit(1);
+            }
+        };
+
+        let r = &result.report;
+        println!("═══════════════════════════════════════════════════════");
+        println!("  BACKTEST RESULTS: {symbol} @ {timeframe}");
+        println!("═══════════════════════════════════════════════════════");
+        println!("  Total Trades:       {}", r.total_trades);
+        println!("  Win Rate:           {:.1}%", r.win_rate);
+        println!("  Profit Factor:      {:.2}", r.profit_factor);
+        println!("  Sharpe Ratio:       {:.2}", r.sharpe_ratio);
+        println!("  Total P&L:          ${:.2}", r.total_pnl);
+        println!("  Gross Profit:       ${:.2}", r.gross_profit);
+        println!("  Gross Loss:         ${:.2}", r.gross_loss);
+        println!("  Avg Win:            ${:.2}", r.avg_win);
+        println!("  Avg Loss:           ${:.2}", r.avg_loss);
+        println!("  Avg Trade:          ${:.2}", r.avg_trade);
+        println!("  Max Drawdown:       ${:.2} ({:.1}%)", r.max_drawdown, r.max_drawdown_pct);
+        println!("  Max Con. Wins:      {}", r.max_consecutive_wins);
+        println!("  Max Con. Losses:    {}", r.max_consecutive_losses);
+        println!("═══════════════════════════════════════════════════════");
+
+        // Print trade log
+        if !result.trades.is_empty() {
+            println!("\n  TRADE LOG:");
+            println!("  {:<6} {:<12} {:<12} {:<10} {:<12}", "Side", "Entry", "Exit", "P&L", "P&L%");
+            for t in result.trades.iter().take(50) {
+                println!("  {:<6} {:<12.4} {:<12.4} ${:<9.2} {:.2}%",
+                    t.side, t.entry_price, t.exit_price, t.pnl, t.pnl_pct);
+            }
+            if result.trades.len() > 50 {
+                println!("  ... and {} more trades", result.trades.len() - 50);
+            }
+        }
+    });
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -2182,6 +2290,14 @@ fn main() {
                 .unwrap_or_else(|_| "typhoon_terminal=info".into()),
         )
         .init();
+
+    // ── Headless CLI Backtest Mode ──
+    // Usage: typhoon-terminal --backtest --symbol SMCI --timeframe 1Day --strategy nnfx
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--backtest") {
+        run_headless_backtest(&args);
+        return;
+    }
 
     let state: SharedState = Arc::new(Mutex::new(AppState {
         broker: None,

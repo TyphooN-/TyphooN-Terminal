@@ -67,7 +67,9 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Sector Rotation** | S&P 500 sector ETF heatmap with daily/weekly % (Ctrl+K → SECTORS) |
 | **Options Strategy** | Live chain viewer, presets (spreads, condors), aggregate Greeks (Ctrl+K → OPTSTRAT) |
 | **Auto-Trading** | JS plugin → live order execution, paper-only safety (Ctrl+K → AUTOTRADE) |
-| **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
+| **Headless CLI** | `--backtest` mode: run strategies from command line, no GUI needed (VPS/SSH) |
+| **Community Chat** | Matrix protocol chat via Ctrl+K → CHAT, no server needed |
+| **Multi-Broker Trait** | BrokerTrait abstraction for Alpaca + Tastytrade |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
 | **Security** | 18-pass audit (84 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize, async lock optimization |
@@ -191,6 +193,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [023](docs/adr/023-ux-features-batch.md) | UX batch: GUI menu, tabs, drawing tools, trading |
 | [024](docs/adr/024-charting-engine-race-conditions.md) | Charting engine race conditions — cross-symbol contamination |
 | [025](docs/adr/025-new-features-batch-2.md) | Feature batch 2: NNFX strategy, options tools, sectors, auto-trading |
+| [026](docs/adr/026-architecture-future.md) | Architecture: headless CLI, WebWorker/Wasm plans, Pine Script analysis |
 
 ---
 
