@@ -6,10 +6,57 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 use futures_util::{SinkExt, StreamExt};
+
+/// Shared HTTP client for SEC EDGAR requests (reuses TCP connections).
+fn sec_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .pool_max_idle_per_host(2)
+            .build()
+            .expect("Failed to build SEC HTTP client")
+    })
+}
+
+/// Cached SEC ticker→CIK map. Fetched once (~8MB), reused for all lookups.
+static SEC_TICKER_MAP: tokio::sync::OnceCell<serde_json::Value> = tokio::sync::OnceCell::const_new();
+
+async fn get_sec_ticker_map() -> Result<&'static serde_json::Value, String> {
+    SEC_TICKER_MAP.get_or_try_init(|| async {
+        let client = sec_client();
+        let resp = client
+            .get("https://www.sec.gov/files/company_tickers.json")
+            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+            .send()
+            .await
+            .map_err(|_| "SEC ticker map request failed".to_string())?;
+        resp.json::<serde_json::Value>().await
+            .map_err(|_| "SEC ticker map parse failed".to_string())
+    }).await
+}
+
+/// Look up CIK number for a ticker symbol from cached SEC ticker map.
+async fn lookup_cik(ticker: &str) -> Result<u64, String> {
+    let tickers = get_sec_ticker_map().await?;
+    let upper_ticker = ticker.to_uppercase();
+    if let Some(obj) = tickers.as_object() {
+        for (_, v) in obj {
+            if v["ticker"].as_str() == Some(&upper_ticker) {
+                if let Some(cik) = v["cik_str"].as_u64()
+                    .or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()))
+                {
+                    return Ok(cik);
+                }
+            }
+        }
+    }
+    Err(format!("CIK not found for {ticker}"))
+}
 
 const PAPER_BASE: &str = "https://paper-api.alpaca.markets";
 const LIVE_BASE: &str = "https://api.alpaca.markets";
@@ -610,10 +657,7 @@ impl AlpacaBroker {
         if !matches!(filing_type, "10-K" | "10-Q" | "8-K" | "S-1" | "DEF 14A" | "13F" | "4" | "SC 13D" | "SC 13G") {
             return Err("Invalid filing type".to_string());
         }
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| format!("HTTP client error: {e}"))?;
+        let client = sec_client();
 
         let quoted_ticker = format!("\"{}\"", ticker);
         let cik_resp = client
@@ -655,41 +699,15 @@ impl AlpacaBroker {
 
     /// Fetch company facts from SEC EDGAR (financials, shares outstanding, etc.)
     /// Hardened: timeout, validated ticker, generic error messages.
+    /// Uses cached ticker map and shared HTTP client.
     pub async fn get_sec_company_facts(ticker: &str) -> Result<serde_json::Value, String> {
         if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .map_err(|e| format!("HTTP client error: {e}"))?;
-
-        let tickers_resp = client
-            .get("https://www.sec.gov/files/company_tickers.json")
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
-            .send()
-            .await
-            .map_err(|_| "SEC ticker map request failed".to_string())?;
-
-        let tickers: serde_json::Value = tickers_resp.json().await
-            .map_err(|_| "SEC ticker map parse failed".to_string())?;
-
-        // Find CIK for ticker
-        let upper_ticker = ticker.to_uppercase();
-        let mut cik: Option<u64> = None;
-        if let Some(obj) = tickers.as_object() {
-            for (_, v) in obj {
-                if v["ticker"].as_str() == Some(&upper_ticker) {
-                    cik = v["cik_str"].as_u64().or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()));
-                    break;
-                }
-            }
-        }
-
-        let cik = cik.ok_or_else(|| format!("CIK not found for {ticker}"))?;
+        let client = sec_client();
+        let cik = lookup_cik(ticker).await?;
         let cik_padded = format!("CIK{:010}", cik);
 
-        // Fetch company facts
         let facts_resp = client
             .get(format!("https://data.sec.gov/api/xbrl/companyfacts/{}.json", cik_padded))
             .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
@@ -1158,38 +1176,13 @@ impl AlpacaBroker {
 
     /// Fetch comprehensive financial analysis from SEC EDGAR companyfacts.
     /// Returns income statement, balance sheet, and cash flow data.
+    /// Uses cached ticker map and shared HTTP client.
     pub async fn get_financial_analysis(ticker: &str) -> Result<serde_json::Value, String> {
         if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .map_err(|e| format!("HTTP client error: {e}"))?;
-
-        // Reuse same CIK lookup as get_sec_company_facts
-        let tickers_resp = client
-            .get("https://www.sec.gov/files/company_tickers.json")
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
-            .send()
-            .await
-            .map_err(|_| "SEC ticker map request failed".to_string())?;
-
-        let tickers: serde_json::Value = tickers_resp.json().await
-            .map_err(|_| "SEC ticker map parse failed".to_string())?;
-
-        let upper_ticker = ticker.to_uppercase();
-        let mut cik: Option<u64> = None;
-        if let Some(obj) = tickers.as_object() {
-            for (_, v) in obj {
-                if v["ticker"].as_str() == Some(&upper_ticker) {
-                    cik = v["cik_str"].as_u64().or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()));
-                    break;
-                }
-            }
-        }
-
-        let cik = cik.ok_or_else(|| format!("CIK not found for {ticker}"))?;
+        let client = sec_client();
+        let cik = lookup_cik(ticker).await?;
         let cik_padded = format!("CIK{:010}", cik);
 
         let facts_resp = client
@@ -1267,41 +1260,15 @@ impl AlpacaBroker {
 
     /// Fetch institutional holder info from SEC EDGAR submissions.
     /// Looks for 13F filings in the company's filing history.
+    /// Uses cached ticker map and shared HTTP client.
     pub async fn get_institutional_holders(ticker: &str) -> Result<serde_json::Value, String> {
         if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .map_err(|e| format!("HTTP client error: {e}"))?;
-
-        // Ticker → CIK lookup
-        let tickers_resp = client
-            .get("https://www.sec.gov/files/company_tickers.json")
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
-            .send()
-            .await
-            .map_err(|_| "SEC ticker map request failed".to_string())?;
-
-        let tickers: serde_json::Value = tickers_resp.json().await
-            .map_err(|_| "SEC ticker map parse failed".to_string())?;
-
-        let upper_ticker = ticker.to_uppercase();
-        let mut cik: Option<u64> = None;
-        if let Some(obj) = tickers.as_object() {
-            for (_, v) in obj {
-                if v["ticker"].as_str() == Some(&upper_ticker) {
-                    cik = v["cik_str"].as_u64().or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()));
-                    break;
-                }
-            }
-        }
-
-        let cik = cik.ok_or_else(|| format!("CIK not found for {ticker}"))?;
+        let client = sec_client();
+        let cik = lookup_cik(ticker).await?;
         let cik_padded = format!("{:010}", cik);
 
-        // Fetch submissions (filing history)
         let subs_resp = client
             .get(format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded))
             .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
@@ -1600,42 +1567,15 @@ impl AlpacaBroker {
     // ── Insider Trading (SEC Form 4) ─────────────────────────────────
 
     /// Fetch insider trades for a ticker via SEC EDGAR (Form 4 filings).
+    /// Uses cached ticker map and shared HTTP client.
     pub async fn get_insider_trades(ticker: &str) -> Result<Vec<InsiderTrade>, String> {
         if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .map_err(|e| format!("HTTP client error: {e}"))?;
-
-        // Step 1: Look up CIK from ticker
-        let tickers_resp = client
-            .get("https://www.sec.gov/files/company_tickers.json")
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
-            .send()
-            .await
-            .map_err(|_| "SEC ticker map request failed".to_string())?;
-
-        let tickers: serde_json::Value = tickers_resp.json().await
-            .map_err(|_| "SEC ticker map parse failed".to_string())?;
-
-        let upper_ticker = ticker.to_uppercase();
-        let mut cik: Option<u64> = None;
-        if let Some(obj) = tickers.as_object() {
-            for (_, v) in obj {
-                if v["ticker"].as_str() == Some(&upper_ticker) {
-                    cik = v["cik_str"].as_u64()
-                        .or_else(|| v["cik_str"].as_str().and_then(|s| s.parse().ok()));
-                    break;
-                }
-            }
-        }
-
-        let cik = cik.ok_or_else(|| format!("CIK not found for {ticker}"))?;
+        let client = sec_client();
+        let cik = lookup_cik(ticker).await?;
         let cik_padded = format!("{:010}", cik);
 
-        // Step 2: Fetch submissions (includes all recent filings)
         let subs_resp = client
             .get(format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded))
             .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")

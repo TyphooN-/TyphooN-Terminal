@@ -64,6 +64,7 @@ let currentTimeframe = "1Hour";
 let lastPrice = 0;
 let mtfData = {};
 let currentChartData = []; // full chartData with volume — candleSeries.data() drops volume
+let chartLoadGeneration = 0; // increments on each loadChart call — stale intervals check this
 let activeBrokerId = "default"; // per-broker data isolation — set on connect
 let currentChartType = "candles"; // "candles" | "line" | "bars"
 let orderPriceLines = []; // pending order visualization lines on chart
@@ -116,6 +117,8 @@ function switchTab(id) {
   // Clear current chart immediately before loading new
   candleSeries.setData([]);
   clearIndicators();
+  removeSLLine(); removeTPLine(); // Clear SL/TP lines from previous symbol
+  mtfData = {}; // Clear stale MTF data from previous symbol
   for (const [, s] of Object.entries(fisherSeries)) fisherChart.removeSeries(s);
   for (const [, s] of Object.entries(volumeSeries)) volumeChart.removeSeries(s);
   fisherSeries = {};
@@ -538,6 +541,36 @@ function removeTPLine() {
 }
 function getSLPrice() { return slLine ? slLine.options().price : null; }
 function getTPPrice() { return tpLine ? tpLine.options().price : null; }
+
+/// Place a protective stop or limit order on an existing position.
+/// Called when "Set SL" / "Set TP" is clicked or from the warning banner.
+async function placeProtectiveOrder(symbol, type, price) {
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+    const symNoSlash = symbol.replace("/", "");
+    const pos = positions.find(p => p.symbol === symbol || p.symbol === symNoSlash);
+    if (!pos) return; // no position to protect
+
+    const qty = Math.abs(pos.qty);
+    const oppSide = pos.side === "long" ? "sell" : "buy";
+
+    if (type === "sl") {
+      await invoke("place_stop_order", {
+        symbol, qty, side: oppSide, stopPrice: price, tif: "gtc",
+      });
+      log(`Protective SL placed: ${oppSide} ${qty} @ ${price}`, "ok");
+    } else if (type === "tp") {
+      await invoke("place_limit_order", {
+        symbol, qty, side: oppSide, limitPrice: price, tif: "gtc",
+      });
+      log(`Protective TP placed: ${oppSide} ${qty} @ ${price}`, "ok");
+    }
+  } catch (e) {
+    log(`Protective order failed: ${e}`, "error");
+    alert(`Failed to place protective ${type.toUpperCase()}: ${e}`);
+  }
+}
 
 // ── Draggable SL/TP Lines (MT5-style) ──────────────────────
 // Double-click near a line to grab it, drag to new price, release to set.
@@ -1564,7 +1597,7 @@ const MTF_MA_COLORS = {
   "1Week": "#FF00FF",  // Magenta
 };
 
-const MTF_LABELS = { "15Min": "M15", "30Min": "M30", "1Hour": "H1", "4Hour": "H4", "1Day": "D1", "1Week": "W1" };
+const MTF_LABELS = { "15Min": "M15", "30Min": "M30", "1Hour": "H1", "2Hour": "H2", "3Hour": "H3", "4Hour": "H4", "6Hour": "H6", "8Hour": "H8", "12Hour": "H12", "1Day": "D1", "1Week": "W1", "1Month": "MN1" };
 
 async function loadMTFData(symbol) {
   try {
@@ -1573,6 +1606,11 @@ async function loadMTFData(symbol) {
       timeframes: MTF_TIMEFRAMES,
       limit: 500,
     });
+    // Guard: discard if symbol changed during async fetch
+    if (currentSymbol !== symbol) {
+      log(`MTF data discarded (symbol changed: ${symbol} → ${currentSymbol})`, "warn");
+      return;
+    }
     mtfData = {};
     const parsed = JSON.parse(json);
     for (const [tf, bars] of Object.entries(parsed)) {
@@ -2374,9 +2412,14 @@ function aggregateBars(bars, factor) {
 
 // Custom timeframe map: custom TF -> { base TF, aggregation factor }
 const CUSTOM_TIMEFRAME_MAP = {
+  "10Min":  { base: "5Min",  factor: 2 },
+  "20Min":  { base: "5Min",  factor: 4 },
+  "45Min":  { base: "15Min", factor: 3 },
   "2Hour":  { base: "1Hour", factor: 2 },
   "3Hour":  { base: "1Hour", factor: 3 },
   "6Hour":  { base: "1Hour", factor: 6 },
+  "8Hour":  { base: "4Hour", factor: 2 },
+  "12Hour": { base: "4Hour", factor: 3 },
   "2Day":   { base: "1Day",  factor: 2 },
   "3Day":   { base: "1Day",  factor: 3 },
 };
@@ -2468,8 +2511,8 @@ async function loadChart(symbol, timeframe) {
             if (freshBars.length > 0) {
               barCache[cacheKey] = { data: freshBars, timestamp: Date.now() };
               saveBarCacheToDisk(cacheKey, freshBars);
-              // If still on same tab/symbol, update chart
-              if (currentSymbol === symbol && currentTimeframe === timeframe) {
+              // If still on same tab/symbol, update chart (activeTabId prevents cross-tab writes)
+              if (currentSymbol === symbol && currentTimeframe === timeframe && activeTabId === loadTabId) {
                 let freshChartData = freshBars.map(b => ({
                   time: Math.floor(new Date(b.timestamp).getTime() / 1000),
                   open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
@@ -2554,32 +2597,55 @@ async function loadChart(symbol, timeframe) {
     if (chartData.length > 0) lastPrice = chartData[chartData.length - 1].close;
 
     // Load MTF data for multi-timeframe indicators, then apply all + update grid
+    // Guard: discard stale MTF data if user switched symbols during fetch
     loadMTFData(symbol).then(() => {
+      if (currentSymbol !== symbol) return;
       applyIndicators(chartData);
       renderAnnotations();
       updateMTFGrid();
-    }).catch(() => applyIndicators(chartData));
+    }).catch(() => {
+      if (currentSymbol !== symbol) return;
+      applyIndicators(chartData);
+    });
 
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
     setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
     setLoadingStatus(symbol, null);
     updateTabLabel();
 
-    // Start live bar polling (update latest bar every 10s)
-    if (liveBarInterval) clearInterval(liveBarInterval);
-    liveBarInterval = setInterval(() => updateLatestBar(symbol, timeframe), 10000);
+    // Restore SL/TP lines from backend state (persists across tab switches)
+    try {
+      const stJson = await invoke("get_sl_tp_pl", {
+        symbol, qty: 1, side: "long", entryPrice: lastPrice,
+      });
+      const st = JSON.parse(stJson);
+      if (st.sl_price && st.sl_price > 0 && !getSLPrice()) createSLLine(st.sl_price);
+      if (st.tp_price && st.tp_price > 0 && !getTPPrice()) createTPLine(st.tp_price);
+    } catch (_) {}
 
-    // If MTF grid is active, reload cells with new symbol (defer to avoid blocking)
+    // Start live bar polling (update latest bar every 10s)
+    // Generation counter prevents stale intervals from updating wrong charts
+    if (liveBarInterval) clearInterval(liveBarInterval);
+    const gen = ++chartLoadGeneration;
+    liveBarInterval = setInterval(() => {
+      if (chartLoadGeneration !== gen) { clearInterval(liveBarInterval); return; }
+      updateLatestBar(symbol, timeframe);
+    }, 10000);
+
+    // If MTF grid is active, reload cells with new symbol (defer to let DOM settle)
     if (mtfGridActive && mtfGridCells.length > 0) {
       const selectedTFs = mtfGridCells.map(c => c.tf);
       closeMTFGrid();
-      setTimeout(() => {
-        openMTFGrid(symbol, selectedTFs).catch(e => {
+      // Wait for DOM cleanup, then reopen grid with new symbol
+      requestAnimationFrame(() => {
+        openMTFGrid(symbol, selectedTFs).then(() => {
+          // Extra resize after data loads to fix 0-dimension cells
+          setTimeout(() => resizeMTFGrid(), 100);
+        }).catch(e => {
           log(`MTF grid reload failed: ${e}`, "warn");
-          // Show main chart as fallback
           document.getElementById("chart-stack").style.display = "";
         });
-      }, 200);
+      });
     } else {
       prefetchAllTimeframes(symbol, timeframe, limit);
     }
@@ -2633,6 +2699,8 @@ async function updateLatestBar(symbol, timeframe) {
   const fetchTF = customTF ? customTF.base : timeframe;
   try {
     const barsJson = await invoke("get_bars", { symbol, timeframe: fetchTF, limit: 5 });
+    // Re-check symbol after async — user may have switched tabs during fetch
+    if (symbol !== currentSymbol) return;
     const bars = JSON.parse(barsJson);
     if (bars.length === 0) return;
     const latest = bars[bars.length - 1];
@@ -2644,7 +2712,6 @@ async function updateLatestBar(symbol, timeframe) {
       low: latest.low,
       close: latest.close,
     };
-    // Always update lastPrice (used by dashboard, alerts, MTF sync)
     lastPrice = bar.close;
     // Only update main chart series if it's visible (not in MTF grid mode)
     if (!mtfGridActive) {
@@ -2659,6 +2726,8 @@ async function updateLatestBar(symbol, timeframe) {
 
     // If a NEW bar has printed (different timestamp), refresh all indicators
     if (barTime !== lastBarTime && lastBarTime !== 0) {
+      // Final symbol guard before mutating global chart state
+      if (symbol !== currentSymbol) return;
       log(`New bar on ${symbol} @ ${timeframe}`, "info");
       // Update currentChartData with the new bar (preserve volume)
       if (currentChartData.length > 0 && currentChartData[currentChartData.length - 1].time === barTime) {
@@ -2724,6 +2793,7 @@ async function updateDashboard() {
     plEl.className = `dash-row ${totalPL >= 0 ? "positive" : "negative"}`;
 
     // SL/TP P/L, Risk, R:R
+    const warnEl = document.getElementById("no-sl-warning");
     if (posQty > 0 && posEntry > 0) {
       try {
         const stJson = await invoke("get_sl_tp_pl", {
@@ -2731,7 +2801,10 @@ async function updateDashboard() {
         });
         const st = JSON.parse(stJson);
 
-        if (st.sl_pl !== null) {
+        const hasSL = st.sl_pl !== null;
+        const hasTP = st.tp_pl !== null;
+
+        if (hasSL) {
           setTextClass("info-sl-pl", `SL P/L: $${st.sl_pl.toFixed(2)}`, st.sl_pl >= 0 ? "positive" : "negative");
           if (mi.balance > 0) {
             setText("info-risk", `Risk: $${Math.abs(st.sl_pl).toFixed(2)} (${(Math.abs(st.sl_pl) / mi.balance * 100).toFixed(2)}%)`);
@@ -2740,10 +2813,17 @@ async function updateDashboard() {
           setText("info-sl-pl", "SL P/L: —");
           setText("info-risk", "Risk: —");
         }
-        if (st.tp_pl !== null) setTextClass("info-tp-pl", `TP P/L: $${st.tp_pl.toFixed(2)}`, "positive");
+        if (hasTP) setTextClass("info-tp-pl", `TP P/L: $${st.tp_pl.toFixed(2)}`, "positive");
         else setText("info-tp-pl", "TP P/L: —");
         if (st.rr !== null) setText("info-rr", `RR: ${st.rr.toFixed(2)}`);
         else setText("info-rr", "RR: —");
+
+        // Show/hide unprotected position warning
+        if (!hasSL && !hasTP) {
+          warnEl.classList.remove("hidden");
+        } else {
+          warnEl.classList.add("hidden");
+        }
       } catch (_) {}
 
       // VaR
@@ -2762,10 +2842,12 @@ async function updateDashboard() {
       setText("info-rr", "RR: —");
       setText("info-var", "VaR: —");
       setText("info-risk", "Risk: —");
+      warnEl.classList.add("hidden");
     }
 
     updateNextBarTime();
     updatePositionsPanel();
+    updateOrdersPanel();
     updateOrderPriceLines();
     checkAlerts();
     checkMultiConditionAlerts();
@@ -3002,7 +3084,11 @@ function setupButtons() {
 
       orderInFlight = true;
       try {
-        const orderType = document.getElementById("order-type").value;
+        let orderType = document.getElementById("order-type").value;
+        // MT5 behavior: market order with SL/TP lines → auto-upgrade to bracket
+        if (orderType === "market" && sl && tp) {
+          orderType = "bracket";
+        }
         for (let i = 0; i < calc.count; i++) {
           if (orderType === "bracket") {
             await invoke("place_bracket_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side, tpPrice: tp, slPrice: sl });
@@ -3107,6 +3193,8 @@ function setupButtons() {
     const sl = getSLPrice();
     if (!sl || !currentSymbol) return;
     await invoke("set_sl_level", { symbol: currentSymbol, price: sl });
+    // Place a broker-side stop order if position exists (protective SL)
+    await placeProtectiveOrder(currentSymbol, "sl", sl);
     updateDashboard();
   });
 
@@ -3114,6 +3202,32 @@ function setupButtons() {
     const tp = getTPPrice();
     if (!tp || !currentSymbol) return;
     await invoke("set_tp_level", { symbol: currentSymbol, price: tp });
+    // Place a broker-side limit order if position exists (protective TP)
+    await placeProtectiveOrder(currentSymbol, "tp", tp);
+    updateDashboard();
+  });
+
+  // Warning banner click: prompt for SL/TP and place protective orders
+  document.getElementById("no-sl-warning").addEventListener("click", async () => {
+    if (!currentSymbol) return;
+    const sl = prompt(`Set SL price for ${currentSymbol}:`);
+    const tp = prompt(`Set TP price for ${currentSymbol}:`);
+    if (sl) {
+      const slNum = parseFloat(sl);
+      if (slNum > 0 && isFinite(slNum)) {
+        createSLLine(slNum);
+        await invoke("set_sl_level", { symbol: currentSymbol, price: slNum });
+        await placeProtectiveOrder(currentSymbol, "sl", slNum);
+      }
+    }
+    if (tp) {
+      const tpNum = parseFloat(tp);
+      if (tpNum > 0 && isFinite(tpNum)) {
+        createTPLine(tpNum);
+        await invoke("set_tp_level", { symbol: currentSymbol, price: tpNum });
+        await placeProtectiveOrder(currentSymbol, "tp", tpNum);
+      }
+    }
     updateDashboard();
   });
 
@@ -3121,23 +3235,33 @@ function setupButtons() {
   const slInput = document.getElementById("sl-input");
   const tpInput = document.getElementById("tp-input");
 
-  // SL/TP inputs: only fire on Enter key (not blur/change — prevents accidental triggers)
+  // SL/TP inputs: Enter key sets line + saves to backend + places protective order
   if (slInput) {
-    slInput.addEventListener("keydown", (e) => {
+    slInput.addEventListener("keydown", async (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
         const val = parseFloat(slInput.value);
-        if (!isNaN(val) && val > 0) createSLLine(val);
+        if (!isNaN(val) && val > 0 && currentSymbol) {
+          createSLLine(val);
+          await invoke("set_sl_level", { symbol: currentSymbol, price: val });
+          await placeProtectiveOrder(currentSymbol, "sl", val);
+          updateDashboard();
+        }
         slInput.blur();
       }
     });
   }
   if (tpInput) {
-    tpInput.addEventListener("keydown", (e) => {
+    tpInput.addEventListener("keydown", async (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
         const val = parseFloat(tpInput.value);
-        if (!isNaN(val) && val > 0) createTPLine(val);
+        if (!isNaN(val) && val > 0 && currentSymbol) {
+          createTPLine(val);
+          await invoke("set_tp_level", { symbol: currentSymbol, price: val });
+          await placeProtectiveOrder(currentSymbol, "tp", val);
+          updateDashboard();
+        }
         tpInput.blur();
       }
     });
@@ -3890,29 +4014,78 @@ function restoreSession() {
 
 // ── Positions Panel ──────────────────────────────────────────
 
+let positionsChartOnly = false;
+
 function setupPositionsPanel() {
   const panel = document.getElementById("positions-panel");
   const header = document.getElementById("positions-header");
-  const content = document.getElementById("positions-content");
 
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
-    header.textContent = panel.classList.contains("collapsed") ? "Positions ▶" : "Positions ▼";
+    updatePositionsHeader(panel);
   });
+}
+
+function updatePositionsHeader(panel) {
+  const header = document.getElementById("positions-header");
+  header.textContent = panel.classList.contains("collapsed") ? "Positions ▶" : "Positions ▼";
 }
 
 async function updatePositionsPanel() {
   const content = document.getElementById("positions-content");
+  const panel = document.getElementById("positions-panel");
   if (!content) return;
   try {
     const posJson = await invoke("get_positions");
     const positions = JSON.parse(posJson);
     content.textContent = "";
+
     if (positions.length === 0) {
       content.textContent = "No positions";
       return;
     }
-    for (const p of positions) {
+
+    // Auto-expand when positions exist (never auto-collapse)
+    if (panel.classList.contains("collapsed")) {
+      panel.classList.remove("collapsed");
+      updatePositionsHeader(panel);
+    }
+
+    // Filter controls
+    const controls = document.createElement("div");
+    controls.style.cssText = "display:flex;align-items:center;gap:6px;padding:2px 0 4px;border-bottom:1px solid #1a1a2e;";
+    const filterLabel = document.createElement("label");
+    filterLabel.style.cssText = "display:flex;align-items:center;gap:3px;font-size:10px;color:#888;cursor:pointer;user-select:none;";
+    const filterCb = document.createElement("input");
+    filterCb.type = "checkbox";
+    filterCb.checked = positionsChartOnly;
+    filterCb.style.cssText = "margin:0;cursor:pointer;";
+    filterCb.addEventListener("change", () => {
+      positionsChartOnly = filterCb.checked;
+      updatePositionsPanel();
+    });
+    const filterText = document.createElement("span");
+    filterText.textContent = "Chart only";
+    filterLabel.appendChild(filterCb);
+    filterLabel.appendChild(filterText);
+    controls.appendChild(filterLabel);
+    content.appendChild(controls);
+
+    // Filter positions if checkbox is ticked
+    const sym = currentSymbol.replace("/", "");
+    const filtered = positionsChartOnly
+      ? positions.filter(p => p.symbol === currentSymbol || p.symbol === sym)
+      : positions;
+
+    if (filtered.length === 0) {
+      const msg = document.createElement("div");
+      msg.style.cssText = "color:#888;font-size:10px;padding:4px 0;";
+      msg.textContent = `No positions for ${currentSymbol}`;
+      content.appendChild(msg);
+      return;
+    }
+
+    for (const p of filtered) {
       const row = document.createElement("div");
       row.className = "pos-row";
       row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:3px 0;border-bottom:1px solid #1a1a2e;font-size:11px;";
@@ -3956,53 +4129,103 @@ async function updatePositionsPanel() {
 
 // ── Orders Panel (Trade History) ─────────────────────────────
 
+let ordersChartOnly = false;
+
 function setupOrdersPanel() {
   const panel = document.getElementById("orders-panel");
   const header = document.getElementById("orders-header");
 
-  panel.classList.add("collapsed");
-  header.textContent = "Orders ▶";
-
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
-    header.textContent = panel.classList.contains("collapsed") ? "Orders ▶" : "Orders ▼";
+    updateOrdersHeader(panel);
     if (!panel.classList.contains("collapsed")) updateOrdersPanel();
   });
 }
 
+function updateOrdersHeader(panel) {
+  const header = document.getElementById("orders-header");
+  header.textContent = panel.classList.contains("collapsed") ? "Orders ▶" : "Orders ▼";
+}
+
 async function updateOrdersPanel() {
   const content = document.getElementById("orders-content");
+  const panel = document.getElementById("orders-panel");
   if (!content) return;
   content.textContent = "";
   try {
     // Open orders first
     const openJson = await invoke("get_open_orders");
     const openOrders = JSON.parse(openJson);
-    if (openOrders.length > 0) {
-      const hdr = document.createElement("div");
-      hdr.textContent = "Open Orders";
-      hdr.style.cssText = "color:#ff8;font-size:10px;font-weight:bold;padding:4px 0 2px;";
-      content.appendChild(hdr);
-      for (const o of openOrders) {
-        content.appendChild(renderOrderRow(o, true));
-      }
-    }
 
     // Recent closed orders
     const histJson = await invoke("get_order_history", { limit: 20 });
     const history = JSON.parse(histJson);
-    if (history.length > 0) {
+
+    const hasOrders = openOrders.length > 0 || history.length > 0;
+
+    if (!hasOrders) {
+      content.textContent = "No orders";
+      return;
+    }
+
+    // Auto-expand when open orders exist (never auto-collapse)
+    if (openOrders.length > 0 && panel.classList.contains("collapsed")) {
+      panel.classList.remove("collapsed");
+      updateOrdersHeader(panel);
+    }
+
+    // Filter controls
+    const controls = document.createElement("div");
+    controls.style.cssText = "display:flex;align-items:center;gap:6px;padding:2px 0 4px;border-bottom:1px solid #1a1a2e;";
+    const filterLabel = document.createElement("label");
+    filterLabel.style.cssText = "display:flex;align-items:center;gap:3px;font-size:10px;color:#888;cursor:pointer;user-select:none;";
+    const filterCb = document.createElement("input");
+    filterCb.type = "checkbox";
+    filterCb.checked = ordersChartOnly;
+    filterCb.style.cssText = "margin:0;cursor:pointer;";
+    filterCb.addEventListener("change", () => {
+      ordersChartOnly = filterCb.checked;
+      updateOrdersPanel();
+    });
+    const filterText = document.createElement("span");
+    filterText.textContent = "Chart only";
+    filterLabel.appendChild(filterCb);
+    filterLabel.appendChild(filterText);
+    controls.appendChild(filterLabel);
+    content.appendChild(controls);
+
+    // Filter by current chart symbol if checkbox ticked
+    const sym = currentSymbol.replace("/", "");
+    const matchSymbol = (o) => !ordersChartOnly || o.symbol === currentSymbol || o.symbol === sym;
+
+    const filteredOpen = openOrders.filter(matchSymbol);
+    const filteredHist = history.filter(matchSymbol);
+
+    if (filteredOpen.length > 0) {
+      const hdr = document.createElement("div");
+      hdr.textContent = "Open Orders";
+      hdr.style.cssText = "color:#ff8;font-size:10px;font-weight:bold;padding:4px 0 2px;";
+      content.appendChild(hdr);
+      for (const o of filteredOpen) {
+        content.appendChild(renderOrderRow(o, true));
+      }
+    }
+
+    if (filteredHist.length > 0) {
       const hdr = document.createElement("div");
       hdr.textContent = "Recent Fills";
       hdr.style.cssText = "color:#888;font-size:10px;font-weight:bold;padding:4px 0 2px;";
       content.appendChild(hdr);
-      for (const o of history.slice(0, 15)) {
+      for (const o of filteredHist.slice(0, 15)) {
         content.appendChild(renderOrderRow(o, false));
       }
     }
 
-    if (openOrders.length === 0 && history.length === 0) {
-      content.textContent = "No orders";
+    if (filteredOpen.length === 0 && filteredHist.length === 0) {
+      const msg = document.createElement("div");
+      msg.style.cssText = "color:#888;font-size:10px;padding:4px 0;";
+      msg.textContent = `No orders for ${currentSymbol}`;
+      content.appendChild(msg);
     }
   } catch (_) {}
 }
@@ -6073,7 +6296,7 @@ function openVisualBacktester() {
   tfSelect.textContent = "TF:";
   const tfSel = document.createElement("select");
   tfSel.className = "bt-input";
-  for (const [v, l] of [["1Min","1m"],["5Min","5m"],["15Min","15m"],["1Hour","1H"],["4Hour","4H"],["1Day","D1"],["1Week","W1"]]) {
+  for (const [v, l] of [["1Min","M1"],["5Min","M5"],["15Min","M15"],["30Min","M30"],["1Hour","H1"],["4Hour","H4"],["1Day","D1"],["1Week","W1"]]) {
     const opt = document.createElement("option");
     opt.value = v; opt.textContent = l;
     if (v === tf) opt.selected = true;
@@ -7527,15 +7750,105 @@ async function updateOrderPriceLines() {
 
   // Only draw if we have a series and are connected
   if (!candleSeries || !currentSymbol) return;
+  const sym = currentSymbol;
+  const symNoSlash = sym.replace("/", "");
 
   try {
-    const json = await invoke("get_open_orders");
-    const orders = JSON.parse(json);
+    // Fetch orders and positions in parallel
+    const [ordersJson, posJson] = await Promise.all([
+      invoke("get_open_orders"),
+      invoke("get_positions"),
+    ]);
+    const orders = JSON.parse(ordersJson);
+    const positions = JSON.parse(posJson);
 
+    // ── Position SL/TP dotted lines (MT5-style) ──
+    // Find open orders that are bracket legs for the current symbol's position.
+    // Bracket SL = stop order on opposite side of position.
+    // Bracket TP = limit order on opposite side of position.
+    const pos = positions.find(p => p.symbol === sym || p.symbol === symNoSlash);
+    if (pos) {
+      const oppSide = pos.side === "long" ? "sell" : "buy";
+      // Collect bracket leg prices for this position
+      let posSL = null;
+      let posTP = null;
+      for (const o of orders) {
+        const oSym = o.symbol || "";
+        if (oSym !== sym && oSym !== symNoSlash) continue;
+        if (o.side !== oppSide) continue;
+        // Stop order on opposite side = SL leg
+        if (o.order_type === "stop" && o.stop_price) {
+          const p = parseFloat(o.stop_price);
+          if (p > 0 && isFinite(p)) posSL = p;
+        }
+        // Limit order on opposite side = TP leg
+        if (o.order_type === "limit" && o.limit_price) {
+          const p = parseFloat(o.limit_price);
+          if (p > 0 && isFinite(p)) posTP = p;
+        }
+      }
+
+      // Fallback: if no bracket legs found, use locally-tracked SL/TP
+      // (set when order was placed via set_sl_level/set_tp_level, or from manual SL/TP lines)
+      if (!posSL) posSL = getSLPrice();
+      if (!posTP) posTP = getTPPrice();
+
+      // Draw position SL as dotted red line
+      if (posSL) {
+        try {
+          const line = candleSeries.createPriceLine({
+            price: posSL,
+            color: "#f44336",
+            lineWidth: 1,
+            lineStyle: 3, // dotted (MT5-style)
+            axisLabelVisible: true,
+            title: `SL ${pos.side.toUpperCase()}`,
+          });
+          orderPriceLines.push(line);
+        } catch (_) {}
+      }
+
+      // Draw position TP as dotted green line
+      if (posTP) {
+        try {
+          const line = candleSeries.createPriceLine({
+            price: posTP,
+            color: "#4caf50",
+            lineWidth: 1,
+            lineStyle: 3, // dotted (MT5-style)
+            axisLabelVisible: true,
+            title: `TP ${pos.side.toUpperCase()}`,
+          });
+          orderPriceLines.push(line);
+        } catch (_) {}
+      }
+
+      // Draw position entry as dotted blue line
+      if (pos.avg_entry_price > 0) {
+        try {
+          const line = candleSeries.createPriceLine({
+            price: pos.avg_entry_price,
+            color: pos.side === "long" ? "#2196f3" : "#e91e63",
+            lineWidth: 1,
+            lineStyle: 3, // dotted
+            axisLabelVisible: true,
+            title: `ENTRY ${pos.side.toUpperCase()} ${Math.abs(pos.qty)}`,
+          });
+          orderPriceLines.push(line);
+        } catch (_) {}
+      }
+    }
+
+    // ── Pending order lines (existing behavior) ──
     for (const o of orders) {
-      // Only show orders for the current symbol
       const orderSymbol = o.symbol || "";
-      if (orderSymbol !== currentSymbol && orderSymbol !== currentSymbol.replace("/", "")) continue;
+      if (orderSymbol !== sym && orderSymbol !== symNoSlash) continue;
+
+      // Skip bracket legs already drawn as position SL/TP above
+      if (pos) {
+        const oppSide = pos.side === "long" ? "sell" : "buy";
+        if (o.side === oppSide && (o.order_type === "stop" || o.order_type === "limit")) continue;
+      }
 
       let price = null;
       let color = "#2196f3"; // default blue for limit
@@ -7550,12 +7863,10 @@ async function updateOrderPriceLines() {
         color = "#ff9800"; // orange
         title = `STP ${o.side.toUpperCase()} ${o.qty}`;
       } else if (o.order_type === "stop_limit") {
-        // Show stop price as the trigger
         price = parseFloat(o.stop_price || o.limit_price);
         color = "#9c27b0"; // purple
         title = `S/L ${o.side.toUpperCase()} ${o.qty}`;
       } else if (o.order_type === "trailing_stop") {
-        // Trail stops may not have a fixed price yet
         if (o.stop_price) {
           price = parseFloat(o.stop_price);
           color = "#ff9800";
@@ -7625,7 +7936,8 @@ document.addEventListener("DOMContentLoaded", () => {
 // ── MTF Grid View (MT5-style multi-timeframe) ───────────
 
 let mtfGridActive = false;
-let mtfGridCells = []; // [{ tf, chart, candleSeries, fisherChart, volumeChart, container }]
+let mtfGridCells = []; // [{ tf, symbol, chart, candleSeries, fisherChart, volumeChart, container }]
+let mtfGridSymbol = ""; // symbol the grid was opened for
 let mtfActiveCell = null; // currently selected grid cell for trading
 
 function setupMTFGrid() {
@@ -7661,6 +7973,7 @@ function setupMTFGrid() {
 async function openMTFGrid(symbol, timeframes) {
   if (!symbol) { log("MTF grid: no symbol", "warn"); return; }
   mtfGridActive = true;
+  mtfGridSymbol = symbol;
   const btn = document.getElementById("btn-mtf-grid");
   btn.textContent = "Close Grid";
 
@@ -7677,7 +7990,7 @@ async function openMTFGrid(symbol, timeframes) {
   gridContainer.className = `grid-${Math.min(count, 5)}`;
   chartStack.parentElement.insertBefore(gridContainer, chartStack);
 
-  const tfLabels = { "1Min": "M1", "5Min": "M5", "15Min": "M15", "30Min": "M30", "1Hour": "H1", "4Hour": "H4", "1Day": "D1", "1Week": "W1", "1Month": "MN" };
+  const tfLabels = { "1Min": "M1", "5Min": "M5", "10Min": "M10", "15Min": "M15", "20Min": "M20", "30Min": "M30", "45Min": "M45", "1Hour": "H1", "2Hour": "H2", "3Hour": "H3", "4Hour": "H4", "6Hour": "H6", "8Hour": "H8", "12Hour": "H12", "1Day": "D1", "2Day": "2D", "3Day": "3D", "1Week": "W1", "1Month": "MN1" };
 
   for (const tf of timeframes) {
     const cell = document.createElement("div");
@@ -7834,8 +8147,18 @@ async function openMTFGrid(symbol, timeframes) {
     await loadMTFCellData(cellInfo, symbol);
   }
 
-  // Initial resize
-  requestAnimationFrame(() => resizeMTFGrid());
+  // Initial resize — multiple frames to ensure DOM has settled after grid creation.
+  // Without this, cells can have 0×0 dimensions on first symbol load.
+  requestAnimationFrame(() => {
+    resizeMTFGrid();
+    requestAnimationFrame(() => {
+      resizeMTFGrid();
+      // Final resize + fit content after layout is stable
+      for (const cell of mtfGridCells) {
+        cell.chart.timeScale().fitContent();
+      }
+    });
+  });
 
   // Resize observer
   const ro = new ResizeObserver(() => resizeMTFGrid());
@@ -7878,6 +8201,13 @@ async function loadMTFCellData(cellInfo, symbol) {
     }));
 
     if (chartData.length === 0) return;
+
+    // Ensure cell has dimensions before setting data (fixes 0×0 on first load)
+    const w = cellInfo.chartDiv.clientWidth;
+    const ch = cellInfo.chartDiv.clientHeight;
+    if (w > 0 && ch > 0) {
+      cellInfo.chart.resize(w, ch);
+    }
 
     cellInfo.candleSeries.setData(chartData);
     // Zoom to recent bars — fewer for higher TFs (MT5-style)
@@ -8029,13 +8359,15 @@ function resizeMTFGrid() {
 // Sync live price across all MTF grid cells — update last bar's close to current price
 function syncMTFGridLivePrice() {
   if (!mtfGridActive || mtfGridCells.length === 0 || lastPrice <= 0) return;
-  const now = Math.floor(Date.now() / 1000);
+  // Guard: only sync if the grid symbol matches the current symbol.
+  // Prevents cross-symbol contamination during tab switches (e.g. LUMN grid
+  // getting SMCI's lastPrice, creating a false $8→$868 wick).
+  if (mtfGridSymbol !== currentSymbol) return;
   for (const cell of mtfGridCells) {
     try {
       const data = cell.candleSeries.data();
       if (!data || data.length === 0) continue;
       const lastBar = data[data.length - 1];
-      // Update the last bar with current live price
       cell.candleSeries.update({
         time: lastBar.time,
         open: lastBar.open,
@@ -8390,6 +8722,7 @@ function detectRegime(data, period = 20) {
 
 function closeMTFGrid() {
   mtfGridActive = false;
+  mtfGridSymbol = "";
   mtfActiveCell = null;
   const btn = document.getElementById("btn-mtf-grid");
   btn.textContent = "MTF Grid";

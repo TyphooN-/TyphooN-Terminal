@@ -5,7 +5,21 @@
 
 use reqwest::Client;
 use serde_json::json;
+use std::sync::OnceLock;
 use tracing::{error, info};
+
+/// Shared HTTP client for all notification providers.
+/// Reuses TCP connections across calls instead of creating a new client each time.
+fn notification_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .pool_max_idle_per_host(2)
+            .build()
+            .expect("Failed to build notification HTTP client")
+    })
+}
 
 /// Send a message to a Discord webhook.
 ///
@@ -22,10 +36,7 @@ pub async fn send_discord(webhook_url: &str, message: &str) -> Result<(), String
         return Err("Message too long (max 2000 chars)".to_string());
     }
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let client = notification_client();
     let body = json!({ "content": message });
 
     let resp = client
@@ -60,10 +71,7 @@ pub async fn send_pushover(token: &str, user: &str, message: &str) -> Result<(),
         return Err("Message must be 1-1024 chars".to_string());
     }
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let client = notification_client();
 
     let body = json!({
         "token": token,
@@ -105,10 +113,7 @@ pub async fn send_ntfy(topic: &str, message: &str) -> Result<(), String> {
         return Err("Message must be 1-4096 chars".to_string());
     }
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let client = notification_client();
 
     let resp = client
         .post(format!("https://ntfy.sh/{topic}"))

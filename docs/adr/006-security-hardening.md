@@ -1,6 +1,6 @@
 # ADR-006: Security Hardening
 
-**Status:** Implemented (Pass 17)
+**Status:** Implemented (Pass 18)
 **Date:** 2026-03-15
 **Updated:** 2026-03-15
 
@@ -252,6 +252,28 @@ Full cross-reference of MQL5 EA (TyphooN.mq5 v1.420, 2730 lines) against Rust/Ta
 75. **(Verified clean)**: GUI menu bar routes only to existing validated functions — no new attack surface
 76. **(Verified clean)**: All new drawing tools (ray, ruler) use canvas API only — no DOM injection
 
-**17 passes, 76 findings total: 70 fixed, 6 accepted with documented rationale.**
+### Pass 18 — Performance, Async & Memory Optimization
 
-All actionable security items and MQL5 feature parity items completed.
+#### Performance → Fixed
+
+77. **Lock contention across API calls**: ALL Tauri commands that call the broker now clone the broker and drop the `AppState` mutex before making any network calls. Previously, commands held the mutex for the entire API round-trip, blocking ALL other commands. Critical multi-call commands fixed: `calculate_lots` (4 API calls), `open_martingale_hedge` (3), `get_margin_info` (2), `calculate_position_var` (2), `get_multi_tf_bars` (N concurrent). All single-call commands also converted: `get_bars` (multi-chunk, seconds), `load_symbols` (11K+ assets), `get_account`, `get_positions`, all order placement/management, `get_news`, `get_options`, `get_latest_quote`, `start_streaming`, `export_trade_history`, `get_most_active`, `get_top_movers`, `get_orderbook`, etc. Total: ~35 commands.
+
+78. **`get_multi_tf_bars` sequential fetch**: N timeframe requests executed sequentially while holding the global lock. Refactored to clone broker, drop lock, and use `futures_util::future::join_all` for concurrent fetching. Rate limiter paces requests internally while allowing network overlap.
+
+79. **SEC ticker map re-downloaded on every call**: `company_tickers.json` (~8MB) was fetched from SEC EDGAR on every CIK lookup — 4 duplicate implementations across `get_sec_company_facts`, `get_financial_analysis`, `get_institutional_holders`, `get_insider_trades`. Fixed with `tokio::sync::OnceCell` for process-lifetime caching + shared `lookup_cik()` helper. Eliminates ~32MB/session of redundant downloads.
+
+80. **Per-call HTTP client creation**: 6 functions created a new `reqwest::Client` on every invocation (3 notification providers, `fetch_article`, `fetch_fred_series`, `ai_chat`). Each new client establishes fresh TCP connections. Fixed with `OnceLock`-based shared clients that reuse connection pools. Notification module shares one client; main.rs non-broker requests share another; SEC EDGAR requests share a third.
+
+81. **Dead lock acquisition in `run_screener`**: `let _s = state.lock().await;` acquired the global mutex but never used it, needlessly blocking other commands during screener execution.
+
+#### Memory → Fixed
+
+82. **Duplicate daily returns computation in VaR**: `calculate_var` and `lot_size_from_var` both contained identical 8-line daily returns loops. Extracted into `compute_daily_returns()` helper using `windows(2)` iterator (cleaner, avoids manual index math).
+
+83. **SQLite mmap I/O**: Added `PRAGMA mmap_size=268435456` (256MB) to SQLite cache initialization. Memory-mapped I/O lets the OS manage page caching, reducing userspace copies for read-heavy bar data access.
+
+84. **SEC CIK lookup deduplication**: 4 copies of the 15-line CIK-from-ticker lookup (iterate JSON map, match ticker, extract `cik_str`) consolidated into single `lookup_cik()` async function.
+
+**18 passes, 84 findings total: 78 fixed, 6 accepted with documented rationale.**
+
+All actionable security, performance, and memory optimization items completed.

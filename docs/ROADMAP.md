@@ -72,7 +72,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Auto Fibonacci | ✅ Done | Fractal-based swing detection, 13 levels (retrace + extension) |
 | Per-broker data isolation | ✅ Done | Separate IndexedDB + cold cache per account |
 | Article images | ✅ Done | HTTPS images in news reader, click to enlarge |
-| Security hardening (10 passes) | ✅ Done | 64 findings, 58 fixed, 6 accepted |
+| Security hardening (18 passes) | ✅ Done | 84 findings, 78 fixed, 6 accepted |
 
 ### Tier 2 — Competitive with MT5
 

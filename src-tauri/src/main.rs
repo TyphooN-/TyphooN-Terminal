@@ -26,9 +26,21 @@ use core::backtest::{self as backtest_engine, SMACrossStrategy, BacktestResult, 
 use core::cache::SqliteCache;
 use core::screener::{self as screener_engine, ScreenerFilter, ScreenerSymbol};
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use tauri::State;
+
+/// Shared HTTP client for non-broker requests (articles, FRED, AI chat).
+/// Reuses TCP connections across calls. Per-request timeouts override the default.
+fn shared_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(4)
+            .build()
+            .expect("Failed to build shared HTTP client")
+    })
+}
 
 /// Shared application state.
 struct AppState {
@@ -199,16 +211,20 @@ async fn keychain_delete(account_name: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_account(state: State<'_, SharedState>) -> Result<String, String> {
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let account = broker.get_account().await?;
     Ok(serde_json::to_string(&account).unwrap())
 }
 
 #[tauri::command]
 async fn get_positions(state: State<'_, SharedState>) -> Result<String, String> {
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let positions = broker.get_positions().await?;
     Ok(serde_json::to_string(&positions).unwrap())
 }
@@ -223,8 +239,11 @@ async fn get_bars(
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
     let limit = limit.min(50_000);
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    // Clone broker and drop lock — get_bars can take seconds (multi-chunk fetch)
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let bars = broker.get_bars(&symbol, &timeframe, limit).await?;
     Ok(serde_json::to_string(&bars).unwrap())
 }
@@ -244,15 +263,30 @@ async fn get_multi_tf_bars(
         if !is_valid_timeframe(tf) { return Err(format!("Invalid timeframe: {tf}")); }
     }
     let limit = limit.min(50_000);
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
-    let mut result = serde_json::Map::new();
-    for tf in &timeframes {
-        // Rate limiting handled by broker.rate_limiter inside get_bars
-        match broker.get_bars(&symbol, tf, limit).await {
-            Ok(bars) => { result.insert(tf.clone(), serde_json::to_value(&bars).unwrap()); }
-            Err(e) => { tracing::warn!("MTF bars {symbol} @ {tf}: {e}"); }
+    // Clone broker and drop lock before API calls to avoid blocking other commands
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+    // Fetch all timeframes concurrently (rate limiter paces them internally)
+    let futures: Vec<_> = timeframes.iter().map(|tf| {
+        let b = broker.clone();
+        let sym = symbol.clone();
+        let tf = tf.clone();
+        async move {
+            match b.get_bars(&sym, &tf, limit).await {
+                Ok(bars) => Some((tf, serde_json::to_value(&bars).unwrap())),
+                Err(e) => {
+                    tracing::warn!("MTF bars {sym} @ {tf}: {e}");
+                    None
+                }
+            }
         }
+    }).collect();
+    let results = futures_util::future::join_all(futures).await;
+    let mut result = serde_json::Map::new();
+    for item in results.into_iter().flatten() {
+        result.insert(item.0, item.1);
     }
     Ok(serde_json::Value::Object(result).to_string())
 }
@@ -274,8 +308,10 @@ async fn place_order(
     if side != "buy" && side != "sell" {
         return Err(format!("Invalid side: {side}. Must be 'buy' or 'sell'"));
     }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.market_order(&symbol, qty, &side).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -290,8 +326,10 @@ async fn close_position(
     if let Some(q) = qty {
         if q <= 0.0 || !q.is_finite() { return Err("Invalid quantity".into()); }
     }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.close_position(&symbol, qty).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -310,8 +348,10 @@ async fn place_limit_order(
     if side != "buy" && side != "sell" { return Err("Invalid side".into()); }
     if !limit_price.is_finite() || limit_price <= 0.0 { return Err("Invalid limit price".into()); }
     let tif = if matches!(tif.as_str(), "day" | "gtc" | "ioc" | "fok") { tif } else { "gtc".to_string() };
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.limit_order(&symbol, qty, &side, limit_price, &tif).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -330,8 +370,10 @@ async fn place_stop_order(
     if side != "buy" && side != "sell" { return Err("Invalid side".into()); }
     if !stop_price.is_finite() || stop_price <= 0.0 { return Err("Invalid stop price".into()); }
     let tif = if matches!(tif.as_str(), "day" | "gtc" | "ioc" | "fok") { tif } else { "gtc".to_string() };
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.stop_order(&symbol, qty, &side, stop_price, &tif).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -353,8 +395,10 @@ async fn place_stop_limit_order(
         return Err("Invalid price".into());
     }
     let tif = if matches!(tif.as_str(), "day" | "gtc" | "ioc" | "fok") { tif } else { "gtc".to_string() };
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.stop_limit_order(&symbol, qty, &side, stop_price, limit_price, &tif).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -374,8 +418,10 @@ async fn place_trailing_stop(
     if trail_price.is_none() && trail_percent.is_none() { return Err("Must specify trail_price or trail_percent".into()); }
     if let Some(tp) = trail_price { if !tp.is_finite() || tp <= 0.0 { return Err("Invalid trail price".into()); } }
     if let Some(tp) = trail_percent { if !tp.is_finite() || tp <= 0.0 || tp > 50.0 { return Err("Invalid trail percent".into()); } }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.trailing_stop_order(&symbol, qty, &side, trail_price, trail_percent, "gtc").await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -395,16 +441,20 @@ async fn place_bracket_order(
     if !tp_price.is_finite() || tp_price <= 0.0 || !sl_price.is_finite() || sl_price <= 0.0 {
         return Err("Invalid TP/SL price".into());
     }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.bracket_order(&symbol, qty, &side, tp_price, sl_price).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
 
 #[tauri::command]
 async fn get_open_orders(state: State<'_, SharedState>) -> Result<String, String> {
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let orders = broker.get_orders("open", 100).await?;
     Ok(serde_json::to_string(&orders).unwrap())
 }
@@ -412,8 +462,10 @@ async fn get_open_orders(state: State<'_, SharedState>) -> Result<String, String
 #[tauri::command]
 async fn get_order_history(state: State<'_, SharedState>, limit: u32) -> Result<String, String> {
     let limit = limit.min(500);
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let orders = broker.get_orders("closed", limit).await?;
     Ok(serde_json::to_string(&orders).unwrap())
 }
@@ -428,8 +480,10 @@ async fn modify_order(
     trail: Option<f64>,
 ) -> Result<String, String> {
     if order_id.is_empty() || order_id.len() > 100 { return Err("Invalid order ID".into()); }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.modify_order(&order_id, qty, limit_price, stop_price, trail).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -437,28 +491,37 @@ async fn modify_order(
 #[tauri::command]
 async fn cancel_order(state: State<'_, SharedState>, order_id: String) -> Result<(), String> {
     if order_id.is_empty() || order_id.len() > 100 { return Err("Invalid order ID".into()); }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     broker.cancel_order(&order_id).await
 }
 
 #[tauri::command]
 async fn close_all(state: State<'_, SharedState>) -> Result<(), String> {
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     broker.close_all_positions().await
 }
 
 #[tauri::command]
 async fn load_symbols(state: State<'_, SharedState>) -> Result<String, String> {
-    let mut s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    // Clone broker and drop lock — get_all_assets fetches 11K+ symbols
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let assets = broker.get_all_assets().await?;
     let symbols: Vec<(String, String)> = assets
         .iter()
         .map(|a| (a.symbol.clone(), a.name.clone()))
         .collect();
     let count = symbols.len();
+    // Re-acquire lock to write cached symbols
+    let mut s = state.lock().await;
     s.symbols = symbols;
     Ok(format!("{count}"))
 }
@@ -481,8 +544,10 @@ async fn search_symbols(state: State<'_, SharedState>, query: String) -> Result<
 #[tauri::command]
 async fn get_asset(state: State<'_, SharedState>, symbol: String) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let asset = broker.get_asset(&symbol).await?;
     Ok(serde_json::to_string(&asset).unwrap())
 }
@@ -509,8 +574,14 @@ async fn calculate_lots(
     if sl_price <= 0.0 || tp_price <= 0.0 || current_price <= 0.0 {
         return Err("Prices must be positive".into());
     }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    // Clone broker + config and drop lock before API calls to avoid blocking other commands
+    let (broker, risk_config, sl_level) = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        let config = s.risk_config.clone();
+        let sl = s.sl_levels.get(&symbol).copied();
+        (broker, config, sl)
+    };
 
     let account = broker.get_account().await?;
     let balance = account.balance;
@@ -542,10 +613,10 @@ async fn calculate_lots(
     };
 
     // VaR per lot (if VaR mode)
-    let var_per_lot = if s.risk_config.order_mode == OrderMode::VaR {
-        let bars = broker.get_bars(&symbol, &s.risk_config.var_timeframe, s.risk_config.var_periods + 1).await?;
+    let var_per_lot = if risk_config.order_mode == OrderMode::VaR {
+        let bars = broker.get_bars(&symbol, &risk_config.var_timeframe, risk_config.var_periods + 1).await?;
         let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
-        var::calculate_var(&closes, 1.0, spec.tick_value, spec.tick_size, current_price, s.risk_config.var_confidence)
+        var::calculate_var(&closes, 1.0, spec.tick_value, spec.tick_size, current_price, risk_config.var_confidence)
             .map(|r| r.var_dollars)
             .unwrap_or(0.0)
     } else {
@@ -559,8 +630,7 @@ async fn calculate_lots(
         let symbol_no_slash = symbol.replace("/", "");
         positions.iter().any(|p| {
             (p.symbol == symbol || p.symbol == symbol_no_slash) && {
-                // Check if SL is tracked in backend state
-                if let Some(&sl) = s.sl_levels.get(&symbol) {
+                if let Some(sl) = sl_level {
                     (sl - p.avg_entry_price).abs() < tick * 0.5
                 } else {
                     false
@@ -570,7 +640,7 @@ async fn calculate_lots(
     };
 
     let (lots, count) = risk::calculate_lots(
-        &s.risk_config,
+        &risk_config,
         &spec,
         balance,
         equity,
@@ -586,9 +656,9 @@ async fn calculate_lots(
         "count": count,
         "side": side,
         "sl_distance": sl_distance,
-        "mode": format!("{:?}", s.risk_config.order_mode),
-        "risk_money": if s.risk_config.order_mode == OrderMode::Standard {
-            balance * (s.risk_config.risk_pct / 100.0)
+        "mode": format!("{:?}", risk_config.order_mode),
+        "risk_money": if risk_config.order_mode == OrderMode::Standard {
+            balance * (risk_config.risk_pct / 100.0)
         } else { 0.0 },
     })).unwrap())
 }
@@ -604,17 +674,21 @@ async fn calculate_position_var(
     if !position_size.is_finite() || !current_price.is_finite() || current_price <= 0.0 {
         return Err("Invalid price or position size".into());
     }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    // Clone broker + config and drop lock before API calls
+    let (broker, var_tf, var_periods, var_confidence) = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        (broker, s.risk_config.var_timeframe.clone(), s.risk_config.var_periods, s.risk_config.var_confidence)
+    };
 
-    let bars = broker.get_bars(&symbol, &s.risk_config.var_timeframe, s.risk_config.var_periods + 1).await?;
+    let bars = broker.get_bars(&symbol, &var_tf, var_periods + 1).await?;
     let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
 
     let asset = broker.get_asset(&symbol).await?;
     let tick_size = asset.price_increment.unwrap_or(0.01);
     let tick_value = tick_size; // 1:1 for stocks
 
-    match var::calculate_var(&closes, position_size, tick_value, tick_size, current_price, s.risk_config.var_confidence) {
+    match var::calculate_var(&closes, position_size, tick_value, tick_size, current_price, var_confidence) {
         Some(result) => Ok(serde_json::to_string(&result).unwrap()),
         None => Err("VaR calculation failed — insufficient price data".to_string()),
     }
@@ -780,17 +854,19 @@ async fn set_martingale_config(state: State<'_, SharedState>, config_json: Strin
 
 #[tauri::command]
 async fn calc_open_mg_size(state: State<'_, SharedState>) -> Result<String, String> {
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let (broker, mg_state) = {
+        let s = state.lock().await;
+        (s.broker.as_ref().ok_or("Not connected")?.clone(), s.martingale.clone())
+    };
     let account = broker.get_account().await?;
 
-    let (per_side, safe_gross) = s.martingale.calc_open_mg_size(account.equity);
+    let (per_side, safe_gross) = mg_state.calc_open_mg_size(account.equity);
 
     Ok(serde_json::to_string(&serde_json::json!({
         "per_side": per_side,
         "safe_gross": safe_gross,
         "equity": account.equity,
-        "spread_tolerance": s.martingale.config.spread_tolerance,
+        "spread_tolerance": mg_state.config.spread_tolerance,
     })).unwrap())
 }
 
@@ -801,11 +877,15 @@ async fn open_martingale_hedge(
     direction: String,
 ) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    // Clone broker + MG config and drop lock before API calls (3 network calls)
+    let (broker, mg_state) = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        (broker, s.martingale.clone())
+    };
     let account = broker.get_account().await?;
 
-    let (per_side, safe_gross) = s.martingale.calc_open_mg_size(account.equity);
+    let (per_side, safe_gross) = mg_state.calc_open_mg_size(account.equity);
     if per_side <= 0.0 {
         return Err("Insufficient equity for MG position".to_string());
     }
@@ -834,28 +914,32 @@ async fn open_martingale_hedge(
 
 #[tauri::command]
 async fn get_margin_info(state: State<'_, SharedState>) -> Result<String, String> {
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    // Clone broker + config and drop lock before API calls
+    let (broker, margin_buffer_pct, mg_config) = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        (broker, s.risk_config.margin_buffer_pct, s.martingale.config.clone())
+    };
     let account = broker.get_account().await?;
 
     let ml = margin::margin_level_pct(account.equity, account.initial_margin);
     let usable = margin::usable_margin(
         account.balance,
         account.initial_margin,
-        s.risk_config.margin_buffer_pct,
+        margin_buffer_pct,
     );
     let positions = broker.get_positions().await?;
     let gross: f64 = positions.iter().map(|p| p.qty.abs()).sum();
     let spread_tol = margin::spread_tolerance(account.equity, gross);
 
     // Determine MG zone — only show zone if positions exist and MG is active
-    let zone = if gross <= 0.0 || !s.martingale.config.enabled {
+    let zone = if gross <= 0.0 || !mg_config.enabled {
         ""
-    } else if ml <= s.martingale.config.hard_floor_pct {
+    } else if ml <= mg_config.hard_floor_pct {
         "HARD FLOOR"
-    } else if ml < s.martingale.config.protect_pct {
+    } else if ml < mg_config.protect_pct {
         "PROTECT"
-    } else if ml <= s.martingale.config.trim_pct {
+    } else if ml <= mg_config.trim_pct {
         "DEAD ZONE"
     } else {
         "TRIM"
@@ -896,18 +980,22 @@ async fn set_equity_protection(
 
 #[tauri::command]
 async fn check_equity_protection(state: State<'_, SharedState>) -> Result<String, String> {
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    // Clone broker + protection config and drop lock before API call
+    let (broker, equity_tp, equity_sl) = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        (broker, s.equity_tp, s.equity_sl)
+    };
     let account = broker.get_account().await?;
 
     let mut triggered = String::new();
 
-    if let Some(tp) = s.equity_tp {
+    if let Some(tp) = equity_tp {
         if account.equity >= tp {
             triggered = format!("EQUITY_TP: equity ${:.2} >= target ${:.2}", account.equity, tp);
         }
     }
-    if let Some(sl) = s.equity_sl {
+    if let Some(sl) = equity_sl {
         if account.equity <= sl {
             triggered = format!("EQUITY_SL: equity ${:.2} <= floor ${:.2}", account.equity, sl);
         }
@@ -915,8 +1003,8 @@ async fn check_equity_protection(state: State<'_, SharedState>) -> Result<String
 
     Ok(serde_json::to_string(&serde_json::json!({
         "equity": account.equity,
-        "equity_tp": s.equity_tp,
-        "equity_sl": s.equity_sl,
+        "equity_tp": equity_tp,
+        "equity_sl": equity_sl,
         "triggered": if triggered.is_empty() { None } else { Some(&triggered) },
     })).unwrap())
 }
@@ -927,8 +1015,10 @@ async fn check_equity_protection(state: State<'_, SharedState>) -> Result<String
 async fn get_news(state: State<'_, SharedState>, symbol: String, limit: u32) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let limit = limit.min(50);
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let news = broker.get_news(&symbol, limit).await?;
     Ok(serde_json::to_string(&news).unwrap())
 }
@@ -936,8 +1026,10 @@ async fn get_news(state: State<'_, SharedState>, symbol: String, limit: u32) -> 
 #[tauri::command]
 async fn get_corporate_actions(state: State<'_, SharedState>, symbol: String, types: Option<String>) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let action_types = types.as_deref().unwrap_or("dividend");
     let actions = broker.get_corporate_actions(&symbol, action_types).await?;
     Ok(serde_json::to_string(&actions).unwrap())
@@ -970,8 +1062,10 @@ async fn run_walk_forward(
     }
 
     let bars = {
-        let s = state.lock().await;
-        let broker = s.broker.as_ref().ok_or("Not connected")?;
+        let broker = {
+            let s = state.lock().await;
+            s.broker.as_ref().ok_or("Not connected")?.clone()
+        };
         broker.get_bars(&symbol, &timeframe, bar_limit).await?
     };
 
@@ -1047,8 +1141,10 @@ async fn get_company_fundamentals(symbol: String) -> Result<String, String> {
 #[tauri::command]
 async fn get_latest_quote(state: State<'_, SharedState>, symbol: String) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let quote = broker.get_latest_quote(&symbol).await?;
     Ok(serde_json::to_string(&quote).unwrap())
 }
@@ -1069,8 +1165,10 @@ async fn get_account_activities(
         return Err("Invalid activity types format".into());
     }
     let limit = limit.min(200);
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let activities = broker.get_account_activities(&activity_types, limit).await?;
     Ok(serde_json::to_string(&activities).unwrap())
 }
@@ -1091,12 +1189,10 @@ async fn fetch_article(url: String) -> Result<String, String> {
     if !url.starts_with("https://") {
         return Err("Only HTTPS URLs allowed".to_string());
     }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let client = shared_client();
     let resp = client
         .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
         .header("User-Agent", "Mozilla/5.0 (compatible)")
         .send()
         .await
@@ -1166,8 +1262,10 @@ async fn run_backtest(
 
     // Fetch bars
     let bars = {
-        let s = state.lock().await;
-        let broker = s.broker.as_ref().ok_or("Not connected")?;
+        let broker = {
+            let s = state.lock().await;
+            s.broker.as_ref().ok_or("Not connected")?.clone()
+        };
         broker.get_bars(&symbol, &timeframe, bar_limit).await?
     };
 
@@ -1199,8 +1297,10 @@ async fn export_trade_history(
     limit: Option<u32>,
 ) -> Result<String, String> {
     let limit = limit.unwrap_or(500).min(500);
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let orders = broker.get_orders("closed", limit).await?;
 
     // CSV-safe escaping: quote fields that may contain commas/quotes
@@ -1245,8 +1345,10 @@ async fn get_options(
     if expiry.len() != 10 || expiry.chars().nth(4) != Some('-') || expiry.chars().nth(7) != Some('-') {
         return Err("Invalid expiry format (expected YYYY-MM-DD)".into());
     }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let chain = broker.get_options_chain(&symbol, &expiry).await?;
     Ok(serde_json::to_string(&chain).unwrap())
 }
@@ -1255,7 +1357,7 @@ async fn get_options(
 
 #[tauri::command]
 async fn run_screener(
-    state: State<'_, SharedState>,
+    _state: State<'_, SharedState>,
     filters_json: String,
     symbols_json: String,
 ) -> Result<String, String> {
@@ -1267,8 +1369,6 @@ async fn run_screener(
     let symbols: Vec<ScreenerSymbol> = serde_json::from_str(&symbols_json)
         .map_err(|e| format!("Invalid symbols data: {e}"))?;
 
-    // Also allow running against cached asset list if no symbols_json provided
-    let _s = state.lock().await;
     let result = screener_engine::screen_symbols(&filters, &symbols);
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -1292,13 +1392,16 @@ async fn start_streaming(
         return Err("Too many symbols (max 100)".into());
     }
 
-    let mut s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
-
-    // Drop any existing stream
-    s.stream_rx = None;
+    // Clone broker and drop lock before WebSocket connect
+    let broker = {
+        let mut s = state.lock().await;
+        s.stream_rx = None; // Drop any existing stream
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
 
     let rx = broker.start_stream(trade_symbols.clone(), quote_symbols.clone()).await?;
+    // Re-acquire lock to store the stream receiver
+    let mut s = state.lock().await;
     s.stream_rx = Some(rx);
 
     Ok(serde_json::to_string(&serde_json::json!({
@@ -1346,13 +1449,11 @@ async fn fetch_fred_series(series_id: String, api_key: String, limit: Option<u32
         return Err("Invalid FRED API key".into());
     }
     let limit = limit.unwrap_or(100).min(10000);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let client = shared_client();
 
     let resp = client
         .get("https://api.stlouisfed.org/fred/series/observations")
+        .timeout(std::time::Duration::from_secs(10))
         .query(&[
             ("series_id", series_id.as_str()),
             ("api_key", api_key.as_str()),
@@ -1391,10 +1492,7 @@ async fn ai_chat(
     if message.is_empty() || message.len() > 10_000 {
         return Err("Message must be 1-10000 chars".into());
     }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let client = shared_client();
 
     let system_prompt = "You are a trading assistant for TyphooN-Terminal. Help with market analysis, risk management, and trading decisions. Be concise.";
     let ctx = context.unwrap_or_default();
@@ -1410,6 +1508,7 @@ async fn ai_chat(
             });
             let resp = client
                 .post("https://api.anthropic.com/v1/messages")
+                .timeout(std::time::Duration::from_secs(60))
                 .header("x-api-key", &api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
@@ -1439,6 +1538,7 @@ async fn ai_chat(
             });
             let resp = client
                 .post("https://api.openai.com/v1/chat/completions")
+                .timeout(std::time::Duration::from_secs(60))
                 .header("Authorization", format!("Bearer {api_key}"))
                 .header("content-type", "application/json")
                 .json(&body)
@@ -1647,8 +1747,10 @@ async fn get_most_active(
     top: Option<u32>,
 ) -> Result<String, String> {
     let top = top.unwrap_or(20).min(100);
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.get_most_active(top).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -1661,8 +1763,10 @@ async fn get_top_movers(
 ) -> Result<String, String> {
     let market_type = market_type.unwrap_or_else(|| "stocks".to_string());
     let top = top.unwrap_or(20).min(100);
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.get_top_movers(&market_type, top).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }
@@ -1689,8 +1793,10 @@ async fn run_bar_by_bar_backtest(
     let bar_limit = limit.unwrap_or(5000).min(50_000);
 
     let bars = {
-        let s = state.lock().await;
-        let broker = s.broker.as_ref().ok_or("Not connected")?;
+        let broker = {
+            let s = state.lock().await;
+            s.broker.as_ref().ok_or("Not connected")?.clone()
+        };
         broker.get_bars(&symbol, &timeframe, bar_limit).await?
     };
 
@@ -1751,8 +1857,10 @@ async fn run_optimization(
     let bar_limit = limit.unwrap_or(5000).min(50_000);
 
     let bars = {
-        let s = state.lock().await;
-        let broker = s.broker.as_ref().ok_or("Not connected")?;
+        let broker = {
+            let s = state.lock().await;
+            s.broker.as_ref().ok_or("Not connected")?.clone()
+        };
         broker.get_bars(&symbol, &timeframe, bar_limit).await?
     };
 
@@ -1783,8 +1891,10 @@ async fn get_orderbook(
     if !symbol.contains('/') {
         return Err("Orderbook is only available for crypto pairs (e.g. BTC/USD)".into());
     }
-    let s = state.lock().await;
-    let broker = s.broker.as_ref().ok_or("Not connected")?;
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
     let result = broker.get_orderbook(&symbol).await?;
     Ok(serde_json::to_string(&result).unwrap())
 }

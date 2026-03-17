@@ -20,11 +20,13 @@ impl SqliteCache {
             .map_err(|e| format!("SQLite open failed: {e}"))?;
 
         // WAL mode for concurrent reads + single writer performance
+        // mmap_size=256MB for memory-mapped I/O (faster reads, OS manages pages)
         conn.execute_batch("
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
             PRAGMA cache_size=-64000;
             PRAGMA temp_store=MEMORY;
+            PRAGMA mmap_size=268435456;
         ").map_err(|e| format!("SQLite pragma failed: {e}"))?;
 
         // Create tables

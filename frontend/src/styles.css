@@ -4,6 +4,33 @@
   box-sizing: border-box;
 }
 
+/* ── Unprotected Position Warning ─────────────────────────── */
+
+#no-sl-warning {
+  background: #b71c1c;
+  color: #fff;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: bold;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  animation: warn-pulse 1.5s ease-in-out infinite;
+}
+
+#no-sl-warning.hidden {
+  display: none !important;
+}
+
+@keyframes warn-pulse {
+  0%, 100% { background: #b71c1c; }
+  50% { background: #d32f2f; }
+}
+
 body {
   font-family: 'Consolas', 'Courier New', monospace;
   background: #000000;
@@ -358,7 +385,7 @@ body {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  padding-bottom: 40px;
 }
 
 /* ── Button Grid (5×2, matches TyphooN EA) ───────────────── */

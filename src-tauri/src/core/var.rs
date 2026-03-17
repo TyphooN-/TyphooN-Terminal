@@ -74,6 +74,20 @@ pub fn inverse_cumulative_normal(p: f64) -> f64 {
     }
 }
 
+/// Compute daily returns from close prices.
+/// Shared by calculate_var and lot_size_from_var to avoid duplication.
+fn compute_daily_returns(close_prices: &[f64]) -> Vec<f64> {
+    let mut returns = Vec::with_capacity(close_prices.len().saturating_sub(1));
+    for w in close_prices.windows(2) {
+        if w[0] == 0.0 || w[1] == 0.0 {
+            returns.push(0.0);
+        } else {
+            returns.push((w[1] / w[0]) - 1.0);
+        }
+    }
+    returns
+}
+
 /// Calculate VaR for a single position.
 ///
 /// Port of CPortfolioRiskMan::CalculateVaR.
@@ -89,16 +103,7 @@ pub fn calculate_var(
         return None;
     }
 
-    // Daily returns
-    let mut daily_returns = Vec::with_capacity(close_prices.len() - 1);
-    for i in 0..close_prices.len() - 1 {
-        if close_prices[i] == 0.0 || close_prices[i + 1] == 0.0 {
-            daily_returns.push(0.0);
-        } else {
-            daily_returns.push((close_prices[i + 1] / close_prices[i]) - 1.0);
-        }
-    }
-
+    let daily_returns = compute_daily_returns(close_prices);
     let sd = std_dev(&daily_returns);
     if sd == 0.0 || !sd.is_finite() {
         return None;
@@ -135,15 +140,7 @@ pub fn lot_size_from_var(
         return None;
     }
 
-    let mut daily_returns = Vec::with_capacity(close_prices.len() - 1);
-    for i in 0..close_prices.len() - 1 {
-        if close_prices[i] == 0.0 || close_prices[i + 1] == 0.0 {
-            daily_returns.push(0.0);
-        } else {
-            daily_returns.push((close_prices[i + 1] / close_prices[i]) - 1.0);
-        }
-    }
-
+    let daily_returns = compute_daily_returns(close_prices);
     let sd = std_dev(&daily_returns);
     if sd == 0.0 || !sd.is_finite() {
         return None;

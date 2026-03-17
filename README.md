@@ -65,7 +65,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Multi-Broker Trait** | BrokerTrait abstraction for future broker support |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS keychain credential storage (gnome-keyring/KWallet) |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
-| **Security** | 17-pass audit (76 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize |
+| **Security** | 18-pass audit (84 findings): input validation, HTTP timeouts, path traversal, CSP, config bounds, resource limits, OS keychain, zeroize, async lock optimization |
 
 ---
 
@@ -184,6 +184,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [021](docs/adr/021-mt5-godel-parity-roadmap.md) | MT5 + Godel parity roadmap + blockers |
 | [022](docs/adr/022-tastytrade-broker.md) | Tastytrade broker integration |
 | [023](docs/adr/023-ux-features-batch.md) | UX batch: GUI menu, tabs, drawing tools, trading |
+| [024](docs/adr/024-charting-engine-race-conditions.md) | Charting engine race conditions — cross-symbol contamination |
 
 ---
 

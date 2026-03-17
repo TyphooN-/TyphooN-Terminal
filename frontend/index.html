@@ -138,20 +138,25 @@
         <div id="symbol-autocomplete" class="autocomplete-list hidden"></div>
       </div>
       <select id="timeframe-select">
-        <option value="1Min">1m</option>
-        <option value="5Min">5m</option>
-        <option value="15Min">15m</option>
-        <option value="30Min">30m</option>
-        <option value="1Hour">1H</option>
-        <option value="2Hour">2H</option>
-        <option value="3Hour">3H</option>
-        <option value="4Hour">4H</option>
-        <option value="6Hour">6H</option>
+        <option value="1Min">M1</option>
+        <option value="5Min">M5</option>
+        <option value="10Min">M10</option>
+        <option value="15Min">M15</option>
+        <option value="20Min">M20</option>
+        <option value="30Min">M30</option>
+        <option value="45Min">M45</option>
+        <option value="1Hour">H1</option>
+        <option value="2Hour">H2</option>
+        <option value="3Hour">H3</option>
+        <option value="4Hour">H4</option>
+        <option value="6Hour">H6</option>
+        <option value="8Hour">H8</option>
+        <option value="12Hour">H12</option>
         <option value="1Day">D1</option>
         <option value="2Day">2D</option>
         <option value="3Day">3D</option>
         <option value="1Week">W1</option>
-        <option value="1Month" selected>MN</option>
+        <option value="1Month" selected>MN1</option>
       </select>
       <select id="chart-type-select">
         <option value="candles" selected>Candles</option>
@@ -175,7 +180,7 @@
         <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="4Hour" checked /> H4</label>
         <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Day" checked /> D1</label>
         <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Week" checked /> W1</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Month" checked /> MN</label>
+        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Month" checked /> MN1</label>
       </span>
       <span id="loading-indicator" class="loading hidden">Loading...</span>
       <span id="connect-status-bar" class="status-bar"></span>
@@ -209,6 +214,11 @@
           <button id="btn-set-sl" class="btn-lines">Set SL</button>
           <button id="btn-set-tp" class="btn-lines">Set TP</button>
         </div>
+        <!-- Unprotected position warning -->
+        <div id="no-sl-warning" class="hidden">
+          <span style="font-size:14px;">&#9888;</span> NO SL/TP — UNPROTECTED <span style="font-size:14px;">&#9888;</span>
+        </div>
+
         <!-- SL/TP manual entry -->
         <div id="sl-tp-inputs" style="display:flex;gap:4px;padding:2px 4px;">
           <input id="sl-input" type="number" step="0.01" placeholder="SL Price" style="flex:1;background:#1a0a0a;color:#f44;border:1px solid #553333;padding:3px 4px;font-size:10px;font-family:inherit;text-align:center;" />
@@ -323,6 +333,12 @@
           <div id="orders-content"></div>
         </div>
 
+        <!-- News & Events Panel (above indicators — live data > config) -->
+        <div id="news-panel">
+          <div id="news-header">News & Events ▼</div>
+          <div id="news-content"></div>
+        </div>
+
         <!-- Indicator Config -->
         <div id="indicator-panel">
           <div id="indicator-header">Indicators ▼</div>
@@ -362,11 +378,6 @@
             <label class="ind-row"><input type="checkbox" data-ind="wma" data-period="20" /> WMA (20)</label>
             <label class="ind-row"><input type="checkbox" data-ind="hma" data-period="20" /> HMA (20)</label>
           </div>
-        </div>
-        <!-- News & Events Panel -->
-        <div id="news-panel">
-          <div id="news-header">News & Events ▼</div>
-          <div id="news-content"></div>
         </div>
 
         <!-- Floating windows render over the app via windows.js -->
