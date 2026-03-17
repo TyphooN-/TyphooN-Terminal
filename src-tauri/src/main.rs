@@ -1566,6 +1566,179 @@ async fn ai_chat(
     }
 }
 
+// ── Matrix Community Chat ────────────────────────────────────────────
+
+const MATRIX_DEFAULT_ROOM: &str = "!placeholder:matrix.org"; // replaced by actual room ID at runtime
+
+/// Log in to a Matrix homeserver and get an access token.
+#[tauri::command]
+async fn matrix_login(homeserver: String, username: String, password: String) -> Result<String, String> {
+    if homeserver.is_empty() || !homeserver.starts_with("https://") {
+        return Err("Homeserver must be an HTTPS URL".into());
+    }
+    if username.is_empty() || username.len() > 200 { return Err("Invalid username".into()); }
+    if password.is_empty() || password.len() > 200 { return Err("Invalid password".into()); }
+
+    let client = shared_client();
+    let body = serde_json::json!({
+        "type": "m.login.password",
+        "identifier": { "type": "m.id.user", "user": username },
+        "password": password,
+    });
+
+    let resp = client
+        .post(format!("{}/_matrix/client/v3/login", homeserver))
+        .timeout(std::time::Duration::from_secs(15))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| "Matrix login request failed".to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let _ = resp.text().await;
+        return Err(format!("Matrix login failed: HTTP {status}"));
+    }
+
+    let json: serde_json::Value = resp.json().await
+        .map_err(|_| "Matrix login parse failed".to_string())?;
+
+    Ok(serde_json::to_string(&serde_json::json!({
+        "access_token": json["access_token"],
+        "user_id": json["user_id"],
+        "device_id": json["device_id"],
+    })).unwrap())
+}
+
+/// Send a message to a Matrix room.
+#[tauri::command]
+async fn matrix_send(homeserver: String, access_token: String, room_id: String, message: String) -> Result<(), String> {
+    if access_token.is_empty() || access_token.len() > 500 { return Err("Invalid access token".into()); }
+    if room_id.is_empty() || room_id.len() > 200 { return Err("Invalid room ID".into()); }
+    if message.is_empty() || message.len() > 4096 { return Err("Message must be 1-4096 chars".into()); }
+
+    let client = shared_client();
+    let txn_id = format!("tt_{}", chrono::Utc::now().timestamp_millis());
+    let encoded_room = room_id.replace('!', "%21").replace(':', "%3A");
+
+    let body = serde_json::json!({
+        "msgtype": "m.text",
+        "body": message,
+    });
+
+    let resp = client
+        .put(format!("{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}", homeserver, encoded_room, txn_id))
+        .timeout(std::time::Duration::from_secs(10))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| "Matrix send failed".to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let _ = resp.text().await;
+        return Err(format!("Matrix send failed: HTTP {status}"));
+    }
+    Ok(())
+}
+
+/// Join a Matrix room by alias or ID.
+#[tauri::command]
+async fn matrix_join(homeserver: String, access_token: String, room: String) -> Result<String, String> {
+    if access_token.is_empty() { return Err("Not logged in".into()); }
+    if room.is_empty() || room.len() > 200 { return Err("Invalid room".into()); }
+
+    let client = shared_client();
+    let encoded_room = room.replace('#', "%23").replace('!', "%21").replace(':', "%3A");
+
+    let resp = client
+        .post(format!("{}/_matrix/client/v3/join/{}", homeserver, encoded_room))
+        .timeout(std::time::Duration::from_secs(10))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|_| "Matrix join failed".to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let _ = resp.text().await;
+        return Err(format!("Matrix join failed: HTTP {status}"));
+    }
+
+    let json: serde_json::Value = resp.json().await
+        .map_err(|_| "Matrix join parse failed".to_string())?;
+
+    let room_id = json["room_id"].as_str().unwrap_or("").to_string();
+    Ok(room_id)
+}
+
+/// Poll messages from a Matrix room using /sync.
+#[tauri::command]
+async fn matrix_poll(homeserver: String, access_token: String, since: Option<String>) -> Result<String, String> {
+    if access_token.is_empty() { return Err("Not logged in".into()); }
+
+    let client = shared_client();
+    let filter = serde_json::json!({
+        "room": {
+            "timeline": { "limit": 50 },
+            "state": { "lazy_load_members": true },
+        },
+    });
+
+    let mut url = format!("{}/_matrix/client/v3/sync?timeout=5000&filter={}", homeserver, filter);
+    if let Some(ref s) = since {
+        url.push_str(&format!("&since={s}"));
+    }
+
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(15))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .send()
+        .await
+        .map_err(|_| "Matrix sync failed".to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let _ = resp.text().await;
+        return Err(format!("Matrix sync failed: HTTP {status}"));
+    }
+
+    let json: serde_json::Value = resp.json().await
+        .map_err(|_| "Matrix sync parse failed".to_string())?;
+
+    // Extract messages from all joined rooms
+    let next_batch = json["next_batch"].as_str().unwrap_or("").to_string();
+    let mut messages = Vec::new();
+
+    if let Some(rooms) = json["rooms"]["join"].as_object() {
+        for (room_id, room_data) in rooms {
+            if let Some(events) = room_data["timeline"]["events"].as_array() {
+                for event in events {
+                    if event["type"].as_str() == Some("m.room.message") {
+                        let sender = event["sender"].as_str().unwrap_or("");
+                        let body = event["content"]["body"].as_str().unwrap_or("");
+                        let ts = event["origin_server_ts"].as_u64().unwrap_or(0);
+                        messages.push(serde_json::json!({
+                            "room_id": room_id,
+                            "sender": sender,
+                            "body": body,
+                            "timestamp": ts,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::to_string(&serde_json::json!({
+        "next_batch": next_batch,
+        "messages": messages,
+    })).unwrap())
+}
+
 // ── Push Notification Commands ──────────────────────────────────────
 
 #[tauri::command]
@@ -2144,6 +2317,11 @@ fn main() {
             start_streaming,
             poll_stream,
             stop_streaming,
+            // Matrix Community Chat
+            matrix_login,
+            matrix_send,
+            matrix_join,
+            matrix_poll,
             // Push Notifications
             send_pushover_notification,
             send_ntfy_notification,

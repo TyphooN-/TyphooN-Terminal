@@ -106,7 +106,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | **FX — Currency matrix** | 🔲 Deferred | Needs forex data source |
 | HMS — Historical market stats (FRED) | ✅ Done | Ctrl+K → FRED (user provides free API key) |
 | AI chat | ✅ Done | Ctrl+K → AI (Claude/GPT with market context) |
-| **Community chat** | 🔲 Deferred | Needs server infrastructure |
+| **Community chat** | ✅ Done | Matrix protocol — Ctrl+K → CHAT, no server needed |
 
 ### Tier 4 — Advanced / Long-Term
 
@@ -175,7 +175,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | World equity indices | Alpaca is US-only |
 | Forex currency matrix | Alpaca has crypto not forex |
 | Congress trading | Free APIs locked down; QuiverQuant requires paid tier |
-| Community chat | Needs WebSocket server infrastructure |
+| ~~Community chat~~ | ~~Done — Matrix protocol, no server needed~~ |
 
 ---
 

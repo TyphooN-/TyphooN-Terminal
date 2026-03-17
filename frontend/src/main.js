@@ -4956,6 +4956,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "ECON", desc: "Economic calendar with countdown", action: cmdEconCalendar },
   { name: "OPTSTRAT", desc: "Options strategy builder (spreads, condors)", action: cmdOptionsStrategy },
   { name: "AUTOTRADE", desc: "Strategy auto-trading (JS plugin → live orders)", action: cmdAutoTrade },
+  { name: "CHAT", desc: "Community chat (Matrix)", action: cmdMatrixChat },
   { name: "TILE", desc: "Tile all floating windows", action: () => tileWindows() },
   { name: "CLOSE", desc: "Close all floating windows", action: () => closeAllWindows() },
 ];
@@ -10599,6 +10600,258 @@ function cmdAutoTrade() {
 // ── Watchlist SMA200 Cross Alerts ────────────────────────────
 // (Runs automatically in dashboard cycle if watchlist exists)
 let watchlistSMA200Cache = {};
+
+// ── Matrix Community Chat (CHAT) ─────────────────────────────
+let matrixState = {
+  homeserver: "https://matrix.org",
+  accessToken: "",
+  userId: "",
+  roomId: "",
+  roomAlias: "#typhoon-terminal:matrix.org",
+  nextBatch: "",
+  pollActive: false,
+};
+
+// Load saved Matrix config from localStorage
+try {
+  const saved = localStorage.getItem("matrix_config");
+  if (saved) {
+    const parsed = JSON.parse(saved);
+    if (parsed.homeserver) matrixState.homeserver = parsed.homeserver;
+    if (parsed.accessToken) matrixState.accessToken = parsed.accessToken;
+    if (parsed.userId) matrixState.userId = parsed.userId;
+    if (parsed.roomId) matrixState.roomId = parsed.roomId;
+    if (parsed.roomAlias) matrixState.roomAlias = parsed.roomAlias;
+  }
+} catch (_) {}
+
+function saveMatrixConfig() {
+  try {
+    localStorage.setItem("matrix_config", JSON.stringify({
+      homeserver: matrixState.homeserver,
+      accessToken: matrixState.accessToken,
+      userId: matrixState.userId,
+      roomId: matrixState.roomId,
+      roomAlias: matrixState.roomAlias,
+    }));
+  } catch (_) {}
+}
+
+function cmdMatrixChat() {
+  const win = createWindow({ title: "Community Chat (Matrix)", width: 500, height: 550 });
+  win.contentElement.textContent = "";
+
+  const container = document.createElement("div");
+  container.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;";
+
+  // ── Login / Config bar ──
+  const configBar = document.createElement("div");
+  configBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;flex-direction:column;gap:4px;";
+
+  if (!matrixState.accessToken) {
+    // Login form
+    const loginRow1 = document.createElement("div");
+    loginRow1.style.cssText = "display:flex;gap:4px;";
+    const hsInput = document.createElement("input");
+    hsInput.placeholder = "Homeserver (https://matrix.org)";
+    hsInput.value = matrixState.homeserver;
+    hsInput.style.cssText = "flex:2;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;";
+    const roomInput = document.createElement("input");
+    roomInput.placeholder = "Room (#typhoon-terminal:matrix.org)";
+    roomInput.value = matrixState.roomAlias;
+    roomInput.style.cssText = "flex:2;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;";
+    loginRow1.appendChild(hsInput);
+    loginRow1.appendChild(roomInput);
+
+    const loginRow2 = document.createElement("div");
+    loginRow2.style.cssText = "display:flex;gap:4px;";
+    const userInput = document.createElement("input");
+    userInput.placeholder = "Username";
+    userInput.style.cssText = "flex:1;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;";
+    const passInput = document.createElement("input");
+    passInput.placeholder = "Password";
+    passInput.type = "password";
+    passInput.style.cssText = "flex:1;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;";
+    const loginBtn = document.createElement("button");
+    loginBtn.textContent = "Login";
+    loginBtn.style.cssText = "font-size:10px;padding:3px 10px;background:#1b5e20;color:#8f8;border:1px solid #555;cursor:pointer;";
+    loginRow2.appendChild(userInput);
+    loginRow2.appendChild(passInput);
+    loginRow2.appendChild(loginBtn);
+
+    configBar.appendChild(loginRow1);
+    configBar.appendChild(loginRow2);
+
+    loginBtn.addEventListener("click", async () => {
+      loginBtn.textContent = "Logging in...";
+      loginBtn.disabled = true;
+      try {
+        matrixState.homeserver = hsInput.value || "https://matrix.org";
+        matrixState.roomAlias = roomInput.value || "#typhoon-terminal:matrix.org";
+        const json = await invoke("matrix_login", {
+          homeserver: matrixState.homeserver,
+          username: userInput.value,
+          password: passInput.value,
+        });
+        const result = JSON.parse(json);
+        matrixState.accessToken = result.access_token;
+        matrixState.userId = result.user_id;
+        saveMatrixConfig();
+
+        // Join the room
+        try {
+          const roomId = await invoke("matrix_join", {
+            homeserver: matrixState.homeserver,
+            accessToken: matrixState.accessToken,
+            room: matrixState.roomAlias,
+          });
+          matrixState.roomId = roomId;
+          saveMatrixConfig();
+        } catch (e) {
+          log(`Matrix join failed: ${e}`, "warn");
+        }
+
+        // Rebuild the chat window
+        cmdMatrixChat();
+      } catch (e) {
+        loginBtn.textContent = "Login";
+        loginBtn.disabled = false;
+        alert(`Matrix login failed: ${e}`);
+      }
+    });
+  } else {
+    // Logged in status
+    const statusRow = document.createElement("div");
+    statusRow.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    const userLabel = document.createElement("span");
+    userLabel.textContent = `${matrixState.userId} — ${matrixState.roomAlias}`;
+    userLabel.style.cssText = "color:#8f8;font-size:10px;";
+    const logoutBtn = document.createElement("button");
+    logoutBtn.textContent = "Logout";
+    logoutBtn.style.cssText = "font-size:9px;padding:2px 6px;background:#b71c1c;color:#faa;border:1px solid #555;cursor:pointer;";
+    logoutBtn.addEventListener("click", () => {
+      matrixState.accessToken = "";
+      matrixState.userId = "";
+      matrixState.roomId = "";
+      matrixState.nextBatch = "";
+      matrixState.pollActive = false;
+      saveMatrixConfig();
+      cmdMatrixChat();
+    });
+    statusRow.appendChild(userLabel);
+    statusRow.appendChild(logoutBtn);
+    configBar.appendChild(statusRow);
+  }
+  container.appendChild(configBar);
+
+  // ── Message area ──
+  const msgArea = document.createElement("div");
+  msgArea.style.cssText = "flex:1;overflow-y:auto;padding:6px;min-height:300px;";
+  container.appendChild(msgArea);
+
+  // ── Input bar ──
+  if (matrixState.accessToken) {
+    const inputBar = document.createElement("div");
+    inputBar.style.cssText = "display:flex;gap:4px;padding:6px;border-top:1px solid #333;";
+    const msgInput = document.createElement("input");
+    msgInput.placeholder = "Type a message...";
+    msgInput.style.cssText = "flex:1;font-size:11px;background:#111;color:#ccc;border:1px solid #333;padding:4px 6px;";
+    const sendBtn = document.createElement("button");
+    sendBtn.textContent = "Send";
+    sendBtn.style.cssText = "font-size:10px;padding:4px 10px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;";
+
+    const doSend = async () => {
+      const msg = msgInput.value.trim();
+      if (!msg || !matrixState.roomId) return;
+      msgInput.value = "";
+      try {
+        await invoke("matrix_send", {
+          homeserver: matrixState.homeserver,
+          accessToken: matrixState.accessToken,
+          roomId: matrixState.roomId,
+          message: msg,
+        });
+      } catch (e) {
+        log(`Matrix send failed: ${e}`, "error");
+        alert(`Send failed: ${e}`);
+      }
+    };
+
+    sendBtn.addEventListener("click", doSend);
+    msgInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); doSend(); }
+    });
+
+    inputBar.appendChild(msgInput);
+    inputBar.appendChild(sendBtn);
+    container.appendChild(inputBar);
+
+    // ── Start polling for messages ──
+    matrixState.pollActive = true;
+    const poll = async () => {
+      while (matrixState.pollActive) {
+        try {
+          const json = await invoke("matrix_poll", {
+            homeserver: matrixState.homeserver,
+            accessToken: matrixState.accessToken,
+            since: matrixState.nextBatch || null,
+          });
+          const result = JSON.parse(json);
+          matrixState.nextBatch = result.next_batch;
+
+          for (const msg of result.messages) {
+            const row = document.createElement("div");
+            row.style.cssText = "margin:2px 0;line-height:1.4;";
+
+            const time = new Date(msg.timestamp);
+            const timeStr = time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+            const timeEl = document.createElement("span");
+            timeEl.textContent = `[${timeStr}] `;
+            timeEl.style.cssText = "color:#666;font-size:9px;";
+
+            const senderEl = document.createElement("span");
+            const senderName = msg.sender.split(":")[0].replace("@", "");
+            const isMe = msg.sender === matrixState.userId;
+            senderEl.textContent = `${senderName}: `;
+            senderEl.style.cssText = `font-weight:bold;color:${isMe ? "#8cf" : "#ff8"};`;
+
+            const bodyEl = document.createElement("span");
+            bodyEl.textContent = msg.body;
+            bodyEl.style.cssText = "color:#ccc;";
+
+            row.appendChild(timeEl);
+            row.appendChild(senderEl);
+            row.appendChild(bodyEl);
+            msgArea.appendChild(row);
+          }
+
+          if (result.messages.length > 0) {
+            msgArea.scrollTop = msgArea.scrollHeight;
+          }
+        } catch (_) {
+          // Sync timeout or error — retry
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    };
+    poll();
+
+    // Stop polling when window closes
+    const origClose = win.close;
+    win.close = () => {
+      matrixState.pollActive = false;
+      if (origClose) origClose();
+    };
+  } else {
+    const info = document.createElement("div");
+    info.textContent = "Log in with your Matrix account to join the community chat.";
+    info.style.cssText = "color:#888;padding:12px;text-align:center;";
+    msgArea.appendChild(info);
+  }
+
+  win.appendElement(container);
+}
 
 async function checkWatchlistSMA200Alerts() {
   if (!window._watchlistSymbols || window._watchlistSymbols.length === 0) return;
