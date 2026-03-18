@@ -945,6 +945,23 @@ async function placeProtectiveOrder(symbol, type, price) {
     const qty = Math.abs(pos.qty);
     const oppSide = pos.side === "long" ? "sell" : "buy";
 
+    // Cancel existing protective orders at this symbol+side to avoid "insufficient qty" rejection
+    try {
+      const openJson = await invoke("get_open_orders");
+      const openOrders = JSON.parse(openJson);
+      for (const o of openOrders) {
+        if ((o.symbol === symbol || o.symbol === symNoSlash) && o.side === oppSide) {
+          // Cancel existing stop (SL) or limit (TP) before placing new one
+          const isExistingStop = o.order_type === "stop" || o.order_type === "stop_limit";
+          const isExistingLimit = o.order_type === "limit";
+          if ((type === "sl" && isExistingStop) || (type === "tp" && isExistingLimit)) {
+            await invoke("cancel_order", { orderId: o.id });
+            log(`Cancelled existing ${type.toUpperCase()} order ${o.id} before replacing`, "info");
+          }
+        }
+      }
+    } catch (_) {} // Non-critical: if cancel fails, the new order will still try
+
     if (type === "sl") {
       await invoke("place_stop_order", {
         symbol, qty, side: oppSide, stopPrice: price, tif: "gtc",
@@ -958,7 +975,8 @@ async function placeProtectiveOrder(symbol, type, price) {
     }
   } catch (e) {
     log(`Protective order failed: ${e}`, "error");
-    alert(`Failed to place protective ${type.toUpperCase()}: ${e}`);
+    // Don't alert() for non-critical protective orders — just log
+    log(`Failed to place protective ${type.toUpperCase()}: ${e}`, "warn");
   }
 }
 
@@ -14248,6 +14266,485 @@ function cmdMarketHours() {
   }
 }
 
+// ── CHART-TEMPLATE-SHARE — Export Chart as Shareable Package ──
+function cmdChartTemplateShare() {
+  const win = createWindow({ title: "Chart Template Share", width: 520, height: 480 });
+  const frag = document.createDocumentFragment();
+
+  // Capture current state
+  const indicators = [];
+  document.querySelectorAll("#indicator-list input[type=checkbox]:checked").forEach(cb => {
+    indicators.push({ name: cb.dataset.ind || cb.value, period: cb.dataset.period || "" });
+  });
+  const fisherH = document.getElementById("fisher-pane")?.offsetHeight || 120;
+  const volumeH = document.getElementById("volume-pane")?.offsetHeight || 100;
+  const chartTypeEl = document.getElementById("chart-type");
+  const chartType = chartTypeEl ? chartTypeEl.value : currentChartType;
+  const last50 = currentChartData.slice(-50).map(b => ({
+    time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0
+  }));
+
+  const pkg = {
+    symbol: currentSymbol,
+    timeframe: currentTimeframe,
+    chartType,
+    indicators,
+    paneHeights: { fisher: fisherH, volume: volumeH },
+    bars: last50,
+    createdAt: new Date().toISOString(),
+    author: "TyphooN-Terminal"
+  };
+
+  // Preview section
+  const preview = el("div", "padding:8px;border:1px solid #444;border-radius:4px;margin-bottom:8px;");
+  const title = el("div", "font-weight:bold;color:#4fc3f7;margin-bottom:4px;", "Setup Preview");
+  preview.appendChild(title);
+  preview.appendChild(div("Symbol: " + currentSymbol, "font-size:12px;color:#ccc;"));
+  preview.appendChild(div("Timeframe: " + currentTimeframe, "font-size:12px;color:#ccc;"));
+  preview.appendChild(div("Chart Type: " + chartType, "font-size:12px;color:#ccc;"));
+  preview.appendChild(div("Indicators: " + (indicators.length > 0 ? indicators.map(i => i.name + (i.period ? "(" + i.period + ")" : "")).join(", ") : "None"), "font-size:12px;color:#ccc;"));
+  preview.appendChild(div("Bars: " + last50.length + " (preview)", "font-size:12px;color:#ccc;"));
+  frag.appendChild(preview);
+
+  // Export buttons
+  const btnRow = el("div", "display:flex;gap:8px;margin-bottom:12px;");
+  const exportBtn = el("button", "padding:6px 14px;background:#4caf50;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;", "Export as File");
+  exportBtn.addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(pkg, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = currentSymbol + "_" + currentTimeframe + "_setup.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    log("Chart template exported as file", "ok");
+  });
+  btnRow.appendChild(exportBtn);
+
+  const copyBtn = el("button", "padding:6px 14px;background:#2196f3;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;", "Copy to Clipboard");
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(pkg, null, 2));
+      copyBtn.textContent = "Copied!";
+      setTimeout(() => { copyBtn.textContent = "Copy to Clipboard"; }, 1500);
+    } catch (_) { log("Clipboard copy failed", "error"); }
+  });
+  btnRow.appendChild(copyBtn);
+  frag.appendChild(btnRow);
+
+  // Import section
+  const importSection = el("div", "border-top:1px solid #444;padding-top:10px;");
+  importSection.appendChild(el("div", "font-weight:bold;color:#ff9800;margin-bottom:6px;", "Import Setup"));
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json";
+  fileInput.style.cssText = "font-size:12px;color:#ccc;margin-bottom:8px;display:block;";
+  const statusDiv = el("div", "font-size:11px;color:#888;min-height:20px;");
+  fileInput.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const imported = JSON.parse(ev.target.result);
+        if (!imported.symbol || !imported.timeframe) { statusDiv.textContent = "Invalid setup file (missing symbol/timeframe)."; statusDiv.style.color = "#f44336"; return; }
+        // Apply symbol and timeframe
+        const symInput = document.getElementById("symbol-input");
+        if (symInput) symInput.value = imported.symbol;
+        const tfSelect = document.getElementById("timeframe-select");
+        if (tfSelect) tfSelect.value = imported.timeframe;
+        // Apply chart type
+        const ctEl = document.getElementById("chart-type");
+        if (ctEl && imported.chartType) ctEl.value = imported.chartType;
+        // Apply indicators
+        if (imported.indicators && imported.indicators.length > 0) {
+          document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => { cb.checked = false; });
+          for (const ind of imported.indicators) {
+            document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
+              if ((cb.dataset.ind || cb.value) === ind.name && (!ind.period || cb.dataset.period === ind.period)) {
+                cb.checked = true;
+              }
+            });
+          }
+        }
+        triggerLoad();
+        statusDiv.textContent = "Setup imported: " + imported.symbol + " " + imported.timeframe + " (" + (imported.indicators ? imported.indicators.length : 0) + " indicators). Loading...";
+        statusDiv.style.color = "#4caf50";
+        log("Chart template imported: " + imported.symbol, "ok");
+      } catch (err) { statusDiv.textContent = "Parse error: " + err.message; statusDiv.style.color = "#f44336"; }
+    };
+    reader.readAsText(file);
+  });
+  importSection.appendChild(fileInput);
+  importSection.appendChild(statusDiv);
+  frag.appendChild(importSection);
+
+  win.contentElement.replaceChildren(frag);
+}
+
+// ── KEYBOARD-MACRO — Record Keyboard Sequences ──────────────
+function cmdKeyboardMacro() {
+  const win = createWindow({ title: "Keyboard Macro Recorder", width: 460, height: 420 });
+  const STORAGE_KEY = "typhoon_keyboard_macros";
+  const MAX_KEYS = 50;
+  const MAX_MACROS = 20;
+
+  function loadMacros() {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch (_) { return []; }
+  }
+  function saveMacros(macros) { localStorage.setItem(STORAGE_KEY, JSON.stringify(macros)); }
+
+  let recording = false;
+  let recordedKeys = [];
+  let keyHandler = null;
+
+  function render() {
+    const macros = loadMacros();
+    const frag = document.createDocumentFragment();
+
+    // Recording controls
+    const controls = el("div", "padding:8px;border-bottom:1px solid #444;margin-bottom:8px;");
+    const toggleBtn = el("button", "padding:6px 14px;border:none;border-radius:3px;cursor:pointer;font-size:12px;color:#fff;" + (recording ? "background:#f44336;" : "background:#4caf50;"), recording ? "Stop Recording" : "Start Recording");
+    toggleBtn.addEventListener("click", () => {
+      if (!recording) {
+        recording = true;
+        recordedKeys = [];
+        keyHandler = (e) => {
+          if (e.key === "Escape") { toggleBtn.click(); return; }
+          e.preventDefault();
+          e.stopPropagation();
+          if (recordedKeys.length < MAX_KEYS) {
+            recordedKeys.push({ key: e.key, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey });
+          }
+          render();
+        };
+        document.addEventListener("keydown", keyHandler, true);
+        render();
+      } else {
+        recording = false;
+        if (keyHandler) { document.removeEventListener("keydown", keyHandler, true); keyHandler = null; }
+        render();
+      }
+    });
+    controls.appendChild(toggleBtn);
+
+    if (recording) {
+      const indicator = el("span", "margin-left:10px;color:#f44336;font-size:12px;", "Recording... (" + recordedKeys.length + "/" + MAX_KEYS + " keys) — Escape to stop");
+      controls.appendChild(indicator);
+    }
+
+    // Show recorded keys
+    if (!recording && recordedKeys.length > 0) {
+      const keysDisplay = el("div", "margin-top:6px;font-size:11px;color:#ccc;");
+      keysDisplay.textContent = "Recorded: " + recordedKeys.map(k => {
+        let s = "";
+        if (k.ctrlKey) s += "Ctrl+";
+        if (k.altKey) s += "Alt+";
+        if (k.shiftKey) s += "Shift+";
+        s += k.key;
+        return s;
+      }).join(", ");
+      controls.appendChild(keysDisplay);
+
+      const saveRow = el("div", "display:flex;gap:6px;margin-top:6px;align-items:center;");
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.placeholder = "Macro name...";
+      nameInput.style.cssText = "flex:1;padding:4px 8px;background:#1e1e1e;color:#fff;border:1px solid #555;border-radius:3px;font-size:12px;";
+      const saveBtn = el("button", "padding:4px 12px;background:#4caf50;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;", "Save");
+      saveBtn.addEventListener("click", () => {
+        const name = nameInput.value.trim();
+        if (!name) return;
+        const m = loadMacros();
+        if (m.length >= MAX_MACROS) { log("Max " + MAX_MACROS + " macros reached. Delete one first.", "warn"); return; }
+        m.push({ name, keys: recordedKeys });
+        saveMacros(m);
+        recordedKeys = [];
+        render();
+        log("Macro saved: " + name, "ok");
+      });
+      saveRow.appendChild(nameInput);
+      saveRow.appendChild(saveBtn);
+      controls.appendChild(saveRow);
+    }
+    frag.appendChild(controls);
+
+    // Macro list
+    if (macros.length > 0) {
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      table.appendChild(theadRow(["Name", "Keys", "", ""]));
+      for (let i = 0; i < macros.length; i++) {
+        const m = macros[i];
+        const tr = document.createElement("tr");
+        tr.style.cssText = "border-bottom:1px solid #333;";
+        tr.appendChild(td(m.name, "padding:4px;color:#ccc;"));
+        const keyStr = m.keys.map(k => {
+          let s = "";
+          if (k.ctrlKey) s += "Ctrl+";
+          if (k.altKey) s += "Alt+";
+          if (k.shiftKey) s += "Shift+";
+          s += k.key;
+          return s;
+        }).join(", ");
+        const keyTd = td(keyStr.length > 40 ? keyStr.substring(0, 40) + "..." : keyStr, "padding:4px;color:#888;font-family:Consolas,monospace;max-width:180px;overflow:hidden;");
+        tr.appendChild(keyTd);
+        const playTd = document.createElement("td");
+        playTd.style.cssText = "padding:4px;";
+        const playBtn = el("button", "padding:2px 8px;background:#2196f3;color:#fff;border:none;border-radius:2px;cursor:pointer;font-size:10px;", "Play");
+        playBtn.addEventListener("click", () => {
+          let idx = 0;
+          const iv = setInterval(() => {
+            if (idx >= m.keys.length) { clearInterval(iv); log("Macro '" + m.name + "' playback complete", "ok"); return; }
+            const k = m.keys[idx];
+            document.dispatchEvent(new KeyboardEvent("keydown", { key: k.key, ctrlKey: k.ctrlKey, shiftKey: k.shiftKey, altKey: k.altKey, bubbles: true }));
+            idx++;
+          }, 100);
+        });
+        playTd.appendChild(playBtn);
+        tr.appendChild(playTd);
+        const delTd = document.createElement("td");
+        delTd.style.cssText = "padding:4px;";
+        const delBtn = el("button", "padding:2px 8px;background:#f44336;color:#fff;border:none;border-radius:2px;cursor:pointer;font-size:10px;", "Delete");
+        const macroIndex = i;
+        delBtn.addEventListener("click", () => {
+          const updated = loadMacros();
+          updated.splice(macroIndex, 1);
+          saveMacros(updated);
+          render();
+        });
+        delTd.appendChild(delBtn);
+        tr.appendChild(delTd);
+        table.appendChild(tr);
+      }
+      frag.appendChild(table);
+    } else {
+      frag.appendChild(div("No saved macros. Record a sequence and save it.", "padding:8px;color:#888;font-size:12px;"));
+    }
+
+    win.contentElement.replaceChildren(frag);
+  }
+
+  render();
+  win.onClose = () => {
+    if (keyHandler) { document.removeEventListener("keydown", keyHandler, true); }
+  };
+}
+
+// ── TREEMAP-LIVE — Live Portfolio Treemap ────────────────────
+function cmdTreemapLive() {
+  const win = createWindow({ title: "Live Portfolio Treemap", width: 600, height: 450 });
+  const refresh = async () => {
+    try {
+      const posJson = await invoke("get_positions");
+      const positions = JSON.parse(posJson);
+      if (!positions || positions.length === 0) { win.setContent("No open positions."); return; }
+
+      const items = positions.map(p => ({
+        symbol: p.symbol,
+        qty: parseFloat(p.qty) || 0,
+        price: parseFloat(p.current_price) || 0,
+        pnl: parseFloat(p.unrealized_pl) || 0,
+      })).map(p => ({ ...p, value: Math.abs(p.qty * p.price) })).filter(p => p.value > 0);
+
+      if (items.length === 0) { win.setContent("No positions with market value."); return; }
+
+      const totalValue = items.reduce((s, p) => s + p.value, 0);
+      const totalPnl = items.reduce((s, p) => s + p.pnl, 0);
+
+      // Sort descending by value for squarified layout
+      items.sort((a, b) => b.value - a.value);
+
+      const frag = document.createDocumentFragment();
+
+      // Summary header
+      const header = el("div", "padding:6px 8px;display:flex;justify-content:space-between;font-size:12px;border-bottom:1px solid #444;");
+      header.appendChild(span("Portfolio: $" + totalValue.toFixed(2), "color:#ccc;font-weight:bold;"));
+      const pnlColor = totalPnl >= 0 ? "#4caf50" : "#f44336";
+      header.appendChild(span("P&L: " + (totalPnl >= 0 ? "+" : "") + "$" + totalPnl.toFixed(2), "color:" + pnlColor + ";font-weight:bold;"));
+      frag.appendChild(header);
+
+      // Treemap container using flexbox squarified approach
+      const treemap = el("div", "display:flex;flex-wrap:wrap;width:100%;height:calc(100% - 40px);padding:2px;box-sizing:border-box;");
+
+      for (const item of items) {
+        const weight = item.value / totalValue;
+        const pnlPct = item.value > 0 ? (item.pnl / item.value) : 0;
+        // Color: green gradient for positive, red for negative
+        const intensity = Math.min(Math.abs(pnlPct) * 10, 1);
+        const r = pnlPct < 0 ? Math.round(40 + intensity * 180) : Math.round(20 + intensity * 30);
+        const g = pnlPct >= 0 ? Math.round(40 + intensity * 180) : Math.round(20 + intensity * 30);
+        const b = 30;
+
+        const box = el("div", "background:rgb(" + r + "," + g + "," + b + ");display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;border:1px solid #222;border-radius:2px;overflow:hidden;box-sizing:border-box;min-width:60px;min-height:40px;flex-basis:" + (weight * 100).toFixed(1) + "%;flex-grow:1;");
+
+        const symLabel = el("div", "font-size:11px;font-weight:bold;color:#fff;", item.symbol);
+        const pnlLabel = el("div", "font-size:10px;color:#ddd;font-family:Consolas,monospace;", (item.pnl >= 0 ? "+" : "") + "$" + item.pnl.toFixed(2));
+        const weightLabel = el("div", "font-size:9px;color:#aaa;", (weight * 100).toFixed(1) + "%");
+        box.appendChild(symLabel);
+        box.appendChild(pnlLabel);
+        box.appendChild(weightLabel);
+
+        box.addEventListener("click", () => {
+          const symInput = document.getElementById("symbol-input");
+          if (symInput) symInput.value = item.symbol;
+          triggerLoad();
+        });
+        treemap.appendChild(box);
+      }
+      frag.appendChild(treemap);
+      win.contentElement.replaceChildren(frag);
+    } catch (e) { win.setContent("Failed to load positions: " + e); }
+  };
+  refresh();
+  const iv = setInterval(refresh, 10000);
+  win.onClose = () => clearInterval(iv);
+}
+
+// ── FUNDING — Crypto Funding Rate Info ───────────────────────
+function cmdFunding() {
+  const win = createWindow({ title: "Funding Rate Info — " + currentSymbol, width: 460, height: 380 });
+
+  const frag = document.createDocumentFragment();
+  const isCrypto = /USD$/.test(currentSymbol) && /^(BTC|ETH|SOL|DOGE|ADA|DOT|AVAX|LINK|MATIC|XRP|LTC|UNI|SHIB|AAVE|ATOM)/.test(currentSymbol);
+
+  // Header
+  const header = el("div", "padding:8px;border-bottom:1px solid #444;margin-bottom:8px;");
+  header.appendChild(el("div", "font-weight:bold;color:#4fc3f7;font-size:14px;", currentSymbol));
+
+  // Current price from cache
+  const ck = getCacheKey(currentSymbol, currentTimeframe);
+  const cached = barCache[ck];
+  if (cached && cached.data && cached.data.length > 1) {
+    const bars = cached.data;
+    const cur = bars[bars.length - 1].close || bars[bars.length - 1].c;
+    const prev = bars[bars.length - 2].close || bars[bars.length - 2].c;
+    const change24h = prev > 0 ? ((cur - prev) / prev * 100) : 0;
+    header.appendChild(div("Price: $" + cur.toFixed(cur > 100 ? 2 : 6), "font-size:12px;color:#ccc;margin-top:2px;"));
+    const chColor = change24h >= 0 ? "#4caf50" : "#f44336";
+    header.appendChild(el("div", "font-size:12px;color:" + chColor + ";", "24h Change: " + (change24h >= 0 ? "+" : "") + change24h.toFixed(2) + "%"));
+
+    // Estimate funding direction from recent bar premium/discount
+    if (bars.length >= 10) {
+      const recent = bars.slice(-10);
+      let avgClose = 0, avgOpen = 0;
+      for (const b of recent) { avgClose += (b.close || b.c); avgOpen += (b.open || b.o); }
+      avgClose /= recent.length;
+      avgOpen /= recent.length;
+      const premium = avgClose > avgOpen ? "positive" : "negative";
+      const fundingDir = premium === "positive" ? "Longs likely paying shorts (contango)" : "Shorts likely paying longs (backwardation)";
+      header.appendChild(el("div", "font-size:11px;color:#ff9800;margin-top:4px;", "Estimated Funding Direction: " + fundingDir));
+
+      // Historical premium/discount
+      const premPct = avgOpen > 0 ? ((avgClose - avgOpen) / avgOpen * 100) : 0;
+      header.appendChild(el("div", "font-size:11px;color:#aaa;margin-top:2px;", "Recent avg premium: " + (premPct >= 0 ? "+" : "") + premPct.toFixed(4) + "%"));
+    }
+  } else {
+    header.appendChild(div("No cached price data. Load a chart first.", "font-size:12px;color:#888;"));
+  }
+  frag.appendChild(header);
+
+  // Info panel
+  const infoSection = el("div", "padding:8px;");
+
+  if (isCrypto) {
+    infoSection.appendChild(el("div", "font-weight:bold;color:#ff9800;margin-bottom:6px;font-size:12px;", "About Funding Rates"));
+    const explanations = [
+      "Funding rates are periodic payments between long and short perpetual futures traders.",
+      "Positive rate: longs pay shorts (market is bullish / contango).",
+      "Negative rate: shorts pay longs (market is bearish / backwardation).",
+      "Typical funding: every 8 hours on most exchanges (Binance, Bybit, OKX).",
+      "Annualized funding can range from -100% to +200% in extreme conditions.",
+      "",
+      "Alpaca provides spot crypto trading only. For real-time funding rates, use:",
+      "  Binance API: GET /fapi/v1/fundingRate",
+      "  Bybit API: GET /v5/market/funding/history",
+      "  CoinGlass: coinglass.com/FundingRate",
+    ];
+    for (const line of explanations) {
+      infoSection.appendChild(div(line, "font-size:11px;color:" + (line.startsWith("  ") ? "#4fc3f7" : "#ccc") + ";margin-bottom:2px;"));
+    }
+  } else {
+    infoSection.appendChild(el("div", "color:#ff9800;font-size:12px;", "Funding rates are a crypto-specific concept (perpetual futures)."));
+    infoSection.appendChild(el("div", "color:#888;font-size:11px;margin-top:6px;", "Current symbol (" + currentSymbol + ") is not a recognized crypto pair."));
+    infoSection.appendChild(el("div", "color:#888;font-size:11px;margin-top:4px;", "Switch to a crypto symbol (BTC/USD, ETH/USD, SOL/USD, etc.) for funding info."));
+  }
+  frag.appendChild(infoSection);
+
+  win.contentElement.replaceChildren(frag);
+}
+
+// ── DEFI-YIELD — Yield Comparison Dashboard ──────────────────
+function cmdDefiYield() {
+  const win = createWindow({ title: "Yield Comparison Dashboard", width: 560, height: 480 });
+
+  // Hardcoded approximate yields
+  const cryptoYields = [
+    { asset: "DOT", type: "Crypto Staking", yield: 12.0, risk: "High", vol: 0.85 },
+    { asset: "AVAX", type: "Crypto Staking", yield: 8.0, risk: "High", vol: 0.80 },
+    { asset: "SOL", type: "Crypto Staking", yield: 6.5, risk: "High", vol: 0.90 },
+    { asset: "ETH", type: "Crypto Staking", yield: 3.8, risk: "High", vol: 0.60 },
+    { asset: "ADA", type: "Crypto Staking", yield: 3.5, risk: "High", vol: 0.75 },
+  ];
+
+  const treasuryYields = [
+    { asset: "3M T-Bill", type: "Treasury", yield: 5.3, risk: "Low", vol: 0.02 },
+    { asset: "2Y Treasury", type: "Treasury", yield: 4.5, risk: "Low", vol: 0.05 },
+    { asset: "10Y Treasury", type: "Treasury", yield: 4.2, risk: "Low", vol: 0.08 },
+    { asset: "30Y Treasury", type: "Treasury", yield: 4.4, risk: "Low", vol: 0.12 },
+  ];
+
+  const equityYields = [
+    { asset: "REIT Avg", type: "Equity (REIT)", yield: 4.5, risk: "Medium", vol: 0.20 },
+    { asset: "S&P 500 Div", type: "Equity (Index)", yield: 1.3, risk: "Medium", vol: 0.16 },
+  ];
+
+  const allYields = [...cryptoYields, ...treasuryYields, ...equityYields].map(y => ({
+    ...y,
+    riskAdj: y.vol > 0 ? (y.yield / (y.vol * 100)) : y.yield,
+  }));
+
+  // Sort by yield descending
+  allYields.sort((a, b) => b.yield - a.yield);
+
+  // Find best risk-adjusted
+  const bestRA = allYields.reduce((best, cur) => cur.riskAdj > best.riskAdj ? cur : best, allYields[0]);
+
+  const frag = document.createDocumentFragment();
+
+  // Summary
+  const summary = el("div", "padding:8px;border-bottom:1px solid #444;margin-bottom:6px;");
+  summary.appendChild(el("div", "font-size:12px;color:#4fc3f7;font-weight:bold;", "Best risk-adjusted yield: " + bestRA.asset + " (" + bestRA.riskAdj.toFixed(2) + ")"));
+  summary.appendChild(el("div", "font-size:10px;color:#888;margin-top:2px;", "Risk-adjusted = nominal yield / (estimated annualized volatility). Updated periodically."));
+  frag.appendChild(summary);
+
+  // Table
+  const table = document.createElement("table");
+  table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+  table.appendChild(theadRow(["Asset", "Type", "Yield%", "Risk", "Risk-Adj Yield"]));
+
+  for (const y of allYields) {
+    const tr = document.createElement("tr");
+    // Color band based on risk
+    const riskColor = y.risk === "Low" ? "rgba(76,175,80,0.1)" : y.risk === "Medium" ? "rgba(255,235,59,0.08)" : "rgba(244,67,54,0.1)";
+    tr.style.cssText = "border-bottom:1px solid #333;background:" + riskColor + ";";
+    tr.appendChild(td(y.asset, "padding:5px;color:#fff;font-weight:bold;"));
+    tr.appendChild(td(y.type, "padding:5px;color:#aaa;"));
+    const yieldColor = y.yield >= 5 ? "#4caf50" : y.yield >= 3 ? "#ff9800" : "#ccc";
+    tr.appendChild(td(y.yield.toFixed(1) + "%", "padding:5px;color:" + yieldColor + ";font-family:Consolas,monospace;"));
+    const riskTextColor = y.risk === "Low" ? "#4caf50" : y.risk === "Medium" ? "#ffc107" : "#f44336";
+    tr.appendChild(td(y.risk, "padding:5px;color:" + riskTextColor + ";"));
+    tr.appendChild(td(y.riskAdj.toFixed(2), "padding:5px;color:#4fc3f7;font-family:Consolas,monospace;"));
+    table.appendChild(tr);
+  }
+  frag.appendChild(table);
+
+  // Disclaimer
+  frag.appendChild(el("div", "padding:8px;font-size:9px;color:#666;border-top:1px solid #333;margin-top:8px;", "Yields are approximate and updated periodically. Crypto staking yields vary by validator and network conditions. Treasury yields sourced from FRED. Not financial advice."));
+
+  win.contentElement.replaceChildren(frag);
+}
+
 function cmdQuickOrder() {
   window._quickOrderEnabled = !window._quickOrderEnabled;
   log(`Quick order from chart: ${window._quickOrderEnabled ? "ON — right-click chart for order options" : "OFF"}`, "ok");
@@ -14415,6 +14912,11 @@ const CMD_PALETTE_COMMANDS = [
   { name: "SENTIMENT+", desc: "News volume tracker (article count, spike detection)", action: cmdSentimentPlus },
   { name: "RISK-PARITY", desc: "Risk parity position sizing (volatility-weighted allocation)", action: cmdRiskParity },
   { name: "WORKSPACE", desc: "Full workspace save/restore (settings, tabs, indicators)", action: cmdWorkspace },
+  { name: "CHART-TEMPLATE-SHARE", desc: "Export/import chart as shareable JSON package", action: cmdChartTemplateShare },
+  { name: "KEYBOARD-MACRO", desc: "Record & replay keyboard sequences", action: cmdKeyboardMacro },
+  { name: "TREEMAP-LIVE", desc: "Live portfolio treemap (position weight, P&L color)", action: cmdTreemapLive },
+  { name: "FUNDING", desc: "Crypto funding rate info & estimation", action: cmdFunding },
+  { name: "DEFI-YIELD", desc: "Yield comparison dashboard (crypto, treasury, equity)", action: cmdDefiYield },
 ];
 
 function fuzzyMatch(query, target) {
