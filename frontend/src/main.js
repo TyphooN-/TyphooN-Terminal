@@ -3972,8 +3972,10 @@ function setupButtons() {
       orderInFlight = true;
       try {
         let orderType = document.getElementById("order-type").value;
+        const isCrypto = currentSymbol.includes("/");
         // MT5 behavior: market order with SL/TP lines → auto-upgrade to bracket
-        if (orderType === "market" && sl && tp) {
+        // Crypto: Alpaca doesn't support bracket/OCO for crypto — use separate orders
+        if (orderType === "market" && sl && tp && !isCrypto) {
           orderType = "bracket";
         }
         for (let i = 0; i < calc.count; i++) {
@@ -3990,6 +3992,12 @@ function setupButtons() {
             await invoke("place_trailing_stop", { symbol: currentSymbol, qty: calc.lots, side: calc.side, trailPrice: trail, trailPercent: null });
           } else {
             await invoke("place_order", { symbol: currentSymbol, qty: calc.lots, side: calc.side });
+            // Crypto with SL/TP: place separate protective orders (no bracket support)
+            if (isCrypto && sl && tp) {
+              const oppSide = calc.side === "buy" ? "sell" : "buy";
+              try { await invoke("place_stop_order", { symbol: currentSymbol, qty: calc.lots, side: oppSide, stopPrice: sl, tif: "gtc" }); } catch (e) { log(`Crypto SL order failed: ${e}`, "warn"); }
+              try { await invoke("place_limit_order", { symbol: currentSymbol, qty: calc.lots, side: oppSide, limitPrice: tp, tif: "gtc" }); } catch (e) { log(`Crypto TP order failed: ${e}`, "warn"); }
+            }
           }
         }
         await invoke("set_sl_level", { symbol: currentSymbol, price: sl });
