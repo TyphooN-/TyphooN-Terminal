@@ -3224,12 +3224,19 @@ const ALL_NATIVE_TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour
 
 const prefetchInProgress = new Set();
 // Track which symbol:tf combos are fully loaded (persisted across restarts)
-const fullyLoadedTFs = new Set((() => {
-  try { return JSON.parse(localStorage.getItem("fullyLoadedTFs") || "[]"); } catch { return []; }
-})());
-function saveFullyLoaded() {
-  try { localStorage.setItem("fullyLoadedTFs", JSON.stringify([...fullyLoadedTFs])); } catch (_) {}
-}
+// Session-only prefetch tracking (NOT persistent — clears on restart to ensure fresh data)
+const prefetchedThisSession = new Set();
+// Cache staleness per timeframe: data older than one period of that TF needs refresh
+const CACHE_STALE_BY_TF = {
+  "1Min": 60 * 1000,           // 1 minute
+  "5Min": 5 * 60 * 1000,       // 5 minutes
+  "15Min": 15 * 60 * 1000,     // 15 minutes
+  "30Min": 30 * 60 * 1000,     // 30 minutes
+  "1Hour": 60 * 60 * 1000,     // 1 hour
+  "4Hour": 4 * 60 * 60 * 1000, // 4 hours
+  "1Day": 24 * 60 * 60 * 1000, // 1 day
+  "1Week": 7 * 24 * 60 * 60 * 1000, // 1 week
+};
 
 async function prefetchAllTimeframes(symbol, currentTF) {
   if (prefetchInProgress.has(symbol)) return;
@@ -3239,35 +3246,38 @@ async function prefetchAllTimeframes(symbol, currentTF) {
   for (const tf of ALL_NATIVE_TIMEFRAMES) {
     if (symbol !== currentSymbol) break; // user switched tabs
     const cacheKey = getCacheKey(symbol, tf);
-    const fullyLoadedKey = `${symbol}:${tf}`;
+    const sessionKey = `${symbol}:${tf}`;
 
-    // Skip if already fully loaded in this session
-    if (fullyLoadedTFs.has(fullyLoadedKey)) continue;
+    // Skip if already fetched THIS SESSION (not persistent — every restart re-fetches)
+    if (prefetchedThisSession.has(sessionKey)) continue;
 
     const cached = barCache[cacheKey];
-    if (cached && cached.data && cached.data.length > 0) {
-      fullyLoadedTFs.add(fullyLoadedKey);
+    const cacheAge = cached ? (Date.now() - (cached.timestamp || 0)) : Infinity;
+
+    // If cache exists and is fresh (younger than one period of this TF), skip fetch
+    const staleness = CACHE_STALE_BY_TF[tf] || 60 * 60 * 1000; // default 1 hour
+    if (cached && cached.data && cached.data.length > 0 && cacheAge < staleness) {
+      prefetchedThisSession.add(sessionKey);
       continue;
     }
 
-    // No cached data — initial fetch (max bars for this timeframe)
+    // Fetch fresh data (always, if cache is stale or missing)
     try {
       const barsJson = await invokeQuiet("get_bars", { symbol, timeframe: tf, limit: 2000 });
       const bars = JSON.parse(barsJson);
       if (bars.length > 0) {
-        barCache[cacheKey] = { data: bars, timestamp: Date.now() };
+        barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
         saveBarCacheToDisk(cacheKey, bars);
         fetched++;
-        log(`${symbol} ${tf}: ${bars.length} bars`, "info");
+        log(`${symbol} ${tf}: ${bars.length} bars (${cacheAge < Infinity ? "refreshed" : "new"})`, "info");
       }
-      fullyLoadedTFs.add(fullyLoadedKey);
+      prefetchedThisSession.add(sessionKey);
     } catch (_) {
-      // Don't mark as loaded on error — retry next time
+      // Don't mark as fetched on error — retry next time
     }
   }
 
   if (fetched > 0) log(`Pre-cached ${fetched} timeframes for ${symbol}`, "ok");
-  saveFullyLoaded();
   prefetchInProgress.delete(symbol);
 }
 
@@ -16129,6 +16139,933 @@ if (localStorage.getItem("typhoon_focus_mode") === "true") { window._focusMode =
 // Focus mode keyboard shortcuts (F12, Ctrl+Shift+F)
 document.addEventListener("keydown", (fmEvt) => { if (fmEvt.target.tagName === "INPUT" || fmEvt.target.tagName === "SELECT") return; if (fmEvt.key === "F12") { fmEvt.preventDefault(); cmdFocusMode(); } if (fmEvt.ctrlKey && fmEvt.shiftKey && fmEvt.key === "F") { fmEvt.preventDefault(); cmdFocusMode(); } });
 
+// ══════════════════════════════════════════════════════════════
+// MUSIC — Sonification of Price Data (Web Audio API)
+// ══════════════════════════════════════════════════════════════
+function cmdMusic() {
+  if (!currentChartData || currentChartData.length < 2) { log("MUSIC: Need chart data loaded", "warn"); return; }
+  const win = createWindow({ title: currentSymbol + " — Price Sonification", width: 420, height: 280 });
+  win.contentElement.textContent = "";
+
+  let audioCtx = null;
+  let playing = false;
+  let stopRequested = false;
+  let currentBarIdx = 0;
+
+  const bars = currentChartData;
+  const prices = bars.map(b => b.close);
+  const volumes = bars.map(b => b.volume || 0);
+  const minP = Math.min(...prices);
+  const maxP = Math.max(...prices);
+  const rangeP = maxP - minP || 1;
+  const maxVol = Math.max(...volumes) || 1;
+
+  const container = document.createElement("div");
+  container.style.cssText = "padding:12px;font-family:monospace;font-size:12px;color:#ddd;";
+
+  // Info
+  const info = document.createElement("div");
+  info.style.cssText = "margin-bottom:12px;color:#888;";
+  info.textContent = bars.length + " bars | Price range: " + minP.toFixed(2) + " - " + maxP.toFixed(2);
+  container.appendChild(info);
+
+  // Progress display
+  const progressDiv = document.createElement("div");
+  progressDiv.style.cssText = "margin-bottom:12px;font-size:14px;color:#8cf;";
+  progressDiv.textContent = "Bar: 0 / " + bars.length;
+  container.appendChild(progressDiv);
+
+  // Progress bar
+  const progressBarOuter = document.createElement("div");
+  progressBarOuter.style.cssText = "width:100%;height:8px;background:#222;border-radius:4px;margin-bottom:12px;overflow:hidden;";
+  const progressBarInner = document.createElement("div");
+  progressBarInner.style.cssText = "width:0%;height:100%;background:#4caf50;transition:width 0.05s;";
+  progressBarOuter.appendChild(progressBarInner);
+  container.appendChild(progressBarOuter);
+
+  // Controls row
+  const ctrlRow = document.createElement("div");
+  ctrlRow.style.cssText = "display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;";
+
+  // Play/Stop button
+  const playBtn = document.createElement("button");
+  playBtn.textContent = "Play";
+  playBtn.style.cssText = "padding:6px 20px;background:#0f3460;color:#8cf;border:1px solid #555;border-radius:4px;cursor:pointer;font-family:monospace;font-size:12px;";
+  ctrlRow.appendChild(playBtn);
+
+  // Speed control
+  const speedLabel = document.createElement("label");
+  speedLabel.style.cssText = "color:#888;font-size:11px;display:flex;align-items:center;gap:6px;";
+  speedLabel.textContent = "Speed:";
+  const speedSlider = document.createElement("input");
+  speedSlider.type = "range";
+  speedSlider.min = "1";
+  speedSlider.max = "3";
+  speedSlider.value = "1";
+  speedSlider.step = "1";
+  speedSlider.style.cssText = "width:80px;";
+  const speedVal = document.createElement("span");
+  speedVal.style.cssText = "color:#ccc;min-width:30px;";
+  speedVal.textContent = "1x";
+  const speedMap = { "1": 1, "2": 5, "3": 25 };
+  speedSlider.addEventListener("input", () => { speedVal.textContent = speedMap[speedSlider.value] + "x"; });
+  speedLabel.appendChild(speedSlider);
+  speedLabel.appendChild(speedVal);
+  ctrlRow.appendChild(speedLabel);
+
+  // Volume control
+  const volLabel = document.createElement("label");
+  volLabel.style.cssText = "color:#888;font-size:11px;display:flex;align-items:center;gap:6px;";
+  volLabel.textContent = "Vol:";
+  const volSlider = document.createElement("input");
+  volSlider.type = "range";
+  volSlider.min = "0";
+  volSlider.max = "100";
+  volSlider.value = "50";
+  volSlider.style.cssText = "width:80px;";
+  volLabel.appendChild(volSlider);
+  ctrlRow.appendChild(volLabel);
+
+  container.appendChild(ctrlRow);
+
+  // Current price display
+  const priceDisp = document.createElement("div");
+  priceDisp.style.cssText = "font-size:18px;color:#4caf50;text-align:center;margin-top:8px;";
+  priceDisp.textContent = "--";
+  container.appendChild(priceDisp);
+
+  win.appendElement(container);
+
+  async function playAudio() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    playing = true;
+    stopRequested = false;
+    playBtn.textContent = "Stop";
+
+    const speed = speedMap[speedSlider.value] || 1;
+    const baseDuration = 50; // ms per bar
+    const duration = baseDuration / speed;
+
+    for (let i = currentBarIdx; i < bars.length; i++) {
+      if (stopRequested) break;
+      currentBarIdx = i;
+
+      const normPrice = (prices[i] - minP) / rangeP;
+      const freq = 200 + normPrice * 600;
+      const normVol = (volumes[i] / maxVol) * (parseInt(volSlider.value) / 100);
+      const gain = Math.max(0.01, Math.min(normVol, 1));
+
+      const osc = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gainNode.gain.value = gain * 0.3;
+      osc.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      const now = audioCtx.currentTime;
+      osc.start(now);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, now + duration / 1000);
+      osc.stop(now + duration / 1000);
+
+      progressDiv.textContent = "Bar: " + (i + 1) + " / " + bars.length;
+      progressBarInner.style.width = ((i + 1) / bars.length * 100).toFixed(1) + "%";
+      priceDisp.textContent = prices[i].toFixed(4) + " | " + freq.toFixed(0) + " Hz";
+
+      await new Promise(r => setTimeout(r, duration));
+    }
+
+    playing = false;
+    playBtn.textContent = "Play";
+    if (currentBarIdx >= bars.length - 1) currentBarIdx = 0;
+  }
+
+  function stopAudio() {
+    stopRequested = true;
+    playing = false;
+    playBtn.textContent = "Play";
+  }
+
+  playBtn.addEventListener("click", () => {
+    if (playing) { stopAudio(); } else { playAudio(); }
+  });
+
+  // Cleanup on window close — override via onClose
+  const origClose = win.close.bind(win);
+  win.close = () => { stopAudio(); if (audioCtx) { audioCtx.close(); audioCtx = null; } origClose(); };
+  // Also handle the X button via onClose behavior
+  win.element.querySelector(".fw-btn-close").addEventListener("click", () => { stopAudio(); if (audioCtx) { audioCtx.close(); audioCtx = null; } }, true);
+
+  log("MUSIC: Sonification ready — " + bars.length + " bars", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// TYPEAHEAD — Predictive Next-Bar Estimator
+// ══════════════════════════════════════════════════════════════
+function cmdTypeahead() {
+  if (!currentChartData || currentChartData.length < 10) { log("TYPEAHEAD: Need at least 10 bars loaded", "warn"); return; }
+  const win = createWindow({ title: currentSymbol + " — Predictive Next-Bar Estimator", width: 520, height: 420 });
+  win.contentElement.textContent = "";
+
+  const bars = currentChartData;
+  const patternLen = 5;
+
+  // Compute % change sequence
+  function pctChange(i) {
+    if (i <= 0 || i >= bars.length) return 0;
+    return ((bars[i].close - bars[i - 1].close) / bars[i - 1].close) * 100;
+  }
+
+  // Discretize into bins
+  function toBin(pct) {
+    if (pct < -1) return "BD"; // big down
+    if (pct < 0) return "SD";  // small down
+    if (pct < 1) return "SU";  // small up
+    return "BU";                // big up
+  }
+
+  function binLabel(b) {
+    const labels = { "BD": "Big Down (<-1%)", "SD": "Small Down (-1% to 0%)", "SU": "Small Up (0% to +1%)", "BU": "Big Up (>+1%)" };
+    return labels[b] || b;
+  }
+
+  // Get current pattern (last 5 bars)
+  const currentPattern = [];
+  for (let i = bars.length - patternLen; i < bars.length; i++) {
+    currentPattern.push(toBin(pctChange(i)));
+  }
+  const patternKey = currentPattern.join(",");
+
+  // Scan all historical occurrences of this pattern
+  const nextMoves = [];
+  for (let i = patternLen; i < bars.length - 1; i++) {
+    const pat = [];
+    for (let j = i - patternLen; j < i; j++) {
+      pat.push(toBin(pctChange(j)));
+    }
+    if (pat.join(",") === patternKey) {
+      // Record what the NEXT bar did
+      const nextPct = pctChange(i);
+      nextMoves.push(nextPct);
+    }
+  }
+
+  const container = document.createElement("div");
+  container.style.cssText = "padding:12px;font-family:monospace;font-size:12px;color:#ddd;overflow-y:auto;height:100%;";
+
+  // Current pattern description
+  const patHeader = document.createElement("div");
+  patHeader.style.cssText = "margin-bottom:12px;padding:8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;";
+
+  const patTitle = document.createElement("div");
+  patTitle.style.cssText = "color:#8cf;font-weight:bold;margin-bottom:6px;";
+  patTitle.textContent = "Current 5-Bar Pattern:";
+  patHeader.appendChild(patTitle);
+
+  for (let k = 0; k < currentPattern.length; k++) {
+    const binDiv = document.createElement("div");
+    binDiv.style.cssText = "display:inline-block;margin:2px 4px;padding:3px 8px;border-radius:3px;font-size:11px;";
+    const c = currentPattern[k];
+    const color = (c === "BU" || c === "SU") ? "#4caf50" : "#f44336";
+    binDiv.style.background = color + "22";
+    binDiv.style.color = color;
+    binDiv.style.border = "1px solid " + color + "44";
+    binDiv.textContent = "Bar " + (k + 1) + ": " + binLabel(c);
+    patHeader.appendChild(binDiv);
+  }
+  container.appendChild(patHeader);
+
+  // Results
+  const resultsDiv = document.createElement("div");
+  resultsDiv.style.cssText = "margin-top:12px;";
+
+  if (nextMoves.length === 0) {
+    const noMatch = document.createElement("div");
+    noMatch.style.cssText = "color:#f44336;text-align:center;padding:20px;";
+    noMatch.textContent = "No historical matches found for this exact pattern.";
+    resultsDiv.appendChild(noMatch);
+  } else {
+    const bullish = nextMoves.filter(m => m > 0);
+    const bearish = nextMoves.filter(m => m <= 0);
+    const avgMove = nextMoves.reduce((s, v) => s + v, 0) / nextMoves.length;
+    const bullPct = (bullish.length / nextMoves.length * 100).toFixed(1);
+    const bearPct = (bearish.length / nextMoves.length * 100).toFixed(1);
+    const avgBull = bullish.length > 0 ? bullish.reduce((s, v) => s + v, 0) / bullish.length : 0;
+    const avgBear = bearish.length > 0 ? bearish.reduce((s, v) => s + v, 0) / bearish.length : 0;
+
+    const summaryText = bullPct + "% of times this pattern occurred, next bar was bullish (+" + avgBull.toFixed(2) + "% avg)";
+
+    const summaryDiv = document.createElement("div");
+    summaryDiv.style.cssText = "font-size:14px;margin-bottom:12px;padding:8px;background:#0a2a0a;border:1px solid #4caf5044;border-radius:4px;";
+    const summaryColor = parseFloat(bullPct) >= 50 ? "#4caf50" : "#f44336";
+    summaryDiv.style.color = summaryColor;
+    summaryDiv.textContent = summaryText;
+    resultsDiv.appendChild(summaryDiv);
+
+    // Stats table
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;";
+    table.appendChild(theadRow(["Metric", "Value"]));
+
+    const rows = [
+      ["Historical Matches", String(nextMoves.length)],
+      ["Bullish (next bar up)", bullPct + "% (" + bullish.length + ")"],
+      ["Bearish (next bar down)", bearPct + "% (" + bearish.length + ")"],
+      ["Avg Move (all)", (avgMove >= 0 ? "+" : "") + avgMove.toFixed(3) + "%"],
+      ["Avg Bullish Move", "+" + avgBull.toFixed(3) + "%"],
+      ["Avg Bearish Move", avgBear.toFixed(3) + "%"],
+      ["Best Next Bar", "+" + Math.max(...nextMoves).toFixed(3) + "%"],
+      ["Worst Next Bar", Math.min(...nextMoves).toFixed(3) + "%"],
+    ];
+
+    for (const [label, val] of rows) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = "border-bottom:1px solid #333;";
+      const td1 = document.createElement("td");
+      td1.style.cssText = "padding:4px 8px;color:#888;";
+      td1.textContent = label;
+      const td2 = document.createElement("td");
+      td2.style.cssText = "padding:4px 8px;text-align:right;color:#ccc;";
+      td2.textContent = val;
+      tr.appendChild(td1);
+      tr.appendChild(td2);
+      table.appendChild(tr);
+    }
+    resultsDiv.appendChild(table);
+
+    // Distribution mini chart
+    const distDiv = document.createElement("div");
+    distDiv.style.cssText = "margin-top:12px;padding:8px;background:#111;border:1px solid #333;border-radius:4px;";
+    const distTitle = document.createElement("div");
+    distTitle.style.cssText = "color:#888;font-size:10px;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;";
+    distTitle.textContent = "Next-Bar Move Distribution";
+    distDiv.appendChild(distTitle);
+
+    const buckets = {};
+    for (const m of nextMoves) {
+      const key = Math.round(m * 2) / 2; // round to 0.5% buckets
+      buckets[key] = (buckets[key] || 0) + 1;
+    }
+    const maxCount = Math.max(...Object.values(buckets));
+    const sortedKeys = Object.keys(buckets).map(Number).sort((a, b) => a - b);
+    for (const k of sortedKeys) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:4px;margin:1px 0;";
+      const lbl = document.createElement("span");
+      lbl.style.cssText = "width:50px;text-align:right;font-size:10px;color:#888;";
+      lbl.textContent = (k >= 0 ? "+" : "") + k.toFixed(1) + "%";
+      const bar = document.createElement("div");
+      const w = (buckets[k] / maxCount * 100).toFixed(0);
+      const barColor = k >= 0 ? "#4caf50" : "#f44336";
+      bar.style.cssText = "height:10px;border-radius:2px;background:" + barColor + ";width:" + w + "%;min-width:2px;";
+      const cnt = document.createElement("span");
+      cnt.style.cssText = "font-size:10px;color:#666;";
+      cnt.textContent = String(buckets[k]);
+      row.appendChild(lbl);
+      row.appendChild(bar);
+      row.appendChild(cnt);
+      distDiv.appendChild(row);
+    }
+    resultsDiv.appendChild(distDiv);
+  }
+
+  container.appendChild(resultsDiv);
+  win.appendElement(container);
+  log("TYPEAHEAD: Pattern [" + patternKey + "] — " + nextMoves.length + " historical matches", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// RISK-OF-RUIN-LIVE — Real-Time Risk of Ruin (Monte Carlo)
+// ══════════════════════════════════════════════════════════════
+function cmdRiskOfRuinLive() {
+  const win = createWindow({ title: "Risk of Ruin — Live Monte Carlo", width: 550, height: 480 });
+  win.contentElement.textContent = "";
+
+  const container = document.createElement("div");
+  container.style.cssText = "padding:12px;font-family:monospace;font-size:12px;color:#ddd;overflow-y:auto;height:100%;";
+
+  const statusDiv = document.createElement("div");
+  statusDiv.style.cssText = "color:#888;margin-bottom:12px;";
+  statusDiv.textContent = "Loading trade history...";
+  container.appendChild(statusDiv);
+  win.appendElement(container);
+
+  (async () => {
+    try {
+      const histJson = await invoke("get_order_history", { limit: 500 });
+      const orders = JSON.parse(histJson).filter(o => o.status === "filled" && o.filled_avg_price);
+
+      // Match buys to sells for P&L (same as TRADESTATS)
+      const trades = [];
+      const openPos = {};
+      for (const o of orders.reverse()) {
+        const sym = o.symbol;
+        const price = parseFloat(o.filled_avg_price);
+        const qty = parseFloat(o.qty) || 1;
+        if (!openPos[sym]) {
+          openPos[sym] = { side: o.side, price, qty };
+        } else if (openPos[sym].side !== o.side) {
+          const entry = openPos[sym];
+          const pnl = entry.side === "buy"
+            ? (price - entry.price) / entry.price * 100
+            : (entry.price - price) / entry.price * 100;
+          trades.push({ pnlPct: pnl, win: pnl > 0 });
+          delete openPos[sym];
+        }
+      }
+
+      if (trades.length < 3) {
+        statusDiv.textContent = "Need at least 3 round-trip trades (have " + trades.length + "). Trade more first.";
+        return;
+      }
+
+      const wins = trades.filter(t => t.win);
+      const losses = trades.filter(t => !t.win);
+      const winRate = wins.length / trades.length;
+      const avgWinPct = wins.length > 0 ? wins.reduce((s, t) => s + t.pnlPct, 0) / wins.length : 0;
+      const avgLossPct = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnlPct, 0) / losses.length) : 1;
+
+      statusDiv.textContent = "Trades: " + trades.length + " | Win Rate: " + (winRate * 100).toFixed(1) + "% | Avg Win: +" + avgWinPct.toFixed(2) + "% | Avg Loss: -" + avgLossPct.toFixed(2) + "%";
+
+      // Monte Carlo simulation
+      const simulations = 10000;
+      const tradesPerSim = 100;
+      const ddLevels = [10, 20, 30, 50];
+      const ddHits = {};
+      const ddTimeTo = {};
+      for (const dd of ddLevels) { ddHits[dd] = 0; ddTimeTo[dd] = []; }
+
+      for (let sim = 0; sim < simulations; sim++) {
+        let equity = 100;
+        let peak = 100;
+        const ddReached = {};
+
+        for (let t = 0; t < tradesPerSim; t++) {
+          const isWin = Math.random() < winRate;
+          if (isWin) {
+            equity *= 1 + avgWinPct / 100;
+          } else {
+            equity *= 1 - avgLossPct / 100;
+          }
+          if (equity > peak) peak = equity;
+          const drawdown = (1 - equity / peak) * 100;
+
+          for (const dd of ddLevels) {
+            if (drawdown >= dd && !ddReached[dd]) {
+              ddReached[dd] = true;
+              ddHits[dd]++;
+              ddTimeTo[dd].push(t + 1);
+            }
+          }
+        }
+      }
+
+      // Results table
+      const resultsDiv = document.createElement("div");
+      resultsDiv.style.cssText = "margin-top:12px;";
+
+      const title = document.createElement("div");
+      title.style.cssText = "color:#8cf;font-weight:bold;margin-bottom:8px;font-size:13px;";
+      title.textContent = "Monte Carlo: " + simulations.toLocaleString() + " simulations x " + tradesPerSim + " trades";
+      resultsDiv.appendChild(title);
+
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+      table.appendChild(theadRow(["Drawdown Level", "Probability", "Avg Trades to Hit"]));
+
+      for (const dd of ddLevels) {
+        const prob = (ddHits[dd] / simulations * 100).toFixed(1);
+        const avgTime = ddTimeTo[dd].length > 0 ? (ddTimeTo[dd].reduce((s, v) => s + v, 0) / ddTimeTo[dd].length).toFixed(0) : "N/A";
+
+        const tr = document.createElement("tr");
+        tr.style.cssText = "border-bottom:1px solid #333;";
+
+        const td1 = document.createElement("td");
+        td1.style.cssText = "padding:6px 8px;font-weight:bold;";
+        td1.textContent = dd + "% Drawdown";
+        tr.appendChild(td1);
+
+        const td2 = document.createElement("td");
+        td2.style.cssText = "padding:6px 8px;text-align:center;font-weight:bold;";
+        const probNum = parseFloat(prob);
+        if (probNum < 5) { td2.style.color = "#4caf50"; }
+        else if (probNum < 20) { td2.style.color = "#ff9800"; }
+        else { td2.style.color = "#f44336"; }
+        td2.textContent = prob + "%";
+        tr.appendChild(td2);
+
+        const td3 = document.createElement("td");
+        td3.style.cssText = "padding:6px 8px;text-align:right;color:#888;";
+        td3.textContent = avgTime === "N/A" ? "N/A" : "~" + avgTime + " trades";
+        tr.appendChild(td3);
+
+        table.appendChild(tr);
+      }
+      resultsDiv.appendChild(table);
+
+      // Legend
+      const legend = document.createElement("div");
+      legend.style.cssText = "margin-top:12px;font-size:10px;color:#666;";
+      const g = document.createElement("span");
+      g.style.color = "#4caf50";
+      g.textContent = "Green <5%";
+      const y = document.createElement("span");
+      y.style.color = "#ff9800";
+      y.textContent = " | Yellow 5-20%";
+      const r = document.createElement("span");
+      r.style.color = "#f44336";
+      r.textContent = " | Red >20%";
+      legend.appendChild(g);
+      legend.appendChild(y);
+      legend.appendChild(r);
+      resultsDiv.appendChild(legend);
+
+      // Equity distribution at end
+      const distTitle = document.createElement("div");
+      distTitle.style.cssText = "color:#888;font-size:10px;margin-top:16px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;";
+      distTitle.textContent = "Methodology";
+      resultsDiv.appendChild(distTitle);
+
+      const methDiv = document.createElement("div");
+      methDiv.style.cssText = "font-size:10px;color:#555;line-height:1.6;";
+      methDiv.textContent = "Each simulation randomly assigns wins/losses based on your historical " + (winRate * 100).toFixed(1) + "% win rate. Equity compounds each trade. Drawdown measured from peak equity.";
+      resultsDiv.appendChild(methDiv);
+
+      container.appendChild(resultsDiv);
+
+      log("RISK-OF-RUIN-LIVE: " + trades.length + " trades, " + (winRate * 100).toFixed(1) + "% win rate, " + simulations + " simulations", "ok");
+    } catch (e) {
+      statusDiv.textContent = "Failed to load trade history: " + e;
+    }
+  })();
+}
+
+// ══════════════════════════════════════════════════════════════
+// HARMONIC — Harmonic Pattern Detection (Gartley, Butterfly, Bat, Crab)
+// ══════════════════════════════════════════════════════════════
+function cmdHarmonic() {
+  if (!currentChartData || currentChartData.length < 30) { log("HARMONIC: Need at least 30 bars loaded", "warn"); return; }
+  const win = createWindow({ title: currentSymbol + " — Harmonic Pattern Detection", width: 620, height: 500 });
+  win.contentElement.textContent = "";
+
+  const bars = currentChartData;
+  const tol = 0.05; // 5% tolerance
+
+  // Fractal swing detection (5-bar)
+  function findSwings() {
+    const swings = [];
+    for (let i = 2; i < bars.length - 2; i++) {
+      const b = bars[i];
+      if (b.high > bars[i - 1].high && b.high > bars[i - 2].high && b.high > bars[i + 1].high && b.high > bars[i + 2].high) {
+        swings.push({ idx: i, price: b.high, time: b.time, type: "high" });
+      }
+      if (b.low < bars[i - 1].low && b.low < bars[i - 2].low && b.low < bars[i + 1].low && b.low < bars[i + 2].low) {
+        swings.push({ idx: i, price: b.low, time: b.time, type: "low" });
+      }
+    }
+    // Sort by index, then merge close swings preferring extremes
+    swings.sort((a, b) => a.idx - b.idx);
+    // Alternate highs and lows (keep most extreme if duplicates)
+    const filtered = [];
+    for (const s of swings) {
+      if (filtered.length === 0 || filtered[filtered.length - 1].type !== s.type) {
+        filtered.push(s);
+      } else {
+        const last = filtered[filtered.length - 1];
+        if (s.type === "high" && s.price > last.price) filtered[filtered.length - 1] = s;
+        if (s.type === "low" && s.price < last.price) filtered[filtered.length - 1] = s;
+      }
+    }
+    return filtered;
+  }
+
+  function inRange(actual, target, tolerance) {
+    return Math.abs(actual - target) <= target * tolerance;
+  }
+
+  function ratioInRange(actual, low, high) {
+    return actual >= low * (1 - tol) && actual <= high * (1 + tol);
+  }
+
+  // Pattern definitions: XABCD with Fibonacci ratios
+  const patternDefs = [
+    {
+      name: "Gartley",
+      abRetraceXA: [0.618, 0.618],
+      bcRetraceAB: [0.382, 0.886],
+      cdRetraceBCext: [1.272, 1.618],
+      dRetraceXA: [0.786, 0.786],
+    },
+    {
+      name: "Butterfly",
+      abRetraceXA: [0.786, 0.786],
+      bcRetraceAB: [0.382, 0.886],
+      cdRetraceBCext: [1.618, 2.618],
+      dRetraceXA: [1.272, 1.618],
+    },
+    {
+      name: "Bat",
+      abRetraceXA: [0.382, 0.5],
+      bcRetraceAB: [0.382, 0.886],
+      cdRetraceBCext: [1.618, 2.618],
+      dRetraceXA: [0.886, 0.886],
+    },
+    {
+      name: "Crab",
+      abRetraceXA: [0.382, 0.618],
+      bcRetraceAB: [0.382, 0.886],
+      cdRetraceBCext: [2.24, 3.618],
+      dRetraceXA: [1.618, 1.618],
+    },
+  ];
+
+  const swings = findSwings();
+  const detected = [];
+
+  // Try every combination of 5 consecutive swings as XABCD
+  for (let i = 0; i < swings.length - 4; i++) {
+    const X = swings[i], A = swings[i + 1], B = swings[i + 2], C = swings[i + 3], D = swings[i + 4];
+
+    // Must alternate: X=low,A=high,B=low,C=high,D=low (bullish) or X=high,A=low,B=high,C=low,D=high (bearish)
+    const bullish = X.type === "low" && A.type === "high" && B.type === "low" && C.type === "high" && D.type === "low";
+    const bearish = X.type === "high" && A.type === "low" && B.type === "high" && C.type === "low" && D.type === "high";
+    if (!bullish && !bearish) continue;
+
+    const XA = Math.abs(A.price - X.price);
+    const AB = Math.abs(B.price - A.price);
+    const BC = Math.abs(C.price - B.price);
+    const CD = Math.abs(D.price - C.price);
+
+    if (XA === 0 || AB === 0 || BC === 0) continue;
+
+    const abRetrace = AB / XA;
+    const bcRetrace = BC / AB;
+    const cdExtBC = CD / BC;
+    const dRetraceXA = Math.abs(D.price - (bullish ? A.price : A.price)) / XA;
+    // For D retrace of XA: measure from A toward X
+    const dRetXA = bullish
+      ? (A.price - D.price) / XA
+      : (D.price - A.price) / XA;
+
+    for (const pat of patternDefs) {
+      if (!ratioInRange(abRetrace, pat.abRetraceXA[0], pat.abRetraceXA[1])) continue;
+      if (!ratioInRange(bcRetrace, pat.bcRetraceAB[0], pat.bcRetraceAB[1])) continue;
+      // Check D vs XA retrace
+      if (!ratioInRange(Math.abs(dRetXA), pat.dRetraceXA[0], pat.dRetraceXA[1])) continue;
+
+      // Completion percentage (how close D is to the ideal PRZ)
+      const idealD = bullish
+        ? A.price - XA * ((pat.dRetraceXA[0] + pat.dRetraceXA[1]) / 2)
+        : A.price + XA * ((pat.dRetraceXA[0] + pat.dRetraceXA[1]) / 2);
+      const completion = (1 - Math.abs(D.price - idealD) / XA) * 100;
+
+      detected.push({
+        name: pat.name,
+        direction: bullish ? "Bullish" : "Bearish",
+        X, A, B, C, D,
+        completion: Math.min(100, Math.max(0, completion)),
+        prz: D.price,
+        ratios: { ab: abRetrace, bc: bcRetrace, cd: cdExtBC, dXA: Math.abs(dRetXA) },
+      });
+    }
+  }
+
+  const container = document.createElement("div");
+  container.style.cssText = "padding:12px;font-family:monospace;font-size:12px;color:#ddd;overflow-y:auto;height:100%;";
+
+  const header = document.createElement("div");
+  header.style.cssText = "color:#8cf;font-weight:bold;margin-bottom:12px;font-size:13px;";
+  header.textContent = "Harmonic Patterns Detected: " + detected.length + " (from " + swings.length + " swings)";
+  container.appendChild(header);
+
+  if (detected.length === 0) {
+    const none = document.createElement("div");
+    none.style.cssText = "color:#888;text-align:center;padding:30px;";
+    none.textContent = "No harmonic patterns detected. Try a different timeframe or more data.";
+    container.appendChild(none);
+  } else {
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    table.appendChild(theadRow(["Type", "Direction", "Completion", "PRZ", "AB/XA", "BC/AB", "D/XA"]));
+
+    // Place markers on chart
+    const markers = [];
+
+    for (const p of detected) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = "border-bottom:1px solid #333;cursor:pointer;";
+
+      const dirColor = p.direction === "Bullish" ? "#4caf50" : "#f44336";
+
+      const tdName = document.createElement("td");
+      tdName.style.cssText = "padding:4px;font-weight:bold;color:#8cf;";
+      tdName.textContent = p.name;
+      tr.appendChild(tdName);
+
+      const tdDir = document.createElement("td");
+      tdDir.style.cssText = "padding:4px;color:" + dirColor + ";font-weight:bold;";
+      tdDir.textContent = p.direction;
+      tr.appendChild(tdDir);
+
+      const tdComp = document.createElement("td");
+      tdComp.style.cssText = "padding:4px;text-align:center;";
+      tdComp.textContent = p.completion.toFixed(0) + "%";
+      tr.appendChild(tdComp);
+
+      const tdPrz = document.createElement("td");
+      tdPrz.style.cssText = "padding:4px;text-align:right;color:#ccc;";
+      tdPrz.textContent = p.prz.toFixed(4);
+      tr.appendChild(tdPrz);
+
+      const tdAB = document.createElement("td");
+      tdAB.style.cssText = "padding:4px;text-align:right;color:#888;";
+      tdAB.textContent = p.ratios.ab.toFixed(3);
+      tr.appendChild(tdAB);
+
+      const tdBC = document.createElement("td");
+      tdBC.style.cssText = "padding:4px;text-align:right;color:#888;";
+      tdBC.textContent = p.ratios.bc.toFixed(3);
+      tr.appendChild(tdBC);
+
+      const tdDXA = document.createElement("td");
+      tdDXA.style.cssText = "padding:4px;text-align:right;color:#888;";
+      tdDXA.textContent = p.ratios.dXA.toFixed(3);
+      tr.appendChild(tdDXA);
+
+      table.appendChild(tr);
+
+      // Add chart markers for XABCD points
+      const points = [
+        { label: "X", pt: p.X },
+        { label: "A", pt: p.A },
+        { label: "B", pt: p.B },
+        { label: "C", pt: p.C },
+        { label: "D", pt: p.D },
+      ];
+      for (const { label, pt } of points) {
+        markers.push({
+          time: pt.time,
+          position: pt.type === "high" ? "aboveBar" : "belowBar",
+          color: p.direction === "Bullish" ? "#4caf50" : "#f44336",
+          shape: "circle",
+          text: p.name[0] + "-" + label,
+        });
+      }
+    }
+
+    container.appendChild(table);
+
+    // Deduplicate markers by time+text
+    const seenKeys = new Set();
+    const uniqueMarkers = [];
+    for (const m of markers) {
+      const key = m.time + "-" + m.text;
+      if (!seenKeys.has(key)) { seenKeys.add(key); uniqueMarkers.push(m); }
+    }
+    uniqueMarkers.sort((a, b) => a.time - b.time);
+    try { candleSeries.setMarkers(uniqueMarkers); } catch (_) {}
+
+    // Clear markers button
+    const clearBtn = document.createElement("button");
+    clearBtn.textContent = "Clear Markers";
+    clearBtn.style.cssText = "margin-top:12px;padding:6px 16px;background:#333;color:#ddd;border:1px solid #555;border-radius:4px;cursor:pointer;font-family:monospace;";
+    clearBtn.addEventListener("click", () => { try { candleSeries.setMarkers([]); } catch (_) {} log("Harmonic markers cleared", "info"); });
+    container.appendChild(clearBtn);
+  }
+
+  win.appendElement(container);
+  log("HARMONIC: " + detected.length + " patterns detected from " + swings.length + " swing points", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// LIQUIDITY-MAP — Volume-Weighted Price Heatmap
+// ══════════════════════════════════════════════════════════════
+function cmdLiquidityMap() {
+  if (!currentChartData || currentChartData.length < 5) { log("LIQUIDITY-MAP: Need chart data loaded", "warn"); return; }
+  const win = createWindow({ title: currentSymbol + " — Liquidity Heatmap", width: 560, height: 420 });
+  win.contentElement.textContent = "";
+
+  const bars = currentChartData;
+  const numBins = 40;
+  const canvasWidth = 500;
+  const canvasHeight = 300;
+
+  // Price range
+  let globalLow = Infinity, globalHigh = -Infinity;
+  for (const b of bars) {
+    if (b.low < globalLow) globalLow = b.low;
+    if (b.high > globalHigh) globalHigh = b.high;
+  }
+  const priceRange = globalHigh - globalLow || 1;
+  const binSize = priceRange / numBins;
+
+  // Build 2D grid: [barIndex][priceBin] = volume
+  const grid = [];
+  let maxVol = 0;
+  for (let bi = 0; bi < bars.length; bi++) {
+    const row = new Float64Array(numBins);
+    const b = bars[bi];
+    const vol = b.volume || 1;
+    const barLow = b.low;
+    const barHigh = b.high;
+    const barRange = barHigh - barLow || binSize;
+
+    // Distribute volume across price bins between low and high
+    for (let p = 0; p < numBins; p++) {
+      const binLow = globalLow + p * binSize;
+      const binHigh = binLow + binSize;
+      // Overlap between bar range and bin
+      const overlapLow = Math.max(barLow, binLow);
+      const overlapHigh = Math.min(barHigh, binHigh);
+      if (overlapHigh > overlapLow) {
+        const fraction = (overlapHigh - overlapLow) / barRange;
+        row[p] = vol * fraction;
+        if (row[p] > maxVol) maxVol = row[p];
+      }
+    }
+    grid.push(row);
+  }
+
+  const container = document.createElement("div");
+  container.style.cssText = "padding:12px;font-family:monospace;font-size:12px;color:#ddd;";
+
+  // Canvas heatmap
+  const canvas = document.createElement("canvas");
+  canvas.width = canvasWidth;
+  canvas.height = canvasHeight;
+  canvas.style.cssText = "border:1px solid #333;border-radius:4px;display:block;margin-bottom:12px;";
+  container.appendChild(canvas);
+
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#0a0a0a";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  const cellW = canvasWidth / bars.length;
+  const cellH = canvasHeight / numBins;
+
+  // Accumulate volume per price bin (for S/R detection)
+  const totalVolByBin = new Float64Array(numBins);
+
+  for (let bi = 0; bi < bars.length; bi++) {
+    for (let p = 0; p < numBins; p++) {
+      const v = grid[bi][p];
+      totalVolByBin[p] += v;
+      if (v > 0 && maxVol > 0) {
+        const intensity = v / maxVol;
+        const g = Math.round(intensity * 255);
+        const r = Math.round(intensity * 40);
+        const b = Math.round(intensity * 20);
+        ctx.fillStyle = "rgb(" + r + "," + g + "," + b + ")";
+        // Y is inverted: top = high price, bottom = low price
+        const y = canvasHeight - (p + 1) * cellH;
+        ctx.fillRect(bi * cellW, y, Math.max(cellW, 1), Math.max(cellH, 1));
+      }
+    }
+  }
+
+  // Current price line (white horizontal)
+  const lastPrice = bars[bars.length - 1].close;
+  const priceY = canvasHeight - ((lastPrice - globalLow) / priceRange) * canvasHeight;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(0, priceY);
+  ctx.lineTo(canvasWidth, priceY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Price labels on right edge
+  ctx.fillStyle = "#888";
+  ctx.font = "9px monospace";
+  ctx.textAlign = "right";
+  for (let i = 0; i <= 4; i++) {
+    const p = globalLow + (priceRange * i) / 4;
+    const y = canvasHeight - (i / 4) * canvasHeight;
+    ctx.fillText(p.toFixed(2), canvasWidth - 4, y - 2);
+  }
+  // Current price label
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(lastPrice.toFixed(2), canvasWidth - 4, priceY - 4);
+
+  // Find top 3 high-volume price levels (S/R)
+  const binRanked = [];
+  for (let p = 0; p < numBins; p++) {
+    binRanked.push({ bin: p, vol: totalVolByBin[p], price: globalLow + (p + 0.5) * binSize });
+  }
+  binRanked.sort((a, b) => b.vol - a.vol);
+  const top3 = binRanked.slice(0, 3);
+
+  // Draw S/R lines
+  for (let i = 0; i < top3.length; i++) {
+    const lvl = top3[i];
+    const y = canvasHeight - ((lvl.price - globalLow) / priceRange) * canvasHeight;
+    ctx.strokeStyle = i === 0 ? "#ff9800" : i === 1 ? "#ffeb3b" : "#ff5722";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvasWidth, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.textAlign = "left";
+    ctx.fillText("S/R #" + (i + 1) + ": " + lvl.price.toFixed(2), 4, y - 3);
+  }
+
+  // Info text
+  const infoDiv = document.createElement("div");
+  infoDiv.style.cssText = "margin-bottom:8px;color:#888;font-size:11px;";
+  infoDiv.textContent = bars.length + " bars | " + numBins + " price bins | Range: " + globalLow.toFixed(2) + " - " + globalHigh.toFixed(2);
+  container.appendChild(infoDiv);
+
+  // S/R levels table
+  const srTitle = document.createElement("div");
+  srTitle.style.cssText = "color:#8cf;font-weight:bold;margin-bottom:6px;font-size:12px;";
+  srTitle.textContent = "High-Volume Support/Resistance Levels:";
+  container.appendChild(srTitle);
+
+  const table = document.createElement("table");
+  table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+  table.appendChild(theadRow(["Rank", "Price Level", "Volume", "Relative"]));
+
+  for (let i = 0; i < top3.length; i++) {
+    const lvl = top3[i];
+    const relPct = (lvl.vol / top3[0].vol * 100).toFixed(0);
+    const tr = document.createElement("tr");
+    tr.style.cssText = "border-bottom:1px solid #333;";
+
+    const td1 = document.createElement("td");
+    td1.style.cssText = "padding:4px;color:#888;";
+    td1.textContent = "#" + (i + 1);
+    tr.appendChild(td1);
+
+    const td2 = document.createElement("td");
+    td2.style.cssText = "padding:4px;font-weight:bold;";
+    const colors = ["#ff9800", "#ffeb3b", "#ff5722"];
+    td2.style.color = colors[i];
+    td2.textContent = lvl.price.toFixed(4);
+    tr.appendChild(td2);
+
+    const td3 = document.createElement("td");
+    td3.style.cssText = "padding:4px;text-align:right;color:#ccc;";
+    td3.textContent = lvl.vol.toFixed(0);
+    tr.appendChild(td3);
+
+    const td4 = document.createElement("td");
+    td4.style.cssText = "padding:4px;text-align:right;color:#888;";
+    td4.textContent = relPct + "%";
+    tr.appendChild(td4);
+
+    table.appendChild(tr);
+  }
+  container.appendChild(table);
+
+  win.appendElement(container);
+  log("LIQUIDITY-MAP: Heatmap rendered — top S/R at " + top3[0].price.toFixed(2), "ok");
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
@@ -16311,6 +17248,16 @@ const CMD_PALETTE_COMMANDS = [
   { name: "FRACTAL-DIM", desc: "Higuchi fractal dimension (trend vs random vs mean-revert)", action: cmdFractalDim },
   { name: "WAVELETS", desc: "Haar wavelet decomposition (5-level energy, sparklines)", action: cmdWavelets },
   { name: "COINTEGRATION", desc: "Engle-Granger cointegration test (ADF, hedge ratio, z-score)", action: cmdCointegration },
+  { name: "MUSIC", desc: "Sonification of price data (Web Audio API, pitch=price, vol=volume)", action: cmdMusic },
+  { name: "TYPEAHEAD", desc: "Predictive next-bar estimator (5-bar pattern matching, probability)", action: cmdTypeahead },
+  { name: "RISK-OF-RUIN-LIVE", desc: "Real-time risk of ruin (Monte Carlo, trade history, drawdown probability)", action: cmdRiskOfRuinLive },
+  { name: "HARMONIC", desc: "Harmonic pattern detection (Gartley, Butterfly, Bat, Crab)", action: cmdHarmonic },
+  { name: "LIQUIDITY-MAP", desc: "Volume-weighted price heatmap (S/R detection, canvas render)", action: cmdLiquidityMap },
+  { name: "CLOCK-OVERLAY", desc: "Key event countdown on chart (FOMC, options expiry, earnings)", action: cmdClockOverlay },
+  { name: "DIVERGENCE-AUDIO", desc: "Tonal alerts for indicator events (Fisher, RSI, Web Audio)", action: cmdDivergenceAudio },
+  { name: "SHADOW-TRADE", desc: "Parallel paper portfolio (2x risk, what-if comparison)", action: cmdShadowTrade },
+  { name: "CHART-DIFF", desc: "Compare two time periods side by side (normalized % change)", action: cmdChartDiff },
+  { name: "AUTOCOMPLETE-AI", desc: "Smart symbol suggestions (recent, correlated, watchlist)", action: cmdAutocompleteAI },
 ];
 
 function fuzzyMatch(query, target) {
