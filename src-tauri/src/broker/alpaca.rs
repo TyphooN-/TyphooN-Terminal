@@ -66,6 +66,19 @@ const DATA_BASE: &str = "https://data.alpaca.markets";
 /// We use 320ms to leave headroom.
 const RATE_LIMIT_MS: u64 = 320;
 
+/// Round price to valid increment for Alpaca orders.
+/// Stocks > $1: 2 decimal places (penny). Stocks < $1: 4 decimal places (sub-penny allowed).
+/// Crypto: 8 decimal places.
+fn round_price(price: f64) -> String {
+    if price >= 1.0 {
+        format!("{:.2}", price) // $1+ → 2 decimals (e.g., 15.68)
+    } else if price >= 0.01 {
+        format!("{:.4}", price) // $0.01-$0.99 → 4 decimals
+    } else {
+        format!("{:.8}", price) // sub-penny / crypto → 8 decimals
+    }
+}
+
 /// Centralized rate limiter — shared across all data API requests.
 /// On 429, pauses all requests for a cooldown period.
 #[derive(Debug, Clone)]
@@ -336,7 +349,7 @@ impl AlpacaBroker {
             "qty": qty.to_string(),
             "side": side,
             "type": "limit",
-            "limit_price": limit_price.to_string(),
+            "limit_price": round_price(limit_price),
             "time_in_force": tif,
         });
         self.submit_order(&body).await
@@ -349,7 +362,7 @@ impl AlpacaBroker {
             "qty": qty.to_string(),
             "side": side,
             "type": "stop",
-            "stop_price": stop_price.to_string(),
+            "stop_price": round_price(stop_price),
             "time_in_force": tif,
         });
         self.submit_order(&body).await
@@ -362,8 +375,8 @@ impl AlpacaBroker {
             "qty": qty.to_string(),
             "side": side,
             "type": "stop_limit",
-            "stop_price": stop_price.to_string(),
-            "limit_price": limit_price.to_string(),
+            "stop_price": round_price(stop_price),
+            "limit_price": round_price(limit_price),
             "time_in_force": tif,
         });
         self.submit_order(&body).await
@@ -379,16 +392,19 @@ impl AlpacaBroker {
             "time_in_force": tif,
         });
         if let Some(tp) = trail_price {
-            body["trail_price"] = serde_json::json!(tp.to_string());
+            body["trail_price"] = serde_json::json!(round_price(tp));
         }
         if let Some(tp) = trail_percent {
-            body["trail_percent"] = serde_json::json!(tp.to_string());
+            body["trail_percent"] = serde_json::json!(round_price(tp));
         }
         self.submit_order(&body).await
     }
 
     /// Place a bracket order (market entry with TP + SL legs).
     pub async fn bracket_order(&self, symbol: &str, qty: f64, side: &str, tp_price: f64, sl_price: f64) -> Result<OrderResult, String> {
+        // Round prices to valid increments (Alpaca rejects sub-penny for stocks > $1)
+        let tp_rounded = round_price(tp_price);
+        let sl_rounded = round_price(sl_price);
         let body = serde_json::json!({
             "symbol": symbol,
             "qty": qty.to_string(),
@@ -396,8 +412,8 @@ impl AlpacaBroker {
             "type": "market",
             "time_in_force": "gtc",
             "order_class": "bracket",
-            "take_profit": { "limit_price": tp_price.to_string() },
-            "stop_loss": { "stop_price": sl_price.to_string() },
+            "take_profit": { "limit_price": tp_rounded },
+            "stop_loss": { "stop_price": sl_rounded },
         });
         self.submit_order(&body).await
     }
@@ -475,8 +491,8 @@ impl AlpacaBroker {
     pub async fn modify_order(&self, order_id: &str, qty: Option<f64>, limit_price: Option<f64>, stop_price: Option<f64>, trail: Option<f64>) -> Result<OrderResult, String> {
         let mut body = serde_json::Map::new();
         if let Some(q) = qty { body.insert("qty".into(), serde_json::json!(q.to_string())); }
-        if let Some(lp) = limit_price { body.insert("limit_price".into(), serde_json::json!(lp.to_string())); }
-        if let Some(sp) = stop_price { body.insert("stop_price".into(), serde_json::json!(sp.to_string())); }
+        if let Some(lp) = limit_price { body.insert("limit_price".into(), serde_json::json!(round_price(lp))); }
+        if let Some(sp) = stop_price { body.insert("stop_price".into(), serde_json::json!(round_price(sp))); }
         if let Some(t) = trail { body.insert("trail".into(), serde_json::json!(t.to_string())); }
 
         let resp = self
