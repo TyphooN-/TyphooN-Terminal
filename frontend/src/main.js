@@ -8362,28 +8362,34 @@ function setupMTFGrid() {
 
   btn.addEventListener("click", () => {
     if (mtfGridActive) {
+      // Close grid — go back to single chart mode
       closeMTFGrid();
-    } else {
-      tfCheckboxes.classList.toggle("hidden");
-      if (!tfCheckboxes.classList.contains("hidden")) {
-        // Show checkboxes; user clicks again to activate
-        btn.textContent = "Apply";
-      } else {
-        btn.textContent = "MTF Grid";
-      }
-    }
-  });
-
-  // When "Apply" is clicked with checkboxes visible
-  btn.addEventListener("click", () => {
-    if (btn.textContent === "Apply" && !tfCheckboxes.classList.contains("hidden")) {
-      const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(cb => cb.value);
-      if (selectedTFs.length < 2) { alert("Select at least 2 timeframes"); return; }
-      if (!currentSymbol) { alert("Load a chart first"); return; }
       tfCheckboxes.classList.add("hidden");
+    } else {
+      // Open grid with currently checked timeframes
+      const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(cb => cb.value);
+      if (selectedTFs.length < 2) {
+        tfCheckboxes.classList.remove("hidden");
+        alert("Select at least 2 timeframes");
+        return;
+      }
+      if (!currentSymbol) { alert("Load a chart first"); return; }
+      tfCheckboxes.classList.remove("hidden"); // Keep checkboxes visible while grid is active
       openMTFGrid(currentSymbol, selectedTFs);
     }
   });
+
+  // Live checkbox changes — add/remove cells without closing grid
+  for (const cb of document.querySelectorAll(".mtf-grid-cb")) {
+    cb.addEventListener("change", () => {
+      if (!mtfGridActive) return; // Only live-update when grid is open
+      const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(c => c.value);
+      if (selectedTFs.length < 1) return; // Don't close grid from unchecking all
+      // Rebuild grid with new TF selection
+      closeMTFGrid();
+      openMTFGrid(currentSymbol || mtfGridSymbol, selectedTFs);
+    });
+  }
 }
 
 async function openMTFGrid(symbol, timeframes) {
@@ -9219,7 +9225,6 @@ function closeMTFGrid() {
   mtfGridOrderLines = [];
   const btn = document.getElementById("btn-mtf-grid");
   btn.textContent = "MTF Grid";
-  document.getElementById("mtf-grid-tfs").classList.add("hidden");
 
   // Remove grid container
   const grid = document.getElementById("mtf-grid-container");
