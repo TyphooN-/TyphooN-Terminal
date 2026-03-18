@@ -5728,6 +5728,770 @@ function cmdReplay() {
   log(`REPLAY: Started on ${currentSymbol} — ${replaySavedData.length} bars available.`, "ok");
 }
 
+// ══════════════════════════════════════════════════════════════
+// RISKMAP — Portfolio Risk Heatmap (treemap-style)
+// ══════════════════════════════════════════════════════════════
+
+async function cmdRiskMap() {
+  const win = createWindow({ title: "Portfolio Risk Heatmap", width: 700, height: 500 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Loading positions and calculating VaR...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+
+    if (!positions || positions.length === 0) {
+      win.contentElement.textContent = "";
+      win.setContent("No open positions for risk heatmap.");
+      return;
+    }
+
+    // Compute market value and weight for each position
+    let totalValue = 0;
+    const items = [];
+    for (const p of positions) {
+      const qty = Math.abs(parseFloat(p.qty) || 0);
+      const price = parseFloat(p.current_price) || 0;
+      const mv = Math.abs(parseFloat(p.market_value) || qty * price);
+      totalValue += mv;
+      items.push({ symbol: p.symbol, qty, price, mv, var_dollars: null });
+    }
+
+    // Fetch VaR for each position (best-effort, non-blocking)
+    const varPromises = items.map(item =>
+      invokeQuiet("calculate_position_var", {
+        symbol: item.symbol, positionSize: item.qty, currentPrice: item.price,
+      }).then(json => {
+        const v = JSON.parse(json);
+        item.var_dollars = v.var_dollars || 0;
+      }).catch(() => { item.var_dollars = null; })
+    );
+    await Promise.all(varPromises);
+
+    const totalVaR = items.reduce((s, i) => s + (i.var_dollars || 0), 0);
+    let maxWeight = 0;
+    let maxWeightSymbol = "";
+    for (const item of items) {
+      item.weight = totalValue > 0 ? item.mv / totalValue : 1 / items.length;
+      if (item.weight > maxWeight) { maxWeight = item.weight; maxWeightSymbol = item.symbol; }
+    }
+
+    // Find max VaR for color scaling
+    const maxVaR = Math.max(...items.map(i => Math.abs(i.var_dollars || 0)), 1);
+
+    win.contentElement.textContent = "";
+
+    // Build treemap-style heatmap grid
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:flex;flex-wrap:wrap;gap:3px;padding:8px;min-height:200px;";
+
+    for (const item of items) {
+      // Size proportional to weight (min 70px, max 200px)
+      const boxWidth = Math.max(70, Math.min(200, Math.round(item.weight * 600 + 70)));
+      const boxHeight = Math.max(50, Math.min(120, Math.round(item.weight * 400 + 50)));
+
+      const box = document.createElement("div");
+
+      // Color: red for high VaR/weight concentration, green for low
+      let bgColor;
+      if (item.var_dollars !== null) {
+        const intensity = Math.min(Math.abs(item.var_dollars) / maxVaR, 1);
+        if (intensity > 0.5) {
+          const r = Math.round(120 + intensity * 135);
+          bgColor = `rgba(${r}, ${Math.round(40 * (1 - intensity))}, 0, ${0.35 + intensity * 0.45})`;
+        } else {
+          const g = Math.round(100 + (1 - intensity) * 155);
+          bgColor = `rgba(${Math.round(60 * intensity)}, ${g}, ${Math.round(40 * intensity)}, ${0.3 + intensity * 0.3})`;
+        }
+      } else {
+        // No VaR data — use weight-based coloring
+        const intensity = Math.min(item.weight * 3, 1);
+        bgColor = `rgba(100, 100, 100, ${0.2 + intensity * 0.3})`;
+      }
+
+      box.style.cssText = `width:${boxWidth}px;height:${boxHeight}px;background:${bgColor};border:1px solid #444;border-radius:4px;display:flex;flex-direction:column;justify-content:center;align-items:center;cursor:pointer;padding:4px;`;
+      box.addEventListener("click", () => {
+        document.getElementById("symbol-input").value = item.symbol;
+        triggerLoad();
+      });
+
+      const symEl = document.createElement("div");
+      symEl.textContent = item.symbol;
+      symEl.style.cssText = "font-size:12px;font-weight:bold;color:#fff;";
+
+      const weightEl = document.createElement("div");
+      weightEl.textContent = `${(item.weight * 100).toFixed(1)}%`;
+      weightEl.style.cssText = "font-size:13px;font-weight:bold;color:#ccc;";
+
+      const varEl = document.createElement("div");
+      varEl.textContent = item.var_dollars !== null ? `VaR $${item.var_dollars.toFixed(2)}` : "VaR —";
+      varEl.style.cssText = "font-size:9px;color:#aaa;";
+
+      box.appendChild(symEl);
+      box.appendChild(weightEl);
+      box.appendChild(varEl);
+      grid.appendChild(box);
+    }
+
+    win.appendElement(grid);
+
+    // Summary row
+    const summary = document.createElement("div");
+    summary.style.cssText = "padding:8px 12px;border-top:1px solid #333;font-size:11px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;";
+
+    const sp1 = document.createElement("span");
+    sp1.style.color = "#888";
+    sp1.textContent = `Portfolio: $${totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+    const sp2 = document.createElement("span");
+    sp2.style.color = totalVaR > 0 ? "#f44336" : "#888";
+    sp2.textContent = `Total VaR: $${totalVaR.toFixed(2)}`;
+
+    const sp3 = document.createElement("span");
+    sp3.style.color = maxWeight > 0.3 ? "#ff8" : "#888";
+    sp3.textContent = `Largest: ${maxWeightSymbol} (${(maxWeight * 100).toFixed(1)}%)`;
+
+    summary.appendChild(sp1);
+    summary.appendChild(sp2);
+    summary.appendChild(sp3);
+    win.appendElement(summary);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load risk heatmap: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ECALENDAR — Unified Earnings + Ex-Div Calendar
+// ══════════════════════════════════════════════════════════════
+
+async function cmdEarningsCalendar() {
+  const win = createWindow({ title: "Earnings & Dividend Calendar", width: 700, height: 500 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Loading earnings and dividend events...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    // Get symbols from watchlist or fall back to current symbol
+    let symbols = getWatchlist();
+    if (!symbols || symbols.length === 0) {
+      if (currentSymbol) symbols = [currentSymbol];
+      else { win.contentElement.textContent = ""; win.setContent("No watchlist or symbol loaded. Add symbols via QM first."); return; }
+    }
+
+    // Fetch dividends and earnings in parallel
+    const events = []; // { date, symbol, type, details }
+
+    const promises = symbols.map(async (sym) => {
+      // Fetch dividends
+      try {
+        const divJson = await invokeQuiet("get_corporate_actions", { symbol: sym, types: "dividend" });
+        const divActions = JSON.parse(divJson);
+        if (Array.isArray(divActions)) {
+          for (const a of divActions) {
+            const date = a.ex_date || a.effective_date || a.date;
+            if (date) {
+              events.push({
+                date,
+                symbol: a.symbol || sym,
+                type: "dividend",
+                details: a.cash_amount ? `$${a.cash_amount}/share` : "ex-div",
+              });
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Fetch earnings (corporate actions with type earnings, or fallback)
+      try {
+        const earnJson = await invokeQuiet("get_corporate_actions", { symbol: sym, types: "earnings" });
+        const earnActions = JSON.parse(earnJson);
+        if (Array.isArray(earnActions)) {
+          for (const a of earnActions) {
+            const date = a.date || a.report_date || a.effective_date;
+            if (date) {
+              events.push({
+                date,
+                symbol: a.symbol || sym,
+                type: "earnings",
+                details: a.description || "earnings report",
+              });
+            }
+          }
+        }
+      } catch (_) {}
+    });
+
+    await Promise.all(promises);
+
+    win.contentElement.textContent = "";
+
+    // Build 5-week calendar grid (current week + next 4)
+    const today = new Date();
+    const dayOfWeek = today.getDay(); // 0=Sun
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const startDate = new Date(today);
+    startDate.setDate(today.getDate() + mondayOffset);
+    startDate.setHours(0, 0, 0, 0);
+
+    // Build event lookup by date string
+    const eventsByDate = {};
+    for (const ev of events) {
+      const key = ev.date.substring(0, 10); // YYYY-MM-DD
+      if (!eventsByDate[key]) eventsByDate[key] = [];
+      eventsByDate[key].push(ev);
+    }
+
+    // Find next event for countdown
+    const futureEvents = events
+      .filter(e => new Date(e.date) >= today)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    if (futureEvents.length > 0) {
+      const nextEv = futureEvents[0];
+      const daysUntil = Math.ceil((new Date(nextEv.date) - today) / 86400000);
+      const countdown = document.createElement("div");
+      countdown.style.cssText = "padding:8px 12px;font-size:12px;color:#4caf50;border-bottom:1px solid #333;";
+      countdown.textContent = `Next event: ${nextEv.symbol} ${nextEv.type} in ${daysUntil} day${daysUntil !== 1 ? "s" : ""} (${nextEv.date.substring(0, 10)})`;
+      win.appendElement(countdown);
+    }
+
+    // Calendar table: 5 weeks x 5 days (Mon-Fri)
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+
+    // Header row
+    const thead = document.createElement("tr");
+    for (const day of ["Mon", "Tue", "Wed", "Thu", "Fri"]) {
+      const th = document.createElement("th");
+      th.style.cssText = "color:#888;font-size:10px;padding:4px;border-bottom:1px solid #333;text-align:center;width:20%;";
+      th.textContent = day;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+
+    // 5 weeks
+    for (let week = 0; week < 5; week++) {
+      const tr = document.createElement("tr");
+      for (let day = 0; day < 5; day++) {
+        const cellDate = new Date(startDate);
+        cellDate.setDate(startDate.getDate() + week * 7 + day);
+        const dateStr = cellDate.toISOString().slice(0, 10);
+        const isToday = dateStr === today.toISOString().slice(0, 10);
+
+        const td = document.createElement("td");
+        td.style.cssText = `padding:4px;border:1px solid #333;vertical-align:top;height:60px;${isToday ? "background:#1a2a1a;" : ""}`;
+
+        const dateLabel = document.createElement("div");
+        dateLabel.textContent = `${cellDate.getMonth() + 1}/${cellDate.getDate()}`;
+        dateLabel.style.cssText = `font-size:9px;color:${isToday ? "#4caf50" : "#666"};margin-bottom:2px;`;
+        td.appendChild(dateLabel);
+
+        // Events for this date
+        const dayEvents = eventsByDate[dateStr] || [];
+        for (const ev of dayEvents) {
+          const evEl = document.createElement("div");
+          evEl.style.cssText = `font-size:9px;padding:1px 3px;margin:1px 0;border-radius:2px;cursor:pointer;background:${ev.type === "dividend" ? "rgba(33,150,243,0.25)" : "rgba(255,152,0,0.25)"};color:${ev.type === "dividend" ? "#64b5f6" : "#ffb74d"};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`;
+          evEl.textContent = `${ev.symbol} ${ev.type === "dividend" ? "div" : "earn"}`;
+          evEl.title = `${ev.symbol} — ${ev.type}: ${ev.details}`;
+          evEl.addEventListener("click", () => {
+            document.getElementById("symbol-input").value = ev.symbol;
+            triggerLoad();
+          });
+          td.appendChild(evEl);
+        }
+
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+
+    win.appendElement(table);
+
+    // Legend
+    const legend = document.createElement("div");
+    legend.style.cssText = "padding:6px 12px;font-size:9px;color:#666;border-top:1px solid #333;";
+    legend.innerHTML = `<span style="color:#64b5f6;">&#9632;</span> Dividend &nbsp; <span style="color:#ffb74d;">&#9632;</span> Earnings &nbsp; | &nbsp; ${events.length} events across ${symbols.length} symbol${symbols.length !== 1 ? "s" : ""}`;
+    win.appendElement(legend);
+
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load calendar: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// GREEKS — Aggregate Portfolio Greeks
+// ══════════════════════════════════════════════════════════════
+
+async function cmdGreeks() {
+  const win = createWindow({ title: "Portfolio Greeks", width: 650, height: 500 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Loading positions and computing Greeks...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+
+    if (!positions || positions.length === 0) {
+      win.contentElement.textContent = "";
+      win.setContent("No open positions.");
+      return;
+    }
+
+    // Detect options: symbol typically contains date/strike pattern like AAPL250321C00150000
+    // or has asset_class = "option" / "us_option"
+    const optionPattern = /^([A-Z]+)\d{6}[CP]\d{8}$/;
+
+    const rows = []; // { symbol, qty, delta, gamma, theta, vega, isOption }
+
+    for (const p of positions) {
+      const qty = parseFloat(p.qty) || 0;
+      const symbol = p.symbol;
+      const isOption = optionPattern.test(symbol) ||
+                       (p.asset_class && p.asset_class.toLowerCase().includes("option"));
+
+      if (isOption) {
+        // Extract underlying and expiry from option symbol for chain lookup
+        const match = symbol.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+        let delta = 0, gamma = 0, theta = 0, vega = 0;
+
+        if (match) {
+          const underlying = match[1];
+          const dateStr = match[2]; // YYMMDD
+          const expiry = `20${dateStr.substring(0, 2)}-${dateStr.substring(2, 4)}-${dateStr.substring(4, 6)}`;
+          const putCall = match[3];
+          const strikeRaw = parseInt(match[4], 10) / 1000;
+
+          try {
+            const json = await invokeQuiet("get_options", { symbol: underlying, expiry });
+            const chain = JSON.parse(json);
+            // Search for matching contract in chain
+            const contracts = Array.isArray(chain) ? chain :
+                              (chain.options || chain.snapshots || chain.contracts || []);
+            let found = null;
+            for (const c of contracts) {
+              const cSymbol = c.symbol || c.contract_symbol || "";
+              const cStrike = parseFloat(c.strike_price || c.strike) || 0;
+              const cType = (c.type || c.option_type || c.put_call || "").toUpperCase();
+              if (Math.abs(cStrike - strikeRaw) < 0.01 && cType.startsWith(putCall)) {
+                found = c;
+                break;
+              }
+              if (cSymbol === symbol) { found = c; break; }
+            }
+
+            if (found) {
+              const greeks = found.greeks || found;
+              delta = (parseFloat(greeks.delta) || 0) * qty * 100; // options = 100 shares per contract
+              gamma = (parseFloat(greeks.gamma) || 0) * qty * 100;
+              theta = (parseFloat(greeks.theta) || 0) * qty * 100;
+              vega = (parseFloat(greeks.vega) || 0) * qty * 100;
+            }
+          } catch (_) {
+            // Chain fetch failed — greeks remain 0
+          }
+        }
+
+        rows.push({ symbol, qty, delta, gamma, theta, vega, isOption: true });
+      } else {
+        // Stock: delta = qty (delta 1.0 per share), no gamma/theta/vega
+        rows.push({ symbol, qty, delta: qty, gamma: 0, theta: 0, vega: 0, isOption: false });
+      }
+    }
+
+    // Aggregate totals
+    const totals = { delta: 0, gamma: 0, theta: 0, vega: 0 };
+    for (const r of rows) {
+      totals.delta += r.delta;
+      totals.gamma += r.gamma;
+      totals.theta += r.theta;
+      totals.vega += r.vega;
+    }
+
+    win.contentElement.textContent = "";
+
+    // Summary cards
+    const summaryGrid = document.createElement("div");
+    summaryGrid.style.cssText = "display:flex;gap:8px;padding:10px;flex-wrap:wrap;";
+
+    const greekCards = [
+      { label: "Net Delta", value: totals.delta, desc: "Directional exposure" },
+      { label: "Net Gamma", value: totals.gamma, desc: "Delta sensitivity" },
+      { label: "Net Theta/day", value: totals.theta, desc: "Daily time decay" },
+      { label: "Net Vega", value: totals.vega, desc: "IV sensitivity" },
+    ];
+
+    for (const gc of greekCards) {
+      const card = document.createElement("div");
+      card.style.cssText = "flex:1;min-width:120px;background:#1a1a2e;border:1px solid #333;border-radius:6px;padding:10px;text-align:center;";
+
+      const labelEl = document.createElement("div");
+      labelEl.textContent = gc.label;
+      labelEl.style.cssText = "font-size:10px;color:#888;margin-bottom:4px;";
+
+      const valueEl = document.createElement("div");
+      const sign = gc.value >= 0 ? "+" : "";
+      valueEl.textContent = `${sign}${gc.value.toFixed(2)}`;
+      const isPositive = gc.value >= 0;
+      valueEl.style.cssText = `font-size:18px;font-weight:bold;color:${isPositive ? "#4caf50" : "#f44336"};`;
+
+      const descEl = document.createElement("div");
+      descEl.textContent = gc.desc;
+      descEl.style.cssText = "font-size:8px;color:#555;margin-top:2px;";
+
+      card.appendChild(labelEl);
+      card.appendChild(valueEl);
+      card.appendChild(descEl);
+      summaryGrid.appendChild(card);
+    }
+
+    win.appendElement(summaryGrid);
+
+    // Per-position breakdown table
+    const table = document.createElement("table");
+    table.className = "fw-table";
+    table.style.cssText = "width:100%;font-size:10px;";
+
+    const thead = document.createElement("tr");
+    for (const h of ["Symbol", "Type", "Qty", "Delta", "Gamma", "Theta", "Vega"]) {
+      const th = document.createElement("td");
+      th.style.cssText = "color:#888;font-weight:bold;font-size:10px;border-bottom:1px solid #333;padding:4px 6px;";
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+
+    // Sort: options first, then stocks
+    rows.sort((a, b) => (b.isOption ? 1 : 0) - (a.isOption ? 1 : 0) || a.symbol.localeCompare(b.symbol));
+
+    for (const row of rows) {
+      const tr = document.createElement("tr");
+
+      const vals = [
+        { text: row.symbol, color: "#ccc" },
+        { text: row.isOption ? "OPT" : "STK", color: row.isOption ? "#ffb74d" : "#64b5f6" },
+        { text: row.qty.toString(), color: "#ccc" },
+        { text: row.delta.toFixed(2), color: row.delta >= 0 ? "#4caf50" : "#f44336" },
+        { text: row.gamma.toFixed(4), color: "#aaa" },
+        { text: row.theta.toFixed(2), color: row.theta >= 0 ? "#4caf50" : "#f44336" },
+        { text: row.vega.toFixed(2), color: "#aaa" },
+      ];
+
+      for (const v of vals) {
+        const td = document.createElement("td");
+        td.style.cssText = `padding:3px 6px;color:${v.color};`;
+        td.textContent = v.text;
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+
+    win.appendElement(table);
+
+    // Footer note
+    const note = document.createElement("div");
+    note.style.cssText = "padding:6px 12px;font-size:9px;color:#555;border-top:1px solid #333;";
+    note.textContent = `${rows.length} positions | Stocks: delta=qty, gamma/theta/vega=0 | Options: greeks x qty x 100 multiplier`;
+    win.appendElement(note);
+
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load portfolio Greeks: ${e}`);
+  }
+}
+
+// ── EQUITY — Account Equity Curve ────────────────────────────
+async function cmdEquity() {
+  const win = createWindow({ title: "Equity Curve", type: "custom", width: 650, height: 500 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading equity data...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const [actJson, miJson] = await Promise.all([
+      invoke("get_account_activities", { activityTypes: "", limit: 500 }),
+      invoke("get_margin_info"),
+    ]);
+    const activities = JSON.parse(actJson);
+    const mi = JSON.parse(miJson);
+    win.contentElement.textContent = "";
+    const EQ_STORAGE_KEY = "typhoon_equity_snapshots";
+    let snapshots = [];
+    try { snapshots = JSON.parse(localStorage.getItem(EQ_STORAGE_KEY) || "[]"); } catch (_) {}
+    const today = new Date().toISOString().slice(0, 10);
+    const currentEquity = mi.equity || 0;
+    if (currentEquity > 0) {
+      const existing = snapshots.findIndex(s => s.date === today);
+      if (existing >= 0) snapshots[existing].equity = currentEquity;
+      else snapshots.push({ date: today, equity: currentEquity });
+    }
+    if (activities && activities.length > 0) {
+      const sorted = [...activities].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+      let running = 0;
+      const dailyMap = {};
+      for (const act of sorted) {
+        const d = (act.date || "").slice(0, 10);
+        if (!d) continue;
+        const amt = parseFloat(act.net_amount || act.amount || act.qty || 0);
+        if (act.activity_type === "CSD") running += Math.abs(amt);
+        else if (act.activity_type === "CSW") running -= Math.abs(amt);
+        else if (act.activity_type === "FILL" && act.net_amount) running += amt;
+        else if (act.activity_type === "DIV") running += Math.abs(amt);
+        if (running > 0) dailyMap[d] = running;
+      }
+      const existingDates = new Set(snapshots.map(s => s.date));
+      for (const [date, equity] of Object.entries(dailyMap)) {
+        if (!existingDates.has(date)) snapshots.push({ date, equity });
+      }
+    }
+    snapshots.sort((a, b) => a.date.localeCompare(b.date));
+    const seen = new Set();
+    snapshots = snapshots.filter(s => { if (seen.has(s.date)) return false; seen.add(s.date); return s.equity > 0; });
+    localStorage.setItem(EQ_STORAGE_KEY, JSON.stringify(snapshots.slice(-500)));
+    if (snapshots.length < 2) { win.setContent("Not enough equity data yet. Equity snapshots are recorded each time you open this command. Check back after a few days."); return; }
+    const chartDiv = document.createElement("div");
+    chartDiv.style.cssText = "width:100%;height:300px;";
+    win.appendElement(chartDiv);
+    const eqChart = createChart(chartDiv, {
+      width: chartDiv.clientWidth || 600, height: 300,
+      layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false },
+      grid: { vertLines: { color: "#1a1a2e" }, horzLines: { color: "#1a1a2e" } },
+      rightPriceScale: { borderColor: "#333" }, timeScale: { borderColor: "#333" },
+    });
+    const startEq = snapshots[0].equity;
+    const eqData = snapshots.map(s => ({ time: s.date, value: s.equity }));
+    const isAbove = currentEquity >= startEq;
+    const eqSeries = eqChart.addLineSeries({ color: isAbove ? "#4caf50" : "#f44336", lineWidth: 2, title: "Equity" });
+    eqSeries.setData(eqData);
+    let peak = 0;
+    const ddData = snapshots.map(s => { if (s.equity > peak) peak = s.equity; return { time: s.date, value: peak > 0 ? ((s.equity - peak) / peak) * 100 : 0 }; });
+    const ddSeries = eqChart.addAreaSeries({ topColor: "rgba(244,67,54,0.0)", bottomColor: "rgba(244,67,54,0.3)", lineColor: "rgba(244,67,54,0.6)", lineWidth: 1, title: "Drawdown %", priceScaleId: "dd" });
+    ddSeries.setData(ddData);
+    eqChart.priceScale("dd").applyOptions({ scaleMargins: { top: 0.7, bottom: 0 } });
+    eqChart.timeScale().fitContent();
+    const totalReturn = ((currentEquity - startEq) / startEq * 100);
+    peak = 0; let maxDD = 0;
+    for (const s of snapshots) { if (s.equity > peak) peak = s.equity; const dd = (s.equity - peak) / peak * 100; if (dd < maxDD) maxDD = dd; }
+    let sharpe = "\u2014";
+    if (snapshots.length > 5) {
+      const rets = []; for (let i = 1; i < snapshots.length; i++) rets.push((snapshots[i].equity - snapshots[i - 1].equity) / snapshots[i - 1].equity);
+      const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+      const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
+      const std = Math.sqrt(variance);
+      if (std > 0) sharpe = ((mean / std) * Math.sqrt(252)).toFixed(3);
+    }
+    const statsDiv = document.createElement("div");
+    statsDiv.style.cssText = "padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:11px;";
+    for (const [label, value] of [["Total Return", `${totalReturn >= 0 ? "+" : ""}${totalReturn.toFixed(2)}%`], ["Max Drawdown", `${maxDD.toFixed(2)}%`], ["Sharpe Ratio", sharpe], ["Current Equity", `$${currentEquity.toFixed(2)}`]]) {
+      const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;";
+      const lbl = document.createElement("span"); lbl.style.color = "#666"; lbl.textContent = label;
+      const val = document.createElement("span"); val.style.color = label === "Total Return" ? (totalReturn >= 0 ? "#4caf50" : "#f44336") : label === "Max Drawdown" ? "#f44336" : "#ccc"; val.textContent = value;
+      row.appendChild(lbl); row.appendChild(val); statsDiv.appendChild(row);
+    }
+    win.appendElement(statsDiv);
+    const ro = new ResizeObserver(() => { if (chartDiv.clientWidth > 0) eqChart.applyOptions({ width: chartDiv.clientWidth }); });
+    ro.observe(chartDiv);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to load equity data: ${e}`); }
+}
+
+// ── HEATCAL — Calendar Heatmap of Daily Returns ─────────────
+async function cmdHeatCal() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} \u2014 Calendar Heatmap`, type: "custom", width: 700, height: 480 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Building calendar heatmap...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    let bars = null;
+    const cKey = `${currentSymbol}:1Day`;
+    const cached = barCache[cKey];
+    if (cached && cached.data && cached.data.length > 20) bars = cached.data;
+    if (!bars) {
+      const barsJson = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 500 });
+      bars = JSON.parse(barsJson);
+      if (bars.length > 0) barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+    }
+    if (!bars || bars.length < 2) { win.contentElement.textContent = ""; win.setContent("Not enough daily bar data for heatmap."); return; }
+    win.contentElement.textContent = "";
+    const returns = [];
+    for (let i = 1; i < bars.length; i++) {
+      const prevClose = bars[i - 1].close || bars[i - 1].c || 0;
+      const close = bars[i].close || bars[i].c || 0;
+      if (prevClose <= 0) continue;
+      const ret = ((close - prevClose) / prevClose) * 100;
+      let dateStr = bars[i].t || bars[i].time || bars[i].date || "";
+      if (typeof dateStr === "number") dateStr = new Date(dateStr * 1000).toISOString().slice(0, 10);
+      else dateStr = String(dateStr).slice(0, 10);
+      if (dateStr) returns.push({ date: dateStr, ret });
+    }
+    if (returns.length < 2) { win.setContent("Insufficient return data for heatmap."); return; }
+    const dayOfWeekCounts = [0, 0, 0, 0, 0, 0, 0];
+    for (const r of returns) { const d = new Date(r.date + "T12:00:00Z"); dayOfWeekCounts[d.getUTCDay()]++; }
+    const isCrypto = dayOfWeekCounts[0] > 2 || dayOfWeekCounts[6] > 2;
+    const daysOfWeek = isCrypto ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] : ["Mon", "Tue", "Wed", "Thu", "Fri"];
+    const rowCount = daysOfWeek.length;
+    const retMap = {}; for (const r of returns) retMap[r.date] = r.ret;
+    const startDate = new Date(returns[0].date + "T12:00:00Z");
+    const endDate = new Date(returns[returns.length - 1].date + "T12:00:00Z");
+    const firstDay = new Date(startDate);
+    while (firstDay.getUTCDay() !== 1) firstDay.setUTCDate(firstDay.getUTCDate() - 1);
+    const weeks = []; let cursor = new Date(firstDay);
+    while (cursor <= endDate) {
+      const week = [];
+      for (let d = 0; d < 7; d++) {
+        const ds = cursor.toISOString().slice(0, 10); const dow = cursor.getUTCDay();
+        const rowIdx = dow === 0 ? 6 : dow - 1;
+        if (isCrypto || (dow >= 1 && dow <= 5)) week.push({ date: ds, rowIdx, ret: retMap[ds] !== undefined ? retMap[ds] : null });
+        cursor.setUTCDate(cursor.getUTCDate() + 1);
+      }
+      weeks.push(week);
+    }
+    function retColor(ret) {
+      if (ret === null) return "#1a1a2e";
+      if (ret > 3) return "#1b5e20"; if (ret > 1) return "#388e3c"; if (ret > 0) return "#66bb6a";
+      if (ret > -1) return "#ef9a9a"; if (ret > -3) return "#e53935"; return "#b71c1c";
+    }
+    const container = document.createElement("div"); container.style.cssText = "overflow-x:auto;padding:8px;";
+    const monthBar = document.createElement("div");
+    monthBar.style.cssText = "display:flex;margin-left:32px;margin-bottom:2px;font-size:9px;color:#666;";
+    let lastMonth = -1;
+    for (let w = 0; w < weeks.length; w++) {
+      const firstDateInWeek = weeks[w].find(d => d.ret !== null);
+      const span = document.createElement("span"); span.style.cssText = "width:14px;text-align:center;flex-shrink:0;";
+      if (firstDateInWeek) { const m = new Date(firstDateInWeek.date + "T12:00:00Z").getUTCMonth(); if (m !== lastMonth) { span.textContent = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m]; lastMonth = m; } }
+      monthBar.appendChild(span);
+    }
+    container.appendChild(monthBar);
+    for (let r = 0; r < rowCount; r++) {
+      const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;height:14px;";
+      const label = document.createElement("span"); label.style.cssText = "width:28px;font-size:9px;color:#666;text-align:right;padding-right:4px;flex-shrink:0;"; label.textContent = daysOfWeek[r];
+      row.appendChild(label);
+      for (let w = 0; w < weeks.length; w++) {
+        const cell = document.createElement("div"); cell.style.cssText = "width:12px;height:12px;border-radius:2px;margin:1px;flex-shrink:0;cursor:pointer;";
+        const dayData = weeks[w].find(d => d.rowIdx === r);
+        if (dayData && dayData.ret !== null) { cell.style.background = retColor(dayData.ret); cell.title = `${dayData.date}: ${dayData.ret >= 0 ? "+" : ""}${dayData.ret.toFixed(2)}%`; }
+        else { cell.style.background = "#111"; }
+        row.appendChild(cell);
+      }
+      container.appendChild(row);
+    }
+    const legend = document.createElement("div"); legend.style.cssText = "display:flex;align-items:center;gap:4px;margin-top:8px;margin-left:32px;font-size:9px;color:#666;";
+    for (const item of [{ label: "< -3%", color: "#b71c1c" }, { label: "-3 to -1%", color: "#e53935" }, { label: "-1 to 0%", color: "#ef9a9a" }, { label: "0 to +1%", color: "#66bb6a" }, { label: "+1 to +3%", color: "#388e3c" }, { label: "> +3%", color: "#1b5e20" }]) {
+      const box = document.createElement("span"); box.style.cssText = `display:inline-block;width:10px;height:10px;border-radius:2px;background:${item.color};`;
+      legend.appendChild(box); const txt = document.createElement("span"); txt.textContent = item.label; txt.style.marginRight = "6px"; legend.appendChild(txt);
+    }
+    container.appendChild(legend);
+    win.appendElement(container);
+    const upDays = returns.filter(r => r.ret > 0); const downDays = returns.filter(r => r.ret < 0);
+    const avgRet = returns.reduce((s, r) => s + r.ret, 0) / returns.length;
+    const bestDay = returns.reduce((best, r) => r.ret > best.ret ? r : best, returns[0]);
+    const worstDay = returns.reduce((worst, r) => r.ret < worst.ret ? r : worst, returns[0]);
+    const summaryDiv = document.createElement("div");
+    summaryDiv.style.cssText = "padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:11px;border-top:1px solid #222;margin-top:4px;";
+    for (const [label, value, color] of [["Up Days", `${upDays.length}`, "#4caf50"], ["Down Days", `${downDays.length}`, "#f44336"], ["Avg Daily Return", `${avgRet >= 0 ? "+" : ""}${avgRet.toFixed(3)}%`, avgRet >= 0 ? "#4caf50" : "#f44336"], ["Best Day", `${bestDay.date} (${bestDay.ret >= 0 ? "+" : ""}${bestDay.ret.toFixed(2)}%)`, "#4caf50"], ["Worst Day", `${worstDay.date} (${worstDay.ret.toFixed(2)}%)`, "#f44336"], ["Total Days", `${returns.length}`, "#888"]]) {
+      const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;";
+      const lbl = document.createElement("span"); lbl.style.color = "#666"; lbl.textContent = label;
+      const val = document.createElement("span"); val.style.color = color; val.textContent = value;
+      row.appendChild(lbl); row.appendChild(val); summaryDiv.appendChild(row);
+    }
+    win.appendElement(summaryDiv);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to build heatmap: ${e}`); }
+}
+
+// ── CORRWATCH — Correlation Breakdown Alerts ─────────────────
+async function cmdCorrWatch() {
+  const win = createWindow({ title: "Correlation Breakdown Alerts", type: "custom", width: 700, height: 500 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Calculating correlation breakdowns...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const watchlist = getWatchlist();
+    if (watchlist.length < 2) { win.contentElement.textContent = ""; win.setContent("Need at least 2 watchlist symbols. Add symbols via QM (Quote Monitor) first."); return; }
+    const closePrices = {};
+    for (const sym of watchlist) {
+      let data = null; const cKey = `${sym}:1Day`; const cached = barCache[cKey];
+      if (cached && cached.data && cached.data.length > 60) data = cached.data;
+      if (!data) { try { const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 300 }); const bars = JSON.parse(barsJson); if (bars.length > 60) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {} }
+      if (data) closePrices[sym] = data.slice(-300).map(b => b.close || b.c || 0);
+    }
+    const validSymbols = Object.keys(closePrices).filter(s => closePrices[s].length > 60);
+    if (validSymbols.length < 2) { win.contentElement.textContent = ""; win.setContent("Insufficient cached bar data (need >60 daily bars per symbol). Load some daily charts first."); return; }
+    const returns = {};
+    for (const sym of validSymbols) { const prices = closePrices[sym]; returns[sym] = []; for (let i = 1; i < prices.length; i++) returns[sym].push(prices[i] > 0 ? (prices[i] - prices[i - 1]) / prices[i - 1] : 0); }
+    function pearson(a, b, start, len) {
+      const n = Math.min(len, a.length - start, b.length - start);
+      if (n < 10) return null;
+      let sumA = 0, sumB = 0, sumAB = 0, sumA2 = 0, sumB2 = 0;
+      for (let i = 0; i < n; i++) { const ai = a[start + i], bi = b[start + i]; sumA += ai; sumB += bi; sumAB += ai * bi; sumA2 += ai * ai; sumB2 += bi * bi; }
+      const num = n * sumAB - sumA * sumB; const den = Math.sqrt((n * sumA2 - sumA * sumA) * (n * sumB2 - sumB * sumB));
+      return den > 0 ? num / den : 0;
+    }
+    const pairs = [];
+    for (let i = 0; i < validSymbols.length; i++) {
+      for (let j = i + 1; j < validSymbols.length; j++) {
+        const symA = validSymbols[i], symB = validSymbols[j];
+        const retA = returns[symA], retB = returns[symB];
+        const minLen = Math.min(retA.length, retB.length);
+        if (minLen < 60) continue;
+        const tailA = retA.slice(-minLen), tailB = retB.slice(-minLen);
+        const corr60 = pearson(tailA, tailB, tailA.length - 60, 60);
+        const longLen = Math.min(252, tailA.length);
+        const corr252 = pearson(tailA, tailB, tailA.length - longLen, longLen);
+        if (corr60 === null || corr252 === null) continue;
+        const delta = Math.abs(corr60 - corr252);
+        let status, statusColor;
+        if (delta > 0.5) { status = "BREAKDOWN"; statusColor = "#f44336"; }
+        else if (delta > 0.3) { status = "DIVERGING"; statusColor = "#ff9800"; }
+        else { status = "NORMAL"; statusColor = "#4caf50"; }
+        pairs.push({ symA, symB, corr60, corr252, delta, status, statusColor });
+      }
+    }
+    pairs.sort((a, b) => b.delta - a.delta);
+    win.contentElement.textContent = "";
+    if (pairs.length === 0) { win.setContent("No valid pairs found. Need overlapping daily bar data for at least 2 symbols."); return; }
+    const header = document.createElement("div");
+    header.style.cssText = "padding:6px 8px;font-size:10px;color:#666;border-bottom:1px solid #333;";
+    const breakdowns = pairs.filter(p => p.status === "BREAKDOWN").length;
+    const diverging = pairs.filter(p => p.status === "DIVERGING").length;
+    header.textContent = `${pairs.length} pairs analyzed | ${breakdowns} breakdowns | ${diverging} diverging`;
+    win.appendElement(header);
+    const table = document.createElement("table"); table.className = "fw-table"; table.style.cssText = "width:100%;font-size:11px;";
+    const thead = document.createElement("tr");
+    for (const h of ["Pair", "60D Corr", "1Y Corr", "Delta", "Status"]) { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;font-size:10px;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); }
+    table.appendChild(thead);
+    for (const p of pairs) {
+      const tr = document.createElement("tr");
+      const tdPair = document.createElement("td"); tdPair.style.cssText = "color:#ccc;padding:3px 6px;"; tdPair.textContent = `${p.symA} / ${p.symB}`; tr.appendChild(tdPair);
+      const td60 = document.createElement("td"); td60.style.cssText = "color:#aaa;padding:3px 6px;text-align:right;"; td60.textContent = p.corr60.toFixed(3); tr.appendChild(td60);
+      const td252 = document.createElement("td"); td252.style.cssText = "color:#aaa;padding:3px 6px;text-align:right;"; td252.textContent = p.corr252.toFixed(3); tr.appendChild(td252);
+      const tdDelta = document.createElement("td"); tdDelta.style.cssText = `color:${p.statusColor};padding:3px 6px;text-align:right;font-weight:bold;`; tdDelta.textContent = p.delta.toFixed(3); tr.appendChild(tdDelta);
+      const tdStatus = document.createElement("td"); tdStatus.style.cssText = "padding:3px 6px;";
+      const badge = document.createElement("span"); badge.style.cssText = `font-size:9px;padding:2px 6px;border-radius:2px;background:${p.statusColor};color:#fff;`; badge.textContent = p.status;
+      tdStatus.appendChild(badge); tr.appendChild(tdStatus); table.appendChild(tr);
+    }
+    const tableWrap = document.createElement("div"); tableWrap.style.cssText = "overflow-y:auto;max-height:calc(100% - 50px);";
+    tableWrap.appendChild(table); win.appendElement(tableWrap);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to calculate correlations: ${e}`); }
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "REPLAY", desc: "Bar-by-bar chart replay / practice trading", action: cmdReplay },
   { name: "DES", desc: "Description / Fundamentals", action: cmdDescription },
@@ -5764,6 +6528,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "PCRATIO", desc: "Put/Call ratio dashboard (volume & OI sentiment)", action: cmdPCRatio },
   { name: "UNUSUAL", desc: "Unusual options activity scanner (vol >> OI)", action: cmdUnusual },
   { name: "BRACKET", desc: "Conditional bracket/OCO order placement", action: cmdBracketOrder },
+  { name: "MULTILEG", desc: "Multi-leg order builder (bracket, OCO, scale in/out)", action: cmdMultiLeg },
   { name: "HEATMAP", desc: "Portfolio heat map (daily P&L)", action: cmdHeatmap },
   { name: "OPTCALC", desc: "Options P&L calculator (payoff diagram)", action: cmdOptionsCalc },
   { name: "SECTORS", desc: "Sector rotation heatmap (S&P 500 ETFs)", action: cmdSectorRotation },
@@ -5787,6 +6552,25 @@ const CMD_PALETTE_COMMANDS = [
   { name: "MTFDIV", desc: "Multi-timeframe divergence alerts (Fisher Transform)", action: cmdMTFDiv },
   { name: "BREADTH", desc: "Market breadth dashboard (SMA200/50, A/D, watchlist)", action: cmdBreadth },
   { name: "DIVERGENCE", desc: "Divergence scanner (Fisher/RSI vs price)", action: cmdDivergence },
+  { name: "VOLUME", desc: "Volume Profile (horizontal histogram, POC, Value Area)", action: cmdVolumeProfile },
+  { name: "PIVOTS", desc: "Auto Pivot Points (classic floor trader)", action: cmdPivots },
+  { name: "PERF", desc: "Symbol Performance Card (returns, 52-week range)", action: cmdPerf },
+  { name: "VWAP+", desc: "Anchored VWAP with standard deviation bands", action: cmdAnchoredVWAP },
+  { name: "MARKETPROFILE", desc: "Market Profile / TPO chart (intraday price distribution)", action: cmdMarketProfile },
+  { name: "BACKTEST+", desc: "Visual Strategy Builder (no code, dropdown conditions)", action: cmdBacktestPlus },
+  { name: "FLOWMAP", desc: "Sector Rotation Flow Map (ETF performance + flow direction)", action: cmdFlowMap },
+  { name: "REGIME+", desc: "Advanced Regime Detection Dashboard (vol, trend, Hurst, momentum)", action: cmdRegimePlus },
+  { name: "RISKSIM", desc: "Scenario Stress Testing (crash, correction, custom shocks)", action: cmdRiskSim },
+  { name: "SMARTALERT", desc: "Statistical Anomaly Detection (z-scores, volume, range, RSI)", action: cmdSmartAlert },
+  { name: "RISKMAP", desc: "Portfolio Risk Heatmap (VaR treemap by weight)", action: cmdRiskMap },
+  { name: "ECALENDAR", desc: "Unified Earnings + Ex-Div Calendar (5-week grid)", action: cmdEarningsCalendar },
+  { name: "GREEKS", desc: "Aggregate Portfolio Greeks (delta, gamma, theta, vega)", action: cmdGreeks },
+  { name: "SCANNER+", desc: "Multi-condition stock screener (RSI, SMA200, volume)", action: cmdScannerPlus },
+  { name: "OPTPROFIT", desc: "Options P&L simulator with time decay (Black-Scholes)", action: cmdOptProfit },
+  { name: "ORDERFLOW", desc: "Cumulative delta from WebSocket trades (real-time)", action: cmdOrderFlow },
+  { name: "EQUITY", desc: "Account equity curve (P&L, drawdown, Sharpe)", action: cmdEquity },
+  { name: "HEATCAL", desc: "Calendar heatmap of daily returns (GitHub-style)", action: cmdHeatCal },
+  { name: "CORRWATCH", desc: "Correlation breakdown alerts (60D vs 1Y, watchlist)", action: cmdCorrWatch },
 ];
 
 function fuzzyMatch(query, target) {
@@ -10920,6 +11704,363 @@ function cmdBracketOrder() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// FEATURE: Multi-Leg Order Builder
+// ══════════════════════════════════════════════════════════════
+
+function cmdMultiLeg() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+
+  const win = createWindow({ title: `${currentSymbol} — Multi-Leg Order Builder`, width: 680, height: 520 });
+  win.contentElement.textContent = "";
+
+  const c = document.createElement("div");
+  c.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:8px;font-size:11px;";
+
+  const legs = []; // { side, type, qty, price, symbol, rowEl }
+
+  const inputStyle = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-family:inherit;font-size:11px;";
+  const btnStyle = "padding:6px 12px;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:11px;";
+
+  // ── Leg Table ──
+  const tableWrap = document.createElement("div");
+  tableWrap.style.cssText = "max-height:220px;overflow-y:auto;";
+  const table = document.createElement("table");
+  table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+
+  const thead = document.createElement("thead");
+  thead.innerHTML = `<tr style="color:#888;text-align:left;border-bottom:1px solid #333;">
+    <th style="padding:4px;">#</th>
+    <th style="padding:4px;">Side</th>
+    <th style="padding:4px;">Type</th>
+    <th style="padding:4px;">Qty</th>
+    <th style="padding:4px;">Price</th>
+    <th style="padding:4px;">Symbol</th>
+    <th style="padding:4px;"></th>
+  </tr>`;
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  c.appendChild(tableWrap);
+
+  function addLeg(opts = {}) {
+    const idx = legs.length;
+    const leg = {
+      side: opts.side || "buy",
+      type: opts.type || "market",
+      qty: opts.qty || 1,
+      price: opts.price || (lastPrice || 0),
+      symbol: opts.symbol || currentSymbol,
+    };
+
+    const tr = document.createElement("tr");
+    tr.style.cssText = "border-bottom:1px solid #222;";
+
+    // #
+    const tdNum = document.createElement("td");
+    tdNum.style.cssText = "padding:4px;color:#888;";
+    tdNum.textContent = idx + 1;
+    tr.appendChild(tdNum);
+
+    // Side
+    const tdSide = document.createElement("td");
+    tdSide.style.padding = "4px";
+    const selSide = document.createElement("select");
+    selSide.style.cssText = inputStyle + "width:60px;";
+    for (const s of ["buy", "sell"]) {
+      const o = document.createElement("option");
+      o.value = s; o.textContent = s.toUpperCase();
+      if (s === leg.side) o.selected = true;
+      selSide.appendChild(o);
+    }
+    selSide.addEventListener("change", () => { leg.side = selSide.value; updateSummary(); });
+    tdSide.appendChild(selSide);
+    tr.appendChild(tdSide);
+
+    // Type
+    const tdType = document.createElement("td");
+    tdType.style.padding = "4px";
+    const selType = document.createElement("select");
+    selType.style.cssText = inputStyle + "width:80px;";
+    for (const t of ["market", "limit", "stop", "stop_limit"]) {
+      const o = document.createElement("option");
+      o.value = t; o.textContent = t.replace("_", "-").toUpperCase();
+      if (t === leg.type) o.selected = true;
+      selType.appendChild(o);
+    }
+    selType.addEventListener("change", () => {
+      leg.type = selType.value;
+      inpPrice.disabled = (leg.type === "market");
+      updateSummary();
+    });
+    tdType.appendChild(selType);
+    tr.appendChild(tdType);
+
+    // Qty
+    const tdQty = document.createElement("td");
+    tdQty.style.padding = "4px";
+    const inpQty = document.createElement("input");
+    inpQty.type = "number"; inpQty.min = "1"; inpQty.value = leg.qty;
+    inpQty.style.cssText = inputStyle + "width:60px;";
+    inpQty.addEventListener("input", () => { leg.qty = parseInt(inpQty.value) || 0; updateSummary(); });
+    tdQty.appendChild(inpQty);
+    tr.appendChild(tdQty);
+
+    // Price
+    const tdPrice = document.createElement("td");
+    tdPrice.style.padding = "4px";
+    const inpPrice = document.createElement("input");
+    inpPrice.type = "text"; inpPrice.value = leg.price ? leg.price.toFixed(4) : "0";
+    inpPrice.style.cssText = inputStyle + "width:80px;";
+    inpPrice.disabled = (leg.type === "market");
+    inpPrice.addEventListener("input", () => { leg.price = parseFloat(inpPrice.value) || 0; updateSummary(); });
+    tdPrice.appendChild(inpPrice);
+    tr.appendChild(tdPrice);
+
+    // Symbol
+    const tdSym = document.createElement("td");
+    tdSym.style.padding = "4px";
+    const inpSym = document.createElement("input");
+    inpSym.type = "text"; inpSym.value = leg.symbol;
+    inpSym.style.cssText = inputStyle + "width:70px;";
+    inpSym.addEventListener("input", () => { leg.symbol = inpSym.value; });
+    tdSym.appendChild(inpSym);
+    tr.appendChild(tdSym);
+
+    // Remove
+    const tdRm = document.createElement("td");
+    tdRm.style.padding = "4px";
+    const btnRm = document.createElement("button");
+    btnRm.textContent = "X";
+    btnRm.style.cssText = btnStyle + "background:#600;color:#f88;padding:2px 8px;";
+    btnRm.addEventListener("click", () => {
+      const i = legs.indexOf(leg);
+      if (i >= 0) { legs.splice(i, 1); tr.remove(); renumberLegs(); updateSummary(); }
+    });
+    tdRm.appendChild(btnRm);
+    tr.appendChild(tdRm);
+
+    leg.rowEl = tr;
+    leg.setQty = (v) => { leg.qty = v; inpQty.value = v; };
+    leg.setPrice = (v) => { leg.price = v; inpPrice.value = v.toFixed(4); };
+    leg.setSide = (v) => { leg.side = v; selSide.value = v; };
+    leg.setType = (v) => { leg.type = v; selType.value = v; inpPrice.disabled = (v === "market"); };
+    legs.push(leg);
+    tbody.appendChild(tr);
+    updateSummary();
+    return leg;
+  }
+
+  function renumberLegs() {
+    for (let i = 0; i < legs.length; i++) {
+      const firstTd = legs[i].rowEl.querySelector("td");
+      if (firstTd) firstTd.textContent = i + 1;
+    }
+  }
+
+  // ── Buttons Row ──
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;";
+
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "+ Add Leg";
+  addBtn.style.cssText = btnStyle + "background:#0a2a0a;color:#8f8;";
+  addBtn.addEventListener("click", () => addLeg());
+  btnRow.appendChild(addBtn);
+
+  // Preset: Bracket
+  const bracketBtn = document.createElement("button");
+  bracketBtn.textContent = "Bracket";
+  bracketBtn.title = "Buy market + Sell stop (SL) + Sell limit (TP)";
+  bracketBtn.style.cssText = btnStyle + "background:#0f3460;color:#8cf;";
+  bracketBtn.addEventListener("click", () => {
+    clearLegs();
+    const sl = getSLPrice() || (lastPrice * 0.98);
+    const tp = getTPPrice() || (lastPrice * 1.02);
+    addLeg({ side: "buy", type: "market", qty: 1, price: lastPrice });
+    addLeg({ side: "sell", type: "stop", qty: 1, price: sl });
+    addLeg({ side: "sell", type: "limit", qty: 1, price: tp });
+  });
+  btnRow.appendChild(bracketBtn);
+
+  // Preset: OCO
+  const ocoBtn = document.createElement("button");
+  ocoBtn.textContent = "OCO";
+  ocoBtn.title = "Sell stop (SL) + Sell limit (TP)";
+  ocoBtn.style.cssText = btnStyle + "background:#3a0f60;color:#c8f;";
+  ocoBtn.addEventListener("click", () => {
+    clearLegs();
+    const sl = getSLPrice() || (lastPrice * 0.98);
+    const tp = getTPPrice() || (lastPrice * 1.02);
+    addLeg({ side: "sell", type: "stop", qty: 1, price: sl });
+    addLeg({ side: "sell", type: "limit", qty: 1, price: tp });
+  });
+  btnRow.appendChild(ocoBtn);
+
+  // Preset: Scale In
+  const scaleInBtn = document.createElement("button");
+  scaleInBtn.textContent = "Scale In";
+  scaleInBtn.title = "3 buy limits at -1%, -2%, -3%";
+  scaleInBtn.style.cssText = btnStyle + "background:#2a2a00;color:#ff8;";
+  scaleInBtn.addEventListener("click", () => {
+    clearLegs();
+    for (let i = 1; i <= 3; i++) {
+      addLeg({ side: "buy", type: "limit", qty: 1, price: lastPrice * (1 - i * 0.01) });
+    }
+  });
+  btnRow.appendChild(scaleInBtn);
+
+  // Preset: Scale Out
+  const scaleOutBtn = document.createElement("button");
+  scaleOutBtn.textContent = "Scale Out";
+  scaleOutBtn.title = "3 sell limits at +1%, +2%, +3%";
+  scaleOutBtn.style.cssText = btnStyle + "background:#2a1500;color:#fa8;";
+  scaleOutBtn.addEventListener("click", () => {
+    clearLegs();
+    for (let i = 1; i <= 3; i++) {
+      addLeg({ side: "sell", type: "limit", qty: 1, price: lastPrice * (1 + i * 0.01) });
+    }
+  });
+  btnRow.appendChild(scaleOutBtn);
+
+  c.appendChild(btnRow);
+
+  function clearLegs() {
+    while (legs.length > 0) { legs.pop().rowEl.remove(); }
+    updateSummary();
+  }
+
+  // ── Summary ──
+  const summaryDiv = document.createElement("div");
+  summaryDiv.style.cssText = "background:#0a0a0a;border:1px solid #333;padding:8px;font-size:11px;color:#aaa;";
+  c.appendChild(summaryDiv);
+
+  function updateSummary() {
+    const totalLegs = legs.length;
+    let buyQty = 0, sellQty = 0, maxCost = 0, totalRisk = 0;
+    let entryPrice = 0;
+
+    for (const leg of legs) {
+      if (leg.side === "buy") {
+        buyQty += leg.qty;
+        maxCost += leg.price * leg.qty;
+        if (leg.type === "market" || leg.type === "limit") entryPrice = entryPrice || leg.price;
+      } else {
+        sellQty += leg.qty;
+      }
+    }
+
+    // Risk = distance from entry to stop legs
+    if (entryPrice > 0) {
+      for (const leg of legs) {
+        if (leg.side === "sell" && leg.type === "stop") {
+          totalRisk += Math.abs(entryPrice - leg.price) * leg.qty;
+        }
+      }
+    }
+
+    const net = buyQty - sellQty;
+    summaryDiv.innerHTML = `<b style="color:#fff;">Summary</b><br>` +
+      `Legs: <span style="color:#fff;">${totalLegs}</span> &nbsp;|&nbsp; ` +
+      `Net Qty: <span style="color:${net > 0 ? "#4caf50" : net < 0 ? "#f44" : "#fff"};">${net > 0 ? "+" : ""}${net}</span> &nbsp;|&nbsp; ` +
+      `Buy: <span style="color:#4caf50;">${buyQty}</span> &nbsp; Sell: <span style="color:#f44;">${sellQty}</span><br>` +
+      `Risk (entry→stop): <span style="color:#fa0;">$${totalRisk.toFixed(2)}</span> &nbsp;|&nbsp; ` +
+      `Max Cost: <span style="color:#8cf;">$${maxCost.toFixed(2)}</span>`;
+  }
+  updateSummary();
+
+  // ── Status ──
+  const statusDiv = document.createElement("div");
+  statusDiv.style.cssText = "color:#888;font-size:10px;min-height:20px;";
+  c.appendChild(statusDiv);
+
+  // ── Action Buttons ──
+  const actionRow = document.createElement("div");
+  actionRow.style.cssText = "display:flex;gap:6px;margin-top:4px;";
+
+  // Preview
+  const previewBtn = document.createElement("button");
+  previewBtn.textContent = "Preview";
+  previewBtn.style.cssText = btnStyle + "background:#222;color:#fff;";
+  previewBtn.addEventListener("click", () => {
+    if (legs.length === 0) { statusDiv.textContent = "No legs to preview"; statusDiv.style.color = "#f44"; return; }
+    let preview = "Order Preview:\n";
+    for (let i = 0; i < legs.length; i++) {
+      const l = legs[i];
+      const priceStr = l.type === "market" ? "MKT" : `$${l.price.toFixed(4)}`;
+      preview += `  ${i + 1}. ${l.side.toUpperCase()} ${l.qty}x ${l.symbol} ${l.type.toUpperCase()} @ ${priceStr}\n`;
+    }
+    statusDiv.textContent = preview;
+    statusDiv.style.cssText = "color:#ccc;font-size:10px;min-height:20px;white-space:pre;font-family:monospace;";
+  });
+  actionRow.appendChild(previewBtn);
+
+  // Execute All
+  const execBtn = document.createElement("button");
+  execBtn.textContent = "Execute All";
+  execBtn.style.cssText = btnStyle + "background:#0f3460;color:#8cf;font-weight:bold;";
+  execBtn.addEventListener("click", async () => {
+    if (legs.length === 0) { statusDiv.textContent = "No legs to execute"; statusDiv.style.color = "#f44"; return; }
+
+    // Safety confirm
+    const symbols = [...new Set(legs.map(l => l.symbol))].join(", ");
+    if (!confirm(`Place ${legs.length} orders for ${symbols}?`)) return;
+
+    execBtn.disabled = true;
+    let succeeded = 0, failed = 0;
+    const errors = [];
+
+    for (let i = 0; i < legs.length; i++) {
+      const l = legs[i];
+      statusDiv.textContent = `Placing leg ${i + 1}/${legs.length}...`;
+      statusDiv.style.color = "#888";
+
+      try {
+        if (l.type === "market") {
+          await invoke("place_order", { symbol: l.symbol, qty: l.qty, side: l.side });
+        } else if (l.type === "limit") {
+          await invoke("place_limit_order", { symbol: l.symbol, qty: l.qty, side: l.side, limitPrice: l.price, tif: "gtc" });
+        } else if (l.type === "stop") {
+          await invoke("place_stop_order", { symbol: l.symbol, qty: l.qty, side: l.side, stopPrice: l.price, tif: "gtc" });
+        } else if (l.type === "stop_limit") {
+          await invoke("place_stop_limit_order", { symbol: l.symbol, qty: l.qty, side: l.side, stopPrice: l.price, limitPrice: l.price, tif: "gtc" });
+        }
+        succeeded++;
+        log(`MultiLeg ${i + 1}/${legs.length}: ${l.side} ${l.qty}x ${l.symbol} ${l.type} OK`, "ok");
+      } catch (e) {
+        failed++;
+        errors.push(`Leg ${i + 1}: ${e}`);
+        log(`MultiLeg ${i + 1}/${legs.length}: FAILED — ${e}`, "error");
+      }
+    }
+
+    execBtn.disabled = false;
+    if (failed === 0) {
+      statusDiv.textContent = `Done! All ${succeeded} legs placed successfully.`;
+      statusDiv.style.color = "#4caf50";
+    } else {
+      statusDiv.textContent = `${succeeded} succeeded, ${failed} failed:\n${errors.join("\n")}`;
+      statusDiv.style.cssText = "color:#f44;font-size:10px;min-height:20px;white-space:pre;";
+    }
+    log(`MultiLeg complete: ${succeeded} OK, ${failed} failed`, succeeded > 0 && failed === 0 ? "ok" : "warn");
+  });
+  actionRow.appendChild(execBtn);
+
+  // Cancel
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.style.cssText = btnStyle + "background:#333;color:#aaa;";
+  cancelBtn.addEventListener("click", () => win.close());
+  actionRow.appendChild(cancelBtn);
+
+  c.appendChild(actionRow);
+
+  win.contentElement.textContent = "";
+  win.appendElement(c);
+}
+
+// ══════════════════════════════════════════════════════════════
 // FEATURE: Portfolio Heat Map
 // ══════════════════════════════════════════════════════════════
 
@@ -12827,6 +13968,196 @@ function cmdMatrixChat() {
   win.appendElement(container);
 }
 
+// ══════════════════════════════════════════════════════════════
+// SCANNER+ — Multi-Condition Stock Screener
+// ══════════════════════════════════════════════════════════════
+async function cmdScannerPlus() {
+  const win = createWindow({ title: "SCANNER+ \u2014 Multi-Condition Screener", width: 720, height: 550 });
+  win.contentElement.textContent = "";
+  const form = document.createElement("div");
+  form.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;padding:8px;border-bottom:1px solid #333;align-items:flex-end;";
+  const mkSelect = (label, options, defaultVal) => {
+    const wrap = document.createElement("div"); wrap.style.cssText = "display:flex;flex-direction:column;gap:2px;";
+    const lbl = document.createElement("label"); lbl.textContent = label; lbl.style.cssText = "color:#888;font-size:9px;";
+    const sel = document.createElement("select"); sel.style.cssText = "font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;";
+    for (const o of options) { const op = document.createElement("option"); op.value = o.value !== undefined ? o.value : o; op.textContent = o.label !== undefined ? o.label : o; if (op.value === defaultVal) op.selected = true; sel.appendChild(op); }
+    wrap.appendChild(lbl); wrap.appendChild(sel); return { wrap, sel };
+  };
+  const mkInput = (label, val, width) => {
+    width = width || "60px";
+    const wrap = document.createElement("div"); wrap.style.cssText = "display:flex;flex-direction:column;gap:2px;";
+    const lbl = document.createElement("label"); lbl.textContent = label; lbl.style.cssText = "color:#888;font-size:9px;";
+    const inp = document.createElement("input"); inp.type = "number"; inp.step = "any"; inp.value = val;
+    inp.style.cssText = "width:" + width + ";font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;";
+    wrap.appendChild(lbl); wrap.appendChild(inp); return { wrap, inp };
+  };
+  const rsiCond = mkSelect("RSI Condition", [{ value: "<", label: "<" }, { value: ">", label: ">" }], "<");
+  const rsiVal = mkInput("RSI Value", "30");
+  const smaCond = mkSelect("Price vs SMA200", [{ value: "above", label: "Above" }, { value: "below", label: "Below" }], "below");
+  const volCond = mkSelect("Volume >", [{ value: ">", label: "> Nx Avg" }], ">");
+  const volVal = mkInput("Vol Multiple", "1.5");
+  const minP = mkInput("Min Price", "5"); const maxP = mkInput("Max Price", "500");
+  form.appendChild(rsiCond.wrap); form.appendChild(rsiVal.wrap); form.appendChild(smaCond.wrap);
+  form.appendChild(volCond.wrap); form.appendChild(volVal.wrap); form.appendChild(minP.wrap); form.appendChild(maxP.wrap);
+  const scanBtn = document.createElement("button"); scanBtn.textContent = "Scan";
+  scanBtn.style.cssText = "font-size:11px;padding:4px 14px;background:#1b5e20;color:#8f8;border:1px solid #555;cursor:pointer;font-weight:bold;";
+  form.appendChild(scanBtn); win.appendElement(form);
+  const results = document.createElement("div"); results.style.cssText = "padding:4px;font-size:10px;overflow-y:auto;max-height:420px;";
+  results.textContent = "Configure filters and click Scan."; win.appendElement(results);
+  scanBtn.addEventListener("click", async () => {
+    results.textContent = "";
+    const progressEl = document.createElement("div"); progressEl.style.cssText = "color:#8cf;padding:8px;"; progressEl.textContent = "Scanning... fetching candidates"; results.appendChild(progressEl);
+    try {
+      const minPrice = parseFloat(minP.inp.value) || 5, maxPrice = parseFloat(maxP.inp.value) || 500;
+      const rsiThresh = parseFloat(rsiVal.inp.value) || 30, rsiOp = rsiCond.sel.value, smaDir = smaCond.sel.value, volMult = parseFloat(volVal.inp.value) || 1.5;
+      const activeJson = await invoke("get_most_active", { top: 100 }); const active = JSON.parse(activeJson);
+      const moversJson = await invoke("get_top_movers", { marketType: "stocks", top: 50 }); const movers = JSON.parse(moversJson);
+      const symbols = [];
+      const addSymbols = (data, key) => { const arr = data[key] || data.most_actives || data.gainers || data.losers || []; for (const item of (Array.isArray(arr) ? arr : [])) { const sym = item.symbol || item.S || ""; const pr = item.price || item.p || 0; if (!sym || symbols.find(s => s.symbol === sym)) continue; if (pr > 0 && (pr < minPrice || pr > maxPrice)) continue; symbols.push({ symbol: sym, price: pr, change_pct: item.change_percent || item.percent_change || 0 }); } };
+      addSymbols(active, "most_actives"); addSymbols(movers, "gainers"); addSymbols(movers, "losers");
+      const candidates = symbols.slice(0, 20); const matches = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const sym = candidates[i]; progressEl.textContent = "Scanning... " + (i + 1) + "/" + candidates.length + " (" + sym.symbol + ")";
+        try {
+          const barsJson = await invoke("get_bars", { symbol: sym.symbol, timeframe: "1Day", limit: 220 }); const bars = JSON.parse(barsJson);
+          if (bars.length < 30) continue;
+          const rsiData = calcRSI(bars, 14); const latestRSI = rsiData.length > 0 ? rsiData[rsiData.length - 1].value : null;
+          let sma200 = null;
+          if (bars.length >= 200) { let sum = 0; for (let j = bars.length - 200; j < bars.length; j++) sum += bars[j].close; sma200 = sum / 200; }
+          let avgVol = 0; const volSlice = bars.slice(-20); for (const b of volSlice) avgVol += (b.volume || 0); avgVol = avgVol / volSlice.length;
+          const curPrice = bars[bars.length - 1].close, curVol = bars[bars.length - 1].volume || 0, volRatio = avgVol > 0 ? curVol / avgVol : 0;
+          if (latestRSI !== null) { if (rsiOp === "<" && latestRSI >= rsiThresh) continue; if (rsiOp === ">" && latestRSI <= rsiThresh) continue; }
+          if (sma200 !== null) { if (smaDir === "above" && curPrice <= sma200) continue; if (smaDir === "below" && curPrice >= sma200) continue; }
+          if (volRatio < volMult) continue;
+          matches.push({ symbol: sym.symbol, price: curPrice, rsi: latestRSI, vsSMA200: sma200 !== null ? (curPrice > sma200 ? "ABOVE" : "BELOW") : "N/A", sma200: sma200, volRatio: volRatio, changePct: sym.change_pct });
+        } catch (_) {}
+      }
+      results.textContent = "";
+      const hdr = document.createElement("div"); hdr.style.cssText = "color:#888;font-size:9px;margin-bottom:4px;"; hdr.textContent = matches.length + " matches from " + candidates.length + " scanned"; results.appendChild(hdr);
+      if (matches.length === 0) { const noRes = document.createElement("div"); noRes.textContent = "No symbols matched all conditions."; noRes.style.cssText = "color:#888;padding:8px;"; results.appendChild(noRes); return; }
+      const tblHdr = document.createElement("div"); tblHdr.style.cssText = "display:flex;justify-content:space-between;padding:3px 4px;border-bottom:1px solid #444;color:#666;font-weight:bold;font-size:9px;";
+      for (const h of ["Symbol", "Price", "RSI", "vs SMA200", "Vol Ratio", "Change%"]) { const s = document.createElement("span"); s.style.cssText = "flex:1;text-align:center;"; s.textContent = h; tblHdr.appendChild(s); }
+      results.appendChild(tblHdr);
+      for (const m of matches) {
+        const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;padding:3px 4px;border-bottom:1px solid #1a1a2e;cursor:pointer;";
+        row.addEventListener("mouseenter", function() { this.style.background = "#1a1a2e"; }); row.addEventListener("mouseleave", function() { this.style.background = ""; });
+        row.addEventListener("click", function() { document.getElementById("symbol-input").value = m.symbol; triggerLoad(); });
+        var vals = [
+          { text: m.symbol, css: "color:#fff;font-weight:bold;" }, { text: "$" + m.price.toFixed(2), css: "color:#ccc;font-family:Consolas,monospace;" },
+          { text: m.rsi !== null ? m.rsi.toFixed(1) : "\u2014", css: "color:" + (m.rsi !== null && m.rsi < 30 ? "#4caf50" : m.rsi !== null && m.rsi > 70 ? "#f44336" : "#ccc") + ";" },
+          { text: m.vsSMA200, css: "color:" + (m.vsSMA200 === "ABOVE" ? "#4caf50" : m.vsSMA200 === "BELOW" ? "#f44336" : "#888") + ";" },
+          { text: m.volRatio.toFixed(2) + "x", css: "color:" + (m.volRatio > 2 ? "#ff9800" : "#ccc") + ";" },
+          { text: (m.changePct >= 0 ? "+" : "") + m.changePct.toFixed(2) + "%", css: "color:" + (m.changePct >= 0 ? "#4caf50" : "#f44336") + ";font-weight:bold;" },
+        ];
+        for (const v of vals) { const s = document.createElement("span"); s.style.cssText = "flex:1;text-align:center;" + v.css; s.textContent = v.text; row.appendChild(s); }
+        results.appendChild(row);
+      }
+    } catch (e) { results.textContent = "Error: " + e; }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// OPTPROFIT — Options P&L Simulator with Time Decay
+// ══════════════════════════════════════════════════════════════
+function cmdOptProfit() {
+  const win = createWindow({ title: "OPTPROFIT \u2014 Options P&L Simulator", width: 750, height: 600 });
+  win.contentElement.textContent = "";
+  const container = document.createElement("div"); container.style.cssText = "padding:8px;font-size:11px;";
+  const presetBar = document.createElement("div"); presetBar.style.cssText = "display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;";
+  const presetLabel = document.createElement("span"); presetLabel.textContent = "Presets:"; presetLabel.style.cssText = "color:#888;font-size:9px;align-self:center;margin-right:4px;"; presetBar.appendChild(presetLabel);
+  const price = lastPrice || 100;
+  const presets = { "Long Call": [{ type: "call", strike: price, prem: 3.0, qty: 1 }], "Long Put": [{ type: "put", strike: price, prem: 3.0, qty: 1 }], "Bull Call Spread": [{ type: "call", strike: Math.round(price * 0.97), prem: 5.0, qty: 1 }, { type: "call", strike: Math.round(price * 1.03), prem: 2.0, qty: -1 }], "Bear Put Spread": [{ type: "put", strike: Math.round(price * 1.03), prem: 5.0, qty: 1 }, { type: "put", strike: Math.round(price * 0.97), prem: 2.0, qty: -1 }], "Iron Condor": [{ type: "put", strike: Math.round(price * 0.90), prem: 1.0, qty: 1 }, { type: "put", strike: Math.round(price * 0.95), prem: 2.5, qty: -1 }, { type: "call", strike: Math.round(price * 1.05), prem: 2.5, qty: -1 }, { type: "call", strike: Math.round(price * 1.10), prem: 1.0, qty: 1 }], "Straddle": [{ type: "call", strike: price, prem: 4.0, qty: 1 }, { type: "put", strike: price, prem: 4.0, qty: 1 }] };
+  const legsDiv = document.createElement("div"); legsDiv.style.cssText = "margin-bottom:6px;";
+  const legHdr = document.createElement("div"); legHdr.style.cssText = "display:flex;gap:4px;color:#888;font-weight:bold;padding:2px 0;border-bottom:1px solid #333;margin-bottom:4px;font-size:9px;";
+  for (const h of ["Type", "Strike", "Premium", "Qty (+buy/-sell)"]) { const s = document.createElement("span"); s.style.cssText = "flex:1;text-align:center;"; s.textContent = h; legHdr.appendChild(s); }
+  legsDiv.appendChild(legHdr);
+  function addLegRow(type, strike, prem, qty) { type = type || "call"; strike = strike || ""; prem = prem || ""; qty = qty || "1"; const row = document.createElement("div"); row.style.cssText = "display:flex;gap:4px;margin:2px 0;"; const mkSel = function(opts, val) { const s = document.createElement("select"); s.style.cssText = "flex:1;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:2px;"; for (const o of opts) { const op = document.createElement("option"); op.value = o; op.textContent = o; if (o === val) op.selected = true; s.appendChild(op); } return s; }; const mkInp = function(v, ph) { const i = document.createElement("input"); i.type = "number"; i.step = "0.01"; i.value = v; i.placeholder = ph; i.style.cssText = "flex:1;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:2px;text-align:center;"; return i; }; row.appendChild(mkSel(["call", "put"], type)); row.appendChild(mkInp(strike, "Strike")); row.appendChild(mkInp(prem, "Premium")); row.appendChild(mkInp(qty, "Qty")); const del = document.createElement("button"); del.textContent = "\u00d7"; del.style.cssText = "background:none;border:1px solid #f44;color:#f44;cursor:pointer;padding:0 4px;"; del.addEventListener("click", function() { row.remove(); }); row.appendChild(del); legsDiv.appendChild(row); }
+  function clearLegs() { const rows = legsDiv.querySelectorAll("div:not(:first-child)"); for (const r of rows) r.remove(); }
+  for (const [name, legs] of Object.entries(presets)) { const btn = document.createElement("button"); btn.textContent = name; btn.style.cssText = "font-size:9px;padding:2px 8px;background:#0f3460;color:#8cf;border:1px solid #444;cursor:pointer;"; btn.addEventListener("click", function() { clearLegs(); for (const l of legs) addLegRow(l.type, l.strike.toFixed(2), l.prem.toFixed(2), String(l.qty)); }); presetBar.appendChild(btn); }
+  const dteRow = document.createElement("div"); dteRow.style.cssText = "display:flex;gap:6px;align-items:center;margin:6px 0;";
+  const dteLbl = document.createElement("span"); dteLbl.textContent = "Days to Expiry:"; dteLbl.style.cssText = "color:#888;font-size:10px;";
+  const dteSlider = document.createElement("input"); dteSlider.type = "range"; dteSlider.min = "0"; dteSlider.max = "60"; dteSlider.value = "30"; dteSlider.style.cssText = "flex:1;";
+  const dteVal = document.createElement("span"); dteVal.textContent = "30"; dteVal.style.cssText = "color:#ccc;font-size:10px;min-width:30px;text-align:right;";
+  dteSlider.addEventListener("input", function() { dteVal.textContent = dteSlider.value; }); dteRow.appendChild(dteLbl); dteRow.appendChild(dteSlider); dteRow.appendChild(dteVal);
+  const btnRow = document.createElement("div"); btnRow.style.cssText = "display:flex;gap:6px;margin:6px 0;";
+  const addBtn = document.createElement("button"); addBtn.textContent = "+ Add Leg"; addBtn.style.cssText = "font-size:10px;padding:3px 8px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;"; addBtn.addEventListener("click", function() { addLegRow(); });
+  const calcBtn = document.createElement("button"); calcBtn.textContent = "Calculate"; calcBtn.style.cssText = "font-size:10px;padding:3px 12px;background:#1b5e20;color:#8f8;border:1px solid #555;cursor:pointer;font-weight:bold;"; btnRow.appendChild(addBtn); btnRow.appendChild(calcBtn);
+  const chartCanvas = document.createElement("canvas"); chartCanvas.width = 710; chartCanvas.height = 280; chartCanvas.style.cssText = "border:1px solid #333;margin-top:6px;";
+  const statsDiv = document.createElement("div"); statsDiv.style.cssText = "display:flex;gap:16px;padding:6px 0;font-size:10px;";
+  container.appendChild(presetBar); container.appendChild(legsDiv); container.appendChild(dteRow); container.appendChild(btnRow); container.appendChild(chartCanvas); container.appendChild(statsDiv); win.appendElement(container);
+  addLegRow("call", price.toFixed(2), "3.00", "1");
+  calcBtn.addEventListener("click", function() {
+    const rows = legsDiv.querySelectorAll("div:not(:first-child)"); const legs = [];
+    for (const r of rows) { const els = r.querySelectorAll("select, input"); if (els.length < 4) continue; legs.push({ type: els[0].value, strike: parseFloat(els[1].value), prem: parseFloat(els[2].value), qty: parseInt(els[3].value) || 1 }); }
+    if (legs.length === 0 || legs.some(function(l) { return isNaN(l.strike) || isNaN(l.prem); })) { alert("Fill all leg fields"); return; }
+    const dte = parseInt(dteSlider.value) || 0; const strikes = legs.map(function(l) { return l.strike; }); const center = strikes.reduce(function(a, b) { return a + b; }, 0) / strikes.length;
+    const minPr = center * 0.7, maxPr = center * 1.3, step = (maxPr - minPr) / 200;
+    const expiryPoints = [], dtePoints = []; let maxProfit = -Infinity, maxLoss = Infinity; const breakevens = [];
+    for (let p = minPr; p <= maxPr; p += step) { let pnlExpiry = 0, pnlDTE = 0; for (const l of legs) { const dir = l.qty > 0 ? 1 : -1, absQty = Math.abs(l.qty); const intrinsic = l.type === "call" ? Math.max(0, p - l.strike) : Math.max(0, l.strike - p); pnlExpiry += dir * (intrinsic - l.prem) * absQty * 100; const currentIntrinsic = l.type === "call" ? Math.max(0, price - l.strike) : Math.max(0, l.strike - price); const timeValue = Math.max(0, l.prem - currentIntrinsic); const remainingTV = dte > 0 ? timeValue * (dte / 60) : 0; pnlDTE += dir * (intrinsic + remainingTV - l.prem) * absQty * 100; } expiryPoints.push({ price: p, pnl: pnlExpiry }); dtePoints.push({ price: p, pnl: pnlDTE }); maxProfit = Math.max(maxProfit, pnlExpiry); maxLoss = Math.min(maxLoss, pnlExpiry); }
+    for (let i = 1; i < expiryPoints.length; i++) { if ((expiryPoints[i - 1].pnl <= 0 && expiryPoints[i].pnl > 0) || (expiryPoints[i - 1].pnl >= 0 && expiryPoints[i].pnl < 0)) { const ratio = Math.abs(expiryPoints[i - 1].pnl) / (Math.abs(expiryPoints[i - 1].pnl) + Math.abs(expiryPoints[i].pnl)); breakevens.push(expiryPoints[i - 1].price + ratio * step); } }
+    const ctx = chartCanvas.getContext("2d"); const W = chartCanvas.width, H = chartCanvas.height; ctx.clearRect(0, 0, W, H); ctx.fillStyle = "#0a0a14"; ctx.fillRect(0, 0, W, H);
+    const pad = 50, pRange = maxPr - minPr; const allPnl = expiryPoints.map(function(pt) { return pt.pnl; }).concat(dtePoints.map(function(pt) { return pt.pnl; })); const vMin = Math.min.apply(null, allPnl), vMax = Math.max.apply(null, allPnl), vRange = Math.max(vMax - vMin, 1);
+    const toX = function(pr) { return pad + (pr - minPr) / pRange * (W - 2 * pad); }; const toY = function(v) { return H - pad - (v - vMin) / vRange * (H - 2 * pad); };
+    ctx.strokeStyle = "#ffffff33"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad, toY(0)); ctx.lineTo(W - pad, toY(0)); ctx.stroke();
+    for (let i = 0; i < expiryPoints.length - 1; i++) { const x1 = toX(expiryPoints[i].price), x2 = toX(expiryPoints[i + 1].price), y0 = toY(0); ctx.fillStyle = expiryPoints[i].pnl >= 0 ? "rgba(76,175,80,0.1)" : "rgba(244,67,54,0.1)"; ctx.beginPath(); ctx.moveTo(x1, y0); ctx.lineTo(x1, toY(expiryPoints[i].pnl)); ctx.lineTo(x2, toY(expiryPoints[i + 1].pnl)); ctx.lineTo(x2, y0); ctx.fill(); }
+    if (dte > 0) { ctx.strokeStyle = "#2196f3"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.beginPath(); for (let i = 0; i < dtePoints.length; i++) { const x = toX(dtePoints[i].price), y = toY(dtePoints[i].pnl); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke(); ctx.setLineDash([]); }
+    ctx.strokeStyle = "#4caf50"; ctx.lineWidth = 2; ctx.beginPath(); for (let i = 0; i < expiryPoints.length; i++) { const x = toX(expiryPoints[i].price), y = toY(expiryPoints[i].pnl); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); } ctx.stroke();
+    ctx.strokeStyle = "#ffeb3b44"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]); for (const l of legs) { const x = toX(l.strike); ctx.beginPath(); ctx.moveTo(x, pad - 10); ctx.lineTo(x, H - pad); ctx.stroke(); } ctx.setLineDash([]);
+    for (const be of breakevens) { const x = toX(be), y = toY(0); ctx.fillStyle = "#ff9800"; ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill(); ctx.font = "9px Consolas, monospace"; ctx.textAlign = "center"; ctx.fillText("$" + be.toFixed(1), x, y - 8); }
+    ctx.fillStyle = "#888"; ctx.font = "10px Consolas, monospace"; ctx.textAlign = "center"; for (let i = 0; i <= 5; i++) { const pr = minPr + (pRange * i / 5); ctx.fillText("$" + pr.toFixed(0), toX(pr), H - 5); } ctx.textAlign = "right"; for (let i = 0; i <= 4; i++) { const v = vMin + (vRange * i / 4); ctx.fillText("$" + v.toFixed(0), pad - 4, toY(v) + 3); }
+    ctx.fillStyle = "#4caf50"; ctx.textAlign = "left"; ctx.fillText("At Expiry", pad + 10, 15); if (dte > 0) { ctx.fillStyle = "#2196f3"; ctx.fillText("At " + dte + " DTE (dashed)", pad + 10, 28); }
+    statsDiv.textContent = ""; var addStat = function(label, value, color) { const s = document.createElement("span"); s.style.cssText = "color:" + color + ";"; s.textContent = label + ": " + value; statsDiv.appendChild(s); };
+    addStat("Max Profit", maxProfit >= 1e9 ? "Unlimited" : "$" + maxProfit.toFixed(0), "#4caf50"); addStat("Max Loss", "$" + maxLoss.toFixed(0), "#f44336"); for (let i = 0; i < breakevens.length; i++) addStat("BE" + (i + 1), "$" + breakevens[i].toFixed(2), "#ff9800");
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// ORDERFLOW — Cumulative Delta from WebSocket Trades
+// ══════════════════════════════════════════════════════════════
+function cmdOrderFlow() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  let ofPollInterval = null, cumDelta = 0, totalBuys = 0, totalSells = 0;
+  let deltaHistory = [], volumeHistory = [], lastBidOF = 0, lastAskOF = 0;
+  const win = createWindow({ title: currentSymbol + " \u2014 Order Flow (Cumulative Delta)", width: 650, height: 520, onClose: function() { if (ofPollInterval) { clearInterval(ofPollInterval); ofPollInterval = null; } } });
+  win.contentElement.textContent = "";
+  const statsBar = document.createElement("div"); statsBar.style.cssText = "display:flex;justify-content:space-around;padding:6px 8px;border-bottom:1px solid #333;font-family:Consolas,monospace;font-size:11px;";
+  const mkStat = function(label, color) { const s = document.createElement("span"); s.style.cssText = "color:" + color + ";"; s.textContent = label + ": 0"; return s; };
+  const statBuys = mkStat("Buys", "#4caf50"), statSells = mkStat("Sells", "#f44336"), statDelta = mkStat("Net Delta", "#2196f3"), statRatio = mkStat("B/S Ratio", "#ff9800");
+  statsBar.appendChild(statBuys); statsBar.appendChild(statSells); statsBar.appendChild(statDelta); statsBar.appendChild(statRatio); win.appendElement(statsBar);
+  const chartDiv = document.createElement("div"); chartDiv.style.cssText = "width:100%;height:300px;"; win.appendElement(chartDiv);
+  const volDiv = document.createElement("div"); volDiv.style.cssText = "width:100%;height:120px;"; win.appendElement(volDiv);
+  const deltaChart = createChart(chartDiv, { width: 620, height: 300, layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false }, grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } }, rightPriceScale: { borderColor: "#333" }, timeScale: { borderColor: "#333", timeVisible: true, secondsVisible: true } });
+  const deltaLine = deltaChart.addLineSeries({ color: "#2196f3", lineWidth: 2, title: "Cum. Delta", lastValueVisible: true, priceLineVisible: true });
+  const volChart = createChart(volDiv, { width: 620, height: 120, layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false }, grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } }, rightPriceScale: { borderColor: "#333" }, timeScale: { borderColor: "#333", timeVisible: true, secondsVisible: true } });
+  const ofVolSeries = volChart.addHistogramSeries({ title: "Trade Vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
+  invoke("get_latest_quote", { symbol: currentSymbol }).then(function(json) { const q = JSON.parse(json); if (q.bid > 0) lastBidOF = q.bid; if (q.ask > 0) lastAskOF = q.ask; }).catch(function() {});
+  ofPollInterval = setInterval(async function() {
+    try {
+      const json = await invoke("poll_stream"); const messages = JSON.parse(json); let updated = false;
+      for (const msg of messages) {
+        if (msg.Trade) {
+          const t = msg.Trade, tradePrice = t.price, tradeVol = t.size || 0;
+          const ts = t.timestamp ? Math.floor(new Date(t.timestamp).getTime() / 1000) : Math.floor(Date.now() / 1000);
+          let buyVol = 0, sellVol = 0;
+          if (lastAskOF > 0 && tradePrice >= lastAskOF) { buyVol = tradeVol; } else if (lastBidOF > 0 && tradePrice <= lastBidOF) { sellVol = tradeVol; } else { buyVol = tradeVol / 2; sellVol = tradeVol / 2; }
+          cumDelta += buyVol - sellVol; totalBuys += buyVol; totalSells += sellVol;
+          deltaHistory.push({ time: ts, value: cumDelta }); volumeHistory.push({ time: ts, value: tradeVol, color: buyVol > sellVol ? "rgba(76,175,80,0.7)" : "rgba(244,67,54,0.7)" }); updated = true;
+        }
+      }
+      if (updated) {
+        const seenDelta = new Map(); for (const d of deltaHistory) seenDelta.set(d.time, d);
+        const dedupDelta = Array.from(seenDelta.values()).sort(function(a, b) { return a.time - b.time; });
+        const seenVol = new Map(); for (const v of volumeHistory) { const existing = seenVol.get(v.time); if (existing) { existing.value += v.value; } else { seenVol.set(v.time, Object.assign({}, v)); } }
+        const dedupVol = Array.from(seenVol.values()).sort(function(a, b) { return a.time - b.time; });
+        deltaLine.setData(dedupDelta); ofVolSeries.setData(dedupVol);
+        statBuys.textContent = "Buys: " + totalBuys.toFixed(0); statSells.textContent = "Sells: " + totalSells.toFixed(0);
+        statDelta.textContent = "Net Delta: " + (cumDelta >= 0 ? "+" : "") + cumDelta.toFixed(0); statDelta.style.color = cumDelta >= 0 ? "#4caf50" : "#f44336";
+        const ratio = totalSells > 0 ? (totalBuys / totalSells) : totalBuys > 0 ? 999 : 0; statRatio.textContent = "B/S Ratio: " + ratio.toFixed(2);
+      }
+    } catch (_) {}
+  }, 1000);
+}
+
 // ── Help / About Overlay (? or F1) ──────────────────────────
 function showHelpOverlay() {
   // Remove existing overlay if open
@@ -13211,6 +14542,877 @@ async function cmdFlows() {
   } catch (e) { fc.textContent = `Error: ${e}`; }
 }
 
+
+// ══════════════════════════════════════════════════════════════
+// VOLUME — Volume Profile (Horizontal Histogram)
+// ══════════════════════════════════════════════════════════════
+function cmdVolumeProfile() {
+  if (!currentChartData || currentChartData.length < 10) {
+    log("VOLUME: Need at least 10 bars loaded", "warn");
+    return;
+  }
+  const data = currentChartData;
+  const NUM_BINS = 50;
+  let minLow = Infinity, maxHigh = -Infinity, totalVolume = 0;
+  for (const bar of data) {
+    if (bar.low < minLow) minLow = bar.low;
+    if (bar.high > maxHigh) maxHigh = bar.high;
+    totalVolume += (bar.volume || 0);
+  }
+  if (maxHigh <= minLow || totalVolume === 0) {
+    log("VOLUME: Invalid price range or no volume data", "warn");
+    return;
+  }
+  const binSize = (maxHigh - minLow) / NUM_BINS;
+  const bins = new Array(NUM_BINS).fill(0);
+  for (const bar of data) {
+    const vol = bar.volume || 0;
+    if (vol === 0) continue;
+    const barRange = bar.high - bar.low;
+    if (barRange <= 0) {
+      const idx = Math.min(Math.floor((bar.close - minLow) / binSize), NUM_BINS - 1);
+      bins[idx] += vol;
+      continue;
+    }
+    for (let b = 0; b < NUM_BINS; b++) {
+      const bLow = minLow + b * binSize;
+      const bHigh = bLow + binSize;
+      const overlap = Math.max(0, Math.min(bar.high, bHigh) - Math.max(bar.low, bLow));
+      if (overlap > 0) bins[b] += vol * (overlap / barRange);
+    }
+  }
+  let pocIdx = 0;
+  for (let i = 1; i < NUM_BINS; i++) { if (bins[i] > bins[pocIdx]) pocIdx = i; }
+  const pocPrice = minLow + (pocIdx + 0.5) * binSize;
+  const vaTarget = totalVolume * 0.70;
+  let vaVolume = bins[pocIdx], vaLowIdx = pocIdx, vaHighIdx = pocIdx;
+  while (vaVolume < vaTarget && (vaLowIdx > 0 || vaHighIdx < NUM_BINS - 1)) {
+    const below = vaLowIdx > 0 ? bins[vaLowIdx - 1] : 0;
+    const above = vaHighIdx < NUM_BINS - 1 ? bins[vaHighIdx + 1] : 0;
+    if (below >= above && vaLowIdx > 0) { vaLowIdx--; vaVolume += bins[vaLowIdx]; }
+    else if (vaHighIdx < NUM_BINS - 1) { vaHighIdx++; vaVolume += bins[vaHighIdx]; }
+    else { vaLowIdx--; vaVolume += bins[vaLowIdx]; }
+  }
+  const vaLow = minLow + vaLowIdx * binSize;
+  const vaHigh = minLow + (vaHighIdx + 1) * binSize;
+  const lineData = data.map(d => ({ time: d.time }));
+  const pocSeries = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 0, lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false, title: "POC" });
+  pocSeries.setData(lineData.map(d => ({ time: d.time, value: pocPrice })));
+  indicatorSeries["vpoc"] = pocSeries;
+  const vahSeries = chart.addLineSeries({ color: "#00FFFF", lineWidth: 1, lineStyle: 2, lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false, title: "VA High" });
+  vahSeries.setData(lineData.map(d => ({ time: d.time, value: vaHigh })));
+  indicatorSeries["vah"] = vahSeries;
+  const valSeries = chart.addLineSeries({ color: "#00FFFF", lineWidth: 1, lineStyle: 2, lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false, title: "VA Low" });
+  valSeries.setData(lineData.map(d => ({ time: d.time, value: vaLow })));
+  indicatorSeries["val"] = valSeries;
+  const dp = lastPrice > 100 ? 2 : lastPrice > 1 ? 4 : 6;
+  log(`VOLUME: POC ${pocPrice.toFixed(dp)}, VA ${vaLow.toFixed(dp)}\u2013${vaHigh.toFixed(dp)}`, "ok");
+  const win = createWindow({ title: `${currentSymbol} \u2014 Volume Profile`, width: 380, height: 280 });
+  win.contentElement.textContent = "";
+  const table = document.createElement("table");
+  table.style.cssText = "border-collapse:collapse;font-size:12px;width:100%;font-family:Consolas,monospace;";
+  const rows = [
+    ["Point of Control (POC)", pocPrice.toFixed(dp), "#FFFF00"],
+    ["Value Area High", vaHigh.toFixed(dp), "#00FFFF"],
+    ["Value Area Low", vaLow.toFixed(dp), "#00FFFF"],
+    ["Value Area Width", (vaHigh - vaLow).toFixed(dp), "#ccc"],
+    ["Total Volume", totalVolume.toLocaleString(), "#ccc"],
+    ["Bars Analyzed", data.length.toString(), "#888"],
+    ["Bins", NUM_BINS.toString(), "#888"],
+  ];
+  for (const [label, value, color] of rows) {
+    const tr = document.createElement("tr");
+    const tdL = document.createElement("td");
+    tdL.style.cssText = "padding:6px 10px;border-bottom:1px solid #1a1a2e;color:#888;";
+    tdL.textContent = label;
+    const tdV = document.createElement("td");
+    tdV.style.cssText = `padding:6px 10px;border-bottom:1px solid #1a1a2e;color:${color};text-align:right;font-weight:bold;`;
+    tdV.textContent = value;
+    tr.appendChild(tdL);
+    tr.appendChild(tdV);
+    table.appendChild(tr);
+  }
+  win.appendElement(table);
+}
+
+// ══════════════════════════════════════════════════════════════
+// PIVOTS — Auto Pivot Points (Classic Floor Trader)
+// ══════════════════════════════════════════════════════════════
+async function cmdPivots() {
+  const cKey = getCacheKey(currentSymbol, "1Day");
+  let dailyBars = barCache[cKey] && barCache[cKey].data;
+  if (!dailyBars || dailyBars.length < 3) {
+    try {
+      const barsJson = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 10 });
+      dailyBars = JSON.parse(barsJson);
+      if (dailyBars && dailyBars.length > 0) barCache[cKey] = { data: dailyBars, timestamp: Date.now(), lastAccess: Date.now() };
+    } catch (e) { log(`PIVOTS: Failed to fetch daily bars: ${e}`, "warn"); return; }
+  }
+  if (!dailyBars || dailyBars.length < 2) { log("PIVOTS: Need at least 2 daily bars", "warn"); return; }
+  const prevBar = dailyBars[dailyBars.length - 2];
+  const H = prevBar.high, L = prevBar.low, C = prevBar.close;
+  const PP = (H + L + C) / 3;
+  const R1 = 2 * PP - L, S1 = 2 * PP - H;
+  const R2 = PP + (H - L), S2 = PP - (H - L);
+  const R3 = H + 2 * (PP - L), S3 = L - 2 * (H - PP);
+  const levels = [
+    { name: "R3", price: R3, color: "#f44336", lineStyle: 3 },
+    { name: "R2", price: R2, color: "#f44336", lineStyle: 2 },
+    { name: "R1", price: R1, color: "#f44336", lineStyle: 0 },
+    { name: "PP", price: PP, color: "#FFFFFF", lineStyle: 0 },
+    { name: "S1", price: S1, color: "#4caf50", lineStyle: 0 },
+    { name: "S2", price: S2, color: "#4caf50", lineStyle: 2 },
+    { name: "S3", price: S3, color: "#4caf50", lineStyle: 3 },
+  ];
+  if (!currentChartData || currentChartData.length < 2) { log("PIVOTS: No chart data loaded", "warn"); return; }
+  const startIdx = Math.max(0, currentChartData.length - 30);
+  const lineSegment = currentChartData.slice(startIdx);
+  const dp = lastPrice > 100 ? 2 : lastPrice > 1 ? 4 : 6;
+  for (const level of levels) {
+    const s = chart.addLineSeries({ color: level.color, lineWidth: level.name === "PP" ? 2 : 1, lineStyle: level.lineStyle, lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false, title: level.name });
+    s.setData(lineSegment.map(d => ({ time: d.time, value: level.price })));
+    indicatorSeries[`pivot_${level.name}`] = s;
+  }
+  log(`PIVOTS: PP ${PP.toFixed(dp)}, R1-R3 ${R1.toFixed(dp)}/${R2.toFixed(dp)}/${R3.toFixed(dp)}, S1-S3 ${S1.toFixed(dp)}/${S2.toFixed(dp)}/${S3.toFixed(dp)}`, "ok");
+  const win = createWindow({ title: `${currentSymbol} \u2014 Pivot Points`, width: 420, height: 350 });
+  win.contentElement.textContent = "";
+  const table = document.createElement("table");
+  table.style.cssText = "border-collapse:collapse;font-size:11px;width:100%;font-family:Consolas,monospace;";
+  const thead = document.createElement("tr");
+  for (const hdr of ["Level", "Price", "Distance"]) {
+    const th = document.createElement("td");
+    th.style.cssText = "padding:5px 10px;border-bottom:1px solid #333;color:#888;font-weight:bold;";
+    th.textContent = hdr;
+    thead.appendChild(th);
+  }
+  table.appendChild(thead);
+  for (const level of levels) {
+    const tr = document.createElement("tr");
+    const dist = lastPrice > 0 ? ((level.price - lastPrice) / lastPrice * 100) : 0;
+    const cells = [
+      { text: level.name, color: level.color },
+      { text: level.price.toFixed(dp), color: level.color },
+      { text: `${dist >= 0 ? "+" : ""}${dist.toFixed(2)}%`, color: dist >= 0 ? "#4caf50" : "#f44336" },
+    ];
+    for (const cell of cells) {
+      const td = document.createElement("td");
+      td.style.cssText = `padding:5px 10px;border-bottom:1px solid #1a1a2e;color:${cell.color};`;
+      td.textContent = cell.text;
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+  const note = document.createElement("tr");
+  const noteCell = document.createElement("td");
+  noteCell.colSpan = 3;
+  noteCell.style.cssText = "padding:8px 10px;color:#555;font-size:9px;";
+  noteCell.textContent = `Based on previous daily bar: H=${H.toFixed(dp)} L=${L.toFixed(dp)} C=${C.toFixed(dp)}`;
+  note.appendChild(noteCell);
+  table.appendChild(note);
+  win.appendElement(table);
+}
+
+// ══════════════════════════════════════════════════════════════
+// PERF — Symbol Performance Card
+// ══════════════════════════════════════════════════════════════
+async function cmdPerf() {
+  const cKey = getCacheKey(currentSymbol, "1Day");
+  let dailyBars = barCache[cKey] && barCache[cKey].data;
+  if (!dailyBars || dailyBars.length < 30) {
+    try {
+      const barsJson = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 500 });
+      dailyBars = JSON.parse(barsJson);
+      if (dailyBars && dailyBars.length > 0) barCache[cKey] = { data: dailyBars, timestamp: Date.now(), lastAccess: Date.now() };
+    } catch (e) { log(`PERF: Failed to fetch daily bars: ${e}`, "warn"); return; }
+  }
+  if (!dailyBars || dailyBars.length < 2) { log("PERF: Need at least 2 daily bars", "warn"); return; }
+  const closes = dailyBars.map(b => b.close);
+  const current = closes[closes.length - 1];
+  const dp = current > 100 ? 2 : current > 1 ? 4 : 6;
+  const calcReturn = (periods) => {
+    if (closes.length <= periods) return null;
+    const prev = closes[closes.length - 1 - periods];
+    return ((current - prev) / prev) * 100;
+  };
+  const now = new Date();
+  const yearStart = new Date(now.getFullYear(), 0, 1).getTime() / 1000;
+  let ytdReturn = null;
+  for (let i = 0; i < dailyBars.length; i++) {
+    if (dailyBars[i].time >= yearStart) { ytdReturn = ((current - dailyBars[i].close) / dailyBars[i].close) * 100; break; }
+  }
+  const returns = [
+    { label: "1D", value: calcReturn(1) },
+    { label: "1W", value: calcReturn(5) },
+    { label: "1M", value: calcReturn(21) },
+    { label: "3M", value: calcReturn(63) },
+    { label: "6M", value: calcReturn(126) },
+    { label: "1Y", value: calcReturn(252) },
+    { label: "YTD", value: ytdReturn },
+  ];
+  const yearBars = dailyBars.slice(-252);
+  let high52 = -Infinity, low52 = Infinity;
+  for (const bar of yearBars) { if (bar.high > high52) high52 = bar.high; if (bar.low < low52) low52 = bar.low; }
+  const distFromHigh = ((current - high52) / high52) * 100;
+  const recentBars = dailyBars.slice(-20);
+  let avgVol = 0;
+  for (const bar of recentBars) avgVol += (bar.volume || 0);
+  avgVol = recentBars.length > 0 ? avgVol / recentBars.length : 0;
+  const win = createWindow({ title: `${currentSymbol} \u2014 Performance Card`, width: 420, height: 440 });
+  win.contentElement.textContent = "";
+  const container = document.createElement("div");
+  container.style.cssText = "font-family:Consolas,monospace;padding:4px;";
+  const header = document.createElement("div");
+  header.style.cssText = "text-align:center;margin-bottom:12px;";
+  header.innerHTML = `<div style="font-size:18px;font-weight:bold;color:#fff;">${currentSymbol}</div><div style="font-size:22px;color:#00e5ff;margin-top:4px;">$${current.toFixed(dp)}</div>`;
+  container.appendChild(header);
+  const gridTitle = document.createElement("div");
+  gridTitle.style.cssText = "color:#888;font-size:10px;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;";
+  gridTitle.textContent = "Returns";
+  container.appendChild(gridTitle);
+  const grid = document.createElement("div");
+  grid.style.cssText = "display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px;";
+  for (const r of returns) {
+    const cell = document.createElement("div");
+    cell.style.cssText = "background:#1a1a2e;border-radius:4px;padding:8px 4px;text-align:center;";
+    const labelDiv = document.createElement("div");
+    labelDiv.style.cssText = "color:#666;font-size:9px;margin-bottom:2px;";
+    labelDiv.textContent = r.label;
+    const valDiv = document.createElement("div");
+    const val = r.value;
+    const color = val === null ? "#555" : val >= 0 ? "#4caf50" : "#f44336";
+    const arrow = val === null ? "" : val >= 0 ? "\u25B2 " : "\u25BC ";
+    valDiv.style.cssText = `color:${color};font-size:12px;font-weight:bold;`;
+    valDiv.textContent = val === null ? "N/A" : `${arrow}${val.toFixed(2)}%`;
+    cell.appendChild(labelDiv);
+    cell.appendChild(valDiv);
+    grid.appendChild(cell);
+  }
+  container.appendChild(grid);
+  const rangeTitle = document.createElement("div");
+  rangeTitle.style.cssText = "color:#888;font-size:10px;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;";
+  rangeTitle.textContent = "52-Week Range";
+  container.appendChild(rangeTitle);
+  const rangeContainer = document.createElement("div");
+  rangeContainer.style.cssText = "background:#1a1a2e;border-radius:4px;padding:10px;margin-bottom:14px;";
+  const rangeLabels = document.createElement("div");
+  rangeLabels.style.cssText = "display:flex;justify-content:space-between;font-size:10px;margin-bottom:4px;";
+  rangeLabels.innerHTML = `<span style="color:#f44336;">$${low52.toFixed(dp)}</span><span style="color:#4caf50;">$${high52.toFixed(dp)}</span>`;
+  rangeContainer.appendChild(rangeLabels);
+  const barOuter = document.createElement("div");
+  barOuter.style.cssText = "height:8px;background:#333;border-radius:4px;position:relative;";
+  const pct = high52 > low52 ? ((current - low52) / (high52 - low52)) * 100 : 50;
+  const barInner = document.createElement("div");
+  barInner.style.cssText = "height:100%;background:linear-gradient(90deg,#f44336,#ffeb3b,#4caf50);border-radius:4px;width:100%;";
+  barOuter.appendChild(barInner);
+  const mkr = document.createElement("div");
+  mkr.style.cssText = `position:absolute;top:-3px;left:${Math.min(Math.max(pct, 2), 98)}%;width:2px;height:14px;background:#fff;border-radius:1px;transform:translateX(-50%);`;
+  barOuter.appendChild(mkr);
+  rangeContainer.appendChild(barOuter);
+  const distLabel = document.createElement("div");
+  distLabel.style.cssText = "text-align:center;font-size:10px;color:#888;margin-top:4px;";
+  distLabel.textContent = `${distFromHigh.toFixed(2)}% from 52w high`;
+  rangeContainer.appendChild(distLabel);
+  container.appendChild(rangeContainer);
+  const volTitle = document.createElement("div");
+  volTitle.style.cssText = "color:#888;font-size:10px;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;";
+  volTitle.textContent = "Volume";
+  container.appendChild(volTitle);
+  const volRow = document.createElement("div");
+  volRow.style.cssText = "background:#1a1a2e;border-radius:4px;padding:10px;display:flex;justify-content:space-between;";
+  const fmtVol = (v) => v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K" : Math.round(v).toString();
+  const latestVol = dailyBars[dailyBars.length - 1].volume || 0;
+  volRow.innerHTML = `<div><div style="color:#666;font-size:9px;">Avg Daily (20d)</div><div style="color:#ccc;font-size:13px;font-weight:bold;">${fmtVol(avgVol)}</div></div><div style="text-align:right;"><div style="color:#666;font-size:9px;">Latest Volume</div><div style="color:#ccc;font-size:13px;font-weight:bold;">${fmtVol(latestVol)}</div></div>`;
+  container.appendChild(volRow);
+  win.appendElement(container);
+  log(`PERF: ${currentSymbol} card loaded (${dailyBars.length} daily bars)`, "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// VWAP+ — Anchored VWAP with Standard Deviation Bands
+// ══════════════════════════════════════════════════════════════
+async function cmdAnchoredVWAP() {
+  if (!currentChartData || currentChartData.length < 5) { log("VWAP+: Need at least 5 bars loaded", "warn"); return; }
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset);
+  const defaultAnchor = monday.toISOString().substring(0, 10);
+  const anchorStr = prompt("Anchor date for VWAP (YYYY-MM-DD):", defaultAnchor);
+  if (!anchorStr) return;
+  const anchorDate = new Date(anchorStr + "T00:00:00Z");
+  if (isNaN(anchorDate.getTime())) { log("VWAP+: Invalid date format", "warn"); return; }
+  const anchorTs = Math.floor(anchorDate.getTime() / 1000);
+  let startIdx = -1;
+  for (let i = 0; i < currentChartData.length; i++) {
+    if (currentChartData[i].time >= anchorTs) { startIdx = i; break; }
+  }
+  if (startIdx < 0) { log("VWAP+: No bars found at or after anchor date", "warn"); return; }
+  const bars = currentChartData.slice(startIdx);
+  if (bars.length < 2) { log("VWAP+: Need at least 2 bars from anchor date", "warn"); return; }
+  const vwapData = [], sd1Upper = [], sd1Lower = [], sd2Upper = [], sd2Lower = [];
+  let cumPV = 0, cumVol = 0, cumPV2 = 0;
+  for (const bar of bars) {
+    const typPrice = (bar.high + bar.low + bar.close) / 3;
+    const vol = bar.volume || 0;
+    if (vol === 0) continue;
+    cumPV += typPrice * vol;
+    cumVol += vol;
+    cumPV2 += typPrice * typPrice * vol;
+    const vwap = cumPV / cumVol;
+    const variance = Math.max(0, cumPV2 / cumVol - vwap * vwap);
+    const sd = Math.sqrt(variance);
+    vwapData.push({ time: bar.time, value: vwap });
+    sd1Upper.push({ time: bar.time, value: vwap + sd });
+    sd1Lower.push({ time: bar.time, value: vwap - sd });
+    sd2Upper.push({ time: bar.time, value: vwap + 2 * sd });
+    sd2Lower.push({ time: bar.time, value: vwap - 2 * sd });
+  }
+  if (vwapData.length < 2) { log("VWAP+: Not enough volume data from anchor", "warn"); return; }
+  const sVwap = chart.addLineSeries({ color: "#FF00FF", lineWidth: 2, lineStyle: 0, lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false, title: "VWAP" });
+  sVwap.setData(vwapData);
+  indicatorSeries["avwap"] = sVwap;
+  const sSD1U = chart.addLineSeries({ color: "#FF00FF", lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+  sSD1U.setData(sd1Upper);
+  indicatorSeries["avwap_sd1u"] = sSD1U;
+  const sSD1L = chart.addLineSeries({ color: "#FF00FF", lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+  sSD1L.setData(sd1Lower);
+  indicatorSeries["avwap_sd1l"] = sSD1L;
+  const sSD2U = chart.addLineSeries({ color: "#FF00FF", lineWidth: 1, lineStyle: 3, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+  sSD2U.setData(sd2Upper);
+  indicatorSeries["avwap_sd2u"] = sSD2U;
+  const sSD2L = chart.addLineSeries({ color: "#FF00FF", lineWidth: 1, lineStyle: 3, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+  sSD2L.setData(sd2Lower);
+  indicatorSeries["avwap_sd2l"] = sSD2L;
+  const dp = lastPrice > 100 ? 2 : lastPrice > 1 ? 4 : 6;
+  const lastVwap = vwapData[vwapData.length - 1].value;
+  log(`VWAP+: Anchored from ${anchorStr}, VWAP=${lastVwap.toFixed(dp)}, ${vwapData.length} bars`, "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// MARKETPROFILE — Market Profile / TPO Chart
+// ══════════════════════════════════════════════════════════════
+async function cmdMarketProfile() {
+  const sym = currentSymbol || "SPY";
+  const win = createWindow({ title: `${sym} — Market Profile / TPO`, width: 700, height: 550 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Building Market Profile...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+  try {
+    let bars = null;
+    const key30 = `${sym}:30Min`;
+    const key60 = `${sym}:1Hour`;
+    if (barCache[key30] && barCache[key30].data && barCache[key30].data.length > 20) {
+      bars = barCache[key30].data;
+      barCache[key30].lastAccess = Date.now();
+    } else if (barCache[key60] && barCache[key60].data && barCache[key60].data.length > 20) {
+      bars = barCache[key60].data;
+      barCache[key60].lastAccess = Date.now();
+    } else {
+      try {
+        const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Hour", limit: 500 });
+        bars = JSON.parse(barsJson);
+        if (bars.length > 0) barCache[key60] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+      } catch (_) {}
+    }
+    if (!bars || bars.length < 10) { win.contentElement.textContent = ""; win.setContent("Not enough intraday bar data for Market Profile."); return; }
+    const dayMap = {};
+    for (const b of bars) {
+      const d = typeof b.time === "number" ? new Date(b.time * 1000).toISOString().slice(0, 10) : String(b.time).slice(0, 10);
+      if (!dayMap[d]) dayMap[d] = [];
+      dayMap[d].push(b);
+    }
+    const days = Object.keys(dayMap).sort();
+    let globalHigh = -Infinity, globalLow = Infinity;
+    for (const b of bars) { if (b.high > globalHigh) globalHigh = b.high; if (b.low < globalLow) globalLow = b.low; }
+    const NUM_BINS = 40;
+    const binSize = (globalHigh - globalLow) / NUM_BINS;
+    if (binSize <= 0) { win.contentElement.textContent = ""; win.setContent("Price range too narrow for profile."); return; }
+    const binPrices = [];
+    for (let i = 0; i < NUM_BINS; i++) binPrices.push(globalLow + (i + 0.5) * binSize);
+    const tpoGrid = Array.from({ length: NUM_BINS }, () => []);
+    const tpoCounts = new Array(NUM_BINS).fill(0);
+    const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    const todayKey = days[days.length - 1];
+    for (let di = 0; di < days.length; di++) {
+      const dayBars = dayMap[days[di]];
+      for (let pi = 0; pi < dayBars.length && pi < LETTERS.length; pi++) {
+        const b = dayBars[pi];
+        const letter = LETTERS[pi];
+        const lowBin = Math.max(0, Math.floor((b.low - globalLow) / binSize));
+        const highBin = Math.min(NUM_BINS - 1, Math.floor((b.high - globalLow) / binSize));
+        for (let bin = lowBin; bin <= highBin; bin++) { tpoGrid[bin].push({ letter, dayIdx: di, isToday: days[di] === todayKey }); tpoCounts[bin]++; }
+      }
+    }
+    let pocBin = 0, pocCount = 0;
+    for (let i = 0; i < NUM_BINS; i++) { if (tpoCounts[i] > pocCount) { pocCount = tpoCounts[i]; pocBin = i; } }
+    const pocPrice = binPrices[pocBin];
+    const totalTPOs = tpoCounts.reduce((a, b) => a + b, 0);
+    const vaTarget = Math.floor(totalTPOs * 0.7);
+    let vaCount = tpoCounts[pocBin];
+    let vaLow = pocBin, vaHigh = pocBin;
+    while (vaCount < vaTarget) {
+      const upBin = vaHigh + 1 < NUM_BINS ? vaHigh + 1 : -1;
+      const dnBin = vaLow - 1 >= 0 ? vaLow - 1 : -1;
+      const upVal = upBin >= 0 ? tpoCounts[upBin] : -1;
+      const dnVal = dnBin >= 0 ? tpoCounts[dnBin] : -1;
+      if (upVal < 0 && dnVal < 0) break;
+      if (upVal >= dnVal) { vaHigh = upBin; vaCount += upVal; } else { vaLow = dnBin; vaCount += dnVal; }
+    }
+    const vaHighPrice = binPrices[vaHigh] + binSize / 2;
+    const vaLowPrice = binPrices[vaLow] - binSize / 2;
+    const todayBars = dayMap[todayKey] || [];
+    let ibHigh = -Infinity, ibLow = Infinity;
+    const ibPeriods = Math.min(2, todayBars.length);
+    for (let i = 0; i < ibPeriods; i++) { if (todayBars[i].high > ibHigh) ibHigh = todayBars[i].high; if (todayBars[i].low < ibLow) ibLow = todayBars[i].low; }
+    let todayHigh = -Infinity, todayLow = Infinity;
+    for (const b of todayBars) { if (b.high > todayHigh) todayHigh = b.high; if (b.low < todayLow) todayLow = b.low; }
+    const priceSample = bars[bars.length - 1].close;
+    const priceDecimals = priceSample > 100 ? 2 : priceSample > 1 ? 4 : 6;
+    win.contentElement.textContent = "";
+    const mpContainer = document.createElement("div");
+    mpContainer.style.cssText = "padding:12px;font-family:monospace;font-size:12px;color:#ddd;overflow:auto;height:100%;";
+    const mpHeader = document.createElement("div");
+    mpHeader.style.cssText = "margin-bottom:12px;line-height:1.6;";
+    mpHeader.innerHTML =
+      `<div style="font-size:16px;font-weight:bold;color:#ffd700;margin-bottom:8px;">Market Profile — ${sym}</div>` +
+      `<span style="color:#ffd700;">POC: ${pocPrice.toFixed(priceDecimals)}</span>` +
+      `<span style="color:#888;margin:0 12px;">|</span>` +
+      `<span style="color:#00e5ff;">VA High: ${vaHighPrice.toFixed(priceDecimals)}</span>` +
+      `<span style="color:#888;margin:0 12px;">|</span>` +
+      `<span style="color:#00e5ff;">VA Low: ${vaLowPrice.toFixed(priceDecimals)}</span>` +
+      (todayHigh > -Infinity ? `<span style="color:#888;margin:0 12px;">|</span><span style="color:#aaa;">Today: ${todayLow.toFixed(priceDecimals)} — ${todayHigh.toFixed(priceDecimals)}</span>` : "") +
+      (ibHigh > -Infinity ? `<br><span style="color:#c0c;">IB Range: ${ibLow.toFixed(priceDecimals)} — ${ibHigh.toFixed(priceDecimals)}</span>` : "") +
+      `<br><span style="color:#666;">Sessions: ${days.length} days, ${bars.length} bars, ${totalTPOs} TPOs</span>`;
+    mpContainer.appendChild(mpHeader);
+    const pre = document.createElement("pre");
+    pre.style.cssText = "margin:0;line-height:1.3;font-size:11px;white-space:pre;";
+    for (let bin = NUM_BINS - 1; bin >= 0; bin--) {
+      const price = binPrices[bin].toFixed(priceDecimals);
+      const pricePad = price.padStart(priceDecimals + 8);
+      const isPOC = bin === pocBin;
+      const isVAEdge = bin === vaHigh || bin === vaLow;
+      const isVA = bin >= vaLow && bin <= vaHigh;
+      const priceSpan = document.createElement("span");
+      priceSpan.style.color = isPOC ? "#ffd700" : isVAEdge ? "#00e5ff" : isVA ? "#88aacc" : "#888";
+      priceSpan.textContent = pricePad + " | ";
+      pre.appendChild(priceSpan);
+      for (const tpo of tpoGrid[bin]) {
+        const ls = document.createElement("span");
+        ls.style.color = tpo.isToday ? "#4caf50" : "#b0b0b0";
+        if (isPOC) ls.style.background = "rgba(255,215,0,0.15)";
+        ls.textContent = tpo.letter;
+        pre.appendChild(ls);
+      }
+      let tag = "";
+      if (isPOC) tag = " << POC";
+      else if (bin === vaHigh) tag = " VH";
+      else if (bin === vaLow) tag = " VL";
+      if (tag) { const tagSpan = document.createElement("span"); tagSpan.style.color = isPOC ? "#ffd700" : "#00e5ff"; tagSpan.textContent = tag; pre.appendChild(tagSpan); }
+      pre.appendChild(document.createTextNode("\n"));
+    }
+    mpContainer.appendChild(pre);
+    const legend = document.createElement("div");
+    legend.style.cssText = "margin-top:12px;color:#666;font-size:10px;";
+    legend.innerHTML = '<span style="color:#4caf50;">Green</span> = today\'s session. <span style="color:#ffd700;">Yellow</span> = POC (Point of Control). <span style="color:#00e5ff;">Cyan</span> = Value Area edges. Letters A,B,C... = 30-min periods within each day.';
+    mpContainer.appendChild(legend);
+    win.appendElement(mpContainer);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to build Market Profile: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// BACKTEST+ — Visual Strategy Builder (No Code)
+// ══════════════════════════════════════════════════════════════
+function cmdBacktestPlus() {
+  const sym = currentSymbol || "SPY";
+  const win = createWindow({ title: `${sym} — Visual Strategy Builder`, width: 750, height: 620 });
+  win.contentElement.textContent = "";
+  const bpContainer = document.createElement("div");
+  bpContainer.style.cssText = "padding:12px;font-family:Consolas,monospace;font-size:12px;color:#ddd;overflow-y:auto;height:100%;";
+  function bpSelect(label, options, defaultVal) {
+    const wrap = document.createElement("div"); wrap.style.cssText = "display:inline-block;margin-right:8px;margin-bottom:6px;";
+    const lbl = document.createElement("label"); lbl.style.cssText = "color:#888;font-size:10px;display:block;margin-bottom:2px;"; lbl.textContent = label; wrap.appendChild(lbl);
+    const sel = document.createElement("select"); sel.style.cssText = "background:#1a1a2e;color:#ddd;border:1px solid #444;padding:4px 6px;font-size:11px;font-family:inherit;";
+    for (const o of options) { const opt = document.createElement("option"); opt.value = typeof o === "object" ? o.value : o; opt.textContent = typeof o === "object" ? o.label : o; if ((typeof o === "object" ? o.value : o) === defaultVal) opt.selected = true; sel.appendChild(opt); }
+    wrap.appendChild(sel); return { el: wrap, sel };
+  }
+  function bpInput(label, value, width) {
+    const wrap = document.createElement("div"); wrap.style.cssText = "display:inline-block;margin-right:8px;margin-bottom:6px;";
+    const lbl = document.createElement("label"); lbl.style.cssText = "color:#888;font-size:10px;display:block;margin-bottom:2px;"; lbl.textContent = label; wrap.appendChild(lbl);
+    const inp = document.createElement("input"); inp.type = "text"; inp.value = value; inp.style.cssText = `background:#1a1a2e;color:#ddd;border:1px solid #444;padding:4px 6px;font-size:11px;font-family:inherit;width:${width || "60px"};`; wrap.appendChild(inp);
+    return { el: wrap, inp };
+  }
+  const bpIndicators = [{ value: "fisher", label: "Fisher Transform" }, { value: "rsi", label: "RSI (14)" }, { value: "kama_slope", label: "KAMA Slope" }, { value: "price_vs_sma", label: "Price vs SMA" }];
+  const bpConditions = [{ value: "crosses_above", label: "crosses above" }, { value: "crosses_below", label: "crosses below" }, { value: "is_above", label: "is above" }, { value: "is_below", label: "is below" }];
+  // Entry
+  const entryTitle = document.createElement("div"); entryTitle.style.cssText = "font-size:14px;font-weight:bold;color:#4caf50;margin-bottom:8px;"; entryTitle.textContent = "Entry Conditions"; bpContainer.appendChild(entryTitle);
+  const entryRow1 = document.createElement("div");
+  const e1Ind = bpSelect("Indicator 1", bpIndicators, "fisher"); const e1Cond = bpSelect("Condition", bpConditions, "crosses_above"); const e1Val = bpInput("Value", "0");
+  entryRow1.appendChild(e1Ind.el); entryRow1.appendChild(e1Cond.el); entryRow1.appendChild(e1Val.el); bpContainer.appendChild(entryRow1);
+  const logicRow = document.createElement("div"); logicRow.style.cssText = "margin:4px 0 8px;";
+  const logicSel = bpSelect("Logic", ["AND", "OR"], "AND"); logicRow.appendChild(logicSel.el); bpContainer.appendChild(logicRow);
+  const entryRow2 = document.createElement("div");
+  const e2Ind = bpSelect("Indicator 2 (optional)", [{ value: "none", label: "(none)" }, ...bpIndicators], "none"); const e2Cond = bpSelect("Condition", bpConditions, "is_above"); const e2Val = bpInput("Value", "50");
+  entryRow2.appendChild(e2Ind.el); entryRow2.appendChild(e2Cond.el); entryRow2.appendChild(e2Val.el); bpContainer.appendChild(entryRow2);
+  // Exit
+  const exitTitle = document.createElement("div"); exitTitle.style.cssText = "font-size:14px;font-weight:bold;color:#f44336;margin:16px 0 8px;"; exitTitle.textContent = "Exit Conditions"; bpContainer.appendChild(exitTitle);
+  const exitRow = document.createElement("div");
+  const exitType = bpSelect("Exit Method", [{ value: "indicator", label: "Indicator condition" }, { value: "fixed_bars", label: "Hold for N bars" }, { value: "trailing_stop", label: "Trailing stop (%)" }], "indicator");
+  exitRow.appendChild(exitType.el); bpContainer.appendChild(exitRow);
+  const exitIndRow = document.createElement("div");
+  const exInd = bpSelect("Indicator", bpIndicators, "fisher"); const exCond = bpSelect("Condition", bpConditions, "crosses_below"); const exVal = bpInput("Value", "0");
+  exitIndRow.appendChild(exInd.el); exitIndRow.appendChild(exCond.el); exitIndRow.appendChild(exVal.el); bpContainer.appendChild(exitIndRow);
+  const exitParamRow = document.createElement("div"); exitParamRow.style.display = "none";
+  const exitParamInput = bpInput("Value", "10", "80px"); exitParamRow.appendChild(exitParamInput.el); bpContainer.appendChild(exitParamRow);
+  exitType.sel.addEventListener("change", () => { const v = exitType.sel.value; exitIndRow.style.display = v === "indicator" ? "" : "none"; exitParamRow.style.display = v !== "indicator" ? "" : "none"; if (v === "fixed_bars") exitParamInput.inp.value = "10"; else if (v === "trailing_stop") exitParamInput.inp.value = "2"; });
+  // Settings
+  const settingsTitle = document.createElement("div"); settingsTitle.style.cssText = "font-size:14px;font-weight:bold;color:#ff9800;margin:16px 0 8px;"; settingsTitle.textContent = "Settings"; bpContainer.appendChild(settingsTitle);
+  const settingsRow = document.createElement("div");
+  const sEquity = bpInput("Initial Equity ($)", "10000", "80px"); const sPosSize = bpInput("Position Size (%)", "10", "60px"); const sCommission = bpInput("Commission ($)", "1", "60px");
+  settingsRow.appendChild(sEquity.el); settingsRow.appendChild(sPosSize.el); settingsRow.appendChild(sCommission.el); bpContainer.appendChild(settingsRow);
+  const btnRow = document.createElement("div"); btnRow.style.cssText = "margin:16px 0 12px;";
+  const runBtn = document.createElement("button"); runBtn.textContent = "Run Backtest"; runBtn.style.cssText = "background:#3a0f60;color:#c8f;border:1px solid #555;padding:8px 20px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:bold;";
+  btnRow.appendChild(runBtn); bpContainer.appendChild(btnRow);
+  const resultsArea = document.createElement("div"); bpContainer.appendChild(resultsArea);
+  win.appendElement(bpContainer);
+  // Indicator helpers
+  function bpGetSeries(name, data) {
+    if (name === "fisher") { const f = calcEhlersFisher(data, 32); const m = {}; for (const pt of f.fisher) m[pt.time] = pt.value; return m; }
+    if (name === "rsi") { const r = calcRSI(data, 14); const m = {}; for (const pt of r) m[pt.time] = pt.value; return m; }
+    if (name === "kama_slope") { const k = calcKAMA(data, 10); const m = {}; for (let i = 1; i < k.length; i++) m[k[i].time] = k[i].value - k[i - 1].value; return m; }
+    if (name === "price_vs_sma") { const sma = calcSMA(data, 50); const sm = {}; for (const pt of sma) sm[pt.time] = pt.value; const m = {}; for (const bar of data) { if (sm[bar.time] !== undefined) m[bar.time] = bar.close - sm[bar.time]; } return m; }
+    return {};
+  }
+  function bpCheckCond(condType, curVal, prevVal, threshold) {
+    if (curVal === undefined || prevVal === undefined) return false;
+    const thr = parseFloat(threshold) || 0;
+    if (condType === "crosses_above") return prevVal <= thr && curVal > thr;
+    if (condType === "crosses_below") return prevVal >= thr && curVal < thr;
+    if (condType === "is_above") return curVal > thr;
+    if (condType === "is_below") return curVal < thr;
+    return false;
+  }
+  runBtn.addEventListener("click", () => {
+    const data = currentChartData;
+    if (!data || data.length < 60) { resultsArea.textContent = "Need at least 60 bars loaded on the chart."; return; }
+    runBtn.disabled = true; runBtn.textContent = "Running..."; resultsArea.textContent = "";
+    const equity0 = parseFloat(sEquity.inp.value) || 10000;
+    const posPct = (parseFloat(sPosSize.inp.value) || 10) / 100;
+    const commission = parseFloat(sCommission.inp.value) || 1;
+    const ind1Map = bpGetSeries(e1Ind.sel.value, data);
+    const ind2Name = e2Ind.sel.value;
+    const ind2Map = ind2Name !== "none" ? bpGetSeries(ind2Name, data) : null;
+    const exIndMap = exitType.sel.value === "indicator" ? bpGetSeries(exInd.sel.value, data) : null;
+    const logic = logicSel.sel.value;
+    const exitMethod = exitType.sel.value;
+    const exitParamVal = parseFloat(exitParamInput.inp.value) || 10;
+    const trades = []; let equity = equity0; let inTrade = false, entryPrice = 0, entryIdx = 0, peakPrice = 0;
+    const equityCurve = [{ idx: 0, equity }];
+    for (let i = 1; i < data.length; i++) {
+      const bar = data[i]; const prevBar = data[i - 1]; const t = bar.time; const pt = prevBar.time;
+      if (!inTrade) {
+        const c1 = bpCheckCond(e1Cond.sel.value, ind1Map[t], ind1Map[pt], e1Val.inp.value);
+        let enter = c1;
+        if (ind2Map) { const c2 = bpCheckCond(e2Cond.sel.value, ind2Map[t], ind2Map[pt], e2Val.inp.value); enter = logic === "AND" ? (c1 && c2) : (c1 || c2); }
+        if (enter) { inTrade = true; entryPrice = bar.close; entryIdx = i; peakPrice = bar.close; equity -= commission; }
+      } else {
+        if (bar.high > peakPrice) peakPrice = bar.high;
+        let doExit = false;
+        if (exitMethod === "indicator") { doExit = bpCheckCond(exCond.sel.value, exIndMap[t], exIndMap[pt], exVal.inp.value); }
+        else if (exitMethod === "fixed_bars") { doExit = (i - entryIdx) >= exitParamVal; }
+        else if (exitMethod === "trailing_stop") { doExit = bar.close <= peakPrice * (1 - exitParamVal / 100); }
+        if (doExit || i === data.length - 1) {
+          const exitPrice = bar.close; const shares = Math.floor((equity * posPct) / entryPrice) || 1;
+          const pnl = (exitPrice - entryPrice) * shares - commission; equity += pnl;
+          trades.push({ entryIdx, exitIdx: i, entryTime: data[entryIdx].time, exitTime: bar.time, entryPrice, exitPrice, pnl, shares });
+          inTrade = false;
+        }
+      }
+      equityCurve.push({ idx: i, equity });
+    }
+    const totalTrades = trades.length; const wins = trades.filter(t => t.pnl > 0).length;
+    const winRate = totalTrades > 0 ? (wins / totalTrades * 100).toFixed(1) : "0.0";
+    const grossProfit = trades.filter(t => t.pnl > 0).reduce((s, t) => s + t.pnl, 0);
+    const grossLoss = Math.abs(trades.filter(t => t.pnl <= 0).reduce((s, t) => s + t.pnl, 0));
+    const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : "N/A";
+    const totalReturn = ((equity - equity0) / equity0 * 100).toFixed(2);
+    let peakEq = equity0, maxDD = 0;
+    for (const eqPt of equityCurve) { if (eqPt.equity > peakEq) peakEq = eqPt.equity; const dd = peakEq - eqPt.equity; if (dd > maxDD) maxDD = dd; }
+    const statsHtml = document.createElement("div"); statsHtml.style.cssText = "margin-bottom:12px;";
+    statsHtml.innerHTML =
+      `<div style="font-size:14px;font-weight:bold;color:#ffd700;margin-bottom:8px;">Results</div>` +
+      `<table style="border-collapse:collapse;font-size:12px;">` +
+      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Total Trades</td><td style="color:#ddd;">${totalTrades}</td></tr>` +
+      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Win Rate</td><td style="color:${parseFloat(winRate) >= 50 ? "#4caf50" : "#f44336"};">${winRate}%</td></tr>` +
+      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Profit Factor</td><td style="color:#ddd;">${profitFactor}</td></tr>` +
+      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Max Drawdown</td><td style="color:#f44336;">$${maxDD.toFixed(2)}</td></tr>` +
+      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Total Return</td><td style="color:${parseFloat(totalReturn) >= 0 ? "#4caf50" : "#f44336"};">${totalReturn}%</td></tr>` +
+      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Final Equity</td><td style="color:#ddd;">$${equity.toFixed(2)}</td></tr></table>`;
+    resultsArea.appendChild(statsHtml);
+    // Equity curve CSS bars
+    if (equityCurve.length > 1) {
+      const eqDiv = document.createElement("div"); eqDiv.style.cssText = "margin-bottom:12px;";
+      const eqLabel = document.createElement("div"); eqLabel.style.cssText = "color:#888;font-size:10px;margin-bottom:4px;"; eqLabel.textContent = "Equity Curve"; eqDiv.appendChild(eqLabel);
+      const chartDiv = document.createElement("div"); chartDiv.style.cssText = "display:flex;align-items:flex-end;height:80px;gap:0;background:#0a0a1a;border:1px solid #333;padding:4px;overflow:hidden;";
+      const minEq = Math.min(...equityCurve.map(e => e.equity)); const maxEq = Math.max(...equityCurve.map(e => e.equity)); const eqRange = maxEq - minEq || 1;
+      const step = Math.max(1, Math.floor(equityCurve.length / 200));
+      for (let i = 0; i < equityCurve.length; i += step) { const eqPt = equityCurve[i]; const h = Math.max(1, ((eqPt.equity - minEq) / eqRange) * 70); const cssBar = document.createElement("div"); cssBar.style.cssText = `flex:1;min-width:1px;max-width:4px;height:${h}px;background:${eqPt.equity >= equity0 ? "#4caf50" : "#f44336"};`; chartDiv.appendChild(cssBar); }
+      eqDiv.appendChild(chartDiv); resultsArea.appendChild(eqDiv);
+    }
+    // Trade list
+    if (trades.length > 0) {
+      const tlDiv = document.createElement("div"); tlDiv.style.cssText = "max-height:180px;overflow-y:auto;";
+      const tlLabel = document.createElement("div"); tlLabel.style.cssText = "color:#888;font-size:10px;margin-bottom:4px;"; tlLabel.textContent = `Trades (${trades.length})`; tlDiv.appendChild(tlLabel);
+      const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      const thead = document.createElement("tr");
+      for (const h of ["Entry Date", "Exit Date", "Side", "Entry$", "Exit$", "P&L"]) { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:3px 6px;border-bottom:1px solid #444;font-size:10px;"; th.textContent = h; thead.appendChild(th); }
+      tbl.appendChild(thead);
+      for (const trade of trades) {
+        const row = document.createElement("tr"); row.style.cssText = "border-bottom:1px solid #222;";
+        const entryDate = typeof trade.entryTime === "number" ? new Date(trade.entryTime * 1000).toISOString().slice(0, 10) : String(trade.entryTime).slice(0, 10);
+        const exitDate = typeof trade.exitTime === "number" ? new Date(trade.exitTime * 1000).toISOString().slice(0, 10) : String(trade.exitTime).slice(0, 10);
+        const pnlColor = trade.pnl >= 0 ? "#4caf50" : "#f44336";
+        for (const [val, style] of [[entryDate, ""], [exitDate, ""], ["Long", "color:#4caf50;"], [`$${trade.entryPrice.toFixed(2)}`, ""], [`$${trade.exitPrice.toFixed(2)}`, ""], [`$${trade.pnl.toFixed(2)}`, `color:${pnlColor};font-weight:bold;`]]) { const td = document.createElement("td"); td.style.cssText = `padding:3px 6px;${style}`; td.textContent = val; row.appendChild(td); }
+        tbl.appendChild(row);
+      }
+      tlDiv.appendChild(tbl); resultsArea.appendChild(tlDiv);
+    }
+    runBtn.disabled = false; runBtn.textContent = "Run Backtest";
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// FLOWMAP — Sector Rotation Flow Map
+// ══════════════════════════════════════════════════════════════
+async function cmdFlowMap() {
+  const SECTORS = [
+    { sym: "XLK", name: "Technology" }, { sym: "XLF", name: "Financials" }, { sym: "XLE", name: "Energy" },
+    { sym: "XLV", name: "Healthcare" }, { sym: "XLI", name: "Industrials" }, { sym: "XLC", name: "Communication" },
+    { sym: "XLRE", name: "Real Estate" }, { sym: "XLU", name: "Utilities" }, { sym: "XLB", name: "Materials" },
+    { sym: "XLP", name: "Cons. Staples" }, { sym: "XLY", name: "Cons. Discr." },
+  ];
+  const win = createWindow({ title: "Sector Rotation Flow Map", width: 650, height: 550 });
+  win.contentElement.textContent = "";
+  const fmLoading = document.createElement("div"); fmLoading.textContent = "Fetching sector data..."; fmLoading.style.cssText = "color:#888;padding:20px;"; win.appendElement(fmLoading);
+  try {
+    const results = [];
+    for (const sector of SECTORS) {
+      let bars = null;
+      const cacheKey = `${sector.sym}:1Day`;
+      if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length >= 12) { bars = barCache[cacheKey].data; barCache[cacheKey].lastAccess = Date.now(); }
+      else { try { const barsJson = await invoke("get_bars", { symbol: sector.sym, timeframe: "1Day", limit: 30 }); bars = JSON.parse(barsJson); if (bars.length > 0) barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } catch (_) {} }
+      if (!bars || bars.length < 12) { results.push({ ...sector, thisWeek: null, prevWeek: null, improving: null }); continue; }
+      const len = bars.length;
+      const thisWeekPct = bars[Math.max(0, len - 5)].open > 0 ? ((bars[len - 1].close - bars[Math.max(0, len - 5)].open) / bars[Math.max(0, len - 5)].open) * 100 : 0;
+      const prevWeekPct = bars[Math.max(0, len - 10)].open > 0 ? ((bars[Math.max(0, len - 6)].close - bars[Math.max(0, len - 10)].open) / bars[Math.max(0, len - 10)].open) * 100 : 0;
+      results.push({ ...sector, thisWeek: thisWeekPct, prevWeek: prevWeekPct, improving: thisWeekPct > prevWeekPct });
+    }
+    const valid = results.filter(r => r.thisWeek !== null);
+    if (valid.length === 0) { win.contentElement.textContent = ""; win.setContent("No sector data available. Connect to a broker first."); return; }
+    const maxMag = Math.max(...valid.map(r => Math.abs(r.thisWeek)), 1);
+    win.contentElement.textContent = "";
+    const fmContainer = document.createElement("div"); fmContainer.style.cssText = "padding:12px;font-family:Consolas,monospace;font-size:12px;color:#ddd;overflow-y:auto;height:100%;";
+    const fmHeader = document.createElement("div"); fmHeader.style.cssText = "font-size:16px;font-weight:bold;color:#ffd700;margin-bottom:12px;text-align:center;"; fmHeader.textContent = "Sector Rotation Flow Map"; fmContainer.appendChild(fmHeader);
+    const grid = document.createElement("div"); grid.style.cssText = "display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px;";
+    for (const r of results) {
+      const box = document.createElement("div");
+      const isValid = r.thisWeek !== null; const pct = isValid ? r.thisWeek : 0; const isImproving = r.improving;
+      const scale = isValid ? Math.min(Math.abs(pct) / maxMag, 1) : 0.3;
+      const borderColor = !isValid ? "#444" : isImproving ? "#4caf50" : "#f44336";
+      const bgColor = !isValid ? "#111" : isImproving ? "rgba(76,175,80,0.08)" : "rgba(244,67,54,0.08)";
+      box.style.cssText = `border:2px solid ${borderColor};background:${bgColor};border-radius:6px;padding:10px;text-align:center;min-height:${80 + scale * 50}px;display:flex;flex-direction:column;justify-content:center;align-items:center;`;
+      const symLabel = document.createElement("div"); symLabel.style.cssText = "font-weight:bold;font-size:14px;color:#fff;"; symLabel.textContent = r.sym; box.appendChild(symLabel);
+      const nameLabel = document.createElement("div"); nameLabel.style.cssText = "font-size:10px;color:#888;margin:2px 0 6px;"; nameLabel.textContent = r.name; box.appendChild(nameLabel);
+      if (isValid) {
+        const arrow = document.createElement("div"); arrow.style.cssText = `font-size:20px;color:${isImproving ? "#4caf50" : "#f44336"};`; arrow.textContent = isImproving ? "\u25B2" : "\u25BC"; box.appendChild(arrow);
+        const pctLabel = document.createElement("div"); pctLabel.style.cssText = `font-size:16px;font-weight:bold;color:${pct >= 0 ? "#4caf50" : "#f44336"};margin-top:4px;`; pctLabel.textContent = `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`; box.appendChild(pctLabel);
+        const flowLabel = document.createElement("div"); flowLabel.style.cssText = `font-size:9px;color:${isImproving ? "#4caf50" : "#f44336"};margin-top:2px;`; flowLabel.textContent = isImproving ? "IMPROVING" : "DETERIORATING"; box.appendChild(flowLabel);
+      } else { const na = document.createElement("div"); na.style.cssText = "color:#666;font-size:11px;"; na.textContent = "No data"; box.appendChild(na); }
+      grid.appendChild(box);
+    }
+    fmContainer.appendChild(grid);
+    const improvingSectors = valid.filter(r => r.improving); const deterioratingSectors = valid.filter(r => !r.improving);
+    const summary = document.createElement("div"); summary.style.cssText = "border-top:1px solid #333;padding-top:12px;line-height:1.8;";
+    if (improvingSectors.length > 0) { const inFlow = document.createElement("div"); inFlow.innerHTML = `<span style="color:#4caf50;font-weight:bold;">Money flowing INTO:</span> <span style="color:#ddd;">${improvingSectors.map(r => r.name).join(", ")}</span>`; summary.appendChild(inFlow); }
+    if (deterioratingSectors.length > 0) { const outFlow = document.createElement("div"); outFlow.innerHTML = `<span style="color:#f44336;font-weight:bold;">Money flowing OUT OF:</span> <span style="color:#ddd;">${deterioratingSectors.map(r => r.name).join(", ")}</span>`; summary.appendChild(outFlow); }
+    const sorted = [...valid].sort((a, b) => b.thisWeek - a.thisWeek);
+    const topPerf = document.createElement("div"); topPerf.style.cssText = "margin-top:8px;color:#888;font-size:11px;";
+    topPerf.innerHTML = `<span style="color:#4caf50;">Best:</span> ${sorted[0].sym} (${sorted[0].thisWeek >= 0 ? "+" : ""}${sorted[0].thisWeek.toFixed(2)}%)<span style="margin:0 12px;color:#444;">|</span><span style="color:#f44336;">Worst:</span> ${sorted[sorted.length - 1].sym} (${sorted[sorted.length - 1].thisWeek >= 0 ? "+" : ""}${sorted[sorted.length - 1].thisWeek.toFixed(2)}%)`;
+    summary.appendChild(topPerf); fmContainer.appendChild(summary); win.appendElement(fmContainer);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to build flow map: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// REGIME+ — Advanced Regime Detection Dashboard
+// ══════════════════════════════════════════════════════════════
+async function cmdRegimePlus() {
+  if (!currentSymbol) { log("Load a chart first", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} \u2014 Regime Detection`, width: 640, height: 580 });
+  win.contentElement.textContent = "";
+  const ld = document.createElement("div"); ld.textContent = "Computing regime indicators..."; ld.style.cssText = "color:#888;padding:20px;"; win.appendElement(ld);
+  try {
+    let data = null; const ck = `${currentSymbol}:1Day`; const cc = barCache[ck];
+    if (cc && cc.data && cc.data.length > 100) { data = cc.data; cc.lastAccess = Date.now(); }
+    if (!data) { const j = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 500 }); const b = JSON.parse(j); if (b.length > 100) { data = b; barCache[ck] = { data: b, timestamp: Date.now(), lastAccess: Date.now() }; } }
+    if (!data || data.length < 100) { win.contentElement.textContent = ""; win.setContent("Need at least 100 daily bars for regime analysis."); return; }
+    const closes = data.map(b => b.close); const n = closes.length;
+    const rets = []; for (let i = 1; i < n; i++) rets.push(closes[i] > 0 ? (closes[i] - closes[i-1]) / closes[i-1] : 0);
+    function rStd(a, w) { const o = []; for (let i = w-1; i < a.length; i++) { let s=0,q=0; for (let j=i-w+1;j<=i;j++){s+=a[j];q+=a[j]*a[j];} const m=s/w; o.push(Math.sqrt(Math.max(0,q/w-m*m))); } return o; }
+    const s20 = rStd(rets, 20), s60 = rStd(rets, 60);
+    const ls20 = s20.length > 0 ? s20[s20.length-1] : 0, as60 = s60.length > 0 ? s60[s60.length-1] : ls20;
+    const vr = as60 > 0 ? ls20 / as60 : 1;
+    let volR, volC; if (vr > 1.5) { volR = "HIGH VOL"; volC = "#f44336"; } else if (vr < 0.7) { volR = "LOW VOL"; volC = "#4caf50"; } else { volR = "NORMAL"; volC = "#ff9800"; }
+    const adx = calcADX(data, 14); const lADX = adx.adx.length > 0 ? adx.adx[adx.adx.length-1].value : 0;
+    let tR, tC; if (lADX > 25) { tR = "TRENDING"; tC = "#4caf50"; } else if (lADX >= 15) { tR = "TRANSITIONING"; tC = "#ff9800"; } else { tR = "RANGING"; tC = "#f44336"; }
+    function cHurst(ser) { const len = Math.min(ser.length, 100); if (len < 20) return 0.5; const seg = ser.slice(ser.length - len); const parts = [10,20,25,50]; const lRS = [], lN = [];
+      for (const sz of parts) { if (sz > len) continue; const nb = Math.floor(len / sz); if (nb < 1) continue; let tRS = 0, vb = 0;
+        for (let b = 0; b < nb; b++) { const bl = seg.slice(b*sz, (b+1)*sz); const mn = bl.reduce((a,v)=>a+v,0)/bl.length; const dv = bl.map(v=>v-mn); let cs=0,mx=-Infinity,mi=Infinity; for (const d of dv){cs+=d;if(cs>mx)mx=cs;if(cs<mi)mi=cs;} const R=mx-mi; let sq=0; for(const d of dv)sq+=d*d; const S=Math.sqrt(sq/bl.length); if(S>0){tRS+=R/S;vb++;} }
+        if (vb > 0) { lRS.push(Math.log(tRS/vb)); lN.push(Math.log(sz)); } }
+      if (lRS.length < 2) return 0.5; let sx=0,sy=0,sxy=0,sx2=0; for(let i=0;i<lRS.length;i++){sx+=lN[i];sy+=lRS[i];sxy+=lN[i]*lRS[i];sx2+=lN[i]*lN[i];} const m=lRS.length; const dn=m*sx2-sx*sx; return dn!==0?(m*sxy-sx*sy)/dn:0.5; }
+    const hurst = cHurst(rets);
+    let hR, hC; if (hurst > 0.55) { hR = "TRENDING"; hC = "#4caf50"; } else if (hurst < 0.45) { hR = "MEAN REVERTING"; hC = "#2196f3"; } else { hR = "RANDOM WALK"; hC = "#ff9800"; }
+    const roc20 = n > 20 ? (closes[n-1] - closes[n-21]) / closes[n-21] : 0;
+    const kd = calcKAMA(data, 10); let ks = 0; if (kd.length >= 5) ks = kd[kd.length-1].value - kd[kd.length-5].value;
+    let mR, mC; if (roc20 > 0 && ks > 0) { mR = "BULLISH MOMENTUM"; mC = "#4caf50"; } else if (roc20 < 0 && ks < 0) { mR = "BEARISH MOMENTUM"; mC = "#f44336"; } else { mR = "CHOPPY"; mC = "#ff9800"; }
+    const trans = []; const lb = Math.min(data.length - 61, 200); let pVR = "";
+    for (let i = Math.max(0, rets.length - lb); i < rets.length; i++) { if (i < 59) continue; const a = rStd(rets.slice(0,i+1),20), b = rStd(rets.slice(0,i+1),60); if(!a.length||!b.length)continue; const r=b[b.length-1]>0?a[a.length-1]/b[b.length-1]:1; const rg=r>1.5?"HIGH VOL":r<0.7?"LOW VOL":"NORMAL"; if(rg!==pVR&&pVR!==""){const bi=i+1;const bt=bi<data.length?data[bi].time:0;trans.push({time:bt,from:pVR,to:rg});} pVR=rg; }
+    const rTrans = trans.slice(-10);
+    let rec, recC; const tc = [tR==="TRENDING",hR==="TRENDING",mR==="BULLISH MOMENTUM"||mR==="BEARISH MOMENTUM"].filter(Boolean).length;
+    if (volR==="HIGH VOL"&&tR==="RANGING") { rec = "Reduce size / stay flat"; recC = "#f44336"; } else if (tc >= 2) { rec = "Trend-following strategies"; recC = "#4caf50"; } else if (hR==="MEAN REVERTING"&&tR!=="TRENDING") { rec = "Mean-reversion strategies"; recC = "#2196f3"; } else { rec = "Reduce size / stay flat"; recC = "#ff9800"; }
+    win.contentElement.textContent = "";
+    const ct = document.createElement("div"); ct.style.cssText = "padding:12px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;";
+    const gr = document.createElement("div"); gr.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;";
+    function mc(ti, st, co, dt) { const cd = document.createElement("div"); cd.style.cssText = "background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:12px;text-align:center;"; const d = document.createElement("span"); d.style.cssText = `display:inline-block;width:10px;height:10px;border-radius:50%;background:${co};margin-right:6px;`; const te = document.createElement("div"); te.style.cssText = "color:#888;font-size:11px;margin-bottom:6px;"; te.textContent = ti; const se = document.createElement("div"); se.style.cssText = `font-size:16px;font-weight:bold;color:${co};margin-bottom:4px;`; se.appendChild(d); se.appendChild(document.createTextNode(st)); const de = document.createElement("div"); de.style.cssText = "color:#666;font-size:10px;"; de.textContent = dt; cd.appendChild(te); cd.appendChild(se); cd.appendChild(de); return cd; }
+    gr.appendChild(mc("Volatility Regime", volR, volC, `Ratio: ${vr.toFixed(2)}x (20d vs 60d)`));
+    gr.appendChild(mc("Trend Regime", tR, tC, `ADX(14): ${lADX.toFixed(1)}`));
+    gr.appendChild(mc("Mean Reversion", hR, hC, `Hurst: ${hurst.toFixed(3)}`));
+    gr.appendChild(mc("Momentum", mR, mC, `ROC(20): ${(roc20*100).toFixed(2)}%, KAMA slope: ${ks>=0?"+":""}${ks.toFixed(4)}`));
+    ct.appendChild(gr);
+    const rd = document.createElement("div"); rd.style.cssText = `text-align:center;padding:10px;background:#111;border:1px solid ${recC};border-radius:6px;margin-bottom:16px;`; rd.innerHTML = `<span style="color:#888;font-size:11px;">RECOMMENDATION</span><br><span style="color:${recC};font-size:15px;font-weight:bold;">${rec}</span>`; ct.appendChild(rd);
+    if (rTrans.length > 0) { const tt = document.createElement("div"); tt.style.cssText = "color:#888;font-size:11px;margin-bottom:6px;"; tt.textContent = "Recent Volatility Regime Transitions"; ct.appendChild(tt); const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;"; tbl.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Date</th><th style="text-align:left;padding:4px;">From</th><th style="text-align:center;padding:4px;"></th><th style="text-align:left;padding:4px;">To</th></tr></thead>`; const tb = document.createElement("tbody");
+      for (const t of rTrans) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const ds = typeof t.time === "number" ? new Date(t.time*1000).toLocaleDateString() : String(t.time); const fc = t.from==="HIGH VOL"?"#f44336":t.from==="LOW VOL"?"#4caf50":"#ff9800"; const tc2 = t.to==="HIGH VOL"?"#f44336":t.to==="LOW VOL"?"#4caf50":"#ff9800"; tr.innerHTML = `<td style="padding:4px;color:#aaa;">${ds}</td><td style="padding:4px;color:${fc};">${t.from}</td><td style="padding:4px;text-align:center;color:#666;">&rarr;</td><td style="padding:4px;color:${tc2};">${t.to}</td>`; tb.appendChild(tr); }
+      tbl.appendChild(tb); ct.appendChild(tbl); }
+    win.appendElement(ct);
+    log(`REGIME+ computed for ${currentSymbol}: ${volR} | ${tR} | ${hR} | ${mR}`, "ok");
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to compute regime: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// RISKSIM — Scenario Stress Testing
+// ══════════════════════════════════════════════════════════════
+async function cmdRiskSim() {
+  const win = createWindow({ title: "Risk Scenario Simulator", width: 700, height: 560 });
+  win.contentElement.textContent = "";
+  const ld = document.createElement("div"); ld.textContent = "Loading positions..."; ld.style.cssText = "color:#888;padding:20px;"; win.appendElement(ld);
+  try {
+    const pj = await invoke("get_positions"); const positions = JSON.parse(pj);
+    if (!positions || positions.length === 0) { win.contentElement.textContent = ""; win.setContent("No open positions to stress test."); return; }
+    let acEq = 0, acMg = 0;
+    try { const aj = await invoke("get_account"); const ac = JSON.parse(aj); acEq = parseFloat(ac.equity || ac.portfolio_value || 0); acMg = parseFloat(ac.initial_margin || ac.margin_used || 0); } catch (_) {}
+    const techS = ["AAPL","MSFT","GOOGL","GOOG","AMZN","META","NVDA","TSLA","AMD","INTC","CRM","ADBE","NFLX","AVGO","ORCL","QCOM","MU","NOW","SHOP","SQ","PLTR","SNOW","UBER"];
+    const finS = ["JPM","BAC","GS","MS","WFC","C","BRK.B","AXP","V","MA","SCHW","BLK","COF","USB"];
+    const cryS = ["BTCUSD","ETHUSD","SOLUSD","DOGEUSD","BTC/USD","ETH/USD","SOL/USD","DOGE/USD","BTCUSDT","ETHUSDT"];
+    function cls(sym) { const s = sym.toUpperCase(); if (cryS.some(c => s.includes(c.replace("/","")))) return "crypto"; if (techS.includes(s)) return "tech"; if (finS.includes(s)) return "financial"; return "other"; }
+    const SC = { "Market Crash (-20%)": {tech:-25,financial:-20,crypto:-40,other:-20}, "Correction (-10%)": {tech:-12,financial:-10,crypto:-20,other:-10}, "Rate Hike Shock": {tech:-5,financial:5,crypto:-3,other:-3}, "Crypto Winter": {tech:0,financial:0,crypto:-50,other:0} };
+    win.contentElement.textContent = "";
+    const ct = document.createElement("div"); ct.style.cssText = "padding:12px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;";
+    const br = document.createElement("div"); br.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;";
+    const rd = document.createElement("div");
+    function runSc(nm, pm) {
+      rd.textContent = ""; let tPnL = 0; const rows = [];
+      for (const p of positions) { const sy = p.symbol||""; const mv = parseFloat(p.market_value||(parseFloat(p.qty||p.quantity||0)*parseFloat(p.current_price||p.avg_entry_price||0))||0); const sec = cls(sy); const sp = pm[sec]!==undefined?pm[sec]:(pm.other||0); const pnl = mv*(sp/100); tPnL += pnl; rows.push({sym:sy,mktVal:mv,sector:sec,scenarioPct:sp,pnl,newVal:mv+pnl}); }
+      const pi = acEq > 0 ? (tPnL/acEq)*100 : 0; const ma = acEq > 0 && acMg > 0 ? ((acEq+tPnL)/acMg)*100 : 0; const md = ma > 0 && ma < 150;
+      const pc = tPnL >= 0 ? "#4caf50" : "#f44336"; const mc = md ? "#f44336" : "#4caf50";
+      const sm = document.createElement("div"); sm.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;";
+      sm.innerHTML = `<div style="text-align:center;"><div style="color:#888;font-size:10px;">SCENARIO P&L</div><div style="color:${pc};font-size:16px;font-weight:bold;">${tPnL>=0?"+":""}$${tPnL.toFixed(2)}</div></div><div style="text-align:center;"><div style="color:#888;font-size:10px;">% PORTFOLIO</div><div style="color:${pc};font-size:16px;font-weight:bold;">${pi>=0?"+":""}${pi.toFixed(2)}%</div></div><div style="text-align:center;"><div style="color:#888;font-size:10px;">MARGIN LEVEL</div><div style="color:${mc};font-size:16px;font-weight:bold;">${acMg>0?ma.toFixed(0)+"%":"N/A"}${md?" DANGER":""}</div></div>`;
+      rd.appendChild(sm);
+      const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      tbl.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Current Value</th><th style="text-align:right;padding:4px;">Scenario %</th><th style="text-align:right;padding:4px;">Scenario P&L</th><th style="text-align:right;padding:4px;">New Value</th></tr></thead>`;
+      const tb = document.createElement("tbody");
+      for (const r of rows) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const c = r.pnl>=0?"#4caf50":"#f44336"; tr.innerHTML = `<td style="padding:4px;">${r.sym}<span style="color:#555;font-size:9px;"> ${r.sector}</span></td><td style="text-align:right;padding:4px;">$${r.mktVal.toFixed(2)}</td><td style="text-align:right;padding:4px;color:${c};">${r.scenarioPct>=0?"+":""}${r.scenarioPct}%</td><td style="text-align:right;padding:4px;color:${c};">${r.pnl>=0?"+":""}$${r.pnl.toFixed(2)}</td><td style="text-align:right;padding:4px;">$${r.newVal.toFixed(2)}</td>`; tb.appendChild(tr); }
+      tbl.appendChild(tb); rd.appendChild(tbl);
+    }
+    for (const [nm, pm] of Object.entries(SC)) { const b = document.createElement("button"); b.textContent = nm; b.style.cssText = "background:#222;color:#ddd;border:1px solid #444;border-radius:4px;padding:6px 12px;cursor:pointer;font-family:monospace;font-size:11px;"; b.addEventListener("mouseenter",()=>{b.style.background="#333";}); b.addEventListener("mouseleave",()=>{b.style.background="#222";}); b.addEventListener("click",()=>runSc(nm,pm)); br.appendChild(b); }
+    const cb = document.createElement("button"); cb.textContent = "Custom..."; cb.style.cssText = "background:#1a237e;color:#ddd;border:1px solid #3949ab;border-radius:4px;padding:6px 12px;cursor:pointer;font-family:monospace;font-size:11px;";
+    cb.addEventListener("click", () => { rd.textContent = ""; const fm = document.createElement("div"); fm.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:12px;margin-bottom:12px;"; const ft = document.createElement("div"); ft.textContent = "Enter % change per symbol:"; ft.style.cssText = "color:#888;margin-bottom:8px;font-size:11px;"; fm.appendChild(ft); const inp = {};
+      for (const p of positions) { const rw = document.createElement("div"); rw.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:4px;"; const lb = document.createElement("span"); lb.textContent = p.symbol; lb.style.cssText = "width:80px;"; const ip = document.createElement("input"); ip.type = "number"; ip.value = "-10"; ip.style.cssText = "background:#222;color:#ddd;border:1px solid #444;border-radius:3px;padding:3px 6px;width:80px;font-family:monospace;"; const pl = document.createElement("span"); pl.textContent = "%"; pl.style.cssText = "color:#666;"; inp[p.symbol] = ip; rw.appendChild(lb); rw.appendChild(ip); rw.appendChild(pl); fm.appendChild(rw); }
+      const ab = document.createElement("button"); ab.textContent = "Apply"; ab.style.cssText = "background:#2e7d32;color:#fff;border:none;border-radius:4px;padding:6px 16px;cursor:pointer;margin-top:8px;font-family:monospace;";
+      ab.addEventListener("click", () => { const ps = {}; for (const p of positions) ps[p.symbol] = parseFloat(inp[p.symbol].value||0); rd.textContent = ""; let tPnL = 0; const rows = [];
+        for (const p of positions) { const sy = p.symbol||""; const mv = parseFloat(p.market_value||(parseFloat(p.qty||p.quantity||0)*parseFloat(p.current_price||p.avg_entry_price||0))||0); const sp = ps[sy]||0; const pnl = mv*(sp/100); tPnL += pnl; rows.push({sym:sy,mktVal:mv,scenarioPct:sp,pnl,newVal:mv+pnl}); }
+        const pi = acEq>0?(tPnL/acEq)*100:0; const ma = acEq>0&&acMg>0?((acEq+tPnL)/acMg)*100:0; const md = ma>0&&ma<150; const pc = tPnL>=0?"#4caf50":"#f44336"; const mc2 = md?"#f44336":"#4caf50";
+        const sm = document.createElement("div"); sm.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;";
+        sm.innerHTML = `<div style="text-align:center;"><div style="color:#888;font-size:10px;">SCENARIO P&L</div><div style="color:${pc};font-size:16px;font-weight:bold;">${tPnL>=0?"+":""}$${tPnL.toFixed(2)}</div></div><div style="text-align:center;"><div style="color:#888;font-size:10px;">% PORTFOLIO</div><div style="color:${pc};font-size:16px;font-weight:bold;">${pi>=0?"+":""}${pi.toFixed(2)}%</div></div><div style="text-align:center;"><div style="color:#888;font-size:10px;">MARGIN LEVEL</div><div style="color:${mc2};font-size:16px;font-weight:bold;">${acMg>0?ma.toFixed(0)+"%":"N/A"}${md?" DANGER":""}</div></div>`;
+        rd.appendChild(sm); const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;"; tbl.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Current Value</th><th style="text-align:right;padding:4px;">Scenario %</th><th style="text-align:right;padding:4px;">Scenario P&L</th><th style="text-align:right;padding:4px;">New Value</th></tr></thead>`; const tb = document.createElement("tbody");
+        for (const r of rows) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const c = r.pnl>=0?"#4caf50":"#f44336"; tr.innerHTML = `<td style="padding:4px;">${r.sym}</td><td style="text-align:right;padding:4px;">$${r.mktVal.toFixed(2)}</td><td style="text-align:right;padding:4px;color:${c};">${r.scenarioPct>=0?"+":""}${r.scenarioPct}%</td><td style="text-align:right;padding:4px;color:${c};">${r.pnl>=0?"+":""}$${r.pnl.toFixed(2)}</td><td style="text-align:right;padding:4px;">$${r.newVal.toFixed(2)}</td>`; tb.appendChild(tr); }
+        tbl.appendChild(tb); rd.appendChild(tbl); }); fm.appendChild(ab); rd.appendChild(fm); });
+    br.appendChild(cb); ct.appendChild(br); ct.appendChild(rd); win.appendElement(ct);
+    const fs = Object.entries(SC)[0]; runSc(fs[0], fs[1]);
+    log("RISKSIM loaded with " + positions.length + " positions", "ok");
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to load risk sim: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// SMARTALERT — Statistical Anomaly Detection
+// ══════════════════════════════════════════════════════════════
+async function cmdSmartAlert() {
+  if (!currentSymbol) { log("Load a chart first", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} \u2014 Anomaly Detection`, width: 620, height: 520 });
+  win.contentElement.textContent = "";
+  const ld = document.createElement("div"); ld.textContent = "Computing statistical anomalies..."; ld.style.cssText = "color:#888;padding:20px;"; win.appendElement(ld);
+  try {
+    let data = null; const ck = `${currentSymbol}:1Day`; const cc = barCache[ck];
+    if (cc && cc.data && cc.data.length > 60) { data = cc.data; cc.lastAccess = Date.now(); }
+    if (!data) { const j = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 500 }); const b = JSON.parse(j); if (b.length > 60) { data = b; barCache[ck] = { data: b, timestamp: Date.now(), lastAccess: Date.now() }; } }
+    if (!data || data.length < 61) { win.contentElement.textContent = ""; win.setContent("Need at least 61 daily bars for anomaly detection."); return; }
+    const n = data.length; const today = data[n-1];
+    function zSc(v, m, s) { return s > 0 ? (v - m) / s : 0; }
+    function mS(arr) { const m = arr.reduce((a,b)=>a+b,0)/arr.length; const v = arr.reduce((a,b)=>a+(b-m)*(b-m),0)/arr.length; return {mean:m,std:Math.sqrt(v)}; }
+    function cExc(arr, th) { let c = 0; for (const v of arr) if (Math.abs(v) >= th) c++; return c; }
+    const v60 = data.slice(n-61,n-1).map(b=>b.volume||0); const vSt = mS(v60); const tV = today.volume||0; const vZ = zSc(tV,vSt.mean,vSt.std);
+    const rg60 = data.slice(n-61,n-1).map(b=>b.high-b.low); const rgSt = mS(rg60); const tRg = today.high-today.low; const rgZ = zSc(tRg,rgSt.mean,rgSt.std);
+    const rt60 = []; for (let i=n-60;i<n;i++) rt60.push(data[i].close>0?(data[i].close-data[i-1].close)/data[i-1].close:0);
+    const rtSt = mS(rt60.slice(0,-1)); const tRt = rt60[rt60.length-1]; const rtZ = zSc(tRt,rtSt.mean,rtSt.std);
+    const fR = calcEhlersFisher(data, 32); let fZ = 0, fV = 0;
+    if (fR.fisher.length > 0) { fV = fR.fisher[fR.fisher.length-1].value; const lb = Math.min(fR.fisher.length-1,200); const fVs = fR.fisher.slice(fR.fisher.length-1-lb,fR.fisher.length-1).map(f=>f.value); if (fVs.length > 10) { const fs = mS(fVs); fZ = zSc(fV,fs.mean,fs.std); } }
+    const rsiR = calcRSI(data, 14); const rsiV = rsiR.length > 0 ? rsiR[rsiR.length-1].value : 50; const rsiE = rsiV < 20 || rsiV > 80;
+    const kD = calcKAMA(data, 10); const aD = calcATR(data, 14); let pkZ = 0, pkV = 0;
+    if (kD.length > 0 && aD.length > 0) { const lK = kD[kD.length-1].value; const lA = aD[aD.length-1].value; pkV = lA > 0 ? (today.close - lK) / lA : 0;
+      const kM = new Map(kD.map(k=>[k.time,k.value])); const aM = new Map(aD.map(a=>[a.time,a.value])); const hV = []; const lb = Math.min(60,data.length-1);
+      for (let i=n-1-lb;i<n-1;i++){const kv=kM.get(data[i].time),av=aM.get(data[i].time);if(kv!==undefined&&av!==undefined&&av>0)hV.push((data[i].close-kv)/av);}
+      if (hV.length > 10) { const ps = mS(hV); pkZ = zSc(pkV, ps.mean, ps.std); } }
+    const aVZ = []; for (let i=61;i<n;i++){const vs=data.slice(i-60,i).map(b=>b.volume||0);const s=mS(vs);if(s.std>0)aVZ.push(((data[i].volume||0)-s.mean)/s.std);}
+    const vEC = cExc(aVZ, Math.abs(vZ)); const tBC = Math.min(aVZ.length, 200);
+    const metrics = [
+      {name:"Volume",value:tV.toLocaleString(),z:vZ,detail:`60d avg: ${vSt.mean.toFixed(0)}`},
+      {name:"Range (H-L)",value:tRg.toFixed(4),z:rgZ,detail:`60d avg: ${rgSt.mean.toFixed(4)}`},
+      {name:"Return",value:`${(tRt*100).toFixed(2)}%`,z:rtZ,detail:`60d avg: ${(rtSt.mean*100).toFixed(2)}%`},
+      {name:"Fisher Transform",value:fV.toFixed(3),z:fZ,detail:`200-bar z-score`},
+      {name:"RSI(14)",value:rsiV.toFixed(1),z:rsiE?(rsiV>80?3.0:-3.0):0,detail:rsiE?(rsiV>80?"OVERBOUGHT":"OVERSOLD"):"Normal range"},
+      {name:"Price vs KAMA",value:`${pkV.toFixed(2)} ATR`,z:pkZ,detail:`Distance in ATR units`},
+    ];
+    const aC = metrics.filter(m=>Math.abs(m.z)>=2.0).length;
+    win.contentElement.textContent = "";
+    const ct = document.createElement("div"); ct.style.cssText = "padding:12px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;";
+    const sD = document.createElement("div"); const sC = aC===0?"#4caf50":aC<=2?"#ff9800":"#f44336";
+    sD.style.cssText = `text-align:center;padding:10px;background:#111;border:1px solid ${sC};border-radius:6px;margin-bottom:14px;`;
+    sD.innerHTML = `<span style="color:${sC};font-size:18px;font-weight:bold;">${aC} of 6</span><span style="color:#888;font-size:13px;"> metrics are unusual</span>${aC>0?`<br><span style="color:#ff9800;font-size:11px;">Heightened attention recommended</span>`:`<br><span style="color:#4caf50;font-size:11px;">All metrics within normal range</span>`}`;
+    ct.appendChild(sD);
+    const gr = document.createElement("div"); gr.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;";
+    for (const m of metrics) { const az = Math.abs(m.z); let st, sc; if (az>=3){st="EXTREME";sc="#f44336";}else if(az>=2){st="UNUSUAL";sc="#ff9800";}else{st="NORMAL";sc="#4caf50";}
+      const cd = document.createElement("div"); cd.style.cssText = `background:#1a1a1a;border:1px solid ${az>=2?sc:"#333"};border-radius:6px;padding:10px;text-align:center;`;
+      const dt = document.createElement("span"); dt.style.cssText = `display:inline-block;width:8px;height:8px;border-radius:50%;background:${sc};margin-right:4px;`;
+      const ne = document.createElement("div"); ne.style.cssText = "color:#888;font-size:10px;margin-bottom:4px;"; ne.textContent = m.name;
+      const ve = document.createElement("div"); ve.style.cssText = "font-size:14px;font-weight:bold;color:#ddd;margin-bottom:2px;"; ve.textContent = m.value;
+      const ze = document.createElement("div"); ze.style.cssText = `font-size:11px;color:${sc};margin-bottom:2px;`; ze.appendChild(dt); ze.appendChild(document.createTextNode(`z: ${m.z>=0?"+":""}${m.z.toFixed(2)} \u2014 ${st}`));
+      const de = document.createElement("div"); de.style.cssText = "color:#555;font-size:9px;"; de.textContent = m.detail;
+      cd.appendChild(ne); cd.appendChild(ve); cd.appendChild(ze); cd.appendChild(de); gr.appendChild(cd); }
+    ct.appendChild(gr);
+    if (Math.abs(vZ) >= 2) { const cx = document.createElement("div"); cx.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;font-size:11px;color:#aaa;"; cx.innerHTML = `Volume is at <span style="color:#ff9800;font-weight:bold;">${Math.abs(vZ).toFixed(1)}\u03C3</span> \u2014 this has happened <span style="color:#fff;font-weight:bold;">${vEC}</span> times in the last ${tBC} bars`; ct.appendChild(cx); }
+    win.appendElement(ct);
+    log(`SMARTALERT for ${currentSymbol}: ${aC}/6 anomalies detected`, aC > 0 ? "warn" : "ok");
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to compute anomalies: ${e}`); }
+}
 
 async function checkWatchlistSMA200Alerts() {
   if (!window._watchlistSymbols || window._watchlistSymbols.length === 0) return;
