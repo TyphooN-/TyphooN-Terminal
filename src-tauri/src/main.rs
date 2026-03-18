@@ -1111,6 +1111,24 @@ async fn get_news(state: State<'_, SharedState>, symbol: String, limit: u32) -> 
 }
 
 #[tauri::command]
+async fn get_av_earnings(state: State<'_, SharedState>, symbol: String, av_key: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if av_key.is_empty() || av_key.len() > 100 { return Err("Invalid Alpha Vantage key".into()); }
+    let broker = { let s = state.lock().await; s.broker.as_ref().ok_or("Not connected")?.clone() };
+    let data = broker.get_alpha_vantage_earnings(&symbol, &av_key).await?;
+    Ok(serde_json::to_string(&data).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
+async fn get_fmp_ratings(state: State<'_, SharedState>, symbol: String, fmp_key: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if fmp_key.is_empty() || fmp_key.len() > 100 { return Err("Invalid FMP key".into()); }
+    let broker = { let s = state.lock().await; s.broker.as_ref().ok_or("Not connected")?.clone() };
+    let data = broker.get_fmp_analyst_ratings(&symbol, &fmp_key).await?;
+    Ok(serde_json::to_string(&data).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
 async fn get_finnhub_news(state: State<'_, SharedState>, symbol: String, finnhub_key: String) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
@@ -2483,6 +2501,8 @@ fn main() {
             // News, Events & Fundamentals
             get_news,
             get_finnhub_news,
+            get_av_earnings,
+            get_fmp_ratings,
             get_corporate_actions,
             get_sec_filings,
             get_company_fundamentals,

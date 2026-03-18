@@ -22593,6 +22593,8 @@ function cmdSettings() {
   const fields = [
     { key: "fredApiKey", label: "FRED API Key", ph: "32-char from fred.stlouisfed.org" },
     { key: "finnhubKey", label: "Finnhub API Key (news)", ph: "Free: finnhub.io/register" },
+    { key: "alphaVantageKey", label: "Alpha Vantage API Key", ph: "Free: alphavantage.co/support" },
+    { key: "fmpKey", label: "Financial Modeling Prep Key", ph: "Free: financialmodelingprep.com" },
     { key: "aiProvider", label: "AI Provider", ph: "anthropic or openai", val: settings.aiProvider || "anthropic" },
     { key: "aiApiKey", label: "AI API Key", ph: "sk-ant-... or sk-..." },
     { key: "aiModel", label: "AI Model (opt)", ph: "claude-haiku-4-5-20251001 / gpt-4o-mini" },

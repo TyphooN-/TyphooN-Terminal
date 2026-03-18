@@ -693,6 +693,30 @@ impl AlpacaBroker {
         }).take(20).collect())
     }
 
+    // ── Alpha Vantage — Earnings (EPS estimates vs actual) ─────────
+
+    pub async fn get_alpha_vantage_earnings(&self, symbol: &str, av_key: &str) -> Result<serde_json::Value, String> {
+        if av_key.is_empty() { return Err("Alpha Vantage API key required".into()); }
+        let resp = sec_client()
+            .get("https://www.alphavantage.co/query")
+            .query(&[("function", "EARNINGS"), ("symbol", symbol), ("apikey", av_key)])
+            .send().await.map_err(|e| format!("AV earnings failed: {e}"))?;
+        if !resp.status().is_success() { return Err(format!("AV earnings: HTTP {}", resp.status())); }
+        resp.json().await.map_err(|e| format!("AV parse failed: {e}"))
+    }
+
+    // ── FMP — Analyst Ratings ────────────────────────────────────
+
+    pub async fn get_fmp_analyst_ratings(&self, symbol: &str, fmp_key: &str) -> Result<Vec<serde_json::Value>, String> {
+        if fmp_key.is_empty() { return Err("FMP API key required".into()); }
+        let resp = sec_client()
+            .get(format!("https://financialmodelingprep.com/api/v3/grade/{}", symbol))
+            .query(&[("apikey", fmp_key), ("limit", "20")])
+            .send().await.map_err(|e| format!("FMP ratings failed: {e}"))?;
+        if !resp.status().is_success() { return Err(format!("FMP ratings: HTTP {}", resp.status())); }
+        resp.json().await.map_err(|e| format!("FMP parse failed: {e}"))
+    }
+
     // ── Corporate Actions (Earnings/Dividends) ──────────────────
 
     pub async fn get_corporate_actions(&self, symbol: &str, types: &str) -> Result<Vec<serde_json::Value>, String> {
