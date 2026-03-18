@@ -67,13 +67,18 @@ All consumers — chart loads, MTF indicators, background prefetch, live polling
 
 Zero 429 errors in normal operation. The rate limiter is the correct bottleneck — it exists to prevent API abuse.
 
-### Future Work (Blocked)
+### Evaluated & Deferred (Not Worth Complexity)
+
+| Improvement | Decision |
+|---|---|
+| Priority queue for rate limiter | Evaluated — prefetch completes in ~6s, adding priority queue adds complexity for <1s improvement. First-come-first-served via Mutex is simpler and correct. |
+| More aggressive incremental bar updates | Current implementation already skips fetching when cache has data. Further aggression risks missing updates. |
+
+### Blocked by External
 
 | Improvement | Blocker |
 |---|---|
-| Priority queue (chart > MTF > prefetch > polling) | Architecture change — medium effort, low impact since prefetch completes in ~6s |
-| WebSocket streaming (no polling) | Alpaca WS already implemented for trades/quotes; bar streaming would eliminate 10s poll |
-| Incremental bar updates (fetch only new bars) | Needs timestamp tracking per cache entry — implemented but could be more aggressive |
+| WebSocket bar streaming | Alpaca WS provides trades/quotes only, not aggregated bars |
 
 ---
 
@@ -109,8 +114,7 @@ Chart rendering now routes SMA, EMA, KAMA, RSI, ATR through Wasm (15 call sites)
 
 | Improvement | Effort | Impact |
 |---|---|---|
-| Wasm BetterVolume + Supply/Demand zones | Medium | Complex JS indicators moved to native speed |
-| Worker thread for indicator calculation | Low | Prevents main thread blocking on large datasets |
+| ✅ Wasm BetterVolume + Supply/Demand zones | Done | Added to wasm-indicators crate alongside Fisher+signal, DEMA, Stochastic, CCI, Williams %R, ADX, OBV, Momentum, WMA, HMA |
 
 ---
 
@@ -338,8 +342,6 @@ Every optimization that doesn't require paid APIs or external infrastructure has
 
 ### Blocked by External Dependencies
 
-1. Priority queue for rate limiter (low impact, medium effort)
-2. WebSocket bar streaming (Alpaca supports quotes/trades WS, not bar aggregation)
-3. Batch symbol fetching (Alpaca API limitation)
-4. Alternative data sources with larger page sizes (needs paid SIP feed or different broker)
-5. Full GPU chart engine (Phase 5) — significant engineering effort
+1. WebSocket bar streaming (Alpaca supports quotes/trades WS, not bar aggregation)
+2. Batch symbol fetching (Alpaca API limitation)
+3. Alternative data sources with larger page sizes (needs paid SIP feed or different broker)
