@@ -8791,10 +8791,17 @@ async function loadMTFCellData(cellInfo, symbol) {
       addLine("#FFFFFF88", 1, pcl.lows);
     }
 
-    // Supply/Demand zones (lightweight — lines only, last 4 zones for performance)
+    // Recent price range — used by supply/demand zones + fib to filter out-of-range levels
+    const recentBars = chartData.slice(-50);
+    const recentHigh = Math.max(...recentBars.map(b => b.high));
+    const recentLow = Math.min(...recentBars.map(b => b.low));
+    const priceRange = recentHigh - recentLow;
+
+    // Supply/Demand zones (lightweight — lines only, recent + visible range only)
     if (chartData.length > 12) {
       const zones = calcSupplyDemandZones(chartData);
-      for (const z of zones.slice(-4)) {
+      const relevantZones = zones.filter(z => z.low <= recentHigh + priceRange && z.high >= recentLow - priceRange);
+      for (const z of relevantZones.slice(-4)) {
         const color = z.type === "supply" ? "#87CEEB66" : "#8FBC8F66";
         const zoneBars = chartData.filter(d => d.time >= z.startTime);
         if (zoneBars.length < 2) continue;
@@ -8803,13 +8810,17 @@ async function loadMTFCellData(cellInfo, symbol) {
       }
     }
 
-    // Auto Fibonacci
+    // Auto Fibonacci (only levels within 2x recent price range)
     if (chartData.length > 30) {
       const fib = calcAutoFibonacci(chartData);
       if (fib) {
         const fibBars = chartData.filter(d => d.time >= fib.startTime);
         if (fibBars.length >= 2) {
-          const keyLevels = fib.levels.filter(l => ["38.2%", "50%", "61.8%", "161.8%"].includes(l.label));
+          const keyLevels = fib.levels.filter(l => {
+            if (!["38.2%", "50%", "61.8%", "161.8%"].includes(l.label)) return false;
+            // Skip fib levels far outside visible price range
+            return l.price >= recentLow - priceRange * 2 && l.price <= recentHigh + priceRange * 2;
+          });
           const colors = { "38.2%": "#ffeb3b", "50%": "#8bc34a", "61.8%": "#00bcd4", "161.8%": "#ff5722" };
           for (const level of keyLevels) {
             addLine(colors[level.label] || "#888", 0.8, fibBars.map(d => ({ time: d.time, value: level.price })));
