@@ -315,6 +315,42 @@ function labelValue(label, value, valueColor) {
   return container;
 }
 
+// ── In-flight request deduplication for get_bars ────────────
+// Multiple systems (chart load, MTF data, prefetch, grid cells) fire get_bars
+// for the same symbol+TF simultaneously. This coalesces identical requests.
+const _barInflight = new Map();
+const _origInvoke = window.__TAURI__?.core?.invoke || (typeof invoke === "function" ? null : null);
+
+// Monkey-patch: wrap invoke to dedup get_bars calls
+const _realInvoke = invoke;
+// We can't reassign invoke (it's imported), so we wrap at the get_bars call sites
+// Instead: create a dedup wrapper that callers can use
+async function cachedGetBars(symbol, timeframe, limit) {
+  // Check barCache first (< staleness threshold = skip API)
+  const cacheKey = getCacheKey(symbol, timeframe);
+  const cached = barCache[cacheKey];
+  const STALE = { "1Min": 60000, "5Min": 300000, "15Min": 900000, "30Min": 1800000, "1Hour": 3600000, "4Hour": 14400000, "1Day": 86400000, "1Week": 604800000 };
+  const staleness = STALE[timeframe] || 3600000;
+  if (cached && cached.data && cached.data.length > 0 && (Date.now() - (cached.timestamp || 0)) < staleness) {
+    return JSON.stringify(cached.data); // return cached JSON string, same format as invoke
+  }
+  // Dedup: if same request is in-flight, wait for it
+  const key = `${symbol}:${timeframe}:${limit}`;
+  if (_barInflight.has(key)) return _barInflight.get(key);
+  const promise = invoke("get_bars", { symbol, timeframe, limit }).then(json => {
+    // Update cache with fresh data
+    try {
+      const bars = JSON.parse(json);
+      if (bars.length > 0) {
+        barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+      }
+    } catch (_) {}
+    return json;
+  }).finally(() => _barInflight.delete(key));
+  _barInflight.set(key, promise);
+  return promise;
+}
+
 /// Pack chart bars into flat f64 array for Wasm interop.
 function packBarsForWasm(bars) {
   const flat = new Float64Array(bars.length * 5);
@@ -3064,7 +3100,7 @@ async function loadChart(symbol, timeframe) {
         // Refresh in background — will update chart when done
         (async () => {
           try {
-            const freshJson = await invoke("get_bars", { symbol, timeframe: fetchTimeframe, limit: fetchLimit });
+            const freshJson = await cachedGetBars(symbol, fetchTimeframe, fetchLimit);
             const freshBars = JSON.parse(freshJson);
             if (freshBars.length > 0) {
               barCache[cacheKey] = { data: freshBars, timestamp: Date.now() };
@@ -3096,7 +3132,7 @@ async function loadChart(symbol, timeframe) {
       }
     } else {
       // No usable cache — fetch synchronously
-      const barsJson = await invoke("get_bars", { symbol, timeframe: fetchTimeframe, limit: fetchLimit });
+      const barsJson = await cachedGetBars(symbol, fetchTimeframe, fetchLimit);
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
       saveBarCacheToDisk(cacheKey, bars);
@@ -3263,7 +3299,7 @@ async function prefetchAllTimeframes(symbol, currentTF) {
 
     // Fetch fresh data (always, if cache is stale or missing)
     try {
-      const barsJson = await invokeQuiet("get_bars", { symbol, timeframe: tf, limit: 2000 });
+      const barsJson = await cachedGetBars(symbol, tf, 2000);
       const bars = JSON.parse(barsJson);
       if (bars.length > 0) {
         barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
@@ -3289,7 +3325,7 @@ async function updateLatestBar(symbol, timeframe) {
   const customTF = CUSTOM_TIMEFRAME_MAP[timeframe];
   const fetchTF = customTF ? customTF.base : timeframe;
   try {
-    const barsJson = await invoke("get_bars", { symbol, timeframe: fetchTF, limit: 5 });
+    const barsJson = await cachedGetBars(symbol, fetchTF, 5);
     // Re-check symbol after async — user may have switched tabs during fetch
     if (symbol !== currentSymbol) return;
     const bars = JSON.parse(barsJson);
@@ -5702,7 +5738,7 @@ async function cmdBreadth() {
       const cKey = `${sym}:1Day`;
       const cached = barCache[cKey];
       if (cached && cached.data && cached.data.length > 200) data = cached.data;
-      if (!data) { try { const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 300 }); const bars = JSON.parse(barsJson); if (bars.length > 50) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {} }
+      if (!data) { try { const barsJson = await cachedGetBars(sym, "1Day", 300); const bars = JSON.parse(barsJson); if (bars.length > 50) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {} }
       if (!data || data.length < 2) continue;
       validCount++;
       const close = data[data.length - 1].close, prevClose = data[data.length - 2].close;
@@ -6772,7 +6808,7 @@ async function cmdHeatCal() {
     const cached = barCache[cKey];
     if (cached && cached.data && cached.data.length > 20) bars = cached.data;
     if (!bars) {
-      const barsJson = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 500 });
+      const barsJson = await cachedGetBars(currentSymbol, "1Day", 500);
       bars = JSON.parse(barsJson);
       if (bars.length > 0) barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
     }
@@ -6878,7 +6914,7 @@ async function cmdCorrWatch() {
     for (const sym of watchlist) {
       let data = null; const cKey = `${sym}:1Day`; const cached = barCache[cKey];
       if (cached && cached.data && cached.data.length > 60) data = cached.data;
-      if (!data) { try { const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 300 }); const bars = JSON.parse(barsJson); if (bars.length > 60) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {} }
+      if (!data) { try { const barsJson = await cachedGetBars(sym, "1Day", 300); const bars = JSON.parse(barsJson); if (bars.length > 60) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {} }
       if (data) closePrices[sym] = data.slice(-300).map(b => b.close || b.c || 0);
     }
     const validSymbols = Object.keys(closePrices).filter(s => closePrices[s].length > 60);
@@ -8202,7 +8238,7 @@ function cmdDashboard() {
       const sym = currentSymbol || "SPY";
       const cKey = `${sym}:1Day`;
       let bars = barCache[cKey] && barCache[cKey].data ? barCache[cKey].data.slice(-50) : null;
-      if (!bars) { try { const bj = await invokeQuiet("get_bars", { symbol: sym, timeframe: "1Day", limit: 50 }); bars = JSON.parse(bj); } catch (_) {} }
+      if (!bars) { try { const bj = await cachedGetBars(sym, "1Day", 50); bars = JSON.parse(bj); } catch (_) {} }
       if (bars && bars.length > 2) {
         const cv = document.createElement("canvas"); cv.width = 240; cv.height = 80; cv.style.cssText = "display:block;width:100%;";
         body.appendChild(cv);
@@ -8304,7 +8340,7 @@ function cmdDashboard() {
       const sym = currentSymbol || "SPY";
       const cKey = `${sym}:1Day`; const cached = barCache[cKey];
       let sigData = cached && cached.data ? cached.data : null;
-      if (!sigData) { try { const bj = await invokeQuiet("get_bars", { symbol: sym, timeframe: "1Day", limit: 220 }); sigData = JSON.parse(bj); } catch (_) {} }
+      if (!sigData) { try { const bj = await cachedGetBars(sym, "1Day", 220); sigData = JSON.parse(bj); } catch (_) {} }
       if (sigData && sigData.length > 20) {
         let score = 0, signals = [];
         const rsiData = calcRSI(sigData, 14);
@@ -8451,7 +8487,7 @@ function cmdScannerRT() {
     for (const sym of symbols) {
       if (!scanning) break;
       try {
-        const barsJson = await invokeQuiet("get_bars", { symbol: sym, timeframe: "1Day", limit: 220 });
+        const barsJson = await cachedGetBars(sym, "1Day", 220);
         const bars = JSON.parse(barsJson);
         if (!bars || bars.length < 20) continue;
         barCache[`${sym}:1Day`] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
@@ -8811,7 +8847,7 @@ async function cmdCorrelation3D() {
     for (const sym of symbols) {
       let data = null;
       for (const tf of ["1Day", "4Hour", "1Hour"]) { const key = getCacheKey(sym, tf); const cached = barCache[key]; if (cached && cached.data && cached.data.length > 20) { data = cached.data; break; } }
-      if (!data) { try { const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 100 }); const bars = JSON.parse(barsJson); if (bars.length > 20) data = bars; } catch (_) {} }
+      if (!data) { try { const barsJson = await cachedGetBars(sym, "1Day", 100); const bars = JSON.parse(barsJson); if (bars.length > 20) data = bars; } catch (_) {} }
       if (data) closePrices[sym] = data.slice(-100).map(b => b.close || b.c || 0);
     }
     const validSymbols = Object.keys(closePrices).filter(s => closePrices[s].length > 10);
@@ -10013,7 +10049,7 @@ async function cmdRisk360() {
     const cKey = `${currentSymbol}:1Day`;
     let dailyBars = barCache[cKey] && barCache[cKey].data;
     if (!dailyBars || dailyBars.length < 30) {
-      try { const barsJson = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 300 }); dailyBars = JSON.parse(barsJson); if (dailyBars.length > 0) barCache[cKey] = { data: dailyBars, timestamp: Date.now(), lastAccess: Date.now() }; } catch (_) {}
+      try { const barsJson = await cachedGetBars(currentSymbol, "1Day", 300); dailyBars = JSON.parse(barsJson); if (dailyBars.length > 0) barCache[cKey] = { data: dailyBars, timestamp: Date.now(), lastAccess: Date.now() }; } catch (_) {}
     }
     if (!dailyBars || dailyBars.length < 22) { win.contentElement.textContent = ""; win.setContent("Need at least 22 daily bars for risk analysis."); return; }
 
@@ -10286,7 +10322,7 @@ async function cmdMatrix() {
       const cKey = `${sym}:1Day`;
       let data = barCache[cKey] && barCache[cKey].data;
       if (!data || data.length < 60) {
-        try { const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 300 }); const bars = JSON.parse(barsJson); if (bars.length > 60) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {}
+        try { const barsJson = await cachedGetBars(sym, "1Day", 300); const bars = JSON.parse(barsJson); if (bars.length > 60) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {}
       }
       if (!data || data.length < 60) continue;
 
@@ -10792,7 +10828,7 @@ async function cmdComparePlus() {
     const cached = barCache[cKey];
     if (cached && cached.data && cached.data.length > 30) { cached.lastAccess = Date.now(); return cached.data; }
     try {
-      const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 300 });
+      const barsJson = await cachedGetBars(sym, "1Day", 300);
       const bars = JSON.parse(barsJson);
       if (bars.length > 0) barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
       return bars;
@@ -11264,7 +11300,7 @@ async function cmdScreenerVisual() {
     const cached = barCache[cKey];
     if (cached && cached.data && cached.data.length > 30) { cached.lastAccess = Date.now(); return cached.data; }
     try {
-      const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 300 });
+      const barsJson = await cachedGetBars(sym, "1Day", 300);
       const bars = JSON.parse(barsJson);
       if (bars.length > 0) barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
       return bars;
@@ -11536,7 +11572,7 @@ async function cmdPortfolioPlus() {
     for (const sym of symbols) {
       const cKey = `${sym}:1Day`; let data = null; const cached = barCache[cKey];
       if (cached && cached.data && cached.data.length >= 252) { data = cached.data; barCache[cKey].lastAccess = Date.now(); }
-      if (!data) { try { const bj = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 500 }); const bars = JSON.parse(bj); if (bars.length >= 60) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {} }
+      if (!data) { try { const bj = await cachedGetBars(sym, "1Day", 500); const bars = JSON.parse(bj); if (bars.length >= 60) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {} }
       if (data && data.length >= 60) symData[sym] = data;
     }
     const validSyms = Object.keys(symData);
@@ -12683,7 +12719,7 @@ async function cmdQuickCorr() {
         cached.lastAccess = Date.now();
         return cached.data;
       }
-      const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 300 });
+      const barsJson = await cachedGetBars(sym, "1Day", 300);
       const bars = JSON.parse(barsJson);
       if (bars.length > 0) barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
       return bars;
@@ -12899,7 +12935,7 @@ async function cmdPreMarket() {
         } else {
           // Try to fetch
           try {
-            const barsJson = await invokeQuiet("get_bars", { symbol: sym, timeframe: "1Day", limit: 5 });
+            const barsJson = await cachedGetBars(sym, "1Day", 5);
             const bars = JSON.parse(barsJson);
             if (bars.length >= 2) {
               prevClose = bars[bars.length - 2].close;
@@ -13162,7 +13198,7 @@ async function cmdIntermarket() {
     for (const p of imPairs) {
       const ck = getCacheKey(p.symbol, "1Day"); const cc = barCache[ck];
       if (cc && cc.data && cc.data.length >= 60) { allBars[p.symbol] = cc.data; cc.lastAccess = Date.now(); }
-      else { try { const j = await invoke("get_bars", { symbol: p.symbol, timeframe: "1Day", limit: 60 }); const b = JSON.parse(j); if (b.length > 0) { barCache[ck] = { data: b, timestamp: Date.now(), lastAccess: Date.now() }; allBars[p.symbol] = b; } } catch (_) {} }
+      else { try { const j = await cachedGetBars(p.symbol, "1Day", 60); const b = JSON.parse(j); if (b.length > 0) { barCache[ck] = { data: b, timestamp: Date.now(), lastAccess: Date.now() }; allBars[p.symbol] = b; } } catch (_) {} }
     }
     function imPctRet(bars, n) { if (!bars || bars.length < n + 1) return null; const c = bars[bars.length-1].close||bars[bars.length-1].c||0; const p = bars[bars.length-1-n].close||bars[bars.length-1-n].c||0; return p > 0 ? ((c-p)/p)*100 : null; }
     function imPearson(a, b) { const n = Math.min(a.length, b.length); if (n < 5) return 0; const ax = a.slice(-n), bx = b.slice(-n); const ma = ax.reduce((s,v)=>s+v,0)/n, mb = bx.reduce((s,v)=>s+v,0)/n; let nm=0,da=0,db=0; for (let i=0;i<n;i++){const va=ax[i]-ma,vb=bx[i]-mb;nm+=va*vb;da+=va*va;db+=vb*vb;} return da>0&&db>0?nm/Math.sqrt(da*db):0; }
@@ -13563,7 +13599,7 @@ async function cmdRiskParity() {
     const posJson = await invoke("get_positions"); const positions = JSON.parse(posJson);
     if (!positions || positions.length === 0) { win.contentElement.textContent = ""; win.setContent("No open positions."); return; }
     const posData = []; let totalValue = 0;
-    for (const pos of positions) { const sym = pos.symbol; const qty = parseFloat(pos.qty) || 0; const mktVal = Math.abs(parseFloat(pos.market_value) || (qty * (parseFloat(pos.current_price) || 0))); totalValue += mktVal; let annVol = 0; try { const cacheKey = `${sym}:1Day`; let bars; if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length >= 21) { bars = barCache[cacheKey].data; } else { const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 30 }); bars = JSON.parse(barsJson); } if (bars && bars.length >= 21) { const returns = []; for (let i = bars.length - 20; i < bars.length; i++) { if (bars[i - 1].close > 0) returns.push(Math.log(bars[i].close / bars[i - 1].close)); } const mean = returns.reduce((a, b) => a + b, 0) / returns.length; const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1); annVol = Math.sqrt(variance) * Math.sqrt(252); } } catch (_) {} posData.push({ symbol: sym, qty, mktVal, annVol, currentPrice: parseFloat(pos.current_price) || parseFloat(pos.avg_entry_price) || 0 }); }
+    for (const pos of positions) { const sym = pos.symbol; const qty = parseFloat(pos.qty) || 0; const mktVal = Math.abs(parseFloat(pos.market_value) || (qty * (parseFloat(pos.current_price) || 0))); totalValue += mktVal; let annVol = 0; try { const cacheKey = `${sym}:1Day`; let bars; if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length >= 21) { bars = barCache[cacheKey].data; } else { const barsJson = await cachedGetBars(sym, "1Day", 30); bars = JSON.parse(barsJson); } if (bars && bars.length >= 21) { const returns = []; for (let i = bars.length - 20; i < bars.length; i++) { if (bars[i - 1].close > 0) returns.push(Math.log(bars[i].close / bars[i - 1].close)); } const mean = returns.reduce((a, b) => a + b, 0) / returns.length; const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1); annVol = Math.sqrt(variance) * Math.sqrt(252); } } catch (_) {} posData.push({ symbol: sym, qty, mktVal, annVol, currentPrice: parseFloat(pos.current_price) || parseFloat(pos.avg_entry_price) || 0 }); }
     if (totalValue === 0) { win.contentElement.textContent = ""; win.setContent("No position value."); return; }
     const invVols = posData.map(p => p.annVol > 0.001 ? 1 / p.annVol : 0); const sumInvVol = invVols.reduce((a, b) => a + b, 0); const parityWeights = invVols.map(iv => sumInvVol > 0 ? iv / sumInvVol : 1 / posData.length);
     const currentRisk = posData.reduce((s, p) => s + (p.mktVal / totalValue) * p.annVol, 0); const parityRisk = posData.reduce((s, p, i) => s + parityWeights[i] * p.annVol, 0);
@@ -14227,7 +14263,7 @@ function cmdBenchmark() {
     try {
       const [miJson, spyBarsRaw] = await Promise.all([
         invoke("get_margin_info"),
-        invoke("get_bars", { symbol: "SPY", timeframe: "1Day", limit: 252 }),
+        cachedGetBars("SPY", "1Day", 252),
       ]);
       const mi = JSON.parse(miJson);
       const spyBars = JSON.parse(spyBarsRaw);
@@ -15800,8 +15836,8 @@ function cmdCointegration() {
   (async () => {
     try {
       const [jsonA, jsonB] = await Promise.all([
-        invoke("get_bars", { symbol: symA, timeframe: "1Day", limit: 500 }),
-        invoke("get_bars", { symbol: symB, timeframe: "1Day", limit: 500 }),
+        cachedGetBars(symA, "1Day", 500),
+        cachedGetBars(symB, "1Day", 500),
       ]);
       const barsA = JSON.parse(jsonA), barsB = JSON.parse(jsonB);
       const mapB = {};
@@ -18782,7 +18818,7 @@ async function cmdCorrelation() {
       if (!data) {
         // Try to fetch daily bars
         try {
-          const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 100 });
+          const barsJson = await cachedGetBars(sym, "1Day", 100);
           const bars = JSON.parse(barsJson);
           if (bars.length > 20) data = bars;
         } catch (_) {}
@@ -20205,7 +20241,7 @@ async function refreshWatchlist(tableBody) {
     // Fetch data async
     (async () => {
       try {
-        const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 2 });
+        const barsJson = await cachedGetBars(sym, "1Day", 2);
         const bars = JSON.parse(barsJson);
         if (bars.length >= 2) {
           const last = bars[bars.length - 1];
@@ -21351,7 +21387,7 @@ async function loadMTFCellData(cellInfo, symbol) {
       log(`MTF grid ${cellInfo.tf}: ${bars.length} bars from cache`, "info");
     } else {
       log(`MTF grid ${cellInfo.tf}: fetching ${fetchTF} (not cached)...`, "info");
-      const barsJson = await invoke("get_bars", { symbol, timeframe: fetchTF, limit });
+      const barsJson = await cachedGetBars(symbol, fetchTF, limit);
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
     }
@@ -23772,8 +23808,8 @@ function cmdPairs() {
     try {
       // Fetch bars for both symbols
       const [jsonA, jsonB] = await Promise.all([
-        invoke("get_bars", { symbol: symA, timeframe: "1Day", limit: 500 }),
-        invoke("get_bars", { symbol: symB, timeframe: "1Day", limit: 500 }),
+        cachedGetBars(symA, "1Day", 500),
+        cachedGetBars(symB, "1Day", 500),
       ]);
       const barsA = JSON.parse(jsonA), barsB = JSON.parse(jsonB);
       // Align by date
@@ -24155,7 +24191,7 @@ async function cmdSeasonality() {
 
   if (!bars) {
     try {
-      const barsJson = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 2000 });
+      const barsJson = await cachedGetBars(currentSymbol, "1Day", 2000);
       bars = JSON.parse(barsJson);
       if (bars && bars.length > 0) {
         barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
@@ -24312,7 +24348,7 @@ async function cmdCompare() {
   const compSymbol = sym.trim().toUpperCase();
 
   try {
-    const barsJson = await invoke("get_bars", { symbol: compSymbol, timeframe: "1Day", limit: 500 });
+    const barsJson = await cachedGetBars(compSymbol, "1Day", 500);
     const bars = JSON.parse(barsJson);
     if (!bars || bars.length === 0) {
       alert(`No data found for ${compSymbol}`);
@@ -24408,8 +24444,8 @@ async function cmdSpread() {
   try {
     // Fetch bars for both symbols
     const [jsonA, jsonB] = await Promise.all([
-      invoke("get_bars", { symbol: symA, timeframe: "1Day", limit: 500 }),
-      invoke("get_bars", { symbol: symB, timeframe: "1Day", limit: 500 }),
+      cachedGetBars(symA, "1Day", 500),
+      cachedGetBars(symB, "1Day", 500),
     ]);
     const barsA = JSON.parse(jsonA);
     const barsB = JSON.parse(jsonB);
@@ -24713,7 +24749,7 @@ async function cmdSectorRotation() {
     const items = [];
     for (const etf of SECTOR_ETFS) {
       try {
-        const json = await invoke("get_bars", { symbol: etf.sym, timeframe: "1Day", limit: 5 });
+        const json = await cachedGetBars(etf.sym, "1Day", 5);
         const bars = JSON.parse(json);
         if (bars.length >= 2) {
           const prev = bars[bars.length - 2].close;
@@ -24780,7 +24816,7 @@ async function cmdEconCalendar() {
 
   try {
     const json = await invoke("get_corporate_actions", { symbol: "SPY", types: "dividend" });
-    const calJson = await invoke("get_bars", { symbol: "SPY", timeframe: "1Day", limit: 5 });
+    const calJson = await cachedGetBars("SPY", "1Day", 5);
 
     win.contentElement.textContent = "";
 
@@ -25371,7 +25407,7 @@ async function cmdScannerPlus() {
       for (let i = 0; i < candidates.length; i++) {
         const sym = candidates[i]; progressEl.textContent = "Scanning... " + (i + 1) + "/" + candidates.length + " (" + sym.symbol + ")";
         try {
-          const barsJson = await invoke("get_bars", { symbol: sym.symbol, timeframe: "1Day", limit: 220 }); const bars = JSON.parse(barsJson);
+          const barsJson = await cachedGetBars(sym.symbol, "1Day", 220); const bars = JSON.parse(barsJson);
           if (bars.length < 30) continue;
           const rsiData = calcRSI(bars, 14); const latestRSI = rsiData.length > 0 ? rsiData[rsiData.length - 1].value : null;
           let sma200 = null;
@@ -25744,7 +25780,7 @@ async function cmdGaps() {
           bars = barCache[ck].data;
           barCache[ck].lastAccess = Date.now();
         } else {
-          const bj = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 5 });
+          const bj = await cachedGetBars(sym, "1Day", 5);
           bars = JSON.parse(bj);
           barCache[ck] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
         }
@@ -25828,7 +25864,7 @@ async function cmdFlows() {
           bars = barCache[ck].data;
           barCache[ck].lastAccess = Date.now();
         } else {
-          const bj = await invoke("get_bars", { symbol: etf.sym, timeframe: "1Day", limit: 20 });
+          const bj = await cachedGetBars(etf.sym, "1Day", 20);
           bars = JSON.parse(bj);
           barCache[ck] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
         }
@@ -26002,7 +26038,7 @@ async function cmdPivots() {
   let dailyBars = barCache[cKey] && barCache[cKey].data;
   if (!dailyBars || dailyBars.length < 3) {
     try {
-      const barsJson = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 10 });
+      const barsJson = await cachedGetBars(currentSymbol, "1Day", 10);
       dailyBars = JSON.parse(barsJson);
       if (dailyBars && dailyBars.length > 0) barCache[cKey] = { data: dailyBars, timestamp: Date.now(), lastAccess: Date.now() };
     } catch (e) { log(`PIVOTS: Failed to fetch daily bars: ${e}`, "warn"); return; }
@@ -26079,7 +26115,7 @@ async function cmdPerf() {
   let dailyBars = barCache[cKey] && barCache[cKey].data;
   if (!dailyBars || dailyBars.length < 30) {
     try {
-      const barsJson = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 500 });
+      const barsJson = await cachedGetBars(currentSymbol, "1Day", 500);
       dailyBars = JSON.parse(barsJson);
       if (dailyBars && dailyBars.length > 0) barCache[cKey] = { data: dailyBars, timestamp: Date.now(), lastAccess: Date.now() };
     } catch (e) { log(`PERF: Failed to fetch daily bars: ${e}`, "warn"); return; }
@@ -26271,7 +26307,7 @@ async function cmdMarketProfile() {
       barCache[key60].lastAccess = Date.now();
     } else {
       try {
-        const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Hour", limit: 500 });
+        const barsJson = await cachedGetBars(sym, "1Hour", 500);
         bars = JSON.parse(barsJson);
         if (bars.length > 0) barCache[key60] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
       } catch (_) {}
@@ -26556,7 +26592,7 @@ async function cmdFlowMap() {
       let bars = null;
       const cacheKey = `${sector.sym}:1Day`;
       if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length >= 12) { bars = barCache[cacheKey].data; barCache[cacheKey].lastAccess = Date.now(); }
-      else { try { const barsJson = await invoke("get_bars", { symbol: sector.sym, timeframe: "1Day", limit: 30 }); bars = JSON.parse(barsJson); if (bars.length > 0) barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } catch (_) {} }
+      else { try { const barsJson = await cachedGetBars(sector.sym, "1Day", 30); bars = JSON.parse(barsJson); if (bars.length > 0) barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } catch (_) {} }
       if (!bars || bars.length < 12) { results.push({ ...sector, thisWeek: null, prevWeek: null, improving: null }); continue; }
       const len = bars.length;
       const thisWeekPct = bars[Math.max(0, len - 5)].open > 0 ? ((bars[len - 1].close - bars[Math.max(0, len - 5)].open) / bars[Math.max(0, len - 5)].open) * 100 : 0;
@@ -26609,7 +26645,7 @@ async function cmdRegimePlus() {
   try {
     let data = null; const ck = `${currentSymbol}:1Day`; const cc = barCache[ck];
     if (cc && cc.data && cc.data.length > 100) { data = cc.data; cc.lastAccess = Date.now(); }
-    if (!data) { const j = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 500 }); const b = JSON.parse(j); if (b.length > 100) { data = b; barCache[ck] = { data: b, timestamp: Date.now(), lastAccess: Date.now() }; } }
+    if (!data) { const j = await cachedGetBars(currentSymbol, "1Day", 500); const b = JSON.parse(j); if (b.length > 100) { data = b; barCache[ck] = { data: b, timestamp: Date.now(), lastAccess: Date.now() }; } }
     if (!data || data.length < 100) { win.contentElement.textContent = ""; win.setContent("Need at least 100 daily bars for regime analysis."); return; }
     const closes = data.map(b => b.close); const n = closes.length;
     const rets = []; for (let i = 1; i < n; i++) rets.push(closes[i] > 0 ? (closes[i] - closes[i-1]) / closes[i-1] : 0);
@@ -26720,7 +26756,7 @@ async function cmdSmartAlert() {
   try {
     let data = null; const ck = `${currentSymbol}:1Day`; const cc = barCache[ck];
     if (cc && cc.data && cc.data.length > 60) { data = cc.data; cc.lastAccess = Date.now(); }
-    if (!data) { const j = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 500 }); const b = JSON.parse(j); if (b.length > 60) { data = b; barCache[ck] = { data: b, timestamp: Date.now(), lastAccess: Date.now() }; } }
+    if (!data) { const j = await cachedGetBars(currentSymbol, "1Day", 500); const b = JSON.parse(j); if (b.length > 60) { data = b; barCache[ck] = { data: b, timestamp: Date.now(), lastAccess: Date.now() }; } }
     if (!data || data.length < 61) { win.contentElement.textContent = ""; win.setContent("Need at least 61 daily bars for anomaly detection."); return; }
     const n = data.length; const today = data[n-1];
     function zSc(v, m, s) { return s > 0 ? (v - m) / s : 0; }
@@ -27555,7 +27591,7 @@ async function checkWatchlistSMA200Alerts() {
     const cacheKey = `sma200alert:${sym}`;
     if (watchlistSMA200Cache[cacheKey] && (now - watchlistSMA200Cache[cacheKey].ts) < 300000) continue; // 5min cache
     try {
-      const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 210 });
+      const barsJson = await cachedGetBars(sym, "1Day", 210);
       const bars = JSON.parse(barsJson);
       if (bars.length < 201) continue;
       const closes = bars.map(b => b.close);
