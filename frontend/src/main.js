@@ -5263,7 +5263,473 @@ async function cmdInsider() {
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+// BREADTH — Market Breadth Dashboard
+// ══════════════════════════════════════════════════════════════
+async function cmdBreadth() {
+  const win = createWindow({ title: "Market Breadth Dashboard", width: 500, height: 450 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Scanning watchlist for market breadth...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+  try {
+    const watchlist = getWatchlist();
+    if (watchlist.length === 0) { win.contentElement.textContent = ""; win.setContent("No watchlist symbols. Add symbols via QM (Quote Monitor) first."); return; }
+    let aboveSMA200 = 0, aboveSMA50 = 0, advances = 0, declines = 0, totalChange = 0, validCount = 0;
+    const details = [];
+    for (const sym of watchlist) {
+      let data = null;
+      const cKey = `${sym}:1Day`;
+      const cached = barCache[cKey];
+      if (cached && cached.data && cached.data.length > 200) data = cached.data;
+      if (!data) { try { const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 300 }); const bars = JSON.parse(barsJson); if (bars.length > 50) { data = bars; barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() }; } } catch (_) {} }
+      if (!data || data.length < 2) continue;
+      validCount++;
+      const close = data[data.length - 1].close, prevClose = data[data.length - 2].close;
+      const dayChange = ((close - prevClose) / prevClose) * 100;
+      totalChange += dayChange;
+      if (dayChange >= 0) advances++; else declines++;
+      let sma200Val = null;
+      if (data.length >= 200) { let s = 0; for (let i = data.length - 200; i < data.length; i++) s += data[i].close; sma200Val = s / 200; if (close > sma200Val) aboveSMA200++; }
+      let sma50Val = null;
+      if (data.length >= 50) { let s = 0; for (let i = data.length - 50; i < data.length; i++) s += data[i].close; sma50Val = s / 50; if (close > sma50Val) aboveSMA50++; }
+      details.push({ sym, close, dayChange, abv200: sma200Val ? close > sma200Val : null, abv50: sma50Val ? close > sma50Val : null });
+    }
+    if (validCount === 0) { win.contentElement.textContent = ""; win.setContent("No bar data available for watchlist symbols. Load some charts first."); return; }
+    const pctAbove200 = (aboveSMA200 / validCount) * 100, pctAbove50 = (aboveSMA50 / validCount) * 100;
+    const avgChange = totalChange / validCount;
+    const assessment = pctAbove200 > 60 ? "BULLISH" : pctAbove200 < 40 ? "BEARISH" : "MIXED";
+    const assessColor = assessment === "BULLISH" ? "#4caf50" : assessment === "BEARISH" ? "#f44336" : "#ff9800";
+    win.contentElement.textContent = "";
+    const container = document.createElement("div");
+    container.style.cssText = "padding:12px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;";
+    const header = document.createElement("div");
+    header.style.cssText = `text-align:center;font-size:20px;font-weight:bold;color:${assessColor};margin-bottom:16px;`;
+    header.textContent = `Market: ${assessment}`;
+    container.appendChild(header);
+    function makeProgressBar(label, pct, color) {
+      const row = document.createElement("div"); row.style.cssText = "margin-bottom:12px;";
+      const lbl = document.createElement("div"); lbl.style.cssText = "margin-bottom:4px;";
+      lbl.innerHTML = `${label}: <span style="color:${color};font-weight:bold">${pct.toFixed(1)}%</span>`;
+      row.appendChild(lbl);
+      const track = document.createElement("div"); track.style.cssText = "background:#333;border-radius:4px;height:16px;overflow:hidden;";
+      const fill = document.createElement("div"); fill.style.cssText = `background:${color};height:100%;width:${Math.min(pct, 100)}%;border-radius:4px;transition:width 0.3s;`;
+      track.appendChild(fill); row.appendChild(track); return row;
+    }
+    const bc200 = pctAbove200 > 60 ? "#4caf50" : pctAbove200 < 40 ? "#f44336" : "#ff9800";
+    const bc50 = pctAbove50 > 60 ? "#4caf50" : pctAbove50 < 40 ? "#f44336" : "#ff9800";
+    container.appendChild(makeProgressBar("Above SMA 200 (long-term health)", pctAbove200, bc200));
+    container.appendChild(makeProgressBar("Above SMA 50 (medium-term momentum)", pctAbove50, bc50));
+    const adLine = document.createElement("div"); adLine.style.cssText = "margin-bottom:12px;display:flex;justify-content:space-between;";
+    adLine.innerHTML = `<span>Advance/Decline:</span> <span style="color:#4caf50">${advances} Adv</span> / <span style="color:#f44336">${declines} Dec</span> <span style="color:#888">(Ratio: ${declines > 0 ? (advances / declines).toFixed(2) : "N/A"})</span>`;
+    container.appendChild(adLine);
+    const avgLine = document.createElement("div"); avgLine.style.cssText = "margin-bottom:16px;";
+    const avgColor = avgChange >= 0 ? "#4caf50" : "#f44336";
+    avgLine.innerHTML = `Avg 1-Day Change: <span style="color:${avgColor};font-weight:bold">${avgChange >= 0 ? "+" : ""}${avgChange.toFixed(2)}%</span>`;
+    container.appendChild(avgLine);
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+    table.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Close</th><th style="text-align:right;padding:4px;">Chg%</th><th style="text-align:center;padding:4px;">SMA200</th><th style="text-align:center;padding:4px;">SMA50</th></tr></thead>`;
+    const tbody = document.createElement("tbody");
+    for (const d of details) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #333;";
+      const chgC = d.dayChange >= 0 ? "#4caf50" : "#f44336";
+      const s200 = d.abv200 === null ? "-" : d.abv200 ? '<span style="color:#4caf50">&#9650;</span>' : '<span style="color:#f44336">&#9660;</span>';
+      const s50 = d.abv50 === null ? "-" : d.abv50 ? '<span style="color:#4caf50">&#9650;</span>' : '<span style="color:#f44336">&#9660;</span>';
+      tr.innerHTML = `<td style="padding:4px;">${d.sym}</td><td style="text-align:right;padding:4px;">$${d.close.toFixed(2)}</td><td style="text-align:right;padding:4px;color:${chgC}">${d.dayChange >= 0 ? "+" : ""}${d.dayChange.toFixed(2)}%</td><td style="text-align:center;padding:4px;">${s200}</td><td style="text-align:center;padding:4px;">${s50}</td>`;
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody); container.appendChild(table);
+    win.appendElement(container);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to compute breadth: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// DIVERGENCE — Indicator Divergence Scanner
+// ══════════════════════════════════════════════════════════════
+function cmdDivergence() {
+  if (!currentChartData || currentChartData.length < 55) { log("Need at least 55 bars loaded for divergence scan", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Divergence Scanner`, width: 600, height: 450 });
+  win.contentElement.textContent = "";
+  const fisherResult = calcEhlersFisher(currentChartData, 32);
+  const rsiResult = calcRSI(currentChartData, 14);
+  const totalBars = currentChartData.length;
+  const scanStart = Math.max(0, totalBars - 50), scanEnd = totalBars;
+  const fisherByTime = {}; for (const f of fisherResult.fisher) fisherByTime[f.time] = f.value;
+  const rsiByTime = {}; for (const r of rsiResult) rsiByTime[r.time] = r.value;
+  function findSwingHighs(si, ei) {
+    const sw = [];
+    for (let i = si + 2; i < ei - 2; i++) { const b = currentChartData[i]; if (b.high > currentChartData[i-1].high && b.high > currentChartData[i-2].high && b.high > currentChartData[i+1].high && b.high > currentChartData[i+2].high) sw.push({ idx: i, price: b.high, time: b.time }); }
+    return sw;
+  }
+  function findSwingLows(si, ei) {
+    const sw = [];
+    for (let i = si + 2; i < ei - 2; i++) { const b = currentChartData[i]; if (b.low < currentChartData[i-1].low && b.low < currentChartData[i-2].low && b.low < currentChartData[i+1].low && b.low < currentChartData[i+2].low) sw.push({ idx: i, price: b.low, time: b.time }); }
+    return sw;
+  }
+  const swingHighs = findSwingHighs(scanStart, scanEnd);
+  const swingLows = findSwingLows(scanStart, scanEnd);
+  const divergences = [];
+  for (let i = 1; i < swingHighs.length; i++) {
+    const prev = swingHighs[i-1], curr = swingHighs[i];
+    if (curr.price > prev.price) {
+      const pF = fisherByTime[prev.time], cF = fisherByTime[curr.time];
+      if (pF !== undefined && cF !== undefined && cF < pF) divergences.push({ barIdx: curr.idx, type: "Bearish", indicator: "Fisher", priceLevel: curr.price, indLevel: cF, time: curr.time });
+      const pR = rsiByTime[prev.time], cR = rsiByTime[curr.time];
+      if (pR !== undefined && cR !== undefined && cR < pR) divergences.push({ barIdx: curr.idx, type: "Bearish", indicator: "RSI", priceLevel: curr.price, indLevel: cR, time: curr.time });
+    }
+  }
+  for (let i = 1; i < swingLows.length; i++) {
+    const prev = swingLows[i-1], curr = swingLows[i];
+    if (curr.price < prev.price) {
+      const pF = fisherByTime[prev.time], cF = fisherByTime[curr.time];
+      if (pF !== undefined && cF !== undefined && cF > pF) divergences.push({ barIdx: curr.idx, type: "Bullish", indicator: "Fisher", priceLevel: curr.price, indLevel: cF, time: curr.time });
+      const pR = rsiByTime[prev.time], cR = rsiByTime[curr.time];
+      if (pR !== undefined && cR !== undefined && cR > pR) divergences.push({ barIdx: curr.idx, type: "Bullish", indicator: "RSI", priceLevel: curr.price, indLevel: cR, time: curr.time });
+    }
+  }
+  divergences.sort((a, b) => a.barIdx - b.barIdx);
+  const divMarkers = divergences.map(d => ({ time: d.time, position: d.type === "Bullish" ? "belowBar" : "aboveBar", color: d.type === "Bullish" ? "#4caf50" : "#f44336", shape: d.type === "Bullish" ? "arrowUp" : "arrowDown", text: `${d.type[0]}-${d.indicator}` }));
+  const seenKeys = new Set(); const uniqueMarkers = [];
+  for (const m of divMarkers) { const key = `${m.time}-${m.text}`; if (!seenKeys.has(key)) { seenKeys.add(key); uniqueMarkers.push(m); } }
+  uniqueMarkers.sort((a, b) => a.time - b.time);
+  try { candleSeries.setMarkers(uniqueMarkers); } catch (_) {}
+  const container = document.createElement("div"); container.style.cssText = "padding:12px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;";
+  const summary = document.createElement("div"); summary.style.cssText = "margin-bottom:12px;";
+  const bullCount = divergences.filter(d => d.type === "Bullish").length;
+  const bearCount = divergences.filter(d => d.type === "Bearish").length;
+  summary.innerHTML = `Found <b>${divergences.length}</b> divergences (last 50 bars): <span style="color:#4caf50">${bullCount} Bullish</span> | <span style="color:#f44336">${bearCount} Bearish</span>`;
+  container.appendChild(summary);
+  if (divergences.length === 0) {
+    const none = document.createElement("div"); none.style.cssText = "color:#888;padding:20px;text-align:center;"; none.textContent = "No divergences detected in the scan window."; container.appendChild(none);
+  } else {
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+    table.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Bar#</th><th style="text-align:left;padding:4px;">Type</th><th style="text-align:left;padding:4px;">Indicator</th><th style="text-align:right;padding:4px;">Price</th><th style="text-align:right;padding:4px;">Ind Value</th></tr></thead>`;
+    const tbody = document.createElement("tbody");
+    for (const d of divergences) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #333;";
+      const tc = d.type === "Bullish" ? "#4caf50" : "#f44336";
+      tr.innerHTML = `<td style="padding:4px;">${d.barIdx}</td><td style="padding:4px;color:${tc};font-weight:bold">${d.type}</td><td style="padding:4px;">${d.indicator}</td><td style="text-align:right;padding:4px;">$${d.priceLevel.toFixed(2)}</td><td style="text-align:right;padding:4px;">${d.indLevel.toFixed(2)}</td>`;
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody); container.appendChild(table);
+  }
+  const clearBtn = document.createElement("button"); clearBtn.textContent = "Clear Markers";
+  clearBtn.style.cssText = "margin-top:12px;padding:6px 16px;background:#333;color:#ddd;border:1px solid #555;border-radius:4px;cursor:pointer;";
+  clearBtn.addEventListener("click", () => { candleSeries.setMarkers([]); log("Divergence markers cleared", "info"); });
+  container.appendChild(clearBtn);
+  win.appendElement(container);
+}
+
+// ── REPLAY — Bar-by-Bar Practice Trading ────────────────────
+
+let replayIndex = 100;
+let replaySpeed = 1;
+let replayRunning = false;
+let replayTrades = [];
+let replayInterval = null;
+let replayOpenTrade = null;
+let replaySavedData = null;
+
+function cmdReplay() {
+  if (!currentChartData || currentChartData.length < 120) {
+    log("REPLAY: Need at least 120 bars loaded. Load a chart first.", "warn");
+    return;
+  }
+
+  replaySavedData = currentChartData.slice();
+  replayIndex = 100;
+  replaySpeed = 1;
+  replayRunning = false;
+  replayTrades = [];
+  replayOpenTrade = null;
+
+  const dp = lastPrice > 100 ? 2 : lastPrice > 1 ? 4 : 6;
+
+  function cleanup() {
+    replayRunning = false;
+    if (replayInterval) { clearInterval(replayInterval); replayInterval = null; }
+    if (replaySavedData) {
+      currentChartData = replaySavedData;
+      candleSeries.setData(currentChartData);
+      applyIndicators(currentChartData);
+      candleSeries.setMarkers([]);
+      replaySavedData = null;
+    }
+    replayOpenTrade = null;
+    log("REPLAY: Session ended, chart restored.", "info");
+  }
+
+  const win = createWindow({
+    title: `REPLAY — ${currentSymbol} Practice`,
+    width: 380,
+    height: 520,
+    onClose: cleanup,
+  });
+  win.contentElement.textContent = "";
+  win.contentElement.style.cssText = "padding:10px;font-family:Consolas,monospace;font-size:11px;color:#ccc;display:flex;flex-direction:column;gap:8px;";
+
+  const statusEl = document.createElement("div");
+  statusEl.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;";
+  statusEl.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">STATUS</div>';
+  const barLabel = document.createElement("div");
+  barLabel.textContent = `Bar: ${replayIndex} / ${currentChartData.length}`;
+  const priceLabel = document.createElement("div");
+  priceLabel.style.cssText = "font-size:14px;font-weight:bold;color:#ffeb3b;margin:4px 0;";
+  const stateLabel = document.createElement("div");
+  stateLabel.style.color = "#888";
+  stateLabel.textContent = "PAUSED";
+  statusEl.appendChild(barLabel);
+  statusEl.appendChild(priceLabel);
+  statusEl.appendChild(stateLabel);
+  win.appendElement(statusEl);
+
+  const transport = document.createElement("div");
+  transport.style.cssText = "display:flex;gap:6px;align-items:center;";
+
+  const makeBtn = (text, color, onClick) => {
+    const btn = document.createElement("button");
+    btn.textContent = text;
+    btn.style.cssText = `padding:6px 12px;background:${color};border:1px solid #555;color:#fff;cursor:pointer;border-radius:3px;font-family:Consolas,monospace;font-size:11px;`;
+    btn.addEventListener("click", onClick);
+    return btn;
+  };
+
+  const playBtn = makeBtn("Play", "#1b5e20", () => {
+    replayRunning = !replayRunning;
+    playBtn.textContent = replayRunning ? "Pause" : "Play";
+    playBtn.style.background = replayRunning ? "#b71c1c" : "#1b5e20";
+    stateLabel.textContent = replayRunning ? `PLAYING ${replaySpeed}x` : "PAUSED";
+    stateLabel.style.color = replayRunning ? "#4caf50" : "#888";
+    if (replayRunning) startReplayInterval();
+    else stopReplayInterval();
+  });
+
+  const stepBtn = makeBtn("Step >", "#333", () => {
+    if (!replayRunning) advanceReplay();
+  });
+
+  const speedSel = document.createElement("select");
+  speedSel.style.cssText = "padding:4px;background:#222;border:1px solid #555;color:#ccc;font-family:Consolas,monospace;font-size:11px;border-radius:3px;";
+  for (const spd of [1, 5, 25, 100]) {
+    const opt = document.createElement("option");
+    opt.value = spd;
+    opt.textContent = `${spd}x`;
+    if (spd === 1) opt.selected = true;
+    speedSel.appendChild(opt);
+  }
+  speedSel.addEventListener("change", () => {
+    replaySpeed = parseInt(speedSel.value);
+    stateLabel.textContent = replayRunning ? `PLAYING ${replaySpeed}x` : "PAUSED";
+    if (replayRunning) { stopReplayInterval(); startReplayInterval(); }
+  });
+
+  transport.appendChild(playBtn);
+  transport.appendChild(stepBtn);
+  transport.appendChild(speedSel);
+  win.appendElement(transport);
+
+  const tradingDiv = document.createElement("div");
+  tradingDiv.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;";
+
+  const buyBtn = makeBtn("BUY", "#1b5e20", () => {
+    if (replayOpenTrade) { log("REPLAY: Already in a trade. Close first.", "warn"); return; }
+    const price = currentChartData[replayIndex - 1].close;
+    replayOpenTrade = { side: "buy", entryPrice: price, entryBar: replayIndex - 1 };
+    posLabel.textContent = `LONG @ ${price.toFixed(dp)}`;
+    posLabel.style.color = "#4caf50";
+    log(`REPLAY: BUY @ ${price.toFixed(dp)}`, "ok");
+    updateReplayMarkers();
+  });
+
+  const sellBtn = makeBtn("SELL", "#b71c1c", () => {
+    if (replayOpenTrade) { log("REPLAY: Already in a trade. Close first.", "warn"); return; }
+    const price = currentChartData[replayIndex - 1].close;
+    replayOpenTrade = { side: "sell", entryPrice: price, entryBar: replayIndex - 1 };
+    posLabel.textContent = `SHORT @ ${price.toFixed(dp)}`;
+    posLabel.style.color = "#f44336";
+    log(`REPLAY: SELL @ ${price.toFixed(dp)}`, "ok");
+    updateReplayMarkers();
+  });
+
+  const closeBtn = makeBtn("Close Position", "#4a148c", () => {
+    if (!replayOpenTrade) { log("REPLAY: No open trade.", "warn"); return; }
+    const exitPrice = currentChartData[replayIndex - 1].close;
+    const pnl = replayOpenTrade.side === "buy"
+      ? exitPrice - replayOpenTrade.entryPrice
+      : replayOpenTrade.entryPrice - exitPrice;
+    const trade = {
+      side: replayOpenTrade.side,
+      entryPrice: replayOpenTrade.entryPrice,
+      entryBar: replayOpenTrade.entryBar,
+      exitPrice,
+      exitBar: replayIndex - 1,
+      pnl,
+    };
+    replayTrades.push(trade);
+    log(`REPLAY: Closed ${trade.side.toUpperCase()} — P&L: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(dp)}`, pnl >= 0 ? "ok" : "warn");
+    replayOpenTrade = null;
+    posLabel.textContent = "No position";
+    posLabel.style.color = "#888";
+    updatePnL();
+    updateReplayMarkers();
+  });
+
+  const resetBtn = makeBtn("Reset", "#333", () => {
+    replayRunning = false;
+    stopReplayInterval();
+    replayIndex = 100;
+    replayTrades = [];
+    replayOpenTrade = null;
+    playBtn.textContent = "Play";
+    playBtn.style.background = "#1b5e20";
+    stateLabel.textContent = "PAUSED";
+    stateLabel.style.color = "#888";
+    posLabel.textContent = "No position";
+    posLabel.style.color = "#888";
+    updatePnL();
+    advanceReplay();
+    log("REPLAY: Reset to bar 100.", "info");
+  });
+
+  tradingDiv.appendChild(buyBtn);
+  tradingDiv.appendChild(sellBtn);
+  tradingDiv.appendChild(closeBtn);
+  tradingDiv.appendChild(resetBtn);
+  win.appendElement(tradingDiv);
+
+  const posDiv = document.createElement("div");
+  posDiv.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;";
+  posDiv.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">POSITION</div>';
+  const posLabel = document.createElement("div");
+  posLabel.textContent = "No position";
+  posLabel.style.color = "#888";
+  const unrealizedLabel = document.createElement("div");
+  unrealizedLabel.style.cssText = "font-size:10px;margin-top:4px;";
+  posDiv.appendChild(posLabel);
+  posDiv.appendChild(unrealizedLabel);
+  win.appendElement(posDiv);
+
+  const pnlDiv = document.createElement("div");
+  pnlDiv.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;";
+  pnlDiv.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">PERFORMANCE</div>';
+  const pnlLabel = document.createElement("div");
+  pnlLabel.style.cssText = "font-size:14px;font-weight:bold;";
+  pnlLabel.textContent = "P&L: 0.00";
+  const statsLabel = document.createElement("div");
+  statsLabel.style.cssText = "font-size:10px;color:#888;margin-top:4px;";
+  statsLabel.textContent = "Trades: 0 | Win: 0 | Loss: 0 | Win%: —";
+  pnlDiv.appendChild(pnlLabel);
+  pnlDiv.appendChild(statsLabel);
+  win.appendElement(pnlDiv);
+
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;flex:1;overflow-y:auto;max-height:120px;";
+  logDiv.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">TRADE LOG</div>';
+  const logList = document.createElement("div");
+  logList.style.cssText = "font-size:10px;";
+  logDiv.appendChild(logList);
+  win.appendElement(logDiv);
+
+  function updatePnL() {
+    const totalPnL = replayTrades.reduce((sum, t) => sum + t.pnl, 0);
+    const wins = replayTrades.filter(t => t.pnl > 0).length;
+    const losses = replayTrades.filter(t => t.pnl <= 0).length;
+    const winRate = replayTrades.length > 0 ? ((wins / replayTrades.length) * 100).toFixed(1) : "—";
+    pnlLabel.textContent = `P&L: ${totalPnL >= 0 ? "+" : ""}${totalPnL.toFixed(dp)}`;
+    pnlLabel.style.color = totalPnL >= 0 ? "#4caf50" : "#f44336";
+    statsLabel.textContent = `Trades: ${replayTrades.length} | Win: ${wins} | Loss: ${losses} | Win%: ${winRate}`;
+    logList.textContent = "";
+    for (const t of replayTrades.slice().reverse()) {
+      const entry = document.createElement("div");
+      entry.style.cssText = `color:${t.pnl >= 0 ? "#4caf50" : "#f44336"};margin:2px 0;`;
+      entry.textContent = `${t.side.toUpperCase()} ${t.entryPrice.toFixed(dp)} -> ${t.exitPrice.toFixed(dp)} = ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(dp)}`;
+      logList.appendChild(entry);
+    }
+  }
+
+  function updateReplayMarkers() {
+    const markers = [];
+    for (const t of replayTrades) {
+      markers.push({
+        time: currentChartData[t.entryBar].time,
+        position: t.side === "buy" ? "belowBar" : "aboveBar",
+        color: t.side === "buy" ? "#4caf50" : "#f44336",
+        shape: t.side === "buy" ? "arrowUp" : "arrowDown",
+        text: `${t.side === "buy" ? "B" : "S"} ${t.entryPrice.toFixed(dp)}`,
+      });
+      markers.push({
+        time: currentChartData[t.exitBar].time,
+        position: "aboveBar",
+        color: t.pnl >= 0 ? "#4caf50" : "#f44336",
+        shape: "circle",
+        text: `X ${t.pnl >= 0 ? "+" : ""}${t.pnl.toFixed(dp)}`,
+      });
+    }
+    if (replayOpenTrade) {
+      markers.push({
+        time: currentChartData[replayOpenTrade.entryBar].time,
+        position: replayOpenTrade.side === "buy" ? "belowBar" : "aboveBar",
+        color: replayOpenTrade.side === "buy" ? "#4caf50" : "#f44336",
+        shape: replayOpenTrade.side === "buy" ? "arrowUp" : "arrowDown",
+        text: `${replayOpenTrade.side === "buy" ? "B" : "S"} ${replayOpenTrade.entryPrice.toFixed(dp)}`,
+      });
+    }
+    markers.sort((a, b) => a.time - b.time);
+    try { candleSeries.setMarkers(markers); } catch (_) {}
+  }
+
+  function advanceReplay() {
+    if (replayIndex >= replaySavedData.length) {
+      replayRunning = false;
+      stopReplayInterval();
+      playBtn.textContent = "Play";
+      playBtn.style.background = "#1b5e20";
+      stateLabel.textContent = "FINISHED";
+      stateLabel.style.color = "#ffeb3b";
+      log("REPLAY: Reached end of data.", "info");
+      return;
+    }
+    const slice = replaySavedData.slice(0, replayIndex);
+    currentChartData = slice;
+    candleSeries.setData(slice);
+    applyIndicators(slice);
+    const bar = slice[slice.length - 1];
+    barLabel.textContent = `Bar: ${replayIndex} / ${replaySavedData.length}`;
+    priceLabel.textContent = `${bar.close.toFixed(dp)}`;
+    if (replayOpenTrade) {
+      const unrealized = replayOpenTrade.side === "buy"
+        ? bar.close - replayOpenTrade.entryPrice
+        : replayOpenTrade.entryPrice - bar.close;
+      unrealizedLabel.textContent = `Unrealized: ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(dp)}`;
+      unrealizedLabel.style.color = unrealized >= 0 ? "#4caf50" : "#f44336";
+    } else {
+      unrealizedLabel.textContent = "";
+    }
+    updateReplayMarkers();
+    replayIndex++;
+  }
+
+  function startReplayInterval() {
+    stopReplayInterval();
+    const baseMs = 500;
+    const interval = Math.max(10, Math.round(baseMs / replaySpeed));
+    replayInterval = setInterval(() => {
+      if (!replayRunning) { stopReplayInterval(); return; }
+      advanceReplay();
+    }, interval);
+  }
+
+  function stopReplayInterval() {
+    if (replayInterval) { clearInterval(replayInterval); replayInterval = null; }
+  }
+
+  advanceReplay();
+  log(`REPLAY: Started on ${currentSymbol} — ${replaySavedData.length} bars available.`, "ok");
+}
+
 const CMD_PALETTE_COMMANDS = [
+  { name: "REPLAY", desc: "Bar-by-bar chart replay / practice trading", action: cmdReplay },
   { name: "DES", desc: "Description / Fundamentals", action: cmdDescription },
   { name: "NEWS", desc: "News headlines", action: cmdNews },
   { name: "FA", desc: "Financial Analysis (income, balance, cash flow)", action: cmdFinancialAnalysis },
@@ -5295,6 +5761,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "PATTERNS", desc: "Pattern recognition (Double Top/Bottom, H&S)", action: cmdPatterns },
   { name: "SENTIMENT", desc: "News sentiment analysis", action: cmdSentiment },
   { name: "VOLSURF", desc: "Volatility surface (options IV grid)", action: cmdVolSurf },
+  { name: "PCRATIO", desc: "Put/Call ratio dashboard (volume & OI sentiment)", action: cmdPCRatio },
+  { name: "UNUSUAL", desc: "Unusual options activity scanner (vol >> OI)", action: cmdUnusual },
   { name: "BRACKET", desc: "Conditional bracket/OCO order placement", action: cmdBracketOrder },
   { name: "HEATMAP", desc: "Portfolio heat map (daily P&L)", action: cmdHeatmap },
   { name: "OPTCALC", desc: "Options P&L calculator (payoff diagram)", action: cmdOptionsCalc },
@@ -5306,6 +5774,19 @@ const CMD_PALETTE_COMMANDS = [
   { name: "HELP", desc: "Keybindings, commands & feature reference", action: showHelpOverlay },
   { name: "TILE", desc: "Tile all floating windows", action: () => tileWindows() },
   { name: "CLOSE", desc: "Close all floating windows", action: () => closeAllWindows() },
+  { name: "COMPARE", desc: "Chart comparison overlay (% change)", action: cmdCompare },
+  { name: "SPREAD", desc: "Spread/Ratio chart (two symbols)", action: cmdSpread },
+  { name: "IVRANK", desc: "IV Percentile from options chain history", action: cmdIVRank },
+  { name: "GAPS", desc: "Gap scanner (watchlist daily gaps)", action: cmdGaps },
+  { name: "FLOWS", desc: "Sector fund flows (ETF volume × price change)", action: cmdFlows },
+  { name: "TRADESTATS", desc: "Trade statistics dashboard (win rate, P&L, expectancy)", action: cmdTradeStats },
+  { name: "RELSTRENGTH", desc: "Relative strength ranking (watchlist)", action: cmdRelStrength },
+  { name: "SRLEVEL", desc: "Auto support/resistance detection (fractal clustering)", action: cmdSRLevel },
+  { name: "SEASONALITY", desc: "Monthly performance patterns (bar chart + table)", action: cmdSeasonality },
+  { name: "PAIRS", desc: "Pairs trading analysis (correlation, z-score, half-life)", action: cmdPairs },
+  { name: "MTFDIV", desc: "Multi-timeframe divergence alerts (Fisher Transform)", action: cmdMTFDiv },
+  { name: "BREADTH", desc: "Market breadth dashboard (SMA200/50, A/D, watchlist)", action: cmdBreadth },
+  { name: "DIVERGENCE", desc: "Divergence scanner (Fisher/RSI vs price)", action: cmdDivergence },
 ];
 
 function fuzzyMatch(query, target) {
@@ -10091,6 +10572,240 @@ async function cmdVolSurf() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// FEATURE: Put/Call Ratio Dashboard
+// ══════════════════════════════════════════════════════════════
+
+async function cmdPCRatio() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Put/Call Ratio`, width: 500, height: 400 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching options chain for put/call ratio...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  function getNextExpiry() {
+    const now = new Date();
+    let month = now.getMonth();
+    let year = now.getFullYear();
+    for (let i = 0; i < 2; i++) {
+      const firstDay = new Date(year, month, 1).getDay();
+      const firstFriday = firstDay <= 5 ? (5 - firstDay + 1) : (12 - firstDay + 1);
+      const thirdFriday = firstFriday + 14;
+      const expDate = new Date(year, month, thirdFriday);
+      if (expDate > now) return expDate.toISOString().slice(0, 10);
+      month++;
+      if (month > 11) { month = 0; year++; }
+    }
+    return now.toISOString().slice(0, 10);
+  }
+
+  try {
+    const expiry = getNextExpiry();
+    const json = await invoke("get_options", { symbol: currentSymbol, expiry });
+    const chain = typeof json === "string" ? JSON.parse(json) : json;
+    const options = Array.isArray(chain) ? chain : (chain.options || []);
+    win.contentElement.textContent = "";
+
+    if (!options || options.length === 0) {
+      win.setContent("No options data available. This symbol may not have listed options.");
+      return;
+    }
+
+    let callVolume = 0, putVolume = 0, callOI = 0, putOI = 0;
+    for (const opt of options) {
+      const vol = opt.volume || 0;
+      const oi = opt.open_interest || opt.openInterest || 0;
+      if (opt.option_type === "call") { callVolume += vol; callOI += oi; }
+      else if (opt.option_type === "put") { putVolume += vol; putOI += oi; }
+    }
+
+    const volRatio = callVolume > 0 ? putVolume / callVolume : 0;
+    const oiRatio = callOI > 0 ? putOI / callOI : 0;
+
+    function classify(ratio) {
+      if (ratio > 1.0) return { label: "BEARISH", color: "#f44336" };
+      if (ratio < 0.7) return { label: "BULLISH", color: "#4caf50" };
+      return { label: "NEUTRAL", color: "#ff9800" };
+    }
+
+    const volSent = classify(volRatio);
+    const oiSent = classify(oiRatio);
+
+    const header = document.createElement("div");
+    header.style.cssText = "padding:12px;border-bottom:1px solid #333;text-align:center;";
+    header.innerHTML = `<div style="color:#888;font-size:11px;margin-bottom:4px;">Expiry: ${expiry}</div>`;
+    win.appendElement(header);
+
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;";
+
+    const rows = [
+      ["", "Puts", "Calls", "P/C Ratio", "Sentiment"],
+      ["Volume", putVolume.toLocaleString(), callVolume.toLocaleString(), volRatio.toFixed(3), volSent],
+      ["Open Interest", putOI.toLocaleString(), callOI.toLocaleString(), oiRatio.toFixed(3), oiSent],
+    ];
+
+    for (let r = 0; r < rows.length; r++) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = r === 0 ? "border-bottom:1px solid #444;" : "border-bottom:1px solid #1a1a2e;";
+      for (let c = 0; c < rows[r].length; c++) {
+        const td = document.createElement(r === 0 ? "th" : "td");
+        td.style.cssText = `padding:8px 10px;text-align:${c === 0 ? "left" : "center"};`;
+        if (r === 0) {
+          td.style.color = "#888";
+          td.style.fontSize = "10px";
+          td.textContent = rows[r][c];
+        } else if (c === 4) {
+          const sent = rows[r][c];
+          td.style.color = sent.color;
+          td.style.fontWeight = "bold";
+          td.textContent = sent.label;
+        } else {
+          td.style.color = c === 3 ? "#fff" : "#ccc";
+          if (c === 3) td.style.fontWeight = "bold";
+          td.textContent = rows[r][c];
+        }
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+
+    const legend = document.createElement("div");
+    legend.style.cssText = "padding:12px;font-size:10px;color:#666;border-top:1px solid #333;margin-top:12px;";
+    legend.innerHTML = `<span style="color:#f44336;">&#9632;</span> Bearish: ratio &gt; 1.0 &nbsp;&nbsp;`
+      + `<span style="color:#ff9800;">&#9632;</span> Neutral: 0.7 - 1.0 &nbsp;&nbsp;`
+      + `<span style="color:#4caf50;">&#9632;</span> Bullish: ratio &lt; 0.7`;
+    win.appendElement(legend);
+
+    log(`P/C Ratio for ${currentSymbol}: Vol ${volRatio.toFixed(3)} (${volSent.label}), OI ${oiRatio.toFixed(3)} (${oiSent.label})`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Put/Call ratio failed: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Unusual Options Activity Scanner
+// ══════════════════════════════════════════════════════════════
+
+async function cmdUnusual() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Unusual Options Activity`, width: 700, height: 500 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Scanning options chain for unusual activity...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+
+  function getNextExpiry() {
+    const now = new Date();
+    let month = now.getMonth();
+    let year = now.getFullYear();
+    for (let i = 0; i < 2; i++) {
+      const firstDay = new Date(year, month, 1).getDay();
+      const firstFriday = firstDay <= 5 ? (5 - firstDay + 1) : (12 - firstDay + 1);
+      const thirdFriday = firstFriday + 14;
+      const expDate = new Date(year, month, thirdFriday);
+      if (expDate > now) return expDate.toISOString().slice(0, 10);
+      month++;
+      if (month > 11) { month = 0; year++; }
+    }
+    return now.toISOString().slice(0, 10);
+  }
+
+  try {
+    const expiry = getNextExpiry();
+    const json = await invoke("get_options", { symbol: currentSymbol, expiry });
+    const chain = typeof json === "string" ? JSON.parse(json) : json;
+    const options = Array.isArray(chain) ? chain : (chain.options || []);
+    win.contentElement.textContent = "";
+
+    if (!options || options.length === 0) {
+      win.setContent("No options data available. This symbol may not have listed options.");
+      return;
+    }
+
+    const unusual = [];
+    for (const opt of options) {
+      const vol = opt.volume || 0;
+      const oi = opt.open_interest || opt.openInterest || 0;
+      if (vol > 100 && oi > 0 && vol > 3 * oi) {
+        unusual.push({
+          strike: opt.strike,
+          type: opt.option_type === "call" ? "Call" : "Put",
+          volume: vol,
+          oi: oi,
+          ratio: vol / oi,
+          sentiment: opt.option_type === "call" ? "Bullish" : "Bearish",
+          sentColor: opt.option_type === "call" ? "#4caf50" : "#f44336",
+        });
+      }
+    }
+    unusual.sort((a, b) => b.volume - a.volume);
+
+    const header = document.createElement("div");
+    header.style.cssText = "padding:8px 12px;border-bottom:1px solid #333;color:#888;font-size:11px;";
+    header.textContent = `Expiry: ${expiry} — Flagged: volume > 3x open interest AND volume > 100`;
+    win.appendElement(header);
+
+    if (unusual.length === 0) {
+      const msg = document.createElement("div");
+      msg.style.cssText = "padding:20px;text-align:center;color:#888;font-size:12px;";
+      msg.textContent = "No unusual options activity detected for this expiration.";
+      win.appendElement(msg);
+      log(`Unusual options for ${currentSymbol}: none detected`, "ok");
+      return;
+    }
+
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    thead.style.cssText = "border-bottom:1px solid #444;";
+    for (const h of ["Strike", "Type", "Volume", "OI", "Vol/OI", "Side"]) {
+      const th = document.createElement("th");
+      th.style.cssText = "padding:6px 8px;color:#888;text-align:center;font-size:10px;";
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+
+    for (const u of unusual) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = "border-bottom:1px solid #1a1a2e;";
+      const vals = [
+        { text: u.strike.toFixed(2), color: "#fff", bold: true },
+        { text: u.type, color: u.type === "Call" ? "#4caf50" : "#f44336", bold: false },
+        { text: u.volume.toLocaleString(), color: "#ff9800", bold: true },
+        { text: u.oi.toLocaleString(), color: "#ccc", bold: false },
+        { text: u.ratio.toFixed(1) + "x", color: "#ff9800", bold: true },
+        { text: u.sentiment, color: u.sentColor, bold: true },
+      ];
+      for (const v of vals) {
+        const td = document.createElement("td");
+        td.style.cssText = `padding:5px 8px;text-align:center;color:${v.color};${v.bold ? "font-weight:bold;" : ""}`;
+        td.textContent = v.text;
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = "overflow-y:auto;max-height:380px;";
+    wrapper.appendChild(table);
+    win.appendElement(wrapper);
+
+    log(`Unusual options for ${currentSymbol}: ${unusual.length} strikes flagged`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Unusual options scan failed: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
 // FEATURE: Conditional Bracket/OCO Order Placement UI
 // ══════════════════════════════════════════════════════════════
 
@@ -10373,6 +11088,8 @@ function setupMenuBar() {
     "portfolio": () => cmdPortfolio(),
     "heatmap": () => cmdHeatmap(),
     "volsurf": () => cmdVolSurf(),
+    "pcratio": () => cmdPCRatio(),
+    "unusual": () => cmdUnusual(),
     "journal": () => cmdTradeJournal(),
     "activities": () => cmdActivities(),
     "alertboard": () => cmdAlertBoard(),
@@ -10414,6 +11131,899 @@ function setupTabs() {
       if (activeTabId !== null) closeTab(activeTabId);
     }
   });
+}
+
+// ══════════════════════════════════════════════════════════════
+// SRLEVEL — Auto Support/Resistance Detection (fractal clustering)
+// ══════════════════════════════════════════════════════════════
+
+function cmdTradeStats() {
+  const win = createWindow({ title: "Trade Statistics", width: 420, height: 380 });
+  (async () => {
+    try {
+      const histJson = await invoke("get_order_history", { limit: 500 });
+      const orders = JSON.parse(histJson).filter(o => o.status === "filled" && o.filled_avg_price);
+      if (orders.length === 0) { win.setContent("No filled orders found."); return; }
+
+      // Match buys to sells by symbol for P&L
+      const trades = [];
+      const openPos = {}; // symbol → { side, price, qty }
+      for (const o of orders.reverse()) { // oldest first
+        const sym = o.symbol;
+        const price = parseFloat(o.filled_avg_price);
+        const qty = parseFloat(o.qty) || 1;
+        if (!openPos[sym]) {
+          openPos[sym] = { side: o.side, price, qty };
+        } else if (openPos[sym].side !== o.side) {
+          const entry = openPos[sym];
+          const pnl = entry.side === "buy" ? (price - entry.price) * Math.min(qty, entry.qty) : (entry.price - price) * Math.min(qty, entry.qty);
+          trades.push({ symbol: sym, pnl, side: entry.side });
+          delete openPos[sym];
+        }
+      }
+      if (trades.length === 0) { win.setContent("No round-trip trades found (need buy+sell pairs)."); return; }
+
+      const wins = trades.filter(t => t.pnl > 0);
+      const losses = trades.filter(t => t.pnl <= 0);
+      const winRate = (wins.length / trades.length * 100).toFixed(1);
+      const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
+      const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 0;
+      const grossWin = wins.reduce((s, t) => s + t.pnl, 0);
+      const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
+      const profitFactor = grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : "∞";
+      const expectancy = (avgWin * wins.length / trades.length - avgLoss * losses.length / trades.length).toFixed(2);
+      const totalPnL = trades.reduce((s, t) => s + t.pnl, 0);
+      const largest = { win: wins.length > 0 ? Math.max(...wins.map(t => t.pnl)) : 0, loss: losses.length > 0 ? Math.min(...losses.map(t => t.pnl)) : 0 };
+
+      // Consecutive
+      let maxConsW = 0, maxConsL = 0, cw = 0, cl = 0;
+      for (const t of trades) {
+        if (t.pnl > 0) { cw++; cl = 0; maxConsW = Math.max(maxConsW, cw); }
+        else { cl++; cw = 0; maxConsL = Math.max(maxConsL, cl); }
+      }
+
+      const rows = [
+        ["Total Trades", trades.length], ["Wins", wins.length], ["Losses", losses.length],
+        ["Win Rate", winRate + "%"], ["Avg Win", "$" + avgWin.toFixed(2)], ["Avg Loss", "$" + avgLoss.toFixed(2)],
+        ["Largest Win", "$" + largest.win.toFixed(2)], ["Largest Loss", "$" + largest.loss.toFixed(2)],
+        ["Profit Factor", profitFactor], ["Expectancy", "$" + expectancy],
+        ["Max Consec. Wins", maxConsW], ["Max Consec. Losses", maxConsL],
+        ["Total P&L", "$" + totalPnL.toFixed(2)],
+      ];
+      win.contentElement.textContent = "";
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+      for (const [label, val] of rows) {
+        const tr = document.createElement("tr");
+        const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 8px;color:#888;"; td1.textContent = label;
+        const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 8px;text-align:right;font-family:Consolas,monospace;";
+        const valStr = String(val);
+        td2.textContent = valStr;
+        if (label === "Total P&L") td2.style.color = totalPnL >= 0 ? "#4caf50" : "#f44336";
+        if (label === "Win Rate") td2.style.color = parseFloat(valStr) >= 50 ? "#4caf50" : "#f44336";
+        tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+      }
+      win.appendElement(table);
+    } catch (e) { win.setContent("Failed: " + e); }
+  })();
+}
+
+function cmdRelStrength() {
+  const win = createWindow({ title: "Relative Strength Ranking", width: 500, height: 400 });
+  (async () => {
+    try {
+      const symbols = getWatchlist();
+      if (symbols.length === 0) { win.setContent("Add symbols to watchlist first (Ctrl+K → QM)."); return; }
+
+      const results = [];
+      for (const sym of symbols) {
+        const cacheKey = getCacheKey(sym, "1Day");
+        const cached = barCache[cacheKey];
+        if (!cached || !cached.data || cached.data.length < 10) continue;
+        const bars = cached.data.map(b => ({ close: b.close || b.c || parseFloat(b.close) }));
+        const len = bars.length;
+        const cur = bars[len - 1].close;
+        const chg5 = len > 5 ? ((cur - bars[len - 6].close) / bars[len - 6].close * 100) : null;
+        const chg20 = len > 20 ? ((cur - bars[len - 21].close) / bars[len - 21].close * 100) : null;
+        const chg60 = len > 60 ? ((cur - bars[len - 61].close) / bars[len - 61].close * 100) : null;
+        results.push({ symbol: sym, chg5, chg20, chg60 });
+      }
+
+      if (results.length === 0) { win.setContent("No cached daily data for watchlist symbols. Load a symbol first."); return; }
+      results.sort((a, b) => (b.chg20 || 0) - (a.chg20 || 0));
+
+      win.contentElement.textContent = "";
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      const hdr = document.createElement("tr");
+      for (const h of ["Symbol", "1W %", "1M %", "3M %", "Trend"]) {
+        const th = document.createElement("td");
+        th.style.cssText = "padding:4px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;";
+        th.textContent = h; hdr.appendChild(th);
+      }
+      table.appendChild(hdr);
+
+      for (const r of results) {
+        const tr = document.createElement("tr");
+        tr.style.cssText = "cursor:pointer;";
+        tr.addEventListener("click", () => { document.getElementById("symbol-input").value = r.symbol; triggerLoad(); });
+        const fmt = (v) => v !== null ? v.toFixed(1) + "%" : "—";
+        const clr = (v) => v !== null ? (v >= 0 ? "#4caf50" : "#f44336") : "#666";
+        const trend = r.chg5 !== null && r.chg20 !== null ? (r.chg5 > r.chg20 ? "▲ Accel" : "▼ Decel") : "—";
+        const trendClr = r.chg5 !== null && r.chg20 !== null ? (r.chg5 > r.chg20 ? "#4caf50" : "#f44336") : "#666";
+        const vals = [
+          { text: r.symbol, color: "#ccc" },
+          { text: fmt(r.chg5), color: clr(r.chg5) },
+          { text: fmt(r.chg20), color: clr(r.chg20) },
+          { text: fmt(r.chg60), color: clr(r.chg60) },
+          { text: trend, color: trendClr },
+        ];
+        for (const v of vals) {
+          const td = document.createElement("td");
+          td.style.cssText = `padding:3px 6px;color:${v.color};font-family:Consolas,monospace;`;
+          td.textContent = v.text; tr.appendChild(td);
+        }
+        table.appendChild(tr);
+      }
+      win.appendElement(table);
+    } catch (e) { win.setContent("Failed: " + e); }
+  })();
+}
+
+function cmdPairs() {
+  const sym2 = prompt("Enter second symbol for pairs analysis:", "SPY");
+  if (!sym2 || !sym2.trim()) return;
+  const symA = currentSymbol, symB = sym2.trim().toUpperCase();
+  const win = createWindow({ title: `${symA} / ${symB} Pairs Analysis`, width: 600, height: 500 });
+  (async () => {
+    try {
+      // Fetch bars for both symbols
+      const [jsonA, jsonB] = await Promise.all([
+        invoke("get_bars", { symbol: symA, timeframe: "1Day", limit: 500 }),
+        invoke("get_bars", { symbol: symB, timeframe: "1Day", limit: 500 }),
+      ]);
+      const barsA = JSON.parse(jsonA), barsB = JSON.parse(jsonB);
+      // Align by date
+      const mapB = {};
+      for (const b of barsB) mapB[b.timestamp.substring(0, 10)] = b;
+      const aligned = [];
+      for (const a of barsA) {
+        const d = a.timestamp.substring(0, 10);
+        if (mapB[d]) aligned.push({ date: d, a: a.close, b: mapB[d].close });
+      }
+      if (aligned.length < 30) { win.setContent("Not enough overlapping data (need 30+ bars)."); return; }
+
+      // Compute stats
+      const n = aligned.length;
+      const retA = [], retB = [];
+      for (let i = 1; i < n; i++) {
+        retA.push((aligned[i].a - aligned[i-1].a) / aligned[i-1].a);
+        retB.push((aligned[i].b - aligned[i-1].b) / aligned[i-1].b);
+      }
+      const meanA = retA.reduce((s,v) => s+v, 0) / retA.length;
+      const meanB = retB.reduce((s,v) => s+v, 0) / retB.length;
+      let cov = 0, varA = 0, varB = 0;
+      for (let i = 0; i < retA.length; i++) {
+        cov += (retA[i] - meanA) * (retB[i] - meanB);
+        varA += (retA[i] - meanA) ** 2;
+        varB += (retB[i] - meanB) ** 2;
+      }
+      cov /= retA.length; varA /= retA.length; varB /= retA.length;
+      const corr = (Math.sqrt(varA) * Math.sqrt(varB)) > 0 ? cov / (Math.sqrt(varA) * Math.sqrt(varB)) : 0;
+      const hedgeRatio = varB > 0 ? cov / varB : 1;
+
+      // Spread and Z-score
+      const spread = aligned.map(d => d.a - hedgeRatio * d.b);
+      const window20 = 20;
+      const zScores = [];
+      for (let i = window20; i < spread.length; i++) {
+        const slice = spread.slice(i - window20, i);
+        const m = slice.reduce((s,v) => s+v, 0) / slice.length;
+        const sd = Math.sqrt(slice.reduce((s,v) => s + (v-m)**2, 0) / slice.length);
+        zScores.push({ date: aligned[i].date, z: sd > 0 ? (spread[i] - m) / sd : 0, spread: spread[i] });
+      }
+      const curZ = zScores.length > 0 ? zScores[zScores.length - 1].z : 0;
+      const signal = curZ < -2 ? "ENTER LONG SPREAD" : curZ > 2 ? "ENTER SHORT SPREAD" : Math.abs(curZ) < 0.5 ? "EXIT / FLAT" : "HOLD";
+      const sigClr = curZ < -2 ? "#4caf50" : curZ > 2 ? "#f44336" : "#888";
+
+      // Half-life (OLS: Δspread = α + β*spread → half-life = -ln(2)/β)
+      let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, hln = spread.length - 1;
+      for (let i = 1; i < spread.length; i++) {
+        const x = spread[i-1], y = spread[i] - spread[i-1];
+        sumX += x; sumY += y; sumXY += x*y; sumX2 += x*x;
+      }
+      const beta = (hln * sumXY - sumX * sumY) / (hln * sumX2 - sumX * sumX);
+      const halfLife = beta < 0 ? (-Math.log(2) / beta).toFixed(1) : "N/A";
+
+      // Display summary
+      win.contentElement.textContent = "";
+      const stats = [
+        ["Correlation", corr.toFixed(3)], ["Hedge Ratio", hedgeRatio.toFixed(4)],
+        ["Current Z-Score", curZ.toFixed(2)], ["Half-Life (days)", halfLife],
+        ["Signal", signal], ["Aligned Bars", n],
+      ];
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px;";
+      for (const [k, v] of stats) {
+        const tr = document.createElement("tr");
+        const td1 = document.createElement("td"); td1.style.cssText = "padding:3px 8px;color:#888;"; td1.textContent = k;
+        const td2 = document.createElement("td"); td2.style.cssText = "padding:3px 8px;text-align:right;font-family:Consolas,monospace;";
+        td2.textContent = v;
+        if (k === "Signal") td2.style.color = sigClr;
+        if (k === "Correlation") td2.style.color = Math.abs(corr) > 0.7 ? "#4caf50" : "#f44336";
+        tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+      }
+      win.appendElement(table);
+
+      // Embed z-score chart
+      const chartDiv = document.createElement("div");
+      chartDiv.style.cssText = "width:100%;height:200px;";
+      win.appendElement(chartDiv);
+      const pairChart = createChart(chartDiv, {
+        width: 560, height: 200,
+        layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false },
+        grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+        rightPriceScale: { borderColor: "#333" }, timeScale: { borderColor: "#333" },
+      });
+      const zLine = pairChart.addLineSeries({ color: "#2196f3", lineWidth: 2, title: "Z-Score", lastValueVisible: true });
+      zLine.setData(zScores.map(d => ({ time: d.date, value: d.z })));
+      // Z-score threshold lines
+      const addThresh = (val, clr) => {
+        const s = pairChart.addLineSeries({ color: clr, lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false });
+        s.setData(zScores.map(d => ({ time: d.date, value: val })));
+      };
+      addThresh(2, "#f4433666"); addThresh(-2, "#4caf5066"); addThresh(0, "#ffffff33");
+      pairChart.timeScale().fitContent();
+    } catch (e) { win.setContent("Failed: " + e); }
+  })();
+}
+
+function cmdMTFDiv() {
+  const win = createWindow({ title: `MTF Divergence — ${currentSymbol}`, width: 400, height: 300 });
+  try {
+    if (!mtfData || Object.keys(mtfData).length === 0) {
+      win.setContent("MTF data not loaded. Load a chart first and wait for MTF indicators.");
+      return;
+    }
+    const tfs = ["1Hour", "4Hour", "1Day", "1Week"];
+    const tfLabels = { "1Hour": "H1", "4Hour": "H4", "1Day": "D1", "1Week": "W1" };
+    const results = [];
+    for (const tf of tfs) {
+      const bars = mtfData[tf];
+      if (!bars || bars.length < 33) { results.push({ tf, bias: "N/A", fisher: 0, signal: 0 }); continue; }
+      const ef = calcEhlersFisher(bars, 32);
+      if (ef.fisher.length === 0) { results.push({ tf, bias: "N/A", fisher: 0, signal: 0 }); continue; }
+      const last = ef.fisher[ef.fisher.length - 1].value;
+      const sig = ef.signal[ef.signal.length - 1].value;
+      const bias = last > sig ? "BULLISH" : last < sig ? "BEARISH" : "NEUTRAL";
+      results.push({ tf, bias, fisher: last, signal: sig });
+    }
+
+    // Determine alignment
+    const biases = results.filter(r => r.bias !== "N/A").map(r => r.bias);
+    const allBull = biases.every(b => b === "BULLISH");
+    const allBear = biases.every(b => b === "BEARISH");
+    const htfBias = results.filter(r => r.tf === "1Day" || r.tf === "1Week").map(r => r.bias);
+    const ltfBias = results.filter(r => r.tf === "1Hour" || r.tf === "4Hour").map(r => r.bias);
+    const htfConflict = htfBias.length >= 2 && ltfBias.length >= 1 &&
+      htfBias.some(b => b === "BULLISH") !== ltfBias.some(b => b === "BULLISH") &&
+      !htfBias.includes("N/A") && !ltfBias.includes("N/A") &&
+      htfBias[0] !== ltfBias[0];
+    let overall, overallClr;
+    if (allBull) { overall = "ALIGNED BULLISH"; overallClr = "#4caf50"; }
+    else if (allBear) { overall = "ALIGNED BEARISH"; overallClr = "#f44336"; }
+    else if (htfConflict) { overall = "HTF CONFLICT ⚠️"; overallClr = "#ff9800"; }
+    else { overall = "MIXED"; overallClr = "#888"; }
+
+    win.contentElement.textContent = "";
+    // Overall
+    const hdr = document.createElement("div");
+    hdr.style.cssText = `text-align:center;font-size:16px;font-weight:bold;padding:8px;color:${overallClr};`;
+    hdr.textContent = overall;
+    win.appendElement(hdr);
+
+    // Table
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+    const thead = document.createElement("tr");
+    for (const h of ["TF", "Fisher", "Signal", "Bias"]) {
+      const td = document.createElement("td");
+      td.style.cssText = "padding:4px 8px;color:#666;font-weight:bold;border-bottom:1px solid #333;";
+      td.textContent = h; thead.appendChild(td);
+    }
+    table.appendChild(thead);
+    for (const r of results) {
+      const tr = document.createElement("tr");
+      const biasClr = r.bias === "BULLISH" ? "#4caf50" : r.bias === "BEARISH" ? "#f44336" : "#888";
+      const vals = [
+        { text: tfLabels[r.tf] || r.tf, color: "#ccc" },
+        { text: r.fisher.toFixed(3), color: "#2196f3" },
+        { text: r.signal.toFixed(3), color: "#A9A9A9" },
+        { text: r.bias, color: biasClr },
+      ];
+      for (const v of vals) {
+        const td = document.createElement("td");
+        td.style.cssText = `padding:4px 8px;font-family:Consolas,monospace;color:${v.color};`;
+        td.textContent = v.text; tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+
+    // NNFX recommendation
+    const rec = document.createElement("div");
+    rec.style.cssText = "padding:8px;margin-top:8px;font-size:11px;color:#888;border-top:1px solid #333;";
+    const d1Bias = results.find(r => r.tf === "1Day");
+    const w1Bias = results.find(r => r.tf === "1Week");
+    if (d1Bias && w1Bias && d1Bias.bias !== "N/A" && w1Bias.bias !== "N/A") {
+      if (d1Bias.bias === w1Bias.bias) {
+        rec.textContent = `NNFX: Trade ${d1Bias.bias === "BULLISH" ? "LONG" : "SHORT"} only (D1+W1 aligned ${d1Bias.bias}).`;
+        rec.style.color = d1Bias.bias === "BULLISH" ? "#4caf50" : "#f44336";
+      } else {
+        rec.textContent = "NNFX: D1 and W1 disagree — NO TRADE. Wait for alignment.";
+        rec.style.color = "#ff9800";
+      }
+    } else {
+      rec.textContent = "NNFX: Insufficient HTF data for recommendation.";
+    }
+    win.appendElement(rec);
+  } catch (e) { win.setContent("Failed: " + e); }
+}
+
+function cmdSRLevel() {
+  if (!currentChartData || currentChartData.length < 30) {
+    log("SRLEVEL: Need at least 30 bars loaded", "warn");
+    return;
+  }
+
+  const data = currentChartData;
+  const fractalLookback = 5; // 5-bar fractal method (same as auto-fib)
+
+  // Step 1: Find all swing highs and swing lows
+  const swingHighs = [];
+  const swingLows = [];
+
+  for (let i = fractalLookback; i < data.length - fractalLookback; i++) {
+    let isHigh = true, isLow = true;
+    for (let j = 1; j <= fractalLookback; j++) {
+      if (data[i - j].high >= data[i].high || data[i + j].high >= data[i].high) isHigh = false;
+      if (data[i - j].low <= data[i].low || data[i + j].low <= data[i].low) isLow = false;
+    }
+    if (isHigh) swingHighs.push({ idx: i, price: data[i].high, time: data[i].time, type: "resistance" });
+    if (isLow) swingLows.push({ idx: i, price: data[i].low, time: data[i].time, type: "support" });
+  }
+
+  const allSwings = [...swingHighs, ...swingLows];
+  if (allSwings.length === 0) {
+    log("SRLEVEL: No swing points found", "warn");
+    return;
+  }
+
+  // Step 2: Cluster nearby swing points within 0.5% of each other
+  const clusters = [];
+  const used = new Set();
+
+  // Sort by price for efficient clustering
+  allSwings.sort((a, b) => a.price - b.price);
+
+  for (let i = 0; i < allSwings.length; i++) {
+    if (used.has(i)) continue;
+    const cluster = { points: [allSwings[i]], priceSum: allSwings[i].price, type: allSwings[i].type };
+    used.add(i);
+
+    for (let j = i + 1; j < allSwings.length; j++) {
+      if (used.has(j)) continue;
+      const avgPrice = cluster.priceSum / cluster.points.length;
+      const pctDiff = Math.abs(allSwings[j].price - avgPrice) / avgPrice;
+      if (pctDiff <= 0.005) { // 0.5% threshold
+        cluster.points.push(allSwings[j]);
+        cluster.priceSum += allSwings[j].price;
+        used.add(j);
+        // Determine cluster type by majority
+        const supportCount = cluster.points.filter(p => p.type === "support").length;
+        cluster.type = supportCount > cluster.points.length / 2 ? "support" : "resistance";
+      }
+    }
+    clusters.push(cluster);
+  }
+
+  // Step 3: Filter — keep clusters with 3+ touches
+  const validClusters = clusters
+    .filter(c => c.points.length >= 3)
+    .map(c => {
+      const avgPrice = c.priceSum / c.points.length;
+      const times = c.points.map(p => p.time).sort((a, b) => a - b);
+      return {
+        price: avgPrice,
+        touches: c.points.length,
+        type: c.type,
+        firstTouch: times[0],
+        lastTouch: times[times.length - 1],
+      };
+    })
+    .sort((a, b) => b.touches - a.touches); // Rank by touch count
+
+  if (validClusters.length === 0) {
+    log("SRLEVEL: No significant S/R levels found (need 3+ touches per cluster)", "warn");
+    return;
+  }
+
+  // Step 4: Draw on chart
+  const dp = lastPrice > 100 ? 2 : lastPrice > 1 ? 4 : 6;
+
+  for (let i = 0; i < validClusters.length; i++) {
+    const level = validClusters[i];
+    const isStrong = level.touches >= 5;
+    const isSupport = level.type === "support";
+
+    const color = isSupport
+      ? (isStrong ? "#00e676" : "#4caf5099")   // green for support
+      : (isStrong ? "#ff1744" : "#f4433699");   // red for resistance
+
+    const lineWidth = isStrong ? 2 : 1;
+    const lineStyle = isStrong ? 0 : 2; // solid for strong, dashed for medium
+
+    const s = chart.addLineSeries({
+      color,
+      lineWidth,
+      lineStyle,
+      lastValueVisible: true,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+      title: `${level.type === "support" ? "S" : "R"} (${level.touches})`,
+    });
+
+    // Line extends from first touch to current bar
+    const lineData = data
+      .filter(d => d.time >= level.firstTouch)
+      .map(d => ({ time: d.time, value: level.price }));
+
+    if (lineData.length >= 2) {
+      s.setData(lineData);
+      indicatorSeries[`sr_${i}`] = s;
+    } else {
+      chart.removeSeries(s);
+    }
+  }
+
+  log(`SRLEVEL: Found ${validClusters.length} levels (${validClusters.filter(l => l.touches >= 5).length} strong)`, "ok");
+
+  // Step 5: Summary floating window
+  const win = createWindow({ title: `${currentSymbol} — S/R Levels`, width: 650, height: 400 });
+  win.contentElement.textContent = "";
+
+  const table = document.createElement("table");
+  table.style.cssText = "border-collapse:collapse;font-size:11px;width:100%;font-family:Consolas,monospace;";
+
+  // Header
+  const thead = document.createElement("tr");
+  for (const hdr of ["Price Level", "Type", "Touches", "Strength", "First Touch", "Last Touch"]) {
+    const th = document.createElement("td");
+    th.style.cssText = "padding:4px 8px;border-bottom:1px solid #333;color:#888;font-weight:bold;";
+    th.textContent = hdr;
+    thead.appendChild(th);
+  }
+  table.appendChild(thead);
+
+  for (const level of validClusters) {
+    const tr = document.createElement("tr");
+    const isSupport = level.type === "support";
+    const color = isSupport ? "#4caf50" : "#f44336";
+    const strength = level.touches >= 5 ? "STRONG" : "MEDIUM";
+
+    const formatDate = (ts) => {
+      const d = new Date(ts * 1000);
+      return d.toISOString().substring(0, 10);
+    };
+
+    const cells = [
+      level.price.toFixed(dp),
+      isSupport ? "SUPPORT" : "RESISTANCE",
+      level.touches.toString(),
+      strength,
+      formatDate(level.firstTouch),
+      formatDate(level.lastTouch),
+    ];
+
+    for (let ci = 0; ci < cells.length; ci++) {
+      const td = document.createElement("td");
+      td.style.cssText = `padding:4px 8px;border-bottom:1px solid #1a1a2e;color:${ci <= 1 ? color : "#ccc"};`;
+      td.textContent = cells[ci];
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+
+  win.appendElement(table);
+}
+
+// ══════════════════════════════════════════════════════════════
+// SEASONALITY — Monthly Performance Patterns
+// ══════════════════════════════════════════════════════════════
+
+async function cmdSeasonality() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+
+  const win = createWindow({ title: `${currentSymbol} — Seasonality`, width: 700, height: 600 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Loading daily bars for seasonality analysis...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  // Get daily bars — try cache first, then fetch
+  let bars = null;
+  const cacheKey = currentSymbol + ":1Day";
+  if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length > 50) {
+    bars = barCache[cacheKey].data;
+    barCache[cacheKey].lastAccess = Date.now();
+  }
+
+  if (!bars) {
+    try {
+      const barsJson = await invoke("get_bars", { symbol: currentSymbol, timeframe: "1Day", limit: 2000 });
+      bars = JSON.parse(barsJson);
+      if (bars && bars.length > 0) {
+        barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+      }
+    } catch (e) {
+      win.contentElement.textContent = "";
+      win.setContent(`Failed to fetch daily bars: ${e}`);
+      return;
+    }
+  }
+
+  if (!bars || bars.length < 30) {
+    win.contentElement.textContent = "";
+    win.setContent("Insufficient daily bar data for seasonality analysis.");
+    return;
+  }
+
+  // Group bars by calendar month and compute monthly returns
+  const monthlyReturns = {}; // { 0..11: [return1, return2, ...] }
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  // Group bars by year-month
+  const yearMonthBars = {}; // "2023-03" -> [bars]
+  for (const bar of bars) {
+    const d = new Date(bar.time * 1000);
+    const key = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
+    if (!yearMonthBars[key]) yearMonthBars[key] = [];
+    yearMonthBars[key].push(bar);
+  }
+
+  // Compute return for each year-month
+  for (const [key, monthBars] of Object.entries(yearMonthBars)) {
+    if (monthBars.length < 2) continue;
+    const monthIdx = parseInt(key.split("-")[1]);
+    const openPrice = monthBars[0].open;
+    const closePrice = monthBars[monthBars.length - 1].close;
+    if (openPrice <= 0) continue;
+    const ret = ((closePrice - openPrice) / openPrice) * 100;
+
+    if (!monthlyReturns[monthIdx]) monthlyReturns[monthIdx] = [];
+    monthlyReturns[monthIdx].push(ret);
+  }
+
+  // Compute statistics for each month
+  const stats = [];
+  for (let m = 0; m < 12; m++) {
+    const returns = monthlyReturns[m] || [];
+    if (returns.length === 0) {
+      stats.push({ month: monthNames[m], avgReturn: 0, winRate: 0, best: 0, worst: 0, stdDev: 0, count: 0 });
+      continue;
+    }
+    const avg = returns.reduce((a, b) => a + b, 0) / returns.length;
+    const wins = returns.filter(r => r > 0).length;
+    const winRate = (wins / returns.length) * 100;
+    const best = Math.max(...returns);
+    const worst = Math.min(...returns);
+    const variance = returns.reduce((sum, r) => sum + (r - avg) ** 2, 0) / returns.length;
+    const stdDev = Math.sqrt(variance);
+
+    stats.push({ month: monthNames[m], avgReturn: avg, winRate, best, worst, stdDev, count: returns.length });
+  }
+
+  win.contentElement.textContent = "";
+
+  // Bar chart visualization
+  const chartDiv = document.createElement("div");
+  chartDiv.style.cssText = "display:flex;align-items:flex-end;justify-content:space-around;height:150px;padding:20px 10px 5px;border-bottom:1px solid #333;";
+
+  const maxAbs = Math.max(...stats.map(s => Math.abs(s.avgReturn)), 0.1);
+
+  for (const s of stats) {
+    const barContainer = document.createElement("div");
+    barContainer.style.cssText = "display:flex;flex-direction:column;align-items:center;flex:1;height:100%;justify-content:flex-end;position:relative;";
+
+    // Value label above bar
+    const valLabel = document.createElement("div");
+    valLabel.style.cssText = "font-size:9px;color:#aaa;position:absolute;width:100%;text-align:center;";
+    valLabel.textContent = s.avgReturn.toFixed(1) + "%";
+
+    const bar = document.createElement("div");
+    const heightPct = Math.abs(s.avgReturn) / maxAbs * 60; // max 60% of container height
+    const isPositive = s.avgReturn >= 0;
+    bar.style.cssText = `width:70%;min-width:20px;background:${isPositive ? "#4caf50" : "#f44336"};border-radius:2px 2px 0 0;transition:height 0.3s;`;
+    bar.style.height = Math.max(heightPct, 2) + "%";
+
+    valLabel.style.bottom = `${Math.max(heightPct, 2) + 2}%`;
+
+    const monthLabel = document.createElement("div");
+    monthLabel.style.cssText = "font-size:10px;color:#888;margin-top:4px;";
+    monthLabel.textContent = s.month;
+
+    barContainer.appendChild(valLabel);
+    barContainer.appendChild(bar);
+    barContainer.appendChild(monthLabel);
+    chartDiv.appendChild(barContainer);
+  }
+
+  win.appendElement(chartDiv);
+
+  // Summary info
+  const info = document.createElement("div");
+  info.style.cssText = "padding:8px 10px;color:#666;font-size:10px;border-bottom:1px solid #222;";
+  info.textContent = `${currentSymbol} — ${bars.length} daily bars analyzed | ${Object.keys(yearMonthBars).length} months of data`;
+  win.appendElement(info);
+
+  // Table
+  const table = document.createElement("table");
+  table.style.cssText = "border-collapse:collapse;font-size:11px;width:100%;font-family:Consolas,monospace;";
+
+  // Header
+  const thead = document.createElement("tr");
+  for (const hdr of ["Month", "Avg Return%", "Win Rate%", "Best%", "Worst%", "StdDev", "Years"]) {
+    const th = document.createElement("td");
+    th.style.cssText = "padding:4px 8px;border-bottom:1px solid #333;color:#888;font-weight:bold;";
+    th.textContent = hdr;
+    thead.appendChild(th);
+  }
+  table.appendChild(thead);
+
+  for (const s of stats) {
+    const tr = document.createElement("tr");
+    const color = s.avgReturn >= 0 ? "#4caf50" : "#f44336";
+
+    const cells = [
+      s.month,
+      s.avgReturn.toFixed(2),
+      s.winRate.toFixed(1),
+      s.best.toFixed(2),
+      s.worst.toFixed(2),
+      s.stdDev.toFixed(2),
+      s.count.toString(),
+    ];
+
+    for (let ci = 0; ci < cells.length; ci++) {
+      const td = document.createElement("td");
+      td.style.cssText = `padding:4px 8px;border-bottom:1px solid #1a1a2e;color:${ci === 0 ? "#ccc" : color};`;
+      td.textContent = cells[ci];
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+
+  win.appendElement(table);
+  log(`SEASONALITY: ${currentSymbol} — ${bars.length} bars, ${Object.keys(yearMonthBars).length} months analyzed`, "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// COMPARE — Chart Comparison Overlay (% change from first visible bar)
+// ══════════════════════════════════════════════════════════════
+
+async function cmdCompare() {
+  const sym = prompt("Enter comparison symbol (e.g. SPY, QQQ):");
+  if (!sym || !sym.trim()) return;
+  const compSymbol = sym.trim().toUpperCase();
+
+  try {
+    const barsJson = await invoke("get_bars", { symbol: compSymbol, timeframe: "1Day", limit: 500 });
+    const bars = JSON.parse(barsJson);
+    if (!bars || bars.length === 0) {
+      alert(`No data found for ${compSymbol}`);
+      return;
+    }
+
+    // Build comparison chart data keyed by time
+    const compData = bars.map(b => ({
+      time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+      close: b.close,
+    }));
+
+    // Get current chart data closes keyed by time
+    const mainByTime = {};
+    for (const d of currentChartData) {
+      mainByTime[d.time] = d.close;
+    }
+    const compByTime = {};
+    for (const d of compData) {
+      compByTime[d.time] = d.close;
+    }
+
+    // Find common timestamps
+    const commonTimes = Object.keys(mainByTime)
+      .map(Number)
+      .filter(t => compByTime[t] !== undefined)
+      .sort((a, b) => a - b);
+
+    if (commonTimes.length < 2) {
+      alert(`Not enough overlapping data between ${currentSymbol} and ${compSymbol}`);
+      return;
+    }
+
+    // Normalize both to % change from first common bar
+    const mainBase = mainByTime[commonTimes[0]];
+    const compBase = compByTime[commonTimes[0]];
+
+    const mainNorm = commonTimes.map(t => ({
+      time: t,
+      value: ((mainByTime[t] - mainBase) / mainBase) * 100,
+    }));
+    const compNorm = commonTimes.map(t => ({
+      time: t,
+      value: ((compByTime[t] - compBase) / compBase) * 100,
+    }));
+
+    // Add main symbol % change line (white, dashed)
+    const mainPctSeries = chart.addLineSeries({
+      color: "#FFFFFF",
+      lineWidth: 1,
+      lineStyle: 2,
+      title: `${currentSymbol} %`,
+      lastValueVisible: true,
+      priceLineVisible: false,
+      priceScaleId: "compare",
+    });
+    mainPctSeries.setData(mainNorm);
+    indicatorSeries[`compare_main_${compSymbol}`] = mainPctSeries;
+
+    // Add comparison symbol line (cyan)
+    const compSeries = chart.addLineSeries({
+      color: "#00BCD4",
+      lineWidth: 2,
+      title: `${compSymbol} %`,
+      lastValueVisible: true,
+      priceLineVisible: false,
+      priceScaleId: "compare",
+    });
+    compSeries.setData(compNorm);
+    indicatorSeries[`compare_${compSymbol}`] = compSeries;
+
+    // Configure the compare price scale on the left
+    chart.priceScale("compare").applyOptions({
+      scaleMargins: { top: 0.1, bottom: 0.1 },
+      autoScale: true,
+    });
+
+  } catch (e) {
+    alert(`Failed to load ${compSymbol}: ${e.message || e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// SPREAD — Spread/Ratio Chart (floating window)
+// ══════════════════════════════════════════════════════════════
+
+async function cmdSpread() {
+  const sym = prompt("Enter second symbol for spread (e.g. SPY, QQQ):");
+  if (!sym || !sym.trim()) return;
+  const symB = sym.trim().toUpperCase();
+  const symA = currentSymbol;
+
+  try {
+    // Fetch bars for both symbols
+    const [jsonA, jsonB] = await Promise.all([
+      invoke("get_bars", { symbol: symA, timeframe: "1Day", limit: 500 }),
+      invoke("get_bars", { symbol: symB, timeframe: "1Day", limit: 500 }),
+    ]);
+    const barsA = JSON.parse(jsonA);
+    const barsB = JSON.parse(jsonB);
+
+    if (!barsA.length || !barsB.length) {
+      alert(`No data for ${!barsA.length ? symA : symB}`);
+      return;
+    }
+
+    // Build maps keyed by date string for alignment
+    const mapA = {};
+    for (const b of barsA) {
+      const t = Math.floor(new Date(b.timestamp).getTime() / 1000);
+      mapA[t] = b.close;
+    }
+    const mapB = {};
+    for (const b of barsB) {
+      const t = Math.floor(new Date(b.timestamp).getTime() / 1000);
+      mapB[t] = b.close;
+    }
+
+    // Find common timestamps
+    const commonTimes = Object.keys(mapA)
+      .map(Number)
+      .filter(t => mapB[t] !== undefined)
+      .sort((a, b) => a - b);
+
+    if (commonTimes.length < 2) {
+      alert(`Not enough overlapping data between ${symA} and ${symB}`);
+      return;
+    }
+
+    // Compute spread and ratio
+    const spreadData = commonTimes.map(t => ({
+      time: t,
+      value: mapA[t] - mapB[t],
+    }));
+    const ratioData = commonTimes.map(t => ({
+      time: t,
+      value: mapA[t] / mapB[t],
+    }));
+
+    // Create floating window
+    const win = createWindow({
+      title: `${symA} / ${symB} Spread`,
+      width: 700,
+      height: 400,
+    });
+    win.contentElement.textContent = "";
+    win.contentElement.style.padding = "0";
+
+    const chartDiv = document.createElement("div");
+    chartDiv.style.cssText = "width:100%;height:100%;";
+    win.contentElement.appendChild(chartDiv);
+
+    const spreadChart = createChart(chartDiv, {
+      layout: {
+        background: { color: "#1a1a2e" },
+        textColor: "#d1d4dc",
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: "rgba(42,46,57,0.5)" },
+        horzLines: { color: "rgba(42,46,57,0.5)" },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { visible: true, borderColor: "rgba(197,203,206,0.3)" },
+      leftPriceScale: { visible: true, borderColor: "rgba(197,203,206,0.3)" },
+      timeScale: { borderColor: "rgba(197,203,206,0.3)" },
+    });
+
+    // Spread line on left price scale
+    const spreadSeries = spreadChart.addLineSeries({
+      color: "#2196f3",
+      lineWidth: 2,
+      title: `Spread (${symA} - ${symB})`,
+      priceScaleId: "left",
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+    spreadSeries.setData(spreadData);
+
+    // Ratio line on right price scale
+    const ratioSeries = spreadChart.addLineSeries({
+      color: "#ff9800",
+      lineWidth: 2,
+      title: `Ratio (${symA} / ${symB})`,
+      priceScaleId: "right",
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+    ratioSeries.setData(ratioData);
+
+    spreadChart.timeScale().fitContent();
+
+    // Resize chart when window resizes
+    const ro = new ResizeObserver(() => {
+      const rect = chartDiv.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        spreadChart.resize(rect.width, rect.height);
+      }
+    });
+    ro.observe(chartDiv);
+
+  } catch (e) {
+    alert(`Failed to load spread data: ${e.message || e}`);
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -11297,6 +12907,8 @@ function showHelpOverlay() {
       ["MONTECARLO", "Monte Carlo risk of ruin"],
       ["PATTERNS", "Pattern recognition (H&S, Double Top)"],
       ["SENTIMENT", "News sentiment analysis"],
+      ["PCRATIO", "Put/Call ratio dashboard"],
+      ["UNUSUAL", "Unusual options activity scanner"],
       ["AI", "AI trading assistant (Claude/GPT)"],
       ["SETTINGS", "API keys & configuration"],
       ["HELP", "This help screen"],
@@ -11348,6 +12960,257 @@ function showHelpOverlay() {
   };
   document.addEventListener("keydown", closeHandler);
 }
+
+// ── IVRANK ────────────────────────────────────────────────────
+async function cmdIVRank() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — IV Rank`, width: 420, height: 320 });
+  win.contentElement.textContent = "";
+  const ivC = document.createElement("div");
+  ivC.style.cssText = "padding:10px;font-size:11px;color:#ccc;";
+  ivC.textContent = "Loading options chain...";
+  win.appendElement(ivC);
+  try {
+    const nf = new Date();
+    nf.setDate(nf.getDate() + (5 - nf.getDay() + 7) % 7 + 7);
+    const expiry = nf.toISOString().split("T")[0];
+    const json = await invoke("get_options", { symbol: currentSymbol, expiry });
+    const chain = JSON.parse(json);
+    if (!chain || chain.length === 0) { ivC.textContent = "No options data available."; return; }
+    const price = lastPrice || 0;
+    if (price <= 0) { ivC.textContent = "No current price available."; return; }
+    const nearMoney = chain.filter(c => c.strike && Math.abs(c.strike - price) / price <= 0.10);
+    const ivVals = nearMoney.map(c => c.implied_volatility).filter(v => v && v > 0);
+    if (ivVals.length === 0) { ivC.textContent = "No IV data in near-money strikes."; return; }
+    const curIV = ivVals.reduce((a, b) => a + b, 0) / ivVals.length;
+    const hk = `typhoon_iv_history_${currentSymbol}`;
+    let hist = [];
+    try { hist = JSON.parse(localStorage.getItem(hk) || "[]"); } catch (_) {}
+    hist.push({ iv: curIV, ts: Date.now() });
+    if (hist.length > 365) hist = hist.slice(-365);
+    localStorage.setItem(hk, JSON.stringify(hist));
+    ivC.textContent = "";
+    if (hist.length < 5) {
+      const n2 = document.createElement("div");
+      n2.style.cssText = "padding:20px;text-align:center;color:#ff0;font-size:13px;";
+      n2.textContent = `Collecting data... ${hist.length} sample${hist.length !== 1 ? "s" : ""}`;
+      const s2 = document.createElement("div");
+      s2.style.cssText = "color:#888;font-size:10px;margin-top:8px;";
+      s2.textContent = "Check back later — need at least 5 data points for IV Rank.";
+      n2.appendChild(s2);
+      ivC.appendChild(n2);
+      return;
+    }
+    const sorted = hist.map(h => h.iv).sort((a, b) => a - b);
+    const ivHi = sorted[sorted.length - 1];
+    const ivLo = sorted[0];
+    const ivRank = ivHi !== ivLo ? ((curIV - ivLo) / (ivHi - ivLo)) * 100 : 50;
+    const t30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const rec = hist.filter(h => h.ts >= t30);
+    const avg30 = rec.length > 0 ? rec.reduce((a, b) => a + b.iv, 0) / rec.length : curIV;
+    const rc = ivRank < 25 ? "#4caf50" : ivRank > 75 ? "#f44336" : "#ff0";
+    const rl = ivRank < 25 ? "CHEAP OPTIONS" : ivRank > 75 ? "EXPENSIVE OPTIONS" : "NEUTRAL";
+    const tbl = document.createElement("table");
+    tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;";
+    for (const [lbl, val] of [["Current IV", `${(curIV * 100).toFixed(1)}%`], ["IV Rank", `${ivRank.toFixed(1)}%`], ["IV High", `${(ivHi * 100).toFixed(1)}%`], ["IV Low", `${(ivLo * 100).toFixed(1)}%`], ["30-Day Avg IV", `${(avg30 * 100).toFixed(1)}%`], ["Samples", `${hist.length}`]]) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = "border-bottom:1px solid #1a1a2e;";
+      const tdL = document.createElement("td");
+      tdL.style.cssText = "padding:6px 10px;color:#888;";
+      tdL.textContent = lbl;
+      const tdR = document.createElement("td");
+      tdR.style.cssText = `padding:6px 10px;text-align:right;font-weight:bold;color:${lbl === "IV Rank" ? rc : "#ccc"};`;
+      tdR.textContent = val;
+      tr.appendChild(tdL);
+      tr.appendChild(tdR);
+      tbl.appendChild(tr);
+    }
+    ivC.appendChild(tbl);
+    const badge = document.createElement("div");
+    badge.style.cssText = `text-align:center;padding:10px;margin-top:10px;font-size:14px;font-weight:bold;color:${rc};border:1px solid ${rc};border-radius:4px;`;
+    badge.textContent = rl;
+    ivC.appendChild(badge);
+  } catch (e) { ivC.textContent = `Error: ${e}`; }
+}
+
+// ── GAPS ──────────────────────────────────────────────────────
+async function cmdGaps() {
+  const win = createWindow({ title: "Gap Scanner", width: 600, height: 450 });
+  win.contentElement.textContent = "";
+  const gc = document.createElement("div");
+  gc.style.cssText = "padding:6px;font-size:10px;color:#ccc;";
+  gc.textContent = "Scanning watchlist for gaps...";
+  win.appendElement(gc);
+  try {
+    const wl = getWatchlist();
+    if (!wl || wl.length === 0) { gc.textContent = "No symbols in watchlist. Add symbols to QM first."; return; }
+    const MIN_GAP = 1;
+    const gaps = [];
+    for (const sym of wl) {
+      try {
+        const ck = `${sym}:1Day`;
+        let bars;
+        if (barCache[ck] && barCache[ck].data && barCache[ck].data.length >= 2) {
+          bars = barCache[ck].data;
+          barCache[ck].lastAccess = Date.now();
+        } else {
+          const bj = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 5 });
+          bars = JSON.parse(bj);
+          barCache[ck] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+        }
+        if (bars.length < 2) continue;
+        const prev = bars[bars.length - 2];
+        const cur = bars[bars.length - 1];
+        const gp = ((cur.open - prev.close) / prev.close) * 100;
+        if (Math.abs(gp) >= MIN_GAP) gaps.push({ sym, gapPct: gp, direction: gp > 0 ? "UP" : "DOWN", prevClose: prev.close, open: cur.open });
+      } catch (_) {}
+    }
+    gaps.sort((a, b) => Math.abs(b.gapPct) - Math.abs(a.gapPct));
+    gc.textContent = "";
+    if (gaps.length === 0) { gc.textContent = `No gaps > ${MIN_GAP}% found in ${wl.length} symbols.`; return; }
+    const tbl = document.createElement("table");
+    tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    hr.style.cssText = "border-bottom:1px solid #444;";
+    for (const h of ["Symbol", "Gap %", "Direction", "Prev Close", "Open"]) {
+      const th = document.createElement("th");
+      th.style.cssText = "padding:4px 6px;color:#888;text-align:left;font-size:10px;";
+      th.textContent = h;
+      hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    tbl.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    for (const g of gaps) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = "border-bottom:1px solid #1a1a2e;cursor:pointer;";
+      tr.addEventListener("mouseenter", () => { tr.style.background = "rgba(255,255,255,0.05)"; });
+      tr.addEventListener("mouseleave", () => { tr.style.background = ""; });
+      tr.addEventListener("click", () => { document.getElementById("symbol-input").value = g.sym; triggerLoad(); });
+      const clr = g.direction === "UP" ? "#4caf50" : "#f44336";
+      for (const v of [
+        { text: g.sym, style: "color:#fff;font-weight:bold;" },
+        { text: `${g.gapPct >= 0 ? "+" : ""}${g.gapPct.toFixed(2)}%`, style: `color:${clr};font-weight:bold;` },
+        { text: g.direction, style: `color:${clr};` },
+        { text: `$${g.prevClose.toFixed(2)}`, style: "color:#ccc;" },
+        { text: `$${g.open.toFixed(2)}`, style: "color:#ccc;" },
+      ]) {
+        const td = document.createElement("td");
+        td.style.cssText = `padding:4px 6px;${v.style}`;
+        td.textContent = v.text;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody);
+    gc.appendChild(tbl);
+    const sm = document.createElement("div");
+    sm.style.cssText = "padding:6px;color:#666;font-size:9px;margin-top:6px;";
+    sm.textContent = `${gaps.length} gap${gaps.length !== 1 ? "s" : ""} found across ${wl.length} symbols (threshold: ${MIN_GAP}%)`;
+    gc.appendChild(sm);
+  } catch (e) { gc.textContent = `Error: ${e}`; }
+}
+
+// ── FLOWS ─────────────────────────────────────────────────────
+async function cmdFlows() {
+  const win = createWindow({ title: "Sector Fund Flows", width: 700, height: 450 });
+  win.contentElement.textContent = "";
+  const fc = document.createElement("div");
+  fc.style.cssText = "padding:6px;font-size:10px;color:#ccc;";
+  fc.textContent = "Loading sector fund flow data...";
+  win.appendElement(fc);
+  const etfs = [
+    { sym: "XLK", name: "Technology" }, { sym: "XLF", name: "Finance" },
+    { sym: "XLE", name: "Energy" }, { sym: "XLV", name: "Health Care" },
+    { sym: "XLI", name: "Industrials" }, { sym: "XLC", name: "Communication" },
+    { sym: "XLRE", name: "Real Estate" }, { sym: "XLU", name: "Utilities" },
+    { sym: "XLB", name: "Materials" }, { sym: "XLP", name: "Consumer Staples" },
+    { sym: "XLY", name: "Consumer Disc" },
+  ];
+  try {
+    const fi = [];
+    for (const etf of etfs) {
+      try {
+        const ck = `${etf.sym}:1Day`;
+        let bars;
+        if (barCache[ck] && barCache[ck].data && barCache[ck].data.length >= 6) {
+          bars = barCache[ck].data;
+          barCache[ck].lastAccess = Date.now();
+        } else {
+          const bj = await invoke("get_bars", { symbol: etf.sym, timeframe: "1Day", limit: 20 });
+          bars = JSON.parse(bj);
+          barCache[ck] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+        }
+        if (bars.length < 2) continue;
+        const last = bars[bars.length - 1];
+        const f1d = last.volume * (last.close - last.open);
+        const p1d = ((last.close - bars[bars.length - 2].close) / bars[bars.length - 2].close) * 100;
+        const l5 = bars.slice(-5);
+        const f5d = l5.reduce((sum, b) => sum + b.volume * (b.close - b.open), 0);
+        const fdac = bars.length >= 6 ? bars[bars.length - 6].close : l5[0].open;
+        const p5d = ((last.close - fdac) / fdac) * 100;
+        fi.push({ ...etf, flow1d: f1d, flow5d: f5d, pctChg1d: p1d, pctChg5d: p5d });
+      } catch (_) {}
+    }
+    fi.sort((a, b) => b.flow1d - a.flow1d);
+    fc.textContent = "";
+    if (fi.length === 0) { fc.textContent = "No sector data available."; return; }
+    function fmt(v) {
+      const a = Math.abs(v);
+      if (a >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+      if (a >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+      if (a >= 1e3) return `$${(v / 1e3).toFixed(0)}K`;
+      return `$${v.toFixed(0)}`;
+    }
+    const tbl = document.createElement("table");
+    tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    hr.style.cssText = "border-bottom:1px solid #444;";
+    for (const h of ["Sector", "1D Flow", "5D Flow", "1D %Chg", "5D %Chg"]) {
+      const th = document.createElement("th");
+      th.style.cssText = "padding:4px 8px;color:#888;text-align:right;font-size:10px;";
+      if (h === "Sector") th.style.textAlign = "left";
+      th.textContent = h;
+      hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    tbl.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    for (const it of fi) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = "border-bottom:1px solid #1a1a2e;cursor:pointer;";
+      tr.addEventListener("mouseenter", () => { tr.style.background = "rgba(255,255,255,0.05)"; });
+      tr.addEventListener("mouseleave", () => { tr.style.background = ""; });
+      tr.addEventListener("click", () => { document.getElementById("symbol-input").value = it.sym; triggerLoad(); });
+      const c1 = it.flow1d >= 0 ? "#4caf50" : "#f44336";
+      const c5 = it.flow5d >= 0 ? "#4caf50" : "#f44336";
+      const cp1 = it.pctChg1d >= 0 ? "#4caf50" : "#f44336";
+      const cp5 = it.pctChg5d >= 0 ? "#4caf50" : "#f44336";
+      for (const c of [
+        { text: `${it.sym} — ${it.name}`, style: "text-align:left;color:#fff;font-weight:bold;" },
+        { text: `${it.flow1d >= 0 ? "+" : ""}${fmt(it.flow1d)}`, style: `text-align:right;color:${c1};font-weight:bold;` },
+        { text: `${it.flow5d >= 0 ? "+" : ""}${fmt(it.flow5d)}`, style: `text-align:right;color:${c5};` },
+        { text: `${it.pctChg1d >= 0 ? "+" : ""}${it.pctChg1d.toFixed(2)}%`, style: `text-align:right;color:${cp1};` },
+        { text: `${it.pctChg5d >= 0 ? "+" : ""}${it.pctChg5d.toFixed(2)}%`, style: `text-align:right;color:${cp5};` },
+      ]) {
+        const td = document.createElement("td");
+        td.style.cssText = `padding:5px 8px;${c.style}`;
+        td.textContent = c.text;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody);
+    fc.appendChild(tbl);
+    const lg = document.createElement("div");
+    lg.style.cssText = "padding:8px;color:#666;font-size:9px;margin-top:6px;";
+    lg.textContent = "Flow = Volume x (Close - Open). Positive = buying pressure (inflow), Negative = selling pressure (outflow). Click row to load chart.";
+    fc.appendChild(lg);
+  } catch (e) { fc.textContent = `Error: ${e}`; }
+}
+
 
 async function checkWatchlistSMA200Alerts() {
   if (!window._watchlistSymbols || window._watchlistSymbols.length === 0) return;
