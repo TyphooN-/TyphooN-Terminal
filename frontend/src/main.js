@@ -5320,7 +5320,8 @@ async function cmdBreadth() {
     function makeProgressBar(label, pct, color) {
       const row = document.createElement("div"); row.style.cssText = "margin-bottom:12px;";
       const lbl = document.createElement("div"); lbl.style.cssText = "margin-bottom:4px;";
-      lbl.innerHTML = `${label}: <span style="color:${color};font-weight:bold">${pct.toFixed(1)}%</span>`;
+      lbl.appendChild(document.createTextNode(label + ": "));
+      const lblVal = document.createElement("span"); lblVal.style.cssText = `color:${color};font-weight:bold`; lblVal.textContent = pct.toFixed(1) + "%"; lbl.appendChild(lblVal);
       row.appendChild(lbl);
       const track = document.createElement("div"); track.style.cssText = "background:#333;border-radius:4px;height:16px;overflow:hidden;";
       const fill = document.createElement("div"); fill.style.cssText = `background:${color};height:100%;width:${Math.min(pct, 100)}%;border-radius:4px;transition:width 0.3s;`;
@@ -5331,21 +5332,37 @@ async function cmdBreadth() {
     container.appendChild(makeProgressBar("Above SMA 200 (long-term health)", pctAbove200, bc200));
     container.appendChild(makeProgressBar("Above SMA 50 (medium-term momentum)", pctAbove50, bc50));
     const adLine = document.createElement("div"); adLine.style.cssText = "margin-bottom:12px;display:flex;justify-content:space-between;";
-    adLine.innerHTML = `<span>Advance/Decline:</span> <span style="color:#4caf50">${advances} Adv</span> / <span style="color:#f44336">${declines} Dec</span> <span style="color:#888">(Ratio: ${declines > 0 ? (advances / declines).toFixed(2) : "N/A"})</span>`;
+    const adLabel = document.createElement("span"); adLabel.textContent = "Advance/Decline:"; adLine.appendChild(adLabel);
+    adLine.appendChild(document.createTextNode(" "));
+    const adAdv = document.createElement("span"); adAdv.style.color = "#4caf50"; adAdv.textContent = advances + " Adv"; adLine.appendChild(adAdv);
+    adLine.appendChild(document.createTextNode(" / "));
+    const adDec = document.createElement("span"); adDec.style.color = "#f44336"; adDec.textContent = declines + " Dec"; adLine.appendChild(adDec);
+    adLine.appendChild(document.createTextNode(" "));
+    const adRatio = document.createElement("span"); adRatio.style.color = "#888"; adRatio.textContent = "(Ratio: " + (declines > 0 ? (advances / declines).toFixed(2) : "N/A") + ")"; adLine.appendChild(adRatio);
     container.appendChild(adLine);
     const avgLine = document.createElement("div"); avgLine.style.cssText = "margin-bottom:16px;";
     const avgColor = avgChange >= 0 ? "#4caf50" : "#f44336";
-    avgLine.innerHTML = `Avg 1-Day Change: <span style="color:${avgColor};font-weight:bold">${avgChange >= 0 ? "+" : ""}${avgChange.toFixed(2)}%</span>`;
+    avgLine.appendChild(document.createTextNode("Avg 1-Day Change: "));
+    const avgVal = document.createElement("span"); avgVal.style.cssText = `color:${avgColor};font-weight:bold`; avgVal.textContent = (avgChange >= 0 ? "+" : "") + avgChange.toFixed(2) + "%"; avgLine.appendChild(avgVal);
     container.appendChild(avgLine);
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
-    table.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Close</th><th style="text-align:right;padding:4px;">Chg%</th><th style="text-align:center;padding:4px;">SMA200</th><th style="text-align:center;padding:4px;">SMA50</th></tr></thead>`;
+    const thead = document.createElement("thead");
+    const headTr = document.createElement("tr"); headTr.style.cssText = "color:#888;border-bottom:1px solid #444;";
+    for (const [text, align] of [["Symbol","left"],["Close","right"],["Chg%","right"],["SMA200","center"],["SMA50","center"]]) { const th = document.createElement("th"); th.style.cssText = `text-align:${align};padding:4px;`; th.textContent = text; headTr.appendChild(th); }
+    thead.appendChild(headTr); table.appendChild(thead);
     const tbody = document.createElement("tbody");
     for (const d of details) {
       const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #333;";
       const chgC = d.dayChange >= 0 ? "#4caf50" : "#f44336";
-      const s200 = d.abv200 === null ? "-" : d.abv200 ? '<span style="color:#4caf50">&#9650;</span>' : '<span style="color:#f44336">&#9660;</span>';
-      const s50 = d.abv50 === null ? "-" : d.abv50 ? '<span style="color:#4caf50">&#9650;</span>' : '<span style="color:#f44336">&#9660;</span>';
-      tr.innerHTML = `<td style="padding:4px;">${d.sym}</td><td style="text-align:right;padding:4px;">$${d.close.toFixed(2)}</td><td style="text-align:right;padding:4px;color:${chgC}">${d.dayChange >= 0 ? "+" : ""}${d.dayChange.toFixed(2)}%</td><td style="text-align:center;padding:4px;">${s200}</td><td style="text-align:center;padding:4px;">${s50}</td>`;
+      const tdSym = document.createElement("td"); tdSym.style.padding = "4px"; tdSym.textContent = d.sym; tr.appendChild(tdSym);
+      const tdClose = document.createElement("td"); tdClose.style.cssText = "text-align:right;padding:4px;"; tdClose.textContent = "$" + d.close.toFixed(2); tr.appendChild(tdClose);
+      const tdChg = document.createElement("td"); tdChg.style.cssText = `text-align:right;padding:4px;color:${chgC}`; tdChg.textContent = (d.dayChange >= 0 ? "+" : "") + d.dayChange.toFixed(2) + "%"; tr.appendChild(tdChg);
+      const tdS200 = document.createElement("td"); tdS200.style.cssText = "text-align:center;padding:4px;";
+      if (d.abv200 === null) { tdS200.textContent = "-"; } else { const arrow = document.createElement("span"); arrow.style.color = d.abv200 ? "#4caf50" : "#f44336"; arrow.textContent = d.abv200 ? "\u25B2" : "\u25BC"; tdS200.appendChild(arrow); }
+      tr.appendChild(tdS200);
+      const tdS50 = document.createElement("td"); tdS50.style.cssText = "text-align:center;padding:4px;";
+      if (d.abv50 === null) { tdS50.textContent = "-"; } else { const arrow = document.createElement("span"); arrow.style.color = d.abv50 ? "#4caf50" : "#f44336"; arrow.textContent = d.abv50 ? "\u25B2" : "\u25BC"; tdS50.appendChild(arrow); }
+      tr.appendChild(tdS50);
       tbody.appendChild(tr);
     }
     table.appendChild(tbody); container.appendChild(table);
@@ -5407,18 +5424,28 @@ function cmdDivergence() {
   const summary = document.createElement("div"); summary.style.cssText = "margin-bottom:12px;";
   const bullCount = divergences.filter(d => d.type === "Bullish").length;
   const bearCount = divergences.filter(d => d.type === "Bearish").length;
-  summary.innerHTML = `Found <b>${divergences.length}</b> divergences (last 50 bars): <span style="color:#4caf50">${bullCount} Bullish</span> | <span style="color:#f44336">${bearCount} Bearish</span>`;
+  const summaryB = document.createElement("b"); summaryB.textContent = divergences.length; summary.appendChild(document.createTextNode("Found ")); summary.appendChild(summaryB); summary.appendChild(document.createTextNode(" divergences (last 50 bars): "));
+  const summaryBull = document.createElement("span"); summaryBull.style.color = "#4caf50"; summaryBull.textContent = bullCount + " Bullish"; summary.appendChild(summaryBull);
+  summary.appendChild(document.createTextNode(" | "));
+  const summaryBear = document.createElement("span"); summaryBear.style.color = "#f44336"; summaryBear.textContent = bearCount + " Bearish"; summary.appendChild(summaryBear);
   container.appendChild(summary);
   if (divergences.length === 0) {
     const none = document.createElement("div"); none.style.cssText = "color:#888;padding:20px;text-align:center;"; none.textContent = "No divergences detected in the scan window."; container.appendChild(none);
   } else {
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
-    table.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Bar#</th><th style="text-align:left;padding:4px;">Type</th><th style="text-align:left;padding:4px;">Indicator</th><th style="text-align:right;padding:4px;">Price</th><th style="text-align:right;padding:4px;">Ind Value</th></tr></thead>`;
+    const dThead = document.createElement("thead");
+    const dHeadTr = document.createElement("tr"); dHeadTr.style.cssText = "color:#888;border-bottom:1px solid #444;";
+    for (const [text, align] of [["Bar#","left"],["Type","left"],["Indicator","left"],["Price","right"],["Ind Value","right"]]) { const th = document.createElement("th"); th.style.cssText = `text-align:${align};padding:4px;`; th.textContent = text; dHeadTr.appendChild(th); }
+    dThead.appendChild(dHeadTr); table.appendChild(dThead);
     const tbody = document.createElement("tbody");
     for (const d of divergences) {
       const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #333;";
       const tc = d.type === "Bullish" ? "#4caf50" : "#f44336";
-      tr.innerHTML = `<td style="padding:4px;">${d.barIdx}</td><td style="padding:4px;color:${tc};font-weight:bold">${d.type}</td><td style="padding:4px;">${d.indicator}</td><td style="text-align:right;padding:4px;">$${d.priceLevel.toFixed(2)}</td><td style="text-align:right;padding:4px;">${d.indLevel.toFixed(2)}</td>`;
+      const tdBar = document.createElement("td"); tdBar.style.padding = "4px"; tdBar.textContent = d.barIdx; tr.appendChild(tdBar);
+      const tdType = document.createElement("td"); tdType.style.cssText = `padding:4px;color:${tc};font-weight:bold`; tdType.textContent = d.type; tr.appendChild(tdType);
+      const tdInd = document.createElement("td"); tdInd.style.padding = "4px"; tdInd.textContent = d.indicator; tr.appendChild(tdInd);
+      const tdPrice = document.createElement("td"); tdPrice.style.cssText = "text-align:right;padding:4px;"; tdPrice.textContent = "$" + d.priceLevel.toFixed(2); tr.appendChild(tdPrice);
+      const tdVal = document.createElement("td"); tdVal.style.cssText = "text-align:right;padding:4px;"; tdVal.textContent = d.indLevel.toFixed(2); tr.appendChild(tdVal);
       tbody.appendChild(tr);
     }
     table.appendChild(tbody); container.appendChild(table);
@@ -6606,7 +6633,9 @@ function cmdSignal() {
 
   const scoreDiv = document.createElement("div");
   scoreDiv.style.cssText = `text-align:center;padding:18px;background:#111;border:2px solid ${labelColor};border-radius:10px;margin-bottom:16px;`;
-  scoreDiv.innerHTML = `<div style="font-size:48px;font-weight:bold;color:${labelColor};">${composite}</div><div style="font-size:18px;color:${labelColor};font-weight:bold;">${label}</div><div style="color:#888;font-size:12px;margin-top:4px;">Signal strength: ${composite}/100</div>`;
+  const scoreNum = document.createElement("div"); scoreNum.style.cssText = `font-size:48px;font-weight:bold;color:${labelColor};`; scoreNum.textContent = composite; scoreDiv.appendChild(scoreNum);
+  const scoreLbl = document.createElement("div"); scoreLbl.style.cssText = `font-size:18px;color:${labelColor};font-weight:bold;`; scoreLbl.textContent = label; scoreDiv.appendChild(scoreLbl);
+  const scoreStr = document.createElement("div"); scoreStr.style.cssText = "color:#888;font-size:12px;margin-top:4px;"; scoreStr.textContent = "Signal strength: " + composite + "/100"; scoreDiv.appendChild(scoreStr);
   container.appendChild(scoreDiv);
 
   const breakdownTitle = document.createElement("div");
@@ -6654,7 +6683,7 @@ function cmdSignal() {
   else if (composite >= 45) recText = "No clear directional bias. Stay flat or reduce exposure.";
   else if (composite >= 30) recText = "Weak bearish bias. Caution on longs, watch for breakdown.";
   else recText = "Strong bearish confluence. Consider short entries or hedge longs.";
-  recDiv.innerHTML = `<span style="color:#888;font-size:11px;">${recText}</span>`;
+  const recSpan = document.createElement("span"); recSpan.style.cssText = "color:#888;font-size:11px;"; recSpan.textContent = recText; recDiv.appendChild(recSpan);
   container.appendChild(recDiv);
 
   win.appendElement(container);
@@ -6875,18 +6904,25 @@ function cmdFiboTime() {
   const anchorDate = typeof chartData[anchorIdx].time === "number" ? new Date(chartData[anchorIdx].time * 1000).toLocaleDateString() : chartData[anchorIdx].time;
   const headerDiv = document.createElement("div");
   headerDiv.style.cssText = "margin-bottom:14px;padding:10px;background:#111;border:1px solid #9C27B0;border-radius:6px;text-align:center;";
-  headerDiv.innerHTML = `<div style="color:#9C27B0;font-size:14px;font-weight:bold;">Fibonacci Time Zones</div><div style="color:#888;font-size:11px;margin-top:4px;">Anchor: Bar ${anchorIdx} (${anchorDate}) — Swing Low at $${chartData[anchorIdx].low.toFixed(2)}</div>`;
+  const fiboTitle = document.createElement("div"); fiboTitle.style.cssText = "color:#9C27B0;font-size:14px;font-weight:bold;"; fiboTitle.textContent = "Fibonacci Time Zones"; headerDiv.appendChild(fiboTitle);
+  const fiboAnchor = document.createElement("div"); fiboAnchor.style.cssText = "color:#888;font-size:11px;margin-top:4px;"; fiboAnchor.textContent = "Anchor: Bar " + anchorIdx + " (" + anchorDate + ") \u2014 Swing Low at $" + chartData[anchorIdx].low.toFixed(2); headerDiv.appendChild(fiboAnchor);
   container.appendChild(headerDiv);
 
   const table = document.createElement("table");
   table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
-  table.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Fib #</th><th style="text-align:left;padding:4px;">Bars Forward</th><th style="text-align:left;padding:4px;">Date</th><th style="text-align:center;padding:4px;">Status</th></tr></thead>`;
+  const fThead = document.createElement("thead");
+  const fHeadTr = document.createElement("tr"); fHeadTr.style.cssText = "color:#888;border-bottom:1px solid #444;";
+  for (const [text, align] of [["Fib #","left"],["Bars Forward","left"],["Date","left"],["Status","center"]]) { const th = document.createElement("th"); th.style.cssText = `text-align:${align};padding:4px;`; th.textContent = text; fHeadTr.appendChild(th); }
+  fThead.appendChild(fHeadTr); table.appendChild(fThead);
   const tbody = document.createElement("tbody");
   for (const f of fiboList) {
     const tr = document.createElement("tr"); tr.style.borderBottom = "1px solid #333";
     const statusColor = f.projected ? "#ff9800" : "#4caf50";
     const statusText = f.projected ? "Projected" : "On Chart";
-    tr.innerHTML = `<td style="padding:4px;color:#9C27B0;font-weight:bold;">${f.fib}</td><td style="padding:4px;">+${f.fib}</td><td style="padding:4px;">${f.label.split("= ")[1] || "---"}</td><td style="text-align:center;padding:4px;color:${statusColor};font-size:11px;">${statusText}</td>`;
+    const tdFib = document.createElement("td"); tdFib.style.cssText = "padding:4px;color:#9C27B0;font-weight:bold;"; tdFib.textContent = f.fib; tr.appendChild(tdFib);
+    const tdBars = document.createElement("td"); tdBars.style.padding = "4px"; tdBars.textContent = "+" + f.fib; tr.appendChild(tdBars);
+    const tdDate = document.createElement("td"); tdDate.style.padding = "4px"; tdDate.textContent = f.label.split("= ")[1] || "---"; tr.appendChild(tdDate);
+    const tdStatus = document.createElement("td"); tdStatus.style.cssText = `text-align:center;padding:4px;color:${statusColor};font-size:11px;`; tdStatus.textContent = statusText; tr.appendChild(tdStatus);
     tbody.appendChild(tr);
   }
   table.appendChild(tbody); container.appendChild(table);
@@ -7326,6 +7362,7 @@ function cmdTimer() {
   win.appendElement(container);
 
   function saveTimers() {
+    if (timers.length > 100) timers = timers.slice(-100);
     localStorage.setItem(TIMER_KEY, JSON.stringify(timers));
   }
 
@@ -8178,7 +8215,7 @@ async function cmdJournalPlus() {
   const JOURNAL_PLUS_KEY = "typhoon_journal_plus";
   const TAGS = ["Breakout", "Mean Reversion", "Earnings Play", "FOMO", "Revenge Trade", "Trend Follow", "Scalp", "Swing", "News", "Other"];
   function loadJP() { try { return JSON.parse(localStorage.getItem(JOURNAL_PLUS_KEY) || "[]"); } catch { return []; } }
-  function saveJP(entries) { localStorage.setItem(JOURNAL_PLUS_KEY, JSON.stringify(entries)); }
+  function saveJP(entries) { if (entries.length > 500) entries = entries.slice(-500); localStorage.setItem(JOURNAL_PLUS_KEY, JSON.stringify(entries)); }
   let jpEntries = loadJP();
   let filterTag = "ALL", filterSymbol = "", filterPnL = "all", filterDateFrom = "", filterDateTo = "";
   const root = document.createElement("div");
@@ -8314,7 +8351,7 @@ async function cmdJournalPlus() {
       const avgWinRating = winners.length > 0 ? (winners.reduce((s, e) => s + e.rating, 0) / winners.length).toFixed(1) : "\u2014";
       const avgLossRating = losers.length > 0 ? (losers.reduce((s, e) => s + e.rating, 0) / losers.length).toFixed(1) : "\u2014";
       const ratingDiv = document.createElement("div"); ratingDiv.style.cssText = "padding:4px;color:#ccc;font-size:11px;";
-      ratingDiv.innerHTML = "<b>Avg Rating:</b> Winners: " + avgWinRating + " | Losers: " + avgLossRating; jpContent.appendChild(ratingDiv);
+      const ratingBold = document.createElement("b"); ratingBold.textContent = "Avg Rating:"; ratingDiv.appendChild(ratingBold); ratingDiv.appendChild(document.createTextNode(" Winners: " + avgWinRating + " | Losers: " + avgLossRating)); jpContent.appendChild(ratingDiv);
     }
   }
   const fetchBar = document.createElement("div"); fetchBar.style.cssText = "padding:4px;border-top:1px solid #333;display:flex;gap:4px;align-items:center;";
@@ -8473,6 +8510,8 @@ function cmdImportTrades() {
     const format = formatSel.value === "auto" ? "generic" : formatSel.value;
     const trades = normalizeTrades(parsedRows, format);
     if (trades.length === 0) { log("No valid trades found in CSV", "warn"); return; }
+    const serialized = JSON.stringify(trades);
+    if (serialized.length > 5 * 1024 * 1024) { log("Import data exceeds 5 MB limit (" + (serialized.length / 1024 / 1024).toFixed(1) + " MB). Reduce CSV size.", "warn"); return; }
     saveImported(trades); log("Imported " + trades.length + " trades", "ok"); renderImportResults(trades);
   });
   function renderImportResults(trades) {
@@ -17999,15 +18038,18 @@ function fireWebhooks(event, data) {
   for (const hook of hooks) {
     if (hook.events && hook.events.includes(event)) {
       const payload = { event, timestamp: new Date().toISOString(), ...data };
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       fetch(hook.url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       }).then(() => {
         log(`Webhook "${hook.name}" fired (${event})`, "ok");
       }).catch(err => {
         log(`Webhook "${hook.name}" failed: ${err}`, "error");
-      });
+      }).finally(() => clearTimeout(timeout));
     }
   }
 }
@@ -18072,15 +18114,18 @@ function cmdWebhook() {
           message: "Test webhook from TyphooN Terminal",
           timestamp: new Date().toISOString(),
         };
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
         fetch(hook.url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
+          signal: controller.signal,
         }).then(r => {
           log(`Webhook test "${hook.name}": ${r.status} ${r.statusText}`, r.ok ? "ok" : "warn");
         }).catch(err => {
           log(`Webhook test "${hook.name}" failed: ${err}`, "error");
-        });
+        }).finally(() => clearTimeout(timeout));
       });
 
       const editBtn = document.createElement("button");
@@ -18193,6 +18238,8 @@ function cmdWebhook() {
       const name = nameInput.value.trim();
       const url = urlInput.value.trim();
       if (!name || !url) { log("Webhook name and URL are required", "warn"); return; }
+      if (!url.startsWith("https://")) { log("Webhook URL must start with https://", "warn"); return; }
+      if (/localhost|127\.0\.0\.1|0\.0\.0\.0|192\.168\.|10\.|172\.16\./.test(url)) { log("Webhook URL must not point to local/private networks (SSRF prevention)", "warn"); return; }
       const events = EVENT_TYPES.filter(e => checkboxes[e].checked);
       if (events.length === 0) { log("Select at least one event type", "warn"); return; }
       const all = loadWebhooks();
