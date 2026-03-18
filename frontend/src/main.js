@@ -4579,7 +4579,7 @@ async function loadNewsAndFundamentals(symbol) {
       articles = JSON.parse(alpacaJson);
 
       // Fetch Finnhub news if API key is set
-      const finnhubKey = localStorage.getItem("typhoon_finnhub_key") || "";
+      const finnhubKey = localStorage.getItem("typhoon_finnhub_key") || loadSettings().finnhubKey || "";
       if (finnhubKey) {
         try {
           const finnhubJson = await invoke("get_finnhub_news", { symbol, finnhubKey });
@@ -22589,6 +22589,7 @@ function cmdSettings() {
   c.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:4px;";
   const fields = [
     { key: "fredApiKey", label: "FRED API Key", ph: "32-char from fred.stlouisfed.org" },
+    { key: "finnhubKey", label: "Finnhub API Key (news)", ph: "Free: finnhub.io/register" },
     { key: "aiProvider", label: "AI Provider", ph: "anthropic or openai", val: settings.aiProvider || "anthropic" },
     { key: "aiApiKey", label: "AI API Key", ph: "sk-ant-... or sk-..." },
     { key: "aiModel", label: "AI Model (opt)", ph: "claude-haiku-4-5-20251001 / gpt-4o-mini" },
@@ -22611,7 +22612,10 @@ function cmdSettings() {
   btn.style.cssText = "padding:8px;background:#0a5f38;color:#8f8;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-weight:bold;";
   btn.addEventListener("click", () => {
     const s = {}; for (const [k, inp] of Object.entries(inputs)) s[k] = inp.value.trim();
-    saveSettings(s); log("Settings saved", "ok"); win.close();
+    saveSettings(s);
+    // Also store Finnhub key in standalone localStorage for news loader
+    if (s.finnhubKey) localStorage.setItem("typhoon_finnhub_key", s.finnhubKey);
+    log("Settings saved", "ok"); win.close();
   });
   c.appendChild(btn);
   const note = document.createElement("div");
