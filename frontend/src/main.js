@@ -3310,7 +3310,18 @@ function setupButtons() {
 
   // Chart type selector
   document.getElementById("chart-type-select").addEventListener("change", (e) => {
-    rebuildMainSeries(e.target.value);
+    const newType = e.target.value;
+    if (mtfGridActive && mtfGridCells.length > 0) {
+      // MTF Grid active: rebuild grid with new chart type
+      const selectedTFs = mtfGridCells.map(c => c.tf);
+      const sym = mtfGridSymbol || currentSymbol;
+      closeMTFGrid();
+      currentChartType = newType;
+      openMTFGrid(sym, selectedTFs);
+    } else {
+      // Single chart mode: rebuild main series
+      rebuildMainSeries(newType);
+    }
   });
 
   // Buy Lines: SL = lowest visible, TP = highest visible
