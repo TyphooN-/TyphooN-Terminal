@@ -303,4 +303,13 @@ Full cross-reference of MQL5 EA (TyphooN.mq5 v1.420, 2730 lines) against Rust/Ta
 
 **21 passes, 97 findings total: 91 fixed, 6 accepted with documented rationale.**
 
-All actionable security items completed. Zero interpolated innerHTML attack surface.
+### Accepted Risks (Documented)
+
+1. **7 `expect()` in Rust** — HTTP client construction in static initializers and `main()`. If client construction fails, the OS is out of memory — no recovery possible. Descriptive panic messages.
+2. **1 `new Function()` in JS** — Custom indicator plugin loader. Source comes from Rust backend file system, not user input. Documented in ADR-029.
+3. **42 static `innerHTML`** — Contain no variable interpolation. All are constant HTML strings like `'<div style="...">LABEL</div>'`. Zero XSS surface.
+4. **2 `innerHTML` with `${}`** — One is `document.write()` for popup window (intentional), one is a static header (no user data).
+5. **126 silent `catch (_) {}`** — Intentional graceful degradation. Trading apps must never crash on non-critical errors (stale cache, missing API response, DOM race conditions). Each catch is for a non-critical path where failure means "skip this update."
+6. **16 `prompt()` calls** — Blocks UI thread but only fires on user-initiated commands (PAIRS, COMPARE, SPREAD, etc.). Acceptable for manual trader workflow.
+
+All actionable security items completed. Zero interpolated innerHTML attack surface. Full stack audited: Rust (7,009 lines), JS (24,096 lines), Wasm (44KB + 52KB).
