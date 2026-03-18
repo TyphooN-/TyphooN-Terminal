@@ -1,13 +1,13 @@
-# ADR-029: Feature Expansion — Analytics & Risk Tools (36 New Commands)
+# ADR-029: Feature Expansion — Analytics & Risk Tools (56 New Commands)
 
 **Status:** Implemented
 **Date:** 2026-03-17
 
 ## Context
 
-After completing the core trading terminal, research platform, and strategy testing framework (ADRs 001-028), the terminal needed deeper analytical tools to match professional platforms like Bloomberg PORT, FlowAlgo, TradingView Premium, and CQG. Two batches of features were added in a single session — 16 commands in the first batch and 20 in the second — for a total of 36 new Ctrl+K commands.
+After completing the core trading terminal, research platform, and strategy testing framework (ADRs 001-028), the terminal needed deeper analytical tools to match professional platforms like Bloomberg PORT, FlowAlgo, TradingView Premium, and CQG. Three batches of features were added in a single session — 16 commands in the first batch, 20 in the second, and 20 in the third — for a total of 56 new Ctrl+K commands.
 
-**Key architectural decision:** All 36 features use existing cached data (bar cache, options chain, positions, watchlist). Zero new API endpoints were added. This preserves the rate limit budget and adds no new network latency.
+**Key architectural decision:** All 56 features use existing cached data (bar cache, options chain, positions, watchlist). Zero new API endpoints were added. This preserves the rate limit budget and adds no new network latency.
 
 ## Features Added
 
@@ -80,6 +80,43 @@ After completing the core trading terminal, research platform, and strategy test
 | MARKETPROFILE | `Ctrl+K → MARKETPROFILE` | Time-Price-Opportunity (TPO) distribution chart | Bar cache (intraday bars) |
 | HEATCAL | `Ctrl+K → HEATCAL` | Calendar heat map — daily returns colored by magnitude | Bar cache (daily bars) |
 | ECALENDAR | `Ctrl+K → ECALENDAR` | Enhanced economic calendar — ForexFactory-style with impact filters | ForexFactory + FRED data |
+
+### Batch 3 — Dashboards, Automation, DOM & Journaling (20 Commands)
+
+#### Quick Wins (7)
+
+| Command | Ctrl+K | Description | Data Source |
+|---|---|---|---|
+| SNAPSHOT | `Ctrl+K → SNAPSHOT` | Portfolio snapshot to clipboard (formatted text table) | Positions + account info |
+| HOTLIST | `Ctrl+K → HOTLIST` | Real-time top movers dashboard (auto-refresh 30s) | Alpaca top movers/most active |
+| NOTES | `Ctrl+K → NOTES` | Per-symbol persistent trading notes | localStorage |
+| TIMER | `Ctrl+K → TIMER` | Custom countdown timers (London/NY open presets) | localStorage + browser notifications |
+| EXPORT | `Ctrl+K → EXPORT` | Chart data + indicators export to CSV | currentChartData + indicator calcs |
+| DARKMODE | `Ctrl+K → DARKMODE` | Theme switcher (dark/pitch black/light) | CSS variables + localStorage |
+| FIBO+ | `Ctrl+K → FIBO+` | Fibonacci time zones from fractal anchor | currentChartData |
+
+#### Medium (7)
+
+| Command | Ctrl+K | Description | Data Source |
+|---|---|---|---|
+| SIGNAL | `Ctrl+K → SIGNAL` | Composite 0-100 trading signal from 6 indicators | currentChartData + indicator calcs |
+| PROFILE | `Ctrl+K → PROFILE` | Trading profile analytics (best symbols, day-of-week, long vs short) | Order history |
+| LADDER | `Ctrl+K → LADDER` | Price ladder / DOM visualization with bid-ask depth | Orderbook / quotes |
+| CHAIN+ | `Ctrl+K → CHAIN+` | Options chain visualizer (vol smile, OI profile, volume heatmap) | Options chain |
+| SPREAD+ | `Ctrl+K → SPREAD+` | Live bid-ask spread monitor with 2-sigma alert | WebSocket quotes |
+| WEBHOOK | `Ctrl+K → WEBHOOK` | Custom webhook endpoints for alert automation | localStorage + fetch() |
+| IMPORTTRADES | `Ctrl+K → IMPORTTRADES` | Import trade history CSV (MT5, IB, Tastytrade formats) | File input |
+
+#### High (6)
+
+| Command | Ctrl+K | Description | Data Source |
+|---|---|---|---|
+| BOOKMAP | `Ctrl+K → BOOKMAP` | Heatmap order book over time (canvas rendering) | Orderbook polling |
+| DASHBOARD | `Ctrl+K → DASHBOARD` | Customizable 8-widget dashboard grid (auto-refresh) | All data sources |
+| SCANNER-RT | `Ctrl+K → SCANNER-RT` | Real-time multi-symbol scanner (7 conditions, 60s poll) | Watchlist + bar cache |
+| ALGO | `Ctrl+K → ALGO` | Live algorithm monitor for auto-trade strategies | localStorage state |
+| JOURNAL+ | `Ctrl+K → JOURNAL+` | Enhanced journal (tags, ratings, monthly P&L calendar) | Order history + localStorage |
+| CORRELATION3D | `Ctrl+K → CORRELATION3D` | Force-directed correlation network graph (canvas) | Bar cache (watchlist) |
 
 ## Architectural Decisions
 

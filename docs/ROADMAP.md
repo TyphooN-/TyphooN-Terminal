@@ -204,6 +204,26 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Calendar heat map | ✅ Done | Ctrl+K → HEATCAL, daily returns calendar visualization |
 | Enhanced economic calendar | ✅ Done | Ctrl+K → ECALENDAR, ForexFactory-style with impact filters |
 | Order flow analysis | ✅ Done | Ctrl+K → ORDERFLOW, trade tape aggregation + delta |
+| Portfolio snapshot | ✅ Done | Ctrl+K → SNAPSHOT, copy portfolio table to clipboard |
+| Real-time top movers | ✅ Done | Ctrl+K → HOTLIST, auto-refresh gainers/losers/active |
+| Per-symbol notes | ✅ Done | Ctrl+K → NOTES, persistent trading notes per symbol |
+| Custom timers | ✅ Done | Ctrl+K → TIMER, countdown timers with London/NY presets |
+| Chart data export | ✅ Done | Ctrl+K → EXPORT, OHLCV + indicators to CSV |
+| Theme switcher | ✅ Done | Ctrl+K → DARKMODE, dark/pitch black/light themes |
+| Fibonacci time zones | ✅ Done | Ctrl+K → FIBO+, time-based Fibonacci from fractal anchor |
+| Composite signal | ✅ Done | Ctrl+K → SIGNAL, 0-100 score from 6 indicators |
+| Trading profile | ✅ Done | Ctrl+K → PROFILE, analytics by symbol/day/side/hold time |
+| Price ladder / DOM | ✅ Done | Ctrl+K → LADDER, vertical bid-ask depth visualization |
+| Options chain visualizer | ✅ Done | Ctrl+K → CHAIN+, vol smile + OI profile + volume heatmap |
+| Live spread monitor | ✅ Done | Ctrl+K → SPREAD+, bid-ask spread tracking with 2σ alert |
+| Webhook alerts | ✅ Done | Ctrl+K → WEBHOOK, custom endpoint POST on events |
+| Heatmap order book | ✅ Done | Ctrl+K → BOOKMAP, order book depth over time (canvas) |
+| Custom dashboard | ✅ Done | Ctrl+K → DASHBOARD, 8-widget configurable grid |
+| Real-time scanner | ✅ Done | Ctrl+K → SCANNER-RT, 7 conditions with 60s polling |
+| Algorithm monitor | ✅ Done | Ctrl+K → ALGO, live auto-trade strategy status |
+| Enhanced journal | ✅ Done | Ctrl+K → JOURNAL+, tags/ratings/monthly P&L calendar |
+| Correlation network | ✅ Done | Ctrl+K → CORRELATION3D, force-directed graph (canvas) |
+| Import trade history | ✅ Done | Ctrl+K → IMPORTTRADES, CSV from MT5/IB/Tastytrade |
 
 ### Blocked — Needs External Resources
 

@@ -126,6 +126,14 @@
 14. **Statistical anomaly detection** — Smart alerts that detect unusual price/volume/volatility patterns. Unique feature — no competitor offers this.
 15. **No-code strategy builder** — Visual strategy builder without writing code. Comparable to TradingView Pine Script but visual/drag-and-drop.
 16. **Pairs trading with cointegration** — Statistical pairs analysis with z-score signals. Professional quant feature usually found only in institutional platforms.
+17. **Heatmap order book (Bookmap)** — Order book depth over time as a 2D heatmap. Comparable to Bookmap ($40/mo). Canvas rendering.
+18. **Customizable dashboard** — 8-widget configurable grid with auto-refresh. Comparable to Bloomberg LAUNCHPAD.
+19. **Real-time scanner** — Multi-condition scanner with 7 preset conditions, 60-second polling, browser notifications.
+20. **Composite trading signal** — 0-100 score aggregating 6 indicators (Fisher, RSI, KAMA, SMA, volume, ATR). Unique feature.
+21. **Price ladder / DOM** — Vertical bid-ask depth with volume bars. Standard on CQG and TT.
+22. **Theme switcher** — Dark, pitch black (OLED), light themes. Accessibility feature competitors lack.
+23. **Webhook alert automation** — Custom webhook endpoints for integrating with Discord bots, Zapier, etc.
+24. **95 Ctrl+K commands** — More command palette entries than any open-source terminal.
 
 ## UX Advantages Over Competitors
 
