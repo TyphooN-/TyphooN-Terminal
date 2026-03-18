@@ -4982,6 +4982,114 @@ function restoreSession() {
 
 // ── Positions Panel ──────────────────────────────────────────
 
+// ── Tab Watchlist (TradingView-style, right sidebar) ────────
+function setupTabWatchlist() {
+  const panel = document.getElementById("tab-watchlist-panel");
+  const header = document.getElementById("tab-watchlist-header");
+  const content = document.getElementById("tab-watchlist-content");
+  if (!panel || !header) return;
+
+  header.addEventListener("click", () => {
+    panel.classList.toggle("collapsed");
+    header.textContent = panel.classList.contains("collapsed") ? "Watchlist ▶" : "Watchlist ▼";
+  });
+
+  async function refreshWatchlist() {
+    // Get unique symbols from all open tabs
+    const symbols = [...new Set(tabs.map(t => t.symbol).filter(Boolean))];
+    if (symbols.length === 0) { content.textContent = "No tabs open"; return; }
+
+    const frag = document.createDocumentFragment();
+    for (const sym of symbols) {
+      try {
+        const quoteJson = await invoke("get_latest_quote", { symbol: sym });
+        const q = JSON.parse(quoteJson);
+
+        // Get daily bar for high/low/prev close
+        const ck = getCacheKey(sym, "1Day");
+        const cached = barCache[ck];
+        let high = 0, low = 0, prevClose = 0, change = 0, changePct = 0;
+        if (cached && cached.data && cached.data.length >= 2) {
+          const today = cached.data[cached.data.length - 1];
+          const yesterday = cached.data[cached.data.length - 2];
+          high = today.high || today.h || 0;
+          low = today.low || today.l || 0;
+          prevClose = yesterday.close || yesterday.c || 0;
+          if (prevClose > 0) {
+            const curPrice = q.bid > 0 ? (q.bid + q.ask) / 2 : today.close || today.c || 0;
+            change = curPrice - prevClose;
+            changePct = (change / prevClose) * 100;
+          }
+        }
+
+        const bid = q.bid || 0, ask = q.ask || 0;
+        const spread = ask > bid ? ask - bid : 0;
+        const dp = bid > 100 ? 2 : bid > 1 ? 4 : 6;
+        const isActive = sym === currentSymbol;
+
+        const row = document.createElement("div");
+        row.className = "wl-row";
+        if (isActive) row.style.background = "#0a1a2a";
+
+        // Symbol
+        const symEl = document.createElement("span");
+        symEl.className = "wl-sym";
+        symEl.textContent = sym.length > 8 ? sym.substring(0, 7) + "…" : sym;
+        symEl.style.color = isActive ? "#4caf50" : "#fff";
+
+        // Price + bid/ask
+        const priceEl = document.createElement("span");
+        priceEl.className = "wl-price";
+        const mid = bid > 0 ? ((bid + ask) / 2) : 0;
+        priceEl.textContent = mid > 0 ? mid.toFixed(dp) : "—";
+        priceEl.style.color = "#ccc";
+
+        // Change %
+        const chgEl = document.createElement("span");
+        chgEl.className = "wl-chg";
+        chgEl.textContent = changePct !== 0 ? (changePct >= 0 ? "+" : "") + changePct.toFixed(2) + "%" : "—";
+        chgEl.style.color = changePct > 0 ? "#4caf50" : changePct < 0 ? "#f44336" : "#888";
+
+        row.appendChild(symEl);
+        row.appendChild(priceEl);
+        row.appendChild(chgEl);
+
+        // Tooltip with full details
+        const details = [];
+        if (bid > 0) details.push(`Bid: ${bid.toFixed(dp)}`);
+        if (ask > 0) details.push(`Ask: ${ask.toFixed(dp)}`);
+        if (spread > 0) details.push(`Spread: ${spread.toFixed(dp)}`);
+        if (high > 0) details.push(`H: ${high.toFixed(dp)}`);
+        if (low > 0) details.push(`L: ${low.toFixed(dp)}`);
+        if (change !== 0) details.push(`Chg: ${change >= 0 ? "+" : ""}${change.toFixed(dp)}`);
+        row.title = details.join(" | ");
+
+        // Click to switch to this tab
+        row.addEventListener("click", () => {
+          const tab = tabs.find(t => t.symbol === sym);
+          if (tab) switchTab(tab.id);
+        });
+
+        frag.appendChild(row);
+      } catch (_) {
+        // Symbol failed — show with no data
+        const row = document.createElement("div");
+        row.className = "wl-row";
+        row.appendChild(span(sym, "color:#666;font-weight:bold;"));
+        row.appendChild(span("—", "color:#333;text-align:right;"));
+        row.appendChild(span("", ""));
+        frag.appendChild(row);
+      }
+    }
+    content.replaceChildren(frag);
+  }
+
+  refreshWatchlist();
+  const iv = setInterval(refreshWatchlist, 2000);
+  // Clean up if panel removed
+  panel._watchlistInterval = iv;
+}
+
 let positionsChartOnly = false;
 
 function setupPositionsPanel() {
@@ -21472,6 +21580,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupLogPanel();
   setupNewsPanel();
   setupIndicatorPanel();
+  setupTabWatchlist();
   setupPositionsPanel();
   setupOrdersPanel();
   loadAlerts();
