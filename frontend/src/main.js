@@ -205,7 +205,7 @@ let mtfData = {};
 let currentChartData = []; // full chartData with volume — candleSeries.data() drops volume
 let chartLoadGeneration = 0; // increments on each loadChart call — stale intervals check this
 let activeBrokerId = "default"; // per-broker data isolation — set on connect
-let currentChartType = "candles"; // "candles" | "line" | "bars"
+let currentChartType = "gpu"; // default GPU candles, "candles" for CPU fallback
 let orderPriceLines = []; // pending order visualization lines on chart
 let mtfGridOrderLines = []; // position SL/TP/entry lines on MTF grid cells
 let lastTradePrice = 0; // for T&S uptick/downtick detection
@@ -2915,31 +2915,49 @@ async function loadChart(symbol, timeframe) {
   }
 }
 
-const ALL_TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week"];
+const ALL_NATIVE_TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month"];
 
-const prefetchInProgress = new Set(); // prevent duplicate prefetch runs per symbol
+const prefetchInProgress = new Set();
+// Track which symbol:tf combos are fully loaded (don't re-fetch)
+const fullyLoadedTFs = new Set();
 
-async function prefetchAllTimeframes(symbol, currentTF, limit) {
-  if (prefetchInProgress.has(symbol)) return; // already prefetching this symbol
+async function prefetchAllTimeframes(symbol, currentTF) {
+  if (prefetchInProgress.has(symbol)) return;
   prefetchInProgress.add(symbol);
 
-  const toFetch = ALL_TIMEFRAMES.filter(tf => tf !== currentTF);
   let fetched = 0;
-  for (const tf of toFetch) {
+  for (const tf of ALL_NATIVE_TIMEFRAMES) {
+    if (symbol !== currentSymbol) break; // user switched tabs
     const cacheKey = getCacheKey(symbol, tf);
+    const fullyLoadedKey = `${symbol}:${tf}`;
+
+    // Skip if already fully loaded in this session
+    if (fullyLoadedTFs.has(fullyLoadedKey)) continue;
+
     const cached = barCache[cacheKey];
-    // Skip if already cached (any data at all — don't re-fetch)
-    if (cached && cached.data && cached.data.length > 0) continue;
+    if (cached && cached.data && cached.data.length > 0) {
+      // Already have data — mark as loaded, don't re-fetch
+      // (updateLatestBar handles new bars every 10s)
+      fullyLoadedTFs.add(fullyLoadedKey);
+      continue;
+    }
+
+    // No cached data — initial fetch (max bars for this timeframe)
     try {
-      const barsJson = await invoke("get_bars", { symbol, timeframe: tf, limit: Math.min(limit, 1000) });
+      const barsJson = await invokeQuiet("get_bars", { symbol, timeframe: tf, limit: 10000 });
       const bars = JSON.parse(barsJson);
       if (bars.length > 0) {
         barCache[cacheKey] = { data: bars, timestamp: Date.now() };
         saveBarCacheToDisk(cacheKey, bars);
         fetched++;
+        log(`${symbol} ${tf}: ${bars.length} bars`, "info");
       }
-    } catch (_) {}
+      fullyLoadedTFs.add(fullyLoadedKey);
+    } catch (_) {
+      // Don't mark as loaded on error — retry next time
+    }
   }
+
   if (fetched > 0) log(`Pre-cached ${fetched} timeframes for ${symbol}`, "ok");
   prefetchInProgress.delete(symbol);
 }
