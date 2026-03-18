@@ -3402,7 +3402,23 @@ async function updateDashboard() {
         else setText("info-rr", "RR: —");
 
         // Show/hide unprotected position warning
-        if (!hasSL && !hasTP) {
+        // Also check broker-side open orders (stop orders = SL, limit orders = TP)
+        let brokerHasSL = hasSL, brokerHasTP = hasTP;
+        if (!hasSL || !hasTP) {
+          try {
+            const openJson = await invoke("get_open_orders");
+            const openOrders = JSON.parse(openJson);
+            const sym = currentSymbol.replace("/", "");
+            const oppSide = posSide === "long" ? "sell" : "buy";
+            for (const o of openOrders) {
+              if ((o.symbol === currentSymbol || o.symbol === sym) && o.side === oppSide) {
+                if (o.order_type === "stop" || o.order_type === "stop_limit") brokerHasSL = true;
+                if (o.order_type === "limit") brokerHasTP = true;
+              }
+            }
+          } catch (_) {}
+        }
+        if (!brokerHasSL && !brokerHasTP) {
           warnEl.classList.remove("hidden");
         } else {
           warnEl.classList.add("hidden");
@@ -14750,7 +14766,1375 @@ function cmdQuickOrder() {
   log(`Quick order from chart: ${window._quickOrderEnabled ? "ON — right-click chart for order options" : "OFF"}`, "ok");
 }
 
+// ── ANOMALY-STREAM — Real-Time Trade Anomaly Detection ──────
+function cmdAnomalyStream() {
+  let anomalyInterval = null;
+  let anomalyCount = 0;
+  let largestTrade = 0;
+  let fastestMove = 0;
+  const rollingPrices = [];
+  const rollingSizes = [];
+  const tradeTimestamps = [];
+  const WINDOW = 100;
+
+  const win = createWindow({
+    title: "Anomaly Stream — " + (currentSymbol || "?"),
+    type: "custom",
+    width: 550,
+    height: 450,
+    onClose: () => { if (anomalyInterval) { clearInterval(anomalyInterval); anomalyInterval = null; } },
+  });
+  win.contentElement.textContent = "";
+
+  // Stats bar
+  const statsBar = el("div", "padding:6px 8px;background:#111;border-bottom:1px solid #333;font-size:11px;font-family:Consolas,monospace;display:flex;gap:16px;");
+  const statAnomalies = span("Anomalies: 0", "color:#ff9800;");
+  const statLargest = span("Largest: --", "color:#2196f3;");
+  const statFastest = span("Fastest: --", "color:#e040fb;");
+  statsBar.appendChild(statAnomalies);
+  statsBar.appendChild(statLargest);
+  statsBar.appendChild(statFastest);
+  win.appendElement(statsBar);
+
+  // Header
+  const hdr = el("div", "display:flex;padding:4px 8px;color:#888;font-size:10px;border-bottom:1px solid #333;font-family:Consolas,monospace;gap:8px;");
+  const hTime = span("TIME", "min-width:70px;");
+  const hType = span("TYPE", "min-width:100px;");
+  const hDetail = span("DETAILS", "flex:1;");
+  const hSev = span("SEVERITY", "min-width:70px;text-align:right;");
+  hdr.appendChild(hTime);
+  hdr.appendChild(hType);
+  hdr.appendChild(hDetail);
+  hdr.appendChild(hSev);
+  win.appendElement(hdr);
+
+  // Feed
+  const feed = el("div", "overflow-y:auto;max-height:calc(100% - 70px);font-family:Consolas,monospace;font-size:11px;");
+  win.appendElement(feed);
+
+  function addAlert(type, detail, severity) {
+    anomalyCount++;
+    statAnomalies.textContent = "Anomalies: " + anomalyCount;
+    const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+    const sevColor = severity === "HIGH" ? "#f44336" : severity === "MED" ? "#ff9800" : "#4caf50";
+    const row = el("div", "display:flex;padding:2px 8px;gap:8px;border-bottom:1px solid #222;");
+    row.appendChild(span(time, "min-width:70px;color:#888;"));
+    row.appendChild(span(type, "min-width:100px;color:#fff;font-weight:bold;"));
+    row.appendChild(span(detail, "flex:1;color:#ccc;"));
+    row.appendChild(span(severity, "min-width:70px;text-align:right;color:" + sevColor + ";font-weight:bold;"));
+    if (feed.firstChild) feed.insertBefore(row, feed.firstChild);
+    else feed.appendChild(row);
+    // Trim to 200 entries
+    while (feed.children.length > 200) feed.removeChild(feed.lastChild);
+    // Browser notification for HIGH
+    if (severity === "HIGH" && typeof Notification !== "undefined" && Notification.permission === "granted") {
+      try { new Notification("TyphooN Anomaly: " + type, { body: detail }); } catch (_) {}
+    }
+  }
+
+  function rollingAvg(arr) {
+    if (arr.length === 0) return 0;
+    let s = 0;
+    for (let i = 0; i < arr.length; i++) s += arr[i];
+    return s / arr.length;
+  }
+
+  function rollingStdDev(arr) {
+    if (arr.length < 2) return 0;
+    const avg = rollingAvg(arr);
+    let sumSq = 0;
+    for (let i = 0; i < arr.length; i++) sumSq += (arr[i] - avg) * (arr[i] - avg);
+    return Math.sqrt(sumSq / arr.length);
+  }
+
+  // Request notification permission
+  if (typeof Notification !== "undefined" && Notification.permission === "default") {
+    try { Notification.requestPermission(); } catch (_) {}
+  }
+
+  anomalyInterval = setInterval(async () => {
+    try {
+      const json = await invoke("poll_stream");
+      const messages = JSON.parse(json);
+      const now = Date.now();
+      for (const msg of messages) {
+        if (!msg.Trade) continue;
+        const t = msg.Trade;
+        const price = t.price;
+        const size = t.size;
+
+        rollingPrices.push(price);
+        rollingSizes.push(size);
+        tradeTimestamps.push(now);
+        if (rollingPrices.length > WINDOW) rollingPrices.shift();
+        if (rollingSizes.length > WINDOW) rollingSizes.shift();
+        while (tradeTimestamps.length > 500) tradeTimestamps.shift();
+
+        if (size > largestTrade) {
+          largestTrade = size;
+          statLargest.textContent = "Largest: " + size.toFixed(2);
+        }
+
+        // LARGE TRADE: size > 5x rolling avg
+        const avgSize = rollingAvg(rollingSizes);
+        if (avgSize > 0 && size > 5 * avgSize) {
+          addAlert("LARGE TRADE", size.toFixed(2) + " (avg " + avgSize.toFixed(2) + ")", "HIGH");
+        }
+
+        // RAPID MOVE: price move > 3 sigma in 1s window
+        const priceStd = rollingStdDev(rollingPrices);
+        if (rollingPrices.length >= 2 && priceStd > 0) {
+          const move = Math.abs(price - rollingPrices[rollingPrices.length - 2]);
+          if (move > 3 * priceStd) {
+            const pct = ((move / price) * 100).toFixed(4);
+            if (move > fastestMove) {
+              fastestMove = move;
+              statFastest.textContent = "Fastest: " + move.toFixed(6);
+            }
+            addAlert("RAPID MOVE", pct + "% (" + move.toFixed(6) + ")", move > 5 * priceStd ? "HIGH" : "MED");
+          }
+        }
+
+        // BURST: 10+ trades in < 1 second
+        const recentCount = tradeTimestamps.filter(ts => now - ts < 1000).length;
+        if (recentCount >= 10) {
+          addAlert("BURST", recentCount + " trades in <1s", recentCount >= 20 ? "HIGH" : "MED");
+          // Clear timestamps to avoid repeat alerts
+          tradeTimestamps.length = 0;
+        }
+      }
+    } catch (_) {}
+  }, 1000);
+}
+
+// ── STRATEGY-GENETIC — Genetic Algorithm Optimizer ──────────
+function cmdStrategyGenetic() {
+  const win = createWindow({
+    title: "Genetic Algorithm Optimizer",
+    type: "custom",
+    width: 650,
+    height: 550,
+  });
+  win.contentElement.textContent = "";
+
+  // Controls
+  const controls = el("div", "padding:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-bottom:1px solid #333;");
+
+  function makeField(labelText, defVal, type) {
+    const wrap = el("label", "color:#888;font-size:11px;display:flex;align-items:center;gap:4px;");
+    wrap.textContent = labelText;
+    if (type === "select") {
+      const sel = document.createElement("select");
+      sel.style.cssText = "padding:3px 6px;background:#111;color:#fff;border:1px solid #555;font-size:11px;";
+      for (const opt of defVal) {
+        const o = document.createElement("option");
+        o.value = opt;
+        o.textContent = opt;
+        sel.appendChild(o);
+      }
+      wrap.appendChild(sel);
+      return { wrap, input: sel };
+    }
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.value = defVal;
+    inp.style.cssText = "width:60px;padding:3px 6px;background:#111;color:#fff;border:1px solid #555;font-size:11px;";
+    if (type === "float") inp.step = "0.01";
+    wrap.appendChild(inp);
+    return { wrap, input: inp };
+  }
+
+  const fPop = makeField("Pop:", "50");
+  const fGen = makeField("Gens:", "20");
+  const fMut = makeField("Mut:", "0.1", "float");
+  const fFit = makeField("Fitness:", ["Profit Factor", "Sharpe", "Total P&L"], "select");
+
+  const evolveBtn = document.createElement("button");
+  evolveBtn.textContent = "Evolve";
+  evolveBtn.style.cssText = "padding:6px 16px;background:#1b5e20;color:#4caf50;border:1px solid #4caf50;cursor:pointer;font-size:12px;font-weight:bold;";
+
+  controls.appendChild(fPop.wrap);
+  controls.appendChild(fGen.wrap);
+  controls.appendChild(fMut.wrap);
+  controls.appendChild(fFit.wrap);
+  controls.appendChild(evolveBtn);
+  win.appendElement(controls);
+
+  // Progress
+  const progressDiv = el("div", "padding:6px 8px;font-family:Consolas,monospace;font-size:11px;color:#ff9800;min-height:18px;");
+  win.appendElement(progressDiv);
+
+  // Results
+  const resultsDiv = el("div", "padding:4px 8px;overflow-y:auto;max-height:calc(100% - 100px);font-family:Consolas,monospace;font-size:11px;");
+  win.appendElement(resultsDiv);
+
+  // SMA cross backtest on given data
+  function runSMACrossBacktest(data, fastP, slowP) {
+    if (data.length < slowP + 2 || fastP >= slowP) return { pf: 0, sharpe: 0, pnl: 0, trades: 0 };
+    // Use wasm SMA if available, else JS
+    const fastSMA = wasmReady ? wasmCalcSMA(data, fastP) : calcSMA(data, fastP);
+    const slowSMA = wasmReady ? wasmCalcSMA(data, slowP) : calcSMA(data, slowP);
+
+    // Align by time
+    const slowMap = {};
+    for (const s of slowSMA) slowMap[s.time] = s.value;
+
+    let pos = 0; // 1=long, -1=short, 0=flat
+    let entryPrice = 0;
+    const returns = [];
+    let grossProfit = 0;
+    let grossLoss = 0;
+
+    for (const f of fastSMA) {
+      const sv = slowMap[f.time];
+      if (sv === undefined) continue;
+      const bar = data.find(d => d.time === f.time);
+      if (!bar) continue;
+
+      if (f.value > sv && pos <= 0) {
+        if (pos === -1) {
+          const pnl = entryPrice - bar.close;
+          returns.push(pnl);
+          if (pnl > 0) grossProfit += pnl; else grossLoss += Math.abs(pnl);
+        }
+        pos = 1;
+        entryPrice = bar.close;
+      } else if (f.value < sv && pos >= 0) {
+        if (pos === 1) {
+          const pnl = bar.close - entryPrice;
+          returns.push(pnl);
+          if (pnl > 0) grossProfit += pnl; else grossLoss += Math.abs(pnl);
+        }
+        pos = -1;
+        entryPrice = bar.close;
+      }
+    }
+
+    const totalPnL = returns.reduce((a, b) => a + b, 0);
+    const pf = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 999 : 0;
+    let sharpe = 0;
+    if (returns.length > 1) {
+      const avg = totalPnL / returns.length;
+      let sumSq = 0;
+      for (const r of returns) sumSq += (r - avg) * (r - avg);
+      const std = Math.sqrt(sumSq / returns.length);
+      sharpe = std > 0 ? (avg / std) * Math.sqrt(252) : 0;
+    }
+    return { pf, sharpe, pnl: totalPnL, trades: returns.length };
+  }
+
+  evolveBtn.addEventListener("click", async () => {
+    const data = currentChartData;
+    if (!data || data.length < 50) { progressDiv.textContent = "Need chart data (50+ bars)"; return; }
+
+    const popSize = parseInt(fPop.input.value) || 50;
+    const numGens = parseInt(fGen.input.value) || 20;
+    const mutRate = parseFloat(fMut.input.value) || 0.1;
+    const metric = fFit.input.value;
+
+    evolveBtn.disabled = true;
+    evolveBtn.textContent = "Evolving...";
+    resultsDiv.textContent = "";
+
+    function fitness(gene) {
+      const r = runSMACrossBacktest(data, gene[0], gene[1]);
+      if (metric === "Profit Factor") return r.pf;
+      if (metric === "Sharpe") return r.sharpe;
+      return r.pnl;
+    }
+
+    function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+    function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+
+    // Initial population
+    let population = [];
+    for (let i = 0; i < popSize; i++) {
+      const fast = randInt(2, 100);
+      const slow = randInt(fast + 1, 200);
+      population.push([fast, slow]);
+    }
+
+    let bestEver = null;
+    let bestFitEver = -Infinity;
+
+    for (let gen = 0; gen < numGens; gen++) {
+      // Evaluate
+      const scored = population.map(g => ({ gene: g, fit: fitness(g) }));
+      scored.sort((a, b) => b.fit - a.fit);
+
+      if (scored[0].fit > bestFitEver) {
+        bestFitEver = scored[0].fit;
+        bestEver = scored[0].gene.slice();
+      }
+
+      progressDiv.textContent = "Generation " + (gen + 1) + "/" + numGens +
+        " -- Best: " + (metric === "Total P&L" ? "$" : "") +
+        bestFitEver.toFixed(2) + " (fast=" + bestEver[0] + ", slow=" + bestEver[1] + ")";
+
+      // Yield to UI
+      await new Promise(r => setTimeout(r, 0));
+
+      // Elitism: keep top 2
+      const nextPop = [scored[0].gene.slice(), scored[1].gene.slice()];
+
+      // Fill rest with selection + crossover + mutation
+      while (nextPop.length < popSize) {
+        // Tournament selection (pick 3)
+        const tournament = () => {
+          let best = scored[randInt(0, scored.length - 1)];
+          for (let t = 0; t < 2; t++) {
+            const challenger = scored[randInt(0, scored.length - 1)];
+            if (challenger.fit > best.fit) best = challenger;
+          }
+          return best.gene;
+        };
+
+        const pA = tournament();
+        const pB = tournament();
+
+        // Uniform crossover
+        const child = [
+          Math.random() < 0.5 ? pA[0] : pB[0],
+          Math.random() < 0.5 ? pA[1] : pB[1],
+        ];
+
+        // Mutation
+        if (Math.random() < mutRate) child[0] = clamp(child[0] + randInt(-10, 10), 2, 100);
+        if (Math.random() < mutRate) child[1] = clamp(child[1] + randInt(-10, 10), 3, 200);
+
+        // Ensure fast < slow
+        if (child[0] >= child[1]) child[1] = child[0] + 1;
+        if (child[1] > 200) { child[1] = 200; child[0] = Math.min(child[0], 199); }
+
+        nextPop.push(child);
+      }
+      population = nextPop;
+    }
+
+    // Final evaluation and top 10
+    const finalScored = population.map(g => {
+      const r = runSMACrossBacktest(data, g[0], g[1]);
+      return { gene: g, pf: r.pf, sharpe: r.sharpe, pnl: r.pnl, trades: r.trades };
+    });
+    finalScored.sort((a, b) => {
+      if (metric === "Profit Factor") return b.pf - a.pf;
+      if (metric === "Sharpe") return b.sharpe - a.sharpe;
+      return b.pnl - a.pnl;
+    });
+
+    progressDiv.textContent = "Complete! Best: fast=" + bestEver[0] + " slow=" + bestEver[1] + " (" + metric + ": " + bestFitEver.toFixed(2) + ")";
+
+    // Results table
+    const tbl = document.createElement("table");
+    tbl.style.cssText = "width:100%;border-collapse:collapse;";
+    tbl.appendChild(theadRow(["#", "Fast", "Slow", "PF", "Sharpe", "P&L", "Trades"]));
+    const top10 = finalScored.slice(0, 10);
+    for (let i = 0; i < top10.length; i++) {
+      const r = top10[i];
+      const row = styledRow([
+        { text: String(i + 1), style: "padding:4px;color:#888;" },
+        { text: String(r.gene[0]), style: "padding:4px;color:#2196f3;" },
+        { text: String(r.gene[1]), style: "padding:4px;color:#ff9800;" },
+        { text: r.pf.toFixed(2), style: "padding:4px;color:" + (r.pf > 1 ? "#4caf50" : "#f44336") + ";" },
+        { text: r.sharpe.toFixed(2), style: "padding:4px;color:#e040fb;" },
+        { text: "$" + r.pnl.toFixed(2), style: "padding:4px;color:" + (r.pnl > 0 ? "#4caf50" : "#f44336") + ";" },
+        { text: String(r.trades), style: "padding:4px;color:#ccc;" },
+      ]);
+      tbl.appendChild(row);
+    }
+    resultsDiv.appendChild(tbl);
+
+    evolveBtn.disabled = false;
+    evolveBtn.textContent = "Evolve";
+  });
+}
+
+// ── WAVEFORM — Audio-Style Price Waveform ───────────────────
+function cmdWaveform() {
+  const data = currentChartData;
+  if (!data || data.length < 3) { log("Waveform: need chart data", "warn"); return; }
+
+  const win = createWindow({
+    title: (currentSymbol || "?") + " -- Price Waveform",
+    type: "custom",
+    width: 540,
+    height: 320,
+  });
+  win.contentElement.textContent = "";
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 500;
+  canvas.height = 200;
+  canvas.style.cssText = "display:block;margin:4px auto;background:#0a0a0a;border:1px solid #333;cursor:crosshair;";
+  win.appendElement(canvas);
+
+  // Compute returns and volumes
+  const returns = [];
+  const volumes = [];
+  for (let i = 1; i < data.length; i++) {
+    returns.push((data[i].close - data[i - 1].close) / data[i - 1].close);
+    volumes.push(data[i].volume || 1);
+  }
+
+  const maxVol = Math.max(...volumes, 1);
+  let zoomLevel = 1;
+  let panOffset = 0;
+
+  function render() {
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Zero line
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+
+    const visibleBars = Math.max(10, Math.floor(returns.length / zoomLevel));
+    const startIdx = Math.max(0, Math.min(panOffset, returns.length - visibleBars));
+    const endIdx = Math.min(returns.length, startIdx + visibleBars);
+    const barW = w / visibleBars;
+
+    // Find max abs return in view for scaling
+    let maxAbs = 0;
+    for (let i = startIdx; i < endIdx; i++) {
+      const a = Math.abs(returns[i]);
+      if (a > maxAbs) maxAbs = a;
+    }
+    if (maxAbs === 0) maxAbs = 0.01;
+
+    for (let i = startIdx; i < endIdx; i++) {
+      const x = (i - startIdx) * barW;
+      const ret = returns[i];
+      const yMag = (ret / maxAbs) * (h / 2 - 10);
+      const thickness = Math.max(1, (volumes[i] / maxVol) * barW * 0.8);
+
+      ctx.strokeStyle = ret >= 0 ? "#4caf50" : "#f44336";
+      ctx.lineWidth = thickness;
+      ctx.beginPath();
+      ctx.moveTo(x + barW / 2, h / 2);
+      ctx.lineTo(x + barW / 2, h / 2 - yMag);
+      ctx.stroke();
+    }
+  }
+
+  render();
+
+  // Zoom with mouse wheel
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (e.deltaY < 0) {
+      zoomLevel = Math.min(zoomLevel * 1.2, returns.length / 10);
+    } else {
+      zoomLevel = Math.max(zoomLevel / 1.2, 1);
+    }
+    // Adjust pan offset to keep centered
+    const visibleBars = Math.floor(returns.length / zoomLevel);
+    panOffset = Math.max(0, Math.min(panOffset, returns.length - visibleBars));
+    render();
+  });
+
+  // Pan with drag
+  let dragging = false;
+  let dragX = 0;
+  canvas.addEventListener("mousedown", (e) => { dragging = true; dragX = e.offsetX; });
+  canvas.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const dx = e.offsetX - dragX;
+    const visibleBars = Math.floor(returns.length / zoomLevel);
+    const barW = canvas.width / visibleBars;
+    panOffset = Math.max(0, Math.min(panOffset - Math.round(dx / barW), returns.length - visibleBars));
+    dragX = e.offsetX;
+    render();
+  });
+  canvas.addEventListener("mouseup", () => { dragging = false; });
+  canvas.addEventListener("mouseleave", () => { dragging = false; });
+
+  // Stats
+  const statsDiv = el("div", "padding:6px 8px;font-family:Consolas,monospace;font-size:11px;display:flex;gap:16px;");
+
+  // RMS amplitude
+  let sumSq = 0;
+  for (const r of returns) sumSq += r * r;
+  const rms = Math.sqrt(sumSq / returns.length);
+
+  // Peak amplitude
+  let peak = 0;
+  for (const r of returns) { const a = Math.abs(r); if (a > peak) peak = a; }
+
+  // Zero-crossing rate
+  let crossings = 0;
+  for (let i = 1; i < returns.length; i++) {
+    if ((returns[i] >= 0 && returns[i - 1] < 0) || (returns[i] < 0 && returns[i - 1] >= 0)) crossings++;
+  }
+  const zcr = crossings / returns.length;
+
+  statsDiv.appendChild(labelValue("RMS: ", (rms * 100).toFixed(3) + "%", "#2196f3"));
+  const sep1 = span("  |  ", "color:#444;");
+  statsDiv.appendChild(sep1);
+  statsDiv.appendChild(labelValue("Peak: ", (peak * 100).toFixed(3) + "%", "#ff9800"));
+  const sep2 = span("  |  ", "color:#444;");
+  statsDiv.appendChild(sep2);
+  statsDiv.appendChild(labelValue("ZCR: ", zcr.toFixed(3), "#e040fb"));
+  win.appendElement(statsDiv);
+}
+
+// ── COMMAND-HISTORY — Command Execution History ─────────────
+if (!window._commandHistory) window._commandHistory = [];
+
+function cmdCommandHistory() {
+  const win = createWindow({
+    title: "Command History",
+    type: "custom",
+    width: 550,
+    height: 500,
+  });
+  win.contentElement.textContent = "";
+
+  // Stats: top commands
+  const statsDiv = el("div", "padding:6px 8px;border-bottom:1px solid #333;font-family:Consolas,monospace;font-size:11px;");
+  const statsTitle = el("div", "color:#888;margin-bottom:4px;font-weight:bold;", "Most Used Commands:");
+  statsDiv.appendChild(statsTitle);
+
+  const counts = {};
+  for (const entry of window._commandHistory) {
+    counts[entry.command] = (counts[entry.command] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  for (const [cmd, count] of sorted) {
+    const row = el("div", "display:flex;gap:8px;");
+    row.appendChild(span(cmd, "color:#2196f3;min-width:140px;"));
+    row.appendChild(span(String(count) + "x", "color:#ff9800;"));
+    statsDiv.appendChild(row);
+  }
+  if (sorted.length === 0) {
+    statsDiv.appendChild(span("No commands recorded yet", "color:#666;"));
+  }
+  win.appendElement(statsDiv);
+
+  // Clear button
+  const toolbar = el("div", "padding:4px 8px;border-bottom:1px solid #333;");
+  const clearBtn = document.createElement("button");
+  clearBtn.textContent = "Clear History";
+  clearBtn.style.cssText = "padding:4px 12px;background:#333;color:#f44336;border:1px solid #555;cursor:pointer;font-size:11px;";
+  clearBtn.addEventListener("click", () => {
+    window._commandHistory = [];
+    listEl.textContent = "";
+    statsDiv.textContent = "";
+    statsDiv.appendChild(span("History cleared", "color:#666;"));
+  });
+  toolbar.appendChild(clearBtn);
+  win.appendElement(toolbar);
+
+  // Header
+  const hdr = el("div", "display:flex;padding:4px 8px;color:#888;font-size:10px;border-bottom:1px solid #333;font-family:Consolas,monospace;gap:8px;");
+  hdr.appendChild(span("TIME", "min-width:80px;"));
+  hdr.appendChild(span("COMMAND", "min-width:140px;"));
+  hdr.appendChild(span("SYMBOL", "min-width:80px;"));
+  hdr.appendChild(span("", "flex:1;"));
+  win.appendElement(hdr);
+
+  // List
+  const listEl = el("div", "overflow-y:auto;max-height:calc(100% - 130px);font-family:Consolas,monospace;font-size:11px;");
+
+  function renderList() {
+    listEl.textContent = "";
+    const history = window._commandHistory.slice().reverse();
+    for (const entry of history) {
+      const row = el("div", "display:flex;padding:2px 8px;gap:8px;border-bottom:1px solid #1a1a1a;align-items:center;");
+      row.appendChild(span(entry.time || "--", "min-width:80px;color:#888;"));
+      row.appendChild(span(entry.command, "min-width:140px;color:#2196f3;font-weight:bold;"));
+      row.appendChild(span(entry.symbol || "--", "min-width:80px;color:#ccc;"));
+      const replayBtn = document.createElement("button");
+      replayBtn.textContent = "Replay";
+      replayBtn.style.cssText = "padding:2px 8px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;font-size:10px;";
+      replayBtn.addEventListener("click", () => {
+        const cmd = CMD_PALETTE_COMMANDS.find(c => c.name === entry.command);
+        if (cmd) cmd.action();
+      });
+      row.appendChild(replayBtn);
+      listEl.appendChild(row);
+    }
+    if (history.length === 0) {
+      listEl.appendChild(span("No commands in history", "color:#666;padding:8px;"));
+    }
+  }
+
+  renderList();
+  win.appendElement(listEl);
+}
+
+// ── DOMINANCE — Crypto Dominance Calculator ─────────────────
+async function cmdDominance() {
+  const win = createWindow({
+    title: "Crypto Dominance",
+    type: "custom",
+    width: 500,
+    height: 520,
+  });
+  win.contentElement.textContent = "";
+
+  const loadingDiv = el("div", "padding:16px;text-align:center;color:#888;font-size:12px;", "Fetching prices...");
+  win.appendElement(loadingDiv);
+
+  const CRYPTOS = [
+    { sym: "BTC/USD", name: "BTC", supply: 19600000, color: "#f7931a" },
+    { sym: "ETH/USD", name: "ETH", supply: 120000000, color: "#627eea" },
+    { sym: "SOL/USD", name: "SOL", supply: 440000000, color: "#00ffa3" },
+    { sym: "ADA/USD", name: "ADA", supply: 35000000000, color: "#0033ad" },
+    { sym: "DOGE/USD", name: "DOGE", supply: 144000000000, color: "#c2a633" },
+    { sym: "AVAX/USD", name: "AVAX", supply: 390000000, color: "#e84142" },
+    { sym: "DOT/USD", name: "DOT", supply: 1300000000, color: "#e6007a" },
+  ];
+
+  // Fetch prices
+  const results = [];
+  for (const c of CRYPTOS) {
+    let price = 0;
+    // Try barCache first
+    const cacheKey = c.sym.replace("/", "") + ":1Day";
+    const cached = barCache[cacheKey];
+    if (cached && cached.data && cached.data.length > 0) {
+      price = cached.data[cached.data.length - 1].close;
+    }
+    if (price <= 0) {
+      try {
+        const qJson = await invokeQuiet("get_latest_quote", { symbol: c.sym.replace("/", "") });
+        const q = JSON.parse(qJson);
+        if (q.bid > 0) price = (q.bid + q.ask) / 2;
+        else if (q.ask > 0) price = q.ask;
+      } catch (_) {}
+    }
+    const mcap = price * c.supply;
+    results.push({ ...c, price, mcap });
+  }
+
+  const totalMcap = results.reduce((s, r) => s + r.mcap, 0);
+  for (const r of results) {
+    r.dominance = totalMcap > 0 ? (r.mcap / totalMcap) * 100 : 0;
+  }
+  results.sort((a, b) => b.mcap - a.mcap);
+
+  loadingDiv.textContent = "";
+  win.contentElement.textContent = "";
+
+  // BTC Dominance header
+  const btc = results.find(r => r.name === "BTC");
+  const btcDom = btc ? btc.dominance.toFixed(1) : "?";
+  const header = el("div", "padding:12px;text-align:center;");
+  const btcLabel = el("div", "font-size:22px;font-weight:bold;color:#f7931a;font-family:Consolas,monospace;", "BTC Dominance: " + btcDom + "%");
+  header.appendChild(btcLabel);
+
+  // Store for trend comparison
+  const prevKey = "typhoon_btc_dominance_prev";
+  const prev = parseFloat(localStorage.getItem(prevKey) || "0");
+  if (btc && btc.dominance > 0) {
+    localStorage.setItem(prevKey, String(btc.dominance));
+    if (prev > 0) {
+      const diff = btc.dominance - prev;
+      const arrow = diff > 0 ? " +" + diff.toFixed(2) + "%" : " " + diff.toFixed(2) + "%";
+      const trendSpan = span(arrow, "font-size:14px;color:" + (diff >= 0 ? "#4caf50" : "#f44336") + ";");
+      header.appendChild(trendSpan);
+    }
+  }
+  win.appendElement(header);
+
+  // CSS pie chart via conic gradient
+  const pieDiv = el("div", "width:180px;height:180px;border-radius:50%;margin:8px auto;position:relative;");
+  let gradStops = [];
+  let cumPct = 0;
+  for (const r of results) {
+    const start = cumPct;
+    cumPct += r.dominance;
+    gradStops.push(r.color + " " + start.toFixed(2) + "% " + cumPct.toFixed(2) + "%");
+  }
+  pieDiv.style.background = "conic-gradient(" + gradStops.join(", ") + ")";
+  // Center hole
+  const hole = el("div", "position:absolute;top:25%;left:25%;width:50%;height:50%;border-radius:50%;background:#1a1a2e;");
+  pieDiv.appendChild(hole);
+  win.appendElement(pieDiv);
+
+  // Legend
+  const legend = el("div", "display:flex;flex-wrap:wrap;justify-content:center;gap:8px;padding:4px 8px;");
+  for (const r of results) {
+    const item = el("div", "display:flex;align-items:center;gap:4px;font-size:10px;");
+    const dot = el("div", "width:8px;height:8px;border-radius:50%;background:" + r.color + ";");
+    item.appendChild(dot);
+    item.appendChild(span(r.name, "color:#ccc;"));
+    legend.appendChild(item);
+  }
+  win.appendElement(legend);
+
+  // Table
+  const tbl = document.createElement("table");
+  tbl.style.cssText = "width:100%;border-collapse:collapse;margin-top:8px;font-family:Consolas,monospace;font-size:11px;";
+  tbl.appendChild(theadRow(["Coin", "Price", "Market Cap", "Dominance%"]));
+  for (const r of results) {
+    const priceStr = r.price > 1000 ? "$" + r.price.toFixed(0) : r.price > 1 ? "$" + r.price.toFixed(2) : "$" + r.price.toFixed(4);
+    const mcapStr = r.mcap >= 1e12 ? "$" + (r.mcap / 1e12).toFixed(2) + "T" :
+                    r.mcap >= 1e9 ? "$" + (r.mcap / 1e9).toFixed(1) + "B" :
+                    r.mcap >= 1e6 ? "$" + (r.mcap / 1e6).toFixed(1) + "M" : "$" + r.mcap.toFixed(0);
+    const domStr = r.dominance.toFixed(2) + "%";
+    const row = styledRow([
+      { text: r.name, style: "padding:4px;color:" + r.color + ";font-weight:bold;" },
+      { text: priceStr, style: "padding:4px;color:#ccc;" },
+      { text: mcapStr, style: "padding:4px;color:#888;" },
+      { text: domStr, style: "padding:4px;color:#fff;font-weight:bold;" },
+    ]);
+    tbl.appendChild(row);
+  }
+  win.appendElement(tbl);
+}
+
+// ── FOURIER — Frequency Domain Analysis (DFT) ────────────────
+function cmdFourier() {
+  if (!currentChartData || currentChartData.length < 10) { log("Need chart data for Fourier analysis", "err"); return; }
+  const win = createWindow({ title: `Fourier Analysis — ${currentSymbol}`, width: 650, height: 520 });
+  const closes = currentChartData.map(b => b.close);
+  const N = closes.length;
+  const meanIdx = (N - 1) / 2;
+  let sumC = 0; for (let i = 0; i < N; i++) sumC += closes[i];
+  const meanC = sumC / N;
+  let slopeNum = 0, slopeDen = 0;
+  for (let i = 0; i < N; i++) { slopeNum += (i - meanIdx) * (closes[i] - meanC); slopeDen += (i - meanIdx) ** 2; }
+  const dftSlope = slopeDen > 0 ? slopeNum / slopeDen : 0;
+  const dftIntercept = meanC - dftSlope * meanIdx;
+  const detrended = closes.map((c, i) => c - (dftSlope * i + dftIntercept));
+  const maxK = Math.min(Math.floor(N / 2), 500);
+  const freqs = [];
+  for (let k = 1; k <= maxK; k++) {
+    let real = 0, imag = 0;
+    for (let n = 0; n < N; n++) {
+      const angle = 2 * Math.PI * k * n / N;
+      real += detrended[n] * Math.cos(angle);
+      imag -= detrended[n] * Math.sin(angle);
+    }
+    const mag = Math.sqrt(real * real + imag * imag);
+    const period = N / k;
+    const phase = Math.atan2(imag, real) * (180 / Math.PI);
+    if (period > 5) freqs.push({ k, magnitude: mag, period, phase });
+  }
+  freqs.sort((a, b) => b.magnitude - a.magnitude);
+  const top5 = freqs.slice(0, 5);
+  const maxMag = top5.length > 0 ? top5[0].magnitude : 1;
+  win.contentElement.textContent = "";
+  if (top5.length > 0) {
+    win.appendElement(el("div", "text-align:center;font-size:15px;font-weight:bold;padding:8px;color:#2196f3;",
+      "Dominant cycle: ~" + top5[0].period.toFixed(1) + " bars"));
+  }
+  win.appendElement(el("div", "color:#888;font-size:11px;padding:4px 8px;", "Top Frequency Peaks (Period vs Magnitude):"));
+  const chartBox = el("div", "display:flex;align-items:flex-end;gap:6px;padding:4px 12px;height:120px;border-bottom:1px solid #333;");
+  const topN = freqs.slice(0, 20);
+  const chartMax = topN.length > 0 ? topN[0].magnitude : 1;
+  for (let i = 0; i < topN.length; i++) {
+    const f = topN[i];
+    const barH = Math.max(2, (f.magnitude / chartMax) * 100);
+    const isTop5 = top5.includes(f);
+    const barDiv = el("div", `width:20px;height:${barH}px;background:${isTop5 ? "#2196f3" : "#333"};border-radius:2px 2px 0 0;position:relative;`);
+    if (isTop5) {
+      barDiv.appendChild(el("div", "position:absolute;top:-16px;left:50%;transform:translateX(-50%);font-size:9px;color:#2196f3;white-space:nowrap;", f.period.toFixed(0)));
+    }
+    chartBox.appendChild(barDiv);
+  }
+  win.appendElement(chartBox);
+  const fourierTable = el("table", "width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;font-family:Consolas,monospace;");
+  fourierTable.appendChild(theadRow(["Rank", "Period (bars)", "Period (~days)", "Magnitude", "Phase (deg)"]));
+  for (let i = 0; i < top5.length; i++) {
+    const f = top5[i];
+    const pctMag = ((f.magnitude / maxMag) * 100).toFixed(1);
+    fourierTable.appendChild(styledRow([
+      { text: String(i + 1), style: "padding:3px 6px;color:#2196f3;text-align:center;" },
+      { text: f.period.toFixed(1), style: "padding:3px 6px;text-align:right;" },
+      { text: f.period.toFixed(1), style: "padding:3px 6px;text-align:right;color:#888;" },
+      { text: f.magnitude.toFixed(2) + " (" + pctMag + "%)", style: "padding:3px 6px;text-align:right;" },
+      { text: f.phase.toFixed(1) + "\u00B0", style: "padding:3px 6px;text-align:right;color:#888;" },
+    ]));
+  }
+  win.appendElement(fourierTable);
+  win.appendElement(el("div", "color:#555;font-size:10px;padding:8px;",
+    N + " bars analyzed. Period (days) assumes current chart timeframe = 1 bar. Detrended before DFT."));
+}
+
+// ── ENTROPY — Shannon Entropy of Returns ─────────────────────
+function cmdEntropy() {
+  if (!currentChartData || currentChartData.length < 30) { log("Need chart data for entropy analysis", "err"); return; }
+  const win = createWindow({ title: `Shannon Entropy — ${currentSymbol}`, width: 550, height: 450 });
+  const closes = currentChartData.map(b => b.close);
+  const N = closes.length;
+  const returns = [];
+  for (let i = 1; i < N; i++) returns.push((closes[i] - closes[i - 1]) / closes[i - 1]);
+  const numBins = 20;
+  let minR = Infinity, maxR = -Infinity;
+  for (const r of returns) { if (r < minR) minR = r; if (r > maxR) maxR = r; }
+  const entropyRange = maxR - minR || 1e-10;
+  const counts = new Array(numBins).fill(0);
+  for (const r of returns) {
+    let bin = Math.floor((r - minR) / entropyRange * numBins);
+    if (bin >= numBins) bin = numBins - 1;
+    counts[bin]++;
+  }
+  let H = 0;
+  for (const c of counts) {
+    if (c > 0) { const p = c / returns.length; H -= p * Math.log2(p); }
+  }
+  const Hmax = Math.log2(numBins);
+  const Hnorm = Hmax > 0 ? H / Hmax : 0;
+  let interp, interpClr;
+  if (Hnorm > 0.9) { interp = "Random / Unpredictable"; interpClr = "#f44336"; }
+  else if (Hnorm > 0.7) { interp = "Moderate Randomness"; interpClr = "#ff9800"; }
+  else { interp = "Structured / Predictable"; interpClr = "#4caf50"; }
+  const rollWin = 50;
+  const rollingH = [];
+  for (let i = rollWin; i < returns.length; i++) {
+    const slice = returns.slice(i - rollWin, i);
+    let sMin = Infinity, sMax = -Infinity;
+    for (const r of slice) { if (r < sMin) sMin = r; if (r > sMax) sMax = r; }
+    const sRange = sMax - sMin || 1e-10;
+    const sCounts = new Array(numBins).fill(0);
+    for (const r of slice) {
+      let bin = Math.floor((r - sMin) / sRange * numBins);
+      if (bin >= numBins) bin = numBins - 1;
+      sCounts[bin]++;
+    }
+    let sH = 0;
+    for (const c of sCounts) {
+      if (c > 0) { const p = c / rollWin; sH -= p * Math.log2(p); }
+    }
+    rollingH.push(sH / Hmax);
+  }
+  win.contentElement.textContent = "";
+  const hdr = el("div", "text-align:center;padding:10px;");
+  hdr.appendChild(el("div", `font-size:28px;font-weight:bold;color:${interpClr};font-family:Consolas,monospace;`, Hnorm.toFixed(4)));
+  hdr.appendChild(el("div", `font-size:13px;color:${interpClr};margin-top:4px;`, interp));
+  hdr.appendChild(el("div", "font-size:11px;color:#555;margin-top:2px;", "H = " + H.toFixed(4) + " bits / H_max = " + Hmax.toFixed(4) + " bits (" + numBins + " bins)"));
+  win.appendElement(hdr);
+  if (rollingH.length > 0) {
+    win.appendElement(el("div", "color:#888;font-size:11px;padding:4px 8px;", "Rolling " + rollWin + "-bar Normalized Entropy:"));
+    const sparkBox = el("div", "display:flex;align-items:flex-end;gap:1px;padding:4px 8px;height:80px;border:1px solid #222;border-radius:4px;margin:0 8px;overflow:hidden;");
+    const step = Math.max(1, Math.floor(rollingH.length / 300));
+    for (let i = 0; i < rollingH.length; i += step) {
+      const v = rollingH[i];
+      const barH = Math.max(1, v * 70);
+      const clr = v > 0.9 ? "#f44336" : v > 0.7 ? "#ff9800" : "#4caf50";
+      sparkBox.appendChild(el("div", `flex:1;min-width:1px;max-width:3px;height:${barH}px;background:${clr};`));
+    }
+    win.appendElement(sparkBox);
+  }
+  const rec = el("div", "padding:10px;font-size:12px;border-top:1px solid #222;margin-top:8px;");
+  rec.appendChild(el("div", "color:#888;font-weight:bold;margin-bottom:4px;", "Strategy Recommendation:"));
+  if (Hnorm > 0.85) {
+    rec.appendChild(el("div", "color:#ccc;", "High entropy suggests random price action. Consider mean-reversion strategies or wait for regime change."));
+  } else if (Hnorm > 0.65) {
+    rec.appendChild(el("div", "color:#ccc;", "Moderate entropy. Mixed regime — use confirmation indicators before trading."));
+  } else {
+    rec.appendChild(el("div", "color:#ccc;", "Low entropy indicates structured/trending behavior. Trend-following strategies may work well."));
+  }
+  win.appendElement(rec);
+  win.appendElement(el("div", "color:#555;font-size:10px;padding:4px 8px;", returns.length + " returns analyzed across " + numBins + " bins."));
+}
+
+// ── FRACTAL-DIM — Higuchi Fractal Dimension ──────────────────
+function cmdFractalDim() {
+  if (!currentChartData || currentChartData.length < 50) { log("Need chart data for fractal dimension", "err"); return; }
+  const win = createWindow({ title: `Fractal Dimension — ${currentSymbol}`, width: 600, height: 480 });
+  const closes = currentChartData.map(b => b.close);
+  const N = closes.length;
+  function higuchiFD(x, kMax) {
+    const n = x.length;
+    const logK = [], logL = [];
+    for (let k = 1; k <= kMax; k++) {
+      let Lk = 0, count = 0;
+      for (let m = 1; m <= k; m++) {
+        const maxI = Math.floor((n - m) / k);
+        if (maxI < 1) continue;
+        let Lmk = 0;
+        for (let i = 1; i <= maxI; i++) Lmk += Math.abs(x[m - 1 + i * k] - x[m - 1 + (i - 1) * k]);
+        Lmk = (Lmk * (n - 1)) / (maxI * k * k);
+        Lk += Lmk; count++;
+      }
+      if (count > 0) { Lk /= count; if (Lk > 0) { logK.push(Math.log(1 / k)); logL.push(Math.log(Lk)); } }
+    }
+    if (logK.length < 2) return { D: 1.5, logK, logL };
+    const nPts = logK.length;
+    let sx = 0, sy = 0, sxy = 0, sx2 = 0;
+    for (let i = 0; i < nPts; i++) { sx += logK[i]; sy += logL[i]; sxy += logK[i] * logL[i]; sx2 += logK[i] * logK[i]; }
+    return { D: (nPts * sxy - sx * sy) / (nPts * sx2 - sx * sx), logK, logL };
+  }
+  const kMax = Math.min(20, Math.floor(N / 4));
+  const fdResult = higuchiFD(closes, kMax);
+  const D = fdResult.D;
+  let fdInterp, fdInterpClr;
+  if (D < 1.3) { fdInterp = "Smooth Trend (persistent)"; fdInterpClr = "#4caf50"; }
+  else if (D < 1.6) { fdInterp = "Random Walk (~1.5)"; fdInterpClr = "#ff9800"; }
+  else { fdInterp = "Mean-Reverting / Space-Filling"; fdInterpClr = "#f44336"; }
+  const fdRollWin = 100;
+  const rollingD = [];
+  for (let i = fdRollWin; i < N; i++) {
+    const slice = closes.slice(i - fdRollWin, i);
+    rollingD.push(higuchiFD(slice, Math.min(10, Math.floor(fdRollWin / 4))).D);
+  }
+  win.contentElement.textContent = "";
+  const fdHdr = el("div", "text-align:center;padding:10px;");
+  fdHdr.appendChild(el("div", `font-size:28px;font-weight:bold;color:${fdInterpClr};font-family:Consolas,monospace;`, "D = " + D.toFixed(4)));
+  fdHdr.appendChild(el("div", `font-size:13px;color:${fdInterpClr};margin-top:4px;`, fdInterp));
+  win.appendElement(fdHdr);
+  const scaleDiv = el("div", "display:flex;justify-content:space-around;padding:6px 12px;font-size:11px;border:1px solid #222;border-radius:4px;margin:4px 8px;");
+  scaleDiv.appendChild(el("span", "color:#4caf50;", "1.0 = Smooth"));
+  scaleDiv.appendChild(el("span", "color:#ff9800;", "1.5 = Random"));
+  scaleDiv.appendChild(el("span", "color:#f44336;", "2.0 = Mean-Rev"));
+  win.appendElement(scaleDiv);
+  if (fdResult.logK.length > 0) {
+    win.appendElement(el("div", "color:#888;font-size:11px;padding:4px 8px;margin-top:8px;", "Log-Log Plot: log(L(k)) vs log(1/k) — slope = D"));
+    const plotBox = el("div", "display:flex;align-items:flex-end;gap:4px;padding:4px 12px;height:100px;border-bottom:1px solid #333;");
+    const minL = Math.min(...fdResult.logL), maxL = Math.max(...fdResult.logL), rangeL = maxL - minL || 1;
+    for (let i = 0; i < fdResult.logK.length; i++) {
+      const barH = Math.max(2, ((fdResult.logL[i] - minL) / rangeL) * 90);
+      plotBox.appendChild(el("div", `flex:1;min-width:4px;max-width:20px;height:${barH}px;background:#2196f3;border-radius:2px 2px 0 0;`));
+    }
+    win.appendElement(plotBox);
+  }
+  if (rollingD.length > 0) {
+    win.appendElement(el("div", "color:#888;font-size:11px;padding:4px 8px;margin-top:8px;", "Rolling " + fdRollWin + "-bar Fractal Dimension:"));
+    const sparkBox = el("div", "display:flex;align-items:flex-end;gap:1px;padding:4px 8px;height:70px;border:1px solid #222;border-radius:4px;margin:0 8px;overflow:hidden;");
+    const step = Math.max(1, Math.floor(rollingD.length / 300));
+    for (let i = 0; i < rollingD.length; i += step) {
+      const v = rollingD[i];
+      const barH = Math.max(1, ((v - 1.0) / 1.0) * 65);
+      const clr = v < 1.3 ? "#4caf50" : v < 1.6 ? "#ff9800" : "#f44336";
+      sparkBox.appendChild(el("div", `flex:1;min-width:1px;max-width:3px;height:${barH}px;background:${clr};`));
+    }
+    win.appendElement(sparkBox);
+  }
+  win.appendElement(el("div", "color:#555;font-size:10px;padding:8px;", N + " bars, k_max=" + kMax + ". Higuchi method."));
+}
+
+// ── WAVELETS — Haar Wavelet Decomposition ────────────────────
+function cmdWavelets() {
+  if (!currentChartData || currentChartData.length < 64) { log("Need at least 64 bars for wavelet decomposition", "err"); return; }
+  const win = createWindow({ title: `Haar Wavelet Decomposition — ${currentSymbol}`, width: 650, height: 520 });
+  const closes = currentChartData.map(b => b.close);
+  let len = 1;
+  while (len * 2 <= closes.length) len *= 2;
+  const wavSignal = closes.slice(closes.length - len);
+  const wavLevels = [];
+  let wavApprox = wavSignal.slice();
+  for (let lv = 1; lv <= 5; lv++) {
+    if (wavApprox.length < 2) break;
+    const nextApprox = [], detail = [];
+    for (let i = 0; i + 1 < wavApprox.length; i += 2) {
+      nextApprox.push((wavApprox[i] + wavApprox[i + 1]) / 2);
+      detail.push((wavApprox[i] - wavApprox[i + 1]) / 2);
+    }
+    let energy = 0;
+    for (const d of detail) energy += d * d;
+    wavLevels.push({ level: lv, scale: Math.pow(2, lv), detail, energy });
+    wavApprox = nextApprox;
+  }
+  const wavTotalEnergy = wavLevels.reduce((s, l) => s + l.energy, 0) || 1;
+  const wavLevelLabels = ["Ultra-short noise", "Short-term fluctuation", "Medium-term swing", "Trend component", "Macro trend"];
+  const wavLevelColors = ["#f44336", "#ff9800", "#ffeb3b", "#4caf50", "#2196f3"];
+  win.contentElement.textContent = "";
+  win.appendElement(el("div", "text-align:center;font-size:14px;font-weight:bold;padding:8px;color:#2196f3;",
+    "Haar Wavelet Decomposition (" + wavSignal.length + " bars)"));
+  const wavTable = el("table", "width:100%;border-collapse:collapse;font-size:12px;margin:4px 0;font-family:Consolas,monospace;");
+  wavTable.appendChild(theadRow(["Level", "Scale (bars)", "Description", "Energy %", ""]));
+  for (let i = 0; i < wavLevels.length; i++) {
+    const lv = wavLevels[i];
+    const pct = ((lv.energy / wavTotalEnergy) * 100).toFixed(1);
+    const barWidth = Math.max(2, (lv.energy / wavTotalEnergy) * 200);
+    const tr = document.createElement("tr");
+    tr.appendChild(td(String(lv.level), "padding:3px 6px;color:" + wavLevelColors[i] + ";text-align:center;"));
+    tr.appendChild(td(String(lv.scale), "padding:3px 6px;text-align:center;"));
+    tr.appendChild(td(wavLevelLabels[i] || "Level " + lv.level, "padding:3px 6px;color:#888;"));
+    tr.appendChild(td(pct + "%", "padding:3px 6px;text-align:right;"));
+    const barTd = document.createElement("td"); barTd.style.cssText = "padding:3px 6px;";
+    barTd.appendChild(el("div", `width:${barWidth}px;height:12px;background:${wavLevelColors[i]};border-radius:2px;`));
+    tr.appendChild(barTd);
+    wavTable.appendChild(tr);
+  }
+  win.appendElement(wavTable);
+  for (let i = 0; i < wavLevels.length; i++) {
+    const lv = wavLevels[i];
+    win.appendElement(el("div", "color:#888;font-size:10px;padding:3px 8px;margin-top:4px;",
+      "Level " + lv.level + " (" + lv.scale + "-bar) — " + wavLevelLabels[i]));
+    const sparkBox = el("div", "display:flex;align-items:center;gap:1px;padding:2px 8px;height:40px;border:1px solid #222;border-radius:3px;margin:0 8px;overflow:hidden;");
+    const detail = lv.detail;
+    let maxD = 0;
+    for (const d of detail) if (Math.abs(d) > maxD) maxD = Math.abs(d);
+    if (maxD === 0) maxD = 1;
+    const step = Math.max(1, Math.floor(detail.length / 200));
+    for (let j = 0; j < detail.length; j += step) {
+      const v = detail[j];
+      const barH = Math.max(1, (Math.abs(v) / maxD) * 18);
+      sparkBox.appendChild(el("div", `flex:1;min-width:1px;max-width:3px;height:${barH}px;background:${v >= 0 ? wavLevelColors[i] : "#555"};align-self:${v >= 0 ? "flex-end" : "flex-start"};`));
+    }
+    win.appendElement(sparkBox);
+  }
+  const wavDominant = wavLevels.reduce((a, b) => a.energy > b.energy ? a : b, wavLevels[0]);
+  const wavDomIdx = wavLevels.indexOf(wavDominant);
+  win.appendElement(el("div", "text-align:center;padding:8px;font-size:12px;color:" + wavLevelColors[wavDomIdx] + ";font-weight:bold;",
+    "Most active timescale: Level " + wavDominant.level + " (" + wavDominant.scale + "-bar) — " +
+    (wavLevelLabels[wavDomIdx] || "") + " (" + ((wavDominant.energy / wavTotalEnergy) * 100).toFixed(1) + "% of energy)"));
+}
+
+// ── COINTEGRATION — Engle-Granger Test ───────────────────────
+function cmdCointegration() {
+  const sym2 = prompt("Enter second symbol for cointegration test:", "SPY");
+  if (!sym2 || !sym2.trim()) return;
+  const symA = currentSymbol, symB = sym2.trim().toUpperCase();
+  const win = createWindow({ title: `Cointegration: ${symA} / ${symB}`, width: 650, height: 520 });
+  (async () => {
+    try {
+      const [jsonA, jsonB] = await Promise.all([
+        invoke("get_bars", { symbol: symA, timeframe: "1Day", limit: 500 }),
+        invoke("get_bars", { symbol: symB, timeframe: "1Day", limit: 500 }),
+      ]);
+      const barsA = JSON.parse(jsonA), barsB = JSON.parse(jsonB);
+      const mapB = {};
+      for (const b of barsB) mapB[b.timestamp.substring(0, 10)] = b;
+      const aligned = [];
+      for (const a of barsA) {
+        const d = a.timestamp.substring(0, 10);
+        if (mapB[d]) aligned.push({ date: d, y: a.close, x: mapB[d].close });
+      }
+      if (aligned.length < 30) { win.setContent("Not enough overlapping data (need 30+ bars). Got " + aligned.length); return; }
+      const cointN = aligned.length;
+      const cointX = aligned.map(d => d.x), cointY = aligned.map(d => d.y);
+      let cSumX = 0, cSumY = 0;
+      for (let i = 0; i < cointN; i++) { cSumX += cointX[i]; cSumY += cointY[i]; }
+      const cMeanX = cSumX / cointN, cMeanY = cSumY / cointN;
+      let cCovXY = 0, cVarX = 0;
+      for (let i = 0; i < cointN; i++) { cCovXY += (cointX[i] - cMeanX) * (cointY[i] - cMeanY); cVarX += (cointX[i] - cMeanX) ** 2; }
+      const cBeta = cVarX > 0 ? cCovXY / cVarX : 0;
+      const cAlpha = cMeanY - cBeta * cMeanX;
+      const cResiduals = [];
+      for (let i = 0; i < cointN; i++) cResiduals.push(cointY[i] - cAlpha - cBeta * cointX[i]);
+      let sXR = 0, sYR = 0, sXYR = 0, sX2R = 0;
+      const nR = cResiduals.length - 1;
+      for (let i = 1; i < cResiduals.length; i++) {
+        const xr = cResiduals[i - 1], yr = cResiduals[i] - cResiduals[i - 1];
+        sXR += xr; sYR += yr; sXYR += xr * yr; sX2R += xr * xr;
+      }
+      const cGamma = (nR * sXYR - sXR * sYR) / (nR * sX2R - sXR * sXR);
+      const cGammaAlpha = (sYR - cGamma * sXR) / nR;
+      let cSSE = 0;
+      for (let i = 1; i < cResiduals.length; i++) {
+        const predicted = cGammaAlpha + cGamma * cResiduals[i - 1];
+        cSSE += (cResiduals[i] - cResiduals[i - 1] - predicted) ** 2;
+      }
+      const cSeGamma = Math.sqrt((cSSE / (nR - 2)) / (sX2R - sXR * sXR / nR));
+      const cTStat = cSeGamma > 0 ? cGamma / cSeGamma : 0;
+      const crit1 = -3.34, crit5 = -2.86, crit10 = -2.57;
+      let cPInterp, cPClr, cCointegrated;
+      if (cTStat < crit1) { cPInterp = "Significant at 1%"; cPClr = "#4caf50"; cCointegrated = true; }
+      else if (cTStat < crit5) { cPInterp = "Significant at 5%"; cPClr = "#4caf50"; cCointegrated = true; }
+      else if (cTStat < crit10) { cPInterp = "Significant at 10%"; cPClr = "#ff9800"; cCointegrated = true; }
+      else { cPInterp = "Not significant"; cPClr = "#f44336"; cCointegrated = false; }
+      win.contentElement.textContent = "";
+      const cHdr = el("div", "text-align:center;padding:10px;");
+      cHdr.appendChild(el("div", `font-size:20px;font-weight:bold;color:${cCointegrated ? "#4caf50" : "#f44336"};`, cCointegrated ? "COINTEGRATED: YES" : "COINTEGRATED: NO"));
+      win.appendElement(cHdr);
+      const cTable = el("table", "width:100%;border-collapse:collapse;font-size:12px;margin:4px 0;font-family:Consolas,monospace;");
+      const cStatsData = [
+        ["Hedge Ratio (\u03B2)", cBeta.toFixed(6), "#ccc"],
+        ["Intercept (\u03B1)", cAlpha.toFixed(4), "#888"],
+        ["ADF t-statistic", cTStat.toFixed(4), cTStat < crit5 ? "#4caf50" : "#f44336"],
+        ["Significance", cPInterp, cPClr],
+        ["Critical 1%", String(crit1), "#888"],
+        ["Critical 5%", String(crit5), "#888"],
+        ["Critical 10%", String(crit10), "#888"],
+        ["Gamma (\u03B3)", cGamma.toFixed(6), cGamma < 0 ? "#4caf50" : "#f44336"],
+        ["Aligned Bars", String(cointN), "#888"],
+      ];
+      for (const [k, v, c] of cStatsData) {
+        const tr = document.createElement("tr");
+        const td1 = document.createElement("td"); td1.style.cssText = "padding:3px 8px;color:#888;"; td1.textContent = k;
+        const td2 = document.createElement("td"); td2.style.cssText = "padding:3px 8px;text-align:right;font-family:Consolas,monospace;color:" + c + ";"; td2.textContent = v;
+        tr.appendChild(td1); tr.appendChild(td2); cTable.appendChild(tr);
+      }
+      win.appendElement(cTable);
+      if (cCointegrated) {
+        win.appendElement(el("div", "color:#888;font-size:11px;padding:4px 8px;margin-top:8px;", "Spread (Y - \u03B1 - \u03B2X) and Z-Score:"));
+        const cSpread = cResiduals.slice();
+        const cZWin = 20;
+        const cZScores = [];
+        for (let i = cZWin; i < cSpread.length; i++) {
+          const slice = cSpread.slice(i - cZWin, i);
+          const m = slice.reduce((s, v) => s + v, 0) / slice.length;
+          const sd = Math.sqrt(slice.reduce((s, v) => s + (v - m) ** 2, 0) / slice.length);
+          cZScores.push({ date: aligned[i].date, z: sd > 0 ? (cSpread[i] - m) / sd : 0 });
+        }
+        const cSparkBox = el("div", "display:flex;align-items:center;gap:1px;padding:4px 8px;height:80px;border:1px solid #222;border-radius:4px;margin:0 8px;overflow:hidden;");
+        let cMaxZ = 0;
+        for (const z of cZScores) if (Math.abs(z.z) > cMaxZ) cMaxZ = Math.abs(z.z);
+        if (cMaxZ === 0) cMaxZ = 1;
+        const cStep = Math.max(1, Math.floor(cZScores.length / 300));
+        for (let i = 0; i < cZScores.length; i += cStep) {
+          const v = cZScores[i].z;
+          const barH = Math.max(1, (Math.abs(v) / cMaxZ) * 35);
+          const clr = v > 2 ? "#f44336" : v < -2 ? "#4caf50" : Math.abs(v) > 1 ? "#ff9800" : "#555";
+          cSparkBox.appendChild(el("div", `flex:1;min-width:1px;max-width:3px;height:${barH}px;background:${clr};align-self:${v >= 0 ? "flex-start" : "flex-end"};`));
+        }
+        win.appendElement(cSparkBox);
+        const cCurZ = cZScores.length > 0 ? cZScores[cZScores.length - 1].z : 0;
+        const cSignal = cCurZ < -2 ? "ENTER LONG SPREAD (buy Y, sell X)" : cCurZ > 2 ? "ENTER SHORT SPREAD (sell Y, buy X)" : Math.abs(cCurZ) < 0.5 ? "EXIT / FLAT" : "HOLD";
+        const cSigClr = cCurZ < -2 ? "#4caf50" : cCurZ > 2 ? "#f44336" : "#888";
+        win.appendElement(el("div", `text-align:center;padding:8px;font-size:13px;font-weight:bold;color:${cSigClr};`, cSignal + " (Z=" + cCurZ.toFixed(2) + ")"));
+      } else {
+        win.appendElement(el("div", "text-align:center;padding:12px;color:#888;font-size:12px;",
+          "Pair is not cointegrated. Spread trading not statistically supported."));
+      }
+    } catch (e) { win.setContent("Failed: " + e); }
+  })();
+}
+
+// ══════════════════════════════════════════════════════════════
+// PATTERN-ML — Historical Pattern Matching (Euclidean Distance)
+// ══════════════════════════════════════════════════════════════
+function cmdPatternML() {
+  if (!currentChartData || currentChartData.length < 50) { log("PATTERN-ML: Need at least 50 bars loaded", "warn"); return; }
+  const data = currentChartData;
+  const patLen = 20;
+  const fwdLen = 10;
+  const minLen = patLen + fwdLen + patLen;
+  if (data.length < minLen) { log("PATTERN-ML: Need at least " + minLen + " bars", "warn"); return; }
+  const queryBars = data.slice(-patLen);
+  const qBase = queryBars[0].close;
+  const queryNorm = queryBars.map(b => ((b.close - qBase) / qBase) * 100);
+  const searchEnd = data.length - patLen - fwdLen;
+  const pmlMatches = [];
+  for (let i = 0; i <= searchEnd - patLen; i++) {
+    const winBars = data.slice(i, i + patLen);
+    const wBase = winBars[0].close;
+    if (wBase === 0) continue;
+    const wNorm = winBars.map(b => ((b.close - wBase) / wBase) * 100);
+    let dist = 0;
+    for (let j = 0; j < patLen; j++) dist += (queryNorm[j] - wNorm[j]) * (queryNorm[j] - wNorm[j]);
+    dist = Math.sqrt(dist);
+    const fwdStart = i + patLen;
+    const fwdEnd = Math.min(fwdStart + fwdLen, data.length);
+    const fwdBase = data[fwdStart - 1].close;
+    const fwdReturn = fwdBase > 0 ? ((data[fwdEnd - 1].close - fwdBase) / fwdBase) * 100 : 0;
+    pmlMatches.push({ offset: i, dist, fwdReturn, date: new Date(data[i].time * 1000) });
+  }
+  pmlMatches.sort((a, b) => a.dist - b.dist);
+  const top5 = pmlMatches.slice(0, 5);
+  if (top5.length === 0) { log("PATTERN-ML: No matches found", "warn"); return; }
+  const maxDist = top5[top5.length - 1].dist || 1;
+  const posCount = top5.filter(m => m.fwdReturn > 0).length;
+  const avgFwd = top5.reduce((s, m) => s + m.fwdReturn, 0) / top5.length;
+  const biasColor = posCount >= 3 ? "#4caf50" : "#f44336";
+  const pmlWin = createWindow({ title: currentSymbol + " — Pattern ML (DTW)", width: 580, height: 420 });
+  pmlWin.contentElement.textContent = "";
+  const pmlC = el("div", "padding:14px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;");
+  const pmlHdr = el("div", "margin-bottom:12px;color:#aaa;font-size:12px;");
+  pmlHdr.textContent = "Current 20-bar pattern matches " + pmlMatches.length + " historical instances";
+  pmlC.appendChild(pmlHdr);
+  const pmlTbl = el("table", "width:100%;border-collapse:collapse;font-size:12px;");
+  pmlTbl.appendChild(theadRow(["#", "Date", "Similarity%", "Next 10 bars"]));
+  for (let i = 0; i < top5.length; i++) {
+    const m = top5[i];
+    const sim = Math.max(0, Math.round((1 - m.dist / (maxDist * 2)) * 100));
+    const tr = document.createElement("tr");
+    tr.style.cssText = "border-bottom:1px solid #333;";
+    tr.appendChild(td(String(i + 1), "padding:4px;color:#888;"));
+    tr.appendChild(td(m.date.toLocaleDateString(), "padding:4px;"));
+    tr.appendChild(td(sim + "%", "padding:4px;color:#ffeb3b;"));
+    const fc = m.fwdReturn >= 0 ? "#4caf50" : "#f44336";
+    tr.appendChild(td((m.fwdReturn >= 0 ? "+" : "") + m.fwdReturn.toFixed(2) + "%", "padding:4px;color:" + fc + ";"));
+    pmlTbl.appendChild(tr);
+  }
+  pmlC.appendChild(pmlTbl);
+  const pmlSum = el("div", "margin-top:16px;padding:12px;background:#111;border-radius:8px;border:1px solid " + biasColor + ";");
+  const pmlAvg = el("div", "font-size:14px;font-weight:bold;color:" + biasColor + ";");
+  pmlAvg.textContent = "Average forward return: " + (avgFwd >= 0 ? "+" : "") + avgFwd.toFixed(2) + "%";
+  pmlSum.appendChild(pmlAvg);
+  const pmlBias = el("div", "font-size:13px;margin-top:6px;color:" + biasColor + ";");
+  pmlBias.textContent = "Historical bias: " + (avgFwd >= 0 ? "+" : "") + avgFwd.toFixed(2) + "% (" + posCount + "/5 positive outcomes)";
+  pmlSum.appendChild(pmlBias);
+  pmlC.appendChild(pmlSum);
+  pmlWin.contentElement.appendChild(pmlC);
+  log("PATTERN-ML: Top 5 matches found, avg forward " + avgFwd.toFixed(2) + "%", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// RADAR — Multi-Indicator Radar Chart (Canvas)
+// ══════════════════════════════════════════════════════════════
+function cmdRadar() {
+  if (!currentChartData || currentChartData.length < 201) { log("RADAR: Need at least 201 bars loaded", "warn"); return; }
+  const rData = currentChartData;
+  let fisherVal = 50;
+  const ef = calcEhlersFisher(rData, 32);
+  if (ef.fisher.length > 0) { const raw = ef.fisher[ef.fisher.length - 1].value; fisherVal = Math.max(0, Math.min(100, (raw + 3) / 6 * 100)); }
+  let rsiVal = 50;
+  const rsiD = calcRSI(rData, 14);
+  if (rsiD.length > 0) rsiVal = rsiD[rsiD.length - 1].value;
+  let kamaVal = 50;
+  const kamaD = calcKAMA(rData, 10);
+  if (kamaD.length >= 3) { const k1 = kamaD[kamaD.length - 1].value; const k3 = kamaD[kamaD.length - 3].value; const diff = k1 - k3; const thr = rData[rData.length - 1].close * 0.001; kamaVal = diff > thr ? 75 : diff < -thr ? 25 : 50; }
+  let smaVal = 50;
+  const sma200 = calcSMA(rData, 200);
+  if (sma200.length > 0) smaVal = rData[rData.length - 1].close > sma200[sma200.length - 1].value ? 75 : 25;
+  let volVal = 50;
+  if (rData.length > 21) { const vols = rData.slice(-21, -1).map(d => d.volume || 0); const av = vols.reduce((a, b) => a + b, 0) / vols.length; const cv = rData[rData.length - 1].volume || 0; volVal = av > 0 ? Math.min(100, (cv / av) / 3 * 100) : 50; }
+  let adxVal = 25;
+  const adxD = calcADX(rData, 14);
+  if (adxD.length > 0) adxVal = Math.min(100, adxD[adxD.length - 1].value);
+  let atrPctVal = 50;
+  const atrD = calcATR(rData, 14);
+  if (atrD.length >= 100) { const rec = atrD.slice(-100); const vs = rec.map(a => a.value).sort((a, b) => a - b); const cur = atrD[atrD.length - 1].value; atrPctVal = (vs.filter(v => v <= cur).length / vs.length) * 100; }
+  let rocVal = 50;
+  if (rData.length > 20) { const roc = ((rData[rData.length - 1].close - rData[rData.length - 21].close) / rData[rData.length - 21].close) * 100; rocVal = Math.max(0, Math.min(100, 50 + roc * 5)); }
+  const radarInds = [
+    { name: "Fisher", value: fisherVal }, { name: "RSI", value: rsiVal },
+    { name: "KAMA", value: kamaVal }, { name: "SMA200", value: smaVal },
+    { name: "Volume", value: volVal }, { name: "ADX", value: adxVal },
+    { name: "ATR%", value: atrPctVal }, { name: "ROC20", value: rocVal },
+  ];
+  const radarOverall = radarInds.reduce((s, ind) => s + ind.value, 0) / radarInds.length;
+  const radarFill = radarOverall > 50 ? "rgba(76,175,80,0.25)" : "rgba(244,67,54,0.25)";
+  const radarStroke = radarOverall > 50 ? "#4caf50" : "#f44336";
+  const radarWin = createWindow({ title: currentSymbol + " — Radar Chart", width: 380, height: 440 });
+  radarWin.contentElement.textContent = "";
+  const rCont = el("div", "padding:10px;text-align:center;font-family:monospace;color:#ddd;overflow-y:auto;height:100%;");
+  const cvs = document.createElement("canvas"); cvs.width = 300; cvs.height = 300; cvs.style.cssText = "display:block;margin:0 auto;";
+  rCont.appendChild(cvs);
+  const ctx = cvs.getContext("2d"); const radarCx = 150, radarCy = 150, radarRad = 120, rn = 8;
+  ctx.strokeStyle = "#333"; ctx.lineWidth = 0.5;
+  for (const pct of [25, 50, 75, 100]) { const rr = radarRad * pct / 100; ctx.beginPath(); ctx.arc(radarCx, radarCy, rr, 0, Math.PI * 2); ctx.stroke(); }
+  ctx.strokeStyle = "#555"; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.arc(radarCx, radarCy, radarRad * 0.5, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle = "#888"; ctx.font = "11px monospace"; ctx.textAlign = "center";
+  for (let i = 0; i < rn; i++) { const ang = (Math.PI * 2 * i / rn) - Math.PI / 2; ctx.strokeStyle = "#444"; ctx.lineWidth = 0.5; ctx.beginPath(); ctx.moveTo(radarCx, radarCy); ctx.lineTo(radarCx + Math.cos(ang) * radarRad, radarCy + Math.sin(ang) * radarRad); ctx.stroke(); ctx.fillText(radarInds[i].name, radarCx + Math.cos(ang) * (radarRad + 16), radarCy + Math.sin(ang) * (radarRad + 16) + 4); }
+  ctx.beginPath();
+  for (let i = 0; i < rn; i++) { const ang = (Math.PI * 2 * i / rn) - Math.PI / 2; const rr = radarRad * radarInds[i].value / 100; const px = radarCx + Math.cos(ang) * rr; const py = radarCy + Math.sin(ang) * rr; if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); }
+  ctx.closePath(); ctx.fillStyle = radarFill; ctx.fill(); ctx.strokeStyle = radarStroke; ctx.lineWidth = 2; ctx.stroke();
+  for (let i = 0; i < rn; i++) { const ang = (Math.PI * 2 * i / rn) - Math.PI / 2; const rr = radarRad * radarInds[i].value / 100; ctx.beginPath(); ctx.arc(radarCx + Math.cos(ang) * rr, radarCy + Math.sin(ang) * rr, 3, 0, Math.PI * 2); ctx.fillStyle = radarStroke; ctx.fill(); }
+  const rScore = el("div", "margin-top:12px;font-size:22px;font-weight:bold;color:" + radarStroke + ";");
+  rScore.textContent = "Overall: " + radarOverall.toFixed(1) + " / 100";
+  rCont.appendChild(rScore);
+  const rBreak = el("div", "margin-top:8px;font-size:11px;color:#aaa;text-align:left;padding:0 20px;");
+  for (const ind of radarInds) { const rw = el("div", "display:flex;justify-content:space-between;padding:2px 0;"); rw.appendChild(span(ind.name, "color:#ccc;")); const vc = ind.value > 60 ? "#4caf50" : ind.value < 40 ? "#f44336" : "#ffeb3b"; rw.appendChild(span(ind.value.toFixed(0), "color:" + vc + ";font-weight:bold;")); rBreak.appendChild(rw); }
+  rCont.appendChild(rBreak);
+  radarWin.contentElement.appendChild(rCont);
+  log("RADAR: Overall score " + radarOverall.toFixed(1) + "/100", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// TIMELINE — Event Timeline on Chart (markers + floating list)
+// ══════════════════════════════════════════════════════════════
+async function cmdTimeline() {
+  const tlOn = localStorage.getItem("typhoon_timeline_enabled") === "true";
+  if (tlOn) { localStorage.setItem("typhoon_timeline_enabled", "false"); try { candleSeries.setMarkers([]); } catch (_) {} log("TIMELINE: Disabled, markers cleared", "info"); return; }
+  localStorage.setItem("typhoon_timeline_enabled", "true");
+  if (!currentSymbol) { log("TIMELINE: No symbol loaded", "warn"); return; }
+  const tlMarkers = [];
+  try { const hj = await invoke("get_order_history", { limit: 500 }); const orders = JSON.parse(hj); for (const o of orders) { if (!o.symbol || o.symbol !== currentSymbol || o.status !== "filled") continue; const t = o.filled_at ? Math.floor(new Date(o.filled_at).getTime() / 1000) : o.submitted_at ? Math.floor(new Date(o.submitted_at).getTime() / 1000) : 0; if (t === 0) continue; const ib = o.side === "buy"; tlMarkers.push({ time: t, position: ib ? "belowBar" : "aboveBar", color: ib ? "#4caf50" : "#f44336", shape: ib ? "arrowUp" : "arrowDown", text: (ib ? "BUY" : "SELL") + " " + (o.filled_qty || o.qty || "") }); } } catch (_) {}
+  try { const ej = await invokeQuiet("get_corporate_actions", { symbol: currentSymbol, types: "earnings" }); const ea = JSON.parse(ej); if (Array.isArray(ea)) for (const ev of ea) { const t = ev.date ? Math.floor(new Date(ev.date).getTime() / 1000) : 0; if (t > 0) tlMarkers.push({ time: t, position: "aboveBar", color: "#ff9800", shape: "circle", text: "E" }); } } catch (_) {}
+  try { const dj = await invokeQuiet("get_corporate_actions", { symbol: currentSymbol, types: "dividend" }); const da = JSON.parse(dj); if (Array.isArray(da)) for (const dv of da) { const t = dv.ex_date ? Math.floor(new Date(dv.ex_date).getTime() / 1000) : dv.date ? Math.floor(new Date(dv.date).getTime() / 1000) : 0; if (t > 0) tlMarkers.push({ time: t, position: "belowBar", color: "#2196f3", shape: "circle", text: "D" }); } } catch (_) {}
+  try { const al = JSON.parse(localStorage.getItem("typhoon_price_alerts") || "[]"); for (const a of al) { if (a.triggered && a.symbol === currentSymbol && a.triggeredAt) { const t = Math.floor(new Date(a.triggeredAt).getTime() / 1000); if (t > 0) tlMarkers.push({ time: t, position: "aboveBar", color: "#ffeb3b", shape: "circle", text: "!" }); } } } catch (_) {}
+  tlMarkers.sort((a, b) => a.time - b.time);
+  try { candleSeries.setMarkers(tlMarkers); } catch (_) {}
+  const tlWin = createWindow({ title: currentSymbol + " — Event Timeline", width: 500, height: 380 });
+  tlWin.contentElement.textContent = "";
+  const tlC = el("div", "padding:12px;font-family:monospace;font-size:12px;color:#ddd;overflow-y:auto;height:100%;");
+  const tlClear = document.createElement("button"); tlClear.textContent = "Clear Timeline"; tlClear.style.cssText = "background:#333;color:#f44336;border:1px solid #555;padding:6px 14px;cursor:pointer;border-radius:4px;margin-bottom:10px;font-family:monospace;";
+  tlClear.addEventListener("click", () => { localStorage.setItem("typhoon_timeline_enabled", "false"); try { candleSeries.setMarkers([]); } catch (_) {} log("TIMELINE: Cleared", "info"); });
+  tlC.appendChild(tlClear);
+  if (tlMarkers.length === 0) { tlC.appendChild(el("div", "color:#888;padding:20px;text-align:center;", "No events found for " + currentSymbol)); }
+  else { const tlt = el("table", "width:100%;border-collapse:collapse;font-size:11px;"); tlt.appendChild(theadRow(["Date", "Type", "Detail"])); for (const m of tlMarkers) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; tr.appendChild(td(new Date(m.time * 1000).toLocaleDateString(), "padding:3px;color:#aaa;")); tr.appendChild(td(m.text, "padding:3px;color:" + m.color + ";font-weight:bold;")); const det = m.shape === "arrowUp" ? "Buy fill" : m.shape === "arrowDown" ? "Sell fill" : m.text === "E" ? "Earnings" : m.text === "D" ? "Dividend" : "Alert triggered"; tr.appendChild(td(det, "padding:3px;color:#888;")); tlt.appendChild(tr); } tlC.appendChild(tlt); }
+  const tlCount = el("div", "margin-top:8px;color:#888;font-size:11px;"); tlCount.textContent = tlMarkers.length + " events displayed"; tlC.appendChild(tlCount);
+  tlWin.contentElement.appendChild(tlC);
+  log("TIMELINE: " + tlMarkers.length + " events marked on chart", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// SELF-LEARN — Prediction Accuracy Tracker
+// ══════════════════════════════════════════════════════════════
+function cmdSelfLearn() {
+  const SL_KEY = "typhoon_predictions";
+  function ldPreds() { try { return JSON.parse(localStorage.getItem(SL_KEY) || "[]"); } catch (_) { return []; } }
+  function svPreds(arr) { localStorage.setItem(SL_KEY, JSON.stringify(arr)); }
+  const preds = ldPreds();
+  for (const p of preds) { if (p.result !== null) continue; if (p.symbol === currentSymbol && lastPrice > 0) { if (p.direction === "long") { if (lastPrice >= p.tpPrice) p.result = "win"; else if (lastPrice <= p.slPrice) p.result = "loss"; } else { if (lastPrice <= p.tpPrice) p.result = "win"; else if (lastPrice >= p.slPrice) p.result = "loss"; } } }
+  svPreds(preds);
+  const resolved = preds.filter(p => p.result !== null);
+  const slWins = resolved.filter(p => p.result === "win").length;
+  const slLosses = resolved.filter(p => p.result === "loss").length;
+  const slTotal = resolved.length;
+  const slAcc = slTotal > 0 ? ((slWins / slTotal) * 100).toFixed(1) : "0.0";
+  const bySym = {};
+  for (const p of resolved) { if (!bySym[p.symbol]) bySym[p.symbol] = { w: 0, l: 0 }; if (p.result === "win") bySym[p.symbol].w++; else bySym[p.symbol].l++; }
+  const lRes = resolved.filter(p => p.direction === "long"); const sRes = resolved.filter(p => p.direction === "short");
+  const lAcc = lRes.length > 0 ? ((lRes.filter(p => p.result === "win").length / lRes.length) * 100).toFixed(1) : "N/A";
+  const sAcc = sRes.length > 0 ? ((sRes.filter(p => p.result === "win").length / sRes.length) * 100).toFixed(1) : "N/A";
+  let slStreak = 0, slStreakType = "";
+  for (let i = resolved.length - 1; i >= 0; i--) { if (i === resolved.length - 1) { slStreakType = resolved[i].result; slStreak = 1; } else if (resolved[i].result === slStreakType) slStreak++; else break; }
+  const slWin = createWindow({ title: "Self-Learn — Prediction Tracker", width: 550, height: 520 });
+  slWin.contentElement.textContent = "";
+  const slC = el("div", "padding:14px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;");
+  const slBox = el("div", "background:#111;border:1px solid #333;border-radius:8px;padding:14px;margin-bottom:14px;");
+  const slAccClr = slTotal > 0 && slWins / slTotal >= 0.5 ? "#4caf50" : "#f44336";
+  const slAccEl = el("div", "font-size:28px;font-weight:bold;color:" + slAccClr + ";text-align:center;"); slAccEl.textContent = slAcc + "% Accuracy"; slBox.appendChild(slAccEl);
+  const slDet = el("div", "text-align:center;color:#888;font-size:12px;margin-top:4px;"); slDet.textContent = slWins + " wins / " + slTotal + " total (" + slLosses + " losses, " + (preds.length - slTotal) + " open)"; slBox.appendChild(slDet);
+  const slDirRow = el("div", "display:flex;justify-content:space-around;margin-top:10px;");
+  const slLD = el("div", "text-align:center;"); slLD.appendChild(el("div", "color:#4caf50;font-weight:bold;", "LONG")); slLD.appendChild(el("div", "color:#aaa;font-size:12px;", lAcc + "%")); slDirRow.appendChild(slLD);
+  const slSD = el("div", "text-align:center;"); slSD.appendChild(el("div", "color:#f44336;font-weight:bold;", "SHORT")); slSD.appendChild(el("div", "color:#aaa;font-size:12px;", sAcc + "%")); slDirRow.appendChild(slSD);
+  const slSkD = el("div", "text-align:center;"); slSkD.appendChild(el("div", "color:#ffeb3b;font-weight:bold;", "STREAK")); const skClr = slStreakType === "win" ? "#4caf50" : slStreakType === "loss" ? "#f44336" : "#888"; slSkD.appendChild(el("div", "color:" + skClr + ";font-size:12px;", slStreak + " " + (slStreakType || "none"))); slDirRow.appendChild(slSkD);
+  slBox.appendChild(slDirRow); slC.appendChild(slBox);
+  if (Object.keys(bySym).length > 0) {
+    slC.appendChild(el("div", "color:#888;font-size:11px;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;", "By Symbol"));
+    const syt = el("table", "width:100%;border-collapse:collapse;font-size:11px;margin-bottom:14px;"); syt.appendChild(theadRow(["Symbol", "Wins", "Losses", "Accuracy"]));
+    for (const [sym, st] of Object.entries(bySym)) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const tot = st.w + st.l; const ac = tot > 0 ? ((st.w / tot) * 100).toFixed(1) : "0.0"; tr.appendChild(td(sym, "padding:3px;color:#ccc;")); tr.appendChild(td(String(st.w), "padding:3px;color:#4caf50;")); tr.appendChild(td(String(st.l), "padding:3px;color:#f44336;")); tr.appendChild(td(ac + "%", "padding:3px;color:#ffeb3b;")); syt.appendChild(tr); }
+    slC.appendChild(syt);
+  }
+  const recBtn = document.createElement("button"); recBtn.textContent = "Record Prediction"; recBtn.style.cssText = "background:#1e88e5;color:#fff;border:none;padding:8px 18px;cursor:pointer;border-radius:4px;font-family:monospace;margin-bottom:14px;";
+  recBtn.addEventListener("click", () => {
+    const frmD = el("div", "background:#111;border:1px solid #444;border-radius:8px;padding:12px;margin-bottom:12px;");
+    const flds = [{ label: "Symbol", fid: "sl-sym", value: currentSymbol }, { label: "Direction (long/short)", fid: "sl-dir", value: "long" }, { label: "Entry Price", fid: "sl-entry", value: lastPrice > 0 ? lastPrice.toFixed(4) : "" }, { label: "SL Price", fid: "sl-sl", value: "" }, { label: "TP Price", fid: "sl-tp", value: "" }];
+    for (const f of flds) { const rw = el("div", "margin-bottom:6px;display:flex;align-items:center;gap:8px;"); rw.appendChild(el("label", "color:#aaa;font-size:11px;width:100px;", f.label)); const inp = document.createElement("input"); inp.type = "text"; inp.value = f.value; inp.style.cssText = "background:#222;color:#ddd;border:1px solid #555;padding:4px 8px;border-radius:3px;font-family:monospace;width:120px;"; inp.dataset.fieldId = f.fid; rw.appendChild(inp); frmD.appendChild(rw); }
+    const svBtn = document.createElement("button"); svBtn.textContent = "Save"; svBtn.style.cssText = "background:#4caf50;color:#fff;border:none;padding:6px 16px;cursor:pointer;border-radius:4px;font-family:monospace;margin-top:6px;";
+    svBtn.addEventListener("click", () => { const inps = frmD.querySelectorAll("input"); const vl = {}; inps.forEach(inp => { vl[inp.dataset.fieldId] = inp.value.trim(); }); const pred = { symbol: vl["sl-sym"] || currentSymbol, direction: vl["sl-dir"] === "short" ? "short" : "long", entryPrice: parseFloat(vl["sl-entry"]) || 0, slPrice: parseFloat(vl["sl-sl"]) || 0, tpPrice: parseFloat(vl["sl-tp"]) || 0, timestamp: Date.now(), result: null }; if (pred.entryPrice === 0 || pred.slPrice === 0 || pred.tpPrice === 0) { log("SELF-LEARN: Entry, SL, and TP are required", "warn"); return; } const cu = ldPreds(); cu.push(pred); svPreds(cu); log("SELF-LEARN: Prediction recorded for " + pred.symbol + " " + pred.direction, "ok"); frmD.remove(); });
+    frmD.appendChild(svBtn); slC.insertBefore(frmD, recBtn.nextSibling);
+  });
+  slC.appendChild(recBtn);
+  slC.appendChild(el("div", "color:#888;font-size:11px;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;", "Recent Predictions"));
+  const rTbl = el("table", "width:100%;border-collapse:collapse;font-size:11px;"); rTbl.appendChild(theadRow(["Date", "Symbol", "Dir", "Entry", "SL", "TP", "Result"]));
+  const rcnt = preds.slice(-20).reverse();
+  for (const p of rcnt) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; tr.appendChild(td(new Date(p.timestamp).toLocaleDateString(), "padding:3px;color:#888;")); tr.appendChild(td(p.symbol, "padding:3px;color:#ccc;")); const dc = p.direction === "long" ? "#4caf50" : "#f44336"; tr.appendChild(td(p.direction.toUpperCase(), "padding:3px;color:" + dc + ";")); tr.appendChild(td(p.entryPrice.toFixed(2), "padding:3px;")); tr.appendChild(td(p.slPrice.toFixed(2), "padding:3px;color:#f44336;")); tr.appendChild(td(p.tpPrice.toFixed(2), "padding:3px;color:#4caf50;")); const rc = p.result === "win" ? "#4caf50" : p.result === "loss" ? "#f44336" : "#888"; tr.appendChild(td(p.result || "OPEN", "padding:3px;color:" + rc + ";font-weight:bold;")); rTbl.appendChild(tr); }
+  slC.appendChild(rTbl); slWin.contentElement.appendChild(slC);
+  log("SELF-LEARN: " + slAcc + "% accuracy (" + slWins + "W/" + slLosses + "L)", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// FOCUS-MODE — Distraction-Free Trading
+// ══════════════════════════════════════════════════════════════
+function cmdFocusMode() {
+  window._focusMode = !window._focusMode;
+  const fmOn = window._focusMode;
+  localStorage.setItem("typhoon_focus_mode", fmOn ? "true" : "false");
+  if (!document.getElementById("focus-mode-style")) { const fmSt = document.createElement("style"); fmSt.id = "focus-mode-style"; fmSt.textContent = ".focus-hidden { display: none !important; }"; document.head.appendChild(fmSt); }
+  const fmHideIds = ["indicator-panel", "news-panel", "log-panel", "menu-bar", "tab-bar"];
+  for (const fmId of fmHideIds) { const fmEl = document.getElementById(fmId); if (fmEl) { if (fmOn) fmEl.classList.add("focus-hidden"); else fmEl.classList.remove("focus-hidden"); } }
+  const fmRp = document.getElementById("right-panel");
+  if (fmRp) { const fmCh = fmRp.children; for (let ci = 0; ci < fmCh.length; ci++) { const fmChild = fmCh[ci]; const keepIds = ["btn-buy-lines","btn-sell-lines","btn-trade","btn-close-all","btn-martingale","btn-close-partial","btn-destroy-lines","position-info","equity-display","account-info"]; const cid = fmChild.id || ""; const keep = keepIds.includes(cid) || fmChild.tagName === "BUTTON" || (fmChild.className && (fmChild.className.includes("position") || fmChild.className.includes("equity") || fmChild.className.includes("trade-btn"))); if (!keep) { if (fmOn) fmChild.classList.add("focus-hidden"); else fmChild.classList.remove("focus-hidden"); } } }
+  if (chart) { setTimeout(() => { const fmCC = document.getElementById("chart-container"); if (fmCC) chart.resize(fmCC.clientWidth, fmCC.clientHeight); }, 100); }
+  log("FOCUS MODE: " + (fmOn ? "ON — minimal UI" : "OFF — full UI restored"), fmOn ? "ok" : "info");
+}
+// Restore focus mode on load
+if (localStorage.getItem("typhoon_focus_mode") === "true") { window._focusMode = false; setTimeout(() => cmdFocusMode(), 500); }
+// Focus mode keyboard shortcuts (F12, Ctrl+Shift+F)
+document.addEventListener("keydown", (fmEvt) => { if (fmEvt.target.tagName === "INPUT" || fmEvt.target.tagName === "SELECT") return; if (fmEvt.key === "F12") { fmEvt.preventDefault(); cmdFocusMode(); } if (fmEvt.ctrlKey && fmEvt.shiftKey && fmEvt.key === "F") { fmEvt.preventDefault(); cmdFocusMode(); } });
+
 const CMD_PALETTE_COMMANDS = [
+  { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
+  { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
+  { name: "TIMELINE", desc: "Event timeline on chart (trades, earnings, dividends, alerts)", action: cmdTimeline },
+  { name: "SELF-LEARN", desc: "Prediction accuracy tracker (win/loss, by symbol, streak)", action: cmdSelfLearn },
+  { name: "FOCUS-MODE", desc: "Distraction-free trading (hide panels, expand chart) [F12 / Ctrl+Shift+F]", action: cmdFocusMode },
   { name: "CHART-LINK", desc: "Sync scroll across MTF grid + tabs", action: cmdChartLink },
   { name: "RROVERLAY", desc: "Visual risk/reward zones (green profit, red loss)", action: cmdRROverlay },
   { name: "HOTKEY-PANEL", desc: "Customizable hotkey button bar (right-click to configure)", action: cmdHotkeyPanel },
@@ -14917,6 +16301,16 @@ const CMD_PALETTE_COMMANDS = [
   { name: "TREEMAP-LIVE", desc: "Live portfolio treemap (position weight, P&L color)", action: cmdTreemapLive },
   { name: "FUNDING", desc: "Crypto funding rate info & estimation", action: cmdFunding },
   { name: "DEFI-YIELD", desc: "Yield comparison dashboard (crypto, treasury, equity)", action: cmdDefiYield },
+  { name: "ANOMALY-STREAM", desc: "Real-time trade anomaly detection (large trades, rapid moves, bursts)", action: cmdAnomalyStream },
+  { name: "STRATEGY-GENETIC", desc: "Genetic algorithm optimizer (SMA cross, population evolution)", action: cmdStrategyGenetic },
+  { name: "WAVEFORM", desc: "Audio-style price waveform (returns, volume thickness, zoom)", action: cmdWaveform },
+  { name: "COMMAND-HISTORY", desc: "Command execution history (replay, stats, search)", action: cmdCommandHistory },
+  { name: "DOMINANCE", desc: "Crypto dominance calculator (BTC, ETH, SOL, pie chart)", action: cmdDominance },
+  { name: "FOURIER", desc: "Frequency domain analysis (DFT, dominant cycles, phase)", action: cmdFourier },
+  { name: "ENTROPY", desc: "Shannon entropy of returns (randomness, rolling sparkline)", action: cmdEntropy },
+  { name: "FRACTAL-DIM", desc: "Higuchi fractal dimension (trend vs random vs mean-revert)", action: cmdFractalDim },
+  { name: "WAVELETS", desc: "Haar wavelet decomposition (5-level energy, sparklines)", action: cmdWavelets },
+  { name: "COINTEGRATION", desc: "Engle-Granger cointegration test (ADF, hedge ratio, z-score)", action: cmdCointegration },
 ];
 
 function fuzzyMatch(query, target) {
@@ -14980,6 +16374,10 @@ function setupCommandPalette() {
         closePalette();
         // Macro recording hook: capture command executions
         if (window._macroRecording) window._macroSteps.push({ action: "open_command", params: { command: c.name } });
+        // Command history tracking
+        if (!window._commandHistory) window._commandHistory = [];
+        window._commandHistory.push({ command: c.name, symbol: currentSymbol || "", time: new Date().toLocaleTimeString("en-GB", { hour12: false }) });
+        if (window._commandHistory.length > 500) window._commandHistory.shift();
         c.action();
       });
       results.appendChild(div);
