@@ -17962,6 +17962,20 @@ async function loadMTFCellData(cellInfo, symbol) {
     // ── Full indicator set (matches main chart NNFX system) ──
     const addLine = (color, width, data) => {
       if (data.length < 2) return;
+      // GPU mode: route through gpuChart.add_line() instead of dummy CPU chart
+      if (cellInfo.gpuChart) {
+        try {
+          // Parse hex color to [r,g,b] 0-1 range
+          const hex = color.replace("#", "");
+          const r = parseInt(hex.substring(0, 2), 16) / 255;
+          const g = parseInt(hex.substring(2, 4), 16) / 255;
+          const b = parseInt(hex.substring(4, 6), 16) / 255;
+          const values = data.map(d => d.value);
+          cellInfo.gpuChart.add_line(new Float64Array(values), r, g, b, 1.0);
+          cellInfo.gpuChart.render();
+        } catch (_) {}
+        return;
+      }
       const s = cellInfo.chart.addLineSeries({ color, lineWidth: width, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
       s.setData(data);
     };
@@ -17990,13 +18004,13 @@ async function loadMTFCellData(cellInfo, symbol) {
         const startIdx = Math.max(0, chartData.length - 30);
         const levelBars = chartData.slice(startIdx);
         if (levelBars.length >= 2) {
-          const su = cellInfo.chart.addLineSeries({ color: "#FFFF00", lineWidth: 1, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-          const sl = cellInfo.chart.addLineSeries({ color: "#FFFF00", lineWidth: 1, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-          su.setData(levelBars.map(d => ({ time: d.time, value: upper })));
-          sl.setData(levelBars.map(d => ({ time: d.time, value: lower })));
+          // Route through addLine which handles GPU vs CPU
+          addLine("#FFFF00", 1, levelBars.map(d => ({ time: d.time, value: upper })));
+          addLine("#FFFF00", 1, levelBars.map(d => ({ time: d.time, value: lower })));
         }
       }
     }
+    // (ATR projection lines now routed through addLine above)
 
     // Previous Candle Levels removed from MTF grid (MQL5 only draws HTF levels, not per-bar)
 
