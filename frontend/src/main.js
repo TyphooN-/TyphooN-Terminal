@@ -22591,25 +22591,41 @@ function cmdSettings() {
   const c = document.createElement("div");
   c.style.cssText = "display:flex;flex-direction:column;gap:8px;padding:4px;";
   const fields = [
-    { key: "fredApiKey", label: "FRED API Key", ph: "32-char from fred.stlouisfed.org" },
-    { key: "finnhubKey", label: "Finnhub API Key (news)", ph: "Free: finnhub.io/register" },
-    { key: "alphaVantageKey", label: "Alpha Vantage API Key", ph: "Free: alphavantage.co/support" },
-    { key: "fmpKey", label: "Financial Modeling Prep Key", ph: "Free: financialmodelingprep.com" },
+    { key: "fredApiKey", label: "FRED API Key", url: "https://fred.stlouisfed.org/docs/api/api_key.html", urlText: "Get free key" },
+    { key: "finnhubKey", label: "Finnhub API Key (news)", url: "https://finnhub.io/register", urlText: "Sign up free" },
+    { key: "alphaVantageKey", label: "Alpha Vantage API Key", url: "https://www.alphavantage.co/support/#api-key", urlText: "Get free key" },
+    { key: "fmpKey", label: "Financial Modeling Prep Key", url: "https://site.financialmodelingprep.com/register", urlText: "Sign up free" },
     { key: "aiProvider", label: "AI Provider", ph: "anthropic or openai", val: settings.aiProvider || "anthropic" },
-    { key: "aiApiKey", label: "AI API Key", ph: "sk-ant-... or sk-..." },
+    { key: "aiApiKey", label: "AI API Key", url: "https://console.anthropic.com/settings/keys", urlText: "Anthropic keys" },
     { key: "aiModel", label: "AI Model (opt)", ph: "claude-haiku-4-5-20251001 / gpt-4o-mini" },
   ];
   const inputs = {};
   for (const f of fields) {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:1px;";
     const lbl = document.createElement("label");
     lbl.textContent = f.label;
-    lbl.style.cssText = "display:block;color:#888;font-size:10px;margin-bottom:1px;";
+    lbl.style.cssText = "color:#888;font-size:10px;";
+    row.appendChild(lbl);
+    if (f.url) {
+      const link = document.createElement("a");
+      link.textContent = f.urlText || "Sign up";
+      link.href = f.url;
+      link.target = "_blank";
+      link.style.cssText = "color:#4caf50;font-size:9px;text-decoration:underline;cursor:pointer;";
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        try { window.__TAURI__?.shell?.open(f.url); } catch (_) {}
+        try { window.open(f.url, "_blank"); } catch (_) {}
+      });
+      row.appendChild(link);
+    }
     const inp = document.createElement("input");
     inp.type = f.key.includes("Key") ? "password" : "text";
-    inp.placeholder = f.ph;
+    inp.placeholder = f.ph || "";
     inp.value = f.val || settings[f.key] || "";
     inp.style.cssText = "width:100%;background:#111;color:#fff;border:1px solid #555;padding:5px;font-family:inherit;font-size:11px;box-sizing:border-box;";
-    c.appendChild(lbl); c.appendChild(inp);
+    c.appendChild(row); c.appendChild(inp);
     inputs[f.key] = inp;
   }
   const btn = document.createElement("button");
