@@ -285,6 +285,36 @@ function deactivateGpuChart() {
   if (gpuAnimFrame) { cancelAnimationFrame(gpuAnimFrame); gpuAnimFrame = null; }
 }
 
+// ── Safe DOM helpers (innerHTML elimination) ─────────────────
+// All user-facing DOM construction MUST use these instead of innerHTML.
+function el(tag, style, text) {
+  const e = document.createElement(tag);
+  if (style) e.style.cssText = style;
+  if (text !== undefined && text !== null) e.textContent = String(text);
+  return e;
+}
+function span(text, style) { return el("span", style, text); }
+function div(text, style) { return el("div", style, text); }
+function td(text, style) { const t = el("td", style, text); return t; }
+function theadRow(headers, style) {
+  const tr = document.createElement("tr");
+  for (const h of headers) { const th = el("td", style || "padding:4px;color:#888;font-weight:bold;border-bottom:1px solid #333;", h); tr.appendChild(th); }
+  return tr;
+}
+function styledRow(values) {
+  // values: [{ text, style }] — creates a <tr> with <td> for each
+  const tr = document.createElement("tr");
+  for (const v of values) { tr.appendChild(td(v.text || v.t || "", v.style || v.s || "padding:4px;")); }
+  return tr;
+}
+function colorSpan(text, color) { return span(text, `color:${color};`); }
+function labelValue(label, value, valueColor) {
+  const container = document.createElement("span");
+  container.appendChild(span(label, "color:#888;"));
+  container.appendChild(span(String(value), `color:${valueColor || "#ccc"};font-weight:bold;`));
+  return container;
+}
+
 /// Pack chart bars into flat f64 array for Wasm interop.
 function packBarsForWasm(bars) {
   const flat = new Float64Array(bars.length * 5);
@@ -6391,7 +6421,10 @@ async function cmdEarningsCalendar() {
     // Legend
     const legend = document.createElement("div");
     legend.style.cssText = "padding:6px 12px;font-size:9px;color:#666;border-top:1px solid #333;";
-    legend.innerHTML = `<span style="color:#64b5f6;">&#9632;</span> Dividend &nbsp; <span style="color:#ffb74d;">&#9632;</span> Earnings &nbsp; | &nbsp; ${events.length} events across ${symbols.length} symbol${symbols.length !== 1 ? "s" : ""}`;
+    legend.appendChild(span("\u25A0", "color:#64b5f6;"));
+    legend.appendChild(document.createTextNode(" Dividend \u00A0 "));
+    legend.appendChild(span("\u25A0", "color:#ffb74d;"));
+    legend.appendChild(document.createTextNode(" Earnings \u00A0 | \u00A0 " + events.length + " events across " + symbols.length + " symbol" + (symbols.length !== 1 ? "s" : "")));
     win.appendElement(legend);
 
   } catch (e) {
@@ -7075,7 +7108,7 @@ async function cmdProfile() {
     for (const s of symbolPnL.slice(0, 5)) {
       const tr = document.createElement("tr"); tr.style.borderBottom = "1px solid #333";
       const pc = s.pnl >= 0 ? "#4caf50" : "#f44336";
-      tr.innerHTML = `<td style="padding:4px;">${s.symbol}</td><td style="text-align:right;padding:4px;color:${pc};">$${s.pnl.toFixed(2)}</td><td style="text-align:right;padding:4px;">${s.trades}</td>`;
+      tr.appendChild(td(s.symbol, "padding:4px;")); tr.appendChild(td("$" + s.pnl.toFixed(2), "text-align:right;padding:4px;color:" + pc + ";")); tr.appendChild(td(s.trades, "text-align:right;padding:4px;"));
       bestBody.appendChild(tr);
     }
     bestTable.appendChild(bestBody); container.appendChild(bestTable);
@@ -7092,7 +7125,7 @@ async function cmdProfile() {
     for (const s of symbolPnL.slice(-5).reverse()) {
       const tr = document.createElement("tr"); tr.style.borderBottom = "1px solid #333";
       const pc = s.pnl >= 0 ? "#4caf50" : "#f44336";
-      tr.innerHTML = `<td style="padding:4px;">${s.symbol}</td><td style="text-align:right;padding:4px;color:${pc};">$${s.pnl.toFixed(2)}</td><td style="text-align:right;padding:4px;">${s.trades}</td>`;
+      tr.appendChild(td(s.symbol, "padding:4px;")); tr.appendChild(td("$" + s.pnl.toFixed(2), "text-align:right;padding:4px;color:" + pc + ";")); tr.appendChild(td(s.trades, "text-align:right;padding:4px;"));
       worstBody.appendChild(tr);
     }
     worstTable.appendChild(worstBody); container.appendChild(worstTable);
@@ -7144,10 +7177,10 @@ async function cmdProfile() {
     lsGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;";
     const buyBox = document.createElement("div");
     buyBox.style.cssText = "background:#1a2e1a;border:1px solid #4caf50;border-radius:6px;padding:10px;text-align:center;";
-    buyBox.innerHTML = `<div style="color:#4caf50;font-size:16px;font-weight:bold;">LONG</div><div style="color:#ccc;font-size:13px;margin-top:4px;">${buys.length} orders</div><div style="color:#888;font-size:11px;">${filled.length > 0 ? ((buys.length / filled.length) * 100).toFixed(1) : 0}% of total</div>`;
+    buyBox.appendChild(div("LONG", "color:#4caf50;font-size:16px;font-weight:bold;")); buyBox.appendChild(div(buys.length + " orders", "color:#ccc;font-size:13px;margin-top:4px;")); buyBox.appendChild(div((filled.length > 0 ? ((buys.length / filled.length) * 100).toFixed(1) : 0) + "% of total", "color:#888;font-size:11px;"));
     const sellBox = document.createElement("div");
     sellBox.style.cssText = "background:#2e1a1a;border:1px solid #f44336;border-radius:6px;padding:10px;text-align:center;";
-    sellBox.innerHTML = `<div style="color:#f44336;font-size:16px;font-weight:bold;">SHORT</div><div style="color:#ccc;font-size:13px;margin-top:4px;">${sells.length} orders</div><div style="color:#888;font-size:11px;">${filled.length > 0 ? ((sells.length / filled.length) * 100).toFixed(1) : 0}% of total</div>`;
+    sellBox.appendChild(div("SHORT", "color:#f44336;font-size:16px;font-weight:bold;")); sellBox.appendChild(div(sells.length + " orders", "color:#ccc;font-size:13px;margin-top:4px;")); sellBox.appendChild(div((filled.length > 0 ? ((sells.length / filled.length) * 100).toFixed(1) : 0) + "% of total", "color:#888;font-size:11px;"));
     lsGrid.appendChild(buyBox); lsGrid.appendChild(sellBox);
     container.appendChild(lsGrid);
 
@@ -7178,7 +7211,7 @@ async function cmdProfile() {
     for (const [htLabel, count, color] of [["<1h (Scalp)", shortHold, "#64b5f6"], ["1h-1d (Day)", medHold, "#ffab40"], ["1d+ (Swing)", swingHold, "#ce93d8"]]) {
       const box = document.createElement("div");
       box.style.cssText = `background:#111;border:1px solid ${color};border-radius:6px;padding:8px;text-align:center;`;
-      box.innerHTML = `<div style="color:${color};font-size:18px;font-weight:bold;">${count}</div><div style="color:#888;font-size:10px;">${htLabel}</div><div style="color:#666;font-size:10px;">${((count / htTotal) * 100).toFixed(0)}%</div>`;
+      box.appendChild(div(count, "color:" + color + ";font-size:18px;font-weight:bold;")); box.appendChild(div(htLabel, "color:#888;font-size:10px;")); box.appendChild(div(((count / htTotal) * 100).toFixed(0) + "%", "color:#666;font-size:10px;"));
       htGrid.appendChild(box);
     }
     container.appendChild(htGrid);
@@ -8020,10 +8053,11 @@ function cmdBookmap() {
     const largestAsk = last.asks.reduce((max, a) => a.size > max.size ? a : max, { size: 0, price: 0 });
     const totalBidVol = last.bids.reduce((s, b) => s + b.size, 0);
     const totalAskVol = last.asks.reduce((s, a) => s + a.size, 0);
-    bmStatsDiv.innerHTML = `<span style="color:#4caf50">Largest Bid: ${largestBid.size.toFixed(2)} @ $${largestBid.price.toFixed(2)}</span>` +
-      `<span style="color:#f44336">Largest Ask: ${largestAsk.size.toFixed(2)} @ $${largestAsk.price.toFixed(2)}</span>` +
-      `<span style="color:#4caf50">Total Bid Vol: ${totalBidVol.toFixed(2)}</span>` +
-      `<span style="color:#f44336">Total Ask Vol: ${totalAskVol.toFixed(2)}</span>`;
+    bmStatsDiv.textContent = "";
+    bmStatsDiv.appendChild(span("Largest Bid: " + largestBid.size.toFixed(2) + " @ $" + largestBid.price.toFixed(2), "color:#4caf50;"));
+    bmStatsDiv.appendChild(span("Largest Ask: " + largestAsk.size.toFixed(2) + " @ $" + largestAsk.price.toFixed(2), "color:#f44336;"));
+    bmStatsDiv.appendChild(span("Total Bid Vol: " + totalBidVol.toFixed(2), "color:#4caf50;"));
+    bmStatsDiv.appendChild(span("Total Ask Vol: " + totalAskVol.toFixed(2), "color:#f44336;"));
   }
 
   async function fetchSnapshot() {
@@ -8150,7 +8184,7 @@ function cmdDashboard() {
             const pl = parseFloat(p.unrealized_pl || p.unrealized_pnl || 0);
             totalPL += pl;
             const row = document.createElement("div"); row.style.cssText = `display:flex;justify-content:space-between;padding:1px 0;color:${pl >= 0 ? "#4caf50" : "#f44336"};`;
-            row.innerHTML = `<span>${psym}</span><span>${pl >= 0 ? "+" : ""}$${pl.toFixed(2)}</span>`;
+            row.appendChild(span(psym)); row.appendChild(span((pl >= 0 ? "+" : "") + "$" + pl.toFixed(2)));
             body.appendChild(row);
           }
           const tot = document.createElement("div"); tot.style.cssText = `border-top:1px solid #333;margin-top:2px;padding-top:2px;font-weight:bold;color:${totalPL >= 0 ? "#4caf50" : "#f44336"};text-align:right;`;
@@ -8172,7 +8206,7 @@ function cmdDashboard() {
             let chg = 0;
             if (cached && cached.data && cached.data.length >= 2) { const prev = cached.data[cached.data.length - 2].close; if (prev > 0) chg = ((price - prev) / prev) * 100; }
             const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;padding:1px 0;";
-            row.innerHTML = `<span style="color:#8ff">${wsym}</span><span>$${price.toFixed(2)}</span><span style="color:${chg >= 0 ? "#4caf50" : "#f44336"}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span>`;
+            row.appendChild(span(wsym, "color:#8ff;")); row.appendChild(span("$" + price.toFixed(2))); row.appendChild(span((chg >= 0 ? "+" : "") + chg.toFixed(2) + "%", "color:" + (chg >= 0 ? "#4caf50" : "#f44336") + ";"));
             body.appendChild(row);
           } catch (_) {}
         }
@@ -8187,7 +8221,7 @@ function cmdDashboard() {
         else {
           for (const n of news.slice(0, 5)) {
             const d = document.createElement("div"); d.style.cssText = "padding:2px 0;border-bottom:1px solid #111;";
-            d.innerHTML = `<span style="color:#8cf;font-size:9px;">${(n.headline || n.title || "").substring(0, 60)}</span>`;
+            d.appendChild(span((n.headline || n.title || "").substring(0, 60), "color:#8cf;font-size:9px;"));
             body.appendChild(d);
           }
         }
@@ -8198,11 +8232,11 @@ function cmdDashboard() {
       const body = widgetDivs.alertStatus; body.textContent = "";
       const allAlerts = [...priceAlerts, ...multiConditionAlerts];
       const active = allAlerts.filter(a => !a.triggered);
-      body.innerHTML = `<div>Active alerts: <span style="color:#ff8;font-weight:bold;">${active.length}</span></div>` +
-        `<div>Total alerts: ${allAlerts.length}</div>`;
+      const aDiv1 = document.createElement("div"); aDiv1.appendChild(document.createTextNode("Active alerts: ")); aDiv1.appendChild(span(active.length, "color:#ff8;font-weight:bold;")); body.appendChild(aDiv1);
+      body.appendChild(div("Total alerts: " + allAlerts.length));
       if (active.length > 0) {
         const next = active[0];
-        body.innerHTML += `<div style="margin-top:4px;color:#8cf;">Next: ${next.symbol || next.name || "?"} @ $${next.price || "?"}</div>`;
+        body.appendChild(div("Next: " + (next.symbol || next.name || "?") + " @ $" + (next.price || "?"), "margin-top:4px;color:#8cf;"));
       }
     }
 
@@ -8214,10 +8248,10 @@ function cmdDashboard() {
         const balance = parseFloat(ac.cash || ac.balance || 0);
         const margin = parseFloat(ac.initial_margin || ac.margin_used || 0);
         const bp = parseFloat(ac.buying_power || 0);
-        body.innerHTML = `<div>Equity: <span style="color:#4caf50">$${equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>` +
-          `<div>Cash: $${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>` +
-          `<div>Margin Used: $${margin.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>` +
-          `<div>Buying Power: $${bp.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>`;
+        const eqDiv = document.createElement("div"); eqDiv.appendChild(document.createTextNode("Equity: ")); eqDiv.appendChild(span("$" + equity.toLocaleString(undefined, { minimumFractionDigits: 2 }), "color:#4caf50;")); body.appendChild(eqDiv);
+        body.appendChild(div("Cash: $" + balance.toLocaleString(undefined, { minimumFractionDigits: 2 })));
+        body.appendChild(div("Margin Used: $" + margin.toLocaleString(undefined, { minimumFractionDigits: 2 })));
+        body.appendChild(div("Buying Power: $" + bp.toLocaleString(undefined, { minimumFractionDigits: 2 })));
       } catch (_) { body.textContent = "Failed to load account"; }
     }
 
@@ -8244,9 +8278,9 @@ function cmdDashboard() {
         }
         const scoreColor = score >= 2 ? "#4caf50" : score <= -2 ? "#f44336" : "#ff9800";
         const slabel = score >= 2 ? "BULLISH" : score <= -2 ? "BEARISH" : "NEUTRAL";
-        body.innerHTML = `<div style="font-size:16px;font-weight:bold;color:${scoreColor};text-align:center;">${slabel} (${score >= 0 ? "+" : ""}${score})</div>` +
-          `<div style="margin-top:4px;font-size:9px;color:#888;">${sym} | RSI: ${latestRSI.toFixed(1)}</div>` +
-          `<div style="font-size:9px;color:#666;">${signals.join(" | ")}</div>`;
+        body.appendChild(div(slabel + " (" + (score >= 0 ? "+" : "") + score + ")", "font-size:16px;font-weight:bold;color:" + scoreColor + ";text-align:center;"));
+        body.appendChild(div(sym + " | RSI: " + latestRSI.toFixed(1), "margin-top:4px;font-size:9px;color:#888;"));
+        body.appendChild(div(signals.join(" | "), "font-size:9px;color:#666;"));
       } else { body.textContent = `No data for ${sym}`; }
     }
 
@@ -8260,7 +8294,7 @@ function cmdDashboard() {
           const gh = document.createElement("div"); gh.textContent = "Gainers"; gh.style.cssText = "color:#4caf50;font-weight:bold;font-size:9px;"; body.appendChild(gh);
           for (const g of gainers) {
             const r = document.createElement("div"); r.style.cssText = "display:flex;justify-content:space-between;color:#4caf50;font-size:9px;";
-            r.innerHTML = `<span>${g.symbol || g.S || "?"}</span><span>+${(g.percent_change || g.change_percent || 0).toFixed(2)}%</span>`;
+            r.appendChild(span(g.symbol || g.S || "?")); r.appendChild(span("+" + (g.percent_change || g.change_percent || 0).toFixed(2) + "%"));
             body.appendChild(r);
           }
         }
@@ -8268,7 +8302,7 @@ function cmdDashboard() {
           const lh = document.createElement("div"); lh.textContent = "Losers"; lh.style.cssText = "color:#f44336;font-weight:bold;font-size:9px;margin-top:4px;"; body.appendChild(lh);
           for (const lo of losers) {
             const r = document.createElement("div"); r.style.cssText = "display:flex;justify-content:space-between;color:#f44336;font-size:9px;";
-            r.innerHTML = `<span>${lo.symbol || lo.S || "?"}</span><span>${(lo.percent_change || lo.change_percent || 0).toFixed(2)}%</span>`;
+            r.appendChild(span(lo.symbol || lo.S || "?")); r.appendChild(span((lo.percent_change || lo.change_percent || 0).toFixed(2) + "%"));
             body.appendChild(r);
           }
         }
@@ -8479,8 +8513,8 @@ function cmdAlgoMonitor() {
     const stratName = state.strategyName || state.strategy || state.plugin || "Unknown Strategy";
     const status = state.status || (state.active ? "Running" : "Stopped");
     const statusColor = status === "Running" ? "#4caf50" : status === "Error" ? "#f44336" : "#ff9800";
-    hdr.innerHTML = `<div style="font-size:14px;font-weight:bold;color:#ff8;">${stratName}</div>` +
-      `<div style="margin-top:4px;">Status: <span style="color:${statusColor};font-weight:bold;">${status}</span></div>`;
+    hdr.appendChild(div(stratName, "font-size:14px;font-weight:bold;color:#ff8;"));
+    const statusRow = document.createElement("div"); statusRow.style.cssText = "margin-top:4px;"; statusRow.appendChild(document.createTextNode("Status: ")); statusRow.appendChild(span(status, "color:" + statusColor + ";font-weight:bold;")); hdr.appendChild(statusRow);
     algoContainer.appendChild(hdr);
 
     const posSection = document.createElement("div"); posSection.style.cssText = "border:1px solid #333;border-radius:4px;padding:8px;margin-bottom:8px;";
@@ -8489,10 +8523,10 @@ function cmdAlgoMonitor() {
     if (state.position && state.position.symbol) {
       const p = state.position;
       const pl = parseFloat(p.unrealized_pl || p.pnl || 0);
-      posSection.innerHTML += `<div>Symbol: <span style="color:#fff;">${p.symbol}</span></div>` +
-        `<div>Side: <span style="color:${p.side === "long" ? "#4caf50" : "#f44336"}">${(p.side || "N/A").toUpperCase()}</span></div>` +
-        `<div>Qty: ${p.qty || 0}</div>` +
-        `<div>P&L: <span style="color:${pl >= 0 ? "#4caf50" : "#f44336"}">${pl >= 0 ? "+" : ""}$${pl.toFixed(2)}</span></div>`;
+      const symDiv = document.createElement("div"); symDiv.appendChild(document.createTextNode("Symbol: ")); symDiv.appendChild(span(p.symbol, "color:#fff;")); posSection.appendChild(symDiv);
+      const sideDiv = document.createElement("div"); sideDiv.appendChild(document.createTextNode("Side: ")); sideDiv.appendChild(span((p.side || "N/A").toUpperCase(), "color:" + (p.side === "long" ? "#4caf50" : "#f44336") + ";")); posSection.appendChild(sideDiv);
+      posSection.appendChild(div("Qty: " + (p.qty || 0)));
+      const plDiv = document.createElement("div"); plDiv.appendChild(document.createTextNode("P&L: ")); plDiv.appendChild(span((pl >= 0 ? "+" : "") + "$" + pl.toFixed(2), "color:" + (pl >= 0 ? "#4caf50" : "#f44336") + ";")); posSection.appendChild(plDiv);
     } else {
       posSection.innerHTML += `<div style="color:#666;">No position</div>`;
     }
@@ -8503,9 +8537,9 @@ function cmdAlgoMonitor() {
     sigSection.appendChild(sigTitle);
     const totalSignals = state.signalCount || state.signals || 0;
     const lastSignal = state.lastSignal || null;
-    sigSection.innerHTML += `<div>Total Signals: <span style="color:#ff8;">${totalSignals}</span></div>`;
+    const tsDiv = document.createElement("div"); tsDiv.appendChild(document.createTextNode("Total Signals: ")); tsDiv.appendChild(span(totalSignals, "color:#ff8;")); sigSection.appendChild(tsDiv);
     if (lastSignal) {
-      sigSection.innerHTML += `<div>Last: <span style="color:#ccc;">${lastSignal.type || "?"} ${lastSignal.symbol || ""} @ ${lastSignal.time || "?"}</span></div>`;
+      const lsDiv = document.createElement("div"); lsDiv.appendChild(document.createTextNode("Last: ")); lsDiv.appendChild(span((lastSignal.type || "?") + " " + (lastSignal.symbol || "") + " @ " + (lastSignal.time || "?"), "color:#ccc;")); sigSection.appendChild(lsDiv);
     }
     algoContainer.appendChild(sigSection);
 
@@ -8516,9 +8550,9 @@ function cmdAlgoMonitor() {
     const tradeCount = state.tradeCount || state.trades || 0;
     const winRate = state.winRate || (state.wins && tradeCount > 0 ? ((state.wins / tradeCount) * 100) : 0);
     const lastBar = state.lastBarTime || state.lastBar || "N/A";
-    perfSection.innerHTML += `<div>Total P&L: <span style="color:${totalPL >= 0 ? "#4caf50" : "#f44336"};font-weight:bold;">${totalPL >= 0 ? "+" : ""}$${totalPL.toFixed(2)}</span></div>` +
-      `<div>Trades: ${tradeCount} | Win Rate: ${typeof winRate === "number" ? winRate.toFixed(1) : winRate}%</div>` +
-      `<div>Last Bar: <span style="color:#888;">${lastBar}</span></div>`;
+    const plPerfDiv = document.createElement("div"); plPerfDiv.appendChild(document.createTextNode("Total P&L: ")); plPerfDiv.appendChild(span((totalPL >= 0 ? "+" : "") + "$" + totalPL.toFixed(2), "color:" + (totalPL >= 0 ? "#4caf50" : "#f44336") + ";font-weight:bold;")); perfSection.appendChild(plPerfDiv);
+    perfSection.appendChild(div("Trades: " + tradeCount + " | Win Rate: " + (typeof winRate === "number" ? winRate.toFixed(1) : winRate) + "%"));
+    const lbDiv = document.createElement("div"); lbDiv.appendChild(document.createTextNode("Last Bar: ")); lbDiv.appendChild(span(lastBar, "color:#888;")); perfSection.appendChild(lbDiv);
     algoContainer.appendChild(perfSection);
 
     const stopBtn = document.createElement("button"); stopBtn.textContent = "Stop Strategy";
@@ -8922,7 +8956,7 @@ async function cmdUndo() {
       ];
       for (const [k, v] of fields) {
         const row = document.createElement("div");
-        row.innerHTML = `<span style="color:#666;width:70px;display:inline-block;">${k}:</span> <span style="color:#ccc;">${v}</span>`;
+        row.appendChild(span(k + ":", "color:#666;width:70px;display:inline-block;")); row.appendChild(document.createTextNode(" ")); row.appendChild(span(v, "color:#ccc;"));
         detailDiv.appendChild(row);
       }
 
@@ -8968,7 +9002,7 @@ async function cmdUndo() {
       ];
       for (const [k, v] of fields) {
         const row = document.createElement("div");
-        row.innerHTML = `<span style="color:#666;width:70px;display:inline-block;">${k}:</span> <span style="color:#ccc;">${v}</span>`;
+        row.appendChild(span(k + ":", "color:#666;width:70px;display:inline-block;")); row.appendChild(document.createTextNode(" ")); row.appendChild(span(v, "color:#ccc;"));
         detailDiv.appendChild(row);
       }
 
@@ -10027,7 +10061,7 @@ async function cmdRisk360() {
     // Position summary
     const posInfo = document.createElement("div");
     posInfo.style.cssText = "margin-bottom:12px;padding:8px;background:#111;border-radius:4px;";
-    posInfo.innerHTML = `<span style="color:#ff8;font-weight:bold">${currentSymbol}</span> ${side.toUpperCase()} ${absQty} @ $${entryPrice.toFixed(2)} | Current: $${curPrice.toFixed(2)} | Daily \u03C3: $${sigmaDollar.toFixed(2)} (${(dailySigma * 100).toFixed(2)}%)`;
+    posInfo.appendChild(span(currentSymbol, "color:#ff8;font-weight:bold;")); posInfo.appendChild(document.createTextNode(" " + side.toUpperCase() + " " + absQty + " @ $" + entryPrice.toFixed(2) + " | Current: $" + curPrice.toFixed(2) + " | Daily \u03C3: $" + sigmaDollar.toFixed(2) + " (" + (dailySigma * 100).toFixed(2) + "%)"));
     container.appendChild(posInfo);
 
     // Risk assessment
@@ -10061,7 +10095,7 @@ async function cmdRisk360() {
     function makeProgressBar(label, pct, color) {
       const row = document.createElement("div"); row.style.cssText = "margin-bottom:8px;";
       const lbl = document.createElement("div"); lbl.style.cssText = "margin-bottom:3px;font-size:10px;";
-      lbl.innerHTML = `${label}: <span style="color:${color};font-weight:bold">${pct !== null ? pct.toFixed(1) + "%" : "N/A"}</span>`;
+      lbl.appendChild(document.createTextNode(label + ": ")); lbl.appendChild(span(pct !== null ? pct.toFixed(1) + "%" : "N/A", "color:" + color + ";font-weight:bold;"));
       row.appendChild(lbl);
       if (pct !== null) {
         const track = document.createElement("div"); track.style.cssText = "background:#222;border-radius:3px;height:12px;overflow:hidden;";
@@ -10401,7 +10435,7 @@ async function cmdPnL() {
       ];
       for (const st of stats) {
         const el = document.createElement("span");
-        el.innerHTML = `<span style="color:#888">${st.label}:</span> <span style="color:${st.color}">${st.val}</span>`;
+        el.textContent = ""; el.appendChild(labelValue(st.label + ": ", st.val, st.color));
         summary.appendChild(el);
       }
       contentArea.appendChild(summary);
@@ -11680,7 +11714,7 @@ async function cmdMultiAccount() {
     for (const item of summaryItems) {
       const cell = document.createElement("div");
       cell.style.cssText = "padding:4px 0;";
-      cell.innerHTML = `<span style="color:#888;">${item.label}:</span> <span style="color:${item.color};font-weight:bold;">${item.value}</span>`;
+      cell.textContent = ""; cell.appendChild(labelValue(item.label + ": ", item.value, item.color));
       summaryGrid.appendChild(cell);
     }
     summaryDiv.appendChild(summaryGrid);
@@ -11754,7 +11788,7 @@ async function cmdMultiAccount() {
       const pct = totalPortfolioValue > 0 ? (gValue / totalPortfolioValue * 100).toFixed(1) : "0.0";
       const leg = document.createElement("span");
       leg.style.cssText = "font-size:10px;color:#aaa;";
-      leg.innerHTML = `<span style="display:inline-block;width:8px;height:8px;background:${color};border-radius:2px;margin-right:4px;vertical-align:middle;"></span>${gName}: $${gValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} (${pct}%)`;
+      const dot = document.createElement("span"); dot.style.cssText = "display:inline-block;width:8px;height:8px;background:" + color + ";border-radius:2px;margin-right:4px;vertical-align:middle;"; leg.appendChild(dot); leg.appendChild(document.createTextNode(gName + ": $" + gValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + " (" + pct + "%)"));
       legendDiv.appendChild(leg);
     }
     allocDiv.appendChild(legendDiv);
@@ -11770,7 +11804,7 @@ async function cmdMultiAccount() {
       const gValue = gItems.reduce((s, i) => s + i.mv, 0);
       const gPL = gItems.reduce((s, i) => s + i.pl, 0);
       const gPct = totalPortfolioValue > 0 ? (gValue / totalPortfolioValue * 100).toFixed(1) : "0.0";
-      gTitle.innerHTML = `<span>${gName} (${gItems.length})</span><span style="font-size:10px;color:#888;">$${gValue.toLocaleString(undefined, { maximumFractionDigits: 0 })} | <span style="color:${gPL >= 0 ? '#4caf50' : '#f44336'}">P&L: $${gPL.toFixed(2)}</span> | ${gPct}%</span>`;
+      gTitle.appendChild(span(gName + " (" + gItems.length + ")")); const gInfo = document.createElement("span"); gInfo.style.cssText = "font-size:10px;color:#888;"; gInfo.appendChild(document.createTextNode("$" + gValue.toLocaleString(undefined, { maximumFractionDigits: 0 }) + " | ")); gInfo.appendChild(span("P&L: $" + gPL.toFixed(2), "color:" + (gPL >= 0 ? "#4caf50" : "#f44336") + ";")); gInfo.appendChild(document.createTextNode(" | " + gPct + "%")); gTitle.appendChild(gInfo);
       gDiv.appendChild(gTitle);
 
       const table = document.createElement("table");
@@ -11851,7 +11885,7 @@ async function cmdMultiAccount() {
     for (const item of riskItems) {
       const cell = document.createElement("div");
       cell.style.cssText = "padding:4px 0;";
-      cell.innerHTML = `<span style="color:#888;font-size:10px;">${item.label}:</span><br><span style="color:${item.color};font-weight:bold;">${item.value}</span>`;
+      cell.appendChild(span(item.label + ":", "color:#888;font-size:10px;")); cell.appendChild(document.createElement("br")); cell.appendChild(span(item.value, "color:" + item.color + ";font-weight:bold;"));
       riskGrid.appendChild(cell);
     }
     riskDiv.appendChild(riskGrid);
@@ -12358,7 +12392,7 @@ async function cmdPDT() {
         const tr = document.createElement("tr");
         tr.style.borderBottom = "1px solid #222";
         const fmt = (ts) => { try { return new Date(ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }); } catch { return ts; } };
-        tr.innerHTML = `<td style="padding:4px;">${dt.date}</td><td style="padding:4px;color:#fff;font-weight:bold;">${dt.symbol}</td><td style="padding:4px;color:#4caf50;">${fmt(dt.buyTime)}</td><td style="padding:4px;color:#f44336;">${fmt(dt.sellTime)}</td>`;
+        tr.appendChild(td(dt.date, "padding:4px;")); tr.appendChild(td(dt.symbol, "padding:4px;color:#fff;font-weight:bold;")); tr.appendChild(td(fmt(dt.buyTime), "padding:4px;color:#4caf50;")); tr.appendChild(td(fmt(dt.sellTime), "padding:4px;color:#f44336;"));
         tbody.appendChild(tr);
       }
       table.appendChild(tbody);
@@ -12395,7 +12429,7 @@ function cmdBackup() {
 
   const stats = document.createElement("div");
   stats.style.cssText = "background:#111;padding:10px;border-radius:4px;margin-bottom:16px;";
-  stats.innerHTML = `<div style="color:#2196f3;font-weight:bold;margin-bottom:6px;">Current Storage</div><div>Keys: ${allKeys.length} typhoon_ entries</div><div>Estimated size: ${(totalSize / 1024).toFixed(1)} KB</div>`;
+  stats.appendChild(div("Current Storage", "color:#2196f3;font-weight:bold;margin-bottom:6px;")); stats.appendChild(div("Keys: " + allKeys.length + " typhoon_ entries")); stats.appendChild(div("Estimated size: " + (totalSize / 1024).toFixed(1) + " KB"));
   root.appendChild(stats);
 
   // Export button
@@ -12564,7 +12598,7 @@ async function cmdAnnounce() {
         const changeColor = qoqChange === null ? "#666" : qoqChange >= 0 ? "#4caf50" : "#f44336";
         const trendIcon = qoqChange === null ? "\u2014" : qoqChange >= 0 ? "\u25b2" : "\u25bc";
         const trendColor = qoqChange === null ? "#666" : qoqChange >= 0 ? "#4caf50" : "#f44336";
-        tr.innerHTML = `<td style="padding:4px;">${q.period || "\u2014"}</td><td style="padding:4px;text-align:right;color:#fff;font-weight:bold;">$${q.value.toFixed(2)}</td><td style="padding:4px;text-align:right;color:${changeColor};">${changeStr}</td><td style="padding:4px;text-align:center;color:${trendColor};font-weight:bold;">${trendIcon}</td>`;
+        tr.appendChild(td(q.period || "\u2014", "padding:4px;")); tr.appendChild(td("$" + q.value.toFixed(2), "padding:4px;text-align:right;color:#fff;font-weight:bold;")); tr.appendChild(td(changeStr, "padding:4px;text-align:right;color:" + changeColor + ";")); tr.appendChild(td(trendIcon, "padding:4px;text-align:center;color:" + trendColor + ";font-weight:bold;"));
         tbody.appendChild(tr);
       }
       table.appendChild(tbody);
@@ -12576,7 +12610,7 @@ async function cmdAnnounce() {
       summary.style.cssText = "margin-top:12px;padding:10px;background:#111;border-radius:4px;";
       const beatsOf = Math.min(surpriseCount, 4);
       const summaryColor = beats >= beatsOf ? "#4caf50" : beats >= 2 ? "#ff9800" : "#f44336";
-      summary.innerHTML = `<span style="color:${summaryColor};font-weight:bold;">${beats}/${beatsOf} beats</span> <span style="color:#888;">\u2014 avg QoQ change: ${avgSurprise >= 0 ? "+" : ""}${avgSurprise.toFixed(1)}%</span>`;
+      summary.appendChild(span(beats + "/" + beatsOf + " beats", "color:" + summaryColor + ";font-weight:bold;")); summary.appendChild(document.createTextNode(" ")); summary.appendChild(span("\u2014 avg QoQ change: " + (avgSurprise >= 0 ? "+" : "") + avgSurprise.toFixed(1) + "%", "color:#888;"));
       root.appendChild(summary);
     }
     win.appendElement(root);
@@ -12683,7 +12717,7 @@ async function cmdQuickCorr() {
       const color = corr === null ? "#666" : corr > 0.7 ? "#4caf50" : corr < -0.3 ? "#f44336" : "#888";
       const cell = document.createElement("div");
       cell.style.cssText = `text-align:center;padding:8px 10px;background:#111;border-radius:4px;border:1px solid ${color};`;
-      cell.innerHTML = `<div style="color:#888;font-size:10px;margin-bottom:4px;">${w.label}</div><div style="color:${color};font-weight:bold;font-size:16px;">${val}</div>`;
+      cell.appendChild(div(w.label, "color:#888;font-size:10px;margin-bottom:4px;")); cell.appendChild(div(val, "color:" + color + ";font-weight:bold;font-size:16px;"));
       corrRow.appendChild(cell);
     }
     root.appendChild(corrRow);
@@ -12693,7 +12727,7 @@ async function cmdQuickCorr() {
     const betaDiv = document.createElement("div");
     betaDiv.style.cssText = "text-align:center;padding:10px;background:#111;border-radius:4px;";
     const betaColor = beta !== null && beta > 1.2 ? "#ff9800" : beta !== null && beta < 0.5 ? "#2196f3" : "#ccc";
-    betaDiv.innerHTML = `<span style="color:#888;">Beta: </span><span style="color:${betaColor};font-weight:bold;font-size:18px;">${beta !== null ? beta.toFixed(2) : "N/A"}</span>`;
+    betaDiv.appendChild(span("Beta: ", "color:#888;")); betaDiv.appendChild(span(beta !== null ? beta.toFixed(2) : "N/A", "color:" + betaColor + ";font-weight:bold;font-size:18px;"));
     root.appendChild(betaDiv);
 
     win.appendElement(root);
@@ -12771,7 +12805,7 @@ async function cmdSplits() {
         const tr = document.createElement("tr");
         tr.style.borderBottom = "1px solid #222";
         const typeColor = s.isForward ? "#4caf50" : "#f44336";
-        tr.innerHTML = `<td style="padding:4px;">${s.date}</td><td style="padding:4px;color:#fff;font-weight:bold;">${s.symbol}</td><td style="padding:4px;text-align:center;color:#ff9800;font-weight:bold;">${s.ratio}</td><td style="padding:4px;text-align:center;color:${typeColor};font-weight:bold;">${s.type}</td>`;
+        tr.appendChild(td(s.date, "padding:4px;")); tr.appendChild(td(s.symbol, "padding:4px;color:#fff;font-weight:bold;")); tr.appendChild(td(s.ratio, "padding:4px;text-align:center;color:#ff9800;font-weight:bold;")); tr.appendChild(td(s.type, "padding:4px;text-align:center;color:" + typeColor + ";font-weight:bold;"));
         tbody.appendChild(tr);
       }
       table.appendChild(tbody);
@@ -12854,7 +12888,7 @@ async function cmdPreMarket() {
 
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;";
-    header.innerHTML = `<span style="font-size:14px;font-weight:bold;color:#2196f3;">${refreshTitle}</span><span style="color:#666;font-size:10px;">Auto-refresh 30s | ${movers.length} symbols</span>`;
+    header.appendChild(span(refreshTitle, "font-size:14px;font-weight:bold;color:#2196f3;")); header.appendChild(span("Auto-refresh 30s | " + movers.length + " symbols", "color:#666;font-size:10px;"));
     root.appendChild(header);
 
     if (movers.length === 0) {
@@ -12878,7 +12912,7 @@ async function cmdPreMarket() {
         const gapColor = m.gapPct >= 0 ? "#4caf50" : "#f44336";
         const gapSign = m.gapPct >= 0 ? "+" : "";
         const volStr = m.volume >= 1e6 ? (m.volume / 1e6).toFixed(1) + "M" : m.volume >= 1e3 ? (m.volume / 1e3).toFixed(0) + "K" : m.volume.toString();
-        tr.innerHTML = `<td style="padding:4px;color:#fff;font-weight:bold;">${m.symbol}</td><td style="padding:4px;text-align:right;">$${m.lastPx.toFixed(2)}</td><td style="padding:4px;text-align:right;color:#888;">$${m.prevClose.toFixed(2)}</td><td style="padding:4px;text-align:right;color:${gapColor};font-weight:bold;">${gapSign}${m.gapPct.toFixed(2)}%</td><td style="padding:4px;text-align:right;color:#888;">${volStr}</td>`;
+        tr.appendChild(td(m.symbol, "padding:4px;color:#fff;font-weight:bold;")); tr.appendChild(td("$" + m.lastPx.toFixed(2), "padding:4px;text-align:right;")); tr.appendChild(td("$" + m.prevClose.toFixed(2), "padding:4px;text-align:right;color:#888;")); tr.appendChild(td(gapSign + m.gapPct.toFixed(2) + "%", "padding:4px;text-align:right;color:" + gapColor + ";font-weight:bold;")); tr.appendChild(td(volStr, "padding:4px;text-align:right;color:#888;"));
         tbody.appendChild(tr);
       }
       table.appendChild(tbody);
@@ -13258,7 +13292,7 @@ async function cmdReport() {
     win.contentElement.textContent = "";
     const reportDiv=document.createElement("div");reportDiv.id="trading-report-content";reportDiv.style.cssText="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#ccc;line-height:1.6;padding:8px;";
     const style=document.createElement("style");style.textContent=`@media print{body *{visibility:hidden !important;}#trading-report-content,#trading-report-content *{visibility:visible !important;color:#000 !important;background:#fff !important;}#trading-report-content{position:fixed;left:0;top:0;width:100%;font-size:10pt;}.report-section{break-inside:avoid;}}`;reportDiv.appendChild(style);
-    const header=document.createElement("div");header.style.cssText="text-align:center;border-bottom:2px solid #8cf;padding-bottom:8px;margin-bottom:12px;";header.innerHTML=`<div style="font-size:16px;font-weight:bold;color:#8cf;">TyphooN-Terminal Trading Report</div><div style="font-size:11px;color:#888;">${reportDate}</div>`;reportDiv.appendChild(header);
+    const header=document.createElement("div");header.style.cssText="text-align:center;border-bottom:2px solid #8cf;padding-bottom:8px;margin-bottom:12px;";header.appendChild(div("TyphooN-Terminal Trading Report","font-size:16px;font-weight:bold;color:#8cf;"));header.appendChild(div(reportDate,"font-size:11px;color:#888;"));reportDiv.appendChild(header);
     function addRptSec(title,rows){const sec=document.createElement("div");sec.className="report-section";sec.style.cssText="margin-bottom:14px;";const hdr=document.createElement("div");hdr.style.cssText="color:#8cf;font-size:12px;font-weight:bold;border-bottom:1px solid #333;padding-bottom:2px;margin-bottom:4px;";hdr.textContent=title;sec.appendChild(hdr);const tbl=document.createElement("table");tbl.style.cssText="width:100%;border-collapse:collapse;font-size:11px;";for(const[label,value,color]of rows){const tr=document.createElement("tr");const td1=document.createElement("td");td1.style.cssText="padding:2px 6px;color:#888;";td1.textContent=label;const td2=document.createElement("td");td2.style.cssText=`padding:2px 6px;text-align:right;color:${color||"#ccc"};font-family:Consolas,monospace;`;td2.textContent=value;tr.appendChild(td1);tr.appendChild(td2);tbl.appendChild(tr);}sec.appendChild(tbl);reportDiv.appendChild(sec);}
     addRptSec("Account Summary",[["Equity","$"+(mi.equity||0).toFixed(2)],["Buying Power","$"+(mi.buying_power||0).toFixed(2)],["Margin Used","$"+(mi.initial_margin||0).toFixed(2)],["Cash","$"+(mi.cash||0).toFixed(2)]]);
     if(positions.length>0){addRptSec(`Open Positions (${positions.length})`,positions.map(p=>{const mv=Math.abs(p.market_value||p.qty*(p.current_price||0));const pl=p.unrealized_pl||0;return[`${p.symbol} ${p.side==="long"?"L":"S"} ${Math.abs(p.qty)}`,`$${mv.toFixed(2)} (${pl>=0?"+":""}$${pl.toFixed(2)})`,pl>=0?"#4caf50":"#f44336"];}));}
@@ -13307,7 +13341,8 @@ async function cmdEconomic() {
       let pathD="";for(let i=0;i<dedupData.length;i++){const x=padL+(i/(dedupData.length-1))*plotW;const y=padT+plotH-((dedupData[i].value-minV)/range)*plotH;pathD+=(i===0?"M":"L")+x.toFixed(1)+","+y.toFixed(1);}
       const zeroY=padT+plotH-((0-minV)/range)*plotH;const lc=dedupData[dedupData.length-1].value>=0?"#4caf50":"#f44336";
       const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.setAttribute("width",svgW);svg.setAttribute("height",svgH);svg.style.cssText="display:block;margin:0 auto;";
-      svg.innerHTML=`<rect width="${svgW}" height="${svgH}" fill="#0a0a0a" rx="4"/><line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${svgW-padR}" y2="${zeroY.toFixed(1)}" stroke="#333" stroke-dasharray="4,4"/><path d="${pathD}" fill="none" stroke="${lc}" stroke-width="2"/><text x="${padL-4}" y="${padT+8}" fill="#666" font-size="9" text-anchor="end">${maxV.toFixed(2)}</text><text x="${padL-4}" y="${padT+plotH}" fill="#666" font-size="9" text-anchor="end">${minV.toFixed(2)}</text><text x="${padL}" y="${svgH-4}" fill="#666" font-size="9">${dedupData[0].date}</text><text x="${svgW-padR}" y="${svgH-4}" fill="#666" font-size="9" text-anchor="end">${dedupData[dedupData.length-1].date}</text><text x="${padL-4}" y="${zeroY.toFixed(1)+3}" fill="#555" font-size="8" text-anchor="end">0</text>`;
+      const ns="http://www.w3.org/2000/svg";function svgEl(tag,attrs){const e=document.createElementNS(ns,tag);for(const[k,v]of Object.entries(attrs))e.setAttribute(k,String(v));return e;}function svgText(attrs,txt){const e=svgEl("text",attrs);e.textContent=txt;return e;}
+      svg.appendChild(svgEl("rect",{width:svgW,height:svgH,fill:"#0a0a0a",rx:4}));svg.appendChild(svgEl("line",{x1:padL,y1:zeroY.toFixed(1),x2:svgW-padR,y2:zeroY.toFixed(1),stroke:"#333","stroke-dasharray":"4,4"}));svg.appendChild(svgEl("path",{d:pathD,fill:"none",stroke:lc,"stroke-width":2}));svg.appendChild(svgText({x:padL-4,y:padT+8,fill:"#666","font-size":9,"text-anchor":"end"},maxV.toFixed(2)));svg.appendChild(svgText({x:padL-4,y:padT+plotH,fill:"#666","font-size":9,"text-anchor":"end"},minV.toFixed(2)));svg.appendChild(svgText({x:padL,y:svgH-4,fill:"#666","font-size":9},dedupData[0].date));svg.appendChild(svgText({x:svgW-padR,y:svgH-4,fill:"#666","font-size":9,"text-anchor":"end"},dedupData[dedupData.length-1].date));svg.appendChild(svgText({x:padL-4,y:zeroY.toFixed(1)+3,fill:"#555","font-size":8,"text-anchor":"end"},"0"));
       win.appendElement(svg);
     }
     // Regime
@@ -13434,7 +13469,7 @@ function cmdIndicatorTune() {
     runBtn.disabled = false; runBtn.textContent = "Run Optimization"; results.sort((a, b) => b.metric - a.metric); const top10 = results.slice(0, 10); progressDiv.textContent = `Done. ${total} parameter values tested.`;
     if (top10.length > 0) { const opt = document.createElement("div"); opt.style.cssText = "padding:8px;background:#1b5e20;border:1px solid #4caf50;color:#fff;font-weight:bold;text-align:center;margin-bottom:8px;"; opt.textContent = `Optimal: period=${top10[0].period} (${metric}=${top10[0].metric.toFixed(4)}, ${top10[0].trades} trades)`; resultsDiv.appendChild(opt); }
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;"; const thead = document.createElement("tr"); thead.innerHTML = "<th style='text-align:left;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Rank</th><th style='text-align:left;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Period</th><th style='text-align:right;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Metric</th><th style='text-align:right;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Trades</th>"; table.appendChild(thead);
-    for (let i = 0; i < top10.length; i++) { const r = top10[i]; const tr = document.createElement("tr"); tr.style.cssText = i === 0 ? "background:#1b5e20;" : ""; tr.innerHTML = `<td style="padding:2px 6px;color:#ccc;">${i + 1}</td><td style="padding:2px 6px;color:#fff;font-weight:bold;">${r.period}</td><td style="padding:2px 6px;text-align:right;color:#4caf50;">${r.metric.toFixed(4)}</td><td style="padding:2px 6px;text-align:right;color:#888;">${r.trades}</td>`; table.appendChild(tr); }
+    for (let i = 0; i < top10.length; i++) { const r = top10[i]; const tr = document.createElement("tr"); tr.style.cssText = i === 0 ? "background:#1b5e20;" : ""; tr.appendChild(td(i + 1, "padding:2px 6px;color:#ccc;")); tr.appendChild(td(r.period, "padding:2px 6px;color:#fff;font-weight:bold;")); tr.appendChild(td(r.metric.toFixed(4), "padding:2px 6px;text-align:right;color:#4caf50;")); tr.appendChild(td(r.trades, "padding:2px 6px;text-align:right;color:#888;")); table.appendChild(tr); }
     resultsDiv.appendChild(table);
     const sorted = [...results].sort((a, b) => a.period - b.period); const maxMetric = Math.max(...sorted.map(r => r.metric), 0.001); chartArea.textContent = "";
     const chartLabel = document.createElement("div"); chartLabel.style.cssText = "position:absolute;top:2px;left:4px;font-size:9px;color:#666;z-index:1;"; chartLabel.textContent = `${metric} by Period`; chartArea.appendChild(chartLabel);
@@ -13464,7 +13499,7 @@ async function cmdSentimentPlus() {
     const hdr = document.createElement("div"); hdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;"; hdr.textContent = `${currentSymbol} News Volume Tracker`; root.appendChild(hdr);
     if (todayCount > avgCount * 2 && todayCount > 3) { const spike = document.createElement("div"); spike.style.cssText = "padding:8px;background:#b71c1c;border:1px solid #f44336;color:#fff;font-weight:bold;text-align:center;margin-bottom:8px;"; spike.textContent = `NEWS SPIKE: ${todayCount} articles today (avg: ${avgCount.toFixed(1)}/day)`; root.appendChild(spike); speakAlert(`News spike detected for ${currentSymbol}. ${todayCount} articles today.`); }
     const statsRow = document.createElement("div"); statsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px;";
-    for (const [label, value, color] of [["Avg/Day", avgCount.toFixed(1), "#2196f3"], ["Today", todayCount.toString(), todayCount > avgCount * 2 ? "#f44336" : "#4caf50"], ["Trend", countTrend, countTrend === "Increasing" ? "#f44336" : countTrend === "Decreasing" ? "#4caf50" : "#ff9800"], ["Days", dates.length.toString(), "#888"]]) { const cell = document.createElement("div"); cell.style.cssText = "text-align:center;padding:8px;background:#111;border:1px solid #333;"; cell.innerHTML = `<div style="color:#888;font-size:9px;">${label}</div><div style="color:${color};font-size:16px;font-weight:bold;">${value}</div>`; statsRow.appendChild(cell); }
+    for (const [label, value, color] of [["Avg/Day", avgCount.toFixed(1), "#2196f3"], ["Today", todayCount.toString(), todayCount > avgCount * 2 ? "#f44336" : "#4caf50"], ["Trend", countTrend, countTrend === "Increasing" ? "#f44336" : countTrend === "Decreasing" ? "#4caf50" : "#ff9800"], ["Days", dates.length.toString(), "#888"]]) { const cell = document.createElement("div"); cell.style.cssText = "text-align:center;padding:8px;background:#111;border:1px solid #333;"; cell.appendChild(div(label, "color:#888;font-size:9px;")); cell.appendChild(div(value, "color:" + color + ";font-size:16px;font-weight:bold;")); statsRow.appendChild(cell); }
     root.appendChild(statsRow);
     const chartDiv = document.createElement("div"); chartDiv.style.cssText = "height:140px;border:1px solid #333;background:#0a0a0a;margin-bottom:12px;position:relative;overflow:hidden;"; const chartLabel = document.createElement("div"); chartLabel.style.cssText = "position:absolute;top:2px;left:4px;font-size:9px;color:#666;z-index:1;"; chartLabel.textContent = "Articles per Day (color = sentiment)"; chartDiv.appendChild(chartLabel);
     const barsDiv = document.createElement("div"); barsDiv.style.cssText = "display:flex;align-items:flex-end;height:100%;padding:16px 4px 18px 4px;gap:2px;";
@@ -13493,10 +13528,10 @@ async function cmdRiskParity() {
     win.contentElement.textContent = ""; const root = document.createElement("div"); root.style.cssText = "padding:12px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
     const hdr = document.createElement("div"); hdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;"; hdr.textContent = "Risk Parity Analysis"; root.appendChild(hdr);
     const riskRow = document.createElement("div"); riskRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;";
-    for (const [label, value, color] of [["Current Risk", `${(currentRisk * 100).toFixed(1)}%`, "#f44336"], ["Risk Parity", `${(parityRisk * 100).toFixed(1)}%`, "#4caf50"], ["Positions", posData.length.toString(), "#2196f3"]]) { const cell = document.createElement("div"); cell.style.cssText = "text-align:center;padding:8px;background:#111;border:1px solid #333;"; cell.innerHTML = `<div style="color:#888;font-size:9px;">${label}</div><div style="color:${color};font-size:16px;font-weight:bold;">${value}</div>`; riskRow.appendChild(cell); }
+    for (const [label, value, color] of [["Current Risk", (currentRisk * 100).toFixed(1) + "%", "#f44336"], ["Risk Parity", (parityRisk * 100).toFixed(1) + "%", "#4caf50"], ["Positions", posData.length.toString(), "#2196f3"]]) { const cell = document.createElement("div"); cell.style.cssText = "text-align:center;padding:8px;background:#111;border:1px solid #333;"; cell.appendChild(div(label, "color:#888;font-size:9px;")); cell.appendChild(div(value, "color:" + color + ";font-size:16px;font-weight:bold;")); riskRow.appendChild(cell); }
     root.appendChild(riskRow);
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-bottom:12px;"; const theadRow = document.createElement("tr"); theadRow.innerHTML = "<th style='text-align:left;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Symbol</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Current Wt</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Vol (ann)</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Parity Wt</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Change</th>"; table.appendChild(theadRow);
-    for (let i = 0; i < posData.length; i++) { const p = posData[i]; const curW = p.mktVal / totalValue; const parW = parityWeights[i]; const diff = parW - curW; const diffPct = diff * 100; const close = Math.abs(diffPct) < 3; const color = close ? "#4caf50" : "#f44336"; const tr = document.createElement("tr"); tr.style.cssText = `background:${close ? "transparent" : "#1a0000"};`; tr.innerHTML = `<td style="padding:4px 6px;color:#fff;font-weight:bold;">${p.symbol}</td><td style="padding:4px 6px;text-align:right;color:#ccc;">${(curW * 100).toFixed(1)}%</td><td style="padding:4px 6px;text-align:right;color:#ff9800;">${(p.annVol * 100).toFixed(1)}%</td><td style="padding:4px 6px;text-align:right;color:#4caf50;">${(parW * 100).toFixed(1)}%</td><td style="padding:4px 6px;text-align:right;color:${color};font-weight:bold;">${diffPct >= 0 ? "+" : ""}${diffPct.toFixed(1)}%</td>`; table.appendChild(tr); }
+    for (let i = 0; i < posData.length; i++) { const p = posData[i]; const curW = p.mktVal / totalValue; const parW = parityWeights[i]; const diff = parW - curW; const diffPct = diff * 100; const close = Math.abs(diffPct) < 3; const color = close ? "#4caf50" : "#f44336"; const tr = document.createElement("tr"); tr.style.cssText = "background:" + (close ? "transparent" : "#1a0000") + ";"; tr.appendChild(td(p.symbol, "padding:4px 6px;color:#fff;font-weight:bold;")); tr.appendChild(td((curW * 100).toFixed(1) + "%", "padding:4px 6px;text-align:right;color:#ccc;")); tr.appendChild(td((p.annVol * 100).toFixed(1) + "%", "padding:4px 6px;text-align:right;color:#ff9800;")); tr.appendChild(td((parW * 100).toFixed(1) + "%", "padding:4px 6px;text-align:right;color:#4caf50;")); tr.appendChild(td((diffPct >= 0 ? "+" : "") + diffPct.toFixed(1) + "%", "padding:4px 6px;text-align:right;color:" + color + ";font-weight:bold;")); table.appendChild(tr); }
     root.appendChild(table);
     const sugTitle = document.createElement("div"); sugTitle.style.cssText = "font-weight:bold;color:#ff9800;margin-bottom:6px;border-bottom:1px solid #333;padding-bottom:4px;"; sugTitle.textContent = "Rebalance Suggestions"; root.appendChild(sugTitle);
     for (let i = 0; i < posData.length; i++) { const p = posData[i]; const curW = p.mktVal / totalValue; const parW = parityWeights[i]; const diff = parW - curW; if (Math.abs(diff) < 0.01) continue; const dollarChange = diff * totalValue; const shareChange = p.currentPrice > 0 ? Math.round(dollarChange / p.currentPrice) : 0; const action = dollarChange > 0 ? "Buy" : "Sell"; const sug = document.createElement("div"); sug.style.cssText = `padding:4px 8px;margin-bottom:2px;color:${dollarChange > 0 ? "#4caf50" : "#f44336"};`; sug.textContent = `${action} ${Math.abs(shareChange)} shares of ${p.symbol} ($${Math.abs(dollarChange).toFixed(0)})`; root.appendChild(sug); }
@@ -19237,7 +19272,7 @@ async function cmdPCRatio() {
 
     const header = document.createElement("div");
     header.style.cssText = "padding:12px;border-bottom:1px solid #333;text-align:center;";
-    header.innerHTML = `<div style="color:#888;font-size:11px;margin-bottom:4px;">Expiry: ${expiry}</div>`;
+    header.appendChild(div("Expiry: " + expiry, "color:#888;font-size:11px;margin-bottom:4px;"));
     win.appendElement(header);
 
     const table = document.createElement("table");
@@ -22588,7 +22623,7 @@ async function cmdPerf() {
   container.style.cssText = "font-family:Consolas,monospace;padding:4px;";
   const header = document.createElement("div");
   header.style.cssText = "text-align:center;margin-bottom:12px;";
-  header.innerHTML = `<div style="font-size:18px;font-weight:bold;color:#fff;">${currentSymbol}</div><div style="font-size:22px;color:#00e5ff;margin-top:4px;">$${current.toFixed(dp)}</div>`;
+  header.appendChild(div(currentSymbol, "font-size:18px;font-weight:bold;color:#fff;")); header.appendChild(div("$" + current.toFixed(dp), "font-size:22px;color:#00e5ff;margin-top:4px;"));
   container.appendChild(header);
   const gridTitle = document.createElement("div");
   gridTitle.style.cssText = "color:#888;font-size:10px;margin-bottom:6px;text-transform:uppercase;letter-spacing:1px;";
@@ -22621,7 +22656,7 @@ async function cmdPerf() {
   rangeContainer.style.cssText = "background:#1a1a2e;border-radius:4px;padding:10px;margin-bottom:14px;";
   const rangeLabels = document.createElement("div");
   rangeLabels.style.cssText = "display:flex;justify-content:space-between;font-size:10px;margin-bottom:4px;";
-  rangeLabels.innerHTML = `<span style="color:#f44336;">$${low52.toFixed(dp)}</span><span style="color:#4caf50;">$${high52.toFixed(dp)}</span>`;
+  rangeLabels.appendChild(span("$" + low52.toFixed(dp), "color:#f44336;")); rangeLabels.appendChild(span("$" + high52.toFixed(dp), "color:#4caf50;"));
   rangeContainer.appendChild(rangeLabels);
   const barOuter = document.createElement("div");
   barOuter.style.cssText = "height:8px;background:#333;border-radius:4px;position:relative;";
@@ -22646,7 +22681,8 @@ async function cmdPerf() {
   volRow.style.cssText = "background:#1a1a2e;border-radius:4px;padding:10px;display:flex;justify-content:space-between;";
   const fmtVol = (v) => v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K" : Math.round(v).toString();
   const latestVol = dailyBars[dailyBars.length - 1].volume || 0;
-  volRow.innerHTML = `<div><div style="color:#666;font-size:9px;">Avg Daily (20d)</div><div style="color:#ccc;font-size:13px;font-weight:bold;">${fmtVol(avgVol)}</div></div><div style="text-align:right;"><div style="color:#666;font-size:9px;">Latest Volume</div><div style="color:#ccc;font-size:13px;font-weight:bold;">${fmtVol(latestVol)}</div></div>`;
+  const vLeft = document.createElement("div"); vLeft.appendChild(div("Avg Daily (20d)", "color:#666;font-size:9px;")); vLeft.appendChild(div(fmtVol(avgVol), "color:#ccc;font-size:13px;font-weight:bold;")); volRow.appendChild(vLeft);
+  const vRight = document.createElement("div"); vRight.style.cssText = "text-align:right;"; vRight.appendChild(div("Latest Volume", "color:#666;font-size:9px;")); vRight.appendChild(div(fmtVol(latestVol), "color:#ccc;font-size:13px;font-weight:bold;")); volRow.appendChild(vRight);
   container.appendChild(volRow);
   win.appendElement(container);
   log(`PERF: ${currentSymbol} card loaded (${dailyBars.length} daily bars)`, "ok");
@@ -23059,11 +23095,11 @@ async function cmdFlowMap() {
     fmContainer.appendChild(grid);
     const improvingSectors = valid.filter(r => r.improving); const deterioratingSectors = valid.filter(r => !r.improving);
     const summary = document.createElement("div"); summary.style.cssText = "border-top:1px solid #333;padding-top:12px;line-height:1.8;";
-    if (improvingSectors.length > 0) { const inFlow = document.createElement("div"); inFlow.innerHTML = `<span style="color:#4caf50;font-weight:bold;">Money flowing INTO:</span> <span style="color:#ddd;">${improvingSectors.map(r => r.name).join(", ")}</span>`; summary.appendChild(inFlow); }
-    if (deterioratingSectors.length > 0) { const outFlow = document.createElement("div"); outFlow.innerHTML = `<span style="color:#f44336;font-weight:bold;">Money flowing OUT OF:</span> <span style="color:#ddd;">${deterioratingSectors.map(r => r.name).join(", ")}</span>`; summary.appendChild(outFlow); }
+    if (improvingSectors.length > 0) { const inFlow = document.createElement("div"); inFlow.appendChild(span("Money flowing INTO:", "color:#4caf50;font-weight:bold;")); inFlow.appendChild(document.createTextNode(" ")); inFlow.appendChild(span(improvingSectors.map(r => r.name).join(", "), "color:#ddd;")); summary.appendChild(inFlow); }
+    if (deterioratingSectors.length > 0) { const outFlow = document.createElement("div"); outFlow.appendChild(span("Money flowing OUT OF:", "color:#f44336;font-weight:bold;")); outFlow.appendChild(document.createTextNode(" ")); outFlow.appendChild(span(deterioratingSectors.map(r => r.name).join(", "), "color:#ddd;")); summary.appendChild(outFlow); }
     const sorted = [...valid].sort((a, b) => b.thisWeek - a.thisWeek);
     const topPerf = document.createElement("div"); topPerf.style.cssText = "margin-top:8px;color:#888;font-size:11px;";
-    topPerf.innerHTML = `<span style="color:#4caf50;">Best:</span> ${sorted[0].sym} (${sorted[0].thisWeek >= 0 ? "+" : ""}${sorted[0].thisWeek.toFixed(2)}%)<span style="margin:0 12px;color:#444;">|</span><span style="color:#f44336;">Worst:</span> ${sorted[sorted.length - 1].sym} (${sorted[sorted.length - 1].thisWeek >= 0 ? "+" : ""}${sorted[sorted.length - 1].thisWeek.toFixed(2)}%)`;
+    topPerf.appendChild(span("Best:", "color:#4caf50;")); topPerf.appendChild(document.createTextNode(" " + sorted[0].sym + " (" + (sorted[0].thisWeek >= 0 ? "+" : "") + sorted[0].thisWeek.toFixed(2) + "%)")); topPerf.appendChild(span("|", "margin:0 12px;color:#444;")); topPerf.appendChild(span("Worst:", "color:#f44336;")); topPerf.appendChild(document.createTextNode(" " + sorted[sorted.length - 1].sym + " (" + (sorted[sorted.length - 1].thisWeek >= 0 ? "+" : "") + sorted[sorted.length - 1].thisWeek.toFixed(2) + "%)"));
     summary.appendChild(topPerf); fmContainer.appendChild(summary); win.appendElement(fmContainer);
   } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to build flow map: ${e}`); }
 }
@@ -23114,9 +23150,9 @@ async function cmdRegimePlus() {
     gr.appendChild(mc("Mean Reversion", hR, hC, `Hurst: ${hurst.toFixed(3)}`));
     gr.appendChild(mc("Momentum", mR, mC, `ROC(20): ${(roc20*100).toFixed(2)}%, KAMA slope: ${ks>=0?"+":""}${ks.toFixed(4)}`));
     ct.appendChild(gr);
-    const rd = document.createElement("div"); rd.style.cssText = `text-align:center;padding:10px;background:#111;border:1px solid ${recC};border-radius:6px;margin-bottom:16px;`; rd.innerHTML = `<span style="color:#888;font-size:11px;">RECOMMENDATION</span><br><span style="color:${recC};font-size:15px;font-weight:bold;">${rec}</span>`; ct.appendChild(rd);
+    const rd = document.createElement("div"); rd.style.cssText = "text-align:center;padding:10px;background:#111;border:1px solid " + recC + ";border-radius:6px;margin-bottom:16px;"; rd.appendChild(span("RECOMMENDATION", "color:#888;font-size:11px;")); rd.appendChild(document.createElement("br")); rd.appendChild(span(rec, "color:" + recC + ";font-size:15px;font-weight:bold;")); ct.appendChild(rd);
     if (rTrans.length > 0) { const tt = document.createElement("div"); tt.style.cssText = "color:#888;font-size:11px;margin-bottom:6px;"; tt.textContent = "Recent Volatility Regime Transitions"; ct.appendChild(tt); const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;"; tbl.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Date</th><th style="text-align:left;padding:4px;">From</th><th style="text-align:center;padding:4px;"></th><th style="text-align:left;padding:4px;">To</th></tr></thead>`; const tb = document.createElement("tbody");
-      for (const t of rTrans) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const ds = typeof t.time === "number" ? new Date(t.time*1000).toLocaleDateString() : String(t.time); const fc = t.from==="HIGH VOL"?"#f44336":t.from==="LOW VOL"?"#4caf50":"#ff9800"; const tc2 = t.to==="HIGH VOL"?"#f44336":t.to==="LOW VOL"?"#4caf50":"#ff9800"; tr.innerHTML = `<td style="padding:4px;color:#aaa;">${ds}</td><td style="padding:4px;color:${fc};">${t.from}</td><td style="padding:4px;text-align:center;color:#666;">&rarr;</td><td style="padding:4px;color:${tc2};">${t.to}</td>`; tb.appendChild(tr); }
+      for (const t of rTrans) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const ds = typeof t.time === "number" ? new Date(t.time*1000).toLocaleDateString() : String(t.time); const fc = t.from==="HIGH VOL"?"#f44336":t.from==="LOW VOL"?"#4caf50":"#ff9800"; const tc2 = t.to==="HIGH VOL"?"#f44336":t.to==="LOW VOL"?"#4caf50":"#ff9800"; tr.appendChild(td(ds, "padding:4px;color:#aaa;")); tr.appendChild(td(t.from, "padding:4px;color:" + fc + ";")); tr.appendChild(td("\u2192", "padding:4px;text-align:center;color:#666;")); tr.appendChild(td(t.to, "padding:4px;color:" + tc2 + ";")); tb.appendChild(tr); }
       tbl.appendChild(tb); ct.appendChild(tbl); }
     win.appendElement(ct);
     log(`REGIME+ computed for ${currentSymbol}: ${volR} | ${tR} | ${hR} | ${mR}`, "ok");
@@ -23150,12 +23186,13 @@ async function cmdRiskSim() {
       const pi = acEq > 0 ? (tPnL/acEq)*100 : 0; const ma = acEq > 0 && acMg > 0 ? ((acEq+tPnL)/acMg)*100 : 0; const md = ma > 0 && ma < 150;
       const pc = tPnL >= 0 ? "#4caf50" : "#f44336"; const mc = md ? "#f44336" : "#4caf50";
       const sm = document.createElement("div"); sm.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;";
-      sm.innerHTML = `<div style="text-align:center;"><div style="color:#888;font-size:10px;">SCENARIO P&L</div><div style="color:${pc};font-size:16px;font-weight:bold;">${tPnL>=0?"+":""}$${tPnL.toFixed(2)}</div></div><div style="text-align:center;"><div style="color:#888;font-size:10px;">% PORTFOLIO</div><div style="color:${pc};font-size:16px;font-weight:bold;">${pi>=0?"+":""}${pi.toFixed(2)}%</div></div><div style="text-align:center;"><div style="color:#888;font-size:10px;">MARGIN LEVEL</div><div style="color:${mc};font-size:16px;font-weight:bold;">${acMg>0?ma.toFixed(0)+"%":"N/A"}${md?" DANGER":""}</div></div>`;
+      function smCell(label, value, color) { const d = document.createElement("div"); d.style.cssText = "text-align:center;"; d.appendChild(div(label, "color:#888;font-size:10px;")); d.appendChild(div(value, "color:" + color + ";font-size:16px;font-weight:bold;")); return d; }
+      sm.appendChild(smCell("SCENARIO P&L", (tPnL>=0?"+":"") + "$" + tPnL.toFixed(2), pc)); sm.appendChild(smCell("% PORTFOLIO", (pi>=0?"+":"") + pi.toFixed(2) + "%", pc)); sm.appendChild(smCell("MARGIN LEVEL", (acMg>0?ma.toFixed(0)+"%":"N/A") + (md?" DANGER":""), mc));
       rd.appendChild(sm);
       const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
-      tbl.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Current Value</th><th style="text-align:right;padding:4px;">Scenario %</th><th style="text-align:right;padding:4px;">Scenario P&L</th><th style="text-align:right;padding:4px;">New Value</th></tr></thead>`;
+      tbl.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #444;'><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:right;padding:4px;'>Current Value</th><th style='text-align:right;padding:4px;'>Scenario %</th><th style='text-align:right;padding:4px;'>Scenario P&L</th><th style='text-align:right;padding:4px;'>New Value</th></tr></thead>";
       const tb = document.createElement("tbody");
-      for (const r of rows) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const c = r.pnl>=0?"#4caf50":"#f44336"; tr.innerHTML = `<td style="padding:4px;">${r.sym}<span style="color:#555;font-size:9px;"> ${r.sector}</span></td><td style="text-align:right;padding:4px;">$${r.mktVal.toFixed(2)}</td><td style="text-align:right;padding:4px;color:${c};">${r.scenarioPct>=0?"+":""}${r.scenarioPct}%</td><td style="text-align:right;padding:4px;color:${c};">${r.pnl>=0?"+":""}$${r.pnl.toFixed(2)}</td><td style="text-align:right;padding:4px;">$${r.newVal.toFixed(2)}</td>`; tb.appendChild(tr); }
+      for (const r of rows) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const c = r.pnl>=0?"#4caf50":"#f44336"; const symTd = td(r.sym, "padding:4px;"); symTd.appendChild(span(" " + r.sector, "color:#555;font-size:9px;")); tr.appendChild(symTd); tr.appendChild(td("$" + r.mktVal.toFixed(2), "text-align:right;padding:4px;")); tr.appendChild(td((r.scenarioPct>=0?"+":"") + r.scenarioPct + "%", "text-align:right;padding:4px;color:" + c + ";")); tr.appendChild(td((r.pnl>=0?"+":"") + "$" + r.pnl.toFixed(2), "text-align:right;padding:4px;color:" + c + ";")); tr.appendChild(td("$" + r.newVal.toFixed(2), "text-align:right;padding:4px;")); tb.appendChild(tr); }
       tbl.appendChild(tb); rd.appendChild(tbl);
     }
     for (const [nm, pm] of Object.entries(SC)) { const b = document.createElement("button"); b.textContent = nm; b.style.cssText = "background:#222;color:#ddd;border:1px solid #444;border-radius:4px;padding:6px 12px;cursor:pointer;font-family:monospace;font-size:11px;"; b.addEventListener("mouseenter",()=>{b.style.background="#333";}); b.addEventListener("mouseleave",()=>{b.style.background="#222";}); b.addEventListener("click",()=>runSc(nm,pm)); br.appendChild(b); }
@@ -23167,9 +23204,10 @@ async function cmdRiskSim() {
         for (const p of positions) { const sy = p.symbol||""; const mv = parseFloat(p.market_value||(parseFloat(p.qty||p.quantity||0)*parseFloat(p.current_price||p.avg_entry_price||0))||0); const sp = ps[sy]||0; const pnl = mv*(sp/100); tPnL += pnl; rows.push({sym:sy,mktVal:mv,scenarioPct:sp,pnl,newVal:mv+pnl}); }
         const pi = acEq>0?(tPnL/acEq)*100:0; const ma = acEq>0&&acMg>0?((acEq+tPnL)/acMg)*100:0; const md = ma>0&&ma<150; const pc = tPnL>=0?"#4caf50":"#f44336"; const mc2 = md?"#f44336":"#4caf50";
         const sm = document.createElement("div"); sm.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;";
-        sm.innerHTML = `<div style="text-align:center;"><div style="color:#888;font-size:10px;">SCENARIO P&L</div><div style="color:${pc};font-size:16px;font-weight:bold;">${tPnL>=0?"+":""}$${tPnL.toFixed(2)}</div></div><div style="text-align:center;"><div style="color:#888;font-size:10px;">% PORTFOLIO</div><div style="color:${pc};font-size:16px;font-weight:bold;">${pi>=0?"+":""}${pi.toFixed(2)}%</div></div><div style="text-align:center;"><div style="color:#888;font-size:10px;">MARGIN LEVEL</div><div style="color:${mc2};font-size:16px;font-weight:bold;">${acMg>0?ma.toFixed(0)+"%":"N/A"}${md?" DANGER":""}</div></div>`;
-        rd.appendChild(sm); const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;"; tbl.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Current Value</th><th style="text-align:right;padding:4px;">Scenario %</th><th style="text-align:right;padding:4px;">Scenario P&L</th><th style="text-align:right;padding:4px;">New Value</th></tr></thead>`; const tb = document.createElement("tbody");
-        for (const r of rows) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const c = r.pnl>=0?"#4caf50":"#f44336"; tr.innerHTML = `<td style="padding:4px;">${r.sym}</td><td style="text-align:right;padding:4px;">$${r.mktVal.toFixed(2)}</td><td style="text-align:right;padding:4px;color:${c};">${r.scenarioPct>=0?"+":""}${r.scenarioPct}%</td><td style="text-align:right;padding:4px;color:${c};">${r.pnl>=0?"+":""}$${r.pnl.toFixed(2)}</td><td style="text-align:right;padding:4px;">$${r.newVal.toFixed(2)}</td>`; tb.appendChild(tr); }
+        function smCell2(label, value, color) { const d = document.createElement("div"); d.style.cssText = "text-align:center;"; d.appendChild(div(label, "color:#888;font-size:10px;")); d.appendChild(div(value, "color:" + color + ";font-size:16px;font-weight:bold;")); return d; }
+        sm.appendChild(smCell2("SCENARIO P&L", (tPnL>=0?"+":"") + "$" + tPnL.toFixed(2), pc)); sm.appendChild(smCell2("% PORTFOLIO", (pi>=0?"+":"") + pi.toFixed(2) + "%", pc)); sm.appendChild(smCell2("MARGIN LEVEL", (acMg>0?ma.toFixed(0)+"%":"N/A") + (md?" DANGER":""), mc2));
+        rd.appendChild(sm); const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;"; tbl.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #444;'><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:right;padding:4px;'>Current Value</th><th style='text-align:right;padding:4px;'>Scenario %</th><th style='text-align:right;padding:4px;'>Scenario P&L</th><th style='text-align:right;padding:4px;'>New Value</th></tr></thead>"; const tb = document.createElement("tbody");
+        for (const r of rows) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const c = r.pnl>=0?"#4caf50":"#f44336"; tr.appendChild(td(r.sym, "padding:4px;")); tr.appendChild(td("$" + r.mktVal.toFixed(2), "text-align:right;padding:4px;")); tr.appendChild(td((r.scenarioPct>=0?"+":"") + r.scenarioPct + "%", "text-align:right;padding:4px;color:" + c + ";")); tr.appendChild(td((r.pnl>=0?"+":"") + "$" + r.pnl.toFixed(2), "text-align:right;padding:4px;color:" + c + ";")); tr.appendChild(td("$" + r.newVal.toFixed(2), "text-align:right;padding:4px;")); tb.appendChild(tr); }
         tbl.appendChild(tb); rd.appendChild(tbl); }); fm.appendChild(ab); rd.appendChild(fm); });
     br.appendChild(cb); ct.appendChild(br); ct.appendChild(rd); win.appendElement(ct);
     const fs = Object.entries(SC)[0]; runSc(fs[0], fs[1]);
@@ -23221,7 +23259,7 @@ async function cmdSmartAlert() {
     const ct = document.createElement("div"); ct.style.cssText = "padding:12px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;";
     const sD = document.createElement("div"); const sC = aC===0?"#4caf50":aC<=2?"#ff9800":"#f44336";
     sD.style.cssText = `text-align:center;padding:10px;background:#111;border:1px solid ${sC};border-radius:6px;margin-bottom:14px;`;
-    sD.innerHTML = `<span style="color:${sC};font-size:18px;font-weight:bold;">${aC} of 6</span><span style="color:#888;font-size:13px;"> metrics are unusual</span>${aC>0?`<br><span style="color:#ff9800;font-size:11px;">Heightened attention recommended</span>`:`<br><span style="color:#4caf50;font-size:11px;">All metrics within normal range</span>`}`;
+    sD.appendChild(span(aC + " of 6", "color:" + sC + ";font-size:18px;font-weight:bold;")); sD.appendChild(span(" metrics are unusual", "color:#888;font-size:13px;")); sD.appendChild(document.createElement("br")); sD.appendChild(span(aC > 0 ? "Heightened attention recommended" : "All metrics within normal range", "color:" + (aC > 0 ? "#ff9800" : "#4caf50") + ";font-size:11px;"));
     ct.appendChild(sD);
     const gr = document.createElement("div"); gr.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px;";
     for (const m of metrics) { const az = Math.abs(m.z); let st, sc; if (az>=3){st="EXTREME";sc="#f44336";}else if(az>=2){st="UNUSUAL";sc="#ff9800";}else{st="NORMAL";sc="#4caf50";}
@@ -23233,7 +23271,7 @@ async function cmdSmartAlert() {
       const de = document.createElement("div"); de.style.cssText = "color:#555;font-size:9px;"; de.textContent = m.detail;
       cd.appendChild(ne); cd.appendChild(ve); cd.appendChild(ze); cd.appendChild(de); gr.appendChild(cd); }
     ct.appendChild(gr);
-    if (Math.abs(vZ) >= 2) { const cx = document.createElement("div"); cx.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;font-size:11px;color:#aaa;"; cx.innerHTML = `Volume is at <span style="color:#ff9800;font-weight:bold;">${Math.abs(vZ).toFixed(1)}\u03C3</span> \u2014 this has happened <span style="color:#fff;font-weight:bold;">${vEC}</span> times in the last ${tBC} bars`; ct.appendChild(cx); }
+    if (Math.abs(vZ) >= 2) { const cx = document.createElement("div"); cx.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;font-size:11px;color:#aaa;"; cx.appendChild(document.createTextNode("Volume is at ")); cx.appendChild(span(Math.abs(vZ).toFixed(1) + "\u03C3", "color:#ff9800;font-weight:bold;")); cx.appendChild(document.createTextNode(" \u2014 this has happened ")); cx.appendChild(span(vEC, "color:#fff;font-weight:bold;")); cx.appendChild(document.createTextNode(" times in the last " + tBC + " bars")); ct.appendChild(cx); }
     win.appendElement(ct);
     log(`SMARTALERT for ${currentSymbol}: ${aC}/6 anomalies detected`, aC > 0 ? "warn" : "ok");
   } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to compute anomalies: ${e}`); }
@@ -23365,7 +23403,7 @@ function cmdLadder() {
     const total = totalBid + totalAsk || 1;
     const bidPct = ((totalBid / total) * 100).toFixed(1);
     const askPct = ((totalAsk / total) * 100).toFixed(1);
-    footer.innerHTML = `<span style="color:#4caf50">BID: ${totalBid.toLocaleString()} (${bidPct}%)</span><span style="color:#888">|</span><span style="color:#f44336">ASK: ${totalAsk.toLocaleString()} (${askPct}%)</span>`;
+    footer.textContent = ""; footer.appendChild(span("BID: " + totalBid.toLocaleString() + " (" + bidPct + "%)", "color:#4caf50;")); footer.appendChild(span("|", "color:#888;")); footer.appendChild(span("ASK: " + totalAsk.toLocaleString() + " (" + askPct + "%)", "color:#f44336;"));
   }
 
   refresh();
@@ -23502,7 +23540,7 @@ async function cmdChainPlus() {
     if (maxPainStrike > 0) {
       const mpDiv = document.createElement("div");
       mpDiv.style.cssText = "padding:6px;text-align:center;font-size:11px;border-bottom:1px solid #333;";
-      mpDiv.innerHTML = `Max Pain: <span style="color:#ff9800;font-weight:bold">$${maxPainStrike.toFixed(2)}</span> (Total OI: ${maxPainOI.toLocaleString()})`;
+      mpDiv.appendChild(document.createTextNode("Max Pain: ")); mpDiv.appendChild(span("$" + maxPainStrike.toFixed(2), "color:#ff9800;font-weight:bold;")); mpDiv.appendChild(document.createTextNode(" (Total OI: " + maxPainOI.toLocaleString() + ")"));
       container.appendChild(mpDiv);
     }
 
