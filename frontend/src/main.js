@@ -4531,7 +4531,10 @@ function setupConnect() {
 
 // ── News & Fundamentals ─────────────────────────────────────
 
+let _newsLoadInFlight = null; // dedup guard — prevents double-load for same symbol
 async function loadNewsAndFundamentals(symbol) {
+  if (_newsLoadInFlight === symbol) return;
+  _newsLoadInFlight = symbol;
   const panel = document.getElementById("news-content");
   if (!panel) return;
   panel.textContent = "";
