@@ -2908,6 +2908,7 @@ async function loadChart(symbol, timeframe) {
     setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
     setLoadingStatus(symbol, null);
     updateTabLabel();
+    if (typeof updateNotesIndicator === "function") updateNotesIndicator();
 
     // Restore SL/TP lines from backend state (persists across tab switches)
     try {
@@ -4661,6 +4662,14 @@ function checkAlerts() {
 function fireAlert(alert) {
   log(`ALERT: ${alert.symbol} ${alert.direction} $${alert.price.toFixed(4)} — price: $${lastPrice.toFixed(4)}`, "warn");
   try { new Notification(`${alert.symbol} Alert`, { body: `Price ${alert.direction} $${alert.price.toFixed(4)}` }); } catch (_) {}
+  // Fire webhooks with price_alert event
+  if (typeof fireWebhooks === "function") {
+    fireWebhooks("price_alert", {
+      symbol: alert.symbol,
+      price: lastPrice,
+      condition: `${alert.direction} ${alert.price.toFixed(4)}`,
+    });
+  }
 }
 
 // ── Dividend/Corporate Action Alerts ─────────────────────────
@@ -6492,8 +6501,2018 @@ async function cmdCorrWatch() {
   } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to calculate correlations: ${e}`); }
 }
 
+// ══════════════════════════════════════════════════════════════
+// SIGNAL — Composite Trading Signal Generator
+// ══════════════════════════════════════════════════════════════
+function cmdSignal() {
+  if (!currentChartData || currentChartData.length < 201) { log("SIGNAL: Need at least 201 bars loaded", "warn"); return; }
+  const chartData = currentChartData;
+  const win = createWindow({ title: `${currentSymbol} — Composite Signal`, width: 420, height: 520 });
+  win.contentElement.textContent = "";
+
+  const ef = calcEhlersFisher(chartData, 32);
+  const rsiData = calcRSI(chartData, 14);
+  const kamaData = calcKAMA(chartData, 10);
+  const sma200 = calcSMA(chartData, 200);
+  const atrData = calcATR(chartData, 14);
+
+  let score = 0;
+  const components = [];
+
+  // 1. Fisher Transform
+  let fisherScore = 0;
+  if (ef.fisher.length > 1 && ef.signal.length > 0) {
+    const lastFisher = ef.fisher[ef.fisher.length - 1].value;
+    const lastSignal = ef.signal[ef.signal.length - 1].value;
+    fisherScore = lastFisher > lastSignal ? 20 : -20;
+  }
+  score += fisherScore;
+  components.push({ name: "Fisher Transform", value: fisherScore, max: 20, detail: fisherScore > 0 ? "Bullish (fisher > signal)" : "Bearish (fisher < signal)" });
+
+  // 2. RSI (14)
+  let rsiScore = 0;
+  if (rsiData.length > 0) {
+    const rsiVal = rsiData[rsiData.length - 1].value;
+    if (rsiVal < 30) rsiScore = 15;
+    else if (rsiVal > 70) rsiScore = -15;
+    else rsiScore = Math.round(15 * (50 - rsiVal) / 20);
+    components.push({ name: `RSI (${rsiVal.toFixed(1)})`, value: rsiScore, max: 15, detail: rsiVal < 30 ? "Oversold" : rsiVal > 70 ? "Overbought" : "Neutral zone" });
+  } else {
+    components.push({ name: "RSI", value: 0, max: 15, detail: "Insufficient data" });
+  }
+  score += rsiScore;
+
+  // 3. Price vs SMA200
+  let smaScore = 0;
+  if (sma200.length > 0) {
+    const lastClose = chartData[chartData.length - 1].close;
+    const lastSMA = sma200[sma200.length - 1].value;
+    smaScore = lastClose > lastSMA ? 20 : -20;
+    components.push({ name: "Price vs SMA200", value: smaScore, max: 20, detail: smaScore > 0 ? `Above ($${lastSMA.toFixed(2)})` : `Below ($${lastSMA.toFixed(2)})` });
+  } else {
+    components.push({ name: "Price vs SMA200", value: 0, max: 20, detail: "Insufficient data" });
+  }
+  score += smaScore;
+
+  // 4. KAMA slope
+  let kamaScore = 0;
+  if (kamaData.length >= 3) {
+    const k1 = kamaData[kamaData.length - 1].value;
+    const k2 = kamaData[kamaData.length - 3].value;
+    kamaScore = k1 > k2 ? 15 : -15;
+    components.push({ name: "KAMA Slope", value: kamaScore, max: 15, detail: kamaScore > 0 ? "Positive (bullish)" : "Negative (bearish)" });
+  } else {
+    components.push({ name: "KAMA Slope", value: 0, max: 15, detail: "Insufficient data" });
+  }
+  score += kamaScore;
+
+  // 5. Volume confirmation: current > 1.5x 20-day avg
+  let volScore = 0;
+  const volLookback = 20;
+  if (chartData.length > volLookback + 1) {
+    const recentVols = chartData.slice(-volLookback - 1, -1).map(d => d.volume || 0);
+    const avgVol = recentVols.reduce((a, b) => a + b, 0) / recentVols.length;
+    const curVol = chartData[chartData.length - 1].volume || 0;
+    volScore = (avgVol > 0 && curVol > avgVol * 1.5) ? 15 : 0;
+    components.push({ name: "Volume Confirm", value: volScore, max: 15, detail: avgVol > 0 ? `${(curVol / avgVol).toFixed(1)}x avg` : "No volume data" });
+  } else {
+    components.push({ name: "Volume Confirm", value: 0, max: 15, detail: "Insufficient data" });
+  }
+  score += volScore;
+
+  // 6. ATR trend
+  let atrScore = 0;
+  if (atrData.length >= 10) {
+    const atrNow = atrData[atrData.length - 1].value;
+    const atr10Ago = atrData[atrData.length - 10].value;
+    atrScore = atrNow < atr10Ago ? 15 : -5;
+    components.push({ name: "ATR Trend", value: atrScore, max: 15, detail: atrScore > 0 ? "Contracting (calm)" : "Expanding (volatile)" });
+  } else {
+    components.push({ name: "ATR Trend", value: 0, max: 15, detail: "Insufficient data" });
+  }
+  score += atrScore;
+
+  const composite = Math.max(0, Math.min(100, score + 50));
+
+  let label, labelColor;
+  if (composite <= 30) { label = "SELL"; labelColor = "#f44336"; }
+  else if (composite <= 45) { label = "WEAK"; labelColor = "#ff9800"; }
+  else if (composite <= 55) { label = "NEUTRAL"; labelColor = "#888"; }
+  else if (composite <= 70) { label = "BUILDING"; labelColor = "#ffeb3b"; }
+  else { label = "BUY"; labelColor = "#4caf50"; }
+
+  const container = document.createElement("div");
+  container.style.cssText = "padding:16px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;";
+
+  const scoreDiv = document.createElement("div");
+  scoreDiv.style.cssText = `text-align:center;padding:18px;background:#111;border:2px solid ${labelColor};border-radius:10px;margin-bottom:16px;`;
+  scoreDiv.innerHTML = `<div style="font-size:48px;font-weight:bold;color:${labelColor};">${composite}</div><div style="font-size:18px;color:${labelColor};font-weight:bold;">${label}</div><div style="color:#888;font-size:12px;margin-top:4px;">Signal strength: ${composite}/100</div>`;
+  container.appendChild(scoreDiv);
+
+  const breakdownTitle = document.createElement("div");
+  breakdownTitle.style.cssText = "color:#888;font-size:11px;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px;";
+  breakdownTitle.textContent = "Component Breakdown";
+  container.appendChild(breakdownTitle);
+
+  for (const c of components) {
+    const row = document.createElement("div");
+    row.style.cssText = "margin-bottom:8px;";
+    const nameRow = document.createElement("div");
+    nameRow.style.cssText = "display:flex;justify-content:space-between;margin-bottom:2px;";
+    const nameSpan = document.createElement("span");
+    nameSpan.style.cssText = "font-size:12px;color:#ccc;";
+    nameSpan.textContent = c.name;
+    const valSpan = document.createElement("span");
+    const valColor = c.value > 0 ? "#4caf50" : c.value < 0 ? "#f44336" : "#888";
+    valSpan.style.cssText = `font-size:12px;color:${valColor};font-weight:bold;`;
+    valSpan.textContent = `${c.value > 0 ? "+" : ""}${c.value}`;
+    nameRow.appendChild(nameSpan);
+    nameRow.appendChild(valSpan);
+    row.appendChild(nameRow);
+
+    const barOuter = document.createElement("div");
+    barOuter.style.cssText = "width:100%;height:6px;background:#222;border-radius:3px;overflow:hidden;";
+    const barInner = document.createElement("div");
+    const pct = c.max > 0 ? Math.abs(c.value) / c.max * 100 : 0;
+    barInner.style.cssText = `width:${pct}%;height:100%;background:${valColor};border-radius:3px;transition:width 0.3s;`;
+    barOuter.appendChild(barInner);
+    row.appendChild(barOuter);
+
+    const detailDiv = document.createElement("div");
+    detailDiv.style.cssText = "font-size:10px;color:#666;margin-top:1px;";
+    detailDiv.textContent = c.detail;
+    row.appendChild(detailDiv);
+
+    container.appendChild(row);
+  }
+
+  const recDiv = document.createElement("div");
+  recDiv.style.cssText = `margin-top:14px;padding:10px;background:#111;border-radius:6px;border:1px solid #333;text-align:center;`;
+  let recText;
+  if (composite >= 70) recText = "Strong bullish confluence. Consider long entries with tight SL.";
+  else if (composite >= 55) recText = "Building bullish bias. Wait for confirmation or reduce size.";
+  else if (composite >= 45) recText = "No clear directional bias. Stay flat or reduce exposure.";
+  else if (composite >= 30) recText = "Weak bearish bias. Caution on longs, watch for breakdown.";
+  else recText = "Strong bearish confluence. Consider short entries or hedge longs.";
+  recDiv.innerHTML = `<span style="color:#888;font-size:11px;">${recText}</span>`;
+  container.appendChild(recDiv);
+
+  win.appendElement(container);
+  log(`SIGNAL: ${currentSymbol} composite score ${composite}/100 (${label})`, composite >= 55 ? "ok" : composite <= 30 ? "warn" : "info");
+}
+
+// ══════════════════════════════════════════════════════════════
+// PROFILE — Trading Profile Analytics
+// ══════════════════════════════════════════════════════════════
+async function cmdProfile() {
+  const win = createWindow({ title: "Trading Profile Analytics", width: 650, height: 550 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.style.cssText = "padding:20px;color:#888;text-align:center;";
+  loading.textContent = "Loading order history...";
+  win.appendElement(loading);
+
+  try {
+    const histJson = await invoke("get_order_history", { limit: 500 });
+    const orders = JSON.parse(histJson);
+    const filled = orders.filter(o => o.status === "filled" && o.filled_avg_price);
+    win.contentElement.textContent = "";
+
+    if (filled.length === 0) { win.setContent("No filled orders found."); return; }
+
+    const container = document.createElement("div");
+    container.style.cssText = "padding:14px;font-family:monospace;font-size:12px;color:#ddd;overflow-y:auto;height:100%;";
+
+    // Group by symbol
+    const bySymbol = {};
+    for (const o of filled) {
+      if (!bySymbol[o.symbol]) bySymbol[o.symbol] = { trades: 0, buyCost: 0, sellProceeds: 0 };
+      const s = bySymbol[o.symbol];
+      s.trades++;
+      const qty = parseFloat(o.filled_qty || o.qty || 0);
+      const price = parseFloat(o.filled_avg_price || 0);
+      if (o.side === "buy") s.buyCost += qty * price;
+      else s.sellProceeds += qty * price;
+    }
+    const symbolPnL = Object.entries(bySymbol).map(([sym, s]) => ({
+      symbol: sym, pnl: s.sellProceeds - s.buyCost, trades: s.trades
+    })).sort((a, b) => b.pnl - a.pnl);
+
+    // Best Symbols
+    const bestTitle = document.createElement("div");
+    bestTitle.style.cssText = "color:#4caf50;font-weight:bold;font-size:14px;margin-bottom:6px;";
+    bestTitle.textContent = "Best Symbols (by estimated P&L)";
+    container.appendChild(bestTitle);
+    const bestTable = document.createElement("table");
+    bestTable.style.cssText = "width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;";
+    bestTable.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Est. P&L</th><th style="text-align:right;padding:4px;">Trades</th></tr></thead>`;
+    const bestBody = document.createElement("tbody");
+    for (const s of symbolPnL.slice(0, 5)) {
+      const tr = document.createElement("tr"); tr.style.borderBottom = "1px solid #333";
+      const pc = s.pnl >= 0 ? "#4caf50" : "#f44336";
+      tr.innerHTML = `<td style="padding:4px;">${s.symbol}</td><td style="text-align:right;padding:4px;color:${pc};">$${s.pnl.toFixed(2)}</td><td style="text-align:right;padding:4px;">${s.trades}</td>`;
+      bestBody.appendChild(tr);
+    }
+    bestTable.appendChild(bestBody); container.appendChild(bestTable);
+
+    // Worst Symbols
+    const worstTitle = document.createElement("div");
+    worstTitle.style.cssText = "color:#f44336;font-weight:bold;font-size:14px;margin-bottom:6px;";
+    worstTitle.textContent = "Worst Symbols";
+    container.appendChild(worstTitle);
+    const worstTable = document.createElement("table");
+    worstTable.style.cssText = "width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;";
+    worstTable.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Est. P&L</th><th style="text-align:right;padding:4px;">Trades</th></tr></thead>`;
+    const worstBody = document.createElement("tbody");
+    for (const s of symbolPnL.slice(-5).reverse()) {
+      const tr = document.createElement("tr"); tr.style.borderBottom = "1px solid #333";
+      const pc = s.pnl >= 0 ? "#4caf50" : "#f44336";
+      tr.innerHTML = `<td style="padding:4px;">${s.symbol}</td><td style="text-align:right;padding:4px;color:${pc};">$${s.pnl.toFixed(2)}</td><td style="text-align:right;padding:4px;">${s.trades}</td>`;
+      worstBody.appendChild(tr);
+    }
+    worstTable.appendChild(worstBody); container.appendChild(worstTable);
+
+    // Day of Week
+    const dowTitle = document.createElement("div");
+    dowTitle.style.cssText = "color:#64b5f6;font-weight:bold;font-size:14px;margin-bottom:6px;";
+    dowTitle.textContent = "Day of Week Activity";
+    container.appendChild(dowTitle);
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const dowCounts = [0, 0, 0, 0, 0, 0, 0];
+    const dowBuys = [0, 0, 0, 0, 0, 0, 0];
+    const dowSells = [0, 0, 0, 0, 0, 0, 0];
+    for (const o of filled) {
+      const d = new Date(o.submitted_at || o.created_at);
+      const day = d.getDay();
+      dowCounts[day]++;
+      if (o.side === "buy") dowBuys[day]++; else dowSells[day]++;
+    }
+    const maxDow = Math.max(...dowCounts, 1);
+    const dowChart = document.createElement("div");
+    dowChart.style.cssText = "display:flex;gap:6px;align-items:flex-end;height:80px;margin-bottom:16px;";
+    for (let i = 1; i <= 5; i++) {
+      const col = document.createElement("div");
+      col.style.cssText = "flex:1;display:flex;flex-direction:column;align-items:center;";
+      const bar = document.createElement("div");
+      const pct = (dowCounts[i] / maxDow) * 100;
+      const barColor = dowBuys[i] > dowSells[i] ? "#4caf50" : dowSells[i] > dowBuys[i] ? "#f44336" : "#888";
+      bar.style.cssText = `width:100%;height:${Math.max(pct, 2)}%;background:${barColor};border-radius:3px 3px 0 0;min-height:2px;`;
+      const lbl = document.createElement("div");
+      lbl.style.cssText = "font-size:10px;color:#888;margin-top:4px;";
+      lbl.textContent = dayNames[i];
+      const cnt = document.createElement("div");
+      cnt.style.cssText = "font-size:10px;color:#ccc;";
+      cnt.textContent = dowCounts[i];
+      col.appendChild(cnt); col.appendChild(bar); col.appendChild(lbl);
+      dowChart.appendChild(col);
+    }
+    container.appendChild(dowChart);
+
+    // Long vs Short
+    const lsTitle = document.createElement("div");
+    lsTitle.style.cssText = "color:#ffab40;font-weight:bold;font-size:14px;margin-bottom:6px;";
+    lsTitle.textContent = "Long vs Short";
+    container.appendChild(lsTitle);
+    const buys = filled.filter(o => o.side === "buy");
+    const sells = filled.filter(o => o.side === "sell");
+    const lsGrid = document.createElement("div");
+    lsGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;";
+    const buyBox = document.createElement("div");
+    buyBox.style.cssText = "background:#1a2e1a;border:1px solid #4caf50;border-radius:6px;padding:10px;text-align:center;";
+    buyBox.innerHTML = `<div style="color:#4caf50;font-size:16px;font-weight:bold;">LONG</div><div style="color:#ccc;font-size:13px;margin-top:4px;">${buys.length} orders</div><div style="color:#888;font-size:11px;">${filled.length > 0 ? ((buys.length / filled.length) * 100).toFixed(1) : 0}% of total</div>`;
+    const sellBox = document.createElement("div");
+    sellBox.style.cssText = "background:#2e1a1a;border:1px solid #f44336;border-radius:6px;padding:10px;text-align:center;";
+    sellBox.innerHTML = `<div style="color:#f44336;font-size:16px;font-weight:bold;">SHORT</div><div style="color:#ccc;font-size:13px;margin-top:4px;">${sells.length} orders</div><div style="color:#888;font-size:11px;">${filled.length > 0 ? ((sells.length / filled.length) * 100).toFixed(1) : 0}% of total</div>`;
+    lsGrid.appendChild(buyBox); lsGrid.appendChild(sellBox);
+    container.appendChild(lsGrid);
+
+    // Hold Time Distribution
+    const htTitle = document.createElement("div");
+    htTitle.style.cssText = "color:#ce93d8;font-weight:bold;font-size:14px;margin-bottom:6px;";
+    htTitle.textContent = "Hold Time Distribution (estimated)";
+    container.appendChild(htTitle);
+    let shortHold = 0, medHold = 0, swingHold = 0;
+    const sortedFilled = [...filled].sort((a, b) => new Date(a.submitted_at || a.created_at) - new Date(b.submitted_at || b.created_at));
+    const openTrades = {};
+    for (const o of sortedFilled) {
+      const sym = o.symbol;
+      if (o.side === "buy") {
+        openTrades[sym] = new Date(o.submitted_at || o.created_at);
+      } else if (o.side === "sell" && openTrades[sym]) {
+        const holdMs = new Date(o.submitted_at || o.created_at) - openTrades[sym];
+        const holdHrs = holdMs / 3600000;
+        if (holdHrs < 1) shortHold++;
+        else if (holdHrs < 24) medHold++;
+        else swingHold++;
+        delete openTrades[sym];
+      }
+    }
+    const htTotal = shortHold + medHold + swingHold || 1;
+    const htGrid = document.createElement("div");
+    htGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;";
+    for (const [htLabel, count, color] of [["<1h (Scalp)", shortHold, "#64b5f6"], ["1h-1d (Day)", medHold, "#ffab40"], ["1d+ (Swing)", swingHold, "#ce93d8"]]) {
+      const box = document.createElement("div");
+      box.style.cssText = `background:#111;border:1px solid ${color};border-radius:6px;padding:8px;text-align:center;`;
+      box.innerHTML = `<div style="color:${color};font-size:18px;font-weight:bold;">${count}</div><div style="color:#888;font-size:10px;">${htLabel}</div><div style="color:#666;font-size:10px;">${((count / htTotal) * 100).toFixed(0)}%</div>`;
+      htGrid.appendChild(box);
+    }
+    container.appendChild(htGrid);
+
+    win.appendElement(container);
+    log(`PROFILE: Analyzed ${filled.length} filled orders across ${Object.keys(bySymbol).length} symbols`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load profile: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FIBO+ — Fibonacci Time Zones
+// ══════════════════════════════════════════════════════════════
+let fiboTimeMarkers = [];
+
+function cmdFiboTime() {
+  if (!currentChartData || currentChartData.length < 30) { log("FIBO+: Need at least 30 bars loaded", "warn"); return; }
+  const chartData = currentChartData;
+
+  // Find most recent swing low via fractal detection
+  let anchorIdx = chartData.length - 10;
+  for (let i = chartData.length - 3; i >= 2; i--) {
+    if (chartData[i].low < chartData[i - 1].low && chartData[i].low < chartData[i - 2].low &&
+        chartData[i].low < chartData[i + 1].low && chartData[i].low < chartData[i + 2].low) {
+      anchorIdx = i;
+      break;
+    }
+  }
+
+  const fibIntervals = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89];
+  const markers = [];
+  const fiboList = [];
+
+  for (const fib of fibIntervals) {
+    const targetIdx = anchorIdx + fib;
+    if (targetIdx >= chartData.length) {
+      fiboList.push({ fib, time: null, label: `+${fib} bars (future)`, projected: true });
+      continue;
+    }
+    const bar = chartData[targetIdx];
+    markers.push({ time: bar.time, position: "aboveBar", color: "#9C27B0", shape: "arrowDown", text: `F${fib}` });
+    const d = typeof bar.time === "number" ? new Date(bar.time * 1000).toLocaleDateString() : bar.time;
+    fiboList.push({ fib, time: bar.time, label: `+${fib} bars = ${d}`, projected: false });
+  }
+
+  fiboTimeMarkers = markers;
+  try {
+    const sortedMarkers = [...markers].sort((a, b) => a.time - b.time);
+    candleSeries.setMarkers(sortedMarkers);
+  } catch (_) {}
+
+  const win = createWindow({ title: `${currentSymbol} — Fibonacci Time Zones`, width: 380, height: 400 });
+  win.contentElement.textContent = "";
+  const container = document.createElement("div");
+  container.style.cssText = "padding:14px;font-family:monospace;font-size:13px;color:#ddd;overflow-y:auto;height:100%;";
+
+  const anchorDate = typeof chartData[anchorIdx].time === "number" ? new Date(chartData[anchorIdx].time * 1000).toLocaleDateString() : chartData[anchorIdx].time;
+  const headerDiv = document.createElement("div");
+  headerDiv.style.cssText = "margin-bottom:14px;padding:10px;background:#111;border:1px solid #9C27B0;border-radius:6px;text-align:center;";
+  headerDiv.innerHTML = `<div style="color:#9C27B0;font-size:14px;font-weight:bold;">Fibonacci Time Zones</div><div style="color:#888;font-size:11px;margin-top:4px;">Anchor: Bar ${anchorIdx} (${anchorDate}) — Swing Low at $${chartData[anchorIdx].low.toFixed(2)}</div>`;
+  container.appendChild(headerDiv);
+
+  const table = document.createElement("table");
+  table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+  table.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Fib #</th><th style="text-align:left;padding:4px;">Bars Forward</th><th style="text-align:left;padding:4px;">Date</th><th style="text-align:center;padding:4px;">Status</th></tr></thead>`;
+  const tbody = document.createElement("tbody");
+  for (const f of fiboList) {
+    const tr = document.createElement("tr"); tr.style.borderBottom = "1px solid #333";
+    const statusColor = f.projected ? "#ff9800" : "#4caf50";
+    const statusText = f.projected ? "Projected" : "On Chart";
+    tr.innerHTML = `<td style="padding:4px;color:#9C27B0;font-weight:bold;">${f.fib}</td><td style="padding:4px;">+${f.fib}</td><td style="padding:4px;">${f.label.split("= ")[1] || "---"}</td><td style="text-align:center;padding:4px;color:${statusColor};font-size:11px;">${statusText}</td>`;
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody); container.appendChild(table);
+
+  const clearBtn = document.createElement("button");
+  clearBtn.textContent = "Clear Markers";
+  clearBtn.style.cssText = "margin-top:12px;padding:6px 16px;background:#333;color:#ddd;border:1px solid #555;border-radius:4px;cursor:pointer;";
+  clearBtn.addEventListener("click", () => { fiboTimeMarkers = []; candleSeries.setMarkers([]); log("FIBO+: Markers cleared", "info"); });
+  container.appendChild(clearBtn);
+
+  win.appendElement(container);
+  log(`FIBO+: Plotted ${markers.length} Fibonacci time zones from bar ${anchorIdx}`, "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// DARKMODE — Theme Switcher
+// ══════════════════════════════════════════════════════════════
+const THEMES = {
+  dark: { name: "Dark", bg: "#0a0a14", text: "#d1d4dc", grid: "#222", panelBg: "#0a0a14", border: "#333", chartBg: "#000000", chartGrid: "#333333", chartText: "#d1d4dc", fisherBg: "#000000", fisherGrid: "#111" },
+  pitchBlack: { name: "Pitch Black", bg: "#000000", text: "#cccccc", grid: "#111", panelBg: "#000000", border: "#222", chartBg: "#000000", chartGrid: "#111111", chartText: "#cccccc", fisherBg: "#000000", fisherGrid: "#0a0a0a" },
+  light: { name: "Light", bg: "#f5f5f5", text: "#333333", grid: "#ddd", panelBg: "#ffffff", border: "#ccc", chartBg: "#ffffff", chartGrid: "#e0e0e0", chartText: "#333333", fisherBg: "#fafafa", fisherGrid: "#e8e8e8" },
+};
+
+function applyTheme(themeKey) {
+  const t = THEMES[themeKey];
+  if (!t) return;
+  const root = document.documentElement.style;
+  root.setProperty("--bg-color", t.bg);
+  root.setProperty("--text-color", t.text);
+  root.setProperty("--grid-color", t.grid);
+  root.setProperty("--panel-bg", t.panelBg);
+  root.setProperty("--border-color", t.border);
+  document.body.style.backgroundColor = t.bg;
+  document.body.style.color = t.text;
+  if (chart) {
+    chart.applyOptions({
+      layout: { background: { color: t.chartBg }, textColor: t.chartText },
+      grid: { vertLines: { color: t.chartGrid }, horzLines: { color: t.chartGrid } },
+      rightPriceScale: { borderColor: t.border }, timeScale: { borderColor: t.border },
+    });
+  }
+  if (fisherChart) {
+    fisherChart.applyOptions({
+      layout: { background: { color: t.fisherBg }, textColor: t.text },
+      grid: { vertLines: { color: t.fisherGrid }, horzLines: { color: t.fisherGrid } },
+      rightPriceScale: { borderColor: t.border },
+    });
+  }
+  if (volumeChart) {
+    volumeChart.applyOptions({
+      layout: { background: { color: t.fisherBg }, textColor: t.text },
+      grid: { vertLines: { color: t.fisherGrid }, horzLines: { color: t.fisherGrid } },
+      rightPriceScale: { borderColor: t.border },
+    });
+  }
+  localStorage.setItem("typhoon_theme", themeKey);
+  log(`Theme switched to: ${t.name}`, "ok");
+}
+
+function loadSavedTheme() {
+  const saved = localStorage.getItem("typhoon_theme");
+  if (saved && THEMES[saved]) applyTheme(saved);
+}
+
+function cmdDarkMode() {
+  const win = createWindow({ title: "Theme Switcher", width: 340, height: 220 });
+  win.contentElement.textContent = "";
+  const container = document.createElement("div");
+  container.style.cssText = "padding:18px;font-family:monospace;font-size:13px;color:#ddd;";
+  const titleEl = document.createElement("div");
+  titleEl.style.cssText = "text-align:center;color:#888;font-size:12px;margin-bottom:16px;text-transform:uppercase;letter-spacing:1px;";
+  titleEl.textContent = "Select Theme";
+  container.appendChild(titleEl);
+  const btnGrid = document.createElement("div");
+  btnGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;";
+  const currentTheme = localStorage.getItem("typhoon_theme") || "dark";
+  for (const [key, t] of Object.entries(THEMES)) {
+    const btn = document.createElement("button");
+    btn.style.cssText = `display:flex;flex-direction:column;align-items:center;gap:8px;padding:14px 8px;border-radius:8px;cursor:pointer;border:2px solid ${key === currentTheme ? "#64b5f6" : "#444"};background:#1a1a1a;transition:border-color 0.2s;`;
+    const swatch = document.createElement("div");
+    swatch.style.cssText = `width:48px;height:32px;border-radius:4px;background:${t.chartBg};border:1px solid ${t.border};position:relative;overflow:hidden;`;
+    const gl1 = document.createElement("div"); gl1.style.cssText = `position:absolute;top:50%;left:0;right:0;height:1px;background:${t.chartGrid};`;
+    const gl2 = document.createElement("div"); gl2.style.cssText = `position:absolute;left:50%;top:0;bottom:0;width:1px;background:${t.chartGrid};`;
+    const td = document.createElement("div"); td.style.cssText = `position:absolute;bottom:4px;right:4px;width:6px;height:6px;border-radius:50%;background:${t.chartText};`;
+    swatch.appendChild(gl1); swatch.appendChild(gl2); swatch.appendChild(td);
+    btn.appendChild(swatch);
+    const lbl = document.createElement("span");
+    lbl.style.cssText = "color:#ccc;font-size:12px;font-weight:bold;";
+    lbl.textContent = t.name;
+    btn.appendChild(lbl);
+    btn.addEventListener("click", () => {
+      applyTheme(key);
+      for (const b of btnGrid.querySelectorAll("button")) b.style.borderColor = "#444";
+      btn.style.borderColor = "#64b5f6";
+    });
+    btn.addEventListener("mouseenter", () => { if (key !== (localStorage.getItem("typhoon_theme") || "dark")) btn.style.borderColor = "#666"; });
+    btn.addEventListener("mouseleave", () => { const cur = localStorage.getItem("typhoon_theme") || "dark"; btn.style.borderColor = key === cur ? "#64b5f6" : "#444"; });
+    btnGrid.appendChild(btn);
+  }
+  container.appendChild(btnGrid);
+  win.appendElement(container);
+}
+
+// ── SNAPSHOT — Portfolio Snapshot to Clipboard ─────────────
+async function cmdSnapshot() {
+  const win = createWindow({ title: "Portfolio Snapshot", width: 500, height: 400 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Building snapshot...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+  try {
+    const [marginJson, posJson] = await Promise.all([
+      invoke("get_margin_info"),
+      invoke("get_positions"),
+    ]);
+    const mi = JSON.parse(marginJson);
+    const positions = JSON.parse(posJson);
+    const hasPositions = mi.gross_lots > 0;
+    const mlText = hasPositions ? `${mi.margin_level_pct.toFixed(1)}%` : "N/A";
+    const now = new Date();
+    const dateStr = now.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+    const sep = "\u2500".repeat(44);
+
+    let totalPL = 0;
+    const rows = [];
+    for (const p of positions) {
+      const sym = (p.symbol || "").padEnd(8).slice(0, 8);
+      const side = (p.side === "long" ? "L" : "S").padEnd(6);
+      const qty = String(Math.abs(p.qty)).padStart(6);
+      const entry = `$${Number(p.avg_entry_price).toFixed(2)}`.padStart(10);
+      const pl = p.unrealized_pl || 0;
+      totalPL += pl;
+      const plStr = `$${pl.toFixed(2)}`.padStart(10);
+      rows.push(`${sym}${side}${qty}  ${entry}  ${plStr}`);
+    }
+    if (rows.length === 0) rows.push("  (no open positions)");
+
+    const text = [
+      "TyphooN-Terminal Portfolio Snapshot",
+      `Date: ${dateStr}`,
+      `Equity: $${Math.round(mi.equity).toLocaleString()} | Balance: $${Math.round(mi.balance).toLocaleString()} | ML: ${mlText}`,
+      sep,
+      "Symbol  Side    Qty     Entry       P&L",
+      ...rows,
+      sep,
+      `Total P&L: $${totalPL.toFixed(2)}`,
+    ].join("\n");
+
+    win.contentElement.textContent = "";
+    const pre = document.createElement("pre");
+    pre.style.cssText = "font-family:'Iosevka Fixed',monospace;font-size:12px;color:#ccc;padding:12px;white-space:pre;overflow:auto;max-height:calc(100% - 50px);margin:0;";
+    pre.textContent = text;
+    win.appendElement(pre);
+
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "padding:8px 12px;display:flex;gap:8px;";
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "Copy to Clipboard";
+    copyBtn.className = "fw-btn";
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(text).then(() => log("Snapshot copied to clipboard", "ok")).catch(e => log(`Clipboard copy failed: ${e}`, "error"));
+    });
+    btnRow.appendChild(copyBtn);
+    win.appendElement(btnRow);
+
+    // Auto-copy on open
+    navigator.clipboard.writeText(text).then(() => log("Snapshot copied to clipboard", "ok")).catch(() => {});
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to build snapshot: ${e}`);
+  }
+}
+
+// ── HOTLIST — Real-Time Top Movers Dashboard ───────────────
+async function cmdHotlist() {
+  const win = createWindow({ title: "Top Movers \u2014 Hotlist", width: 650, height: 550 });
+  win.contentElement.textContent = "";
+
+  let activeTab = "gainers";
+  let refreshTimer = null;
+
+  const tabBar = document.createElement("div");
+  tabBar.style.cssText = "display:flex;gap:0;border-bottom:1px solid #333;";
+  const hotlistTabs = [
+    { id: "gainers", label: "Top Gainers" },
+    { id: "losers", label: "Top Losers" },
+    { id: "active", label: "Most Active" },
+  ];
+  const tabBtns = {};
+  for (const t of hotlistTabs) {
+    const btn = document.createElement("button");
+    btn.textContent = t.label;
+    btn.style.cssText = "flex:1;padding:8px;background:none;border:none;color:#888;cursor:pointer;font-size:12px;border-bottom:2px solid transparent;";
+    btn.addEventListener("click", () => { activeTab = t.id; updateTabStyles(); renderData(); });
+    tabBar.appendChild(btn);
+    tabBtns[t.id] = btn;
+  }
+  win.appendElement(tabBar);
+
+  const contentDiv = document.createElement("div");
+  contentDiv.style.cssText = "overflow-y:auto;max-height:calc(100% - 80px);padding:4px;";
+  win.appendElement(contentDiv);
+
+  const statusDiv = document.createElement("div");
+  statusDiv.style.cssText = "padding:4px 8px;font-size:10px;color:#555;text-align:right;";
+  win.appendElement(statusDiv);
+
+  let moversData = { gainers: [], losers: [], active: [] };
+
+  function updateTabStyles() {
+    for (const [id, btn] of Object.entries(tabBtns)) {
+      btn.style.color = id === activeTab ? "#8ff" : "#888";
+      btn.style.borderBottomColor = id === activeTab ? "#8ff" : "transparent";
+    }
+  }
+  updateTabStyles();
+
+  function renderData() {
+    contentDiv.textContent = "";
+    const list = moversData[activeTab] || [];
+    if (list.length === 0) { contentDiv.textContent = "No data"; return; }
+    const table = document.createElement("table");
+    table.className = "fw-table";
+    const thead = document.createElement("tr");
+    for (const h of ["Symbol", "Price", "Change %", "Volume"]) {
+      const th = document.createElement("td");
+      th.style.cssText = "color:#666;font-weight:bold;font-size:10px;text-transform:uppercase;padding:4px 8px;";
+      th.textContent = h;
+      thead.appendChild(th);
+    }
+    table.appendChild(thead);
+    for (const s of list) {
+      const tr = document.createElement("tr");
+      tr.style.cursor = "pointer";
+      const sym = s.symbol || s.ticker || "\u2014";
+      const price = s.last ?? s.price ?? "\u2014";
+      const chgPct = s.change_percent ?? s.pct_change ?? 0;
+      const vol = s.volume ? (s.volume >= 1e6 ? `${(s.volume / 1e6).toFixed(1)}M` : Number(s.volume).toLocaleString()) : "\u2014";
+      const isPositive = typeof chgPct === "number" ? chgPct >= 0 : false;
+      const chgColor = isPositive ? "#4caf50" : "#f44336";
+      const vals = [
+        { text: sym, css: "color:#8ff;font-weight:bold;" },
+        { text: typeof price === "number" ? `$${price.toFixed(2)}` : String(price), css: "color:#ccc;" },
+        { text: typeof chgPct === "number" ? `${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%` : String(chgPct), css: `color:${chgColor};font-weight:bold;` },
+        { text: vol, css: "color:#aaa;" },
+      ];
+      for (const v of vals) {
+        const td = document.createElement("td");
+        td.className = "fw-value";
+        td.style.cssText = `text-align:left;padding:4px 8px;${v.css}`;
+        td.textContent = v.text;
+        tr.appendChild(td);
+      }
+      tr.addEventListener("click", () => {
+        document.getElementById("symbol-input").value = sym;
+        triggerLoad();
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function fetchData() {
+    try {
+      const [moversJson, activeJson] = await Promise.all([
+        invoke("get_top_movers", { marketType: "stocks", top: 50 }),
+        invoke("get_most_active", { top: 50 }),
+      ]);
+      const movers = typeof moversJson === "string" ? JSON.parse(moversJson) : moversJson;
+      const active = typeof activeJson === "string" ? JSON.parse(activeJson) : activeJson;
+      const allMovers = Array.isArray(movers) ? movers : (movers.gainers || movers.movers || movers.stocks || []);
+      moversData.gainers = allMovers.filter(s => (s.change_percent ?? s.pct_change ?? 0) >= 0).sort((a, b) => (b.change_percent ?? b.pct_change ?? 0) - (a.change_percent ?? a.pct_change ?? 0));
+      moversData.losers = allMovers.filter(s => (s.change_percent ?? s.pct_change ?? 0) < 0).sort((a, b) => (a.change_percent ?? a.pct_change ?? 0) - (b.change_percent ?? b.pct_change ?? 0));
+      moversData.active = Array.isArray(active) ? active : (active.most_active || active.stocks || []);
+      statusDiv.textContent = `Updated ${new Date().toLocaleTimeString("en-GB", { hour12: false })}`;
+      renderData();
+    } catch (e) {
+      contentDiv.textContent = `Error: ${e}`;
+    }
+  }
+
+  await fetchData();
+  refreshTimer = setInterval(fetchData, 30000);
+
+  // Clean up interval when window is removed from DOM
+  const hotlistObs = new MutationObserver(() => {
+    if (!document.body.contains(win.element)) { clearInterval(refreshTimer); hotlistObs.disconnect(); }
+  });
+  hotlistObs.observe(document.body, { childList: true, subtree: true });
+}
+
+// ── NOTES — Per-Symbol Trading Notes ───────────────────────
+function cmdNotes() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const sym = currentSymbol;
+  const storageKey = `typhoon_notes_${sym}`;
+  const win = createWindow({ title: `Notes \u2014 ${sym}`, width: 400, height: 350 });
+  win.contentElement.textContent = "";
+
+  const container = document.createElement("div");
+  container.style.cssText = "display:flex;flex-direction:column;height:100%;padding:8px;box-sizing:border-box;";
+
+  const textarea = document.createElement("textarea");
+  textarea.style.cssText = "flex:1;width:100%;background:#1a1a2e;color:#ccc;border:1px solid #333;font-family:'Iosevka Fixed',monospace;font-size:12px;padding:8px;resize:none;border-radius:3px;box-sizing:border-box;";
+  textarea.placeholder = `Trading notes for ${sym}...`;
+  textarea.value = localStorage.getItem(storageKey) || "";
+
+  let saveTimeout = null;
+  textarea.addEventListener("input", () => {
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      const val = textarea.value;
+      if (val) {
+        localStorage.setItem(storageKey, val);
+      } else {
+        localStorage.removeItem(storageKey);
+      }
+      updateNotesIndicator();
+    }, 500);
+  });
+
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:8px;margin-top:8px;";
+  const clearBtn = document.createElement("button");
+  clearBtn.textContent = "Clear";
+  clearBtn.className = "fw-btn";
+  clearBtn.style.cssText += "background:#611;";
+  clearBtn.addEventListener("click", () => {
+    textarea.value = "";
+    localStorage.removeItem(storageKey);
+    updateNotesIndicator();
+    log(`Notes cleared for ${sym}`, "ok");
+  });
+  btnRow.appendChild(clearBtn);
+  container.appendChild(textarea);
+  container.appendChild(btnRow);
+  win.appendElement(container);
+  textarea.focus();
+}
+
+/** Update the notes indicator in the status bar */
+function updateNotesIndicator() {
+  const statusBar = document.getElementById("connect-status-bar");
+  if (!statusBar) return;
+  const existing = statusBar.querySelector(".notes-badge");
+  if (existing) existing.remove();
+  if (currentSymbol && localStorage.getItem(`typhoon_notes_${currentSymbol}`)) {
+    const badge = document.createElement("span");
+    badge.className = "notes-badge";
+    badge.textContent = " \uD83D\uDCDD";
+    badge.title = "Trading notes exist for this symbol";
+    badge.style.cursor = "pointer";
+    badge.addEventListener("click", () => cmdNotes());
+    statusBar.appendChild(badge);
+  }
+}
+
+// ── TIMER — Custom Countdown Timers ────────────────────────
+function cmdTimer() {
+  const TIMER_KEY = "typhoon_timers";
+  const win = createWindow({ title: "Countdown Timers", width: 450, height: 400 });
+  win.contentElement.textContent = "";
+
+  let timers = [];
+  try { timers = JSON.parse(localStorage.getItem(TIMER_KEY) || "[]"); } catch { timers = []; }
+
+  const container = document.createElement("div");
+  container.style.cssText = "padding:8px;display:flex;flex-direction:column;height:100%;box-sizing:border-box;";
+
+  const addSection = document.createElement("div");
+  addSection.style.cssText = "border-bottom:1px solid #333;padding-bottom:8px;margin-bottom:8px;";
+  const addTitle = document.createElement("div");
+  addTitle.textContent = "Add Timer";
+  addTitle.style.cssText = "color:#8ff;font-size:12px;font-weight:bold;margin-bottom:6px;";
+  addSection.appendChild(addTitle);
+
+  const row1 = document.createElement("div");
+  row1.style.cssText = "display:flex;gap:6px;margin-bottom:6px;align-items:center;";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.placeholder = "Timer name";
+  nameInput.style.cssText = "flex:1;background:#1a1a2e;color:#ccc;border:1px solid #333;padding:4px 8px;font-size:12px;border-radius:3px;";
+  const hoursInput = document.createElement("input");
+  hoursInput.type = "number";
+  hoursInput.placeholder = "Hours from now";
+  hoursInput.min = "0";
+  hoursInput.step = "0.5";
+  hoursInput.style.cssText = "width:100px;background:#1a1a2e;color:#ccc;border:1px solid #333;padding:4px 8px;font-size:12px;border-radius:3px;";
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "+";
+  addBtn.className = "fw-btn";
+  addBtn.style.cssText += "padding:4px 12px;";
+  row1.appendChild(nameInput);
+  row1.appendChild(hoursInput);
+  row1.appendChild(addBtn);
+  addSection.appendChild(row1);
+
+  const presetRow = document.createElement("div");
+  presetRow.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;";
+  const presets = [
+    { label: "London Open (08:00 UTC)", getTarget: () => { const d = new Date(); d.setUTCHours(8, 0, 0, 0); if (d <= new Date()) d.setUTCDate(d.getUTCDate() + 1); return d; } },
+    { label: "NY Open (14:30 UTC)", getTarget: () => { const d = new Date(); d.setUTCHours(14, 30, 0, 0); if (d <= new Date()) d.setUTCDate(d.getUTCDate() + 1); return d; } },
+    { label: "Next Hour", getTarget: () => { const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1); return d; } },
+  ];
+  for (const p of presets) {
+    const btn = document.createElement("button");
+    btn.textContent = p.label;
+    btn.className = "fw-btn";
+    btn.style.cssText += "font-size:10px;padding:3px 8px;";
+    btn.addEventListener("click", () => {
+      const target = p.getTarget();
+      timers.push({ name: p.label, target: target.getTime() });
+      saveTimers();
+      renderTimerList();
+    });
+    presetRow.appendChild(btn);
+  }
+  addSection.appendChild(presetRow);
+  container.appendChild(addSection);
+
+  addBtn.addEventListener("click", () => {
+    const name = nameInput.value.trim() || "Timer";
+    const hours = parseFloat(hoursInput.value);
+    if (isNaN(hours) || hours <= 0) { log("Enter valid hours", "warn"); return; }
+    const target = Date.now() + hours * 3600000;
+    timers.push({ name, target });
+    saveTimers();
+    renderTimerList();
+    nameInput.value = "";
+    hoursInput.value = "";
+  });
+
+  const listDiv = document.createElement("div");
+  listDiv.style.cssText = "flex:1;overflow-y:auto;";
+  container.appendChild(listDiv);
+  win.appendElement(container);
+
+  function saveTimers() {
+    localStorage.setItem(TIMER_KEY, JSON.stringify(timers));
+  }
+
+  function renderTimerList() {
+    listDiv.textContent = "";
+    if (timers.length === 0) {
+      const msg = document.createElement("div");
+      msg.textContent = "No active timers";
+      msg.style.cssText = "color:#555;padding:20px;text-align:center;";
+      listDiv.appendChild(msg);
+      return;
+    }
+    for (let i = 0; i < timers.length; i++) {
+      const t = timers[i];
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-bottom:1px solid #222;";
+      row.dataset.timerIdx = i;
+
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = t.name;
+      nameSpan.style.cssText = "color:#ccc;font-size:12px;flex:1;";
+
+      const countdownSpan = document.createElement("span");
+      countdownSpan.className = "timer-countdown";
+      countdownSpan.style.cssText = "color:#8ff;font-family:'Iosevka Fixed',monospace;font-size:14px;font-weight:bold;min-width:80px;text-align:right;margin-right:8px;";
+
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "\u00D7";
+      removeBtn.style.cssText = "background:none;border:1px solid #555;color:#f44;cursor:pointer;font-size:14px;padding:2px 8px;border-radius:3px;";
+      removeBtn.addEventListener("click", () => {
+        timers.splice(i, 1);
+        saveTimers();
+        renderTimerList();
+      });
+
+      row.appendChild(nameSpan);
+      row.appendChild(countdownSpan);
+      row.appendChild(removeBtn);
+      listDiv.appendChild(row);
+    }
+  }
+
+  function updateCountdowns() {
+    const now = Date.now();
+    const rows = listDiv.querySelectorAll("[data-timer-idx]");
+    for (const row of rows) {
+      const idx = parseInt(row.dataset.timerIdx);
+      if (idx >= timers.length) continue;
+      const t = timers[idx];
+      const remaining = t.target - now;
+      const cdSpan = row.querySelector(".timer-countdown");
+      if (!cdSpan) continue;
+      if (remaining <= 0) {
+        cdSpan.textContent = "DONE!";
+        cdSpan.style.color = "#f44";
+        row.style.background = "rgba(255,0,0,0.08)";
+        if (!t.notified) {
+          t.notified = true;
+          log(`Timer "${t.name}" has expired!`, "warn");
+          if (Notification.permission === "granted") {
+            new Notification("TyphooN-Terminal Timer", { body: `${t.name} has expired!` });
+          } else if (Notification.permission !== "denied") {
+            Notification.requestPermission();
+          }
+        }
+      } else {
+        const hrs = Math.floor(remaining / 3600000);
+        const mins = Math.floor((remaining % 3600000) / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
+        cdSpan.textContent = `${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+      }
+    }
+  }
+
+  renderTimerList();
+  const tickInterval = setInterval(() => {
+    if (!document.body.contains(win.element)) { clearInterval(tickInterval); return; }
+    updateCountdowns();
+  }, 1000);
+
+  const timerObs = new MutationObserver(() => {
+    if (!document.body.contains(win.element)) { clearInterval(tickInterval); timerObs.disconnect(); }
+  });
+  timerObs.observe(document.body, { childList: true, subtree: true });
+}
+
+// ── EXPORT — Chart Data Export to CSV ──────────────────────
+function cmdExport() {
+  if (!currentSymbol || currentChartData.length === 0) { log("No chart data to export", "warn"); return; }
+  const win = createWindow({ title: `Export \u2014 ${currentSymbol}`, width: 650, height: 450 });
+  win.contentElement.textContent = "";
+
+  const container = document.createElement("div");
+  container.style.cssText = "padding:8px;display:flex;flex-direction:column;height:100%;box-sizing:border-box;";
+
+  const optRow = document.createElement("div");
+  optRow.style.cssText = "display:flex;gap:12px;align-items:center;margin-bottom:8px;flex-wrap:wrap;";
+  const exportIndicators = [
+    { id: "kama", label: "KAMA(10)" },
+    { id: "fisher", label: "Fisher(32)" },
+    { id: "rsi", label: "RSI(14)" },
+    { id: "sma200", label: "SMA(200)" },
+  ];
+  const checks = {};
+  for (const ind of exportIndicators) {
+    const lbl = document.createElement("label");
+    lbl.style.cssText = "color:#ccc;font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    checks[ind.id] = cb;
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(ind.label));
+    optRow.appendChild(lbl);
+  }
+  const genBtn = document.createElement("button");
+  genBtn.textContent = "Generate CSV";
+  genBtn.className = "fw-btn";
+  optRow.appendChild(genBtn);
+  container.appendChild(optRow);
+
+  const previewPre = document.createElement("pre");
+  previewPre.style.cssText = "flex:1;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#aaa;background:#111;padding:8px;overflow:auto;border:1px solid #333;border-radius:3px;margin:0;white-space:pre;";
+  previewPre.textContent = "Click 'Generate CSV' to preview data";
+  container.appendChild(previewPre);
+
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:8px;margin-top:8px;";
+  const dlBtn = document.createElement("button");
+  dlBtn.textContent = "Download CSV";
+  dlBtn.className = "fw-btn";
+  dlBtn.disabled = true;
+  const copyBtn = document.createElement("button");
+  copyBtn.textContent = "Copy to Clipboard";
+  copyBtn.className = "fw-btn";
+  copyBtn.disabled = true;
+  btnRow.appendChild(dlBtn);
+  btnRow.appendChild(copyBtn);
+  container.appendChild(btnRow);
+  win.appendElement(container);
+
+  let csvText = "";
+
+  genBtn.addEventListener("click", () => {
+    const data = currentChartData;
+    const useKama = checks.kama.checked;
+    const useFisher = checks.fisher.checked;
+    const useRsi = checks.rsi.checked;
+    const useSma200 = checks.sma200.checked;
+
+    let kamaMap = {}, fisherMap = {}, rsiMap = {}, smaMap = {};
+    if (useKama) {
+      const kamaResult = calcKAMA(data, 10);
+      for (const pt of kamaResult) kamaMap[pt.time] = pt.value;
+    }
+    if (useFisher) {
+      const fisherResult = calcEhlersFisher(data, 32);
+      for (const pt of fisherResult.fisher) fisherMap[pt.time] = pt.value;
+    }
+    if (useRsi) {
+      const rsiResult = calcRSI(data, 14);
+      for (const pt of rsiResult) rsiMap[pt.time] = pt.value;
+    }
+    if (useSma200) {
+      const smaResult = calcSMA(data, 200);
+      for (const pt of smaResult) smaMap[pt.time] = pt.value;
+    }
+
+    const cols = ["Date", "Open", "High", "Low", "Close", "Volume"];
+    if (useKama) cols.push("KAMA");
+    if (useFisher) cols.push("Fisher");
+    if (useRsi) cols.push("RSI");
+    if (useSma200) cols.push("SMA200");
+
+    const csvRows = [cols.join(",")];
+    for (const bar of data) {
+      const t = bar.time;
+      const dStr = typeof t === "number" ? new Date(t * 1000).toISOString().slice(0, 19) : String(t);
+      const vals = [dStr, bar.open, bar.high, bar.low, bar.close, bar.volume || 0];
+      if (useKama) vals.push(kamaMap[t] !== undefined ? kamaMap[t].toFixed(4) : "");
+      if (useFisher) vals.push(fisherMap[t] !== undefined ? fisherMap[t].toFixed(4) : "");
+      if (useRsi) vals.push(rsiMap[t] !== undefined ? rsiMap[t].toFixed(4) : "");
+      if (useSma200) vals.push(smaMap[t] !== undefined ? smaMap[t].toFixed(4) : "");
+      csvRows.push(vals.join(","));
+    }
+    csvText = csvRows.join("\n");
+
+    const previewLines = csvRows.slice(0, 11).join("\n");
+    previewPre.textContent = previewLines + (csvRows.length > 11 ? `\n... (${csvRows.length - 1} total rows)` : "");
+    dlBtn.disabled = false;
+    copyBtn.disabled = false;
+    log(`CSV generated: ${csvRows.length - 1} rows, ${cols.length} columns`, "ok");
+  });
+
+  dlBtn.addEventListener("click", () => {
+    if (!csvText) return;
+    const dStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const filename = `${currentSymbol}_${currentTimeframe}_${dStr}.csv`;
+    const blob = new Blob([csvText], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    log(`Downloaded ${filename}`, "ok");
+  });
+
+  copyBtn.addEventListener("click", () => {
+    if (!csvText) return;
+    navigator.clipboard.writeText(csvText).then(() => log("CSV copied to clipboard", "ok")).catch(e => log(`Clipboard copy failed: ${e}`, "error"));
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// BOOKMAP — Heatmap Order Book Over Time
+// ══════════════════════════════════════════════════════════════
+function cmdBookmap() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const sym = currentSymbol;
+  const isCryptoSym = /USD$|BTC$|ETH$|\//.test(sym) && !/^[A-Z]{1,5}$/.test(sym);
+  const SNAP_COUNT = 100, LEVELS = 30, LEVEL_PX = 4;
+  const snapshots = [];
+  let bmInterval = null;
+
+  const win = createWindow({ title: `${sym} \u2014 BOOKMAP (Heatmap)`, width: 640, height: 500, onClose() { if (bmInterval) { clearInterval(bmInterval); bmInterval = null; } } });
+  win.contentElement.textContent = "";
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 600; canvas.height = LEVELS * 2 * LEVEL_PX;
+  canvas.style.cssText = "display:block;margin:4px auto;border:1px solid #333;";
+  win.appendElement(canvas);
+
+  const bmStatsDiv = document.createElement("div");
+  bmStatsDiv.style.cssText = "padding:6px 12px;font-size:10px;font-family:Consolas,monospace;color:#ccc;display:flex;justify-content:space-around;border-top:1px solid #333;";
+  win.appendElement(bmStatsDiv);
+
+  const bmCtx = canvas.getContext("2d");
+  bmCtx.fillStyle = "#0a0a14"; bmCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+  function renderHeatmap() {
+    const W = canvas.width, H = canvas.height;
+    bmCtx.fillStyle = "#0a0a14"; bmCtx.fillRect(0, 0, W, H);
+    if (snapshots.length === 0) return;
+
+    let maxSize = 1;
+    for (const snap of snapshots) {
+      for (const b of snap.bids) if (b.size > maxSize) maxSize = b.size;
+      for (const a of snap.asks) if (a.size > maxSize) maxSize = a.size;
+    }
+
+    const colWidth = Math.max(1, Math.floor(W / SNAP_COUNT));
+    for (let si = 0; si < snapshots.length; si++) {
+      const snap = snapshots[si];
+      const x = si * colWidth;
+      if (x >= W) break;
+      const mid = snap.mid;
+      if (!mid || mid === 0) continue;
+
+      let priceStep = mid * 0.001;
+      if (snap.asks.length > 1) {
+        const sorted = [...snap.asks].sort((a, b) => a.price - b.price);
+        const diff = sorted[1].price - sorted[0].price;
+        if (diff > 0) priceStep = diff;
+      } else if (snap.bids.length > 1) {
+        const sorted = [...snap.bids].sort((a, b) => b.price - a.price);
+        const diff = sorted[0].price - sorted[1].price;
+        if (diff > 0) priceStep = diff;
+      }
+
+      for (let lvl = -LEVELS; lvl < LEVELS; lvl++) {
+        const price = mid + lvl * priceStep;
+        const row = LEVELS - 1 - lvl;
+        const y = row * LEVEL_PX;
+
+        let size = 0, isBid = false, isAsk = false;
+        if (lvl <= 0) {
+          let closest = null, closestDist = Infinity;
+          for (const b of snap.bids) { const d = Math.abs(b.price - price); if (d < closestDist) { closestDist = d; closest = b; } }
+          if (closest && closestDist <= priceStep * 1.5) { size = closest.size; isBid = true; }
+        }
+        if (lvl >= 0) {
+          let closest = null, closestDist = Infinity;
+          for (const a of snap.asks) { const d = Math.abs(a.price - price); if (d < closestDist) { closestDist = d; closest = a; } }
+          if (closest && closestDist <= priceStep * 1.5) { size = closest.size; isAsk = true; }
+        }
+
+        if (size > 0) {
+          const intensity = Math.min(1, size / maxSize);
+          const alpha = 0.15 + intensity * 0.85;
+          if (isAsk) bmCtx.fillStyle = `rgba(244,67,54,${alpha.toFixed(2)})`;
+          else if (isBid) bmCtx.fillStyle = `rgba(76,175,80,${alpha.toFixed(2)})`;
+          bmCtx.fillRect(x, y, colWidth, LEVEL_PX);
+        }
+      }
+
+      const midRow = LEVELS - 1;
+      bmCtx.fillStyle = "rgba(255,255,255,0.7)";
+      bmCtx.fillRect(x, midRow * LEVEL_PX, colWidth, 1);
+    }
+
+    bmCtx.fillStyle = "#888"; bmCtx.font = "9px Consolas,monospace"; bmCtx.textAlign = "left";
+    bmCtx.fillText("Ask \u2191", 4, 12);
+    bmCtx.fillText("Bid \u2193", 4, H - 4);
+    bmCtx.textAlign = "right";
+    if (snapshots.length > 0) {
+      const mid = snapshots[snapshots.length - 1].mid;
+      bmCtx.fillStyle = "#fff";
+      bmCtx.fillText(`Mid: $${mid.toFixed(2)}`, W - 4, LEVELS * LEVEL_PX + 3);
+    }
+  }
+
+  function updateBmStats() {
+    if (snapshots.length === 0) { bmStatsDiv.textContent = "Waiting for data..."; return; }
+    const last = snapshots[snapshots.length - 1];
+    const largestBid = last.bids.reduce((max, b) => b.size > max.size ? b : max, { size: 0, price: 0 });
+    const largestAsk = last.asks.reduce((max, a) => a.size > max.size ? a : max, { size: 0, price: 0 });
+    const totalBidVol = last.bids.reduce((s, b) => s + b.size, 0);
+    const totalAskVol = last.asks.reduce((s, a) => s + a.size, 0);
+    bmStatsDiv.innerHTML = `<span style="color:#4caf50">Largest Bid: ${largestBid.size.toFixed(2)} @ $${largestBid.price.toFixed(2)}</span>` +
+      `<span style="color:#f44336">Largest Ask: ${largestAsk.size.toFixed(2)} @ $${largestAsk.price.toFixed(2)}</span>` +
+      `<span style="color:#4caf50">Total Bid Vol: ${totalBidVol.toFixed(2)}</span>` +
+      `<span style="color:#f44336">Total Ask Vol: ${totalAskVol.toFixed(2)}</span>`;
+  }
+
+  async function fetchSnapshot() {
+    try {
+      let bids = [], asks = [], mid = 0;
+      if (isCryptoSym) {
+        const json = await invokeQuiet("get_orderbook", { symbol: sym });
+        const book = typeof json === "string" ? JSON.parse(json) : json;
+        bids = (book.bids || []).map(b => ({ price: parseFloat(b.price || b.p || 0), size: parseFloat(b.size || b.qty || b.s || 0) })).filter(b => b.price > 0);
+        asks = (book.asks || []).map(a => ({ price: parseFloat(a.price || a.p || 0), size: parseFloat(a.size || a.qty || a.s || 0) })).filter(a => a.price > 0);
+        if (bids.length > 0 && asks.length > 0) mid = (bids[0].price + asks[0].price) / 2;
+        else if (bids.length > 0) mid = bids[0].price;
+        else if (asks.length > 0) mid = asks[0].price;
+      } else {
+        const json = await invokeQuiet("get_latest_quote", { symbol: sym });
+        const q = typeof json === "string" ? JSON.parse(json) : json;
+        const bid = parseFloat(q.bid || q.bp || 0);
+        const ask = parseFloat(q.ask || q.ap || 0);
+        const bidSize = parseFloat(q.bid_size || q.bs || 1);
+        const askSize = parseFloat(q.ask_size || q.as || 1);
+        if (bid > 0) bids = [{ price: bid, size: bidSize }];
+        if (ask > 0) asks = [{ price: ask, size: askSize }];
+        mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : bid || ask || lastPrice || 0;
+      }
+      if (mid === 0) return;
+      snapshots.push({ time: Date.now(), bids, asks, mid });
+      if (snapshots.length > SNAP_COUNT) snapshots.shift();
+      renderHeatmap();
+      updateBmStats();
+    } catch (_) {}
+  }
+
+  fetchSnapshot();
+  bmInterval = setInterval(fetchSnapshot, 2000);
+}
+
+// ══════════════════════════════════════════════════════════════
+// DASHBOARD — Customizable Widget Dashboard
+// ══════════════════════════════════════════════════════════════
+function cmdDashboard() {
+  const DASH_STORAGE_KEY = "typhoon_dashboard_widgets";
+  const ALL_WIDGETS = ["miniChart", "positions", "watchlistPrices", "newsHeadlines", "alertStatus", "accountSummary", "signalScore", "topMovers"];
+  const WIDGET_LABELS = { miniChart: "Mini Chart", positions: "Positions Summary", watchlistPrices: "Watchlist Prices", newsHeadlines: "News Headlines", alertStatus: "Alert Status", accountSummary: "Account Summary", signalScore: "Signal Score", topMovers: "Top Movers" };
+  let dashEnabled;
+  try { dashEnabled = JSON.parse(localStorage.getItem(DASH_STORAGE_KEY)); if (!Array.isArray(dashEnabled)) dashEnabled = null; } catch (_) { dashEnabled = null; }
+  if (!dashEnabled) dashEnabled = [...ALL_WIDGETS];
+
+  let dashInterval = null;
+  const win = createWindow({ title: "DASHBOARD \u2014 Widget Grid", width: 820, height: 620, onClose() { if (dashInterval) { clearInterval(dashInterval); dashInterval = null; } } });
+  win.contentElement.textContent = "";
+
+  const configBar = document.createElement("div");
+  configBar.style.cssText = "padding:4px 8px;border-bottom:1px solid #333;display:flex;align-items:center;gap:6px;flex-wrap:wrap;";
+  const cfgLabel = document.createElement("span"); cfgLabel.textContent = "Widgets:"; cfgLabel.style.cssText = "color:#888;font-size:10px;font-weight:bold;";
+  configBar.appendChild(cfgLabel);
+  for (const wid of ALL_WIDGETS) {
+    const lbl = document.createElement("label"); lbl.style.cssText = "color:#aaa;font-size:9px;display:flex;align-items:center;gap:2px;cursor:pointer;";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = dashEnabled.includes(wid);
+    cb.addEventListener("change", () => {
+      if (cb.checked && !dashEnabled.includes(wid)) dashEnabled.push(wid);
+      else if (!cb.checked) dashEnabled = dashEnabled.filter(w => w !== wid);
+      localStorage.setItem(DASH_STORAGE_KEY, JSON.stringify(dashEnabled));
+      renderDashGrid();
+    });
+    lbl.appendChild(cb); lbl.appendChild(document.createTextNode(WIDGET_LABELS[wid]));
+    configBar.appendChild(lbl);
+  }
+  win.appendElement(configBar);
+
+  const dashGrid = document.createElement("div");
+  dashGrid.style.cssText = "display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px;overflow-y:auto;max-height:540px;";
+  win.appendElement(dashGrid);
+
+  const widgetDivs = {};
+
+  function mkWidget(id, title) {
+    const div = document.createElement("div");
+    div.style.cssText = "border:1px solid #333;border-radius:4px;padding:6px;min-height:120px;background:#0a0a14;";
+    const hdr = document.createElement("div"); hdr.textContent = title; hdr.style.cssText = "font-size:10px;font-weight:bold;color:#ff8;margin-bottom:4px;border-bottom:1px solid #222;padding-bottom:3px;";
+    const body = document.createElement("div"); body.style.cssText = "font-size:10px;color:#ccc;font-family:Consolas,monospace;overflow:hidden;";
+    div.appendChild(hdr); div.appendChild(body);
+    widgetDivs[id] = body;
+    return div;
+  }
+
+  function renderDashGrid() {
+    dashGrid.textContent = "";
+    for (const wid of ALL_WIDGETS) {
+      if (!dashEnabled.includes(wid)) continue;
+      dashGrid.appendChild(mkWidget(wid, WIDGET_LABELS[wid]));
+    }
+    refreshDashAll();
+  }
+
+  async function refreshDashAll() {
+    if (widgetDivs.miniChart && dashEnabled.includes("miniChart")) {
+      const body = widgetDivs.miniChart; body.textContent = "";
+      const sym = currentSymbol || "SPY";
+      const cKey = `${sym}:1Day`;
+      let bars = barCache[cKey] && barCache[cKey].data ? barCache[cKey].data.slice(-50) : null;
+      if (!bars) { try { const bj = await invokeQuiet("get_bars", { symbol: sym, timeframe: "1Day", limit: 50 }); bars = JSON.parse(bj); } catch (_) {} }
+      if (bars && bars.length > 2) {
+        const cv = document.createElement("canvas"); cv.width = 240; cv.height = 80; cv.style.cssText = "display:block;width:100%;";
+        body.appendChild(cv);
+        const ct = cv.getContext("2d");
+        const closes = bars.map(b => b.close || b.c || 0);
+        const minC = Math.min(...closes), maxC = Math.max(...closes), rng = maxC - minC || 1;
+        ct.strokeStyle = closes[closes.length - 1] >= closes[0] ? "#4caf50" : "#f44336"; ct.lineWidth = 1.5; ct.beginPath();
+        for (let i = 0; i < closes.length; i++) { const px = (i / (closes.length - 1)) * cv.width; const py = cv.height - ((closes[i] - minC) / rng) * (cv.height - 4) - 2; if (i === 0) ct.moveTo(px, py); else ct.lineTo(px, py); }
+        ct.stroke();
+        const lbl = document.createElement("div"); lbl.style.cssText = "color:#888;font-size:9px;margin-top:2px;"; lbl.textContent = `${sym} $${closes[closes.length - 1].toFixed(2)}`; body.appendChild(lbl);
+      } else { body.textContent = "No chart data"; }
+    }
+
+    if (widgetDivs.positions && dashEnabled.includes("positions")) {
+      const body = widgetDivs.positions; body.textContent = "";
+      try {
+        const pj = await invokeQuiet("get_positions"); const positions = JSON.parse(pj);
+        if (positions.length === 0) { body.textContent = "No open positions"; }
+        else {
+          let totalPL = 0;
+          for (const p of positions.slice(0, 6)) {
+            const psym = p.symbol || p.S || "?";
+            const pl = parseFloat(p.unrealized_pl || p.unrealized_pnl || 0);
+            totalPL += pl;
+            const row = document.createElement("div"); row.style.cssText = `display:flex;justify-content:space-between;padding:1px 0;color:${pl >= 0 ? "#4caf50" : "#f44336"};`;
+            row.innerHTML = `<span>${psym}</span><span>${pl >= 0 ? "+" : ""}$${pl.toFixed(2)}</span>`;
+            body.appendChild(row);
+          }
+          const tot = document.createElement("div"); tot.style.cssText = `border-top:1px solid #333;margin-top:2px;padding-top:2px;font-weight:bold;color:${totalPL >= 0 ? "#4caf50" : "#f44336"};text-align:right;`;
+          tot.textContent = `Total: ${totalPL >= 0 ? "+" : ""}$${totalPL.toFixed(2)}`; body.appendChild(tot);
+        }
+      } catch (_) { body.textContent = "Failed to load positions"; }
+    }
+
+    if (widgetDivs.watchlistPrices && dashEnabled.includes("watchlistPrices")) {
+      const body = widgetDivs.watchlistPrices; body.textContent = "";
+      const wl = getWatchlist();
+      if (wl.length === 0) { body.textContent = "No watchlist symbols"; }
+      else {
+        for (const wsym of wl.slice(0, 8)) {
+          try {
+            const qj = await invokeQuiet("get_latest_quote", { symbol: wsym }); const q = JSON.parse(qj);
+            const price = parseFloat(q.ask || q.ap || q.price || q.last || 0);
+            const ck = `${wsym}:1Day`; const cached = barCache[ck];
+            let chg = 0;
+            if (cached && cached.data && cached.data.length >= 2) { const prev = cached.data[cached.data.length - 2].close; if (prev > 0) chg = ((price - prev) / prev) * 100; }
+            const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;padding:1px 0;";
+            row.innerHTML = `<span style="color:#8ff">${wsym}</span><span>$${price.toFixed(2)}</span><span style="color:${chg >= 0 ? "#4caf50" : "#f44336"}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span>`;
+            body.appendChild(row);
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (widgetDivs.newsHeadlines && dashEnabled.includes("newsHeadlines")) {
+      const body = widgetDivs.newsHeadlines; body.textContent = "";
+      try {
+        const nj = await invokeQuiet("get_news", { symbol: currentSymbol || "SPY", limit: 5 }); const news = JSON.parse(nj);
+        if (!Array.isArray(news) || news.length === 0) { body.textContent = "No recent news"; }
+        else {
+          for (const n of news.slice(0, 5)) {
+            const d = document.createElement("div"); d.style.cssText = "padding:2px 0;border-bottom:1px solid #111;";
+            d.innerHTML = `<span style="color:#8cf;font-size:9px;">${(n.headline || n.title || "").substring(0, 60)}</span>`;
+            body.appendChild(d);
+          }
+        }
+      } catch (_) { body.textContent = "Failed to load news"; }
+    }
+
+    if (widgetDivs.alertStatus && dashEnabled.includes("alertStatus")) {
+      const body = widgetDivs.alertStatus; body.textContent = "";
+      const allAlerts = [...priceAlerts, ...multiConditionAlerts];
+      const active = allAlerts.filter(a => !a.triggered);
+      body.innerHTML = `<div>Active alerts: <span style="color:#ff8;font-weight:bold;">${active.length}</span></div>` +
+        `<div>Total alerts: ${allAlerts.length}</div>`;
+      if (active.length > 0) {
+        const next = active[0];
+        body.innerHTML += `<div style="margin-top:4px;color:#8cf;">Next: ${next.symbol || next.name || "?"} @ $${next.price || "?"}</div>`;
+      }
+    }
+
+    if (widgetDivs.accountSummary && dashEnabled.includes("accountSummary")) {
+      const body = widgetDivs.accountSummary; body.textContent = "";
+      try {
+        const aj = await invokeQuiet("get_account"); const ac = JSON.parse(aj);
+        const equity = parseFloat(ac.equity || ac.portfolio_value || 0);
+        const balance = parseFloat(ac.cash || ac.balance || 0);
+        const margin = parseFloat(ac.initial_margin || ac.margin_used || 0);
+        const bp = parseFloat(ac.buying_power || 0);
+        body.innerHTML = `<div>Equity: <span style="color:#4caf50">$${equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></div>` +
+          `<div>Cash: $${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>` +
+          `<div>Margin Used: $${margin.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>` +
+          `<div>Buying Power: $${bp.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>`;
+      } catch (_) { body.textContent = "Failed to load account"; }
+    }
+
+    if (widgetDivs.signalScore && dashEnabled.includes("signalScore")) {
+      const body = widgetDivs.signalScore; body.textContent = "";
+      const sym = currentSymbol || "SPY";
+      const cKey = `${sym}:1Day`; const cached = barCache[cKey];
+      let sigData = cached && cached.data ? cached.data : null;
+      if (!sigData) { try { const bj = await invokeQuiet("get_bars", { symbol: sym, timeframe: "1Day", limit: 220 }); sigData = JSON.parse(bj); } catch (_) {} }
+      if (sigData && sigData.length > 20) {
+        let score = 0, signals = [];
+        const rsiData = calcRSI(sigData, 14);
+        const latestRSI = rsiData.length > 0 ? rsiData[rsiData.length - 1].value : 50;
+        if (latestRSI < 30) { score += 2; signals.push("RSI oversold"); } else if (latestRSI > 70) { score -= 2; signals.push("RSI overbought"); }
+        if (sigData.length >= 200) {
+          const sma200 = calcSMA(sigData, 200);
+          const lastSMA = sma200.length > 0 ? sma200[sma200.length - 1].value : 0;
+          if (sigData[sigData.length - 1].close > lastSMA) { score += 1; signals.push("Above SMA200"); } else { score -= 1; signals.push("Below SMA200"); }
+        }
+        if (sigData.length >= 50) {
+          const sma50 = calcSMA(sigData, 50);
+          const lastSMA50 = sma50.length > 0 ? sma50[sma50.length - 1].value : 0;
+          if (sigData[sigData.length - 1].close > lastSMA50) { score += 1; signals.push("Above SMA50"); } else { score -= 1; signals.push("Below SMA50"); }
+        }
+        const scoreColor = score >= 2 ? "#4caf50" : score <= -2 ? "#f44336" : "#ff9800";
+        const slabel = score >= 2 ? "BULLISH" : score <= -2 ? "BEARISH" : "NEUTRAL";
+        body.innerHTML = `<div style="font-size:16px;font-weight:bold;color:${scoreColor};text-align:center;">${slabel} (${score >= 0 ? "+" : ""}${score})</div>` +
+          `<div style="margin-top:4px;font-size:9px;color:#888;">${sym} | RSI: ${latestRSI.toFixed(1)}</div>` +
+          `<div style="font-size:9px;color:#666;">${signals.join(" | ")}</div>`;
+      } else { body.textContent = `No data for ${sym}`; }
+    }
+
+    if (widgetDivs.topMovers && dashEnabled.includes("topMovers")) {
+      const body = widgetDivs.topMovers; body.textContent = "";
+      try {
+        const mj = await invokeQuiet("get_top_movers", { marketType: "stocks", top: 6 }); const movers = JSON.parse(mj);
+        const gainers = (movers.gainers || []).slice(0, 3);
+        const losers = (movers.losers || []).slice(0, 3);
+        if (gainers.length > 0) {
+          const gh = document.createElement("div"); gh.textContent = "Gainers"; gh.style.cssText = "color:#4caf50;font-weight:bold;font-size:9px;"; body.appendChild(gh);
+          for (const g of gainers) {
+            const r = document.createElement("div"); r.style.cssText = "display:flex;justify-content:space-between;color:#4caf50;font-size:9px;";
+            r.innerHTML = `<span>${g.symbol || g.S || "?"}</span><span>+${(g.percent_change || g.change_percent || 0).toFixed(2)}%</span>`;
+            body.appendChild(r);
+          }
+        }
+        if (losers.length > 0) {
+          const lh = document.createElement("div"); lh.textContent = "Losers"; lh.style.cssText = "color:#f44336;font-weight:bold;font-size:9px;margin-top:4px;"; body.appendChild(lh);
+          for (const lo of losers) {
+            const r = document.createElement("div"); r.style.cssText = "display:flex;justify-content:space-between;color:#f44336;font-size:9px;";
+            r.innerHTML = `<span>${lo.symbol || lo.S || "?"}</span><span>${(lo.percent_change || lo.change_percent || 0).toFixed(2)}%</span>`;
+            body.appendChild(r);
+          }
+        }
+        if (gainers.length === 0 && losers.length === 0) body.textContent = "No mover data";
+      } catch (_) { body.textContent = "Failed to load movers"; }
+    }
+  }
+
+  renderDashGrid();
+  dashInterval = setInterval(refreshDashAll, 10000);
+}
+
+// ══════════════════════════════════════════════════════════════
+// SCANNER-RT — Real-Time Multi-Symbol Scanner
+// ══════════════════════════════════════════════════════════════
+function cmdScannerRT() {
+  let scanInterval = null;
+  let scanning = false;
+
+  const win = createWindow({ title: "SCANNER-RT \u2014 Real-Time Scanner", width: 680, height: 500, onClose() { scanning = false; if (scanInterval) { clearInterval(scanInterval); scanInterval = null; } } });
+  win.contentElement.textContent = "";
+
+  const scanForm = document.createElement("div");
+  scanForm.style.cssText = "padding:8px;border-bottom:1px solid #333;font-size:11px;";
+
+  const condRow = document.createElement("div"); condRow.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:6px;";
+  const condLabel = document.createElement("span"); condLabel.textContent = "Condition:"; condLabel.style.cssText = "color:#888;font-size:10px;";
+  const condSel = document.createElement("select"); condSel.style.cssText = "flex:1;font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:4px;";
+  const scanConditions = [
+    { value: "rsi_below_30", label: "RSI crossed below 30" },
+    { value: "rsi_above_70", label: "RSI crossed above 70" },
+    { value: "price_above_sma200", label: "Price broke above SMA200" },
+    { value: "price_below_sma200", label: "Price broke below SMA200" },
+    { value: "volume_2x", label: "Volume > 2x average" },
+    { value: "52w_high", label: "New 52-week high" },
+    { value: "52w_low", label: "New 52-week low" },
+  ];
+  for (const c of scanConditions) { const opt = document.createElement("option"); opt.value = c.value; opt.textContent = c.label; condSel.appendChild(opt); }
+  condRow.appendChild(condLabel); condRow.appendChild(condSel);
+  scanForm.appendChild(condRow);
+
+  const srcRow = document.createElement("div"); srcRow.style.cssText = "display:flex;gap:12px;align-items:center;margin-bottom:6px;";
+  const srcLabel = document.createElement("span"); srcLabel.textContent = "Source:"; srcLabel.style.cssText = "color:#888;font-size:10px;";
+  const mkScanRadio = (name, value, label, checked) => {
+    const lbl = document.createElement("label"); lbl.style.cssText = "color:#ccc;font-size:10px;display:flex;align-items:center;gap:3px;cursor:pointer;";
+    const radio = document.createElement("input"); radio.type = "radio"; radio.name = name; radio.value = value; if (checked) radio.checked = true;
+    lbl.appendChild(radio); lbl.appendChild(document.createTextNode(label)); return { lbl, radio };
+  };
+  const srcWL = mkScanRadio("scanrt-src", "watchlist", "Watchlist", true);
+  const srcMA = mkScanRadio("scanrt-src", "most_active", "Most Active", false);
+  srcRow.appendChild(srcLabel); srcRow.appendChild(srcWL.lbl); srcRow.appendChild(srcMA.lbl);
+  scanForm.appendChild(srcRow);
+
+  const btnRow = document.createElement("div"); btnRow.style.cssText = "display:flex;gap:8px;align-items:center;";
+  const scanToggleBtn = document.createElement("button"); scanToggleBtn.textContent = "Start Scanning";
+  scanToggleBtn.style.cssText = "font-size:11px;padding:4px 14px;background:#1b5e20;color:#8f8;border:1px solid #555;cursor:pointer;font-weight:bold;";
+  const scanStatusSpan = document.createElement("span"); scanStatusSpan.style.cssText = "color:#888;font-size:10px;"; scanStatusSpan.textContent = "Stopped";
+  btnRow.appendChild(scanToggleBtn); btnRow.appendChild(scanStatusSpan);
+  scanForm.appendChild(btnRow);
+  win.appendElement(scanForm);
+
+  const resDiv = document.createElement("div"); resDiv.style.cssText = "overflow-y:auto;max-height:360px;font-size:10px;";
+  const tblHeader = document.createElement("div"); tblHeader.style.cssText = "display:flex;padding:4px 8px;border-bottom:1px solid #444;color:#666;font-weight:bold;font-size:9px;position:sticky;top:0;background:#0a0a14;";
+  for (const h of ["Time", "Symbol", "Condition", "Value", "Action"]) { const s = document.createElement("span"); s.style.cssText = "flex:1;text-align:center;"; s.textContent = h; tblHeader.appendChild(s); }
+  resDiv.appendChild(tblHeader);
+  const resBody = document.createElement("div");
+  resDiv.appendChild(resBody);
+  win.appendElement(resDiv);
+
+  function addScanResult(sym, condLbl, value) {
+    const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+    const row = document.createElement("div"); row.style.cssText = "display:flex;padding:3px 8px;border-bottom:1px solid #1a1a2e;cursor:pointer;";
+    row.addEventListener("mouseenter", function() { this.style.background = "#1a1a2e"; }); row.addEventListener("mouseleave", function() { this.style.background = ""; });
+    row.addEventListener("click", () => { document.getElementById("symbol-input").value = sym; triggerLoad(); });
+    const vals = [
+      { text: time, css: "color:#888;" },
+      { text: sym, css: "color:#8ff;font-weight:bold;" },
+      { text: condLbl, css: "color:#ccc;" },
+      { text: value, css: "color:#ff8;font-family:Consolas,monospace;" },
+      { text: "Load", css: "color:#8cf;text-decoration:underline;" },
+    ];
+    for (const v of vals) { const sp = document.createElement("span"); sp.style.cssText = "flex:1;text-align:center;" + v.css; sp.textContent = v.text; row.appendChild(sp); }
+    resBody.insertBefore(row, resBody.firstChild);
+
+    if (Notification.permission === "granted") {
+      try { new Notification(`SCANNER-RT: ${sym}`, { body: `${condLbl}: ${value}`, icon: "/favicon.ico" }); } catch (_) {}
+    }
+  }
+
+  async function runScan() {
+    const src = srcWL.radio.checked ? "watchlist" : "most_active";
+    let symbols = [];
+    if (src === "watchlist") {
+      symbols = getWatchlist();
+    } else {
+      try { const aj = await invokeQuiet("get_most_active", { top: 20 }); const active = JSON.parse(aj); symbols = (active.most_actives || active || []).map(a => a.symbol || a.S || "").filter(s => s); } catch (_) {}
+    }
+    if (symbols.length === 0) { scanStatusSpan.textContent = "No symbols to scan"; return; }
+    scanStatusSpan.textContent = `Scanning ${symbols.length} symbols every 60s...`;
+    const cond = condSel.value;
+
+    for (const sym of symbols) {
+      if (!scanning) break;
+      try {
+        const barsJson = await invokeQuiet("get_bars", { symbol: sym, timeframe: "1Day", limit: 220 });
+        const bars = JSON.parse(barsJson);
+        if (!bars || bars.length < 20) continue;
+        barCache[`${sym}:1Day`] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+
+        const closes = bars.map(b => b.close || b.c || 0);
+        const curPrice = closes[closes.length - 1];
+        const prevPrice = closes[closes.length - 2];
+
+        if (cond === "rsi_below_30") {
+          const rsiData = calcRSI(bars, 14);
+          if (rsiData.length >= 2) {
+            const cur = rsiData[rsiData.length - 1].value;
+            const prev = rsiData[rsiData.length - 2].value;
+            if (cur < 30 && prev >= 30) addScanResult(sym, "RSI crossed below 30", cur.toFixed(1));
+          }
+        } else if (cond === "rsi_above_70") {
+          const rsiData = calcRSI(bars, 14);
+          if (rsiData.length >= 2) {
+            const cur = rsiData[rsiData.length - 1].value;
+            const prev = rsiData[rsiData.length - 2].value;
+            if (cur > 70 && prev <= 70) addScanResult(sym, "RSI crossed above 70", cur.toFixed(1));
+          }
+        } else if (cond === "price_above_sma200") {
+          if (bars.length >= 201) {
+            const sma = calcSMA(bars, 200);
+            if (sma.length >= 2) {
+              const curSMA = sma[sma.length - 1].value;
+              const prevSMA = sma[sma.length - 2].value;
+              if (curPrice > curSMA && prevPrice <= prevSMA) addScanResult(sym, "Price broke above SMA200", `$${curPrice.toFixed(2)} > $${curSMA.toFixed(2)}`);
+            }
+          }
+        } else if (cond === "price_below_sma200") {
+          if (bars.length >= 201) {
+            const sma = calcSMA(bars, 200);
+            if (sma.length >= 2) {
+              const curSMA = sma[sma.length - 1].value;
+              const prevSMA = sma[sma.length - 2].value;
+              if (curPrice < curSMA && prevPrice >= prevSMA) addScanResult(sym, "Price broke below SMA200", `$${curPrice.toFixed(2)} < $${curSMA.toFixed(2)}`);
+            }
+          }
+        } else if (cond === "volume_2x") {
+          const vols = bars.slice(-21, -1).map(b => b.volume || 0);
+          const avgVol = vols.reduce((a, b) => a + b, 0) / vols.length;
+          const curVol = bars[bars.length - 1].volume || 0;
+          if (avgVol > 0 && curVol > avgVol * 2) addScanResult(sym, "Volume > 2x average", `${(curVol / avgVol).toFixed(1)}x`);
+        } else if (cond === "52w_high") {
+          const high252 = Math.max(...closes.slice(-252));
+          if (curPrice >= high252 && curPrice > prevPrice) addScanResult(sym, "New 52-week high", `$${curPrice.toFixed(2)}`);
+        } else if (cond === "52w_low") {
+          const low252 = Math.min(...closes.slice(-252).filter(c => c > 0));
+          if (curPrice <= low252 && curPrice < prevPrice) addScanResult(sym, "New 52-week low", `$${curPrice.toFixed(2)}`);
+        }
+      } catch (_) {}
+    }
+    scanStatusSpan.textContent = `Scanned ${symbols.length} symbols. Next scan in 60s...`;
+  }
+
+  scanToggleBtn.addEventListener("click", () => {
+    scanning = !scanning;
+    if (scanning) {
+      scanToggleBtn.textContent = "Stop Scanning"; scanToggleBtn.style.background = "#b71c1c"; scanToggleBtn.style.color = "#faa";
+      if (Notification.permission === "default") Notification.requestPermission();
+      runScan();
+      scanInterval = setInterval(runScan, 60000);
+    } else {
+      scanToggleBtn.textContent = "Start Scanning"; scanToggleBtn.style.background = "#1b5e20"; scanToggleBtn.style.color = "#8f8";
+      scanStatusSpan.textContent = "Stopped";
+      if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// ALGO — Live Algorithm Monitor
+// ══════════════════════════════════════════════════════════════
+function cmdAlgoMonitor() {
+  let algoInterval = null;
+  const win = createWindow({ title: "ALGO \u2014 Live Algorithm Monitor", width: 550, height: 420, onClose() { if (algoInterval) { clearInterval(algoInterval); algoInterval = null; } } });
+  win.contentElement.textContent = "";
+
+  const algoContainer = document.createElement("div");
+  algoContainer.style.cssText = "padding:12px;font-size:11px;font-family:Consolas,monospace;color:#ccc;";
+  win.appendElement(algoContainer);
+
+  function renderAlgoMonitor() {
+    algoContainer.textContent = "";
+    let state = null;
+    try {
+      const raw = localStorage.getItem("typhoon_autotrade_state");
+      if (raw) state = JSON.parse(raw);
+    } catch (_) {}
+
+    if (!state) {
+      const msg = document.createElement("div");
+      msg.style.cssText = "color:#888;padding:30px;text-align:center;line-height:2;";
+      msg.innerHTML = `<div style="font-size:14px;color:#ff8;margin-bottom:8px;">No Active Strategies</div>` +
+        `<div>No active strategies. Use Ctrl+K \u2192 AUTOTRADE to start one.</div>`;
+      algoContainer.appendChild(msg);
+      return;
+    }
+
+    const hdr = document.createElement("div"); hdr.style.cssText = "margin-bottom:12px;";
+    const stratName = state.strategyName || state.strategy || state.plugin || "Unknown Strategy";
+    const status = state.status || (state.active ? "Running" : "Stopped");
+    const statusColor = status === "Running" ? "#4caf50" : status === "Error" ? "#f44336" : "#ff9800";
+    hdr.innerHTML = `<div style="font-size:14px;font-weight:bold;color:#ff8;">${stratName}</div>` +
+      `<div style="margin-top:4px;">Status: <span style="color:${statusColor};font-weight:bold;">${status}</span></div>`;
+    algoContainer.appendChild(hdr);
+
+    const posSection = document.createElement("div"); posSection.style.cssText = "border:1px solid #333;border-radius:4px;padding:8px;margin-bottom:8px;";
+    const posTitle = document.createElement("div"); posTitle.textContent = "Current Position"; posTitle.style.cssText = "font-weight:bold;color:#8cf;margin-bottom:4px;font-size:10px;";
+    posSection.appendChild(posTitle);
+    if (state.position && state.position.symbol) {
+      const p = state.position;
+      const pl = parseFloat(p.unrealized_pl || p.pnl || 0);
+      posSection.innerHTML += `<div>Symbol: <span style="color:#fff;">${p.symbol}</span></div>` +
+        `<div>Side: <span style="color:${p.side === "long" ? "#4caf50" : "#f44336"}">${(p.side || "N/A").toUpperCase()}</span></div>` +
+        `<div>Qty: ${p.qty || 0}</div>` +
+        `<div>P&L: <span style="color:${pl >= 0 ? "#4caf50" : "#f44336"}">${pl >= 0 ? "+" : ""}$${pl.toFixed(2)}</span></div>`;
+    } else {
+      posSection.innerHTML += `<div style="color:#666;">No position</div>`;
+    }
+    algoContainer.appendChild(posSection);
+
+    const sigSection = document.createElement("div"); sigSection.style.cssText = "border:1px solid #333;border-radius:4px;padding:8px;margin-bottom:8px;";
+    const sigTitle = document.createElement("div"); sigTitle.textContent = "Signals Generated"; sigTitle.style.cssText = "font-weight:bold;color:#8cf;margin-bottom:4px;font-size:10px;";
+    sigSection.appendChild(sigTitle);
+    const totalSignals = state.signalCount || state.signals || 0;
+    const lastSignal = state.lastSignal || null;
+    sigSection.innerHTML += `<div>Total Signals: <span style="color:#ff8;">${totalSignals}</span></div>`;
+    if (lastSignal) {
+      sigSection.innerHTML += `<div>Last: <span style="color:#ccc;">${lastSignal.type || "?"} ${lastSignal.symbol || ""} @ ${lastSignal.time || "?"}</span></div>`;
+    }
+    algoContainer.appendChild(sigSection);
+
+    const perfSection = document.createElement("div"); perfSection.style.cssText = "border:1px solid #333;border-radius:4px;padding:8px;margin-bottom:8px;";
+    const perfTitle = document.createElement("div"); perfTitle.textContent = "Performance Since Start"; perfTitle.style.cssText = "font-weight:bold;color:#8cf;margin-bottom:4px;font-size:10px;";
+    perfSection.appendChild(perfTitle);
+    const totalPL = parseFloat(state.totalPL || state.total_pnl || 0);
+    const tradeCount = state.tradeCount || state.trades || 0;
+    const winRate = state.winRate || (state.wins && tradeCount > 0 ? ((state.wins / tradeCount) * 100) : 0);
+    const lastBar = state.lastBarTime || state.lastBar || "N/A";
+    perfSection.innerHTML += `<div>Total P&L: <span style="color:${totalPL >= 0 ? "#4caf50" : "#f44336"};font-weight:bold;">${totalPL >= 0 ? "+" : ""}$${totalPL.toFixed(2)}</span></div>` +
+      `<div>Trades: ${tradeCount} | Win Rate: ${typeof winRate === "number" ? winRate.toFixed(1) : winRate}%</div>` +
+      `<div>Last Bar: <span style="color:#888;">${lastBar}</span></div>`;
+    algoContainer.appendChild(perfSection);
+
+    const stopBtn = document.createElement("button"); stopBtn.textContent = "Stop Strategy";
+    stopBtn.style.cssText = "padding:6px 16px;font-size:11px;background:#b71c1c;color:#faa;border:1px solid #555;cursor:pointer;font-weight:bold;width:100%;";
+    stopBtn.addEventListener("click", () => {
+      try {
+        const cur = JSON.parse(localStorage.getItem("typhoon_autotrade_state") || "{}");
+        cur.status = "Stopped";
+        cur.active = false;
+        cur.stopRequested = true;
+        localStorage.setItem("typhoon_autotrade_state", JSON.stringify(cur));
+        log("Strategy stop requested via ALGO monitor", "warn");
+        renderAlgoMonitor();
+      } catch (_) {}
+    });
+    algoContainer.appendChild(stopBtn);
+  }
+
+  renderAlgoMonitor();
+  algoInterval = setInterval(renderAlgoMonitor, 5000);
+}
+
+// ══════════════════════════════════════════════════════════════
+// JOURNAL+ — Enhanced Trade Journal with Auto-Screenshots
+// ══════════════════════════════════════════════════════════════
+
+async function cmdJournalPlus() {
+  const win = createWindow({ title: "Journal+ (Enhanced Trade Journal)", width: 800, height: 600 });
+  win.contentElement.textContent = "";
+  const JOURNAL_PLUS_KEY = "typhoon_journal_plus";
+  const TAGS = ["Breakout", "Mean Reversion", "Earnings Play", "FOMO", "Revenge Trade", "Trend Follow", "Scalp", "Swing", "News", "Other"];
+  function loadJP() { try { return JSON.parse(localStorage.getItem(JOURNAL_PLUS_KEY) || "[]"); } catch { return []; } }
+  function saveJP(entries) { localStorage.setItem(JOURNAL_PLUS_KEY, JSON.stringify(entries)); }
+  let jpEntries = loadJP();
+  let filterTag = "ALL", filterSymbol = "", filterPnL = "all", filterDateFrom = "", filterDateTo = "";
+  const root = document.createElement("div");
+  root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;";
+  const filterBar = document.createElement("div");
+  filterBar.style.cssText = "display:flex;gap:4px;padding:4px;border-bottom:1px solid #333;flex-wrap:wrap;align-items:center;";
+  const jpInputStyle = "background:#111;color:#fff;border:1px solid #555;padding:3px 4px;font-size:10px;font-family:inherit;";
+  const tagFilter = document.createElement("select"); tagFilter.style.cssText = jpInputStyle;
+  const allOpt = document.createElement("option"); allOpt.value = "ALL"; allOpt.textContent = "All Tags"; tagFilter.appendChild(allOpt);
+  for (const t of TAGS) { const o = document.createElement("option"); o.value = t; o.textContent = t; tagFilter.appendChild(o); }
+  tagFilter.addEventListener("change", () => { filterTag = tagFilter.value; renderJP(); });
+  const symFilter = document.createElement("input"); symFilter.placeholder = "Symbol"; symFilter.style.cssText = jpInputStyle + "width:60px;";
+  symFilter.addEventListener("input", () => { filterSymbol = symFilter.value.trim().toUpperCase(); renderJP(); });
+  const pnlFilter = document.createElement("select"); pnlFilter.style.cssText = jpInputStyle;
+  for (const [v, l] of [["all","All P&L"],["winners","Winners"],["losers","Losers"]]) { const o = document.createElement("option"); o.value = v; o.textContent = l; pnlFilter.appendChild(o); }
+  pnlFilter.addEventListener("change", () => { filterPnL = pnlFilter.value; renderJP(); });
+  const dateFrom = document.createElement("input"); dateFrom.type = "date"; dateFrom.style.cssText = jpInputStyle;
+  dateFrom.addEventListener("change", () => { filterDateFrom = dateFrom.value; renderJP(); });
+  const dateTo = document.createElement("input"); dateTo.type = "date"; dateTo.style.cssText = jpInputStyle;
+  dateTo.addEventListener("change", () => { filterDateTo = dateTo.value; renderJP(); });
+  const exportBtn = document.createElement("button"); exportBtn.textContent = "Export CSV";
+  exportBtn.style.cssText = "padding:3px 8px;background:#0a5f38;color:#8f8;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+  exportBtn.addEventListener("click", () => {
+    const filtered = getFiltered();
+    const header = "Date,Symbol,Side,Qty,Entry,Exit,P&L,Tag,Rating,Notes\n";
+    const csvData = header + filtered.map(e => '"' + e.date + '","' + e.symbol + '","' + e.side + '",' + e.qty + ',' + e.entry + ',' + e.exit + ',' + e.pnl + ',"' + e.tag + '",' + e.rating + ',"' + (e.notes||"").replace(/"/g,'""') + '"').join("\n");
+    const blob = new Blob([csvData], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "journal_plus.csv"; a.click();
+    log("Journal+ exported as CSV", "ok");
+  });
+  const viewToggle = document.createElement("button"); viewToggle.textContent = "Calendar";
+  viewToggle.style.cssText = "padding:3px 8px;background:#333;color:#ccc;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;margin-left:auto;";
+  let viewMode = "list";
+  viewToggle.addEventListener("click", () => { viewMode = viewMode === "list" ? "calendar" : viewMode === "calendar" ? "stats" : "list"; viewToggle.textContent = viewMode === "list" ? "Calendar" : viewMode === "calendar" ? "Stats" : "List"; renderJP(); });
+  filterBar.appendChild(tagFilter); filterBar.appendChild(symFilter); filterBar.appendChild(pnlFilter);
+  filterBar.appendChild(dateFrom); filterBar.appendChild(dateTo); filterBar.appendChild(exportBtn); filterBar.appendChild(viewToggle);
+  root.appendChild(filterBar);
+  const jpContent = document.createElement("div"); jpContent.style.cssText = "flex:1;overflow-y:auto;padding:4px;";
+  root.appendChild(jpContent);
+  function getFiltered() {
+    return jpEntries.filter(e => {
+      if (filterTag !== "ALL" && e.tag !== filterTag) return false;
+      if (filterSymbol && e.symbol !== filterSymbol) return false;
+      if (filterPnL === "winners" && e.pnl <= 0) return false;
+      if (filterPnL === "losers" && e.pnl >= 0) return false;
+      if (filterDateFrom && e.date < filterDateFrom) return false;
+      if (filterDateTo && e.date > filterDateTo + "T23:59") return false;
+      return true;
+    });
+  }
+  function renderJP() { jpContent.textContent = ""; if (viewMode === "list") renderJPList(); else if (viewMode === "calendar") renderJPCalendar(); else renderJPStats(); }
+  function renderJPList() {
+    const filtered = getFiltered();
+    if (filtered.length === 0) { jpContent.textContent = "No journal entries. Fetch trades below to populate."; jpContent.style.color = "#555"; return; }
+    jpContent.style.color = "";
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    const thead = document.createElement("tr");
+    for (const h of ["Date","Symbol","Side","Qty","Entry","Exit","P&L","Tag","Rating","Notes",""]) { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:3px 4px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); }
+    table.appendChild(thead);
+    for (let idx = 0; idx < filtered.length; idx++) {
+      const e = filtered[idx]; const realIdx = jpEntries.indexOf(e);
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #111;";
+      const cells = [(e.date || "").substring(0, 16).replace("T", " "), e.symbol, e.side, e.qty, typeof e.entry === "number" ? e.entry.toFixed(2) : e.entry || "\u2014", typeof e.exit === "number" ? e.exit.toFixed(2) : e.exit || "\u2014", typeof e.pnl === "number" ? "$" + e.pnl.toFixed(2) : "\u2014"];
+      for (let ci = 0; ci < cells.length; ci++) { const td = document.createElement("td"); td.style.cssText = "padding:3px 4px;"; td.textContent = cells[ci]; if (ci === 6 && typeof e.pnl === "number") td.style.color = e.pnl >= 0 ? "#4caf50" : "#f44336"; if (ci === 2) td.style.color = e.side === "buy" ? "#4caf50" : "#f44336"; tr.appendChild(td); }
+      const tdTag = document.createElement("td"); tdTag.style.cssText = "padding:2px;";
+      const tagSel = document.createElement("select"); tagSel.style.cssText = "background:#111;color:#fff;border:1px solid #333;font-size:9px;padding:1px;";
+      const emptyOpt = document.createElement("option"); emptyOpt.value = ""; emptyOpt.textContent = "\u2014"; tagSel.appendChild(emptyOpt);
+      for (const t of TAGS) { const o = document.createElement("option"); o.value = t; o.textContent = t; if (e.tag === t) o.selected = true; tagSel.appendChild(o); }
+      tagSel.addEventListener("change", () => { jpEntries[realIdx].tag = tagSel.value; saveJP(jpEntries); });
+      tdTag.appendChild(tagSel); tr.appendChild(tdTag);
+      const tdRating = document.createElement("td"); tdRating.style.cssText = "padding:2px;white-space:nowrap;";
+      for (let s = 1; s <= 5; s++) { const star = document.createElement("span"); star.textContent = s <= (e.rating || 0) ? "\u2605" : "\u2606"; star.style.cssText = "cursor:pointer;color:#ffc107;font-size:12px;"; star.addEventListener("click", () => { jpEntries[realIdx].rating = s; saveJP(jpEntries); renderJP(); }); tdRating.appendChild(star); }
+      tr.appendChild(tdRating);
+      const tdNote = document.createElement("td"); tdNote.style.cssText = "padding:2px;";
+      const noteInp = document.createElement("input"); noteInp.value = e.notes || ""; noteInp.placeholder = "notes...";
+      noteInp.style.cssText = "width:100px;background:#111;color:#ccc;border:1px solid #333;font-size:9px;padding:2px;font-family:inherit;";
+      noteInp.addEventListener("change", () => { jpEntries[realIdx].notes = noteInp.value; saveJP(jpEntries); });
+      tdNote.appendChild(noteInp); tr.appendChild(tdNote);
+      const tdDel = document.createElement("td"); tdDel.style.cssText = "padding:2px;";
+      const del = document.createElement("span"); del.textContent = "\u00d7"; del.style.cssText = "color:#f44;cursor:pointer;";
+      del.addEventListener("click", () => { jpEntries.splice(realIdx, 1); saveJP(jpEntries); renderJP(); });
+      tdDel.appendChild(del); tr.appendChild(tdDel); table.appendChild(tr);
+    }
+    jpContent.appendChild(table);
+  }
+  function renderJPCalendar() {
+    const now = new Date(); const year = now.getFullYear(); const month = now.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate(); const firstDay = new Date(year, month, 1).getDay();
+    const dailyPnL = {};
+    for (const e of jpEntries) { if (typeof e.pnl !== "number") continue; const d = (e.date || "").substring(0, 10); dailyPnL[d] = (dailyPnL[d] || 0) + e.pnl; }
+    const calTitle = document.createElement("div");
+    calTitle.textContent = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][month] + " " + year + " \u2014 Monthly P&L Calendar";
+    calTitle.style.cssText = "font-weight:bold;color:#ccc;padding:4px 0 8px;text-align:center;"; jpContent.appendChild(calTitle);
+    const grid = document.createElement("div"); grid.style.cssText = "display:grid;grid-template-columns:repeat(7,1fr);gap:2px;";
+    for (const d of ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]) { const hdr = document.createElement("div"); hdr.textContent = d; hdr.style.cssText = "text-align:center;color:#666;font-size:9px;padding:2px;"; grid.appendChild(hdr); }
+    for (let i = 0; i < firstDay; i++) { grid.appendChild(document.createElement("div")); }
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateStr = year + "-" + String(month + 1).padStart(2, "0") + "-" + String(day).padStart(2, "0");
+      const pnl = dailyPnL[dateStr]; const cell = document.createElement("div");
+      cell.style.cssText = "text-align:center;padding:4px 2px;border-radius:3px;font-size:10px;min-height:30px;";
+      const dayLabel = document.createElement("div"); dayLabel.textContent = day; dayLabel.style.color = "#888"; cell.appendChild(dayLabel);
+      if (pnl !== undefined) { const val = document.createElement("div"); val.textContent = "$" + pnl.toFixed(0); val.style.cssText = "font-size:9px;font-weight:bold;color:" + (pnl >= 0 ? "#4caf50" : "#f44336") + ";"; cell.style.background = pnl >= 0 ? "rgba(76,175,80,0.15)" : "rgba(244,67,54,0.15)"; cell.appendChild(val); }
+      grid.appendChild(cell);
+    }
+    jpContent.appendChild(grid);
+    const monthKey = year + "-" + String(month + 1).padStart(2, "0"); let monthTotal = 0;
+    for (const [d, v] of Object.entries(dailyPnL)) { if (d.startsWith(monthKey)) monthTotal += v; }
+    const totalDiv = document.createElement("div");
+    totalDiv.style.cssText = "text-align:center;padding:8px;font-weight:bold;color:" + (monthTotal >= 0 ? "#4caf50" : "#f44336") + ";";
+    totalDiv.textContent = "Month Total: $" + monthTotal.toFixed(2); jpContent.appendChild(totalDiv);
+  }
+  function renderJPStats() {
+    const filtered = getFiltered();
+    if (filtered.length === 0) { jpContent.textContent = "No entries to analyze."; jpContent.style.color = "#555"; return; }
+    jpContent.style.color = "";
+    const byTag = {};
+    for (const e of filtered) { const t = e.tag || "Untagged"; if (!byTag[t]) byTag[t] = { total: 0, count: 0, wins: 0, totalRating: 0, ratingCount: 0 }; byTag[t].total += (e.pnl || 0); byTag[t].count++; if (e.pnl > 0) byTag[t].wins++; if (e.rating) { byTag[t].totalRating += e.rating; byTag[t].ratingCount++; } }
+    const tagTitle = document.createElement("div"); tagTitle.textContent = "P&L by Tag / Setup"; tagTitle.style.cssText = "font-weight:bold;color:#ccc;padding:4px 0;"; jpContent.appendChild(tagTitle);
+    const tagTable = document.createElement("table"); tagTable.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-bottom:12px;";
+    const tHead = document.createElement("tr");
+    for (const h of ["Tag","Trades","Wins","Win%","P&L","Avg Rating"]) { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:3px 6px;border-bottom:1px solid #333;"; th.textContent = h; tHead.appendChild(th); }
+    tagTable.appendChild(tHead);
+    for (const [tag, d] of Object.entries(byTag).sort((a, b) => b[1].total - a[1].total)) {
+      const tr = document.createElement("tr"); const winPct = d.count > 0 ? (d.wins / d.count * 100).toFixed(1) : "0"; const avgRating = d.ratingCount > 0 ? (d.totalRating / d.ratingCount).toFixed(1) : "\u2014";
+      const vals = [tag, d.count, d.wins, winPct + "%", "$" + d.total.toFixed(2), avgRating];
+      for (let i = 0; i < vals.length; i++) { const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;"; td.textContent = vals[i]; if (i === 4) td.style.color = d.total >= 0 ? "#4caf50" : "#f44336"; tr.appendChild(td); }
+      tagTable.appendChild(tr);
+    }
+    jpContent.appendChild(tagTable);
+    const ratedEntries = filtered.filter(e => e.rating);
+    if (ratedEntries.length > 0) {
+      const winners = ratedEntries.filter(e => e.pnl > 0); const losers = ratedEntries.filter(e => e.pnl <= 0);
+      const avgWinRating = winners.length > 0 ? (winners.reduce((s, e) => s + e.rating, 0) / winners.length).toFixed(1) : "\u2014";
+      const avgLossRating = losers.length > 0 ? (losers.reduce((s, e) => s + e.rating, 0) / losers.length).toFixed(1) : "\u2014";
+      const ratingDiv = document.createElement("div"); ratingDiv.style.cssText = "padding:4px;color:#ccc;font-size:11px;";
+      ratingDiv.innerHTML = "<b>Avg Rating:</b> Winners: " + avgWinRating + " | Losers: " + avgLossRating; jpContent.appendChild(ratingDiv);
+    }
+  }
+  const fetchBar = document.createElement("div"); fetchBar.style.cssText = "padding:4px;border-top:1px solid #333;display:flex;gap:4px;align-items:center;";
+  const fetchBtn = document.createElement("button"); fetchBtn.textContent = "Fetch Trades from Broker";
+  fetchBtn.style.cssText = "padding:4px 10px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+  fetchBtn.addEventListener("click", async () => {
+    fetchBtn.disabled = true; fetchBtn.textContent = "Fetching...";
+    try {
+      const histJson = await invoke("get_order_history", { limit: 200 });
+      const orders = JSON.parse(histJson).filter(o => o.status === "filled" && o.filled_avg_price);
+      if (orders.length === 0) { log("No filled orders found", "warn"); fetchBtn.textContent = "Fetch Trades from Broker"; fetchBtn.disabled = false; return; }
+      const openPos = {}; const existingDates = new Set(jpEntries.map(e => e.date)); let added = 0;
+      for (const o of orders.reverse()) {
+        const sym = o.symbol; const price = parseFloat(o.filled_avg_price); const qty = parseFloat(o.qty) || 1;
+        if (!openPos[sym]) { openPos[sym] = { side: o.side, price, qty, date: o.created_at }; }
+        else if (openPos[sym].side !== o.side) {
+          const entry = openPos[sym]; const pnl = entry.side === "buy" ? (price - entry.price) * Math.min(qty, entry.qty) : (entry.price - price) * Math.min(qty, entry.qty);
+          const dateKey = (o.created_at || "").substring(0, 19);
+          if (!existingDates.has(dateKey)) { jpEntries.unshift({ date: dateKey, symbol: sym, side: entry.side, qty: Math.min(qty, entry.qty), entry: entry.price, exit: price, pnl, tag: "", rating: 0, notes: "" }); existingDates.add(dateKey); added++; }
+          delete openPos[sym];
+        }
+      }
+      saveJP(jpEntries); log("Journal+: imported " + added + " round-trip trades", "ok"); renderJP();
+    } catch (e) { log("Journal+ fetch error: " + e, "error"); }
+    fetchBtn.textContent = "Fetch Trades from Broker"; fetchBtn.disabled = false;
+  });
+  fetchBar.appendChild(fetchBtn); root.appendChild(fetchBar);
+  win.appendElement(root); renderJP();
+}
+
+// ══════════════════════════════════════════════════════════════
+// CORRELATION3D — Correlation Network Graph (force-directed)
+// ══════════════════════════════════════════════════════════════
+
+async function cmdCorrelation3D() {
+  const win = createWindow({ title: "Correlation Network Graph", width: 500, height: 560 });
+  win.contentElement.textContent = "";
+  const loadingMsg = document.createElement("div"); loadingMsg.textContent = "Building correlation network..."; loadingMsg.style.cssText = "color:#888;padding:20px;"; win.appendElement(loadingMsg);
+  try {
+    const symbols = getWatchlist();
+    if (symbols.length < 2) { win.contentElement.textContent = ""; win.setContent("Need at least 2 watchlist symbols. Add via QM first."); return; }
+    const closePrices = {};
+    for (const sym of symbols) {
+      let data = null;
+      for (const tf of ["1Day", "4Hour", "1Hour"]) { const key = getCacheKey(sym, tf); const cached = barCache[key]; if (cached && cached.data && cached.data.length > 20) { data = cached.data; break; } }
+      if (!data) { try { const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 100 }); const bars = JSON.parse(barsJson); if (bars.length > 20) data = bars; } catch (_) {} }
+      if (data) closePrices[sym] = data.slice(-100).map(b => b.close || b.c || 0);
+    }
+    const validSymbols = Object.keys(closePrices).filter(s => closePrices[s].length > 10);
+    if (validSymbols.length < 2) { win.contentElement.textContent = ""; win.setContent("Insufficient cached bar data. Load some charts first."); return; }
+    const corrReturns = {};
+    for (const sym of validSymbols) { const prices = closePrices[sym]; corrReturns[sym] = []; for (let i = 1; i < prices.length; i++) corrReturns[sym].push(prices[i] > 0 ? (prices[i] - prices[i - 1]) / prices[i - 1] : 0); }
+    function pearsonCorr(a, b) { const n = Math.min(a.length, b.length); if (n < 5) return 0; let sA = 0, sB = 0, sAB = 0, sA2 = 0, sB2 = 0; for (let i = 0; i < n; i++) { sA += a[i]; sB += b[i]; sAB += a[i] * b[i]; sA2 += a[i] * a[i]; sB2 += b[i] * b[i]; } const num = n * sAB - sA * sB; const den = Math.sqrt((n * sA2 - sA * sA) * (n * sB2 - sB * sB)); return den > 0 ? num / den : 0; }
+    const corrMatrix = {};
+    for (let i = 0; i < validSymbols.length; i++) for (let j = i + 1; j < validSymbols.length; j++) corrMatrix[validSymbols[i] + ":" + validSymbols[j]] = pearsonCorr(corrReturns[validSymbols[i]], corrReturns[validSymbols[j]]);
+    const corrAvgVol = {}; for (const sym of validSymbols) corrAvgVol[sym] = closePrices[sym].length;
+    const corrMaxVol = Math.max(...Object.values(corrAvgVol));
+    const CW = 400, CH = 400;
+    const corrNodes = validSymbols.map(sym => ({ sym, x: 50 + Math.random() * (CW - 100), y: 50 + Math.random() * (CH - 100), radius: 8 + (corrAvgVol[sym] / corrMaxVol) * 12 }));
+    for (let iter = 0; iter < 100; iter++) {
+      for (let i = 0; i < corrNodes.length; i++) { for (let j = i + 1; j < corrNodes.length; j++) {
+        let dx = corrNodes[i].x - corrNodes[j].x; let dy = corrNodes[i].y - corrNodes[j].y; let dist = Math.sqrt(dx * dx + dy * dy); if (dist < 1) dist = 1;
+        const repForce = 500 / (dist * dist + 1); corrNodes[i].x += repForce * dx / dist; corrNodes[i].y += repForce * dy / dist; corrNodes[j].x -= repForce * dx / dist; corrNodes[j].y -= repForce * dy / dist;
+        const ck = corrNodes[i].sym + ":" + corrNodes[j].sym; const ckr = corrNodes[j].sym + ":" + corrNodes[i].sym;
+        const cc = corrMatrix[ck] !== undefined ? corrMatrix[ck] : (corrMatrix[ckr] !== undefined ? corrMatrix[ckr] : 0);
+        if (Math.abs(cc) > 0.3) { const att = cc * 0.1; corrNodes[i].x -= att * dx; corrNodes[i].y -= att * dy; corrNodes[j].x += att * dx; corrNodes[j].y += att * dy; }
+      } }
+      for (const n of corrNodes) { n.x = Math.max(30, Math.min(CW - 30, n.x)); n.y = Math.max(30, Math.min(CH - 30, n.y)); }
+    }
+    win.contentElement.textContent = "";
+    const corrCanvas = document.createElement("canvas"); corrCanvas.width = CW; corrCanvas.height = CH;
+    corrCanvas.style.cssText = "display:block;margin:0 auto;background:#0a0a0a;border:1px solid #333;border-radius:4px;";
+    const corrCtx = corrCanvas.getContext("2d");
+    for (let i = 0; i < corrNodes.length; i++) { for (let j = i + 1; j < corrNodes.length; j++) {
+      const ck = corrNodes[i].sym + ":" + corrNodes[j].sym; const ckr = corrNodes[j].sym + ":" + corrNodes[i].sym;
+      const cc = corrMatrix[ck] !== undefined ? corrMatrix[ck] : (corrMatrix[ckr] !== undefined ? corrMatrix[ckr] : 0);
+      if (Math.abs(cc) <= 0.3) continue; corrCtx.beginPath(); corrCtx.moveTo(corrNodes[i].x, corrNodes[i].y); corrCtx.lineTo(corrNodes[j].x, corrNodes[j].y);
+      corrCtx.lineWidth = Math.abs(cc) * 4; corrCtx.strokeStyle = cc > 0 ? "rgba(76,175,80," + (Math.abs(cc) * 0.8) + ")" : "rgba(244,67,54," + (Math.abs(cc) * 0.8) + ")"; corrCtx.stroke();
+    } }
+    for (const n of corrNodes) { corrCtx.beginPath(); corrCtx.arc(n.x, n.y, n.radius, 0, Math.PI * 2); corrCtx.fillStyle = "#1a237e"; corrCtx.fill(); corrCtx.strokeStyle = "#4fc3f7"; corrCtx.lineWidth = 1.5; corrCtx.stroke(); corrCtx.fillStyle = "#fff"; corrCtx.font = "bold 9px Consolas, monospace"; corrCtx.textAlign = "center"; corrCtx.textBaseline = "middle"; corrCtx.fillText(n.sym.length > 5 ? n.sym.substring(0, 5) : n.sym, n.x, n.y); }
+    win.appendElement(corrCanvas);
+    const visited = new Set(); const clusters = [];
+    for (let i = 0; i < validSymbols.length; i++) { if (visited.has(i)) continue; const cluster = [validSymbols[i]]; visited.add(i);
+      for (let j = i + 1; j < validSymbols.length; j++) { if (visited.has(j)) continue; const ck = validSymbols[i] + ":" + validSymbols[j]; const ckr = validSymbols[j] + ":" + validSymbols[i]; const cc = corrMatrix[ck] !== undefined ? corrMatrix[ck] : (corrMatrix[ckr] !== undefined ? corrMatrix[ckr] : 0); if (cc > 0.5) { cluster.push(validSymbols[j]); visited.add(j); } }
+      if (cluster.length > 1) clusters.push(cluster);
+    }
+    if (clusters.length > 0) { const summary = document.createElement("div"); summary.style.cssText = "padding:8px;font-size:10px;color:#ccc;border-top:1px solid #333;margin-top:4px;"; summary.innerHTML = "<b>Clusters (corr &gt; 0.5):</b><br>" + clusters.map((c, i) => "Cluster " + (i + 1) + ": " + c.join(", ")).join("<br>"); win.appendElement(summary); }
+    const legend = document.createElement("div"); legend.style.cssText = "padding:4px 8px;font-size:9px;color:#666;text-align:center;"; legend.textContent = "Green = positive correlation | Red = negative | Thickness = strength | Only |corr| > 0.3 shown"; win.appendElement(legend);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent("Failed to build correlation network: " + e); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// IMPORTTRADES — Import External Trade History (CSV)
+// ══════════════════════════════════════════════════════════════
+
+function cmdImportTrades() {
+  const win = createWindow({ title: "Import Trade History", width: 600, height: 500 });
+  win.contentElement.textContent = "";
+  const IMPORT_KEY = "typhoon_imported_trades";
+  function loadImported() { try { return JSON.parse(localStorage.getItem(IMPORT_KEY) || "[]"); } catch { return []; } }
+  function saveImported(data) { localStorage.setItem(IMPORT_KEY, JSON.stringify(data)); }
+  const importRoot = document.createElement("div"); importRoot.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;";
+  const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
+  const impInputStyle = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
+  const formatSel = document.createElement("select"); formatSel.style.cssText = impInputStyle;
+  for (const [v, l] of [["auto","Auto-Detect"],["generic","Generic CSV"],["mt5","MT5 Export"],["ib","Interactive Brokers"],["tasty","Tastytrade"]]) { const o = document.createElement("option"); o.value = v; o.textContent = l; formatSel.appendChild(o); }
+  const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = ".csv"; fileInput.style.cssText = "font-size:10px;color:#ccc;";
+  const importBtn = document.createElement("button"); importBtn.textContent = "Import"; importBtn.style.cssText = "padding:4px 10px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;"; importBtn.disabled = true;
+  const clearBtn = document.createElement("button"); clearBtn.textContent = "Clear Imported Data"; clearBtn.style.cssText = "padding:4px 10px;background:#5f0a0a;color:#f88;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;margin-left:auto;";
+  clearBtn.addEventListener("click", () => { localStorage.removeItem(IMPORT_KEY); renderImportResults([]); log("Imported trade data cleared", "ok"); });
+  topBar.appendChild(formatSel); topBar.appendChild(fileInput); topBar.appendChild(importBtn); topBar.appendChild(clearBtn); importRoot.appendChild(topBar);
+  const previewDiv = document.createElement("div"); previewDiv.style.cssText = "padding:4px 6px;border-bottom:1px solid #333;max-height:120px;overflow-y:auto;font-size:9px;color:#888;"; previewDiv.textContent = "Select a CSV file to preview..."; importRoot.appendChild(previewDiv);
+  const resultsDiv = document.createElement("div"); resultsDiv.style.cssText = "flex:1;overflow-y:auto;padding:4px;"; importRoot.appendChild(resultsDiv);
+  let parsedRows = [];
+  function parseCSV(text) {
+    const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0); if (lines.length < 2) return [];
+    const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, "")); const rows = [];
+    for (let i = 1; i < lines.length; i++) { const vals = []; let inQuote = false, current = ""; for (const ch of lines[i]) { if (ch === '"') { inQuote = !inQuote; continue; } if (ch === "," && !inQuote) { vals.push(current.trim()); current = ""; continue; } current += ch; } vals.push(current.trim()); const row = {}; for (let j = 0; j < headers.length; j++) row[headers[j]] = vals[j] || ""; rows.push(row); }
+    return rows;
+  }
+  function detectFormat(headers) { const hSet = new Set(headers.map(h => h.toLowerCase())); if (hSet.has("deal") && hSet.has("profit")) return "mt5"; if (hSet.has("tradeid") || hSet.has("account id")) return "ib"; if (hSet.has("exec time") || hSet.has("net price")) return "tasty"; return "generic"; }
+  function normalizeTrades(rows, format) {
+    const trades = [];
+    for (const r of rows) {
+      let trade = {};
+      if (format === "mt5") { trade = { date: r["Time"] || r["Open Time"] || "", symbol: r["Symbol"] || "", side: (r["Type"] || "").toLowerCase().includes("buy") ? "buy" : "sell", qty: parseFloat(r["Volume"] || r["Lots"] || "1"), price: parseFloat(r["Price"] || "0"), commission: parseFloat(r["Commission"] || "0"), pnl: parseFloat(r["Profit"] || "0") }; }
+      else if (format === "ib") { trade = { date: r["Date/Time"] || r["TradeDate"] || r["DateTime"] || "", symbol: r["Symbol"] || r["UnderlyingSymbol"] || "", side: (r["Buy/Sell"] || r["Side"] || "").toLowerCase().includes("buy") ? "buy" : "sell", qty: parseFloat(r["Quantity"] || r["Qty"] || "1"), price: parseFloat(r["Price"] || r["TradePrice"] || "0"), commission: parseFloat(r["Commission"] || r["IBCommission"] || "0"), pnl: parseFloat(r["RealizedPnL"] || r["FifoPnlRealized"] || "0") }; }
+      else if (format === "tasty") { trade = { date: r["Exec Time"] || r["Date"] || "", symbol: r["Symbol"] || r["Underlying Symbol"] || "", side: (r["Side"] || r["Action"] || "").toLowerCase().includes("buy") ? "buy" : "sell", qty: parseFloat(r["Quantity"] || r["Qty"] || "1"), price: parseFloat(r["Price"] || r["Net Price"] || r["Avg Price"] || "0"), commission: parseFloat(r["Commission"] || r["Commissions"] || "0"), pnl: parseFloat(r["P/L"] || r["Net P/L"] || "0") }; }
+      else { const keys = Object.keys(r); trade = { date: r[keys[0]] || "", symbol: r[keys[1]] || "", side: (r[keys[2]] || "").toLowerCase().includes("buy") ? "buy" : "sell", qty: parseFloat(r[keys[3]] || "1"), price: parseFloat(r[keys[4]] || "0"), commission: parseFloat(r[keys[5]] || "0"), pnl: parseFloat(r["P&L"] || r["PnL"] || r["Profit"] || "0") }; }
+      if (trade.symbol) trades.push(trade);
+    }
+    return trades;
+  }
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target.result; const csvLines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+      const rows = parseCSV(text); if (rows.length === 0) { previewDiv.textContent = "No data found in CSV."; return; }
+      const headers = csvLines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+      if (formatSel.value === "auto") { const detected = detectFormat(headers); formatSel.value = detected; log("Auto-detected format: " + detected, "info"); }
+      previewDiv.textContent = "";
+      const preTable = document.createElement("table"); preTable.style.cssText = "border-collapse:collapse;font-size:9px;width:100%;";
+      const preHead = document.createElement("tr");
+      for (const h of headers.slice(0, 8)) { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:2px 4px;border-bottom:1px solid #333;"; th.textContent = h.substring(0, 15); preHead.appendChild(th); }
+      preTable.appendChild(preHead);
+      for (let i = 0; i < Math.min(5, rows.length); i++) { const tr = document.createElement("tr"); for (const h of headers.slice(0, 8)) { const td = document.createElement("td"); td.style.cssText = "padding:2px 4px;color:#aaa;"; td.textContent = (rows[i][h] || "").substring(0, 20); tr.appendChild(td); } preTable.appendChild(tr); }
+      previewDiv.appendChild(preTable);
+      const countInfo = document.createElement("div"); countInfo.style.cssText = "color:#888;padding:2px 0;font-size:9px;"; countInfo.textContent = rows.length + " rows found"; previewDiv.appendChild(countInfo);
+      parsedRows = rows; importBtn.disabled = false;
+    };
+    reader.readAsText(file);
+  });
+  importBtn.addEventListener("click", () => {
+    if (parsedRows.length === 0) return;
+    const format = formatSel.value === "auto" ? "generic" : formatSel.value;
+    const trades = normalizeTrades(parsedRows, format);
+    if (trades.length === 0) { log("No valid trades found in CSV", "warn"); return; }
+    saveImported(trades); log("Imported " + trades.length + " trades", "ok"); renderImportResults(trades);
+  });
+  function renderImportResults(trades) {
+    resultsDiv.textContent = "";
+    if (trades.length === 0) { const stored = loadImported(); if (stored.length > 0) { trades = stored; } else { resultsDiv.textContent = "No imported trades."; resultsDiv.style.color = "#555"; return; } }
+    resultsDiv.style.color = "";
+    const wins = trades.filter(t => t.pnl > 0); const losses = trades.filter(t => t.pnl <= 0 && t.pnl !== 0);
+    const totalPnL = trades.reduce((s, t) => s + (t.pnl || 0), 0); const totalComm = trades.reduce((s, t) => s + (t.commission || 0), 0);
+    const winRate = trades.length > 0 ? (wins.length / trades.length * 100).toFixed(1) : "0";
+    const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0;
+    const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 0;
+    const grossWin = wins.reduce((s, t) => s + t.pnl, 0); const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
+    const profitFactor = grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : "\u221e";
+    const bestTrade = trades.length > 0 ? Math.max(...trades.map(t => t.pnl || 0)) : 0;
+    const worstTrade = trades.length > 0 ? Math.min(...trades.map(t => t.pnl || 0)) : 0;
+    const bySym = {}; for (const t of trades) { if (!bySym[t.symbol]) bySym[t.symbol] = { total: 0, count: 0 }; bySym[t.symbol].total += (t.pnl || 0); bySym[t.symbol].count++; }
+    const statsTitle = document.createElement("div"); statsTitle.textContent = "Trade Statistics"; statsTitle.style.cssText = "font-weight:bold;color:#ccc;padding:4px 0;"; resultsDiv.appendChild(statsTitle);
+    const rows = [["Total Trades", trades.length], ["Wins", wins.length], ["Losses", losses.length], ["Win Rate", winRate + "%"], ["Avg Win", "$" + avgWin.toFixed(2)], ["Avg Loss", "$" + avgLoss.toFixed(2)], ["Best Trade", "$" + bestTrade.toFixed(2)], ["Worst Trade", "$" + worstTrade.toFixed(2)], ["Profit Factor", profitFactor], ["Total Commission", "$" + totalComm.toFixed(2)], ["Total P&L", "$" + totalPnL.toFixed(2)]];
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px;";
+    for (const [label, val] of rows) { const tr = document.createElement("tr"); const td1 = document.createElement("td"); td1.style.cssText = "padding:3px 8px;color:#888;"; td1.textContent = label; const td2 = document.createElement("td"); td2.style.cssText = "padding:3px 8px;text-align:right;font-family:Consolas,monospace;"; td2.textContent = String(val); if (label === "Total P&L") td2.style.color = totalPnL >= 0 ? "#4caf50" : "#f44336"; if (label === "Win Rate") td2.style.color = parseFloat(String(val)) >= 50 ? "#4caf50" : "#f44336"; tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr); }
+    resultsDiv.appendChild(table);
+    const symTitle = document.createElement("div"); symTitle.textContent = "P&L by Symbol"; symTitle.style.cssText = "font-weight:bold;color:#ccc;padding:4px 0;"; resultsDiv.appendChild(symTitle);
+    const symTable = document.createElement("table"); symTable.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    const symHead = document.createElement("tr"); for (const h of ["Symbol", "Trades", "P&L"]) { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:3px 6px;border-bottom:1px solid #333;"; th.textContent = h; symHead.appendChild(th); } symTable.appendChild(symHead);
+    for (const [sym, d] of Object.entries(bySym).sort((a, b) => b[1].total - a[1].total)) { const tr = document.createElement("tr"); const vals = [sym, d.count, "$" + d.total.toFixed(2)]; for (let i = 0; i < vals.length; i++) { const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;"; td.textContent = vals[i]; if (i === 2) td.style.color = d.total >= 0 ? "#4caf50" : "#f44336"; tr.appendChild(td); } symTable.appendChild(tr); }
+    resultsDiv.appendChild(symTable);
+  }
+  win.appendElement(importRoot); renderImportResults([]);
+}
+
 const CMD_PALETTE_COMMANDS = [
+  { name: "SNAPSHOT", desc: "Portfolio snapshot to clipboard", action: cmdSnapshot },
+  { name: "HOTLIST", desc: "Real-time top movers dashboard", action: cmdHotlist },
+  { name: "NOTES", desc: "Per-symbol trading notes", action: cmdNotes },
+  { name: "TIMER", desc: "Custom countdown timers", action: cmdTimer },
+  { name: "EXPORT", desc: "Chart data export to CSV", action: cmdExport },
   { name: "REPLAY", desc: "Bar-by-bar chart replay / practice trading", action: cmdReplay },
+  { name: "DES", desc: "Description / Fundamentals", action: cmdDescription },
+  { name: "NEWS", desc: "News headlines", action: cmdNews },
+  { name: "FA", desc: "Financial Analysis (income, balance, cash flow)", action: cmdFinancialAnalysis },
   { name: "DES", desc: "Description / Fundamentals", action: cmdDescription },
   { name: "NEWS", desc: "News headlines", action: cmdNews },
   { name: "FA", desc: "Financial Analysis (income, balance, cash flow)", action: cmdFinancialAnalysis },
@@ -6571,6 +8590,21 @@ const CMD_PALETTE_COMMANDS = [
   { name: "EQUITY", desc: "Account equity curve (P&L, drawdown, Sharpe)", action: cmdEquity },
   { name: "HEATCAL", desc: "Calendar heatmap of daily returns (GitHub-style)", action: cmdHeatCal },
   { name: "CORRWATCH", desc: "Correlation breakdown alerts (60D vs 1Y, watchlist)", action: cmdCorrWatch },
+  { name: "LADDER", desc: "Price Ladder / DOM Visualization", action: cmdLadder },
+  { name: "CHAIN+", desc: "Enhanced Options Chain Visualizer (IV smile, OI, heatmap)", action: cmdChainPlus },
+  { name: "SPREAD+", desc: "Live Bid-Ask Spread Monitor (chart + stats)", action: cmdSpreadMonitor },
+  { name: "WEBHOOK", desc: "Custom Webhook Alert Endpoints", action: cmdWebhook },
+  { name: "JOURNAL+", desc: "Enhanced Trade Journal (tags, ratings, calendar, stats)", action: cmdJournalPlus },
+  { name: "CORRELATION3D", desc: "Correlation Network Graph (force-directed)", action: cmdCorrelation3D },
+  { name: "IMPORTTRADES", desc: "Import external trade history (CSV: MT5, IB, Tastytrade)", action: cmdImportTrades },
+  { name: "SIGNAL", desc: "Composite trading signal generator (Fisher, RSI, KAMA, SMA200, volume, ATR)", action: cmdSignal },
+  { name: "PROFILE", desc: "Trading profile analytics (P&L by symbol, day of week, hold time)", action: cmdProfile },
+  { name: "FIBO+", desc: "Fibonacci time zones (markers at Fib intervals from swing low)", action: cmdFiboTime },
+  { name: "DARKMODE", desc: "Theme switcher (Dark, Pitch Black, Light)", action: cmdDarkMode },
+  { name: "BOOKMAP", desc: "Heatmap order book over time (canvas, bid/ask depth)", action: cmdBookmap },
+  { name: "DASHBOARD", desc: "Customizable widget dashboard (positions, watchlist, signals)", action: cmdDashboard },
+  { name: "SCANNER-RT", desc: "Real-time multi-symbol scanner (RSI, SMA200, volume, 52W)", action: cmdScannerRT },
+  { name: "ALGO", desc: "Live algorithm monitor (auto-trade status, P&L, signals)", action: cmdAlgoMonitor },
 ];
 
 function fuzzyMatch(query, target) {
@@ -9679,6 +11713,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupTemplates();
   setupProfiles();
   setupCommandPalette();
+  loadSavedTheme(); // Restore persisted theme from localStorage
   // setupSplitButton removed — MTF Grid covers all multi-chart layouts
   setupScreenshotShortcut();
   setupCustomPluginUI();
@@ -15412,6 +17447,775 @@ async function cmdSmartAlert() {
     win.appendElement(ct);
     log(`SMARTALERT for ${currentSymbol}: ${aC}/6 anomalies detected`, aC > 0 ? "warn" : "ok");
   } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to compute anomalies: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// LADDER — Price Ladder / DOM Visualization
+// ══════════════════════════════════════════════════════════════
+function cmdLadder() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  let ladderInterval = null;
+  const LEVELS = 20;
+  const win = createWindow({
+    title: `${currentSymbol} — Price Ladder`,
+    width: 420, height: 550,
+    onClose: () => { if (ladderInterval) { clearInterval(ladderInterval); ladderInterval = null; } },
+  });
+  win.contentElement.textContent = "";
+
+  const container = document.createElement("div");
+  container.style.cssText = "font-family:Consolas,monospace;font-size:11px;overflow-y:auto;max-height:calc(100% - 40px);";
+  win.appendElement(container);
+
+  const footer = document.createElement("div");
+  footer.style.cssText = "padding:6px 8px;border-top:1px solid #333;font-size:10px;color:#888;display:flex;justify-content:space-between;";
+  win.appendElement(footer);
+
+  async function refresh() {
+    let bids = [], asks = [], midPrice = 0;
+    try {
+      const json = await invokeQuiet("get_orderbook", { symbol: currentSymbol });
+      const book = typeof json === "string" ? JSON.parse(json) : json;
+      bids = Array.isArray(book.bids) ? book.bids : [];
+      asks = Array.isArray(book.asks) ? book.asks : [];
+      if (bids.length > 0 && asks.length > 0) {
+        midPrice = (Math.max(...bids.map(b => b.price || 0)) + Math.min(...asks.map(a => a.price || Infinity))) / 2;
+      }
+    } catch (_) {
+      // Orderbook not available, fall back to quote
+      try {
+        const qJson = await invokeQuiet("get_latest_quote", { symbol: currentSymbol });
+        const q = typeof qJson === "string" ? JSON.parse(qJson) : qJson;
+        const bid = q.bid || q.bp || 0;
+        const ask = q.ask || q.ap || 0;
+        if (bid > 0 && ask > 0) {
+          midPrice = (bid + ask) / 2;
+          bids = [{ price: bid, size: q.bidsz || q.bs || 1 }];
+          asks = [{ price: ask, size: q.asksz || q.as || 1 }];
+        }
+      } catch (_) {}
+    }
+
+    if (midPrice <= 0 && lastPrice > 0) midPrice = lastPrice;
+    if (midPrice <= 0) return;
+
+    const dp = midPrice > 100 ? 2 : midPrice > 1 ? 4 : 6;
+    const step = midPrice > 100 ? 0.01 : midPrice > 10 ? 0.005 : midPrice > 1 ? 0.001 : 0.0001;
+
+    // Build level map
+    const bidMap = {};
+    const askMap = {};
+    for (const b of bids) { const key = (b.price || 0).toFixed(dp); bidMap[key] = (bidMap[key] || 0) + (b.size || b.qty || 0); }
+    for (const a of asks) { const key = (a.price || 0).toFixed(dp); askMap[key] = (askMap[key] || 0) + (a.size || a.qty || 0); }
+
+    // Generate price levels centered on midPrice
+    const levels = [];
+    for (let i = LEVELS; i >= -LEVELS; i--) {
+      const price = midPrice + i * step;
+      const key = price.toFixed(dp);
+      levels.push({ price, key, bidVol: bidMap[key] || 0, askVol: askMap[key] || 0 });
+    }
+
+    const allSizes = levels.map(l => Math.max(l.bidVol, l.askVol)).filter(v => v > 0);
+    const maxSize = allSizes.length > 0 ? Math.max(...allSizes) : 1;
+    const avgSize = allSizes.length > 0 ? allSizes.reduce((a, b) => a + b, 0) / allSizes.length : 1;
+    const largeThreshold = avgSize * 2;
+
+    container.textContent = "";
+    for (const level of levels) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:grid;grid-template-columns:1fr 80px 1fr;height:18px;align-items:center;border-bottom:1px solid #111;position:relative;";
+      const isCurrentPrice = Math.abs(level.price - midPrice) < step * 0.5;
+      if (isCurrentPrice) row.style.background = "rgba(255,235,59,0.15)";
+
+      // Bid column (left)
+      const bidCell = document.createElement("div");
+      bidCell.style.cssText = "position:relative;text-align:right;padding-right:4px;height:100%;display:flex;align-items:center;justify-content:flex-end;";
+      if (level.bidVol > 0) {
+        const bar = document.createElement("div");
+        const pct = (level.bidVol / maxSize) * 100;
+        const bright = level.bidVol >= largeThreshold;
+        bar.style.cssText = `position:absolute;right:0;top:0;height:100%;width:${pct}%;background:${bright ? "rgba(76,175,80,0.5)" : "rgba(76,175,80,0.25)"};`;
+        bidCell.appendChild(bar);
+        const txt = document.createElement("span");
+        txt.style.cssText = `position:relative;z-index:1;color:${bright ? "#66ff66" : "#4caf50"};font-size:10px;`;
+        txt.textContent = level.bidVol.toLocaleString();
+        bidCell.appendChild(txt);
+      }
+      row.appendChild(bidCell);
+
+      // Price column (center)
+      const priceCell = document.createElement("div");
+      priceCell.style.cssText = `text-align:center;font-weight:${isCurrentPrice ? "bold" : "normal"};color:${isCurrentPrice ? "#ffeb3b" : "#ccc"};font-size:10px;`;
+      priceCell.textContent = level.price.toFixed(dp);
+      row.appendChild(priceCell);
+
+      // Ask column (right)
+      const askCell = document.createElement("div");
+      askCell.style.cssText = "position:relative;text-align:left;padding-left:4px;height:100%;display:flex;align-items:center;";
+      if (level.askVol > 0) {
+        const bar = document.createElement("div");
+        const pct = (level.askVol / maxSize) * 100;
+        const bright = level.askVol >= largeThreshold;
+        bar.style.cssText = `position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${bright ? "rgba(244,67,54,0.5)" : "rgba(244,67,54,0.25)"};`;
+        askCell.appendChild(bar);
+        const txt = document.createElement("span");
+        txt.style.cssText = `position:relative;z-index:1;color:${bright ? "#ff6666" : "#f44336"};font-size:10px;`;
+        txt.textContent = level.askVol.toLocaleString();
+        askCell.appendChild(txt);
+      }
+      row.appendChild(askCell);
+
+      container.appendChild(row);
+    }
+
+    // Footer: total bid vs ask imbalance
+    const totalBid = levels.reduce((s, l) => s + l.bidVol, 0);
+    const totalAsk = levels.reduce((s, l) => s + l.askVol, 0);
+    const total = totalBid + totalAsk || 1;
+    const bidPct = ((totalBid / total) * 100).toFixed(1);
+    const askPct = ((totalAsk / total) * 100).toFixed(1);
+    footer.innerHTML = `<span style="color:#4caf50">BID: ${totalBid.toLocaleString()} (${bidPct}%)</span><span style="color:#888">|</span><span style="color:#f44336">ASK: ${totalAsk.toLocaleString()} (${askPct}%)</span>`;
+  }
+
+  refresh();
+  ladderInterval = setInterval(refresh, 2000);
+}
+
+// ══════════════════════════════════════════════════════════════
+// CHAIN+ — Enhanced Options Chain Visualizer
+// ══════════════════════════════════════════════════════════════
+async function cmdChainPlus() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Enhanced Options Chain`, width: 750, height: 550 });
+  win.contentElement.textContent = "";
+
+  // Expiry selector toolbar
+  const toolbar = document.createElement("div");
+  toolbar.style.cssText = "display:flex;gap:6px;padding:6px;border-bottom:1px solid #333;align-items:center;flex-wrap:wrap;";
+  const label = document.createElement("span");
+  label.textContent = "Expiry:";
+  label.style.cssText = "color:#888;font-size:10px;";
+  const expiryInput = document.createElement("input");
+  expiryInput.type = "date";
+  expiryInput.style.cssText = "font-size:10px;background:#111;color:#ccc;border:1px solid #333;padding:3px;";
+  const nextFri = new Date();
+  nextFri.setDate(nextFri.getDate() + (5 - nextFri.getDay() + 7) % 7 + 7);
+  expiryInput.value = nextFri.toISOString().split("T")[0];
+  const loadBtn = document.createElement("button");
+  loadBtn.textContent = "Load";
+  loadBtn.style.cssText = "font-size:10px;padding:3px 10px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;";
+  toolbar.appendChild(label);
+  toolbar.appendChild(expiryInput);
+  toolbar.appendChild(loadBtn);
+
+  // Tab buttons
+  const tabNames = ["Vol Smile", "OI Profile", "Vol Heatmap"];
+  const tabBtns = [];
+  let activeTab = 0;
+  for (let i = 0; i < tabNames.length; i++) {
+    const btn = document.createElement("button");
+    btn.textContent = tabNames[i];
+    btn.style.cssText = `font-size:10px;padding:3px 10px;border:1px solid #555;cursor:pointer;margin-left:${i === 0 ? "auto" : "0"};background:${i === 0 ? "#1a3a5c" : "#111"};color:${i === 0 ? "#8cf" : "#888"};`;
+    btn.addEventListener("click", () => {
+      activeTab = i;
+      tabBtns.forEach((b, j) => { b.style.background = j === i ? "#1a3a5c" : "#111"; b.style.color = j === i ? "#8cf" : "#888"; });
+      if (chainData) renderTab(chainData);
+    });
+    tabBtns.push(btn);
+    toolbar.appendChild(btn);
+  }
+  win.appendElement(toolbar);
+
+  const content = document.createElement("div");
+  content.style.cssText = "padding:4px;font-size:10px;overflow-y:auto;max-height:460px;";
+  content.textContent = "Select expiry and click Load.";
+  win.appendElement(content);
+
+  let chainData = null;
+
+  function renderTab(chain) {
+    content.textContent = "";
+    if (activeTab === 0) renderVolSmile(chain);
+    else if (activeTab === 1) renderOIProfile(chain);
+    else renderVolHeatmap(chain);
+  }
+
+  function renderVolSmile(chain) {
+    const calls = chain.filter(c => c.option_type === "call").sort((a, b) => a.strike - b.strike);
+    const puts = chain.filter(c => c.option_type === "put").sort((a, b) => a.strike - b.strike);
+    if (calls.length === 0 && puts.length === 0) { content.textContent = "No IV data available."; return; }
+
+    const chartDiv = document.createElement("div");
+    chartDiv.style.cssText = "width:100%;height:350px;";
+    content.appendChild(chartDiv);
+
+    const smileChart = createChart(chartDiv, {
+      width: chartDiv.clientWidth || 700, height: 350,
+      layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false },
+      grid: { vertLines: { color: "#1a1a2e" }, horzLines: { color: "#1a1a2e" } },
+      rightPriceScale: { borderColor: "#333" },
+      timeScale: { borderColor: "#333", visible: false },
+    });
+
+    // Use whitespace-based custom x-axis: map strike index to time
+    const allStrikes = [...new Set(chain.map(c => c.strike))].sort((a, b) => a - b);
+    const strikeToIndex = {};
+    allStrikes.forEach((s, i) => { strikeToIndex[s.toFixed(2)] = i; });
+
+    if (calls.length > 0) {
+      const callLine = smileChart.addLineSeries({ color: "#2196f3", lineWidth: 2, title: "Call IV" });
+      const callData = calls.filter(c => c.implied_volatility > 0).map(c => ({
+        time: strikeToIndex[c.strike.toFixed(2)] || 0,
+        value: c.implied_volatility * 100,
+      }));
+      callLine.setData(callData);
+    }
+    if (puts.length > 0) {
+      const putLine = smileChart.addLineSeries({ color: "#f44336", lineWidth: 2, title: "Put IV" });
+      const putData = puts.filter(c => c.implied_volatility > 0).map(c => ({
+        time: strikeToIndex[c.strike.toFixed(2)] || 0,
+        value: c.implied_volatility * 100,
+      }));
+      putLine.setData(putData);
+    }
+    smileChart.timeScale().fitContent();
+
+    // Legend
+    const legend = document.createElement("div");
+    legend.style.cssText = "padding:6px;font-size:10px;color:#888;text-align:center;";
+    legend.innerHTML = '<span style="color:#2196f3">Call IV</span> / <span style="color:#f44336">Put IV</span> — X: Strike Index (lowest to highest), Y: IV %';
+    content.appendChild(legend);
+
+    const ro = new ResizeObserver(() => { if (chartDiv.clientWidth > 0) smileChart.applyOptions({ width: chartDiv.clientWidth }); });
+    ro.observe(chartDiv);
+  }
+
+  function renderOIProfile(chain) {
+    const allStrikes = [...new Set(chain.map(c => c.strike))].sort((a, b) => a - b);
+    const calls = chain.filter(c => c.option_type === "call");
+    const puts = chain.filter(c => c.option_type === "put");
+
+    // Calculate max pain (strike with most total OI expiring worthless)
+    let maxPainStrike = 0, maxPainOI = 0;
+    for (const strike of allStrikes) {
+      const callOI = calls.filter(c => c.strike === strike).reduce((s, c) => s + (c.open_interest || 0), 0);
+      const putOI = puts.filter(c => c.strike === strike).reduce((s, c) => s + (c.open_interest || 0), 0);
+      const total = callOI + putOI;
+      if (total > maxPainOI) { maxPainOI = total; maxPainStrike = strike; }
+    }
+
+    const maxOI = Math.max(...chain.map(c => c.open_interest || 0), 1);
+    const container = document.createElement("div");
+    container.style.cssText = "overflow-y:auto;max-height:400px;";
+
+    if (maxPainStrike > 0) {
+      const mpDiv = document.createElement("div");
+      mpDiv.style.cssText = "padding:6px;text-align:center;font-size:11px;border-bottom:1px solid #333;";
+      mpDiv.innerHTML = `Max Pain: <span style="color:#ff9800;font-weight:bold">$${maxPainStrike.toFixed(2)}</span> (Total OI: ${maxPainOI.toLocaleString()})`;
+      container.appendChild(mpDiv);
+    }
+
+    for (const strike of allStrikes) {
+      const callOI = calls.filter(c => c.strike === strike).reduce((s, c) => s + (c.open_interest || 0), 0);
+      const putOI = puts.filter(c => c.strike === strike).reduce((s, c) => s + (c.open_interest || 0), 0);
+      const isMaxPain = strike === maxPainStrike;
+
+      const row = document.createElement("div");
+      row.style.cssText = `display:grid;grid-template-columns:1fr 70px 1fr;height:20px;align-items:center;border-bottom:1px solid #111;${isMaxPain ? "background:rgba(255,152,0,0.1);border:1px solid #ff980044;" : ""}`;
+
+      // Call OI bar (left, green, pointing right)
+      const callCell = document.createElement("div");
+      callCell.style.cssText = "position:relative;height:100%;display:flex;align-items:center;justify-content:flex-end;padding-right:4px;";
+      if (callOI > 0) {
+        const bar = document.createElement("div");
+        bar.style.cssText = `position:absolute;right:0;top:2px;height:calc(100% - 4px);width:${(callOI / maxOI) * 100}%;background:rgba(76,175,80,0.35);border-radius:2px;`;
+        callCell.appendChild(bar);
+        const txt = document.createElement("span");
+        txt.style.cssText = "position:relative;z-index:1;color:#4caf50;font-size:9px;";
+        txt.textContent = callOI.toLocaleString();
+        callCell.appendChild(txt);
+      }
+      row.appendChild(callCell);
+
+      // Strike (center)
+      const strikeCell = document.createElement("div");
+      strikeCell.style.cssText = `text-align:center;font-weight:${isMaxPain ? "bold" : "normal"};color:${isMaxPain ? "#ff9800" : "#ccc"};font-size:10px;`;
+      strikeCell.textContent = strike.toFixed(2);
+      row.appendChild(strikeCell);
+
+      // Put OI bar (right, red, pointing right)
+      const putCell = document.createElement("div");
+      putCell.style.cssText = "position:relative;height:100%;display:flex;align-items:center;padding-left:4px;";
+      if (putOI > 0) {
+        const bar = document.createElement("div");
+        bar.style.cssText = `position:absolute;left:0;top:2px;height:calc(100% - 4px);width:${(putOI / maxOI) * 100}%;background:rgba(244,67,54,0.35);border-radius:2px;`;
+        putCell.appendChild(bar);
+        const txt = document.createElement("span");
+        txt.style.cssText = "position:relative;z-index:1;color:#f44336;font-size:9px;";
+        txt.textContent = putOI.toLocaleString();
+        putCell.appendChild(txt);
+      }
+      row.appendChild(putCell);
+
+      container.appendChild(row);
+    }
+    content.appendChild(container);
+
+    const legend = document.createElement("div");
+    legend.style.cssText = "padding:6px;font-size:10px;color:#888;text-align:center;";
+    legend.innerHTML = '<span style="color:#4caf50">Call OI</span> | Strike | <span style="color:#f44336">Put OI</span>';
+    content.appendChild(legend);
+  }
+
+  function renderVolHeatmap(chain) {
+    const allStrikes = [...new Set(chain.map(c => c.strike))].sort((a, b) => a - b);
+    const expiries = [...new Set(chain.map(c => c.expiration_date || c.expiry || ""))].filter(Boolean).sort();
+
+    if (expiries.length === 0) {
+      // Single-expiry: show strike x type grid
+      const maxVol = Math.max(...chain.map(c => c.volume || 0), 1);
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+      const thead = document.createElement("thead");
+      const hr = document.createElement("tr");
+      for (const h of ["Strike", "Call Vol", "Put Vol"]) {
+        const th = document.createElement("th");
+        th.style.cssText = "padding:4px;color:#888;border-bottom:1px solid #333;";
+        th.textContent = h;
+        hr.appendChild(th);
+      }
+      thead.appendChild(hr);
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (const strike of allStrikes) {
+        const callVol = chain.filter(c => c.strike === strike && c.option_type === "call").reduce((s, c) => s + (c.volume || 0), 0);
+        const putVol = chain.filter(c => c.strike === strike && c.option_type === "put").reduce((s, c) => s + (c.volume || 0), 0);
+        const tr = document.createElement("tr");
+        const tdStrike = document.createElement("td");
+        tdStrike.style.cssText = "padding:3px;text-align:center;color:#ccc;border-bottom:1px solid #111;";
+        tdStrike.textContent = strike.toFixed(2);
+        tr.appendChild(tdStrike);
+        for (const vol of [callVol, putVol]) {
+          const td = document.createElement("td");
+          const intensity = maxVol > 0 ? vol / maxVol : 0;
+          const g = Math.round(80 + intensity * 175);
+          td.style.cssText = `padding:3px;text-align:center;border-bottom:1px solid #111;background:rgba(${Math.round(intensity * 20)},${g},${Math.round(intensity * 20)},${0.1 + intensity * 0.5});color:#ccc;`;
+          td.textContent = vol > 0 ? vol.toLocaleString() : "-";
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      content.appendChild(table);
+      return;
+    }
+
+    // Multi-expiry heatmap: rows = strikes, columns = expiry dates
+    const maxVol = Math.max(...chain.map(c => c.volume || 0), 1);
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = "overflow:auto;max-height:400px;";
+    const table = document.createElement("table");
+    table.style.cssText = "border-collapse:collapse;font-size:9px;";
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    const thCorner = document.createElement("th");
+    thCorner.style.cssText = "padding:3px;color:#888;border:1px solid #222;position:sticky;left:0;background:#000;z-index:1;";
+    thCorner.textContent = "Strike";
+    hr.appendChild(thCorner);
+    for (const exp of expiries) {
+      const th = document.createElement("th");
+      th.style.cssText = "padding:3px;color:#888;border:1px solid #222;white-space:nowrap;";
+      th.textContent = exp.slice(5); // MM-DD
+      hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    for (const strike of allStrikes) {
+      const tr = document.createElement("tr");
+      const tdStrike = document.createElement("td");
+      tdStrike.style.cssText = "padding:3px;text-align:center;color:#ccc;border:1px solid #222;position:sticky;left:0;background:#000;z-index:1;";
+      tdStrike.textContent = strike.toFixed(2);
+      tr.appendChild(tdStrike);
+      for (const exp of expiries) {
+        const vol = chain.filter(c => c.strike === strike && (c.expiration_date === exp || c.expiry === exp)).reduce((s, c) => s + (c.volume || 0), 0);
+        const td = document.createElement("td");
+        const intensity = maxVol > 0 ? vol / maxVol : 0;
+        const g = Math.round(80 + intensity * 175);
+        td.style.cssText = `padding:3px;text-align:center;border:1px solid #222;min-width:40px;background:rgba(${Math.round(intensity * 20)},${g},${Math.round(intensity * 20)},${0.05 + intensity * 0.55});color:${intensity > 0.3 ? "#fff" : "#888"};`;
+        td.textContent = vol > 0 ? vol.toLocaleString() : "-";
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+    content.appendChild(wrapper);
+  }
+
+  loadBtn.addEventListener("click", async () => {
+    content.textContent = "Loading options chain...";
+    try {
+      const json = await invoke("get_options", { symbol: currentSymbol, expiry: expiryInput.value });
+      const chain = typeof json === "string" ? JSON.parse(json) : json;
+      if (!Array.isArray(chain) || chain.length === 0) { content.textContent = "No options data."; return; }
+      chainData = chain;
+      renderTab(chain);
+    } catch (e) { content.textContent = `Error: ${e}`; }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// SPREAD+ — Live Bid-Ask Spread Monitor
+// ══════════════════════════════════════════════════════════════
+function cmdSpreadMonitor() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  let spreadInterval = null;
+  const ROLLING_SIZE = 50;
+  const spreadHistory = []; // { time, spread }
+  let maxSpread = 0;
+
+  const win = createWindow({
+    title: `${currentSymbol} — Spread Monitor`,
+    width: 650, height: 480,
+    onClose: () => { if (spreadInterval) { clearInterval(spreadInterval); spreadInterval = null; } },
+  });
+  win.contentElement.textContent = "";
+
+  const chartDiv = document.createElement("div");
+  chartDiv.style.cssText = "width:100%;height:300px;";
+  win.appendElement(chartDiv);
+
+  const statsDiv = document.createElement("div");
+  statsDiv.style.cssText = "padding:8px;display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;font-family:Consolas,monospace;font-size:11px;border-top:1px solid #333;";
+  win.appendElement(statsDiv);
+
+  const spreadChart = createChart(chartDiv, {
+    width: chartDiv.clientWidth || 620, height: 300,
+    layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false },
+    grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+    rightPriceScale: { borderColor: "#333" },
+    timeScale: { borderColor: "#333", timeVisible: true, secondsVisible: true },
+  });
+
+  const spreadLine = spreadChart.addLineSeries({ color: "#00bcd4", lineWidth: 2, title: "Spread", lastValueVisible: true });
+  const avgLine = spreadChart.addLineSeries({ color: "#ffffff", lineWidth: 1, lineStyle: 2, title: "Avg Spread" });
+  const sdLine = spreadChart.addLineSeries({ color: "#f44336", lineWidth: 1, lineStyle: 2, title: "+2 SD" });
+
+  let sampleIndex = 0;
+
+  function updateStats() {
+    const n = spreadHistory.length;
+    if (n === 0) return;
+    const current = spreadHistory[n - 1].spread;
+    const window50 = spreadHistory.slice(-ROLLING_SIZE);
+    const mean = window50.reduce((s, h) => s + h.spread, 0) / window50.length;
+    const variance = window50.reduce((s, h) => s + (h.spread - mean) ** 2, 0) / window50.length;
+    const sd = Math.sqrt(variance);
+    const warnLevel = mean + 2 * sd;
+    const latestPrice = lastPrice > 0 ? lastPrice : 1;
+    const spreadPct = (current / latestPrice * 100).toFixed(4);
+
+    statsDiv.textContent = "";
+    const stats = [
+      ["Current", `$${current.toFixed(4)}`, "#00bcd4"],
+      ["Avg (50)", `$${mean.toFixed(4)}`, "#fff"],
+      ["Max", `$${maxSpread.toFixed(4)}`, "#ff9800"],
+      ["Spread %", `${spreadPct}%`, "#888"],
+    ];
+    for (const [label, value, color] of stats) {
+      const cell = document.createElement("div");
+      cell.style.cssText = "text-align:center;";
+      const lbl = document.createElement("div");
+      lbl.style.cssText = "color:#666;font-size:9px;";
+      lbl.textContent = label;
+      const val = document.createElement("div");
+      val.style.cssText = `color:${color};font-weight:bold;`;
+      val.textContent = value;
+      cell.appendChild(lbl);
+      cell.appendChild(val);
+      statsDiv.appendChild(cell);
+    }
+
+    if (current > warnLevel && n > ROLLING_SIZE) {
+      log(`SPREAD ALERT: ${currentSymbol} spread $${current.toFixed(4)} exceeds 2 SD ($${warnLevel.toFixed(4)})`, "warn");
+    }
+  }
+
+  async function pollSpread() {
+    try {
+      const json = await invokeQuiet("get_latest_quote", { symbol: currentSymbol });
+      const q = typeof json === "string" ? JSON.parse(json) : json;
+      const bid = q.bid || q.bp || 0;
+      const ask = q.ask || q.ap || 0;
+      if (bid <= 0 || ask <= 0) return;
+      const spread = ask - bid;
+      if (spread > maxSpread) maxSpread = spread;
+
+      sampleIndex++;
+      spreadHistory.push({ time: sampleIndex, spread });
+      if (spreadHistory.length > 500) spreadHistory.shift();
+
+      // Update chart data
+      spreadLine.setData(spreadHistory.map(h => ({ time: h.time, value: h.spread })));
+
+      // Rolling average and SD
+      const window50 = spreadHistory.slice(-ROLLING_SIZE);
+      const mean = window50.reduce((s, h) => s + h.spread, 0) / window50.length;
+      const variance = window50.reduce((s, h) => s + (h.spread - mean) ** 2, 0) / window50.length;
+      const sd = Math.sqrt(variance);
+
+      avgLine.setData(spreadHistory.map(h => ({ time: h.time, value: mean })));
+      sdLine.setData(spreadHistory.map(h => ({ time: h.time, value: mean + 2 * sd })));
+
+      spreadChart.timeScale().scrollToRealTime();
+      updateStats();
+    } catch (_) {}
+  }
+
+  pollSpread();
+  spreadInterval = setInterval(pollSpread, 2000);
+
+  const ro = new ResizeObserver(() => { if (chartDiv.clientWidth > 0) spreadChart.applyOptions({ width: chartDiv.clientWidth }); });
+  ro.observe(chartDiv);
+}
+
+// ══════════════════════════════════════════════════════════════
+// WEBHOOK — Custom Webhook Alert Endpoints
+// ══════════════════════════════════════════════════════════════
+const WEBHOOK_STORAGE_KEY = "typhoon_webhooks";
+
+function loadWebhooks() {
+  try { return JSON.parse(localStorage.getItem(WEBHOOK_STORAGE_KEY) || "[]"); } catch { return []; }
+}
+
+function saveWebhooks(hooks) {
+  localStorage.setItem(WEBHOOK_STORAGE_KEY, JSON.stringify(hooks));
+}
+
+function fireWebhooks(event, data) {
+  const hooks = loadWebhooks();
+  for (const hook of hooks) {
+    if (hook.events && hook.events.includes(event)) {
+      const payload = { event, timestamp: new Date().toISOString(), ...data };
+      fetch(hook.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).then(() => {
+        log(`Webhook "${hook.name}" fired (${event})`, "ok");
+      }).catch(err => {
+        log(`Webhook "${hook.name}" failed: ${err}`, "error");
+      });
+    }
+  }
+}
+
+function cmdWebhook() {
+  const win = createWindow({ title: "Webhook Alert Endpoints", width: 550, height: 500 });
+  win.contentElement.textContent = "";
+
+  const EVENT_TYPES = ["price_alert", "order_fill", "signal", "unusual_volume"];
+  const EVENT_LABELS = { price_alert: "Price Alert", order_fill: "Order Fill", signal: "Signal Change", unusual_volume: "Unusual Volume" };
+
+  function render() {
+    win.contentElement.textContent = "";
+    const hooks = loadWebhooks();
+
+    // Header
+    const header = document.createElement("div");
+    header.style.cssText = "padding:8px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center;";
+    const title = document.createElement("span");
+    title.style.cssText = "color:#ccc;font-size:12px;font-weight:bold;";
+    title.textContent = `Webhooks (${hooks.length})`;
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Add Webhook";
+    addBtn.style.cssText = "font-size:10px;padding:4px 12px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;border-radius:3px;";
+    addBtn.addEventListener("click", () => renderForm());
+    header.appendChild(title);
+    header.appendChild(addBtn);
+    win.appendElement(header);
+
+    // List
+    const list = document.createElement("div");
+    list.style.cssText = "overflow-y:auto;max-height:calc(100% - 50px);padding:4px;";
+
+    if (hooks.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:#666;padding:20px;text-align:center;font-size:11px;";
+      empty.textContent = "No webhooks configured. Click '+ Add Webhook' to get started.";
+      list.appendChild(empty);
+    }
+
+    for (let i = 0; i < hooks.length; i++) {
+      const hook = hooks[i];
+      const card = document.createElement("div");
+      card.style.cssText = "background:#111;border:1px solid #333;border-radius:4px;padding:8px;margin-bottom:6px;";
+
+      const topRow = document.createElement("div");
+      topRow.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;";
+      const name = document.createElement("span");
+      name.style.cssText = "color:#ccc;font-weight:bold;font-size:11px;";
+      name.textContent = hook.name;
+      const btnGroup = document.createElement("div");
+      btnGroup.style.cssText = "display:flex;gap:4px;";
+
+      const testBtn = document.createElement("button");
+      testBtn.textContent = "Test";
+      testBtn.style.cssText = "font-size:9px;padding:2px 8px;background:#1a3a1a;color:#4caf50;border:1px solid #333;cursor:pointer;border-radius:2px;";
+      testBtn.addEventListener("click", () => {
+        const payload = {
+          event: "test",
+          symbol: currentSymbol || "TEST",
+          price: lastPrice || 100.00,
+          message: "Test webhook from TyphooN Terminal",
+          timestamp: new Date().toISOString(),
+        };
+        fetch(hook.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }).then(r => {
+          log(`Webhook test "${hook.name}": ${r.status} ${r.statusText}`, r.ok ? "ok" : "warn");
+        }).catch(err => {
+          log(`Webhook test "${hook.name}" failed: ${err}`, "error");
+        });
+      });
+
+      const editBtn = document.createElement("button");
+      editBtn.textContent = "Edit";
+      editBtn.style.cssText = "font-size:9px;padding:2px 8px;background:#1a1a3a;color:#8cf;border:1px solid #333;cursor:pointer;border-radius:2px;";
+      editBtn.addEventListener("click", () => renderForm(i));
+
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "Delete";
+      delBtn.style.cssText = "font-size:9px;padding:2px 8px;background:#3a1a1a;color:#f44336;border:1px solid #333;cursor:pointer;border-radius:2px;";
+      delBtn.addEventListener("click", () => {
+        const all = loadWebhooks();
+        all.splice(i, 1);
+        saveWebhooks(all);
+        log(`Webhook "${hook.name}" deleted`, "ok");
+        render();
+      });
+
+      btnGroup.appendChild(testBtn);
+      btnGroup.appendChild(editBtn);
+      btnGroup.appendChild(delBtn);
+      topRow.appendChild(name);
+      topRow.appendChild(btnGroup);
+      card.appendChild(topRow);
+
+      const urlDiv = document.createElement("div");
+      urlDiv.style.cssText = "color:#666;font-size:9px;margin-bottom:4px;word-break:break-all;";
+      urlDiv.textContent = hook.url;
+      card.appendChild(urlDiv);
+
+      const eventsDiv = document.createElement("div");
+      eventsDiv.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;";
+      for (const evt of (hook.events || [])) {
+        const tag = document.createElement("span");
+        tag.style.cssText = "font-size:9px;padding:1px 6px;background:#1a1a2e;color:#8cf;border-radius:8px;border:1px solid #333;";
+        tag.textContent = EVENT_LABELS[evt] || evt;
+        eventsDiv.appendChild(tag);
+      }
+      card.appendChild(eventsDiv);
+
+      list.appendChild(card);
+    }
+    win.appendElement(list);
+  }
+
+  function renderForm(editIndex) {
+    win.contentElement.textContent = "";
+    const hooks = loadWebhooks();
+    const existing = editIndex !== undefined ? hooks[editIndex] : null;
+
+    const form = document.createElement("div");
+    form.style.cssText = "padding:12px;font-size:11px;";
+
+    const heading = document.createElement("div");
+    heading.style.cssText = "color:#ccc;font-size:13px;font-weight:bold;margin-bottom:12px;";
+    heading.textContent = existing ? "Edit Webhook" : "Add Webhook";
+    form.appendChild(heading);
+
+    // Name
+    const nameLabel = document.createElement("label");
+    nameLabel.style.cssText = "color:#888;font-size:10px;display:block;margin-bottom:2px;";
+    nameLabel.textContent = "Name";
+    const nameInput = document.createElement("input");
+    nameInput.style.cssText = "width:100%;padding:6px;background:#111;color:#ccc;border:1px solid #333;margin-bottom:8px;font-size:11px;box-sizing:border-box;";
+    nameInput.value = existing ? existing.name : "";
+    nameInput.placeholder = "e.g. Discord Bot";
+    form.appendChild(nameLabel);
+    form.appendChild(nameInput);
+
+    // URL
+    const urlLabel = document.createElement("label");
+    urlLabel.style.cssText = "color:#888;font-size:10px;display:block;margin-bottom:2px;";
+    urlLabel.textContent = "Webhook URL";
+    const urlInput = document.createElement("input");
+    urlInput.style.cssText = "width:100%;padding:6px;background:#111;color:#ccc;border:1px solid #333;margin-bottom:8px;font-size:11px;box-sizing:border-box;";
+    urlInput.value = existing ? existing.url : "";
+    urlInput.placeholder = "https://...";
+    form.appendChild(urlLabel);
+    form.appendChild(urlInput);
+
+    // Event checkboxes
+    const evLabel = document.createElement("label");
+    evLabel.style.cssText = "color:#888;font-size:10px;display:block;margin-bottom:6px;";
+    evLabel.textContent = "Events";
+    form.appendChild(evLabel);
+
+    const checkboxes = {};
+    const cbContainer = document.createElement("div");
+    cbContainer.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:12px;";
+    for (const evt of EVENT_TYPES) {
+      const wrap = document.createElement("label");
+      wrap.style.cssText = "color:#ccc;font-size:10px;display:flex;align-items:center;gap:4px;cursor:pointer;";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = existing ? (existing.events || []).includes(evt) : false;
+      checkboxes[evt] = cb;
+      wrap.appendChild(cb);
+      wrap.appendChild(document.createTextNode(EVENT_LABELS[evt]));
+      cbContainer.appendChild(wrap);
+    }
+    form.appendChild(cbContainer);
+
+    // Buttons
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:8px;";
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = existing ? "Update" : "Save";
+    saveBtn.style.cssText = "padding:6px 20px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;font-size:11px;border-radius:3px;";
+    saveBtn.addEventListener("click", () => {
+      const name = nameInput.value.trim();
+      const url = urlInput.value.trim();
+      if (!name || !url) { log("Webhook name and URL are required", "warn"); return; }
+      const events = EVENT_TYPES.filter(e => checkboxes[e].checked);
+      if (events.length === 0) { log("Select at least one event type", "warn"); return; }
+      const all = loadWebhooks();
+      const entry = { name, url, events };
+      if (editIndex !== undefined) { all[editIndex] = entry; } else { all.push(entry); }
+      saveWebhooks(all);
+      log(`Webhook "${name}" ${existing ? "updated" : "added"}`, "ok");
+      render();
+    });
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.style.cssText = "padding:6px 20px;background:#222;color:#888;border:1px solid #444;cursor:pointer;font-size:11px;border-radius:3px;";
+    cancelBtn.addEventListener("click", () => render());
+
+    btnRow.appendChild(saveBtn);
+    btnRow.appendChild(cancelBtn);
+    form.appendChild(btnRow);
+
+    win.appendElement(form);
+  }
+
+  render();
 }
 
 async function checkWatchlistSMA200Alerts() {
