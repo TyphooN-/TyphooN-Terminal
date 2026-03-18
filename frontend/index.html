@@ -223,11 +223,13 @@
         </optgroup>
       </select>
       <select id="chart-type-select">
-        <option value="gpu" selected>Candles</option>
-        <option value="gpu-heikin">Heikin-Ashi</option>
-        <option value="gpu-line">Line</option>
-        <option value="gpu-bars">OHLC Bars</option>
-        <option value="gpu-renko">Renko</option>
+        <optgroup label="GPU (WebGL2)">
+          <option value="gpu" selected>GPU Candles</option>
+          <option value="gpu-heikin">GPU Heikin-Ashi</option>
+          <option value="gpu-line">GPU Line</option>
+          <option value="gpu-bars">GPU OHLC Bars</option>
+          <option value="gpu-renko">GPU Renko</option>
+        </optgroup>
         <optgroup label="CPU (lightweight-charts)">
           <option value="candles">CPU Candles</option>
           <option value="heikin-ashi">CPU Heikin-Ashi</option>
