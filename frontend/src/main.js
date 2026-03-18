@@ -334,8 +334,8 @@ async function cachedGetBars(symbol, timeframe, limit) {
   if (cached && cached.data && cached.data.length > 0 && (Date.now() - (cached.timestamp || 0)) < staleness) {
     return JSON.stringify(cached.data); // return cached JSON string, same format as invoke
   }
-  // Dedup: if same request is in-flight, wait for it
-  const key = `${symbol}:${timeframe}:${limit}`;
+  // Dedup: if same symbol:TF is in-flight (any limit), wait for it
+  const key = `${symbol}:${timeframe}`;
   if (_barInflight.has(key)) return _barInflight.get(key);
   const promise = invoke("get_bars", { symbol, timeframe, limit }).then(json => {
     // Update cache with fresh data
@@ -2068,27 +2068,27 @@ const MTF_LABELS = (() => {
 
 async function loadMTFData(symbol) {
   try {
-    const json = await invoke("get_multi_tf_bars", {
-      symbol,
-      timeframes: MTF_TIMEFRAMES,
-      limit: 500,
-    });
+    // Use cachedGetBars for each TF — serves from cache when fresh, deduplicates in-flight
+    // This eliminates the separate get_multi_tf_bars command and its duplicate API calls
+    mtfData = {};
+    const results = await Promise.all(MTF_TIMEFRAMES.map(async (tf) => {
+      try {
+        const json = await cachedGetBars(symbol, tf, 500);
+        const bars = JSON.parse(json);
+        return { tf, bars };
+      } catch (_) { return { tf, bars: [] }; }
+    }));
     // Guard: discard if symbol changed during async fetch
     if (currentSymbol !== symbol) {
       log(`MTF data discarded (symbol changed: ${symbol} → ${currentSymbol})`, "warn");
       return;
     }
-    mtfData = {};
-    const parsed = JSON.parse(json);
-    for (const [tf, bars] of Object.entries(parsed)) {
-      mtfData[tf] = bars.map(b => ({
-        time: Math.floor(new Date(b.timestamp).getTime() / 1000),
-        open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
-      }));
-      // Also populate barCache so prefetch doesn't re-fetch these TFs
-      const cacheKey = getCacheKey(symbol, tf);
-      if (!barCache[cacheKey] || !barCache[cacheKey].data || barCache[cacheKey].data.length < bars.length) {
-        barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+    for (const { tf, bars } of results) {
+      if (bars.length > 0) {
+        mtfData[tf] = bars.map(b => ({
+          time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+          open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
+        }));
       }
     }
     log(`MTF data loaded: ${Object.keys(mtfData).map(tf => `${MTF_LABELS[tf] || tf}=${(mtfData[tf]||[]).length}`).join(", ")}`, "ok");
