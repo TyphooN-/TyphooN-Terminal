@@ -77,7 +77,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Trade history export (CSV) | ✅ Done | Export closed orders as CSV via Tauri command |
 | WebSocket streaming | ✅ Done | Real-time trades/quotes via Alpaca WS, poll_stream command |
 | Time & Sales | ✅ Done | Via WebSocket trade stream subscription |
-| 30 indicators | ✅ Done | NNFX (9) + Standard (11) + Extended (10: Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
+| 37 indicators + 22 Wasm | ✅ Done | NNFX (9) + Standard (19) + MT5 Parity (9: Alligator, AO, MFI, Force Index, Envelopes, StdDev, Chaikin, DeMarker, Fractals) |
 | Custom indicator plugin system | ✅ Done | Load/save/list JS plugins from ~/.config/typhoon-terminal/indicators/ |
 | NNFX backtesting strategy | ✅ Done | KAMA + Fisher Transform entry logic, D1/W1/MN1 optimized |
 | Options P&L calculator | ✅ Done | Multi-leg payoff diagram with canvas rendering (Ctrl+K → OPTCALC) |

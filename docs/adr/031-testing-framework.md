@@ -5,7 +5,7 @@
 
 ## Context
 
-With 186 Ctrl+K commands, 414 functions, and 27,576 lines of JavaScript, manual testing is impractical. An automated test suite ensures no regressions as features are added.
+With 187 Ctrl+K commands, 420+ functions, and 28,035 lines of JavaScript, manual testing is impractical. An automated test suite ensures no regressions as features are added.
 
 ## Test Suite: `smoke-test.cjs`
 

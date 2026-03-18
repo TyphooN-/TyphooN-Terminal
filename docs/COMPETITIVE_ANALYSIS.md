@@ -155,7 +155,7 @@
 21. **Price ladder / DOM** — Vertical bid-ask depth with volume bars. Standard on CQG and TT.
 22. **Theme switcher** — Dark, pitch black (OLED), light themes. Accessibility feature competitors lack.
 23. **Webhook alert automation** — Custom webhook endpoints for integrating with Discord bots, Zapier, etc.
-24. **186 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
+24. **187 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
 25. **AI-powered strategy suggestions** — Contextual NNFX analysis via Claude/GPT with Fisher/RSI/KAMA/SMA200/volume context.
 26. **Voice alerts** — Web Speech API reads alerts aloud. No competitor has this.
 27. **Data quality monitoring** — Automatic detection of missing bars, OHLC violations, suspicious spikes.
@@ -291,7 +291,7 @@ MT5, cTrader, and NinjaTrader all rely on **third-party DLLs** for indicators an
 
 ### TyphooN-Terminal's Approach
 
-- **100% open source** — every line auditable (17,268 lines, 16 security passes)
+- **100% open source** — every line auditable (28,035 JS + 7,009 Rust lines, 23 security passes)
 - **No DLLs** — pure Rust backend + JavaScript frontend, no binary dependencies
 - **Custom indicator plugins** are plain JavaScript files you can read
 - **API keys AES-256-GCM encrypted** (PBKDF2 100K iterations), stored in SQLite — not in config files
