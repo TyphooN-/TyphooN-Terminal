@@ -8399,6 +8399,7 @@ async function openMTFGrid(symbol, timeframes) {
   if (!symbol) { log("MTF grid: no symbol", "warn"); return; }
   mtfGridActive = true;
   mtfGridSymbol = symbol;
+  const gridUseGpu = currentChartType.startsWith("gpu");
   const btn = document.getElementById("btn-mtf-grid");
   btn.textContent = "Close Grid";
 
@@ -8440,23 +8441,61 @@ async function openMTFGrid(symbol, timeframes) {
 
     gridContainer.appendChild(cell);
 
-    // Create chart instances
-    const cellChart = createChart(chartDiv, {
-      width: 100, height: 100,
-      layout: { background: { color: "#000000" }, textColor: "#d1d4dc", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
-      grid: { vertLines: { color: "#222", style: 3 }, horzLines: { color: "#222", style: 3 } },
-      crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: "#333" },
-      timeScale: { borderColor: "#333", timeVisible: true },
-    });
+    // Create chart instances — GPU or CPU based on current chart type
+    let cellChart, cellCandleSeries, cellGpuChart = null;
 
-    const cellCandleSeries = cellChart.addCandlestickSeries({
-      upColor: "#00ff00", downColor: "#ff0000",
-      borderDownColor: "#ff0000", borderUpColor: "#00ff00",
-      wickDownColor: "#ff0000", wickUpColor: "#00ff00",
-    });
+    if (gridUseGpu && gpuChartModule) {
+      // GPU mode: create canvas + GpuChart per cell
+      const gpuCanvas = document.createElement("canvas");
+      gpuCanvas.style.cssText = "width:100%;height:100%;";
+      gpuCanvas.id = `mtf-gpu-${tf}`;
+      chartDiv.appendChild(gpuCanvas);
 
-    const cellFisherChart = createChart(fisherDiv, {
+      // Need dimensions before creating GPU chart
+      requestAnimationFrame(() => {
+        gpuCanvas.width = chartDiv.clientWidth || 300;
+        gpuCanvas.height = chartDiv.clientHeight || 200;
+      });
+
+      cellGpuChart = new gpuChartModule.GpuChart(`mtf-gpu-${tf}`);
+      const gpuType = GPU_CHART_TYPES[currentChartType] ?? 0;
+      cellGpuChart.set_chart_type(gpuType);
+
+      // Dummy CPU chart objects (not used for rendering, needed for data flow)
+      cellChart = { remove: () => {}, timeScale: () => ({ fitContent: () => {}, setVisibleLogicalRange: () => {} }), addLineSeries: () => ({ setData: () => {} }), addBaselineSeries: () => ({ setData: () => {} }), resize: () => {} };
+      cellCandleSeries = {
+        setData: (data) => {
+          if (cellGpuChart && data.length > 0) {
+            const flat = packBarsForWasm(data);
+            cellGpuChart.set_data(flat);
+            cellGpuChart.resize(gpuCanvas.width || 300, gpuCanvas.height || 200);
+            cellGpuChart.render();
+          }
+        },
+        createPriceLine: (opts) => ({ options: () => opts }),
+        removePriceLine: () => {},
+        data: () => [],
+        update: () => {},
+      };
+    } else {
+      // CPU mode: use lightweight-charts
+      cellChart = createChart(chartDiv, {
+        width: 100, height: 100,
+        layout: { background: { color: "#000000" }, textColor: "#d1d4dc", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+        grid: { vertLines: { color: "#222", style: 3 }, horzLines: { color: "#222", style: 3 } },
+        crosshair: { mode: CrosshairMode.Normal },
+        rightPriceScale: { borderColor: "#333" },
+        timeScale: { borderColor: "#333", timeVisible: true },
+      });
+
+      cellCandleSeries = cellChart.addCandlestickSeries({
+        upColor: "#00ff00", downColor: "#ff0000",
+        borderDownColor: "#ff0000", borderUpColor: "#00ff00",
+        wickDownColor: "#ff0000", wickUpColor: "#00ff00",
+      });
+    }
+
+    let cellFisherChart = createChart(fisherDiv, {
       width: 100, height: 70,
       layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
       grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
@@ -8517,7 +8556,7 @@ async function openMTFGrid(symbol, timeframes) {
       }
     });
 
-    const cellInfo = { tf, chart: cellChart, candleSeries: cellCandleSeries, fisherChart: cellFisherChart, volumeChart: cellVolumeChart, container: cell, chartDiv, fisherDiv, volumeDiv };
+    const cellInfo = { tf, chart: cellChart, candleSeries: cellCandleSeries, fisherChart: cellFisherChart, volumeChart: cellVolumeChart, container: cell, chartDiv, fisherDiv, volumeDiv, gpuChart: cellGpuChart };
     mtfGridCells.push(cellInfo);
 
     // Single click to select as active trading cell
@@ -8573,14 +8612,21 @@ async function openMTFGrid(symbol, timeframes) {
   }
 
   // Initial resize — multiple frames to ensure DOM has settled after grid creation.
-  // Without this, cells can have 0×0 dimensions on first symbol load.
   requestAnimationFrame(() => {
     resizeMTFGrid();
     requestAnimationFrame(() => {
       resizeMTFGrid();
-      // Final resize + fit content after layout is stable
       for (const cell of mtfGridCells) {
         cell.chart.timeScale().fitContent();
+        // GPU cells: resize canvas and re-render after layout settles
+        if (cell.gpuChart) {
+          const w = cell.chartDiv.clientWidth || 300;
+          const h = cell.chartDiv.clientHeight || 200;
+          const canvas = cell.chartDiv.querySelector("canvas");
+          if (canvas) { canvas.width = w; canvas.height = h; }
+          cell.gpuChart.resize(w, h);
+          cell.gpuChart.render();
+        }
       }
     });
   });
@@ -8785,6 +8831,13 @@ function resizeMTFGrid() {
       cell.chart.resize(w, ch);
       cell.fisherChart.resize(cell.fisherDiv.clientWidth, cell.fisherDiv.clientHeight);
       cell.volumeChart.resize(cell.volumeDiv.clientWidth, cell.volumeDiv.clientHeight);
+      // GPU cells: resize canvas + re-render
+      if (cell.gpuChart) {
+        const canvas = cell.chartDiv.querySelector("canvas");
+        if (canvas) { canvas.width = w; canvas.height = ch; }
+        cell.gpuChart.resize(w, ch);
+        cell.gpuChart.render();
+      }
     }
   }
 }
