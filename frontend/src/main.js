@@ -13324,6 +13324,137 @@ function cmdWorkspace() {
   win.appendElement(root); log("Workspace manager opened", "ok");
 }
 
+// ── Wave 7: Chart UX — link, R:R overlay, hotkeys, minimap ────
+
+function cmdChartLink() {
+  window._chartLinkEnabled = !window._chartLinkEnabled;
+  log(`Chart link (sync scroll): ${window._chartLinkEnabled ? "ON" : "OFF"}`, "ok");
+  if (window._chartLinkEnabled && !window._chartLinkSetup) {
+    window._chartLinkSetup = true;
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (!window._chartLinkEnabled || !range) return;
+      // Sync MTF grid cells
+      if (typeof mtfGridCells !== "undefined" && mtfGridCells.length > 0) {
+        for (const cell of mtfGridCells) {
+          try { cell.chart.timeScale().setVisibleLogicalRange(range); } catch (_) {}
+        }
+      }
+      // Store for tab sync
+      window._linkedRange = range;
+    });
+  }
+}
+
+function cmdRROverlay() {
+  window._rrOverlayEnabled = !window._rrOverlayEnabled;
+  if (!window._rrOverlayEnabled) {
+    // Remove existing overlay
+    if (indicatorSeries["rr_profit"]) { try { chart.removeSeries(indicatorSeries["rr_profit"]); } catch (_) {} delete indicatorSeries["rr_profit"]; }
+    if (indicatorSeries["rr_loss"]) { try { chart.removeSeries(indicatorSeries["rr_loss"]); } catch (_) {} delete indicatorSeries["rr_loss"]; }
+    log("R:R overlay: OFF", "ok");
+    return;
+  }
+  // Get SL/TP prices
+  let slPrice = 0, tpPrice = 0;
+  try { slPrice = typeof getSLPrice === "function" ? getSLPrice() : 0; } catch (_) {}
+  try { tpPrice = typeof getTPPrice === "function" ? getTPPrice() : 0; } catch (_) {}
+  if (!slPrice && !tpPrice) { log("Set SL/TP lines first (F2/F3 or Set SL/Set TP buttons)", "warn"); window._rrOverlayEnabled = false; return; }
+  const entry = lastPrice;
+  if (!currentChartData || currentChartData.length < 2) return;
+  const startIdx = Math.max(0, currentChartData.length - 50);
+  const bars = currentChartData.slice(startIdx);
+  // Profit zone (entry to TP)
+  if (tpPrice > 0) {
+    const s = chart.addBaselineSeries({
+      topFillColor1: "#4caf5030", topFillColor2: "#4caf5030",
+      bottomFillColor1: "transparent", bottomFillColor2: "transparent",
+      topLineColor: "#4caf5066", bottomLineColor: "transparent",
+      lineWidth: 0, baseValue: { type: "price", price: entry },
+      lastValueVisible: false, priceLineVisible: false,
+    });
+    s.setData(bars.map(d => ({ time: d.time, value: tpPrice })));
+    indicatorSeries["rr_profit"] = s;
+  }
+  // Loss zone (entry to SL)
+  if (slPrice > 0) {
+    const s = chart.addBaselineSeries({
+      topFillColor1: "transparent", topFillColor2: "transparent",
+      bottomFillColor1: "#f4433630", bottomFillColor2: "#f4433630",
+      topLineColor: "transparent", bottomLineColor: "#f4433666",
+      lineWidth: 0, baseValue: { type: "price", price: entry },
+      lastValueVisible: false, priceLineVisible: false,
+    });
+    s.setData(bars.map(d => ({ time: d.time, value: slPrice })));
+    indicatorSeries["rr_loss"] = s;
+  }
+  log(`R:R overlay: ON (entry=$${entry.toFixed(2)}, SL=$${slPrice.toFixed(2)}, TP=$${tpPrice.toFixed(2)})`, "ok");
+}
+
+function cmdHotkeyPanel() {
+  const HKEY_KEY = "typhoon_hotkey_panel";
+  let slots;
+  try { slots = JSON.parse(localStorage.getItem(HKEY_KEY)); } catch (_) {}
+  if (!slots || !Array.isArray(slots)) slots = ["SIGNAL", "MATRIX", "BREADTH", "REPLAY", "RISK-DASHBOARD", "HOTLIST", "BENCHMARK", "CLOCK"];
+  // Toggle panel
+  let bar = document.getElementById("hotkey-bar");
+  if (bar) { bar.remove(); log("Hotkey panel: hidden", "ok"); return; }
+  bar = document.createElement("div");
+  bar.id = "hotkey-bar";
+  bar.style.cssText = "display:flex;gap:2px;padding:2px 4px;background:#0a0a14;border-bottom:1px solid #333;font-size:10px;z-index:100;";
+  const chartStack = document.getElementById("chart-stack");
+  if (chartStack) chartStack.parentElement.insertBefore(bar, chartStack);
+  const renderBar = () => {
+    bar.textContent = "";
+    for (let i = 0; i < slots.length; i++) {
+      const btn = document.createElement("button");
+      btn.textContent = slots[i];
+      btn.style.cssText = "padding:2px 8px;background:#111;color:#8cf;border:1px solid #333;cursor:pointer;font-size:9px;font-family:Consolas,monospace;border-radius:2px;";
+      btn.addEventListener("click", () => {
+        const cmd = CMD_PALETTE_COMMANDS.find(c => c.name === slots[i]);
+        if (cmd) cmd.action();
+      });
+      btn.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        const name = prompt(`Command for slot ${i + 1} (current: ${slots[i]}):`, slots[i]);
+        if (name && CMD_PALETTE_COMMANDS.find(c => c.name === name.toUpperCase())) {
+          slots[i] = name.toUpperCase();
+          localStorage.setItem(HKEY_KEY, JSON.stringify(slots));
+          renderBar();
+        }
+      });
+      bar.appendChild(btn);
+    }
+  };
+  renderBar();
+  log("Hotkey panel: visible (right-click buttons to customize)", "ok");
+}
+
+function cmdMinimap() {
+  const existingMap = document.getElementById("chart-minimap");
+  if (existingMap) { existingMap.remove(); if (window._minimapChart) { window._minimapChart.remove(); window._minimapChart = null; } log("Minimap: OFF", "ok"); return; }
+  if (!currentChartData || currentChartData.length < 10) { log("Need chart data for minimap", "warn"); return; }
+  const container = document.createElement("div");
+  container.id = "chart-minimap";
+  container.style.cssText = "width:100%;height:40px;border-top:1px solid #333;";
+  const chartStack = document.getElementById("chart-stack");
+  if (chartStack) chartStack.appendChild(container);
+  const miniChart = createChart(container, {
+    width: container.clientWidth || 800, height: 40,
+    layout: { background: { color: "#050510" }, textColor: "#444", fontFamily: "Consolas", attributionLogo: false },
+    grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+    rightPriceScale: { visible: false }, timeScale: { visible: false },
+    handleScroll: false, handleScale: false, crosshair: { mode: 0 },
+  });
+  const miniSeries = miniChart.addAreaSeries({ topColor: "#2196f322", bottomColor: "#2196f305", lineColor: "#2196f3", lineWidth: 1 });
+  miniSeries.setData(currentChartData.map(d => ({ time: d.time, value: d.close })));
+  miniChart.timeScale().fitContent();
+  window._minimapChart = miniChart;
+  // Resize observer
+  const ro = new ResizeObserver(() => { miniChart.resize(container.clientWidth, 40); });
+  ro.observe(container);
+  log("Minimap: ON (overview of full chart)", "ok");
+}
+
 // ── Wave 6: Chart modes, alerts, benchmarks, dashboards ───────
 
 function cmdHeatmapLive() {
@@ -13882,6 +14013,10 @@ function cmdQuickOrder() {
 }
 
 const CMD_PALETTE_COMMANDS = [
+  { name: "CHART-LINK", desc: "Sync scroll across MTF grid + tabs", action: cmdChartLink },
+  { name: "RROVERLAY", desc: "Visual risk/reward zones (green profit, red loss)", action: cmdRROverlay },
+  { name: "HOTKEY-PANEL", desc: "Customizable hotkey button bar (right-click to configure)", action: cmdHotkeyPanel },
+  { name: "MINIMAP", desc: "Chart overview minimap (full dataset preview)", action: cmdMinimap },
   { name: "HEATMAP-LIVE", desc: "Real-time watchlist heatmap (auto-refresh)", action: cmdHeatmapLive },
   { name: "DEPTH-CHART", desc: "Visual depth chart (bid/ask cumulative volume)", action: cmdDepthChart },
   { name: "RISK-DASHBOARD", desc: "Unified risk control center (margin, VaR, concentration)", action: cmdRiskDashboard },
