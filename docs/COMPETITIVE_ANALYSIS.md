@@ -25,7 +25,12 @@
 | Bracket orders | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Pending order visualization | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Context menu on chart | ✅ | ✅ | ❌ | ❌ | ✅ |
-| Keyboard shortcuts (15) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Keyboard shortcuts (15+) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Harmonic pattern detection | ✅ | ❌ | ❌ | ❌ | ❌ |
+| GPU-accelerated charts (WebGL2) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Wasm-accelerated indicators | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Multi-leg order builder | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Pre/post-market pricing | ✅ | ❌ | ✅ | ❌ | ✅ |
 
 ## Risk Management
 
@@ -89,7 +94,14 @@
 | CSV trade export | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Market replay / practice | ✅ | ❌ | ❌ | ❌ | ❌ |
 | No-code strategy builder | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Genetic algorithm optimizer | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Scenario stress testing | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Historical pattern matching | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Fourier / frequency analysis | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Fractal dimension analysis | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Cointegration testing | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Shadow paper portfolio | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Prediction accuracy tracking | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ## Platform & Infrastructure
 
@@ -104,6 +116,16 @@
 | WebSocket streaming | ✅ | ✅ | ✅ | ❌ | ✅ |
 | AI assistant | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Push notifications | ✅ | ✅ | ❌ | ❌ | ✅ |
+| GPU-accelerated charts (WebGL2) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Wasm indicator engine (22 funcs) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Web Worker computation | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Voice + tonal audio alerts | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Price sonification (audio) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Focus mode (distraction-free) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| PDT rule monitor | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Tax lot tracker (FIFO + wash sale) | ✅ | ❌ | ❌ | ❌ | ✅ |
+| 186 command palette entries | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 602 automated tests | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cost | Free | Free* | $80-118/mo | Free | $24K/yr |
 
 *MT5 is free but broker-locked
@@ -133,7 +155,7 @@
 21. **Price ladder / DOM** — Vertical bid-ask depth with volume bars. Standard on CQG and TT.
 22. **Theme switcher** — Dark, pitch black (OLED), light themes. Accessibility feature competitors lack.
 23. **Webhook alert automation** — Custom webhook endpoints for integrating with Discord bots, Zapier, etc.
-24. **151 Ctrl+K commands** — More command palette entries than any trading terminal, period.
+24. **186 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
 25. **AI-powered strategy suggestions** — Contextual NNFX analysis via Claude/GPT with Fisher/RSI/KAMA/SMA200/volume context.
 26. **Voice alerts** — Web Speech API reads alerts aloud. No competitor has this.
 27. **Data quality monitoring** — Automatic detection of missing bars, OHLC violations, suspicious spikes.
@@ -141,6 +163,26 @@
 29. **Risk control center** — Unified margin/VaR/concentration/PDT status in one dashboard.
 30. **Pre/post-market pricing** — Snapshot endpoint for extended hours trades on IEX (free tier).
 31. **Session persistence** — Full state restore including MTF grid, chart zoom, panel states, news articles.
+32. **Fourier / FFT frequency analysis** — Detect dominant price cycles. No trading terminal offers this natively.
+33. **Shannon entropy of returns** — Measure market predictability. Academic quant tool made accessible.
+34. **Fractal dimension (Higuchi)** — More robust than Hurst exponent for regime classification. Unique.
+35. **Wavelet decomposition** — Haar wavelets decompose price into 5 frequency bands. Academic-grade.
+36. **Engle-Granger cointegration test** — Statistical validation for pairs trading. Institutional quant feature.
+37. **Price sonification** — Hear price action via Web Audio API. No trading platform has this.
+38. **Harmonic pattern detection** — Gartley, Butterfly, Bat, Crab auto-detected from fractal swings.
+39. **Genetic algorithm optimizer** — Evolve strategy parameters via tournament/crossover/mutation. Beyond grid search.
+40. **Historical pattern matching** — DTW-based "find similar patterns" with forward return prediction.
+41. **Radar chart (8 indicators)** — Spider chart for at-a-glance multi-indicator assessment.
+42. **Liquidity heatmap** — Volume-weighted price heatmap showing institutional support/resistance.
+43. **Shadow trading** — Parallel paper portfolio to compare alternative sizing/SL strategies.
+44. **Tonal audio alerts** — Distinct frequency tones for Fisher/RSI/multi-signal events. Non-verbal.
+45. **Prediction accuracy tracking** — Track your own win rate by setup type. Self-improvement tool.
+46. **Focus mode** — Distraction-free trading with F12 toggle. Hides all panels except chart + trade buttons.
+47. **Macro recording** — Record and replay command sequences + keyboard actions.
+48. **Workspace save/restore** — Full app state persistence including all settings and window layouts.
+49. **PDT monitor** — Pattern Day Trader rule tracking with countdown and warning banners.
+50. **Tax lot tracker** — FIFO cost basis with wash sale detection and estimated tax impact.
+51. **602 automated tests** — Static analysis smoke test covering every command, function, and security invariant.
 
 ## UX Advantages Over Competitors
 
@@ -153,7 +195,18 @@
 | Custom timeframes (2H, 3H, 6H) | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Heikin-Ashi + Renko | ✅ | ✅ | ❌ | ✅ | ✅ |
 | AI assistant | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Trade journal | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Trade journal (enhanced) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Risk/reward overlay | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Radar chart (8 indicators) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Settings backup/restore | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Workspace save/restore | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Macro recording | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Dark/Light/OLED themes | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Webhook automation | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Chart template sharing | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Minimap (chart overview) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Hotkey panel (customizable) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Focus mode (F12) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Risk/reward overlay | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ## Where TyphooN-Terminal TRAILS
