@@ -7,6 +7,9 @@ export default defineConfig({
     strictPort: true,
   },
   envPrefix: ["VITE_", "TAURI_"],
+  worker: {
+    format: "es", // ES module workers (avoids IIFE code-splitting error)
+  },
   build: {
     target: "esnext",
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
