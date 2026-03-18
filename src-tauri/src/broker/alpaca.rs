@@ -891,7 +891,7 @@ impl AlpacaBroker {
                 let start_str = chunk_start.format("%Y-%m-%dT00:00:00Z").to_string();
                 let mut params = vec![
                     ("timeframe", actual_tf.to_string()),
-                    ("limit", "10000".to_string()), // request max, server returns ~260 on free plan
+                    ("limit", actual_limit.to_string()),
                     ("start", start_str),
                     ("sort", "asc".to_string()),
                 ];
