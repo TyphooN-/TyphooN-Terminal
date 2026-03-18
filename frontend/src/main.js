@@ -7103,7 +7103,7 @@ async function cmdProfile() {
     container.appendChild(bestTitle);
     const bestTable = document.createElement("table");
     bestTable.style.cssText = "width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;";
-    bestTable.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Est. P&L</th><th style="text-align:right;padding:4px;">Trades</th></tr></thead>`;
+    { const thead = document.createElement("thead"); const tr = document.createElement("tr"); tr.style.cssText = "color:#888;border-bottom:1px solid #444;"; for (const [h, align] of [["Symbol","left"],["Est. P&L","right"],["Trades","right"]]) { const th = el("th", "text-align:"+align+";padding:4px;", h); tr.appendChild(th); } thead.appendChild(tr); bestTable.appendChild(thead); }
     const bestBody = document.createElement("tbody");
     for (const s of symbolPnL.slice(0, 5)) {
       const tr = document.createElement("tr"); tr.style.borderBottom = "1px solid #333";
@@ -7120,7 +7120,7 @@ async function cmdProfile() {
     container.appendChild(worstTitle);
     const worstTable = document.createElement("table");
     worstTable.style.cssText = "width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px;";
-    worstTable.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Symbol</th><th style="text-align:right;padding:4px;">Est. P&L</th><th style="text-align:right;padding:4px;">Trades</th></tr></thead>`;
+    { const thead = document.createElement("thead"); const tr = document.createElement("tr"); tr.style.cssText = "color:#888;border-bottom:1px solid #444;"; for (const [h, align] of [["Symbol","left"],["Est. P&L","right"],["Trades","right"]]) { const th = el("th", "text-align:"+align+";padding:4px;", h); tr.appendChild(th); } thead.appendChild(tr); worstTable.appendChild(thead); }
     const worstBody = document.createElement("tbody");
     for (const s of symbolPnL.slice(-5).reverse()) {
       const tr = document.createElement("tr"); tr.style.borderBottom = "1px solid #333";
@@ -8503,8 +8503,8 @@ function cmdAlgoMonitor() {
     if (!state) {
       const msg = document.createElement("div");
       msg.style.cssText = "color:#888;padding:30px;text-align:center;line-height:2;";
-      msg.innerHTML = `<div style="font-size:14px;color:#ff8;margin-bottom:8px;">No Active Strategies</div>` +
-        `<div>No active strategies. Use Ctrl+K \u2192 AUTOTRADE to start one.</div>`;
+      msg.appendChild(div("No Active Strategies", "font-size:14px;color:#ff8;margin-bottom:8px;"));
+      msg.appendChild(div("No active strategies. Use Ctrl+K \u2192 AUTOTRADE to start one."));
       algoContainer.appendChild(msg);
       return;
     }
@@ -8528,7 +8528,7 @@ function cmdAlgoMonitor() {
       posSection.appendChild(div("Qty: " + (p.qty || 0)));
       const plDiv = document.createElement("div"); plDiv.appendChild(document.createTextNode("P&L: ")); plDiv.appendChild(span((pl >= 0 ? "+" : "") + "$" + pl.toFixed(2), "color:" + (pl >= 0 ? "#4caf50" : "#f44336") + ";")); posSection.appendChild(plDiv);
     } else {
-      posSection.innerHTML += `<div style="color:#666;">No position</div>`;
+      posSection.appendChild(div("No position", "color:#666;"));
     }
     algoContainer.appendChild(posSection);
 
@@ -8808,7 +8808,7 @@ async function cmdCorrelation3D() {
       for (let j = i + 1; j < validSymbols.length; j++) { if (visited.has(j)) continue; const ck = validSymbols[i] + ":" + validSymbols[j]; const ckr = validSymbols[j] + ":" + validSymbols[i]; const cc = corrMatrix[ck] !== undefined ? corrMatrix[ck] : (corrMatrix[ckr] !== undefined ? corrMatrix[ckr] : 0); if (cc > 0.5) { cluster.push(validSymbols[j]); visited.add(j); } }
       if (cluster.length > 1) clusters.push(cluster);
     }
-    if (clusters.length > 0) { const summary = document.createElement("div"); summary.style.cssText = "padding:8px;font-size:10px;color:#ccc;border-top:1px solid #333;margin-top:4px;"; summary.innerHTML = "<b>Clusters (corr &gt; 0.5):</b><br>" + clusters.map((c, i) => "Cluster " + (i + 1) + ": " + c.join(", ")).join("<br>"); win.appendElement(summary); }
+    if (clusters.length > 0) { const summary = document.createElement("div"); summary.style.cssText = "padding:8px;font-size:10px;color:#ccc;border-top:1px solid #333;margin-top:4px;"; const b = document.createElement("b"); b.textContent = "Clusters (corr > 0.5):"; summary.appendChild(b); clusters.forEach((c, i) => { summary.appendChild(document.createElement("br")); summary.appendChild(document.createTextNode("Cluster " + (i + 1) + ": " + c.join(", "))); }); win.appendElement(summary); }
     const legend = document.createElement("div"); legend.style.cssText = "padding:4px 8px;font-size:9px;color:#666;text-align:center;"; legend.textContent = "Green = positive correlation | Red = negative | Thickness = strength | Only |corr| > 0.3 shown"; win.appendElement(legend);
   } catch (e) { win.contentElement.textContent = ""; win.setContent("Failed to build correlation network: " + e); }
 }
@@ -9345,7 +9345,7 @@ async function cmdSizing() {
 
   const legend = document.createElement("div");
   legend.style.cssText = "margin-top:10px;font-size:10px;color:#666;";
-  legend.innerHTML = '<span style="color:#4caf50;">Green</span>=small (<10% equity) | <span style="color:#ffeb3b;">Yellow</span>=medium | <span style="color:#ff9800;">Orange</span>=large (>50%) | <span style="color:#f44336;">Red</span>=overleveraged (>100%)';
+  legend.appendChild(colorSpan("Green", "#4caf50")); legend.appendChild(document.createTextNode("=small (<10% equity) | ")); legend.appendChild(colorSpan("Yellow", "#ffeb3b")); legend.appendChild(document.createTextNode("=medium | ")); legend.appendChild(colorSpan("Orange", "#ff9800")); legend.appendChild(document.createTextNode("=large (>50%) | ")); legend.appendChild(colorSpan("Red", "#f44336")); legend.appendChild(document.createTextNode("=overleveraged (>100%)"));
   root.appendChild(legend);
 
   win.appendElement(root);
@@ -10109,11 +10109,9 @@ async function cmdRisk360() {
 
     // Kelly & break-even
     const extras = document.createElement("div"); extras.style.cssText = "margin-top:8px;padding:8px;background:#111;border-radius:4px;font-size:11px;";
-    let extrasHTML = "";
-    if (kellyPct !== null) extrasHTML += `Kelly Optimal Size: <span style="color:${kellyPct > 0 ? "#4caf50" : "#f44336"}">${kellyPct.toFixed(1)}%</span> of equity<br>`;
-    if (breakEvenDays < Infinity && breakEvenDays > 0) extrasHTML += `Break-even Time (at avg drift): ~${breakEvenDays} days<br>`;
-    extrasHTML += `Unrealized P&L: <span style="color:${unrealPnL >= 0 ? "#4caf50" : "#f44336"}">${unrealPnL >= 0 ? "+" : ""}$${unrealPnL.toFixed(2)}</span>`;
-    extras.innerHTML = extrasHTML;
+    if (kellyPct !== null) { extras.appendChild(document.createTextNode("Kelly Optimal Size: ")); extras.appendChild(span(kellyPct.toFixed(1) + "%", "color:" + (kellyPct > 0 ? "#4caf50" : "#f44336") + ";")); extras.appendChild(document.createTextNode(" of equity")); extras.appendChild(document.createElement("br")); }
+    if (breakEvenDays < Infinity && breakEvenDays > 0) { extras.appendChild(document.createTextNode("Break-even Time (at avg drift): ~" + breakEvenDays + " days")); extras.appendChild(document.createElement("br")); }
+    extras.appendChild(document.createTextNode("Unrealized P&L: ")); extras.appendChild(span((unrealPnL >= 0 ? "+" : "") + "$" + unrealPnL.toFixed(2), "color:" + (unrealPnL >= 0 ? "#4caf50" : "#f44336") + ";"));
     container.appendChild(extras);
 
     win.appendElement(container);
@@ -12386,7 +12384,7 @@ async function cmdPDT() {
       root.appendChild(header);
       const table = document.createElement("table");
       table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
-      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Date</th><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:left;padding:4px;'>Buy Time</th><th style='text-align:left;padding:4px;'>Sell Time</th></tr></thead>";
+      { const thead = document.createElement("thead"); const tr = document.createElement("tr"); tr.style.cssText = "color:#888;border-bottom:1px solid #333;"; for (const h of ["Date","Symbol","Buy Time","Sell Time"]) { tr.appendChild(el("th", "text-align:left;padding:4px;", h)); } thead.appendChild(tr); table.appendChild(thead); }
       const tbody = document.createElement("tbody");
       for (const dt of recentDayTrades) {
         const tr = document.createElement("tr");
@@ -12577,7 +12575,7 @@ async function cmdAnnounce() {
 
       const table = document.createElement("table");
       table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
-      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Quarter</th><th style='text-align:right;padding:4px;'>EPS</th><th style='text-align:right;padding:4px;'>QoQ Change</th><th style='text-align:center;padding:4px;'>Trend</th></tr></thead>";
+      { const thead = document.createElement("thead"); const tr = document.createElement("tr"); tr.style.cssText = "color:#888;border-bottom:1px solid #333;"; for (const [h, align] of [["Quarter","left"],["EPS","right"],["QoQ Change","right"],["Trend","center"]]) { tr.appendChild(el("th", "text-align:"+align+";padding:4px;", h)); } thead.appendChild(tr); table.appendChild(thead); }
       const tbody = document.createElement("tbody");
 
       for (let i = 0; i < quarters.length; i++) {
@@ -12799,7 +12797,7 @@ async function cmdSplits() {
     } else {
       const table = document.createElement("table");
       table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
-      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Date</th><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:center;padding:4px;'>Ratio</th><th style='text-align:center;padding:4px;'>Type</th></tr></thead>";
+      { const thead = document.createElement("thead"); const tr = document.createElement("tr"); tr.style.cssText = "color:#888;border-bottom:1px solid #333;"; for (const [h, align] of [["Date","left"],["Symbol","left"],["Ratio","center"],["Type","center"]]) { tr.appendChild(el("th", "text-align:"+align+";padding:4px;", h)); } thead.appendChild(tr); table.appendChild(thead); }
       const tbody = document.createElement("tbody");
       for (const s of splits) {
         const tr = document.createElement("tr");
@@ -12899,7 +12897,7 @@ async function cmdPreMarket() {
     } else {
       const table = document.createElement("table");
       table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
-      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:right;padding:4px;'>Last</th><th style='text-align:right;padding:4px;'>Prev Close</th><th style='text-align:right;padding:4px;'>Gap%</th><th style='text-align:right;padding:4px;'>Volume</th></tr></thead>";
+      { const thead = document.createElement("thead"); const tr = document.createElement("tr"); tr.style.cssText = "color:#888;border-bottom:1px solid #333;"; for (const [h, align] of [["Symbol","left"],["Last","right"],["Prev Close","right"],["Gap%","right"],["Volume","right"]]) { tr.appendChild(el("th", "text-align:"+align+";padding:4px;", h)); } thead.appendChild(tr); table.appendChild(thead); }
       const tbody = document.createElement("tbody");
       for (const m of movers) {
         const tr = document.createElement("tr");
@@ -12984,7 +12982,7 @@ function cmdShortcut() {
     if (shortcuts.length > 0) {
       const table = document.createElement("table");
       table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px;";
-      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Key Combo</th><th style='text-align:left;padding:4px;'>Command</th><th style='text-align:center;padding:4px;'>Action</th></tr></thead>";
+      { const thead = document.createElement("thead"); const tr = document.createElement("tr"); tr.style.cssText = "color:#888;border-bottom:1px solid #333;"; for (const [h, align] of [["Key Combo","left"],["Command","left"],["Action","center"]]) { tr.appendChild(el("th", "text-align:"+align+";padding:4px;", h)); } thead.appendChild(tr); table.appendChild(thead); }
       const tbody = document.createElement("tbody");
       for (let i = 0; i < shortcuts.length; i++) {
         const sc = shortcuts[i];
@@ -13403,7 +13401,7 @@ function cmdVoice() {
   const testBtn = document.createElement("button"); testBtn.textContent = "Test Voice"; testBtn.style.cssText = "padding:8px 20px;background:#1565c0;color:#fff;border:1px solid #2196f3;cursor:pointer;font-family:inherit;font-size:11px;margin-bottom:12px;";
   testBtn.addEventListener("click", () => { const utter = new SpeechSynthesisUtterance("TyphooN Terminal voice alerts active"); utter.volume = Math.max(0, Math.min(1, parseInt(localStorage.getItem("typhoon_voice_volume") || "80", 10) / 100)); utter.rate = Math.max(0.5, Math.min(2, parseFloat(localStorage.getItem("typhoon_voice_rate") || "1"))); const vn = localStorage.getItem("typhoon_voice_name") || ""; if (vn) { const m = speechSynthesis.getVoices().find(x => x.name === vn); if (m) utter.voice = m; } speechSynthesis.speak(utter); });
   root.appendChild(testBtn);
-  const info = document.createElement("div"); info.style.cssText = "padding:8px;background:#0a0a0a;border:1px solid #333;color:#888;font-size:10px;line-height:1.6;"; info.innerHTML = "<b style='color:#ff9800;'>Voice triggers:</b><br>Price alert trigger<br>Fisher Transform crossover<br>RSI extreme (&gt;70 / &lt;30)<br>Unusual volume spike<br>All notification-based alerts"; root.appendChild(info);
+  const info = document.createElement("div"); info.style.cssText = "padding:8px;background:#0a0a0a;border:1px solid #333;color:#888;font-size:10px;line-height:1.6;"; const infoB = document.createElement("b"); infoB.style.color = "#ff9800"; infoB.textContent = "Voice triggers:"; info.appendChild(infoB); for (const t of ["Price alert trigger","Fisher Transform crossover","RSI extreme (>70 / <30)","Unusual volume spike","All notification-based alerts"]) { info.appendChild(document.createElement("br")); info.appendChild(document.createTextNode(t)); } root.appendChild(info);
   win.appendElement(root); log("Voice alert system opened", "ok");
 }
 
@@ -13468,7 +13466,7 @@ function cmdIndicatorTune() {
     }
     runBtn.disabled = false; runBtn.textContent = "Run Optimization"; results.sort((a, b) => b.metric - a.metric); const top10 = results.slice(0, 10); progressDiv.textContent = `Done. ${total} parameter values tested.`;
     if (top10.length > 0) { const opt = document.createElement("div"); opt.style.cssText = "padding:8px;background:#1b5e20;border:1px solid #4caf50;color:#fff;font-weight:bold;text-align:center;margin-bottom:8px;"; opt.textContent = `Optimal: period=${top10[0].period} (${metric}=${top10[0].metric.toFixed(4)}, ${top10[0].trades} trades)`; resultsDiv.appendChild(opt); }
-    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;"; const thead = document.createElement("tr"); thead.innerHTML = "<th style='text-align:left;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Rank</th><th style='text-align:left;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Period</th><th style='text-align:right;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Metric</th><th style='text-align:right;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Trades</th>"; table.appendChild(thead);
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;"; const thead = document.createElement("tr"); for (const [h, align] of [["Rank","left"],["Period","left"],["Metric","right"],["Trades","right"]]) { thead.appendChild(el("th", "text-align:"+align+";padding:2px 6px;border-bottom:1px solid #444;color:#888;", h)); } table.appendChild(thead);
     for (let i = 0; i < top10.length; i++) { const r = top10[i]; const tr = document.createElement("tr"); tr.style.cssText = i === 0 ? "background:#1b5e20;" : ""; tr.appendChild(td(i + 1, "padding:2px 6px;color:#ccc;")); tr.appendChild(td(r.period, "padding:2px 6px;color:#fff;font-weight:bold;")); tr.appendChild(td(r.metric.toFixed(4), "padding:2px 6px;text-align:right;color:#4caf50;")); tr.appendChild(td(r.trades, "padding:2px 6px;text-align:right;color:#888;")); table.appendChild(tr); }
     resultsDiv.appendChild(table);
     const sorted = [...results].sort((a, b) => a.period - b.period); const maxMetric = Math.max(...sorted.map(r => r.metric), 0.001); chartArea.textContent = "";
@@ -13530,7 +13528,7 @@ async function cmdRiskParity() {
     const riskRow = document.createElement("div"); riskRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;";
     for (const [label, value, color] of [["Current Risk", (currentRisk * 100).toFixed(1) + "%", "#f44336"], ["Risk Parity", (parityRisk * 100).toFixed(1) + "%", "#4caf50"], ["Positions", posData.length.toString(), "#2196f3"]]) { const cell = document.createElement("div"); cell.style.cssText = "text-align:center;padding:8px;background:#111;border:1px solid #333;"; cell.appendChild(div(label, "color:#888;font-size:9px;")); cell.appendChild(div(value, "color:" + color + ";font-size:16px;font-weight:bold;")); riskRow.appendChild(cell); }
     root.appendChild(riskRow);
-    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-bottom:12px;"; const theadRow = document.createElement("tr"); theadRow.innerHTML = "<th style='text-align:left;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Symbol</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Current Wt</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Vol (ann)</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Parity Wt</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Change</th>"; table.appendChild(theadRow);
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-bottom:12px;"; const theadRow2 = document.createElement("tr"); for (const [h, align] of [["Symbol","left"],["Current Wt","right"],["Vol (ann)","right"],["Parity Wt","right"],["Change","right"]]) { theadRow2.appendChild(el("th", "text-align:"+align+";padding:4px 6px;border-bottom:1px solid #444;color:#888;", h)); } table.appendChild(theadRow2);
     for (let i = 0; i < posData.length; i++) { const p = posData[i]; const curW = p.mktVal / totalValue; const parW = parityWeights[i]; const diff = parW - curW; const diffPct = diff * 100; const close = Math.abs(diffPct) < 3; const color = close ? "#4caf50" : "#f44336"; const tr = document.createElement("tr"); tr.style.cssText = "background:" + (close ? "transparent" : "#1a0000") + ";"; tr.appendChild(td(p.symbol, "padding:4px 6px;color:#fff;font-weight:bold;")); tr.appendChild(td((curW * 100).toFixed(1) + "%", "padding:4px 6px;text-align:right;color:#ccc;")); tr.appendChild(td((p.annVol * 100).toFixed(1) + "%", "padding:4px 6px;text-align:right;color:#ff9800;")); tr.appendChild(td((parW * 100).toFixed(1) + "%", "padding:4px 6px;text-align:right;color:#4caf50;")); tr.appendChild(td((diffPct >= 0 ? "+" : "") + diffPct.toFixed(1) + "%", "padding:4px 6px;text-align:right;color:" + color + ";font-weight:bold;")); table.appendChild(tr); }
     root.appendChild(table);
     const sugTitle = document.createElement("div"); sugTitle.style.cssText = "font-weight:bold;color:#ff9800;margin-bottom:6px;border-bottom:1px solid #333;padding-bottom:4px;"; sugTitle.textContent = "Rebalance Suggestions"; root.appendChild(sugTitle);
@@ -19337,9 +19335,9 @@ async function cmdPCRatio() {
 
     const legend = document.createElement("div");
     legend.style.cssText = "padding:12px;font-size:10px;color:#666;border-top:1px solid #333;margin-top:12px;";
-    legend.innerHTML = `<span style="color:#f44336;">&#9632;</span> Bearish: ratio &gt; 1.0 &nbsp;&nbsp;`
-      + `<span style="color:#ff9800;">&#9632;</span> Neutral: 0.7 - 1.0 &nbsp;&nbsp;`
-      + `<span style="color:#4caf50;">&#9632;</span> Bullish: ratio &lt; 0.7`;
+    legend.appendChild(colorSpan("\u25A0", "#f44336")); legend.appendChild(document.createTextNode(" Bearish: ratio > 1.0 \u00A0\u00A0"));
+    legend.appendChild(colorSpan("\u25A0", "#ff9800")); legend.appendChild(document.createTextNode(" Neutral: 0.7 - 1.0 \u00A0\u00A0"));
+    legend.appendChild(colorSpan("\u25A0", "#4caf50")); legend.appendChild(document.createTextNode(" Bullish: ratio < 0.7"));
     win.appendElement(legend);
 
     log(`P/C Ratio for ${currentSymbol}: Vol ${volRatio.toFixed(3)} (${volSent.label}), OI ${oiRatio.toFixed(3)} (${oiSent.label})`, "ok");
@@ -19606,15 +19604,7 @@ function cmdMultiLeg() {
   table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
 
   const thead = document.createElement("thead");
-  thead.innerHTML = `<tr style="color:#888;text-align:left;border-bottom:1px solid #333;">
-    <th style="padding:4px;">#</th>
-    <th style="padding:4px;">Side</th>
-    <th style="padding:4px;">Type</th>
-    <th style="padding:4px;">Qty</th>
-    <th style="padding:4px;">Price</th>
-    <th style="padding:4px;">Symbol</th>
-    <th style="padding:4px;"></th>
-  </tr>`;
+  { const tr = document.createElement("tr"); tr.style.cssText = "color:#888;text-align:left;border-bottom:1px solid #333;"; for (const h of ["#","Side","Type","Qty","Price","Symbol",""]) { tr.appendChild(el("th", "padding:4px;", h)); } thead.appendChild(tr); }
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
@@ -19839,12 +19829,13 @@ function cmdMultiLeg() {
     }
 
     const net = buyQty - sellQty;
-    summaryDiv.innerHTML = `<b style="color:#fff;">Summary</b><br>` +
-      `Legs: <span style="color:#fff;">${totalLegs}</span> &nbsp;|&nbsp; ` +
-      `Net Qty: <span style="color:${net > 0 ? "#4caf50" : net < 0 ? "#f44" : "#fff"};">${net > 0 ? "+" : ""}${net}</span> &nbsp;|&nbsp; ` +
-      `Buy: <span style="color:#4caf50;">${buyQty}</span> &nbsp; Sell: <span style="color:#f44;">${sellQty}</span><br>` +
-      `Risk (entry→stop): <span style="color:#fa0;">$${totalRisk.toFixed(2)}</span> &nbsp;|&nbsp; ` +
-      `Max Cost: <span style="color:#8cf;">$${maxCost.toFixed(2)}</span>`;
+    summaryDiv.textContent = "";
+    const sumB = document.createElement("b"); sumB.style.color = "#fff"; sumB.textContent = "Summary"; summaryDiv.appendChild(sumB); summaryDiv.appendChild(document.createElement("br"));
+    summaryDiv.appendChild(document.createTextNode("Legs: ")); summaryDiv.appendChild(span(String(totalLegs), "color:#fff;")); summaryDiv.appendChild(document.createTextNode(" \u00A0|\u00A0 "));
+    summaryDiv.appendChild(document.createTextNode("Net Qty: ")); summaryDiv.appendChild(span((net > 0 ? "+" : "") + net, "color:" + (net > 0 ? "#4caf50" : net < 0 ? "#f44" : "#fff") + ";")); summaryDiv.appendChild(document.createTextNode(" \u00A0|\u00A0 "));
+    summaryDiv.appendChild(document.createTextNode("Buy: ")); summaryDiv.appendChild(span(String(buyQty), "color:#4caf50;")); summaryDiv.appendChild(document.createTextNode(" \u00A0 Sell: ")); summaryDiv.appendChild(span(String(sellQty), "color:#f44;")); summaryDiv.appendChild(document.createElement("br"));
+    summaryDiv.appendChild(document.createTextNode("Risk (entry\u2192stop): ")); summaryDiv.appendChild(span("$" + totalRisk.toFixed(2), "color:#fa0;")); summaryDiv.appendChild(document.createTextNode(" \u00A0|\u00A0 "));
+    summaryDiv.appendChild(document.createTextNode("Max Cost: ")); summaryDiv.appendChild(span("$" + maxCost.toFixed(2), "color:#8cf;"));
   }
   updateSummary();
 
@@ -22861,16 +22852,15 @@ async function cmdMarketProfile() {
     mpContainer.style.cssText = "padding:12px;font-family:monospace;font-size:12px;color:#ddd;overflow:auto;height:100%;";
     const mpHeader = document.createElement("div");
     mpHeader.style.cssText = "margin-bottom:12px;line-height:1.6;";
-    mpHeader.innerHTML =
-      `<div style="font-size:16px;font-weight:bold;color:#ffd700;margin-bottom:8px;">Market Profile — ${sym}</div>` +
-      `<span style="color:#ffd700;">POC: ${pocPrice.toFixed(priceDecimals)}</span>` +
-      `<span style="color:#888;margin:0 12px;">|</span>` +
-      `<span style="color:#00e5ff;">VA High: ${vaHighPrice.toFixed(priceDecimals)}</span>` +
-      `<span style="color:#888;margin:0 12px;">|</span>` +
-      `<span style="color:#00e5ff;">VA Low: ${vaLowPrice.toFixed(priceDecimals)}</span>` +
-      (todayHigh > -Infinity ? `<span style="color:#888;margin:0 12px;">|</span><span style="color:#aaa;">Today: ${todayLow.toFixed(priceDecimals)} — ${todayHigh.toFixed(priceDecimals)}</span>` : "") +
-      (ibHigh > -Infinity ? `<br><span style="color:#c0c;">IB Range: ${ibLow.toFixed(priceDecimals)} — ${ibHigh.toFixed(priceDecimals)}</span>` : "") +
-      `<br><span style="color:#666;">Sessions: ${days.length} days, ${bars.length} bars, ${totalTPOs} TPOs</span>`;
+    mpHeader.appendChild(div("Market Profile \u2014 " + sym, "font-size:16px;font-weight:bold;color:#ffd700;margin-bottom:8px;"));
+    mpHeader.appendChild(span("POC: " + pocPrice.toFixed(priceDecimals), "color:#ffd700;"));
+    mpHeader.appendChild(span("|", "color:#888;margin:0 12px;"));
+    mpHeader.appendChild(span("VA High: " + vaHighPrice.toFixed(priceDecimals), "color:#00e5ff;"));
+    mpHeader.appendChild(span("|", "color:#888;margin:0 12px;"));
+    mpHeader.appendChild(span("VA Low: " + vaLowPrice.toFixed(priceDecimals), "color:#00e5ff;"));
+    if (todayHigh > -Infinity) { mpHeader.appendChild(span("|", "color:#888;margin:0 12px;")); mpHeader.appendChild(span("Today: " + todayLow.toFixed(priceDecimals) + " \u2014 " + todayHigh.toFixed(priceDecimals), "color:#aaa;")); }
+    if (ibHigh > -Infinity) { mpHeader.appendChild(document.createElement("br")); mpHeader.appendChild(span("IB Range: " + ibLow.toFixed(priceDecimals) + " \u2014 " + ibHigh.toFixed(priceDecimals), "color:#c0c;")); }
+    mpHeader.appendChild(document.createElement("br")); mpHeader.appendChild(span("Sessions: " + days.length + " days, " + bars.length + " bars, " + totalTPOs + " TPOs", "color:#666;"));
     mpContainer.appendChild(mpHeader);
     const pre = document.createElement("pre");
     pre.style.cssText = "margin:0;line-height:1.3;font-size:11px;white-space:pre;";
@@ -22901,7 +22891,7 @@ async function cmdMarketProfile() {
     mpContainer.appendChild(pre);
     const legend = document.createElement("div");
     legend.style.cssText = "margin-top:12px;color:#666;font-size:10px;";
-    legend.innerHTML = '<span style="color:#4caf50;">Green</span> = today\'s session. <span style="color:#ffd700;">Yellow</span> = POC (Point of Control). <span style="color:#00e5ff;">Cyan</span> = Value Area edges. Letters A,B,C... = 30-min periods within each day.';
+    legend.appendChild(colorSpan("Green", "#4caf50")); legend.appendChild(document.createTextNode(" = today's session. ")); legend.appendChild(colorSpan("Yellow", "#ffd700")); legend.appendChild(document.createTextNode(" = POC (Point of Control). ")); legend.appendChild(colorSpan("Cyan", "#00e5ff")); legend.appendChild(document.createTextNode(" = Value Area edges. Letters A,B,C... = 30-min periods within each day."));
     mpContainer.appendChild(legend);
     win.appendElement(mpContainer);
   } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed to build Market Profile: ${e}`); }
@@ -23026,15 +23016,11 @@ function cmdBacktestPlus() {
     let peakEq = equity0, maxDD = 0;
     for (const eqPt of equityCurve) { if (eqPt.equity > peakEq) peakEq = eqPt.equity; const dd = peakEq - eqPt.equity; if (dd > maxDD) maxDD = dd; }
     const statsHtml = document.createElement("div"); statsHtml.style.cssText = "margin-bottom:12px;";
-    statsHtml.innerHTML =
-      `<div style="font-size:14px;font-weight:bold;color:#ffd700;margin-bottom:8px;">Results</div>` +
-      `<table style="border-collapse:collapse;font-size:12px;">` +
-      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Total Trades</td><td style="color:#ddd;">${totalTrades}</td></tr>` +
-      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Win Rate</td><td style="color:${parseFloat(winRate) >= 50 ? "#4caf50" : "#f44336"};">${winRate}%</td></tr>` +
-      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Profit Factor</td><td style="color:#ddd;">${profitFactor}</td></tr>` +
-      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Max Drawdown</td><td style="color:#f44336;">$${maxDD.toFixed(2)}</td></tr>` +
-      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Total Return</td><td style="color:${parseFloat(totalReturn) >= 0 ? "#4caf50" : "#f44336"};">${totalReturn}%</td></tr>` +
-      `<tr><td style="padding:3px 12px 3px 0;color:#888;">Final Equity</td><td style="color:#ddd;">$${equity.toFixed(2)}</td></tr></table>`;
+    statsHtml.appendChild(div("Results", "font-size:14px;font-weight:bold;color:#ffd700;margin-bottom:8px;"));
+    const statsTable = document.createElement("table"); statsTable.style.cssText = "border-collapse:collapse;font-size:12px;";
+    const labelStyle = "padding:3px 12px 3px 0;color:#888;";
+    for (const [lbl, val, clr] of [["Total Trades", String(totalTrades), "#ddd"], ["Win Rate", winRate + "%", parseFloat(winRate) >= 50 ? "#4caf50" : "#f44336"], ["Profit Factor", String(profitFactor), "#ddd"], ["Max Drawdown", "$" + maxDD.toFixed(2), "#f44336"], ["Total Return", totalReturn + "%", parseFloat(totalReturn) >= 0 ? "#4caf50" : "#f44336"], ["Final Equity", "$" + equity.toFixed(2), "#ddd"]]) { const tr = document.createElement("tr"); tr.appendChild(td(lbl, labelStyle)); tr.appendChild(td(val, "color:" + clr + ";")); statsTable.appendChild(tr); }
+    statsHtml.appendChild(statsTable);
     resultsArea.appendChild(statsHtml);
     // Equity curve CSS bars
     if (equityCurve.length > 1) {
@@ -23176,7 +23162,7 @@ async function cmdRegimePlus() {
     gr.appendChild(mc("Momentum", mR, mC, `ROC(20): ${(roc20*100).toFixed(2)}%, KAMA slope: ${ks>=0?"+":""}${ks.toFixed(4)}`));
     ct.appendChild(gr);
     const rd = document.createElement("div"); rd.style.cssText = "text-align:center;padding:10px;background:#111;border:1px solid " + recC + ";border-radius:6px;margin-bottom:16px;"; rd.appendChild(span("RECOMMENDATION", "color:#888;font-size:11px;")); rd.appendChild(document.createElement("br")); rd.appendChild(span(rec, "color:" + recC + ";font-size:15px;font-weight:bold;")); ct.appendChild(rd);
-    if (rTrans.length > 0) { const tt = document.createElement("div"); tt.style.cssText = "color:#888;font-size:11px;margin-bottom:6px;"; tt.textContent = "Recent Volatility Regime Transitions"; ct.appendChild(tt); const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;"; tbl.innerHTML = `<thead><tr style="color:#888;border-bottom:1px solid #444;"><th style="text-align:left;padding:4px;">Date</th><th style="text-align:left;padding:4px;">From</th><th style="text-align:center;padding:4px;"></th><th style="text-align:left;padding:4px;">To</th></tr></thead>`; const tb = document.createElement("tbody");
+    if (rTrans.length > 0) { const tt = document.createElement("div"); tt.style.cssText = "color:#888;font-size:11px;margin-bottom:6px;"; tt.textContent = "Recent Volatility Regime Transitions"; ct.appendChild(tt); const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;"; { const thead2 = document.createElement("thead"); const tr = document.createElement("tr"); tr.style.cssText = "color:#888;border-bottom:1px solid #444;"; for (const [h, align] of [["Date","left"],["From","left"],["","center"],["To","left"]]) { tr.appendChild(el("th", "text-align:"+align+";padding:4px;", h)); } thead2.appendChild(tr); tbl.appendChild(thead2); } const tb = document.createElement("tbody");
       for (const t of rTrans) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const ds = typeof t.time === "number" ? new Date(t.time*1000).toLocaleDateString() : String(t.time); const fc = t.from==="HIGH VOL"?"#f44336":t.from==="LOW VOL"?"#4caf50":"#ff9800"; const tc2 = t.to==="HIGH VOL"?"#f44336":t.to==="LOW VOL"?"#4caf50":"#ff9800"; tr.appendChild(td(ds, "padding:4px;color:#aaa;")); tr.appendChild(td(t.from, "padding:4px;color:" + fc + ";")); tr.appendChild(td("\u2192", "padding:4px;text-align:center;color:#666;")); tr.appendChild(td(t.to, "padding:4px;color:" + tc2 + ";")); tb.appendChild(tr); }
       tbl.appendChild(tb); ct.appendChild(tbl); }
     win.appendElement(ct);
@@ -23215,7 +23201,7 @@ async function cmdRiskSim() {
       sm.appendChild(smCell("SCENARIO P&L", (tPnL>=0?"+":"") + "$" + tPnL.toFixed(2), pc)); sm.appendChild(smCell("% PORTFOLIO", (pi>=0?"+":"") + pi.toFixed(2) + "%", pc)); sm.appendChild(smCell("MARGIN LEVEL", (acMg>0?ma.toFixed(0)+"%":"N/A") + (md?" DANGER":""), mc));
       rd.appendChild(sm);
       const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
-      tbl.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #444;'><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:right;padding:4px;'>Current Value</th><th style='text-align:right;padding:4px;'>Scenario %</th><th style='text-align:right;padding:4px;'>Scenario P&L</th><th style='text-align:right;padding:4px;'>New Value</th></tr></thead>";
+      { const rsThead = document.createElement("thead"); const rsTr = document.createElement("tr"); rsTr.style.cssText = "color:#888;border-bottom:1px solid #444;"; for (const [h, align] of [["Symbol","left"],["Current Value","right"],["Scenario %","right"],["Scenario P&L","right"],["New Value","right"]]) { rsTr.appendChild(el("th", "text-align:"+align+";padding:4px;", h)); } rsThead.appendChild(rsTr); tbl.appendChild(rsThead); }
       const tb = document.createElement("tbody");
       for (const r of rows) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const c = r.pnl>=0?"#4caf50":"#f44336"; const symTd = td(r.sym, "padding:4px;"); symTd.appendChild(span(" " + r.sector, "color:#555;font-size:9px;")); tr.appendChild(symTd); tr.appendChild(td("$" + r.mktVal.toFixed(2), "text-align:right;padding:4px;")); tr.appendChild(td((r.scenarioPct>=0?"+":"") + r.scenarioPct + "%", "text-align:right;padding:4px;color:" + c + ";")); tr.appendChild(td((r.pnl>=0?"+":"") + "$" + r.pnl.toFixed(2), "text-align:right;padding:4px;color:" + c + ";")); tr.appendChild(td("$" + r.newVal.toFixed(2), "text-align:right;padding:4px;")); tb.appendChild(tr); }
       tbl.appendChild(tb); rd.appendChild(tbl);
@@ -23231,7 +23217,7 @@ async function cmdRiskSim() {
         const sm = document.createElement("div"); sm.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;";
         function smCell2(label, value, color) { const d = document.createElement("div"); d.style.cssText = "text-align:center;"; d.appendChild(div(label, "color:#888;font-size:10px;")); d.appendChild(div(value, "color:" + color + ";font-size:16px;font-weight:bold;")); return d; }
         sm.appendChild(smCell2("SCENARIO P&L", (tPnL>=0?"+":"") + "$" + tPnL.toFixed(2), pc)); sm.appendChild(smCell2("% PORTFOLIO", (pi>=0?"+":"") + pi.toFixed(2) + "%", pc)); sm.appendChild(smCell2("MARGIN LEVEL", (acMg>0?ma.toFixed(0)+"%":"N/A") + (md?" DANGER":""), mc2));
-        rd.appendChild(sm); const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;"; tbl.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #444;'><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:right;padding:4px;'>Current Value</th><th style='text-align:right;padding:4px;'>Scenario %</th><th style='text-align:right;padding:4px;'>Scenario P&L</th><th style='text-align:right;padding:4px;'>New Value</th></tr></thead>"; const tb = document.createElement("tbody");
+        rd.appendChild(sm); const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;"; { const rsThead = document.createElement("thead"); const rsTr = document.createElement("tr"); rsTr.style.cssText = "color:#888;border-bottom:1px solid #444;"; for (const [h, align] of [["Symbol","left"],["Current Value","right"],["Scenario %","right"],["Scenario P&L","right"],["New Value","right"]]) { rsTr.appendChild(el("th", "text-align:"+align+";padding:4px;", h)); } rsThead.appendChild(rsTr); tbl.appendChild(rsThead); } const tb = document.createElement("tbody");
         for (const r of rows) { const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;"; const c = r.pnl>=0?"#4caf50":"#f44336"; tr.appendChild(td(r.sym, "padding:4px;")); tr.appendChild(td("$" + r.mktVal.toFixed(2), "text-align:right;padding:4px;")); tr.appendChild(td((r.scenarioPct>=0?"+":"") + r.scenarioPct + "%", "text-align:right;padding:4px;color:" + c + ";")); tr.appendChild(td((r.pnl>=0?"+":"") + "$" + r.pnl.toFixed(2), "text-align:right;padding:4px;color:" + c + ";")); tr.appendChild(td("$" + r.newVal.toFixed(2), "text-align:right;padding:4px;")); tb.appendChild(tr); }
         tbl.appendChild(tb); rd.appendChild(tbl); }); fm.appendChild(ab); rd.appendChild(fm); });
     br.appendChild(cb); ct.appendChild(br); ct.appendChild(rd); win.appendElement(ct);
@@ -23537,7 +23523,7 @@ async function cmdChainPlus() {
     // Legend
     const legend = document.createElement("div");
     legend.style.cssText = "padding:6px;font-size:10px;color:#888;text-align:center;";
-    legend.innerHTML = '<span style="color:#2196f3">Call IV</span> / <span style="color:#f44336">Put IV</span> — X: Strike Index (lowest to highest), Y: IV %';
+    legend.appendChild(colorSpan("Call IV", "#2196f3")); legend.appendChild(document.createTextNode(" / ")); legend.appendChild(colorSpan("Put IV", "#f44336")); legend.appendChild(document.createTextNode(" \u2014 X: Strike Index (lowest to highest), Y: IV %"));
     content.appendChild(legend);
 
     const ro = new ResizeObserver(() => { if (chartDiv.clientWidth > 0) smileChart.applyOptions({ width: chartDiv.clientWidth }); });
@@ -23617,7 +23603,7 @@ async function cmdChainPlus() {
 
     const legend = document.createElement("div");
     legend.style.cssText = "padding:6px;font-size:10px;color:#888;text-align:center;";
-    legend.innerHTML = '<span style="color:#4caf50">Call OI</span> | Strike | <span style="color:#f44336">Put OI</span>';
+    legend.appendChild(colorSpan("Call OI", "#4caf50")); legend.appendChild(document.createTextNode(" | Strike | ")); legend.appendChild(colorSpan("Put OI", "#f44336"));
     content.appendChild(legend);
   }
 
