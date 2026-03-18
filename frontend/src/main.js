@@ -4995,20 +4995,30 @@ function setupTabWatchlist() {
   });
 
   async function refreshWatchlist() {
-    // Get unique symbols from all open tabs
     const symbols = [...new Set(tabs.map(t => t.symbol).filter(Boolean))];
     if (symbols.length === 0) { content.textContent = "No tabs open"; return; }
 
     const frag = document.createDocumentFragment();
+
+    // Column headers
+    const hdr = document.createElement("div");
+    hdr.className = "wl-header-row";
+    for (const h of ["Sym", "Bid", "Ask", "Sprd", "Chg%", "H/L"]) {
+      const s = document.createElement("span");
+      s.textContent = h;
+      s.style.textAlign = h === "Sym" ? "left" : "right";
+      hdr.appendChild(s);
+    }
+    frag.appendChild(hdr);
+
     for (const sym of symbols) {
       try {
         const quoteJson = await invoke("get_latest_quote", { symbol: sym });
         const q = JSON.parse(quoteJson);
 
-        // Get daily bar for high/low/prev close
         const ck = getCacheKey(sym, "1Day");
         const cached = barCache[ck];
-        let high = 0, low = 0, prevClose = 0, change = 0, changePct = 0;
+        let high = 0, low = 0, prevClose = 0, changePct = 0;
         if (cached && cached.data && cached.data.length >= 2) {
           const today = cached.data[cached.data.length - 1];
           const yesterday = cached.data[cached.data.length - 2];
@@ -5017,14 +5027,13 @@ function setupTabWatchlist() {
           prevClose = yesterday.close || yesterday.c || 0;
           if (prevClose > 0) {
             const curPrice = q.bid > 0 ? (q.bid + q.ask) / 2 : today.close || today.c || 0;
-            change = curPrice - prevClose;
-            changePct = (change / prevClose) * 100;
+            changePct = ((curPrice - prevClose) / prevClose) * 100;
           }
         }
 
         const bid = q.bid || 0, ask = q.ask || 0;
         const spread = ask > bid ? ask - bid : 0;
-        const dp = bid > 100 ? 2 : bid > 1 ? 4 : 6;
+        const dp = bid > 100 ? 2 : bid > 1 ? 4 : bid > 0.01 ? 6 : 8;
         const isActive = sym === currentSymbol;
 
         const row = document.createElement("div");
@@ -5034,35 +5043,42 @@ function setupTabWatchlist() {
         // Symbol
         const symEl = document.createElement("span");
         symEl.className = "wl-sym";
-        symEl.textContent = sym.length > 8 ? sym.substring(0, 7) + "…" : sym;
+        symEl.textContent = sym.replace("/USD", "").substring(0, 6);
         symEl.style.color = isActive ? "#4caf50" : "#fff";
 
-        // Price + bid/ask
-        const priceEl = document.createElement("span");
-        priceEl.className = "wl-price";
-        const mid = bid > 0 ? ((bid + ask) / 2) : 0;
-        priceEl.textContent = mid > 0 ? mid.toFixed(dp) : "—";
-        priceEl.style.color = "#ccc";
+        // Bid
+        const bidEl = document.createElement("span");
+        bidEl.className = "wl-bid";
+        bidEl.textContent = bid > 0 ? bid.toFixed(dp) : "—";
+
+        // Ask
+        const askEl = document.createElement("span");
+        askEl.className = "wl-ask";
+        askEl.textContent = ask > 0 ? ask.toFixed(dp) : "—";
+
+        // Spread
+        const spreadEl = document.createElement("span");
+        spreadEl.className = "wl-spread";
+        spreadEl.textContent = spread > 0 ? spread.toFixed(dp > 4 ? 4 : dp) : "—";
 
         // Change %
         const chgEl = document.createElement("span");
         chgEl.className = "wl-chg";
         chgEl.textContent = changePct !== 0 ? (changePct >= 0 ? "+" : "") + changePct.toFixed(2) + "%" : "—";
-        chgEl.style.color = changePct > 0 ? "#4caf50" : changePct < 0 ? "#f44336" : "#888";
+        chgEl.style.color = changePct > 0 ? "#4caf50" : changePct < 0 ? "#f44336" : "#666";
+
+        // High/Low compact
+        const hlEl = document.createElement("span");
+        hlEl.style.cssText = "text-align:right;color:#555;font-size:7px;overflow:hidden;";
+        hlEl.textContent = high > 0 ? `${high.toFixed(dp > 4 ? 2 : dp)}` : "—";
+        hlEl.title = high > 0 ? `H: ${high.toFixed(dp)} L: ${low.toFixed(dp)}` : "";
 
         row.appendChild(symEl);
-        row.appendChild(priceEl);
+        row.appendChild(bidEl);
+        row.appendChild(askEl);
+        row.appendChild(spreadEl);
         row.appendChild(chgEl);
-
-        // Tooltip with full details
-        const details = [];
-        if (bid > 0) details.push(`Bid: ${bid.toFixed(dp)}`);
-        if (ask > 0) details.push(`Ask: ${ask.toFixed(dp)}`);
-        if (spread > 0) details.push(`Spread: ${spread.toFixed(dp)}`);
-        if (high > 0) details.push(`H: ${high.toFixed(dp)}`);
-        if (low > 0) details.push(`L: ${low.toFixed(dp)}`);
-        if (change !== 0) details.push(`Chg: ${change >= 0 ? "+" : ""}${change.toFixed(dp)}`);
-        row.title = details.join(" | ");
+        row.appendChild(hlEl);
 
         // Click to switch to this tab
         row.addEventListener("click", () => {

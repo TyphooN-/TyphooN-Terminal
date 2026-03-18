@@ -757,20 +757,32 @@ select option {
 
 #tab-watchlist-panel.collapsed #tab-watchlist-content { display: none; }
 
+.wl-header-row {
+  display: grid;
+  grid-template-columns: 48px 52px 42px 42px 38px 42px;
+  padding: 2px 4px;
+  border-bottom: 1px solid #333;
+  font-size: 8px;
+  color: #555;
+  user-select: none;
+}
+
 .wl-row {
   display: grid;
-  grid-template-columns: 55px 1fr 50px;
+  grid-template-columns: 48px 52px 42px 42px 38px 42px;
   align-items: center;
-  padding: 2px 4px;
-  border-bottom: 1px solid #1a1a2e;
+  padding: 1px 4px;
+  border-bottom: 1px solid #111;
   cursor: pointer;
-  font-size: 9px;
+  font-size: 8px;
   font-family: Consolas, monospace;
 }
 
-.wl-row:hover { background: #111; }
-.wl-row .wl-sym { color: #fff; font-weight: bold; }
-.wl-row .wl-price { text-align: right; }
+.wl-row:hover { background: #0a1a2a; }
+.wl-row .wl-sym { color: #fff; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-row .wl-bid { text-align: right; color: #4caf50; }
+.wl-row .wl-ask { text-align: right; color: #f44336; }
+.wl-row .wl-spread { text-align: right; color: #666; }
 .wl-row .wl-chg { text-align: right; }
 
 /* ── Positions Panel ────────────────────────────────────── */
