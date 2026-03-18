@@ -21,6 +21,7 @@ Performance is a first-class design goal. Every optimization traces back to one 
 | **v6 (+background prefetch)** | All TFs cached silently after first load | First TF 2-5s, all others instant | Instant |
 | **v7 (+LRU eviction)** | Max 200 entries, prevents OOM | Same speed, bounded memory | Instant |
 | **v8 (+prepare_cached)** | SQLite statement caching | Same speed, less CPU per lookup | Instant |
+| **v9 (+zstd level 9)** | Higher compression for persistent storage | Same speed, ~2x smaller on disk | Instant |
 
 ### Current Architecture (4-Tier Cache)
 
@@ -236,11 +237,23 @@ All dependencies are justified:
 - `tracing/tracing-subscriber` — logging
 - `hmac` — HMAC for Tastytrade auth
 
-Shell plugin removed (unnecessary attack surface). Keyring removed (unreliable on Linux).
+Shell plugin removed (unnecessary attack surface). Keyring removed (unreliable on Linux). Tokio reduced from `full` to `rt-multi-thread+sync+time+macros`.
+
+### Crate Security Rollup (March 2026)
+
+All dependencies at latest versions — zero outdated:
+
+| Crate | Version | Notes |
+|---|---|---|
+| reqwest | **0.13** | HTTP client (json+query features) |
+| rand | **0.10** | CSPRNG (Fill trait API) |
+| rusqlite | **0.39** | SQLite (i64 stats, bundled) |
+| tokio-tungstenite | **0.29** | WebSocket (Utf8Bytes message type) |
+| tauri | **2.10** | Latest stable |
 
 ### Status: ✅ Fully Optimized
 
-No unused dependencies. Binary is 10-15x smaller than Electron equivalent.
+No unused dependencies. All at latest versions. Binary is 10-15x smaller than Electron equivalent.
 
 ---
 
