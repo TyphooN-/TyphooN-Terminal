@@ -848,20 +848,21 @@ impl AlpacaBroker {
             format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
         };
 
-        // Go back far enough to cover requested bars — scale lookback by limit
-        // to avoid fetching 10 years of data when only 5 bars are needed
-        let days_per_bar: i64 = match actual_tf {
-            "1Min" => 1,       // ~390 bars/day
-            "5Min" => 1,       // ~78 bars/day
-            "15Min" => 1,      // ~26 bars/day
-            "30Min" => 1,      // ~13 bars/day
-            "1Hour" => 1,      // ~7 bars/day
-            "4Hour" => 1,      // ~2 bars/day
-            "1Day" => 2,       // 1 bar/day (weekends need 2x)
-            "1Week" => 10,     // 1 bar/week
-            _ => 2,
+        // Bars per calendar day — crypto trades 24/7, stocks ~6.5h/day
+        let bars_per_day: f64 = if is_crypto {
+            match actual_tf {
+                "1Min" => 1440.0, "5Min" => 288.0, "15Min" => 96.0,
+                "30Min" => 48.0, "1Hour" => 24.0, "4Hour" => 6.0,
+                "1Day" => 1.0, "1Week" => 0.14, _ => 1.0,
+            }
+        } else {
+            match actual_tf {
+                "1Min" => 390.0, "5Min" => 78.0, "15Min" => 26.0,
+                "30Min" => 13.0, "1Hour" => 7.0, "4Hour" => 2.0,
+                "1Day" => 0.7, "1Week" => 0.14, _ => 0.7,
+            }
         };
-        let max_lookback_days = match actual_tf {
+        let max_lookback_days: i64 = match actual_tf {
             "1Min" => 7,
             "5Min" | "15Min" | "30Min" => 30,
             "1Hour" => 365,
@@ -870,9 +871,9 @@ impl AlpacaBroker {
             "1Week" => 7300,
             _ => 1825,
         };
-        // For small requests, use a proportional lookback instead of max
-        let proportional_days = (actual_limit as i64 * days_per_bar).max(7);
-        let lookback_days = proportional_days.min(max_lookback_days);
+        // Proportional lookback: bars_needed / bars_per_day * 1.5 safety margin
+        let proportional_days = ((actual_limit as f64 / bars_per_day) * 1.5).ceil() as i64;
+        let lookback_days = proportional_days.max(7).min(max_lookback_days);
         let earliest_start = chrono::Utc::now() - chrono::Duration::days(lookback_days);
 
         let mut last_error = String::new();
