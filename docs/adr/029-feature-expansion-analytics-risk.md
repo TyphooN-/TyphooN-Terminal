@@ -122,7 +122,7 @@ After completing the core trading terminal, research platform, and strategy test
 
 ### 1. Zero New API Endpoints
 
-All 36 features derive analytics from data already fetched and cached by the existing pipeline:
+All 112 features derive analytics from data already fetched and cached by the existing pipeline:
 - **Bar cache** (4-tier: memory LRU → IndexedDB → SQLite+zstd → zstd files)
 - **Options chain** (fetched via existing `get_options_chain` command)
 - **Positions/orders** (fetched via existing `get_positions` / `get_open_orders`)
@@ -133,7 +133,7 @@ This was a deliberate decision to avoid increasing API rate limit pressure (200 
 
 ### 2. Frontend-Only Implementation
 
-All 36 features are implemented in the frontend JavaScript. No new Rust/Tauri commands were added. This keeps the backend lean and avoids Tauri IPC overhead for derived calculations.
+All 112 features are implemented in the frontend JavaScript. No new Rust/Tauri commands were added (only stock snapshot endpoint switched for pre/post-market). This keeps the backend lean and avoids Tauri IPC overhead for derived calculations.
 
 ### 3. Floating Window Pattern
 
@@ -141,7 +141,7 @@ All new features use the established floating window pattern (`createFloatingWin
 
 ### 4. Code Growth
 
-The main `main.js` grew from approximately 11,000 lines to approximately 15,400 lines (+4,400 lines, ~40% increase). This is acceptable given:
+The main `main.js` grew from approximately 11,000 lines to approximately 23,700 lines (+12,700 lines, ~115% increase). This is acceptable given:
 - Each command is self-contained (function + floating window)
 - No increase in cyclomatic complexity of existing code
 - No new external dependencies

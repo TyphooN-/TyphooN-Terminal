@@ -133,7 +133,14 @@
 21. **Price ladder / DOM** — Vertical bid-ask depth with volume bars. Standard on CQG and TT.
 22. **Theme switcher** — Dark, pitch black (OLED), light themes. Accessibility feature competitors lack.
 23. **Webhook alert automation** — Custom webhook endpoints for integrating with Discord bots, Zapier, etc.
-24. **95 Ctrl+K commands** — More command palette entries than any open-source terminal.
+24. **151 Ctrl+K commands** — More command palette entries than any trading terminal, period.
+25. **AI-powered strategy suggestions** — Contextual NNFX analysis via Claude/GPT with Fisher/RSI/KAMA/SMA200/volume context.
+26. **Voice alerts** — Web Speech API reads alerts aloud. No competitor has this.
+27. **Data quality monitoring** — Automatic detection of missing bars, OHLC violations, suspicious spikes.
+28. **Performance profiler** — Built-in latency/memory/cache monitoring. No trading terminal offers this.
+29. **Risk control center** — Unified margin/VaR/concentration/PDT status in one dashboard.
+30. **Pre/post-market pricing** — Snapshot endpoint for extended hours trades on IEX (free tier).
+31. **Session persistence** — Full state restore including MTF grid, chart zoom, panel states, news articles.
 
 ## UX Advantages Over Competitors
 

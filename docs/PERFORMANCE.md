@@ -319,11 +319,13 @@ LRU eviction prevents unbounded growth. SQLite mmap is OS-managed (only maps pag
 | Network | ✅ Fully optimized | Connection pooling, keep-alive, HTTP/2 |
 | Binary size | ✅ 10-15MB | 10-15x smaller than Electron |
 | Memory | ✅ Bounded | LRU eviction, 200-400MB typical |
-| Security | ✅ 18 passes | AES-256-GCM, CSP, no innerHTML, input validation |
+| Security | ✅ 20 passes | AES-256-GCM, CSP, no innerHTML, input validation, SSRF prevention |
 
 ### Frontend Code Growth
 
-The main `main.js` has grown from ~11K lines to ~18.2K lines with the addition of 56 new Ctrl+K command palette features (95 total) (options analytics, market analysis, chart tools, risk/portfolio tools, trading utilities, and data visualization). All 56 new features are implemented using **existing cached data** (bar cache, options chain, positions, watchlist) — zero new Alpaca API endpoints were required. This means no additional API rate limit pressure and no new network latency. The features compute derived analytics (breadth, flows, seasonality, divergence, volume profile, etc.) entirely from data already in the 4-tier cache.
+The main `main.js` has grown from ~11K lines to ~23.7K lines with the addition of 112 new Ctrl+K command palette features (151 total) across 6 waves in a single session. All 112 new features are implemented using **existing cached data** (bar cache, options chain, positions, watchlist, order history) — zero new Alpaca API endpoints were added (only the stock snapshot endpoint was switched for pre/post-market pricing). This means no additional API rate limit pressure. Features span: options analytics, market analysis, chart tools, risk/portfolio tools, trading utilities, dashboards, DOM visualization, practice trading, voice alerts, AI strategy, session management, and data quality monitoring — all computed from data already in the 4-tier cache.
+
+**Modularization needed**: 23.7K lines in a single file is a maintenance risk. Priority: split into ES modules (indicators, commands, trading, charts, session, cache, alerts).
 
 ### Remaining TODO (No Blockers)
 
