@@ -104,7 +104,7 @@ async fn connect(
     let account = broker.get_account().await?;
     let mut s = state.lock().await;
     s.broker = Some(broker);
-    Ok(serde_json::to_string(&account).unwrap())
+    Ok(serde_json::to_string(&account).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Tastytrade Connect ──────────────────────────────────────────────
@@ -127,7 +127,7 @@ async fn connect_tastytrade(
     let mut s = state.lock().await;
     s.tastytrade = Some(broker);
     s.active_broker = "tastytrade".to_string();
-    Ok(serde_json::to_string(&account).unwrap())
+    Ok(serde_json::to_string(&account).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Credential Storage (AES-256-GCM encrypted, SQLite-backed) ───────
@@ -147,7 +147,6 @@ fn is_valid_account_name(name: &str) -> bool {
 /// Persistent salt file path — created once, reused forever.
 /// 32 random bytes stored in ~/.config/typhoon-terminal/.cred_salt
 fn get_or_create_salt() -> [u8; 32] {
-    use rand::RngCore;
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let salt_path = std::path::PathBuf::from(home)
         .join(".config").join("typhoon-terminal").join(".cred_salt");
@@ -163,7 +162,7 @@ fn get_or_create_salt() -> [u8; 32] {
 
     // Generate new random salt and persist it
     let mut salt = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::fill(&mut salt);
     std::fs::create_dir_all(salt_path.parent().unwrap()).ok();
     std::fs::write(&salt_path, &salt).ok();
     tracing::info!("Generated new credential encryption salt");
@@ -202,13 +201,11 @@ fn derive_encryption_key() -> [u8; 32] {
 fn encrypt_credential(plaintext: &str) -> Result<String, String> {
     use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
     use aes_gcm::Nonce;
-    use rand::RngCore;
-
     let key_bytes = derive_encryption_key();
     let cipher = Aes256Gcm::new_from_slice(&key_bytes)
         .map_err(|e| format!("Cipher init failed: {e}"))?;
     let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::fill(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
         .map_err(|e| format!("Encryption failed: {e}"))?;
@@ -316,7 +313,7 @@ async fn get_account(state: State<'_, SharedState>) -> Result<String, String> {
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let account = broker.get_account().await?;
-    Ok(serde_json::to_string(&account).unwrap())
+    Ok(serde_json::to_string(&account).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -326,7 +323,7 @@ async fn get_positions(state: State<'_, SharedState>) -> Result<String, String> 
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let positions = broker.get_positions().await?;
-    Ok(serde_json::to_string(&positions).unwrap())
+    Ok(serde_json::to_string(&positions).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -345,7 +342,7 @@ async fn get_bars(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let bars = broker.get_bars(&symbol, &timeframe, limit).await?;
-    Ok(serde_json::to_string(&bars).unwrap())
+    Ok(serde_json::to_string(&bars).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 /// Fetch bars from multiple timeframes for a symbol (for MultiKAMA, ATR_Projection, PreviousCandleLevels).
@@ -413,7 +410,7 @@ async fn place_order(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.market_order(&symbol, qty, &side).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -431,7 +428,7 @@ async fn close_position(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.close_position(&symbol, qty).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -453,7 +450,7 @@ async fn place_limit_order(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.limit_order(&symbol, qty, &side, limit_price, &tif).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -475,7 +472,7 @@ async fn place_stop_order(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.stop_order(&symbol, qty, &side, stop_price, &tif).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -500,7 +497,7 @@ async fn place_stop_limit_order(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.stop_limit_order(&symbol, qty, &side, stop_price, limit_price, &tif).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -523,7 +520,7 @@ async fn place_trailing_stop(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.trailing_stop_order(&symbol, qty, &side, trail_price, trail_percent, "gtc").await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -546,7 +543,7 @@ async fn place_bracket_order(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.bracket_order(&symbol, qty, &side, tp_price, sl_price).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -556,7 +553,7 @@ async fn get_open_orders(state: State<'_, SharedState>) -> Result<String, String
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let orders = broker.get_orders("open", 100).await?;
-    Ok(serde_json::to_string(&orders).unwrap())
+    Ok(serde_json::to_string(&orders).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -567,7 +564,7 @@ async fn get_order_history(state: State<'_, SharedState>, limit: u32) -> Result<
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let orders = broker.get_orders("closed", limit).await?;
-    Ok(serde_json::to_string(&orders).unwrap())
+    Ok(serde_json::to_string(&orders).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -585,7 +582,7 @@ async fn modify_order(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.modify_order(&order_id, qty, limit_price, stop_price, trail).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -638,7 +635,7 @@ async fn search_symbols(state: State<'_, SharedState>, query: String) -> Result<
         })
         .take(20)
         .collect();
-    Ok(serde_json::to_string(&matches).unwrap())
+    Ok(serde_json::to_string(&matches).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -649,7 +646,7 @@ async fn get_asset(state: State<'_, SharedState>, symbol: String) -> Result<Stri
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let asset = broker.get_asset(&symbol).await?;
-    Ok(serde_json::to_string(&asset).unwrap())
+    Ok(serde_json::to_string(&asset).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -789,7 +786,7 @@ async fn calculate_position_var(
     let tick_value = tick_size; // 1:1 for stocks
 
     match var::calculate_var(&closes, position_size, tick_value, tick_size, current_price, var_confidence) {
-        Some(result) => Ok(serde_json::to_string(&result).unwrap()),
+        Some(result) => Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?),
         None => Err("VaR calculation failed — insufficient price data".to_string()),
     }
 }
@@ -799,7 +796,7 @@ async fn calculate_position_var(
 #[tauri::command]
 async fn get_risk_config(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.lock().await;
-    Ok(serde_json::to_string(&s.risk_config).unwrap())
+    Ok(serde_json::to_string(&s.risk_config).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -1120,7 +1117,7 @@ async fn get_news(state: State<'_, SharedState>, symbol: String, limit: u32) -> 
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let news = broker.get_news(&symbol, limit).await?;
-    Ok(serde_json::to_string(&news).unwrap())
+    Ok(serde_json::to_string(&news).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -1132,7 +1129,7 @@ async fn get_corporate_actions(state: State<'_, SharedState>, symbol: String, ty
     };
     let action_types = types.as_deref().unwrap_or("dividend");
     let actions = broker.get_corporate_actions(&symbol, action_types).await?;
-    Ok(serde_json::to_string(&actions).unwrap())
+    Ok(serde_json::to_string(&actions).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -1219,21 +1216,21 @@ async fn run_walk_forward(
         },
     });
 
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
 async fn get_sec_filings(symbol: String, filing_type: String) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let result = broker::alpaca::AlpacaBroker::get_sec_filings(&symbol, &filing_type, 20).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
 async fn get_company_fundamentals(symbol: String) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let result = broker::alpaca::AlpacaBroker::get_sec_company_facts(&symbol).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Bid/Ask Quote Command ────────────────────────────────────────────
@@ -1246,7 +1243,7 @@ async fn get_latest_quote(state: State<'_, SharedState>, symbol: String) -> Resu
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let quote = broker.get_latest_quote(&symbol).await?;
-    Ok(serde_json::to_string(&quote).unwrap())
+    Ok(serde_json::to_string(&quote).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Account Activities Command ──────────────────────────────────────
@@ -1270,7 +1267,7 @@ async fn get_account_activities(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let activities = broker.get_account_activities(&activity_types, limit).await?;
-    Ok(serde_json::to_string(&activities).unwrap())
+    Ok(serde_json::to_string(&activities).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Insider Trading Command ─────────────────────────────────────────
@@ -1279,7 +1276,7 @@ async fn get_account_activities(
 async fn get_insider_trades(symbol: String) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let trades = broker::alpaca::AlpacaBroker::get_insider_trades(&symbol).await?;
-    Ok(serde_json::to_string(&trades).unwrap())
+    Ok(serde_json::to_string(&trades).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 /// Fetch article content from URL, return as text. For in-app reading.
@@ -1392,7 +1389,7 @@ async fn run_backtest(
         _ => return Err(format!("Unknown strategy: {strategy}. Available: sma_cross, nnfx")),
     };
 
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── CSV Export Commands ─────────────────────────────────────────────
@@ -1456,7 +1453,7 @@ async fn get_options(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let chain = broker.get_options_chain(&symbol, &expiry).await?;
-    Ok(serde_json::to_string(&chain).unwrap())
+    Ok(serde_json::to_string(&chain).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Screener Commands ───────────────────────────────────────────────
@@ -1476,7 +1473,7 @@ async fn run_screener(
         .map_err(|e| format!("Invalid symbols data: {e}"))?;
 
     let result = screener_engine::screen_symbols(&filters, &symbols);
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── WebSocket Streaming Commands ────────────────────────────────────
@@ -1534,7 +1531,7 @@ async fn poll_stream(state: State<'_, SharedState>) -> Result<String, String> {
             }
         }
     }
-    Ok(serde_json::to_string(&messages).unwrap())
+    Ok(serde_json::to_string(&messages).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -1579,7 +1576,7 @@ async fn fetch_fred_series(series_id: String, api_key: String, limit: Option<u32
 
     let json: serde_json::Value = resp.json().await
         .map_err(|_| "FRED parse failed".to_string())?;
-    Ok(serde_json::to_string(&json).unwrap())
+    Ok(serde_json::to_string(&json).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── AI Chat Command ─────────────────────────────────────────────────
@@ -1999,7 +1996,7 @@ async fn list_cold_cache() -> Result<String, String> {
             }
         }
     }
-    Ok(serde_json::to_string(&entries).unwrap())
+    Ok(serde_json::to_string(&entries).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Financial Analysis Commands ──────────────────────────────────
@@ -2008,14 +2005,14 @@ async fn list_cold_cache() -> Result<String, String> {
 async fn get_financial_analysis(symbol: String) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let result = AlpacaBroker::get_financial_analysis(&symbol).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
 async fn get_institutional_holders(symbol: String) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let result = AlpacaBroker::get_institutional_holders(&symbol).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Most Active / Top Movers Commands ───────────────────────────
@@ -2031,7 +2028,7 @@ async fn get_most_active(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.get_most_active(top).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]
@@ -2047,7 +2044,7 @@ async fn get_top_movers(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.get_top_movers(&market_type, top).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Visual Backtester Commands ──────────────────────────────────
@@ -2101,7 +2098,7 @@ async fn run_bar_by_bar_backtest(
         _ => return Err(format!("Unknown strategy: {strategy}. Available: sma_cross, nnfx")),
     };
 
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Optimization Commands ───────────────────────────────────────
@@ -2161,7 +2158,7 @@ async fn run_optimization(
         top,
     );
 
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── DOM / Level 2 Commands ──────────────────────────────────────
@@ -2181,7 +2178,7 @@ async fn get_orderbook(
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
     let result = broker.get_orderbook(&symbol).await?;
-    Ok(serde_json::to_string(&result).unwrap())
+    Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 // ── Custom Indicator Plugin System ──────────────────────────────
@@ -2238,7 +2235,7 @@ async fn list_custom_indicators() -> Result<String, String> {
         }
     }
 
-    Ok(serde_json::to_string(&indicators).unwrap())
+    Ok(serde_json::to_string(&indicators).map_err(|e| format!("JSON error: {e}"))?)
 }
 
 #[tauri::command]

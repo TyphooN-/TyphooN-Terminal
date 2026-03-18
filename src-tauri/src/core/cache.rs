@@ -91,6 +91,7 @@ impl SqliteCache {
             PRAGMA cache_size=-64000;
             PRAGMA temp_store=MEMORY;
             PRAGMA mmap_size=268435456;
+            PRAGMA auto_vacuum=INCREMENTAL;
         ").map_err(|e| format!("SQLite pragma failed: {e}"))?;
 
         // Create tables
@@ -133,7 +134,7 @@ impl SqliteCache {
     /// Load bar data — handles both binary (new) and JSON (legacy) formats.
     pub fn get_bars(&self, key: &str) -> Result<Option<(String, i64)>, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT data, timestamp FROM bar_cache WHERE key = ?1"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
@@ -179,7 +180,7 @@ impl SqliteCache {
     /// Load key-value data.
     pub fn get_kv(&self, key: &str) -> Result<Option<String>, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT value FROM kv_cache WHERE key = ?1"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
@@ -215,13 +216,13 @@ impl SqliteCache {
     }
 
     /// Get cache stats.
-    pub fn stats(&self) -> Result<(u64, u64, u64), String> {
+    pub fn stats(&self) -> Result<(i64, i64, i64), String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let bar_count: u64 = conn.query_row("SELECT COUNT(*) FROM bar_cache", [], |r| r.get(0))
+        let bar_count: i64 = conn.query_row("SELECT COUNT(*) FROM bar_cache", [], |r| r.get(0))
             .unwrap_or(0);
-        let kv_count: u64 = conn.query_row("SELECT COUNT(*) FROM kv_cache", [], |r| r.get(0))
+        let kv_count: i64 = conn.query_row("SELECT COUNT(*) FROM kv_cache", [], |r| r.get(0))
             .unwrap_or(0);
-        let total_size: u64 = conn.query_row(
+        let total_size: i64 = conn.query_row(
             "SELECT COALESCE(SUM(LENGTH(data)),0) FROM bar_cache", [], |r| r.get(0)
         ).unwrap_or(0);
         Ok((bar_count, kv_count, total_size))

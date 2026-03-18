@@ -1721,8 +1721,21 @@ const ALL_MTF_PCL_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
 // Timeframe hierarchy — only show TFs HIGHER than current chart (like MT5)
 const TF_RANK = { "1Min": 0, "5Min": 1, "15Min": 2, "30Min": 3, "1Hour": 4, "4Hour": 5, "1Day": 6, "1Week": 7, "1Month": 8 };
 
+// Resolve rank for custom timeframes (e.g., "2Day" → 1Day rank + 0.5, "3Hour" → 1Hour rank + 0.5)
+function getTFRank(tf) {
+  if (TF_RANK[tf] !== undefined) return TF_RANK[tf];
+  // Parse custom TF string to find base: "2Day" → "1Day", "3Hour" → "1Hour", "10Min" → "1Min"
+  const m = tf.match(/^(\d+)(Min|Hour|Day|Week|Month)$/);
+  if (m) {
+    const baseKey = "1" + m[2];
+    const baseRank = TF_RANK[baseKey];
+    if (baseRank !== undefined) return baseRank + 0.5; // between base and next standard TF
+  }
+  return 3; // fallback
+}
+
 function getRelevantMTFs(allTFs) {
-  const currentRank = TF_RANK[currentTimeframe] ?? 3;
+  const currentRank = getTFRank(currentTimeframe);
   return allTFs.filter(tf => (TF_RANK[tf] ?? 0) > currentRank);
 }
 
@@ -1863,6 +1876,9 @@ function applyIndicators(chartData) {
     const period = parseInt(cb.dataset.period) || 14;
     const key = `${ind}_${period}`;
 
+    // Isolate each indicator — one failure must not break others
+    try {
+
     // ══════════════════════════════════════════════════════════
     // NNFX SYSTEM INDICATORS — exact MQL5 ports
     // ══════════════════════════════════════════════════════════
@@ -1890,18 +1906,18 @@ function applyIndicators(chartData) {
       }
 
     } else if (ind === "prev-levels") {
-      // PreviousCandleLevels.mqh: multi-TF previous high/low
-      // Current chart prev candle levels
-      if (chartData.length > 1) {
-        const pcl = calcPrevCandleLevels(chartData);
-        const sh = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
-        const sl2 = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
-        sh.setData(clip(pcl.highs)); sl2.setData(clip(pcl.lows));
-        indicatorSeries[key + "_h"] = sh;
-        indicatorSeries[key + "_l"] = sl2;
-      }
+      // PreviousCandleLevels.mqh: multi-TF previous high/low (horizontal lines only, no current-TF per-bar)
+      // MQL5 TF filtering: chart < H1 shows all HTF; H1-H4 shows D1+ only; D1 shows W1+ only; W1+ nothing
+      const currentRank = getTFRank(currentTimeframe);
+      const pclTFs = ALL_MTF_PCL_TFS.filter(tf => {
+        const tfRank = TF_RANK[tf] ?? 0;
+        if (currentRank < TF_RANK["1Hour"]) return tfRank > currentRank; // chart < H1: show all higher
+        if (currentRank <= TF_RANK["4Hour"]) return tfRank >= TF_RANK["1Day"]; // chart H1-H4: D1+ only
+        if (currentRank >= TF_RANK["1Day"] && currentRank < TF_RANK["1Week"]) return tfRank >= TF_RANK["1Week"]; // chart D1-D6: W1+ only
+        return false; // W1+ chart: nothing in our set
+      });
       // HTF previous candle levels — solid lines from HTF bar start to last candle
-      for (const tf of getRelevantMTFs(ALL_MTF_PCL_TFS)) {
+      for (const tf of pclTFs) {
         const tfBars = mtfData[tf];
         const levels = calcHTFPrevLevels(tfBars, chartData);
         if (!levels) continue;
@@ -1930,26 +1946,41 @@ function applyIndicators(chartData) {
 
     } else if (ind === "atr-proj") {
       // ATR_Projection.mqh: ATR from multiple timeframes, clrYellow, STYLE_DOT, width 2
-      // Current chart ATR projection
+      // Current chart's ATR projection — horizontal lines at last bar's open ± ATR (matches MQL5)
       if (chartData.length > period + 1) {
         const atrp = calcATRProjection(chartData, period);
-        const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
-        const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
-        su.setData(clip(atrp.upper)); sl3.setData(clip(atrp.lower));
-        indicatorSeries[key + "_u"] = su;
-        indicatorSeries[key + "_l"] = sl3;
+        if (atrp.atrValues.length > 0) {
+          const lastATR = atrp.atrValues[atrp.atrValues.length - 1].value;
+          const lastOpen = chartData[chartData.length - 1].open;
+          const upper = lastOpen + lastATR;
+          const lower = lastOpen - lastATR;
+          // Span from ~30 bars ago to last bar (matching MQL5 lookback)
+          const startIdx = Math.max(0, chartData.length - 30);
+          const levelBars = clip(chartData.slice(startIdx));
+          if (levelBars.length >= 2) {
+            const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+            const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+            su.setData(levelBars.map(d => ({ time: d.time, value: upper })));
+            sl3.setData(levelBars.map(d => ({ time: d.time, value: lower })));
+            indicatorSeries[key + "_u"] = su;
+            indicatorSeries[key + "_l"] = sl3;
+          }
+        }
       }
-      // HTF ATR projections — solid yellow lines, clipped to chart range
+      // HTF ATR projections — dotted yellow lines, span from several HTF bars back (matches MQL5 lookbacks)
+      const HTF_ATR_LOOKBACK = { "1Hour": 12, "4Hour": 11, "1Day": 7, "1Week": 4 };
       for (const tf of getRelevantMTFs(ALL_MTF_ATR_TFS)) {
         const tfBars = mtfData[tf];
         const proj = calcHTFATRProjection(tfBars, period);
         if (!proj) continue;
-        // Draw as line series from HTF current bar start to last candle (not edge-to-edge price lines)
-        const htfStart = tfBars[tfBars.length - 1].time;
+        // Start from several HTF bars back to match MQL5 g_startTime lookbacks
+        const lookbackN = HTF_ATR_LOOKBACK[tf] || 7;
+        const startIdx = Math.max(0, tfBars.length - lookbackN);
+        const htfStart = tfBars[startIdx].time;
         const projBars = clip(chartData.filter(d => d.time >= htfStart));
         if (projBars.length < 2) continue;
-        const sU = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
-        const sL = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
+        const sU = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+        const sL = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
         sU.setData(projBars.map(d => ({ time: d.time, value: proj.upper })));
         sL.setData(projBars.map(d => ({ time: d.time, value: proj.lower })));
         indicatorSeries[`atr_mtf_${tf}_u`] = sU;
@@ -1982,6 +2013,15 @@ function applyIndicators(chartData) {
         }
       }
       if (curSeg.length > 0) segments.push({ color: curColor, data: curSeg });
+
+      // Ensure last segment always has >= 2 points for rendering (fixes last bar color change)
+      if (segments.length >= 2) {
+        const lastSeg = segments[segments.length - 1];
+        if (lastSeg.data.length < 2) {
+          const prevSeg = segments[segments.length - 2];
+          lastSeg.data.unshift(prevSeg.data[prevSeg.data.length - 1]);
+        }
+      }
 
       // Draw each segment as its own line series
       for (let si = 0; si < segments.length; si++) {
@@ -2320,6 +2360,8 @@ function applyIndicators(chartData) {
       const s = chart.addLineSeries({ color: "#ff4081", lineWidth: 2, title: "VWAP", lastValueVisible: true });
       s.setData(calcVWAP(chartData)); indicatorSeries[key] = s;
     }
+
+    } catch (e) { log(`Indicator ${ind} failed: ${e.message || e}`, "warn"); }
   }
 }
 
@@ -3022,6 +3064,8 @@ async function updateLatestBar(symbol, timeframe) {
 // ── Dashboard Update (all 11 labels) ────────────────────────
 
 async function updateDashboard() {
+  if (window._dashboardInFlight) return;
+  window._dashboardInFlight = true;
   try {
     // Parallel: fetch margin + positions simultaneously (2 API calls → 1 round trip)
     const [marginJson, posJson] = await Promise.all([
@@ -3149,7 +3193,10 @@ async function updateDashboard() {
         }
       }).catch(() => {});
     }
-  } catch (_) {}
+  } catch (_) {
+  } finally {
+    window._dashboardInFlight = false;
+  }
 }
 
 // ── Equity TP/SL Protection (port of MQL5 EnableEquityTP/SL) ──
@@ -3189,7 +3236,10 @@ function setText(id, text) {
 }
 function setTextClass(id, text, cls) {
   const el = document.getElementById(id);
-  if (el) { el.textContent = text; el.className = `dash-row ${cls}`; }
+  if (!el) return;
+  if (el.textContent !== text) el.textContent = text;
+  const full = "dash-row " + cls;
+  if (el.className !== full) el.className = full;
 }
 function fmt(n) { return Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 }); }
 
@@ -4331,10 +4381,14 @@ async function updatePositionsPanel() {
   try {
     const posJson = await invoke("get_positions");
     const positions = JSON.parse(posJson);
-    content.textContent = "";
+
+    // Build new content in a fragment to avoid layout thrash (atomic swap)
+    const frag = document.createDocumentFragment();
 
     if (positions.length === 0) {
-      content.textContent = "No positions";
+      const msg = document.createTextNode("No positions");
+      frag.appendChild(msg);
+      content.replaceChildren(frag);
       return;
     }
 
@@ -4362,7 +4416,7 @@ async function updatePositionsPanel() {
     filterLabel.appendChild(filterCb);
     filterLabel.appendChild(filterText);
     controls.appendChild(filterLabel);
-    content.appendChild(controls);
+    frag.appendChild(controls);
 
     // Filter positions if checkbox is ticked
     const sym = currentSymbol.replace("/", "");
@@ -4374,7 +4428,8 @@ async function updatePositionsPanel() {
       const msg = document.createElement("div");
       msg.style.cssText = "color:#888;font-size:10px;padding:4px 0;";
       msg.textContent = `No positions for ${currentSymbol}`;
-      content.appendChild(msg);
+      frag.appendChild(msg);
+      content.replaceChildren(frag);
       return;
     }
 
@@ -4408,7 +4463,7 @@ async function updatePositionsPanel() {
       row.appendChild(info);
       row.appendChild(pl);
       row.appendChild(closeBtn);
-      content.appendChild(row);
+      frag.appendChild(row);
 
       // Click row to switch chart to that symbol
       row.style.cursor = "pointer";
@@ -4417,6 +4472,9 @@ async function updatePositionsPanel() {
         triggerLoad();
       });
     }
+
+    // Atomic swap — old content replaced in one operation, no flicker
+    content.replaceChildren(frag);
   } catch (_) {}
 }
 
@@ -4444,20 +4502,22 @@ async function updateOrdersPanel() {
   const content = document.getElementById("orders-content");
   const panel = document.getElementById("orders-panel");
   if (!content) return;
-  content.textContent = "";
   try {
-    // Open orders first
-    const openJson = await invoke("get_open_orders");
+    // Fetch data BEFORE touching the DOM — keeps old content visible during network round-trip
+    const [openJson, histJson] = await Promise.all([
+      invoke("get_open_orders"),
+      invoke("get_order_history", { limit: 20 }),
+    ]);
     const openOrders = JSON.parse(openJson);
-
-    // Recent closed orders
-    const histJson = await invoke("get_order_history", { limit: 20 });
     const history = JSON.parse(histJson);
 
+    // Build new content in a fragment (atomic swap, no flicker)
+    const frag = document.createDocumentFragment();
     const hasOrders = openOrders.length > 0 || history.length > 0;
 
     if (!hasOrders) {
-      content.textContent = "No orders";
+      frag.appendChild(document.createTextNode("No orders"));
+      content.replaceChildren(frag);
       return;
     }
 
@@ -4485,7 +4545,7 @@ async function updateOrdersPanel() {
     filterLabel.appendChild(filterCb);
     filterLabel.appendChild(filterText);
     controls.appendChild(filterLabel);
-    content.appendChild(controls);
+    frag.appendChild(controls);
 
     // Filter by current chart symbol if checkbox ticked
     const sym = currentSymbol.replace("/", "");
@@ -4498,9 +4558,9 @@ async function updateOrdersPanel() {
       const hdr = document.createElement("div");
       hdr.textContent = "Open Orders";
       hdr.style.cssText = "color:#ff8;font-size:10px;font-weight:bold;padding:4px 0 2px;";
-      content.appendChild(hdr);
+      frag.appendChild(hdr);
       for (const o of filteredOpen) {
-        content.appendChild(renderOrderRow(o, true));
+        frag.appendChild(renderOrderRow(o, true));
       }
     }
 
@@ -4508,9 +4568,9 @@ async function updateOrdersPanel() {
       const hdr = document.createElement("div");
       hdr.textContent = "Recent Fills";
       hdr.style.cssText = "color:#888;font-size:10px;font-weight:bold;padding:4px 0 2px;";
-      content.appendChild(hdr);
+      frag.appendChild(hdr);
       for (const o of filteredHist.slice(0, 15)) {
-        content.appendChild(renderOrderRow(o, false));
+        frag.appendChild(renderOrderRow(o, false));
       }
     }
 
@@ -4518,8 +4578,11 @@ async function updateOrdersPanel() {
       const msg = document.createElement("div");
       msg.style.cssText = "color:#888;font-size:10px;padding:4px 0;";
       msg.textContent = `No orders for ${currentSymbol}`;
-      content.appendChild(msg);
+      frag.appendChild(msg);
     }
+
+    // Atomic swap — old content replaced in one operation, no flicker
+    content.replaceChildren(frag);
   } catch (_) {}
 }
 
@@ -8731,6 +8794,15 @@ async function loadMTFCellData(cellInfo, symbol) {
         }
         if (curSeg.length > 0) segments.push({ color: curColor, data: curSeg });
 
+        // Ensure last segment always has >= 2 points for rendering (fixes last bar color change)
+        if (segments.length >= 2) {
+          const lastSeg = segments[segments.length - 1];
+          if (lastSeg.data.length < 2) {
+            const prevSeg = segments[segments.length - 2];
+            lastSeg.data.unshift(prevSeg.data[prevSeg.data.length - 1]);
+          }
+        }
+
         for (const seg of segments) {
           if (seg.data.length < 2) continue;
           const s = cellInfo.fisherChart.addLineSeries({
@@ -8789,21 +8861,26 @@ async function loadMTFCellData(cellInfo, symbol) {
     // KAMA (white)
     if (chartData.length > 11) addLine("#FFFFFF", 2, calcKAMA(chartData, 10));
 
-    // ATR Projection (yellow bands)
+    // ATR Projection (yellow dotted — horizontal lines at lastOpen ± ATR, matches MQL5)
     if (chartData.length > 15) {
       const atrp = calcATRProjection(chartData, 14);
-      if (atrp.upper.length > 0) {
-        addLine("#FFFF00", 1, atrp.upper);
-        addLine("#FFFF00", 1, atrp.lower);
+      if (atrp.atrValues.length > 0) {
+        const lastATR = atrp.atrValues[atrp.atrValues.length - 1].value;
+        const lastOpen = chartData[chartData.length - 1].open;
+        const upper = lastOpen + lastATR;
+        const lower = lastOpen - lastATR;
+        const startIdx = Math.max(0, chartData.length - 30);
+        const levelBars = chartData.slice(startIdx);
+        if (levelBars.length >= 2) {
+          const su = cellInfo.chart.addLineSeries({ color: "#FFFF00", lineWidth: 1, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+          const sl = cellInfo.chart.addLineSeries({ color: "#FFFF00", lineWidth: 1, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+          su.setData(levelBars.map(d => ({ time: d.time, value: upper })));
+          sl.setData(levelBars.map(d => ({ time: d.time, value: lower })));
+        }
       }
     }
 
-    // Previous Candle Levels (white)
-    if (chartData.length > 1) {
-      const pcl = calcPrevCandleLevels(chartData);
-      addLine("#FFFFFF88", 1, pcl.highs);
-      addLine("#FFFFFF88", 1, pcl.lows);
-    }
+    // Previous Candle Levels removed from MTF grid (MQL5 only draws HTF levels, not per-bar)
 
     // Recent price range — used by supply/demand zones + fib to filter out-of-range levels
     const recentBars = chartData.slice(-50);
@@ -8824,15 +8901,17 @@ async function loadMTFCellData(cellInfo, symbol) {
       }
     }
 
-    // Auto Fibonacci (only levels within 2x recent price range)
+    // Auto Fibonacci (only levels within visible price range — prevents y-axis stretch)
     if (chartData.length > 30) {
       const fib = calcAutoFibonacci(chartData);
       if (fib) {
         const fibBars = chartData.filter(d => d.time >= fib.startTime);
         if (fibBars.length >= 2) {
           const keyLevels = fib.levels.filter(l => {
-            // Show all fib levels (retracement + extension up to 423.6%)
-            return l.price >= recentLow - priceRange * 3 && l.price <= recentHigh + priceRange * 3;
+            // Retracements: always show (within swing range)
+            // Extensions: only show within 1.5x recent range to prevent y-axis stretch on higher TFs
+            const maxExt = l.type === "extension" ? 1.5 : 3;
+            return l.price >= recentLow - priceRange * maxExt && l.price <= recentHigh + priceRange * maxExt;
           });
           const colors = {
             "0%": "#888", "23.6%": "#9c27b0", "38.2%": "#ffeb3b", "50%": "#8bc34a",

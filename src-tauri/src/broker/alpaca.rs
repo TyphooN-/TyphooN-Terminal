@@ -213,6 +213,8 @@ impl AlpacaBroker {
         Self {
             client: Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
+                .pool_max_idle_per_host(5)
+                .tcp_keepalive(std::time::Duration::from_secs(30))
                 .build()
                 .expect("Failed to build HTTP client"),
             base_url,
@@ -1029,9 +1031,13 @@ impl AlpacaBroker {
                     let skip = all_bars.len() - actual_limit as usize;
                     all_bars.drain(..skip);
                 }
+                let feed_label = match feed {
+                    Some(f) => *f,
+                    None => "crypto",
+                };
                 tracing::info!(
-                    "Loaded {} bars for {} @ {} (feed={:?}, {} chunks)",
-                    all_bars.len(), symbol, actual_tf, feed,
+                    "Loaded {} bars for {} @ {} (feed={}, {} chunks)",
+                    all_bars.len(), symbol, actual_tf, feed_label,
                     (all_bars.len() as f64 / 260.0).ceil() as u32
                 );
                 return Ok(all_bars);
@@ -1542,6 +1548,10 @@ impl AlpacaBroker {
 
     /// Fetch account activities (fills, dividends, deposits, etc.)
     pub async fn get_account_activities(&self, activity_types: &str, limit: u32) -> Result<Vec<AccountActivity>, String> {
+        // Validate activity_types: alphanumeric + comma only (prevent path traversal)
+        if !activity_types.is_empty() && !activity_types.chars().all(|c| c.is_alphanumeric() || c == ',' || c == '_') {
+            return Err("Invalid activity type characters".to_string());
+        }
         let url = if activity_types.is_empty() {
             format!("{}/v2/account/activities", self.base_url)
         } else {
@@ -1704,7 +1714,7 @@ impl AlpacaBroker {
             "secret": self.secret_key.as_str(),
         });
         write
-            .send(tokio_tungstenite::tungstenite::Message::Text(auth_msg.to_string()))
+            .send(tokio_tungstenite::tungstenite::Message::Text(auth_msg.to_string().into()))
             .await
             .map_err(|e| format!("WebSocket auth send failed: {e}"))?;
 
@@ -1728,7 +1738,7 @@ impl AlpacaBroker {
             "quotes": quote_symbols,
         });
         write
-            .send(tokio_tungstenite::tungstenite::Message::Text(sub_msg.to_string()))
+            .send(tokio_tungstenite::tungstenite::Message::Text(sub_msg.to_string().into()))
             .await
             .map_err(|e| format!("WebSocket subscribe failed: {e}"))?;
 
