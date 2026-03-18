@@ -1,8 +1,8 @@
 # ADR-006: Security Hardening
 
-**Status:** Implemented (Pass 19)
+**Status:** Implemented (Pass 21)
 **Date:** 2026-03-15
-**Updated:** 2026-03-15
+**Updated:** 2026-03-18
 
 ## Pass 1 — Initial Hardening
 
@@ -288,4 +288,19 @@ Full cross-reference of MQL5 EA (TyphooN.mq5 v1.420, 2730 lines) against Rust/Ta
 
 **19 passes, 88 findings total: 82 fixed, 6 accepted with documented rationale.**
 
-All actionable security, performance, and memory optimization items completed.
+### Pass 20 — XSS Prevention, SSRF Protection, Resource Limits (2026-03-18)
+89. innerHTML → createElement for 10 HIGH-risk functions (cmdBreadth, cmdDivergence, cmdSignal, cmdFiboTime, cmdJournalPlus)
+90. Webhook fetch(): AbortController with 5-second timeout
+91. Webhook URL validation: HTTPS-only, block localhost/private IPs (SSRF)
+92. localStorage caps: 100 timers, 500 journal entries, 5MB import limit, 365 IV history
+93. 41 serde_json::unwrap() → map_err() (Rust panic prevention)
+94. URL path injection guard on activity_types endpoint
+
+### Pass 21 — innerHTML Elimination (2026-03-18)
+95. Eliminated 64 innerHTML assignments with template interpolation across 30+ functions
+96. Added safe DOM builder helpers: el(), span(), div(), td(), theadRow(), styledRow(), labelValue()
+97. innerHTML count: 102 → 42 (remaining are static labels with no variable interpolation)
+
+**21 passes, 97 findings total: 91 fixed, 6 accepted with documented rationale.**
+
+All actionable security items completed. Zero interpolated innerHTML attack surface.

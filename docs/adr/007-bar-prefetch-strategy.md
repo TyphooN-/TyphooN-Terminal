@@ -1,6 +1,6 @@
 # ADR-007: Background Bar Pre-Fetch Strategy
 
-**Status:** Planned
+**Status:** Implemented
 **Date:** 2026-03-15
 **Context:** When a user loads a symbol on any timeframe, switching to a different timeframe requires a fresh API fetch. This creates delays and wastes rate limit budget on symbols the user is actively watching.
 

@@ -101,16 +101,15 @@ Zero 429 errors in normal operation. The rate limiter is the correct bottleneck 
 
 Data format: flat `Float64Array` (5 values/bar) — zero-copy Wasm interop, no serialization overhead.
 
-### Status: ✅ Core Optimized, JS Fallback Active
+### Status: ✅ Fully Optimized — Wasm Routed + Worker Thread
 
-The Wasm engine is built and available but the main chart currently uses **JS indicator functions** for compatibility with the color-segmented Fisher Transform and BetterVolume classification. The Wasm engine is used by the backtester and optimizer where raw speed matters most.
+Chart rendering now routes SMA, EMA, KAMA, RSI, ATR through Wasm (15 call sites) with automatic JS fallback. Web Worker (`indicator-worker.js`) computes indicators off the main thread. Fisher Transform and BetterVolume remain JS (color segmentation not in Wasm — would need separate output arrays).
 
-### Future Work (No Blockers)
+### Remaining (Low Impact)
 
 | Improvement | Effort | Impact |
 |---|---|---|
-| Route all indicator calculations through Wasm | Medium | 10-20x faster indicator rendering on chart |
-| Wasm BetterVolume + Supply/Demand zones | Medium | Most complex JS indicators moved to native speed |
+| Wasm BetterVolume + Supply/Demand zones | Medium | Complex JS indicators moved to native speed |
 | Worker thread for indicator calculation | Low | Prevents main thread blocking on large datasets |
 
 ---
@@ -144,13 +143,11 @@ Phase 5: Full chart engine          ✅ DONE — price scale, time axis, crossha
 
 Architecture: WebGL2 renders geometry (candles, wicks, indicator lines, grid, crosshair). Canvas2D overlay renders text (price labels, time labels, OHLC tooltip). This is the industry standard approach used by Bloomberg and TradingView.
 
-### Future Work
+### Future Work (Blocked by External)
 
-| Phase | Effort | Impact | Blocker |
-|---|---|---|---|
-| Phase 4: GPU indicator lines | 2-3 weeks | Eliminate lightweight-charts for overlay rendering | None |
-| Phase 5: Full GPU chart engine | 4-8 weeks | Complete lightweight-charts replacement, 1M+ bars | Significant engineering — crosshair, price scale, time axis |
-| WebGPU migration | Long-term | Next-gen GPU API, better performance | Browser/Tauri WebGPU support maturity |
+| Phase | Status | Blocker |
+|---|---|---|
+| WebGPU migration | 🔲 Long-term | Browser/Tauri WebGPU support maturity |
 
 ---
 

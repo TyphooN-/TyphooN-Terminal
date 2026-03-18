@@ -1,6 +1,6 @@
 # ADR-026: Future Architecture — Headless Mode, WebWorker, Wasm, Pine Script
 
-**Status:** Partially Implemented
+**Status:** Implemented
 **Date:** 2026-03-17
 
 ## Headless CLI Backtest Mode (IMPLEMENTED)
@@ -52,14 +52,10 @@ export ALPACA_SECRET_KEY=your_secret
 - Default room: `#typhoon-terminal:matrix.org` (configurable)
 - Supports any Matrix homeserver (matrix.org, Element, self-hosted)
 
-## WebWorker for Indicators (DEFERRED)
+## WebWorker for Indicators (IMPLEMENTED)
 
-### Why Deferred
-The 35 indicator calculation functions (839 lines) are pure functions that could run in a WebWorker. However:
-1. The functions are already fast enough for current bar counts (< 50ms for 10K bars)
-2. The bottleneck is API fetching, not computation
-3. Moving to a worker requires serializing/deserializing large data arrays across threads
-4. The incremental update pattern (only recompute last bar) is more impactful
+### Implementation (2026-03-18)
+`indicator-worker.js` computes SMA, EMA, KAMA, RSI off the main thread using Wasm when available, JS fallback otherwise. Data sent as compact OHLCV arrays, results returned as flat value arrays. 5-second timeout falls back to main-thread computation. Worker initialized on app startup alongside Wasm engine.
 
 ### Architecture (if needed later)
 ```
