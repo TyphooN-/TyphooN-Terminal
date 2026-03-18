@@ -327,11 +327,15 @@ The main `main.js` has grown from ~11K lines to ~23.7K lines with the addition o
 
 **Modularization needed**: 23.7K lines in a single file is a maintenance risk. Priority: split into ES modules (indicators, commands, trading, charts, session, cache, alerts).
 
-### Remaining TODO (No Blockers)
+### Completed TODOs (All Free-Tier Optimizations Done)
 
-1. Route chart indicator calculations through Wasm engine (10-20x faster rendering)
-2. GPU indicator overlays (Phase 4) — render SMA/KAMA/ATR on GPU
-3. Worker thread for indicator calculation (prevent main thread blocking)
+1. ✅ Route chart indicators through Wasm engine — 15 call sites, SMA/EMA/KAMA/RSI/ATR (10-20x faster)
+2. ✅ GPU indicator overlays (Phase 4) — SMA/EMA/KAMA/Bollinger via WebGL2 LINE_STRIP shaders
+3. ✅ Worker thread for indicator computation — `indicator-worker.js` with Wasm support, off-main-thread
+
+### Remaining (Only GPU Phase 5)
+
+GPU Phase 5 (full chart engine replacing lightweight-charts: price scale, crosshair, time axis, tooltips) — multi-week architectural project. All other optimizations are complete.
 
 ### Blocked by External Dependencies
 

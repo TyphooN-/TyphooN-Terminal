@@ -163,7 +163,7 @@ fn get_or_create_salt() -> [u8; 32] {
     // Generate new random salt and persist it
     let mut salt = [0u8; 32];
     rand::fill(&mut salt);
-    std::fs::create_dir_all(salt_path.parent().unwrap()).ok();
+    if let Some(parent) = salt_path.parent() { std::fs::create_dir_all(parent).ok(); }
     std::fs::write(&salt_path, &salt).ok();
     tracing::info!("Generated new credential encryption salt");
     salt
@@ -372,7 +372,7 @@ async fn get_multi_tf_bars(
         let tf = tf.clone();
         async move {
             match b.get_bars(&sym, &tf, limit).await {
-                Ok(bars) => Some((tf, serde_json::to_value(&bars).unwrap())),
+                Ok(bars) => serde_json::to_value(&bars).ok().map(|v| (tf, v)),
                 Err(e) => {
                     tracing::warn!("MTF bars {sym} @ {tf}: {e}");
                     None
