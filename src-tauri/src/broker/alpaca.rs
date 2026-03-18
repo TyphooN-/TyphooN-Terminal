@@ -1488,60 +1488,83 @@ impl AlpacaBroker {
     // ── Latest Quote ────────────────────────────────────────────────
 
     /// Fetch the latest bid/ask quote for a symbol.
+    /// For stocks/ETFs: uses snapshot endpoint which includes pre/post-market data.
+    /// For crypto: uses latest quotes endpoint (24/7).
     pub async fn get_latest_quote(&self, symbol: &str) -> Result<LatestQuote, String> {
         self.rate_limiter.wait().await;
         let is_crypto = symbol.contains('/');
 
-        let (url, query) = if is_crypto {
-            (
-                format!("{}/v1beta3/crypto/us/latest/quotes", DATA_BASE),
-                vec![("symbols", symbol.to_string())],
-            )
+        if is_crypto {
+            let url = format!("{}/v1beta3/crypto/us/latest/quotes", DATA_BASE);
+            let resp = self.client.get(&url)
+                .headers(self.headers())
+                .query(&[("symbols", symbol)])
+                .send().await
+                .map_err(|e| format!("Quote request failed: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("Quote request failed: HTTP {}", resp.status()));
+            }
+            let json: serde_json::Value = resp.json().await
+                .map_err(|e| format!("Quote parse failed: {e}"))?;
+            let q = json["quotes"][symbol].clone();
+            let bid = q["bp"].as_f64().unwrap_or(0.0);
+            let ask = q["ap"].as_f64().unwrap_or(0.0);
+            Ok(LatestQuote {
+                symbol: symbol.to_string(), bid, ask,
+                bid_size: q["bs"].as_f64().unwrap_or(0.0),
+                ask_size: q["as"].as_f64().unwrap_or(0.0),
+                spread: ask - bid,
+                timestamp: q["t"].as_str().unwrap_or("").to_string(),
+            })
         } else {
-            (
-                format!("{}/v2/stocks/{}/quotes/latest", DATA_BASE, symbol),
-                vec![],
-            )
-        };
+            // Stocks/ETFs: use snapshot endpoint for pre/post-market data
+            // Snapshot returns: { latestTrade, latestQuote, minuteBar, dailyBar, prevDailyBar }
+            let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
+            let resp = self.client.get(&url)
+                .headers(self.headers())
+                .query(&[("feed", "iex")])
+                .send().await
+                .map_err(|e| format!("Snapshot request failed: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("Snapshot request failed: HTTP {}", resp.status()));
+            }
+            let json: serde_json::Value = resp.json().await
+                .map_err(|e| format!("Snapshot parse failed: {e}"))?;
 
-        let mut req = self.client.get(&url).headers(self.headers());
-        for (k, v) in &query {
-            req = req.query(&[(k, v)]);
+            // Latest quote (may be regular hours only on IEX)
+            let q = &json["latestQuote"];
+            let bid = q["bp"].as_f64().unwrap_or(0.0);
+            let ask = q["ap"].as_f64().unwrap_or(0.0);
+
+            // Latest trade includes pre/post-market on IEX
+            let t = &json["latestTrade"];
+            let trade_price = t["p"].as_f64().unwrap_or(0.0);
+            let trade_ts = t["t"].as_str().unwrap_or("");
+
+            // Use trade price as mid if quote is stale (outside market hours)
+            let (final_bid, final_ask) = if bid > 0.0 && ask > 0.0 {
+                (bid, ask)
+            } else if trade_price > 0.0 {
+                // No live quote (pre/post market) — use last trade as both bid and ask
+                (trade_price, trade_price)
+            } else {
+                (0.0, 0.0)
+            };
+
+            Ok(LatestQuote {
+                symbol: symbol.to_string(),
+                bid: final_bid,
+                ask: final_ask,
+                bid_size: q["bs"].as_f64().unwrap_or(0.0),
+                ask_size: q["as"].as_f64().unwrap_or(0.0),
+                spread: final_ask - final_bid,
+                timestamp: if trade_ts.is_empty() {
+                    q["t"].as_str().unwrap_or("").to_string()
+                } else {
+                    trade_ts.to_string()
+                },
+            })
         }
-
-        let resp = req.send().await
-            .map_err(|e| format!("Quote request failed: {e}"))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let _ = resp.text().await;
-            return Err(format!("Quote request failed: HTTP {}", status));
-        }
-
-        let json: serde_json::Value = resp.json().await
-            .map_err(|e| format!("Quote parse failed: {e}"))?;
-
-        // Crypto returns { "quotes": { "BTC/USD": { ... } } }
-        // Stock returns { "quote": { ... } }
-        let q = if is_crypto {
-            let sym_key = symbol;
-            json["quotes"][sym_key].clone()
-        } else {
-            json["quote"].clone()
-        };
-
-        let bid = q["bp"].as_f64().unwrap_or(0.0);
-        let ask = q["ap"].as_f64().unwrap_or(0.0);
-
-        Ok(LatestQuote {
-            symbol: symbol.to_string(),
-            bid,
-            ask,
-            bid_size: q["bs"].as_f64().unwrap_or(0.0),
-            ask_size: q["as"].as_f64().unwrap_or(0.0),
-            spread: ask - bid,
-            timestamp: q["t"].as_str().unwrap_or("").to_string(),
-        })
     }
 
     // ── Account Activities ───────────────────────────────────────────

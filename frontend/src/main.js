@@ -3185,15 +3185,44 @@ async function updateDashboard() {
     syncMTFGridLivePrice();
     updateRiskCalcPanel();
 
-    // Bid/Ask spread (non-blocking — don't fail dashboard if quote fails)
+    // Bid/Ask spread (non-blocking — uses snapshot for pre/post-market)
+    // Persists last known price so it's visible between sessions
     if (currentSymbol) {
       invoke("get_latest_quote", { symbol: currentSymbol }).then(json => {
         const q = JSON.parse(json);
         const spreadEl = document.getElementById("bid-ask-spread");
-        if (spreadEl && q.bid > 0 && q.ask > 0) {
-          spreadEl.textContent = `Bid: ${q.bid.toFixed(4)} | Ask: ${q.ask.toFixed(4)} | Spread: ${q.spread.toFixed(4)}`;
+        if (spreadEl && q.bid > 0) {
+          const dp = q.bid > 100 ? 2 : q.bid > 1 ? 4 : 6;
+          const spread = q.ask > q.bid ? q.spread : 0;
+          const ts = q.timestamp ? new Date(q.timestamp) : null;
+          const timeStr = ts ? ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+          const isExtended = spread === 0; // no spread = pre/post market (trade price only)
+          const prefix = isExtended ? "Last: " : "Bid: ";
+          const text = isExtended
+            ? `Last: ${q.bid.toFixed(dp)} ${timeStr ? "@ " + timeStr : ""}`
+            : `Bid: ${q.bid.toFixed(dp)} | Ask: ${q.ask.toFixed(dp)} | Spread: ${spread.toFixed(dp)}`;
+          spreadEl.textContent = text;
+          if (isExtended) spreadEl.style.color = "#ff9800"; // orange = extended hours
+          else spreadEl.style.color = "";
+          // Persist last known price for this symbol
+          try { localStorage.setItem(`typhoon_lastprice_${currentSymbol}`, JSON.stringify({ bid: q.bid, ask: q.ask, ts: q.timestamp })); } catch (_) {}
         }
-      }).catch(() => {});
+      }).catch(() => {
+        // No live quote — show cached last known price
+        const spreadEl = document.getElementById("bid-ask-spread");
+        if (spreadEl) {
+          try {
+            const cached = JSON.parse(localStorage.getItem(`typhoon_lastprice_${currentSymbol}`) || "null");
+            if (cached && cached.bid > 0) {
+              const dp = cached.bid > 100 ? 2 : cached.bid > 1 ? 4 : 6;
+              const ts = cached.ts ? new Date(cached.ts) : null;
+              const timeStr = ts ? ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" }) : "";
+              spreadEl.textContent = `Last: ${cached.bid.toFixed(dp)} ${timeStr ? "@ " + timeStr : ""} (cached)`;
+              spreadEl.style.color = "#666";
+            }
+          } catch (_) {}
+        }
+      });
     }
   } catch (_) {
   } finally {
