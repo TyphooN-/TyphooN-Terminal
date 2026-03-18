@@ -147,15 +147,113 @@ function activateGpuChart(chartData, gpuType) {
     } catch (_) {}
   }
 
-  // Render loop
+  // ── GPU Phase 5: Text overlay (Canvas2D on top of WebGL) ────
+  // WebGL can't render text — use a transparent Canvas2D for price labels, time axis, crosshair tooltip
+  let overlay = document.getElementById("gpu-text-overlay");
+  if (!overlay) {
+    overlay = document.createElement("canvas");
+    overlay.id = "gpu-text-overlay";
+    overlay.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;z-index:2;";
+    canvas.parentElement.style.position = "relative";
+    canvas.parentElement.appendChild(overlay);
+  }
+  overlay.width = canvas.width;
+  overlay.height = canvas.height;
+  overlay.style.display = "block";
+  const ctx2d = overlay.getContext("2d");
+
+  let gpuMouseX = -1, gpuMouseY = -1;
+
+  function renderOverlay() {
+    if (!ctx2d || !gpuChartInstance) return;
+    const w = overlay.width, h = overlay.height;
+    ctx2d.clearRect(0, 0, w, h);
+    ctx2d.font = "10px Consolas, monospace";
+
+    // Price scale labels (right side)
+    try {
+      const labels = gpuChartInstance.get_price_labels();
+      ctx2d.fillStyle = "#888";
+      ctx2d.textAlign = "right";
+      ctx2d.textBaseline = "middle";
+      for (let i = 0; i < labels.length; i += 2) {
+        const price = labels[i], y = labels[i + 1];
+        if (y > 10 && y < h - 10) {
+          const dp = price > 100 ? 2 : price > 1 ? 4 : 6;
+          ctx2d.fillText(price.toFixed(dp), w - 4, y);
+        }
+      }
+    } catch (_) {}
+
+    // Time axis labels (bottom)
+    try {
+      const tLabels = gpuChartInstance.get_time_labels();
+      ctx2d.fillStyle = "#666";
+      ctx2d.textAlign = "center";
+      ctx2d.textBaseline = "bottom";
+      for (let i = 0; i < tLabels.length; i += 2) {
+        const barIdx = Math.round(tLabels[i]), x = tLabels[i + 1];
+        if (x > 30 && x < w - 60 && barIdx >= 0 && barIdx < currentChartData.length) {
+          const t = currentChartData[barIdx].time;
+          const d = new Date(t * 1000);
+          const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+          ctx2d.fillText(label, x, h - 2);
+        }
+      }
+    } catch (_) {}
+
+    // Crosshair + OHLC tooltip
+    if (gpuMouseX >= 0 && gpuMouseY >= 0) {
+      try {
+        // Draw crosshair lines on WebGL
+        gpuChartInstance.render_crosshair(gpuMouseX, gpuMouseY);
+
+        // Get OHLC data for tooltip
+        const data = gpuChartInstance.get_crosshair_data(gpuMouseX, gpuMouseY);
+        if (data.length >= 6 && data[2] > 0) {
+          const price = data[0], o = data[2], hi = data[3], lo = data[4], c = data[5];
+          const dp = c > 100 ? 2 : c > 1 ? 4 : 6;
+          const lines = [
+            `O: ${o.toFixed(dp)}`,
+            `H: ${hi.toFixed(dp)}`,
+            `L: ${lo.toFixed(dp)}`,
+            `C: ${c.toFixed(dp)}`,
+          ];
+          // Price label on Y-axis
+          ctx2d.fillStyle = "#FFD700";
+          ctx2d.textAlign = "right";
+          ctx2d.textBaseline = "middle";
+          ctx2d.fillText(price.toFixed(dp), w - 4, gpuMouseY);
+
+          // OHLC tooltip box
+          const tx = gpuMouseX + 12, ty = gpuMouseY - 40;
+          ctx2d.fillStyle = "rgba(0,0,0,0.85)";
+          ctx2d.fillRect(tx, ty, 100, 52);
+          ctx2d.strokeStyle = "#444";
+          ctx2d.strokeRect(tx, ty, 100, 52);
+          ctx2d.fillStyle = "#ccc";
+          ctx2d.textAlign = "left";
+          ctx2d.textBaseline = "top";
+          for (let li = 0; li < lines.length; li++) {
+            ctx2d.fillText(lines[li], tx + 4, ty + 3 + li * 12);
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  // Render loop — WebGL + Canvas2D overlay
   if (gpuAnimFrame) cancelAnimationFrame(gpuAnimFrame);
   function renderLoop() {
     gpuChartInstance.render();
+    renderOverlay();
     gpuAnimFrame = requestAnimationFrame(renderLoop);
   }
   renderLoop();
 
-  // Mouse interaction: scroll to pan, wheel to zoom
+  // Mouse interaction: scroll to pan, wheel to zoom, crosshair tracking
+  canvas.style.pointerEvents = "auto";
+  overlay.style.pointerEvents = "none"; // overlay is transparent to clicks
   canvas.onwheel = (e) => {
     e.preventDefault();
     if (e.ctrlKey) {
@@ -167,6 +265,7 @@ function activateGpuChart(chartData, gpuType) {
   let dragging = false, dragStartX = 0;
   canvas.onmousedown = (e) => { dragging = true; dragStartX = e.offsetX; };
   canvas.onmousemove = (e) => {
+    gpuMouseX = e.offsetX; gpuMouseY = e.offsetY; // Track for crosshair
     if (dragging) {
       const dx = e.offsetX - dragStartX;
       const barDelta = -dx / (canvas.width / gpuChartInstance.visible_bars());
@@ -175,12 +274,14 @@ function activateGpuChart(chartData, gpuType) {
     }
   };
   canvas.onmouseup = () => { dragging = false; };
-  canvas.onmouseleave = () => { dragging = false; };
+  canvas.onmouseleave = () => { dragging = false; gpuMouseX = -1; gpuMouseY = -1; };
 }
 
 function deactivateGpuChart() {
   const canvas = document.getElementById("gpu-chart-canvas");
   if (canvas) canvas.style.display = "none";
+  const overlay = document.getElementById("gpu-text-overlay");
+  if (overlay) overlay.style.display = "none";
   if (gpuAnimFrame) { cancelAnimationFrame(gpuAnimFrame); gpuAnimFrame = null; }
 }
 

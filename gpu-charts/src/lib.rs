@@ -375,6 +375,128 @@ impl GpuChart {
         self.canvas.set_height(height);
     }
 
+    /// Get OHLCV data for bar at index (for crosshair tooltip).
+    /// Returns [open, high, low, close, volume] or empty if out of range.
+    #[wasm_bindgen]
+    pub fn get_bar_ohlcv(&self, idx: usize) -> Vec<f64> {
+        if idx >= self.bar_opens.len() { return vec![]; }
+        vec![
+            self.bar_opens[idx] as f64,
+            self.bar_highs[idx] as f64,
+            self.bar_lows[idx] as f64,
+            self.bar_closes[idx] as f64,
+            0.0, // volume not stored in f32 arrays
+        ]
+    }
+
+    /// Get price scale labels: returns [price0, y0, price1, y1, ...] in canvas coordinates.
+    #[wasm_bindgen]
+    pub fn get_price_labels(&self) -> Vec<f64> {
+        let h = self.canvas.height() as f64;
+        let price_range = self.max_price - self.min_price;
+        if price_range <= 0.0 { return vec![]; }
+        let step = nice_step(price_range, 6.0);
+        let first = (self.min_price / step).ceil() * step;
+        let mut result = Vec::new();
+        let mut p = first;
+        while p < self.max_price {
+            let y = h - ((p - self.min_price) / price_range * h);
+            result.push(p);
+            result.push(y);
+            p += step;
+        }
+        result
+    }
+
+    /// Get time scale labels: returns [bar_idx0, x0, bar_idx1, x1, ...] in canvas coordinates.
+    #[wasm_bindgen]
+    pub fn get_time_labels(&self) -> Vec<f64> {
+        let w = self.canvas.width() as f64;
+        let range = self.visible_end - self.visible_start;
+        if range <= 0.0 { return vec![]; }
+        let step = nice_step(range, 8.0);
+        let first = (self.visible_start / step).ceil() * step;
+        let mut result = Vec::new();
+        let mut t = first;
+        while t < self.visible_end {
+            let x = (t - self.visible_start) / range * w;
+            result.push(t);
+            result.push(x);
+            t += step;
+        }
+        result
+    }
+
+    /// Get crosshair data at canvas position: returns [price, bar_idx, open, high, low, close].
+    #[wasm_bindgen]
+    pub fn get_crosshair_data(&self, canvas_x: f64, canvas_y: f64) -> Vec<f64> {
+        let price = self.price_at_y(canvas_y);
+        let bar_f = self.bar_at_x(canvas_x);
+        let bar_idx = bar_f.round() as usize;
+        if bar_idx >= self.bar_opens.len() {
+            return vec![price, bar_f, 0.0, 0.0, 0.0, 0.0];
+        }
+        vec![
+            price, bar_f,
+            self.bar_opens[bar_idx] as f64,
+            self.bar_highs[bar_idx] as f64,
+            self.bar_lows[bar_idx] as f64,
+            self.bar_closes[bar_idx] as f64,
+        ]
+    }
+
+    /// Render crosshair lines at given canvas coordinates.
+    #[wasm_bindgen]
+    pub fn render_crosshair(&self, canvas_x: f64, canvas_y: f64) {
+        let w = self.canvas.width() as f64;
+        let h = self.canvas.height() as f64;
+        // Convert to NDC
+        let x_ndc = (canvas_x / w * 2.0 - 1.0) as f32;
+        let y_ndc = (1.0 - canvas_y / h * 2.0) as f32; // flip Y
+
+        // Horizontal line
+        let h_verts: [f32; 4] = [-1.0, y_ndc, 1.0, y_ndc];
+        // Vertical line
+        let v_verts: [f32; 4] = [x_ndc, -1.0, x_ndc, 1.0];
+
+        self.gl.use_program(Some(&self.grid_program));
+        self.gl.uniform4f(Some(&self.grid_color), 0.6, 0.6, 0.6, 0.5); // semi-transparent gray
+
+        let buf = self.gl.create_buffer();
+        if let Some(buf) = &buf {
+            // Horizontal
+            self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(buf));
+            unsafe {
+                let view = js_sys::Float32Array::view(&h_verts);
+                self.gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &view, GL::DYNAMIC_DRAW);
+            }
+            self.gl.enable_vertex_attrib_array(0);
+            self.gl.vertex_attrib_pointer_with_i32(0, 2, GL::FLOAT, false, 0, 0);
+            self.gl.draw_arrays(GL::LINES, 0, 2);
+
+            // Vertical
+            unsafe {
+                let view = js_sys::Float32Array::view(&v_verts);
+                self.gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &view, GL::DYNAMIC_DRAW);
+            }
+            self.gl.draw_arrays(GL::LINES, 0, 2);
+
+            self.gl.delete_buffer(Some(buf));
+        }
+    }
+
+    /// Get min/max price for current view.
+    #[wasm_bindgen]
+    pub fn get_price_range(&self) -> Vec<f64> {
+        vec![self.min_price, self.max_price]
+    }
+
+    /// Get visible time range.
+    #[wasm_bindgen]
+    pub fn get_time_range(&self) -> Vec<f64> {
+        vec![self.visible_start, self.visible_end]
+    }
+
     /// Get current visible bar count.
     #[wasm_bindgen]
     pub fn visible_bars(&self) -> f64 {
