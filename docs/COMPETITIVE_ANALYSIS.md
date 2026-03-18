@@ -235,6 +235,54 @@
 - ~~**Government data**~~ **RESOLVED** — FRED integration provides Fed Funds, CPI, GDP, Treasury yields, VIX, M2
 - **Jupyter integration** — OpenBB runs in notebooks. We export data via CSV/clipboard for external analysis.
 
+### vs TradingView ($0-60/mo)
+TradingView is the most popular retail charting platform. Feature comparison:
+
+| Feature | TyphooN-Terminal | TradingView Free | TradingView Premium ($60/mo) |
+|---|---|---|---|
+| Candlestick charts | ✅ | ✅ | ✅ |
+| 37 indicators | ✅ | ✅ (limited) | ✅ (100+) |
+| 22 drawing tools | ✅ | ✅ (limited) | ✅ (50+) |
+| Custom timeframes | ✅ | ❌ | ✅ |
+| Volume Profile | ✅ (free) | ❌ | ✅ ($24.95/mo+) |
+| Market Replay | ✅ (free) | ❌ | ✅ ($24.95/mo+) |
+| Pine Script (custom lang) | ❌ (JS plugins) | ✅ | ✅ |
+| Server-side alerts | ❌ (local only) | ✅ (limited) | ✅ (unlimited) |
+| Multi-chart layout | ✅ (MTF grid) | ❌ (1 chart) | ✅ (8 charts) |
+| Paper trading | ✅ (real broker) | ✅ (simulated) | ✅ |
+| Real order execution | ✅ (Alpaca/TT) | ❌ | ✅ (limited brokers) |
+| Open source | ✅ | ❌ | ❌ |
+| No ads | ✅ | ❌ (heavy ads) | ✅ |
+| Local-first (no cloud) | ✅ | ❌ (cloud-only) | ❌ |
+| GPU-accelerated charts | ✅ | ❌ | ❌ |
+| Wasm indicator engine | ✅ | ❌ | ❌ |
+| Risk management (4 modes) | ✅ | ❌ | ❌ |
+| AI strategy suggestions | ✅ | ❌ | ❌ |
+| Voice/audio alerts | ✅ | ❌ | ❌ |
+| Fourier/wavelet/entropy | ✅ | ❌ | ❌ |
+| 187 Ctrl+K commands | ✅ | ❌ | ❌ |
+| Cost | **Free** | Free (limited) | **$60/mo ($720/yr)** |
+
+**TyphooN-Terminal advantages**: Volume Profile and Market Replay are free (TradingView charges $24.95+/mo). Local-first with no ads. Real order execution via broker API. GPU charts, Wasm indicators, 4 risk modes, AI strategy — none available on TradingView at any price.
+
+**TradingView advantages**: Pine Script ecosystem, server-side alerts (work when PC is off), mobile app, social features (ideas, chat), 100+ indicators, 50+ drawing tools, professional data feeds.
+
+### vs cTrader / NinjaTrader / Thinkorswim
+
+| Feature | TyphooN-Terminal | cTrader | NinjaTrader | Thinkorswim |
+|---|---|---|---|---|
+| Open source | ✅ | ❌ | ❌ | ❌ |
+| Linux native | ✅ | ❌ | ❌ | ❌ |
+| Cost | Free | Free | $720/yr or $1,099 | Free (with TD) |
+| Risk management | 4 modes + VaR | Basic | Basic | Basic |
+| AI assistant | ✅ | ❌ | ❌ | ❌ |
+| GPU charts | ✅ | ❌ | ❌ | ❌ |
+| Quant analysis | ✅ (FFT, entropy, wavelets) | ❌ | ❌ | ❌ |
+| DLL-free (no binary deps) | ✅ | ❌ (.NET) | ❌ (.NET) | ❌ (Java) |
+| Custom indicators | JS (readable) | C# (compiled) | C# (compiled) | thinkScript |
+| Options analytics | ✅ | Limited | ✅ | ✅ |
+| Harmonic patterns | ✅ | ❌ | Add-on ($) | ❌ |
+
 ## Future Feature Priorities (Ranked by Impact)
 
 ### Tier A — High Impact, Achievable Now
