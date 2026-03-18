@@ -17066,6 +17066,642 @@ function cmdLiquidityMap() {
   log("LIQUIDITY-MAP: Heatmap rendered — top S/R at " + top3[0].price.toFixed(2), "ok");
 }
 
+// ══════════════════════════════════════════════════════════════
+// CLOCK-OVERLAY — Key Event Countdown on Chart
+// ══════════════════════════════════════════════════════════════
+function cmdClockOverlay() {
+  window._clockOverlayEnabled = !window._clockOverlayEnabled;
+  if (!window._clockOverlayEnabled) {
+    if (window._clockOverlayInterval) { clearInterval(window._clockOverlayInterval); window._clockOverlayInterval = null; }
+    if (window._clockOverlayWin) { try { window._clockOverlayWin.close(); } catch (_) {} window._clockOverlayWin = null; }
+    if (candleSeries) try { candleSeries.setMarkers([]); } catch (_) {}
+    log("CLOCK-OVERLAY: disabled", "info");
+    return;
+  }
+  let clockOvInterval = null;
+  const win = createWindow({ title: "Event Countdown", width: 560, height: 400, onClose() { window._clockOverlayEnabled = false; if (clockOvInterval) clearInterval(clockOvInterval); window._clockOverlayInterval = null; window._clockOverlayWin = null; if (candleSeries) try { candleSeries.setMarkers([]); } catch (_) {} } });
+  window._clockOverlayWin = win;
+  win.contentElement.textContent = "";
+  const coRoot = document.createElement("div"); coRoot.style.cssText = "padding:10px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+  const coHdr = document.createElement("div"); coHdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:10px;"; coHdr.textContent = "Key Event Countdown"; coRoot.appendChild(coHdr);
+  const coTableContainer = document.createElement("div"); coRoot.appendChild(coTableContainer);
+  const coStatusDiv = document.createElement("div"); coStatusDiv.style.cssText = "margin-top:8px;color:#888;font-size:10px;text-align:center;"; coRoot.appendChild(coStatusDiv);
+  win.appendElement(coRoot);
+
+  function coGetThirdFriday(afterDate) {
+    const results = [];
+    for (let mOff = 0; mOff < 3; mOff++) {
+      const yr = afterDate.getFullYear(), mo = afterDate.getMonth() + mOff;
+      const d = new Date(yr, mo, 1);
+      let fridayCount = 0;
+      for (let day = 1; day <= 31; day++) {
+        d.setDate(day);
+        if (d.getMonth() !== mo % 12) break;
+        if (d.getDay() === 5) { fridayCount++; if (fridayCount === 3) { results.push(new Date(d)); break; } }
+      }
+    }
+    return results.filter(d => d >= afterDate);
+  }
+
+  function coGetFOMC(afterDate) {
+    const anchors = [];
+    const year = afterDate.getFullYear();
+    const baseDate = new Date(year, 0, 29);
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(baseDate.getTime() + i * 47 * 86400000);
+      if (d >= afterDate) anchors.push(d);
+    }
+    return anchors.slice(0, 3);
+  }
+
+  function coGetEarnings(afterDate) {
+    const results = [];
+    const year = afterDate.getFullYear();
+    const months = [0, 3, 6, 9];
+    for (let yOff = 0; yOff <= 1; yOff++) {
+      for (const m of months) {
+        const d = new Date(year + yOff, m, 15);
+        if (d >= afterDate) results.push(d);
+      }
+    }
+    return results.slice(0, 3);
+  }
+
+  function coUpdate() {
+    const now = new Date();
+    const events = [];
+    for (const d of coGetThirdFriday(now)) events.push({ name: "Options Expiry", date: d });
+    for (const d of coGetFOMC(now)) events.push({ name: "FOMC Meeting", date: d });
+    for (const d of coGetEarnings(now)) events.push({ name: "Earnings Season", date: d });
+    events.sort((a, b) => a.date - b.date);
+    const within30 = events.filter(e => (e.date - now) / 86400000 <= 30);
+
+    let barsPerDay = 1;
+    if (currentChartData && currentChartData.length > 10) {
+      const first = currentChartData[0].time;
+      const last = currentChartData[currentChartData.length - 1].time;
+      const days = Math.max(1, (last - first) / 86400);
+      barsPerDay = currentChartData.length / days;
+    }
+
+    if (candleSeries && currentChartData && currentChartData.length > 0) {
+      const markers = [];
+      for (const ev of within30) {
+        const evTimeSec = Math.floor(ev.date.getTime() / 1000);
+        let closestTime = currentChartData[currentChartData.length - 1].time;
+        for (let i = currentChartData.length - 1; i >= 0; i--) {
+          if (currentChartData[i].time <= evTimeSec) { closestTime = currentChartData[i].time; break; }
+        }
+        markers.push({ time: closestTime, position: "aboveBar", color: "#ff9800", shape: "arrowDown", text: ev.name });
+      }
+      markers.sort((a, b) => a.time - b.time);
+      try { candleSeries.setMarkers(markers); } catch (_) {}
+    }
+
+    coTableContainer.textContent = "";
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    table.appendChild(theadRow(["Event", "Date", "Days", "Bars"]));
+    for (const ev of within30) {
+      const daysUntil = Math.max(0, Math.ceil((ev.date - now) / 86400000));
+      const barsUntil = Math.round(daysUntil * barsPerDay);
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;";
+      const clr = daysUntil <= 3 ? "#f44336" : daysUntil <= 7 ? "#ff9800" : "#ccc";
+      tr.appendChild(td(ev.name, "padding:4px;color:" + clr + ";font-weight:bold;"));
+      tr.appendChild(td(ev.date.toLocaleDateString(), "padding:4px;"));
+      tr.appendChild(td(String(daysUntil), "padding:4px;text-align:right;color:" + clr + ";"));
+      tr.appendChild(td(String(barsUntil), "padding:4px;text-align:right;color:#888;"));
+      table.appendChild(tr);
+    }
+    if (within30.length === 0) {
+      const emptyTr = document.createElement("tr");
+      const emptyTd = td("No events within 30 days", "padding:12px;color:#666;text-align:center;");
+      emptyTd.colSpan = 4;
+      emptyTr.appendChild(emptyTd);
+      table.appendChild(emptyTr);
+    }
+    coTableContainer.appendChild(table);
+    coStatusDiv.textContent = "Updated: " + now.toLocaleTimeString("en-GB", { hour12: false }) + " | " + events.length + " events tracked";
+  }
+
+  coUpdate();
+  clockOvInterval = setInterval(coUpdate, 60000);
+  window._clockOverlayInterval = clockOvInterval;
+  log("CLOCK-OVERLAY: enabled — tracking FOMC, options expiry, earnings", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// DIVERGENCE-AUDIO — Tonal Alerts for Indicator Events
+// ══════════════════════════════════════════════════════════════
+function cmdDivergenceAudio() {
+  let daInterval = null;
+  const win = createWindow({ title: "Divergence Audio Alerts", width: 440, height: 480, onClose() { if (daInterval) clearInterval(daInterval); window._divAudioInterval = null; } });
+  win.contentElement.textContent = "";
+  const daRoot = document.createElement("div"); daRoot.style.cssText = "padding:10px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+  const daHdr = document.createElement("div"); daHdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:10px;"; daHdr.textContent = "Divergence Audio Alerts"; daRoot.appendChild(daHdr);
+
+  const daEnabled = localStorage.getItem("typhoon_div_audio") === "true";
+  const daVolume = parseInt(localStorage.getItem("typhoon_div_audio_vol") || "50", 10);
+
+  const daToggleRow = document.createElement("div"); daToggleRow.style.cssText = "display:flex;align-items:center;gap:12px;margin-bottom:10px;padding:8px;background:#111;border:1px solid #333;";
+  const daToggleLabel = document.createElement("span"); daToggleLabel.style.cssText = "flex:1;font-weight:bold;"; daToggleLabel.textContent = "Audio Alerts";
+  const daToggleBtn = document.createElement("button"); daToggleBtn.style.cssText = "padding:6px 16px;font-family:inherit;font-size:11px;cursor:pointer;border:1px solid " + (daEnabled ? "#4caf50" : "#666") + ";background:" + (daEnabled ? "#1b5e20" : "#222") + ";color:#fff;"; daToggleBtn.textContent = daEnabled ? "ON" : "OFF";
+  daToggleBtn.addEventListener("click", () => {
+    const now = localStorage.getItem("typhoon_div_audio") !== "true";
+    localStorage.setItem("typhoon_div_audio", now ? "true" : "false");
+    daToggleBtn.textContent = now ? "ON" : "OFF";
+    daToggleBtn.style.background = now ? "#1b5e20" : "#222";
+    daToggleBtn.style.borderColor = now ? "#4caf50" : "#666";
+    log("Divergence audio " + (now ? "enabled" : "disabled"), "ok");
+  });
+  daToggleRow.appendChild(daToggleLabel); daToggleRow.appendChild(daToggleBtn); daRoot.appendChild(daToggleRow);
+
+  const daVolRow = document.createElement("div"); daVolRow.style.cssText = "margin-bottom:10px;";
+  const daVolLabel = document.createElement("div"); daVolLabel.style.cssText = "margin-bottom:4px;color:#888;"; daVolLabel.textContent = "Volume: " + daVolume + "%";
+  const daVolSlider = document.createElement("input"); daVolSlider.type = "range"; daVolSlider.min = "0"; daVolSlider.max = "100"; daVolSlider.value = daVolume; daVolSlider.style.cssText = "width:100%;";
+  daVolSlider.addEventListener("input", () => { localStorage.setItem("typhoon_div_audio_vol", daVolSlider.value); daVolLabel.textContent = "Volume: " + daVolSlider.value + "%"; });
+  daVolRow.appendChild(daVolLabel); daVolRow.appendChild(daVolSlider); daRoot.appendChild(daVolRow);
+
+  let daAudioCtx = null;
+  function daGetCtx() { if (!daAudioCtx) daAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); return daAudioCtx; }
+  function daGetVol() { return Math.max(0, Math.min(1, parseInt(localStorage.getItem("typhoon_div_audio_vol") || "50", 10) / 100)); }
+
+  function daPlayTone(freq, durationMs) {
+    const ctx = daGetCtx(); const osc = ctx.createOscillator(); const gain = ctx.createGain();
+    osc.type = "sine"; osc.frequency.value = freq; gain.gain.value = daGetVol();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + durationMs / 1000);
+  }
+
+  function daFisherBullish() { const ctx = daGetCtx(); const now = ctx.currentTime; const g = ctx.createGain(); g.gain.value = daGetVol(); g.connect(ctx.destination); const o1 = ctx.createOscillator(); o1.type = "sine"; o1.frequency.value = 400; o1.connect(g); o1.start(now); o1.stop(now + 0.1); const o2 = ctx.createOscillator(); o2.type = "sine"; o2.frequency.value = 600; o2.connect(g); o2.start(now + 0.1); o2.stop(now + 0.2); }
+  function daFisherBearish() { const ctx = daGetCtx(); const now = ctx.currentTime; const g = ctx.createGain(); g.gain.value = daGetVol(); g.connect(ctx.destination); const o1 = ctx.createOscillator(); o1.type = "sine"; o1.frequency.value = 600; o1.connect(g); o1.start(now); o1.stop(now + 0.1); const o2 = ctx.createOscillator(); o2.type = "sine"; o2.frequency.value = 400; o2.connect(g); o2.start(now + 0.1); o2.stop(now + 0.2); }
+  function daRSIOversold() { daPlayTone(200, 200); }
+  function daRSIOverbought() { daPlayTone(800, 200); }
+  function daChord() { const ctx = daGetCtx(); const now = ctx.currentTime; const g = ctx.createGain(); g.gain.value = daGetVol(); g.connect(ctx.destination); for (const f of [400, 500, 600]) { const o = ctx.createOscillator(); o.type = "sine"; o.frequency.value = f; o.connect(g); o.start(now); o.stop(now + 0.3); } }
+
+  const daTestSection = document.createElement("div"); daTestSection.style.cssText = "margin-bottom:12px;";
+  const daTestLabel = document.createElement("div"); daTestLabel.style.cssText = "color:#888;margin-bottom:6px;font-size:10px;"; daTestLabel.textContent = "Test Tones:"; daTestSection.appendChild(daTestLabel);
+  const daTones = [
+    { label: "Fisher Bull", fn: daFisherBullish, color: "#4caf50" },
+    { label: "Fisher Bear", fn: daFisherBearish, color: "#f44336" },
+    { label: "RSI Oversold", fn: daRSIOversold, color: "#2196f3" },
+    { label: "RSI Overbought", fn: daRSIOverbought, color: "#ff9800" },
+    { label: "Multi-Signal", fn: daChord, color: "#9c27b0" },
+  ];
+  const daBtnRow = document.createElement("div"); daBtnRow.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;";
+  for (const t of daTones) {
+    const btn = document.createElement("button"); btn.textContent = t.label;
+    btn.style.cssText = "padding:5px 10px;background:#111;color:" + t.color + ";border:1px solid " + t.color + ";cursor:pointer;font-family:inherit;font-size:10px;";
+    btn.addEventListener("click", t.fn);
+    daBtnRow.appendChild(btn);
+  }
+  daTestSection.appendChild(daBtnRow); daRoot.appendChild(daTestSection);
+
+  const daLogLabel = document.createElement("div"); daLogLabel.style.cssText = "color:#888;margin-bottom:4px;font-size:10px;font-weight:bold;"; daLogLabel.textContent = "Event Log:"; daRoot.appendChild(daLogLabel);
+  const daLogArea = document.createElement("div"); daLogArea.style.cssText = "height:140px;overflow-y:auto;background:#0a0a0a;border:1px solid #333;padding:4px;font-size:10px;"; daRoot.appendChild(daLogArea);
+
+  function daAddLog(msg, color) {
+    const entry = document.createElement("div"); entry.style.cssText = "padding:2px 0;color:" + (color || "#888") + ";";
+    entry.textContent = new Date().toLocaleTimeString("en-GB", { hour12: false }) + " " + msg;
+    daLogArea.appendChild(entry);
+    if (daLogArea.childNodes.length > 100) daLogArea.removeChild(daLogArea.firstChild);
+    daLogArea.scrollTop = daLogArea.scrollHeight;
+  }
+
+  let daPrevFisherAbove = null;
+  let daPrevRSI = null;
+
+  function daCheckConditions() {
+    if (localStorage.getItem("typhoon_div_audio") !== "true") return;
+    if (!currentChartData || currentChartData.length < 34) return;
+    let signals = 0;
+    try {
+      const fisherResult = calcEhlersFisher(currentChartData, 32);
+      const fLine = fisherResult.fisher; const sLine = fisherResult.signal;
+      if (fLine.length >= 2 && sLine.length >= 2) {
+        const curAbove = fLine[fLine.length - 1].value > sLine[sLine.length - 1].value;
+        if (daPrevFisherAbove !== null && curAbove !== daPrevFisherAbove) {
+          if (curAbove) { daFisherBullish(); daAddLog("Fisher BULLISH cross", "#4caf50"); signals++; }
+          else { daFisherBearish(); daAddLog("Fisher BEARISH cross", "#f44336"); signals++; }
+        }
+        daPrevFisherAbove = curAbove;
+      }
+    } catch (_) {}
+    try {
+      const rsi = calcRSI(currentChartData, 14);
+      if (rsi.length > 0) {
+        const curRSI = rsi[rsi.length - 1].value;
+        if (daPrevRSI !== null) {
+          if (curRSI < 30 && daPrevRSI >= 30) { daRSIOversold(); daAddLog("RSI OVERSOLD (<30): " + curRSI.toFixed(1), "#2196f3"); signals++; }
+          if (curRSI > 70 && daPrevRSI <= 70) { daRSIOverbought(); daAddLog("RSI OVERBOUGHT (>70): " + curRSI.toFixed(1), "#ff9800"); signals++; }
+        }
+        daPrevRSI = curRSI;
+      }
+    } catch (_) {}
+    if (signals >= 2) { setTimeout(daChord, 300); daAddLog("MULTI-SIGNAL ALIGNMENT (" + signals + " signals)", "#9c27b0"); }
+  }
+
+  if (window._divAudioInterval) clearInterval(window._divAudioInterval);
+  daInterval = setInterval(daCheckConditions, 5000);
+  window._divAudioInterval = daInterval;
+  win.appendElement(daRoot);
+  daAddLog("Divergence audio monitoring started", "#2196f3");
+  log("DIVERGENCE-AUDIO: tonal alert system active", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// SHADOW-TRADE — Parallel Paper Portfolio
+// ══════════════════════════════════════════════════════════════
+function cmdShadowTrade() {
+  const ST_KEY = "typhoon_shadow_portfolio";
+  function stLoad() {
+    try { return JSON.parse(localStorage.getItem(ST_KEY)) || { equity: 100000, positions: [], trades: [] }; }
+    catch (_) { return { equity: 100000, positions: [], trades: [] }; }
+  }
+  function stSave(s) { localStorage.setItem(ST_KEY, JSON.stringify(s)); }
+
+  let stInterval = null;
+  const win = createWindow({ title: "Shadow Trade — Paper Portfolio", width: 600, height: 560, onClose() { if (stInterval) clearInterval(stInterval); } });
+  win.contentElement.textContent = "";
+  const stRoot = document.createElement("div"); stRoot.style.cssText = "padding:10px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+  const stHdr = document.createElement("div"); stHdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#9c27b0;margin-bottom:10px;"; stHdr.textContent = "Shadow Trade Portfolio"; stRoot.appendChild(stHdr);
+
+  const stSettings = document.createElement("div"); stSettings.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;padding:8px;background:#111;border:1px solid #333;";
+  const stRiskLabel = document.createElement("label"); stRiskLabel.style.cssText = "color:#888;"; stRiskLabel.textContent = "Risk Multiplier:";
+  const stRiskInput = document.createElement("input"); stRiskInput.type = "number"; stRiskInput.value = "2"; stRiskInput.min = "0.5"; stRiskInput.max = "10"; stRiskInput.step = "0.5"; stRiskInput.style.cssText = "padding:4px;background:#0a0a0a;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;width:80px;";
+  const stSLLabel = document.createElement("label"); stSLLabel.style.cssText = "color:#888;"; stSLLabel.textContent = "SL Multiplier:";
+  const stSLInput = document.createElement("input"); stSLInput.type = "number"; stSLInput.value = "1.5"; stSLInput.min = "0.5"; stSLInput.max = "5"; stSLInput.step = "0.1"; stSLInput.style.cssText = "padding:4px;background:#0a0a0a;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;width:80px;";
+  stSettings.appendChild(stRiskLabel); stSettings.appendChild(stRiskInput); stSettings.appendChild(stSLLabel); stSettings.appendChild(stSLInput);
+  stRoot.appendChild(stSettings);
+
+  const stBtnRow = document.createElement("div"); stBtnRow.style.cssText = "display:flex;gap:8px;margin-bottom:12px;";
+  const stSyncBtn = document.createElement("button"); stSyncBtn.textContent = "Sync from Real"; stSyncBtn.style.cssText = "flex:1;padding:6px;background:#1565c0;color:#fff;border:1px solid #2196f3;cursor:pointer;font-family:inherit;font-size:11px;";
+  const stResetBtn = document.createElement("button"); stResetBtn.textContent = "Reset Shadow"; stResetBtn.style.cssText = "flex:1;padding:6px;background:#b71c1c;color:#fff;border:1px solid #f44336;cursor:pointer;font-family:inherit;font-size:11px;";
+  const stAddBtn = document.createElement("button"); stAddBtn.textContent = "Add Shadow Position"; stAddBtn.style.cssText = "flex:1;padding:6px;background:#1b5e20;color:#fff;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-size:11px;";
+  stBtnRow.appendChild(stSyncBtn); stBtnRow.appendChild(stAddBtn); stBtnRow.appendChild(stResetBtn);
+  stRoot.appendChild(stBtnRow);
+
+  const stPosContainer = document.createElement("div"); stRoot.appendChild(stPosContainer);
+  const stPerfContainer = document.createElement("div"); stPerfContainer.style.cssText = "margin-top:12px;"; stRoot.appendChild(stPerfContainer);
+
+  function stRender() {
+    const shadow = stLoad();
+    stPosContainer.textContent = "";
+    const posLabel = document.createElement("div"); posLabel.style.cssText = "color:#888;font-weight:bold;margin-bottom:4px;font-size:10px;"; posLabel.textContent = "Shadow Positions (" + shadow.positions.length + "):";
+    stPosContainer.appendChild(posLabel);
+
+    if (shadow.positions.length > 0) {
+      const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-bottom:8px;";
+      table.appendChild(theadRow(["Symbol", "Side", "Qty", "Entry", "P&L", ""]));
+      for (let i = 0; i < shadow.positions.length; i++) {
+        const p = shadow.positions[i];
+        const curPrice = (p.symbol === currentSymbol && lastPrice > 0) ? lastPrice : p.entry;
+        const pnl = p.side === "long" ? (curPrice - p.entry) * p.qty : (p.entry - curPrice) * p.qty;
+        const pnlClr = pnl >= 0 ? "#4caf50" : "#f44336";
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;";
+        tr.appendChild(td(p.symbol, "padding:3px;font-weight:bold;"));
+        tr.appendChild(td(p.side.toUpperCase(), "padding:3px;color:" + (p.side === "long" ? "#4caf50" : "#f44336") + ";"));
+        tr.appendChild(td(String(p.qty), "padding:3px;text-align:right;"));
+        tr.appendChild(td(p.entry.toFixed(4), "padding:3px;text-align:right;"));
+        tr.appendChild(td((pnl >= 0 ? "+" : "") + pnl.toFixed(2), "padding:3px;text-align:right;color:" + pnlClr + ";"));
+        const closeBtn = document.createElement("button"); closeBtn.textContent = "Close"; closeBtn.style.cssText = "padding:2px 6px;background:#333;color:#fff;border:1px solid #555;cursor:pointer;font-size:9px;font-family:inherit;";
+        const idx = i;
+        closeBtn.addEventListener("click", () => {
+          const s = stLoad();
+          const pos = s.positions[idx]; if (!pos) return;
+          const cp = (pos.symbol === currentSymbol && lastPrice > 0) ? lastPrice : pos.entry;
+          const closePnl = pos.side === "long" ? (cp - pos.entry) * pos.qty : (pos.entry - cp) * pos.qty;
+          s.equity += closePnl;
+          s.trades.push({ symbol: pos.symbol, side: pos.side, qty: pos.qty, entry: pos.entry, exit: cp, pnl: closePnl, timestamp: new Date().toISOString() });
+          s.positions.splice(idx, 1);
+          stSave(s); stRender();
+        });
+        const closeTd = document.createElement("td"); closeTd.style.cssText = "padding:3px;"; closeTd.appendChild(closeBtn);
+        tr.appendChild(closeTd); table.appendChild(tr);
+      }
+      stPosContainer.appendChild(table);
+    } else {
+      const empty = document.createElement("div"); empty.style.cssText = "color:#555;text-align:center;padding:8px;"; empty.textContent = "No shadow positions."; stPosContainer.appendChild(empty);
+    }
+
+    stPerfContainer.textContent = "";
+    const perfLabel = document.createElement("div"); perfLabel.style.cssText = "color:#888;font-weight:bold;margin-bottom:4px;font-size:10px;"; perfLabel.textContent = "Performance Comparison:";
+    stPerfContainer.appendChild(perfLabel);
+    const perfTable = document.createElement("table"); perfTable.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    perfTable.appendChild(theadRow(["Metric", "Real", "Shadow", "Delta"]));
+    const totalPnl = shadow.trades.reduce((s, t) => s + t.pnl, 0);
+    const stWins = shadow.trades.filter(t => t.pnl > 0).length;
+    const stWR = shadow.trades.length > 0 ? (stWins / shadow.trades.length * 100).toFixed(1) + "%" : "--";
+    const stMetrics = [
+      ["Equity", "$100,000*", "$" + shadow.equity.toFixed(2), (shadow.equity - 100000 >= 0 ? "+" : "") + (shadow.equity - 100000).toFixed(2)],
+      ["Trades", "--", String(shadow.trades.length), "--"],
+      ["Closed P&L", "--", (totalPnl >= 0 ? "+" : "") + totalPnl.toFixed(2), "--"],
+      ["Win Rate", "--", stWR, "--"],
+      ["Open Positions", "--", String(shadow.positions.length), "--"],
+    ];
+    for (const [m, real, shad, delta] of stMetrics) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;";
+      tr.appendChild(td(m, "padding:4px;color:#888;"));
+      tr.appendChild(td(real, "padding:4px;text-align:right;"));
+      tr.appendChild(td(shad, "padding:4px;text-align:right;color:#9c27b0;font-weight:bold;"));
+      const deltaClr = delta.startsWith("+") ? "#4caf50" : delta.startsWith("-") ? "#f44336" : "#666";
+      tr.appendChild(td(delta, "padding:4px;text-align:right;color:" + deltaClr + ";"));
+      perfTable.appendChild(tr);
+    }
+    stPerfContainer.appendChild(perfTable);
+    const note = document.createElement("div"); note.style.cssText = "color:#555;font-size:9px;margin-top:4px;"; note.textContent = "*Real equity placeholder — connect to account for live data"; stPerfContainer.appendChild(note);
+  }
+
+  stSyncBtn.addEventListener("click", async () => {
+    try {
+      const posJson = await invoke("get_positions");
+      const positions = JSON.parse(posJson);
+      const shadow = stLoad();
+      const mult = parseFloat(stRiskInput.value) || 2;
+      shadow.positions = positions.map(p => ({ symbol: p.symbol, side: parseFloat(p.qty) > 0 ? "long" : "short", qty: Math.abs(parseFloat(p.qty)) * mult, entry: parseFloat(p.avg_entry_price || p.current_price || 0), timestamp: new Date().toISOString() }));
+      stSave(shadow); stRender();
+      log("Shadow: synced " + positions.length + " positions at " + mult + "x", "ok");
+    } catch (e) { log("Shadow sync failed: " + e, "error"); }
+  });
+
+  stResetBtn.addEventListener("click", () => {
+    if (!confirm("Reset shadow portfolio? All positions and history will be lost.")) return;
+    stSave({ equity: 100000, positions: [], trades: [] }); stRender();
+    log("Shadow portfolio reset", "ok");
+  });
+
+  stAddBtn.addEventListener("click", () => {
+    const shadow = stLoad();
+    const sym = currentSymbol || "SPY";
+    const price = lastPrice || 100;
+    const mult = parseFloat(stRiskInput.value) || 2;
+    const qty = Math.round(10 * mult);
+    shadow.positions.push({ symbol: sym, side: "long", qty, entry: price, timestamp: new Date().toISOString() });
+    stSave(shadow); stRender();
+    log("Shadow: added LONG " + qty + " " + sym + " @ " + price.toFixed(4), "ok");
+  });
+
+  stRender();
+  stInterval = setInterval(stRender, 10000);
+  win.appendElement(stRoot);
+  log("SHADOW-TRADE: paper portfolio opened", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// CHART-DIFF — Compare Two Time Periods Side by Side
+// ══════════════════════════════════════════════════════════════
+function cmdChartDiff() {
+  const cdStartStr = prompt("Enter historical comparison start date (YYYY-MM-DD):", "2020-03-01");
+  if (!cdStartStr || !cdStartStr.trim()) return;
+  if (!currentChartData || currentChartData.length < 20) { log("CHART-DIFF: Load a chart first", "warn"); return; }
+
+  const win = createWindow({ title: "Chart Diff — Period Comparison", width: 680, height: 520 });
+  win.contentElement.textContent = "";
+  const cdRoot = document.createElement("div"); cdRoot.style.cssText = "padding:10px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+
+  const cdStartDate = new Date(cdStartStr.trim());
+  if (isNaN(cdStartDate.getTime())) { cdRoot.appendChild(el("div", "color:#f44336;text-align:center;padding:20px;", "Invalid date: " + cdStartStr)); win.appendElement(cdRoot); return; }
+
+  const cdStartSec = Math.floor(cdStartDate.getTime() / 1000);
+  const cdHistStart = currentChartData.findIndex(b => b.time >= cdStartSec);
+  if (cdHistStart < 0) { cdRoot.appendChild(el("div", "color:#f44336;text-align:center;padding:20px;", "No data found at " + cdStartStr + ". Try a date within the loaded chart range.")); win.appendElement(cdRoot); return; }
+
+  const cdMaxLen = Math.min(120, Math.floor((currentChartData.length - cdHistStart) / 2));
+  if (cdMaxLen < 5) { cdRoot.appendChild(el("div", "color:#f44336;text-align:center;padding:20px;", "Not enough bars for comparison.")); win.appendElement(cdRoot); return; }
+
+  const cdHistBars = currentChartData.slice(cdHistStart, cdHistStart + cdMaxLen);
+  const cdRecentBars = currentChartData.slice(-cdMaxLen);
+  const cdHistBase = cdHistBars[0].close;
+  const cdRecentBase = cdRecentBars[0].close;
+  const cdHistNorm = cdHistBars.map((b, i) => ({ time: i, value: ((b.close - cdHistBase) / cdHistBase) * 100 }));
+  const cdRecentNorm = cdRecentBars.map((b, i) => ({ time: i, value: ((b.close - cdRecentBase) / cdRecentBase) * 100 }));
+
+  const cdHdr = document.createElement("div"); cdHdr.style.cssText = "text-align:center;font-size:13px;font-weight:bold;color:#2196f3;margin-bottom:8px;";
+  cdHdr.textContent = "Current (" + cdMaxLen + " bars) vs " + cdStartStr + " (" + cdMaxLen + " bars)";
+  cdRoot.appendChild(cdHdr);
+
+  const cdCanvas = document.createElement("canvas"); cdCanvas.width = 640; cdCanvas.height = 260; cdCanvas.style.cssText = "width:100%;height:260px;border:1px solid #333;background:#0a0a0a;margin-bottom:10px;";
+  cdRoot.appendChild(cdCanvas);
+
+  const cdCtx = cdCanvas.getContext("2d");
+  const cdW = cdCanvas.width, cdH = cdCanvas.height;
+  const cdPad = { top: 20, right: 60, bottom: 30, left: 10 };
+
+  let cdYMin = Infinity, cdYMax = -Infinity;
+  for (const p of cdHistNorm) { if (p.value < cdYMin) cdYMin = p.value; if (p.value > cdYMax) cdYMax = p.value; }
+  for (const p of cdRecentNorm) { if (p.value < cdYMin) cdYMin = p.value; if (p.value > cdYMax) cdYMax = p.value; }
+  const cdYRange = (cdYMax - cdYMin) || 1;
+  cdYMin -= cdYRange * 0.05; cdYMax += cdYRange * 0.05;
+
+  function cdXPos(i) { return cdPad.left + (i / (cdMaxLen - 1)) * (cdW - cdPad.left - cdPad.right); }
+  function cdYPos(v) { return cdPad.top + (1 - (v - cdYMin) / (cdYMax - cdYMin)) * (cdH - cdPad.top - cdPad.bottom); }
+
+  cdCtx.strokeStyle = "#222"; cdCtx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = cdPad.top + (i / 4) * (cdH - cdPad.top - cdPad.bottom);
+    cdCtx.beginPath(); cdCtx.moveTo(cdPad.left, y); cdCtx.lineTo(cdW - cdPad.right, y); cdCtx.stroke();
+    const val = cdYMax - (i / 4) * (cdYMax - cdYMin);
+    cdCtx.fillStyle = "#666"; cdCtx.font = "10px Consolas"; cdCtx.textAlign = "right";
+    cdCtx.fillText(val.toFixed(1) + "%", cdW - 4, y + 4);
+  }
+
+  if (cdYMin < 0 && cdYMax > 0) {
+    cdCtx.strokeStyle = "#444"; cdCtx.lineWidth = 1; cdCtx.setLineDash([4, 4]);
+    cdCtx.beginPath(); cdCtx.moveTo(cdPad.left, cdYPos(0)); cdCtx.lineTo(cdW - cdPad.right, cdYPos(0)); cdCtx.stroke();
+    cdCtx.setLineDash([]);
+  }
+
+  cdCtx.strokeStyle = "#ff9800"; cdCtx.lineWidth = 2; cdCtx.setLineDash([6, 3]);
+  cdCtx.beginPath();
+  for (let i = 0; i < cdHistNorm.length; i++) { const x = cdXPos(i), y = cdYPos(cdHistNorm[i].value); if (i === 0) cdCtx.moveTo(x, y); else cdCtx.lineTo(x, y); }
+  cdCtx.stroke(); cdCtx.setLineDash([]);
+
+  cdCtx.strokeStyle = "#2196f3"; cdCtx.lineWidth = 2;
+  cdCtx.beginPath();
+  for (let i = 0; i < cdRecentNorm.length; i++) { const x = cdXPos(i), y = cdYPos(cdRecentNorm[i].value); if (i === 0) cdCtx.moveTo(x, y); else cdCtx.lineTo(x, y); }
+  cdCtx.stroke();
+
+  cdCtx.fillStyle = "#2196f3"; cdCtx.fillRect(cdPad.left + 10, 6, 20, 3);
+  cdCtx.fillStyle = "#ccc"; cdCtx.font = "10px Consolas"; cdCtx.textAlign = "left"; cdCtx.fillText("Current", cdPad.left + 34, 10);
+  cdCtx.fillStyle = "#ff9800"; cdCtx.setLineDash([4, 3]); cdCtx.beginPath(); cdCtx.moveTo(cdPad.left + 120, 8); cdCtx.lineTo(cdPad.left + 140, 8); cdCtx.stroke(); cdCtx.setLineDash([]);
+  cdCtx.fillStyle = "#ccc"; cdCtx.fillText(cdStartStr, cdPad.left + 144, 10);
+
+  const cdStatsDiv = document.createElement("div"); cdStatsDiv.style.cssText = "padding:8px;background:#111;border:1px solid #333;";
+  const cdN = Math.min(cdHistNorm.length, cdRecentNorm.length);
+  let cdSumXY = 0, cdSumX2 = 0, cdSumY2 = 0, cdSumX = 0, cdSumY = 0;
+  for (let i = 0; i < cdN; i++) {
+    const x = cdHistNorm[i].value, y = cdRecentNorm[i].value;
+    cdSumX += x; cdSumY += y; cdSumXY += x * y; cdSumX2 += x * x; cdSumY2 += y * y;
+  }
+  const cdCorr = cdN > 1 ? (cdN * cdSumXY - cdSumX * cdSumY) / (Math.sqrt((cdN * cdSumX2 - cdSumX * cdSumX) * (cdN * cdSumY2 - cdSumY * cdSumY)) || 1) : 0;
+  let cdMaxDiv = 0;
+  for (let i = 0; i < cdN; i++) { const d = Math.abs(cdHistNorm[i].value - cdRecentNorm[i].value); if (d > cdMaxDiv) cdMaxDiv = d; }
+  const cdCorrClr = cdCorr > 0.5 ? "#4caf50" : cdCorr > 0 ? "#ff9800" : "#f44336";
+  const cdStatsTable = document.createElement("table"); cdStatsTable.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+  const cdStatsData = [
+    ["Correlation", cdCorr.toFixed(4), cdCorrClr],
+    ["Max Divergence", cdMaxDiv.toFixed(2) + "%", "#ff9800"],
+    ["Historical Return", cdHistNorm[cdHistNorm.length - 1].value.toFixed(2) + "%", cdHistNorm[cdHistNorm.length - 1].value >= 0 ? "#4caf50" : "#f44336"],
+    ["Current Return", cdRecentNorm[cdRecentNorm.length - 1].value.toFixed(2) + "%", cdRecentNorm[cdRecentNorm.length - 1].value >= 0 ? "#4caf50" : "#f44336"],
+    ["Bars Compared", String(cdMaxLen), "#888"],
+  ];
+  for (const [label, val, clr] of cdStatsData) {
+    const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;";
+    tr.appendChild(td(label, "padding:3px 6px;color:#888;"));
+    tr.appendChild(td(val, "padding:3px 6px;text-align:right;color:" + clr + ";font-weight:bold;"));
+    cdStatsTable.appendChild(tr);
+  }
+  cdStatsDiv.appendChild(cdStatsTable);
+  cdRoot.appendChild(cdStatsDiv);
+  win.appendElement(cdRoot);
+  log("CHART-DIFF: comparing current vs " + cdStartStr + " (" + cdMaxLen + " bars, corr=" + cdCorr.toFixed(3) + ")", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// AUTOCOMPLETE-AI — Smart Symbol Suggestions
+// ══════════════════════════════════════════════════════════════
+function cmdAutocompleteAI() {
+  const AC_KEY = "typhoon_smart_autocomplete";
+  const acEnabled = localStorage.getItem(AC_KEY) === "true";
+
+  const win = createWindow({ title: "Smart Autocomplete Config", width: 460, height: 420 });
+  win.contentElement.textContent = "";
+  const acRoot = document.createElement("div"); acRoot.style.cssText = "padding:10px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+  const acHdr = document.createElement("div"); acHdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:10px;"; acHdr.textContent = "Smart Autocomplete"; acRoot.appendChild(acHdr);
+
+  const acToggleRow = document.createElement("div"); acToggleRow.style.cssText = "display:flex;align-items:center;gap:12px;margin-bottom:12px;padding:8px;background:#111;border:1px solid #333;";
+  const acToggleLabel = document.createElement("span"); acToggleLabel.style.cssText = "flex:1;font-weight:bold;"; acToggleLabel.textContent = "Smart Suggestions";
+  const acToggleBtn = document.createElement("button");
+  acToggleBtn.style.cssText = "padding:6px 16px;font-family:inherit;font-size:11px;cursor:pointer;border:1px solid " + (acEnabled ? "#4caf50" : "#666") + ";background:" + (acEnabled ? "#1b5e20" : "#222") + ";color:#fff;";
+  acToggleBtn.textContent = acEnabled ? "ON" : "OFF";
+  acToggleBtn.addEventListener("click", () => {
+    const now = localStorage.getItem(AC_KEY) !== "true";
+    localStorage.setItem(AC_KEY, now ? "true" : "false");
+    acToggleBtn.textContent = now ? "ON" : "OFF";
+    acToggleBtn.style.background = now ? "#1b5e20" : "#222";
+    acToggleBtn.style.borderColor = now ? "#4caf50" : "#666";
+    setupSmartAutocomplete();
+    log("Smart autocomplete " + (now ? "enabled" : "disabled"), "ok");
+  });
+  acToggleRow.appendChild(acToggleLabel); acToggleRow.appendChild(acToggleBtn); acRoot.appendChild(acToggleRow);
+
+  const acSrcLabel = document.createElement("div"); acSrcLabel.style.cssText = "color:#888;font-weight:bold;margin-bottom:6px;font-size:10px;"; acSrcLabel.textContent = "Suggestion Sources:";
+  acRoot.appendChild(acSrcLabel);
+
+  const acSources = [
+    { key: "typhoon_ac_recent", label: "Recently Traded (top 5 by frequency)" },
+    { key: "typhoon_ac_correlated", label: "Correlated Symbols (top 3 with current)" },
+    { key: "typhoon_ac_watchlist", label: "Watchlist Symbols" },
+  ];
+  for (const src of acSources) {
+    const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;gap:8px;padding:4px 0;";
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = localStorage.getItem(src.key) !== "false";
+    cb.addEventListener("change", () => { localStorage.setItem(src.key, cb.checked ? "true" : "false"); });
+    const lbl = document.createElement("span"); lbl.textContent = src.label;
+    row.appendChild(cb); row.appendChild(lbl); acRoot.appendChild(row);
+  }
+
+  const acRecentDiv = document.createElement("div"); acRecentDiv.style.cssText = "margin-top:12px;padding:8px;background:#111;border:1px solid #333;";
+  const acRecentLabel = document.createElement("div"); acRecentLabel.style.cssText = "color:#888;font-weight:bold;margin-bottom:6px;font-size:10px;"; acRecentLabel.textContent = "Recently Loaded Symbols:";
+  acRecentDiv.appendChild(acRecentLabel);
+
+  const acHist = window._commandHistory || [];
+  const acSymFreq = {};
+  for (const h of acHist) { if (h.symbol) acSymFreq[h.symbol] = (acSymFreq[h.symbol] || 0) + 1; }
+  const acCacheKeys = Object.keys(barCache || {});
+  for (const k of acCacheKeys) { const sym = k.split(":")[0]; if (sym) acSymFreq[sym] = (acSymFreq[sym] || 0) + 1; }
+
+  const acTopSymbols = Object.entries(acSymFreq).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  if (acTopSymbols.length > 0) {
+    const symList = document.createElement("div"); symList.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;";
+    for (const [sym, count] of acTopSymbols) {
+      const badge = document.createElement("span"); badge.style.cssText = "padding:3px 8px;background:#1a1a2e;border:1px solid #333;color:#2196f3;cursor:pointer;font-size:10px;";
+      badge.textContent = sym + " (" + count + ")";
+      badge.addEventListener("click", () => {
+        const inp = document.getElementById("symbol-input");
+        if (inp) { inp.value = sym; inp.dispatchEvent(new Event("input")); }
+      });
+      symList.appendChild(badge);
+    }
+    acRecentDiv.appendChild(symList);
+  } else {
+    const noData = document.createElement("div"); noData.style.cssText = "color:#555;"; noData.textContent = "No symbol history yet."; acRecentDiv.appendChild(noData);
+  }
+  acRoot.appendChild(acRecentDiv);
+
+  if (currentSymbol) {
+    const acCorrDiv = document.createElement("div"); acCorrDiv.style.cssText = "margin-top:12px;padding:8px;background:#111;border:1px solid #333;";
+    const acCorrLabel = document.createElement("div"); acCorrLabel.style.cssText = "color:#888;font-weight:bold;margin-bottom:6px;font-size:10px;"; acCorrLabel.textContent = "Correlated with " + currentSymbol + ":";
+    acCorrDiv.appendChild(acCorrLabel);
+    const acCorrNote = document.createElement("div"); acCorrNote.style.cssText = "color:#555;font-size:10px;"; acCorrNote.textContent = "Correlations are computed from barCache data when available."; acCorrDiv.appendChild(acCorrNote);
+    acRoot.appendChild(acCorrDiv);
+  }
+
+  win.appendElement(acRoot);
+  setupSmartAutocomplete();
+  log("AUTOCOMPLETE-AI: smart suggestions configured", "ok");
+}
+
+function setupSmartAutocomplete() {
+  if (localStorage.getItem("typhoon_smart_autocomplete") !== "true") {
+    if (window._smartACHandler) {
+      const inp = document.getElementById("symbol-input");
+      if (inp) inp.removeEventListener("focus", window._smartACHandler);
+      window._smartACHandler = null;
+    }
+    return;
+  }
+  const acInput = document.getElementById("symbol-input");
+  const acList = document.getElementById("symbol-autocomplete");
+  if (!acInput || !acList) return;
+
+  if (window._smartACHandler) acInput.removeEventListener("focus", window._smartACHandler);
+
+  window._smartACHandler = function() {
+    if (acInput.value.trim().length > 0) return;
+    const suggestions = [];
+
+    if (localStorage.getItem("typhoon_ac_recent") !== "false") {
+      const hist = window._commandHistory || [];
+      const freq = {};
+      for (const h of hist) { if (h.symbol) freq[h.symbol] = (freq[h.symbol] || 0) + 1; }
+      const cKeys = Object.keys(barCache || {});
+      for (const k of cKeys) { const sym = k.split(":")[0]; if (sym) freq[sym] = (freq[sym] || 0) + 1; }
+      const top5 = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      for (const [sym] of top5) suggestions.push({ sym, tag: "Recent" });
+    }
+
+    if (localStorage.getItem("typhoon_ac_watchlist") !== "false") {
+      try {
+        const wl = JSON.parse(localStorage.getItem("typhoon_watchlist") || "[]");
+        for (const sym of wl.slice(0, 5)) {
+          if (!suggestions.find(s => s.sym === sym)) suggestions.push({ sym, tag: "Watchlist" });
+        }
+      } catch (_) {}
+    }
+
+    if (suggestions.length === 0) return;
+
+    acList.textContent = "";
+    autocompleteIndex = -1;
+
+    const acSugHdr = document.createElement("div"); acSugHdr.style.cssText = "padding:4px 8px;color:#888;font-size:9px;font-weight:bold;border-bottom:1px solid #333;background:#111;"; acSugHdr.textContent = "SUGGESTED"; acList.appendChild(acSugHdr);
+
+    for (const s of suggestions) {
+      const item = document.createElement("div"); item.className = "autocomplete-item";
+      const symSpan = document.createElement("span"); symSpan.className = "sym"; symSpan.textContent = s.sym;
+      const nameSpan = document.createElement("span"); nameSpan.className = "name"; nameSpan.textContent = s.tag;
+      item.appendChild(symSpan); item.appendChild(nameSpan);
+      item.addEventListener("mousedown", (e) => { e.preventDefault(); acInput.value = s.sym; acList.classList.add("hidden"); acInput.dispatchEvent(new Event("input")); });
+      acList.appendChild(item);
+    }
+    acList.classList.remove("hidden");
+  };
+
+  acInput.addEventListener("focus", window._smartACHandler);
+}
+
+if (localStorage.getItem("typhoon_smart_autocomplete") === "true") { setTimeout(setupSmartAutocomplete, 1000); }
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
