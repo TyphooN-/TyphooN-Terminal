@@ -8817,11 +8817,15 @@ async function loadMTFCellData(cellInfo, symbol) {
         const fibBars = chartData.filter(d => d.time >= fib.startTime);
         if (fibBars.length >= 2) {
           const keyLevels = fib.levels.filter(l => {
-            if (!["38.2%", "50%", "61.8%", "161.8%"].includes(l.label)) return false;
-            // Skip fib levels far outside visible price range
-            return l.price >= recentLow - priceRange * 2 && l.price <= recentHigh + priceRange * 2;
+            // Show all fib levels (retracement + extension up to 423.6%)
+            return l.price >= recentLow - priceRange * 3 && l.price <= recentHigh + priceRange * 3;
           });
-          const colors = { "38.2%": "#ffeb3b", "50%": "#8bc34a", "61.8%": "#00bcd4", "161.8%": "#ff5722" };
+          const colors = {
+            "0%": "#888", "23.6%": "#9c27b0", "38.2%": "#ffeb3b", "50%": "#8bc34a",
+            "61.8%": "#00bcd4", "78.6%": "#e91e63", "100%": "#888",
+            "127.2%": "#ff9800", "161.8%": "#ff5722", "200%": "#f44336",
+            "261.8%": "#d32f2f", "361.8%": "#b71c1c", "423.6%": "#880e4f",
+          };
           for (const level of keyLevels) {
             addLine(colors[level.label] || "#888", 0.8, fibBars.map(d => ({ time: d.time, value: level.price })));
           }
