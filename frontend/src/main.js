@@ -2947,7 +2947,7 @@ async function prefetchAllTimeframes(symbol, currentTF) {
 
     // No cached data — initial fetch (max bars for this timeframe)
     try {
-      const barsJson = await invokeQuiet("get_bars", { symbol, timeframe: tf, limit: 10000 });
+      const barsJson = await invokeQuiet("get_bars", { symbol, timeframe: tf, limit: 2000 });
       const bars = JSON.parse(barsJson);
       if (bars.length > 0) {
         barCache[cacheKey] = { data: bars, timestamp: Date.now() };
@@ -3623,62 +3623,56 @@ function setupKeyboard() {
   document.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
     switch (e.key) {
-      case "b": document.getElementById("btn-buy-lines").click(); break;
-      case "s": document.getElementById("btn-sell-lines").click(); break;
-      case "d": document.getElementById("btn-destroy-lines").click(); break;
-      case "t": document.getElementById("btn-trade").click(); break;
-      case "m": document.getElementById("btn-martingale").click(); break;
-      case "o": document.getElementById("btn-open-mg").click(); break;
-      case "c": document.getElementById("btn-close-all").click(); break;
-      case "p": document.getElementById("btn-close-partial").click(); break;
+      // ── F-keys (primary actions) ──
+      case "F1": e.preventDefault(); showHelpOverlay(); break;
+      case "F2": document.getElementById("btn-buy-lines").click(); break;
+      case "F3": document.getElementById("btn-sell-lines").click(); break;
+      case "F4": document.getElementById("btn-trade").click(); break;
+      case "F5": e.preventDefault(); document.getElementById("btn-destroy-lines").click(); break;
+      case "F6": document.getElementById("btn-martingale").click(); break;
+      case "F7": document.getElementById("btn-close-all").click(); break;
+      case "F8": document.getElementById("btn-close-partial").click(); break;
+
+      // ── Single-key shortcuts ──
       case "Escape": removeSLLine(); removeTPLine(); break;
-      case "a":
-        if (currentSymbol && lastPrice > 0) {
-          const dir = prompt("Alert direction (above/below):", "above");
-          if (dir === "above" || dir === "below") addPriceAlert(currentSymbol, lastPrice, dir);
-        }
-        break;
-      case "h": updateOrdersPanel(); break;
-      case "l": // trend Line
-        drawingMode = "trendline"; drawingAnchor = null;
-        document.getElementById("chart-container").style.cursor = "crosshair";
-        log("Drawing mode: trend line — click two points", "info");
-        break;
-      case "f": // Fibonacci
-        drawingMode = "fibonacci"; drawingAnchor = null;
-        document.getElementById("chart-container").style.cursor = "crosshair";
-        log("Drawing mode: Fibonacci — click high and low points", "info");
-        break;
-      case "x": // delete last drawing
+      case "?": showHelpOverlay(); break;
+      case "Delete":
         if (drawings.length > 0) {
           drawings.pop(); saveDrawings(); renderDrawings(); renderDrawingsExtended();
           log("Deleted last drawing", "info");
         }
         break;
-      case "e": // ray (extends right from two points)
-        drawingMode = "ray"; drawingAnchor = null;
+
+      // ── Drawing tools (lowercase letters) ──
+      case "l": // trend Line
+        drawingMode = "trendline"; drawingAnchor = null;
         document.getElementById("chart-container").style.cursor = "crosshair";
-        log("Drawing mode: ray — click two points (extends right)", "info");
+        log("Drawing: trend line — click two points", "info");
         break;
-      case "j": // ruler / price range measure
-        drawingMode = "ruler"; drawingAnchor = null;
+      case "f": // Fibonacci
+        drawingMode = "fibonacci"; drawingAnchor = null;
         document.getElementById("chart-container").style.cursor = "crosshair";
-        log("Ruler mode: click two points to measure", "info");
+        log("Drawing: Fibonacci — click high and low", "info");
         break;
-      case "n": // horizontal line
+      case "h": // Horizontal line
         drawingMode = "horizontal"; drawingAnchor = null; channelThirdClick = false;
         document.getElementById("chart-container").style.cursor = "crosshair";
-        log("Drawing mode: horizontal line — click to place", "info");
+        log("Drawing: horizontal line — click to place", "info");
         break;
-      case "r": // rectangle
+      case "r": // Rectangle
         drawingMode = "rectangle"; drawingAnchor = null; channelThirdClick = false;
         document.getElementById("chart-container").style.cursor = "crosshair";
-        log("Drawing mode: rectangle — click two corners", "info");
+        log("Drawing: rectangle — click two corners", "info");
         break;
-      case "y": // channel (parallel)
+      case "e": // ray
+        drawingMode = "ray"; drawingAnchor = null;
+        document.getElementById("chart-container").style.cursor = "crosshair";
+        log("Drawing: ray — click two points (extends right)", "info");
+        break;
+      case "c": // channel
         drawingMode = "channel"; drawingAnchor = null; channelThirdClick = false;
         document.getElementById("chart-container").style.cursor = "crosshair";
-        log("Drawing mode: channel — click two points + offset", "info");
+        log("Drawing: channel — click two points + offset", "info");
         break;
       case "w":
         if (e.altKey) { closeAllWindows(); e.preventDefault(); }
@@ -5246,6 +5240,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "OPTSTRAT", desc: "Options strategy builder (spreads, condors)", action: cmdOptionsStrategy },
   { name: "AUTOTRADE", desc: "Strategy auto-trading (JS plugin → live orders)", action: cmdAutoTrade },
   { name: "CHAT", desc: "Community chat (Matrix)", action: cmdMatrixChat },
+  { name: "HELP", desc: "Keybindings, commands & feature reference", action: showHelpOverlay },
   { name: "TILE", desc: "Tile all floating windows", action: () => tileWindows() },
   { name: "CLOSE", desc: "Close all floating windows", action: () => closeAllWindows() },
 ];
@@ -11141,6 +11136,138 @@ function cmdMatrixChat() {
   }
 
   win.appendElement(container);
+}
+
+// ── Help / About Overlay (? or F1) ──────────────────────────
+function showHelpOverlay() {
+  // Remove existing overlay if open
+  const existing = document.getElementById("help-overlay");
+  if (existing) { existing.remove(); return; }
+
+  const overlay = document.createElement("div");
+  overlay.id = "help-overlay";
+  overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;justify-content:center;align-items:center;";
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+  const panel = document.createElement("div");
+  panel.style.cssText = "background:#0a0a14;border:1px solid #333;border-radius:8px;padding:24px;max-width:800px;max-height:80vh;overflow-y:auto;color:#ccc;font-family:Consolas,monospace;font-size:12px;";
+
+  const title = document.createElement("h2");
+  title.textContent = "TyphooN Terminal — Help & Keybindings";
+  title.style.cssText = "color:#4caf50;margin:0 0 16px;font-size:18px;text-align:center;";
+  panel.appendChild(title);
+
+  const subtitle = document.createElement("div");
+  subtitle.textContent = "GPU-accelerated trading terminal for Alpaca Markets. Press ? or F1 to toggle this help.";
+  subtitle.style.cssText = "color:#888;text-align:center;margin-bottom:16px;font-size:11px;";
+  panel.appendChild(subtitle);
+
+  const sections = [
+    { title: "F-Keys (Trading)", keys: [
+      ["F1", "Help & Keybindings (this screen)"],
+      ["F2", "Buy Lines (SL low, TP high)"],
+      ["F3", "Sell Lines (SL high, TP low)"],
+      ["F4", "Open Trade (calculates lots, places order)"],
+      ["F5", "Destroy SL/TP Lines"],
+      ["F6", "Cycle Martingale Mode"],
+      ["F7", "Close All Positions"],
+      ["F8", "Close Partial Position"],
+    ]},
+    { title: "Drawing Tools", keys: [
+      ["L", "Trend Line (click two points)"],
+      ["F", "Fibonacci Retracement (click high/low)"],
+      ["H", "Horizontal Line (click to place)"],
+      ["R", "Rectangle (click two corners)"],
+      ["E", "Ray (extends right from two points)"],
+      ["C", "Channel (parallel lines)"],
+      ["Delete", "Remove Last Drawing"],
+    ]},
+    { title: "Navigation", keys: [
+      ["Ctrl+K", "Command Palette (search all commands)"],
+      ["Ctrl+T", "New Tab"],
+      ["Ctrl+W", "Close Tab"],
+      ["Esc", "Clear SL/TP Lines"],
+      ["?", "This Help Screen"],
+    ]},
+    { title: "Chart Types (GPU + CPU)", keys: [
+      ["GPU Candles", "WebGL2 candlestick rendering (default)"],
+      ["GPU Heikin-Ashi", "Smoothed HA candles on GPU"],
+      ["GPU Line", "Close-price line on GPU"],
+      ["GPU OHLC Bars", "Open-High-Low-Close bars on GPU"],
+      ["GPU Renko", "ATR-based brick chart on GPU"],
+      ["CPU variants", "lightweight-charts fallback (bottom of dropdown)"],
+    ]},
+    { title: "Command Palette (Ctrl+K)", keys: [
+      ["DES", "Company fundamentals (SEC EDGAR)"],
+      ["NEWS", "News headlines"],
+      ["FA", "Financial analysis (income/balance/cash flow)"],
+      ["OPT", "Options chain (Greeks, bid/ask)"],
+      ["SCAN", "Stock screener"],
+      ["BACKTEST", "Visual backtester (SMA Cross, NNFX)"],
+      ["OPTIMIZE", "Grid search optimizer"],
+      ["OPTCALC", "Options P&L calculator (payoff diagram)"],
+      ["OPTSTRAT", "Options strategy builder"],
+      ["SECTORS", "Sector rotation heatmap (S&P 500 ETFs)"],
+      ["ECON", "Economic calendar with countdown"],
+      ["CHAT", "Community chat (Matrix protocol)"],
+      ["AUTOTRADE", "Strategy auto-trading framework"],
+      ["ALERTS", "Multi-condition alert manager"],
+      ["ALERTBOARD", "Multi-symbol alert dashboard"],
+      ["PORTFOLIO", "Portfolio breakdown by sector"],
+      ["CORR", "Correlation matrix"],
+      ["MONTECARLO", "Monte Carlo risk of ruin"],
+      ["PATTERNS", "Pattern recognition (H&S, Double Top)"],
+      ["SENTIMENT", "News sentiment analysis"],
+      ["AI", "AI trading assistant (Claude/GPT)"],
+      ["SETTINGS", "API keys & configuration"],
+      ["HELP", "This help screen"],
+    ]},
+    { title: "Architecture", keys: [
+      ["GPU Charts", "WebGL2 (49KB Wasm) — all GPUs via WebGL2"],
+      ["Wasm Indicators", "32KB Wasm — 50-100x faster optimizer"],
+      ["Binary Storage", "Packed f64 + zstd — 3-5x smaller than JSON"],
+      ["Encryption", "AES-256-GCM + PBKDF2 100K iterations"],
+      ["Headless CLI", "--backtest flag for VPS/SSH strategy runs"],
+    ]},
+  ];
+
+  for (const section of sections) {
+    const hdr = document.createElement("div");
+    hdr.textContent = section.title;
+    hdr.style.cssText = "color:#ff8;font-weight:bold;font-size:13px;margin:12px 0 6px;border-bottom:1px solid #333;padding-bottom:4px;";
+    panel.appendChild(hdr);
+
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:grid;grid-template-columns:120px 1fr;gap:2px 12px;";
+    for (const [key, desc] of section.keys) {
+      const k = document.createElement("span");
+      k.textContent = key;
+      k.style.cssText = "color:#8cf;font-weight:bold;";
+      const d = document.createElement("span");
+      d.textContent = desc;
+      d.style.cssText = "color:#aaa;";
+      grid.appendChild(k);
+      grid.appendChild(d);
+    }
+    panel.appendChild(grid);
+  }
+
+  const footer = document.createElement("div");
+  footer.style.cssText = "margin-top:16px;text-align:center;color:#555;font-size:10px;";
+  footer.textContent = "TyphooN Terminal v0.1.0 — Apache-2.0 — github.com/TyphooN-/TyphooN-Terminal";
+  panel.appendChild(footer);
+
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+
+  // Close on Escape
+  const closeHandler = (e) => {
+    if (e.key === "Escape" || e.key === "?" || e.key === "F1") {
+      overlay.remove();
+      document.removeEventListener("keydown", closeHandler);
+    }
+  };
+  document.addEventListener("keydown", closeHandler);
 }
 
 async function checkWatchlistSMA200Alerts() {
