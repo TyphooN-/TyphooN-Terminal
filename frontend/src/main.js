@@ -13324,7 +13324,580 @@ function cmdWorkspace() {
   win.appendElement(root); log("Workspace manager opened", "ok");
 }
 
+// ── Wave 6: Chart modes, alerts, benchmarks, dashboards ───────
+
+function cmdHeatmapLive() {
+  const win = createWindow({ title: "Live Watchlist Heatmap", width: 500, height: 400 });
+  const refresh = async () => {
+    try {
+      const symbols = getWatchlist();
+      if (symbols.length === 0) { win.setContent("Add symbols to watchlist first."); return; }
+      const items = [];
+      for (const sym of symbols.slice(0, 30)) {
+        const ck = getCacheKey(sym, "1Day");
+        const cached = barCache[ck];
+        if (cached && cached.data && cached.data.length >= 2) {
+          const bars = cached.data;
+          const cur = bars[bars.length - 1].close || bars[bars.length - 1].c;
+          const prev = bars[bars.length - 2].close || bars[bars.length - 2].c;
+          const pct = prev > 0 ? ((cur - prev) / prev * 100) : 0;
+          items.push({ symbol: sym, pct });
+        }
+      }
+      if (items.length === 0) { win.setContent("No cached daily data. Load symbols first."); return; }
+      const frag = document.createDocumentFragment();
+      const grid = document.createElement("div");
+      grid.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;padding:4px;";
+      for (const it of items) {
+        const box = document.createElement("div");
+        const intensity = Math.min(Math.abs(it.pct) / 3, 1);
+        const r = it.pct < 0 ? Math.round(40 + intensity * 180) : 20;
+        const g = it.pct >= 0 ? Math.round(40 + intensity * 180) : 20;
+        box.style.cssText = `background:rgb(${r},${g},30);padding:8px;border-radius:3px;text-align:center;min-width:70px;cursor:pointer;`;
+        const sym = document.createElement("div"); sym.style.cssText = "font-size:11px;font-weight:bold;color:#fff;"; sym.textContent = it.symbol;
+        const pct = document.createElement("div"); pct.style.cssText = "font-size:10px;color:#ddd;font-family:Consolas,monospace;"; pct.textContent = (it.pct >= 0 ? "+" : "") + it.pct.toFixed(2) + "%";
+        box.appendChild(sym); box.appendChild(pct);
+        box.addEventListener("click", () => { document.getElementById("symbol-input").value = it.symbol; triggerLoad(); });
+        grid.appendChild(box);
+      }
+      frag.appendChild(grid);
+      win.contentElement.replaceChildren(frag);
+    } catch (_) {}
+  };
+  refresh();
+  const iv = setInterval(refresh, 30000);
+  win.onClose = () => clearInterval(iv);
+}
+
+function cmdDepthChart() {
+  const win = createWindow({ title: `Depth Chart — ${currentSymbol}`, width: 500, height: 350 });
+  const refresh = async () => {
+    try {
+      const json = await invoke("get_orderbook", { symbol: currentSymbol });
+      const ob = JSON.parse(json);
+      if (!ob.bids || !ob.asks || ob.bids.length === 0) { win.setContent("No orderbook data (available for crypto symbols)."); return; }
+      const bids = ob.bids.sort((a, b) => b.price - a.price);
+      const asks = ob.asks.sort((a, b) => a.price - b.price);
+      let cumBid = 0, cumAsk = 0;
+      const bidData = bids.map(b => { cumBid += b.size; return { price: b.price, cum: cumBid }; });
+      const askData = asks.map(a => { cumAsk += a.size; return { price: a.price, cum: cumAsk }; });
+      // Render as simple CSS bars
+      const frag = document.createDocumentFragment();
+      const maxCum = Math.max(cumBid, cumAsk);
+      const container = document.createElement("div"); container.style.cssText = "display:flex;gap:2px;height:250px;align-items:flex-end;padding:4px;";
+      // Bids (green, left)
+      for (const b of bidData.slice(0, 20).reverse()) {
+        const bar = document.createElement("div");
+        const h = maxCum > 0 ? (b.cum / maxCum * 200) : 0;
+        bar.style.cssText = `width:10px;height:${h}px;background:#4caf50;border-radius:1px;`;
+        bar.title = `$${b.price.toFixed(2)}: ${b.cum.toFixed(2)} cumulative`;
+        container.appendChild(bar);
+      }
+      // Separator
+      const sep = document.createElement("div"); sep.style.cssText = "width:2px;height:220px;background:#fff;margin:0 4px;"; container.appendChild(sep);
+      // Asks (red, right)
+      for (const a of askData.slice(0, 20)) {
+        const bar = document.createElement("div");
+        const h = maxCum > 0 ? (a.cum / maxCum * 200) : 0;
+        bar.style.cssText = `width:10px;height:${h}px;background:#f44336;border-radius:1px;`;
+        bar.title = `$${a.price.toFixed(2)}: ${a.cum.toFixed(2)} cumulative`;
+        container.appendChild(bar);
+      }
+      frag.appendChild(container);
+      const stats = document.createElement("div"); stats.style.cssText = "font-size:10px;color:#888;padding:4px;text-align:center;";
+      stats.textContent = `Total Bid: ${cumBid.toFixed(2)} | Total Ask: ${cumAsk.toFixed(2)} | Ratio: ${cumAsk > 0 ? (cumBid / cumAsk).toFixed(2) : "N/A"}`;
+      frag.appendChild(stats);
+      win.contentElement.replaceChildren(frag);
+    } catch (e) { win.setContent("Failed: " + e); }
+  };
+  refresh();
+  const iv = setInterval(refresh, 5000);
+  win.onClose = () => clearInterval(iv);
+}
+
+function cmdRiskDashboard() {
+  const win = createWindow({ title: "Risk Control Center", width: 420, height: 400 });
+  const refresh = async () => {
+    try {
+      const [miJson, posJson] = await Promise.all([invoke("get_margin_info"), invoke("get_positions")]);
+      const mi = JSON.parse(miJson); const positions = JSON.parse(posJson);
+      const totalValue = positions.reduce((s, p) => s + Math.abs(p.qty * p.current_price), 0);
+      const totalPL = positions.reduce((s, p) => s + p.unrealized_pl, 0);
+      const weights = positions.map(p => Math.abs(p.qty * p.current_price) / (totalValue || 1));
+      const hhi = weights.reduce((s, w) => s + w * w, 0);
+      const largest = positions.length > 0 ? Math.max(...weights) * 100 : 0;
+      // PDT count
+      let pdtCount = 0;
+      try { const oh = JSON.parse(await invoke("get_order_history", { limit: 50 })); /* simplified */ pdtCount = 0; } catch (_) {}
+      // Alert count
+      let alertCount = 0;
+      try { alertCount += JSON.parse(localStorage.getItem("typhoon_price_alerts") || "[]").filter(a => !a.triggered).length; } catch (_) {}
+      try { alertCount += JSON.parse(localStorage.getItem("typhoon_conditional_orders") || "[]").filter(c => c.status === "active").length; } catch (_) {}
+      const cards = [
+        { label: "Margin Level", value: mi.margin_level_pct ? mi.margin_level_pct.toFixed(1) + "%" : "—", color: mi.margin_level_pct > 200 ? "#4caf50" : mi.margin_level_pct > 100 ? "#ff9800" : "#f44336" },
+        { label: "Equity", value: "$" + mi.equity.toFixed(2), color: "#2196f3" },
+        { label: "Total P&L", value: "$" + totalPL.toFixed(2), color: totalPL >= 0 ? "#4caf50" : "#f44336" },
+        { label: "Positions", value: positions.length.toString(), color: "#ccc" },
+        { label: "Largest Weight", value: largest.toFixed(1) + "%", color: largest > 50 ? "#f44336" : largest > 30 ? "#ff9800" : "#4caf50" },
+        { label: "HHI Concentration", value: hhi.toFixed(3), color: hhi > 0.5 ? "#f44336" : hhi > 0.25 ? "#ff9800" : "#4caf50" },
+        { label: "Active Alerts", value: alertCount.toString(), color: "#2196f3" },
+      ];
+      const overall = mi.margin_level_pct < 150 || largest > 60 || hhi > 0.5 ? "DANGER" : mi.margin_level_pct < 300 || largest > 40 ? "ATTENTION" : "ALL CLEAR";
+      const overallColor = overall === "ALL CLEAR" ? "#4caf50" : overall === "ATTENTION" ? "#ff9800" : "#f44336";
+      const frag = document.createDocumentFragment();
+      const hdr = document.createElement("div"); hdr.style.cssText = `text-align:center;font-size:16px;font-weight:bold;padding:8px;color:${overallColor};border-bottom:1px solid #333;margin-bottom:8px;`; hdr.textContent = overall; frag.appendChild(hdr);
+      const grid = document.createElement("div"); grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px;";
+      for (const c of cards) {
+        const card = document.createElement("div"); card.style.cssText = "background:#111;border:1px solid #333;border-radius:4px;padding:8px;text-align:center;";
+        const lbl = document.createElement("div"); lbl.style.cssText = "font-size:9px;color:#666;"; lbl.textContent = c.label;
+        const val = document.createElement("div"); val.style.cssText = `font-size:14px;font-weight:bold;color:${c.color};font-family:Consolas,monospace;`; val.textContent = c.value;
+        card.appendChild(lbl); card.appendChild(val); grid.appendChild(card);
+      }
+      frag.appendChild(grid);
+      win.contentElement.replaceChildren(frag);
+    } catch (e) { win.setContent("Failed: " + e); }
+  };
+  refresh();
+  const iv = setInterval(refresh, 10000);
+  win.onClose = () => clearInterval(iv);
+}
+
+function cmdTradePlan() {
+  const PLAN_KEY = "typhoon_trade_plans";
+  const loadPlans = () => { try { return JSON.parse(localStorage.getItem(PLAN_KEY) || "[]"); } catch { return []; } };
+  const savePlans = (p) => localStorage.setItem(PLAN_KEY, JSON.stringify(p));
+  const win = createWindow({ title: "Trade Plan Builder", width: 450, height: 500 });
+  const render = () => {
+    const plans = loadPlans();
+    const frag = document.createDocumentFragment();
+    // Form
+    const form = document.createElement("div"); form.style.cssText = "padding:4px;border-bottom:1px solid #333;margin-bottom:6px;";
+    const fields = [
+      { id: "tp-sym", label: "Symbol", value: currentSymbol, type: "text" },
+      { id: "tp-dir", label: "Direction", value: "Long", type: "select", options: ["Long", "Short"] },
+      { id: "tp-entry", label: "Entry $", value: lastPrice.toFixed(2), type: "text" },
+      { id: "tp-sl", label: "Stop Loss $", value: "", type: "text" },
+      { id: "tp-tp", label: "Take Profit $", value: "", type: "text" },
+      { id: "tp-risk", label: "Risk %", value: "1", type: "text" },
+      { id: "tp-setup", label: "Setup", value: "Breakout", type: "select", options: ["Breakout", "Pullback", "Reversal", "Earnings", "Custom"] },
+    ];
+    for (const f of fields) {
+      const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;gap:4px;padding:1px 0;";
+      const lbl = document.createElement("label"); lbl.style.cssText = "width:80px;font-size:10px;color:#888;"; lbl.textContent = f.label;
+      let input;
+      if (f.type === "select") {
+        input = document.createElement("select"); input.style.cssText = "flex:1;background:#111;color:#ccc;border:1px solid #333;padding:2px;font-size:10px;";
+        for (const o of f.options) { const opt = document.createElement("option"); opt.value = o; opt.textContent = o; input.appendChild(opt); }
+        input.value = f.value;
+      } else {
+        input = document.createElement("input"); input.type = "text"; input.value = f.value; input.style.cssText = "flex:1;background:#111;color:#ccc;border:1px solid #333;padding:2px;font-size:10px;";
+      }
+      input.id = f.id;
+      row.appendChild(lbl); row.appendChild(input); form.appendChild(row);
+    }
+    const reason = document.createElement("textarea"); reason.id = "tp-reason"; reason.placeholder = "Reasoning / notes..."; reason.style.cssText = "width:100%;height:40px;background:#111;color:#ccc;border:1px solid #333;font-size:10px;margin-top:4px;resize:vertical;"; form.appendChild(reason);
+    const saveBtn = document.createElement("button"); saveBtn.textContent = "Save Plan"; saveBtn.style.cssText = "margin-top:4px;padding:4px 12px;background:#1b5e20;color:#8f8;border:1px solid #4caf50;cursor:pointer;font-size:10px;width:100%;";
+    saveBtn.addEventListener("click", () => {
+      const plan = { symbol: document.getElementById("tp-sym").value, direction: document.getElementById("tp-dir").value, entry: document.getElementById("tp-entry").value, sl: document.getElementById("tp-sl").value, tp: document.getElementById("tp-tp").value, risk: document.getElementById("tp-risk").value, setup: document.getElementById("tp-setup").value, reason: document.getElementById("tp-reason").value, status: "Pending", date: new Date().toISOString().substring(0, 10) };
+      const all = loadPlans(); all.unshift(plan); savePlans(all.slice(0, 50)); render();
+    });
+    form.appendChild(saveBtn); frag.appendChild(form);
+    // Plans list
+    if (plans.length > 0) {
+      const list = document.createElement("div"); list.style.cssText = "max-height:200px;overflow-y:auto;";
+      for (let i = 0; i < plans.length; i++) {
+        const p = plans[i];
+        const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;padding:3px 4px;border-bottom:1px solid #1a1a2e;font-size:10px;";
+        const info = document.createElement("span"); info.style.color = "#aaa"; info.textContent = `${p.date} ${p.symbol} ${p.direction} @ $${p.entry} [${p.setup}]`;
+        const del = document.createElement("button"); del.textContent = "×"; del.style.cssText = "background:none;border:1px solid #f44;color:#f44;cursor:pointer;font-size:9px;padding:0 4px;";
+        del.addEventListener("click", () => { const all = loadPlans(); all.splice(i, 1); savePlans(all); render(); });
+        row.appendChild(info); row.appendChild(del); list.appendChild(row);
+      }
+      frag.appendChild(list);
+    }
+    win.contentElement.replaceChildren(frag);
+  };
+  render();
+}
+
+function cmdPerformanceChart() {
+  try {
+    const snaps = JSON.parse(localStorage.getItem("typhoon_equity_snapshots") || "[]");
+    if (snaps.length < 2) { log("Not enough equity snapshots. Dashboard needs to run for a few days.", "warn"); return; }
+    const firstEq = snaps[0].equity;
+    const eqData = snaps.map(s => {
+      const d = new Date(s.date || s.ts || Date.now());
+      return { time: Math.floor(d.getTime() / 1000), value: ((s.equity - firstEq) / firstEq * 100) };
+    }).filter(d => d.time > 0);
+    if (eqData.length < 2) { log("Not enough equity data points.", "warn"); return; }
+    const s = chart.addLineSeries({ color: "#00BCD4", lineWidth: 2, lineStyle: 2, priceScaleId: "equity", lastValueVisible: true, title: "Equity %" });
+    chart.priceScale("equity").applyOptions({ scaleMargins: { top: 0.05, bottom: 0.6 }, borderVisible: false });
+    s.setData(eqData);
+    indicatorSeries["performance_equity"] = s;
+    log("Equity curve overlaid on chart (cyan dashed)", "ok");
+  } catch (e) { log("Performance chart failed: " + e, "warn"); }
+}
+
+function cmdRegimeOverlay() {
+  if (!currentChartData || currentChartData.length < 30) { log("Need 30+ bars for regime overlay", "warn"); return; }
+  window._regimeOverlayEnabled = !window._regimeOverlayEnabled;
+  if (!window._regimeOverlayEnabled) {
+    try { candleSeries.setMarkers([]); } catch (_) {}
+    log("Regime overlay: OFF", "ok");
+    return;
+  }
+  const adxData = calcADX(currentChartData, 14);
+  const atrData = calcATR(currentChartData, 14);
+  const markers = [];
+  if (adxData && adxData.adx) {
+    // Compute 20-bar ATR average for spike detection
+    for (let i = 0; i < adxData.adx.length; i++) {
+      const adx = adxData.adx[i];
+      const time = adx.time;
+      let regime = "ranging";
+      if (adx.value > 25) regime = "trending";
+      else if (adx.value < 15) regime = "ranging";
+      else regime = "transition";
+      // Only mark regime changes or every 10 bars
+      if (i % 10 === 0 || (i > 0 && adxData.adx[i-1] && ((adxData.adx[i-1].value > 25) !== (adx.value > 25)))) {
+        const color = regime === "trending" ? "#4caf50" : regime === "ranging" ? "#ff9800" : "#888";
+        const text = regime === "trending" ? "T" : regime === "ranging" ? "R" : "·";
+        markers.push({ time, position: "aboveBar", color, shape: "circle", text });
+      }
+    }
+  }
+  markers.sort((a, b) => a.time - b.time);
+  try { candleSeries.setMarkers(markers); } catch (_) {}
+  log("Regime overlay: ON (T=trending, R=ranging)", "ok");
+}
+
+function cmdDataQuality() {
+  if (!currentChartData || currentChartData.length < 2) { log("No chart data to analyze", "warn"); return; }
+  const win = createWindow({ title: `Data Quality — ${currentSymbol}`, width: 420, height: 400 });
+  const data = currentChartData;
+  const issues = [];
+  // 1. Missing bars (gap > 2× expected interval)
+  const intervals = [];
+  for (let i = 1; i < data.length; i++) intervals.push(data[i].time - data[i-1].time);
+  const medianInterval = intervals.slice().sort((a, b) => a - b)[Math.floor(intervals.length / 2)] || 86400;
+  for (let i = 1; i < data.length; i++) {
+    const gap = data[i].time - data[i-1].time;
+    if (gap > medianInterval * 3) issues.push({ bar: i, type: "Missing bars", detail: `Gap: ${(gap/3600).toFixed(1)}h (expected ~${(medianInterval/3600).toFixed(1)}h)` });
+  }
+  // 2. OHLC violations
+  for (let i = 0; i < data.length; i++) {
+    const b = data[i];
+    if (b.high < b.low) issues.push({ bar: i, type: "OHLC violation", detail: `high (${b.high}) < low (${b.low})` });
+    if (b.open > b.high || b.open < b.low) issues.push({ bar: i, type: "OHLC violation", detail: `open outside H/L range` });
+    if (b.close > b.high || b.close < b.low) issues.push({ bar: i, type: "OHLC violation", detail: `close outside H/L range` });
+  }
+  // 3. Zero volume
+  const zeroVol = data.filter(b => (b.volume || 0) === 0).length;
+  if (zeroVol > data.length * 0.1) issues.push({ bar: -1, type: "Zero volume", detail: `${zeroVol} bars (${(zeroVol/data.length*100).toFixed(1)}%)` });
+  // 4. Suspicious spikes (>8σ return)
+  const returns = []; for (let i = 1; i < data.length; i++) returns.push((data[i].close - data[i-1].close) / data[i-1].close);
+  const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+  const std = Math.sqrt(returns.reduce((a, b) => a + (b - mean) ** 2, 0) / returns.length);
+  for (let i = 0; i < returns.length; i++) {
+    if (Math.abs(returns[i] - mean) > 8 * std) issues.push({ bar: i + 1, type: "Suspicious spike", detail: `Return: ${(returns[i]*100).toFixed(2)}% (${((returns[i]-mean)/std).toFixed(1)}σ)` });
+  }
+  const score = Math.max(0, 100 - (issues.length / data.length * 1000)).toFixed(1);
+  const scoreColor = score > 95 ? "#4caf50" : score > 80 ? "#ff9800" : "#f44336";
+  const frag = document.createDocumentFragment();
+  const hdr = document.createElement("div"); hdr.style.cssText = `text-align:center;padding:8px;border-bottom:1px solid #333;`;
+  const scoreDiv = document.createElement("div"); scoreDiv.style.cssText = `font-size:24px;font-weight:bold;color:${scoreColor};`; scoreDiv.textContent = `${score}%`;
+  const sub = document.createElement("div"); sub.style.cssText = "font-size:10px;color:#888;"; sub.textContent = `${issues.length} issues in ${data.length} bars`;
+  hdr.appendChild(scoreDiv); hdr.appendChild(sub); frag.appendChild(hdr);
+  if (issues.length > 0) {
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    const thead = document.createElement("tr");
+    for (const h of ["Bar", "Type", "Detail"]) { const td = document.createElement("td"); td.style.cssText = "padding:3px;color:#666;font-weight:bold;border-bottom:1px solid #333;"; td.textContent = h; thead.appendChild(td); }
+    table.appendChild(thead);
+    for (const iss of issues.slice(0, 30)) {
+      const tr = document.createElement("tr");
+      for (const v of [iss.bar >= 0 ? "#" + iss.bar : "—", iss.type, iss.detail]) { const td = document.createElement("td"); td.style.cssText = "padding:2px 3px;color:#aaa;"; td.textContent = v; tr.appendChild(td); }
+      table.appendChild(tr);
+    }
+    frag.appendChild(table);
+  }
+  win.contentElement.replaceChildren(frag);
+}
+
+function cmdPerfMonitor() {
+  if (!window._perfMetrics) window._perfMetrics = { indicatorMs: [], dashboardMs: [], apiMs: [], cacheHits: 0, cacheMisses: 0 };
+  const win = createWindow({ title: "Performance Monitor", width: 380, height: 320 });
+  const refresh = () => {
+    const m = window._perfMetrics;
+    const avg = (arr) => arr.length > 0 ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : "—";
+    const max = (arr) => arr.length > 0 ? Math.max(...arr).toFixed(1) : "—";
+    const hitRate = (m.cacheHits + m.cacheMisses) > 0 ? (m.cacheHits / (m.cacheHits + m.cacheMisses) * 100).toFixed(1) : "—";
+    const mem = performance.memory ? (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1) + "MB" : "N/A";
+    const uptime = window._typhoonLoadTime ? ((Date.now() - window._typhoonLoadTime) / 1000 / 60).toFixed(1) + " min" : "—";
+    const apiCount = window._apiCallCount || 0;
+    const metrics = [
+      ["Uptime", uptime], ["API Calls", apiCount], ["Cache Hit Rate", hitRate + "%"],
+      ["Indicator Calc (avg)", avg(m.indicatorMs) + "ms"], ["Indicator Calc (max)", max(m.indicatorMs) + "ms"],
+      ["Dashboard Update (avg)", avg(m.dashboardMs) + "ms"],
+      ["Memory (JS Heap)", mem],
+      ["barCache Entries", Object.keys(barCache).length],
+      ["Tabs Open", tabs.length],
+    ];
+    const frag = document.createDocumentFragment();
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    for (const [k, v] of metrics) {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 8px;color:#888;"; td1.textContent = k;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 8px;text-align:right;color:#ccc;font-family:Consolas,monospace;"; td2.textContent = v;
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+    }
+    frag.appendChild(table);
+    win.contentElement.replaceChildren(frag);
+  };
+  refresh();
+  const iv = setInterval(refresh, 2000);
+  win.onClose = () => clearInterval(iv);
+}
+
+function cmdAIStrategy() {
+  const win = createWindow({ title: `AI Strategy — ${currentSymbol}`, width: 500, height: 450 });
+  const analyze = async () => {
+    win.setContent("Analyzing market conditions...");
+    try {
+      if (!currentChartData || currentChartData.length < 50) { win.setContent("Need 50+ bars for analysis."); return; }
+      // Gather context
+      const d = currentChartData;
+      const price = d[d.length - 1].close;
+      const ef = calcEhlersFisher(d, 32);
+      const fisherVal = ef.fisher.length > 0 ? ef.fisher[ef.fisher.length - 1].value : 0;
+      const fisherSig = ef.signal.length > 0 ? ef.signal[ef.signal.length - 1].value : 0;
+      const fisherBias = fisherVal > fisherSig ? "BULLISH" : "BEARISH";
+      const rsiData = calcRSI(d, 14);
+      const rsiVal = rsiData.length > 0 ? rsiData[rsiData.length - 1].value : 50;
+      const smaData = calcSMA(d, Math.min(200, d.length - 1));
+      const sma200 = smaData.length > 0 ? smaData[smaData.length - 1].value : price;
+      const aboveSMA = price > sma200;
+      const kamaData = calcKAMA(d, 10);
+      const kamaSlope = kamaData.length > 2 ? (kamaData[kamaData.length - 1].value - kamaData[kamaData.length - 3].value) : 0;
+      const vol20 = d.slice(-20).reduce((s, b) => s + (b.volume || 0), 0) / 20;
+      const volRatio = vol20 > 0 ? ((d[d.length - 1].volume || 0) / vol20).toFixed(2) : "N/A";
+
+      const prompt = `Analyze this trading setup for ${currentSymbol} at $${price.toFixed(2)} (${currentTimeframe} timeframe):
+
+Fisher Transform: ${fisherVal.toFixed(3)} (${fisherBias}, signal: ${fisherSig.toFixed(3)})
+RSI(14): ${rsiVal.toFixed(1)}
+Price vs SMA200: ${aboveSMA ? "ABOVE" : "BELOW"} (SMA200=$${sma200.toFixed(2)}, distance ${((price-sma200)/sma200*100).toFixed(1)}%)
+KAMA slope: ${kamaSlope > 0 ? "POSITIVE (uptrend)" : "NEGATIVE (downtrend)"}
+Volume: ${volRatio}x 20-day average
+
+Based on NNFX methodology, provide:
+1. Trade direction (long/short/no trade) with confidence
+2. Entry strategy
+3. Stop loss placement
+4. Take profit target
+5. Key risk factors`;
+
+      const respJson = await invoke("ai_chat", { message: prompt });
+      const resp = JSON.parse(respJson);
+      const aiText = resp.response || resp.content || resp.message || JSON.stringify(resp);
+
+      const frag = document.createDocumentFragment();
+      // Context header
+      const ctx = document.createElement("div"); ctx.style.cssText = "background:#111;border:1px solid #333;border-radius:4px;padding:6px;margin-bottom:8px;font-size:10px;color:#888;";
+      ctx.textContent = `${currentSymbol} $${price.toFixed(2)} | Fisher: ${fisherBias} | RSI: ${rsiVal.toFixed(0)} | ${aboveSMA ? "Above" : "Below"} SMA200 | KAMA: ${kamaSlope > 0 ? "↑" : "↓"} | Vol: ${volRatio}x`;
+      frag.appendChild(ctx);
+      // AI response
+      const aiDiv = document.createElement("div"); aiDiv.style.cssText = "font-size:11px;color:#ccc;line-height:1.5;white-space:pre-wrap;max-height:300px;overflow-y:auto;";
+      aiDiv.textContent = aiText;
+      frag.appendChild(aiDiv);
+      // Refresh button
+      const btn = document.createElement("button"); btn.textContent = "Refresh Analysis"; btn.style.cssText = "margin-top:8px;padding:4px 12px;background:#0d47a1;color:#90caf9;border:1px solid #1565c0;cursor:pointer;font-size:10px;width:100%;";
+      btn.addEventListener("click", analyze);
+      frag.appendChild(btn);
+      win.contentElement.replaceChildren(frag);
+    } catch (e) { win.setContent("AI chat failed: " + e + "\n\nMake sure AI is configured via Ctrl+K → AI or Settings."); }
+  };
+  analyze();
+}
+
+function cmdPercent() {
+  // Toggle % change mode on Y-axis (PriceScaleMode: 0=Normal, 2=Percentage)
+  const rs = chart.options().rightPriceScale || {};
+  const cur = rs.mode || 0;
+  const next = cur === 2 ? 0 : 2;
+  chart.applyOptions({ rightPriceScale: { mode: next } });
+  log(`Chart: ${next === 2 ? "% change mode" : "absolute price mode"}`, "ok");
+}
+
+function cmdLogScale() {
+  // Toggle logarithmic Y-axis (PriceScaleMode: 0=Normal, 1=Logarithmic)
+  const rs = chart.options().rightPriceScale || {};
+  const cur = rs.mode || 0;
+  const next = cur === 1 ? 0 : 1;
+  chart.applyOptions({ rightPriceScale: { mode: next } });
+  log(`Chart: ${next === 1 ? "logarithmic scale" : "linear scale"}`, "ok");
+}
+
+function cmdCrosshairPlus() {
+  window._crosshairPlusEnabled = !window._crosshairPlusEnabled;
+  log(`Crosshair delta: ${window._crosshairPlusEnabled ? "ON" : "OFF"}`, "ok");
+  // The crosshair move handler checks this flag and shows delta
+  if (!window._crosshairPlusSetup) {
+    window._crosshairPlusSetup = true;
+    let deltaDiv = document.createElement("div");
+    deltaDiv.id = "crosshair-delta";
+    deltaDiv.style.cssText = "position:fixed;top:70px;right:260px;background:#000c;color:#ff0;font-family:Consolas,monospace;font-size:11px;padding:2px 6px;border:1px solid #333;border-radius:3px;z-index:999;display:none;pointer-events:none;";
+    document.body.appendChild(deltaDiv);
+    chart.subscribeCrosshairMove((param) => {
+      if (!window._crosshairPlusEnabled || !param.time || !param.point) { deltaDiv.style.display = "none"; return; }
+      const ohlc = param.seriesData.get(candleSeries);
+      if (!ohlc || ohlc.close === undefined) { deltaDiv.style.display = "none"; return; }
+      const price = ohlc.close;
+      const delta = lastPrice - price;
+      const pct = price > 0 ? (delta / price * 100) : 0;
+      const dp = lastPrice > 100 ? 2 : lastPrice > 1 ? 4 : 6;
+      deltaDiv.textContent = `Δ ${delta >= 0 ? "+" : ""}${delta.toFixed(dp)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`;
+      deltaDiv.style.color = delta >= 0 ? "#4caf50" : "#f44336";
+      deltaDiv.style.display = "";
+    });
+  }
+}
+
+function cmdAlertSummary() {
+  const win = createWindow({ title: "Active Alerts Summary", width: 450, height: 400 });
+  const refresh = () => {
+    try {
+      const frag = document.createDocumentFragment();
+      let total = 0;
+      // Price alerts
+      try {
+        const alerts = JSON.parse(localStorage.getItem("typhoon_price_alerts") || "[]");
+        const active = alerts.filter(a => !a.triggered);
+        total += active.length;
+        const sec = document.createElement("div");
+        sec.style.cssText = "margin-bottom:8px;";
+        const h = document.createElement("div"); h.style.cssText = "color:#ff0;font-weight:bold;font-size:11px;padding:2px 0;"; h.textContent = `Price Alerts (${active.length})`; sec.appendChild(h);
+        for (const a of active.slice(0, 20)) { const r = document.createElement("div"); r.style.cssText = "font-size:10px;color:#aaa;padding:1px 4px;"; r.textContent = `${a.symbol} ${a.condition} ${a.price}`; sec.appendChild(r); }
+        if (active.length === 0) { const r = document.createElement("div"); r.style.cssText = "font-size:10px;color:#555;padding:1px 4px;"; r.textContent = "None"; sec.appendChild(r); }
+        frag.appendChild(sec);
+      } catch (_) {}
+      // Conditional orders
+      try {
+        const conds = JSON.parse(localStorage.getItem("typhoon_conditional_orders") || "[]").filter(c => c.status === "active");
+        total += conds.length;
+        const sec = document.createElement("div");
+        sec.style.cssText = "margin-bottom:8px;";
+        const h = document.createElement("div"); h.style.cssText = "color:#ff0;font-weight:bold;font-size:11px;padding:2px 0;"; h.textContent = `Conditional Orders (${conds.length})`; sec.appendChild(h);
+        for (const c of conds) { const r = document.createElement("div"); r.style.cssText = "font-size:10px;color:#aaa;padding:1px 4px;"; r.textContent = `${c.name}: IF ${c.triggerSymbol} ${c.triggerCondition} ${c.triggerValue} → ${c.actionSide} ${c.actionSymbol}`; sec.appendChild(r); }
+        if (conds.length === 0) { const r = document.createElement("div"); r.style.cssText = "font-size:10px;color:#555;padding:1px 4px;"; r.textContent = "None"; sec.appendChild(r); }
+        frag.appendChild(sec);
+      } catch (_) {}
+      // Header
+      const hdr = document.createElement("div");
+      hdr.style.cssText = `text-align:center;font-size:14px;font-weight:bold;padding:6px;color:${total > 5 ? "#ff9800" : total > 0 ? "#4caf50" : "#888"};border-bottom:1px solid #333;margin-bottom:6px;`;
+      hdr.textContent = `${total} Active Alert${total !== 1 ? "s" : ""}`;
+      win.contentElement.textContent = "";
+      win.contentElement.appendChild(hdr);
+      win.contentElement.appendChild(frag);
+    } catch (_) {}
+  };
+  refresh();
+  const iv = setInterval(refresh, 5000);
+  win.onClose = () => clearInterval(iv);
+}
+
+function cmdBenchmark() {
+  const win = createWindow({ title: "Portfolio vs SPY Benchmark", width: 380, height: 280 });
+  (async () => {
+    try {
+      const [miJson, spyBarsRaw] = await Promise.all([
+        invoke("get_margin_info"),
+        invoke("get_bars", { symbol: "SPY", timeframe: "1Day", limit: 252 }),
+      ]);
+      const mi = JSON.parse(miJson);
+      const spyBars = JSON.parse(spyBarsRaw);
+      if (spyBars.length < 2) { win.setContent("Not enough SPY data."); return; }
+      const spyNow = spyBars[spyBars.length - 1].close;
+      const spy1d = spyBars.length > 1 ? (spyNow - spyBars[spyBars.length - 2].close) / spyBars[spyBars.length - 2].close * 100 : 0;
+      const spy1w = spyBars.length > 5 ? (spyNow - spyBars[spyBars.length - 6].close) / spyBars[spyBars.length - 6].close * 100 : 0;
+      const spy1m = spyBars.length > 21 ? (spyNow - spyBars[spyBars.length - 22].close) / spyBars[spyBars.length - 22].close * 100 : 0;
+      // Portfolio returns from equity snapshots
+      let port1d = 0, port1w = 0, port1m = 0;
+      try {
+        const snaps = JSON.parse(localStorage.getItem("typhoon_equity_snapshots") || "[]");
+        const eq = mi.equity;
+        if (snaps.length > 1) port1d = (eq - snaps[snaps.length - 1].equity) / snaps[snaps.length - 1].equity * 100;
+        if (snaps.length > 5) port1w = (eq - snaps[Math.max(0, snaps.length - 5)].equity) / snaps[Math.max(0, snaps.length - 5)].equity * 100;
+        if (snaps.length > 21) port1m = (eq - snaps[Math.max(0, snaps.length - 21)].equity) / snaps[Math.max(0, snaps.length - 21)].equity * 100;
+      } catch (_) {}
+      win.contentElement.textContent = "";
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+      const hdr = document.createElement("tr");
+      for (const h of ["Period", "You", "SPY", "Alpha"]) {
+        const td = document.createElement("td"); td.style.cssText = "padding:6px;color:#888;font-weight:bold;border-bottom:1px solid #333;"; td.textContent = h; hdr.appendChild(td);
+      }
+      table.appendChild(hdr);
+      const rows = [["1 Day", port1d, spy1d], ["1 Week", port1w, spy1w], ["1 Month", port1m, spy1m]];
+      for (const [label, port, spy] of rows) {
+        const alpha = port - spy;
+        const tr = document.createElement("tr");
+        const vals = [{ t: label, c: "#ccc" }, { t: port.toFixed(2) + "%", c: port >= 0 ? "#4caf50" : "#f44336" }, { t: spy.toFixed(2) + "%", c: spy >= 0 ? "#4caf50" : "#f44336" }, { t: (alpha >= 0 ? "+" : "") + alpha.toFixed(2) + "%", c: alpha >= 0 ? "#4caf50" : "#f44336" }];
+        for (const v of vals) { const td = document.createElement("td"); td.style.cssText = `padding:6px;font-family:Consolas,monospace;color:${v.c};`; td.textContent = v.t; tr.appendChild(td); }
+        table.appendChild(tr);
+      }
+      win.appendElement(table);
+    } catch (e) { win.setContent("Failed: " + e); }
+  })();
+}
+
+function cmdMarketHours() {
+  window._marketHoursEnabled = !window._marketHoursEnabled;
+  log(`Market session coloring: ${window._marketHoursEnabled ? "ON" : "OFF"}`, "ok");
+  if (window._marketHoursEnabled && currentChartData && currentChartData.length > 0) {
+    // Classify each bar by session and add colored markers
+    const markers = [];
+    for (const bar of currentChartData) {
+      const d = new Date(bar.time * 1000);
+      const utcH = d.getUTCHours();
+      let session = "";
+      if (utcH >= 0 && utcH < 8) session = "asian";
+      else if (utcH >= 8 && utcH < 14) session = "london";
+      else if (utcH >= 14 && utcH < 21) session = "ny";
+      else session = "asian";
+      // Only mark session opens on intraday charts
+      if (session === "london" && utcH === 8) markers.push({ time: bar.time, position: "belowBar", color: "#2196f3", shape: "square", text: "LDN" });
+      if (session === "ny" && utcH === 14) markers.push({ time: bar.time, position: "belowBar", color: "#4caf50", shape: "square", text: "NY" });
+      if (session === "asian" && utcH === 0) markers.push({ time: bar.time, position: "belowBar", color: "#ff9800", shape: "square", text: "ASIA" });
+    }
+    markers.sort((a, b) => a.time - b.time);
+    try { candleSeries.setMarkers(markers); } catch (_) {}
+  } else {
+    try { candleSeries.setMarkers([]); } catch (_) {}
+  }
+}
+
+function cmdQuickOrder() {
+  window._quickOrderEnabled = !window._quickOrderEnabled;
+  log(`Quick order from chart: ${window._quickOrderEnabled ? "ON — right-click chart for order options" : "OFF"}`, "ok");
+}
+
 const CMD_PALETTE_COMMANDS = [
+  { name: "HEATMAP-LIVE", desc: "Real-time watchlist heatmap (auto-refresh)", action: cmdHeatmapLive },
+  { name: "DEPTH-CHART", desc: "Visual depth chart (bid/ask cumulative volume)", action: cmdDepthChart },
+  { name: "RISK-DASHBOARD", desc: "Unified risk control center (margin, VaR, concentration)", action: cmdRiskDashboard },
+  { name: "TRADE-PLAN", desc: "Trade plan builder (entry, SL, TP, reasoning)", action: cmdTradePlan },
+  { name: "PERFORMANCE-CHART", desc: "Overlay equity curve on symbol chart", action: cmdPerformanceChart },
+  { name: "REGIME-OVERLAY", desc: "Color bars by market regime (trending/ranging)", action: cmdRegimeOverlay },
+  { name: "DATA-QUALITY", desc: "Data integrity monitor (gaps, spikes, OHLC violations)", action: cmdDataQuality },
+  { name: "PERF-MONITOR", desc: "Real-time performance profiler (latency, memory, cache)", action: cmdPerfMonitor },
+  { name: "AI-STRATEGY", desc: "AI-powered strategy suggestions (NNFX analysis)", action: cmdAIStrategy },
+  { name: "PERCENT", desc: "Toggle % change Y-axis mode", action: cmdPercent },
+  { name: "LOGSCALE", desc: "Toggle logarithmic Y-axis", action: cmdLogScale },
+  { name: "CROSSHAIR+", desc: "Enhanced crosshair with price delta", action: cmdCrosshairPlus },
+  { name: "ALERT-SUMMARY", desc: "All active alerts across all systems", action: cmdAlertSummary },
+  { name: "BENCHMARK", desc: "Portfolio performance vs SPY", action: cmdBenchmark },
+  { name: "MARKETHOURS", desc: "Color-code London/NY/Asian sessions on chart", action: cmdMarketHours },
+  { name: "QUICK-ORDER", desc: "Toggle right-click quick order on chart", action: cmdQuickOrder },
   { name: "SNAPSHOT", desc: "Portfolio snapshot to clipboard", action: cmdSnapshot },
   { name: "HOTLIST", desc: "Real-time top movers dashboard", action: cmdHotlist },
   { name: "NOTES", desc: "Per-symbol trading notes", action: cmdNotes },
