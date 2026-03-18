@@ -86,6 +86,22 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Strategy auto-trading framework | ✅ Done | JS plugin → live orders, paper-only safety (Ctrl+K → AUTOTRADE) |
 | Watchlist SMA200 cross alerts | ✅ Done | Batch monitoring with browser notifications |
 | Economic calendar + countdown | ✅ Done | FOMC, CPI, NFP, GDP with live countdown timers (Ctrl+K → ECON) |
+| Options put/call ratio | ✅ Done | Ctrl+K → PCRATIO, weighted P/C from options chain |
+| Unusual options activity | ✅ Done | Ctrl+K → UNUSUAL, volume vs OI spike detection |
+| IV rank / IV percentile | ✅ Done | Ctrl+K → IVRANK, 52-week IV context |
+| Options Greeks dashboard | ✅ Done | Ctrl+K → GREEKS, aggregate portfolio Greeks |
+| Options profit scenario | ✅ Done | Ctrl+K → OPTPROFIT, theoretical P&L at target price/date |
+| Multi-symbol comparison | ✅ Done | Ctrl+K → COMPARE, normalized overlay of up to 5 symbols |
+| Spread chart | ✅ Done | Ctrl+K → SPREAD, price ratio/difference between two symbols |
+| Support/Resistance levels | ✅ Done | Ctrl+K → SRLEVEL, automatic pivot/fractal-based S/R |
+| Divergence scanner | ✅ Done | Ctrl+K → DIVERGENCE, RSI/MACD vs price divergence |
+| Volume profile | ✅ Done | Ctrl+K → VOLUME, price-at-volume distribution (POC/VA) |
+| Pivot points | ✅ Done | Ctrl+K → PIVOTS, classic/Fibonacci/Woodie pivot levels |
+| Relative performance | ✅ Done | Ctrl+K → PERF, symbol vs benchmark % performance |
+| Enhanced VWAP | ✅ Done | Ctrl+K → VWAP+, anchored VWAP with standard deviation bands |
+| Market replay / practice | ✅ Done | Ctrl+K → REPLAY, historical bar-by-bar replay with simulated trading |
+| Trade statistics | ✅ Done | Ctrl+K → TRADESTATS, win rate/expectancy/R-multiple analysis |
+| Pairs trading | ✅ Done | Ctrl+K → PAIRS, cointegration test + z-score signals |
 
 ### Tier 3 — Godel Terminal Features
 
@@ -126,7 +142,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Insider trading (Form 4) | ✅ Done | SEC EDGAR Form 4 via command palette |
 | Right-click context menu | ✅ Done | Draw, alert, copy price from chart |
 | Pending order visualization | ✅ Done | Open orders as colored lines on chart |
-| **Options flow analysis** | 🔲 Blocked | Needs paid data source (FlowAlgo, Unusual Whales) |
+| **Options flow analysis** | ✅ Done | Synthetic flow from options chain volume/OI analysis |
 | **Wasm indicator engine** | ✅ Done | 32KB Wasm binary — SMA/EMA/KAMA/RSI/Fisher/ATR/MACD/Bollinger + grid optimizer |
 | **Binary bar storage** | ✅ Done | Packed f64 format (48 bytes/bar) + zstd — 3-5x smaller than JSON |
 | **Headless CLI backtest** | ✅ Done | `--backtest` flag — run strategies from command line, no GUI |
@@ -168,6 +184,26 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | FRED economic data | ✅ Done | Fed Funds, CPI, GDP, Treasury yields, VIX, M2 (user provides free API key) |
 | AI trading assistant | ✅ Done | Claude (Anthropic) or GPT (OpenAI) chat with market context |
 | Settings panel | ✅ Done | Ctrl+K → SETTINGS for API key management |
+| Market breadth dashboard | ✅ Done | Ctrl+K → BREADTH, advance/decline, new highs/lows, McClellan |
+| Institutional flows | ✅ Done | Ctrl+K → FLOWS, sector ETF volume/price divergence |
+| Gap analysis | ✅ Done | Ctrl+K → GAPS, unfilled gap detection with fill probability |
+| Relative strength ranking | ✅ Done | Ctrl+K → RELSTRENGTH, Mansfield RS vs benchmark |
+| Seasonality analysis | ✅ Done | Ctrl+K → SEASONALITY, monthly return patterns from historical data |
+| Correlation watchdog | ✅ Done | Ctrl+K → CORRWATCH, alert on correlation regime changes |
+| Flow map visualization | ✅ Done | Ctrl+K → FLOWMAP, sector money flow Sankey-style diagram |
+| Risk heat map | ✅ Done | Ctrl+K → RISKMAP, portfolio VaR contribution by position |
+| Risk scenario simulator | ✅ Done | Ctrl+K → RISKSIM, stress test portfolio against historical events |
+| Equity curve tracker | ✅ Done | Ctrl+K → EQUITY, live equity curve with drawdown overlay |
+| Smart alerts | ✅ Done | Ctrl+K → SMARTALERT, statistical anomaly detection alerts |
+| Enhanced regime detection | ✅ Done | Ctrl+K → REGIME+, volatility regime + mean reversion signals |
+| MTF divergence scanner | ✅ Done | Ctrl+K → MTFDIV, cross-timeframe indicator divergence |
+| Multi-leg order builder | ✅ Done | Ctrl+K → MULTILEG, options/stock combo orders |
+| Enhanced backtester | ✅ Done | Ctrl+K → BACKTEST+, no-code visual strategy builder |
+| Enhanced scanner | ✅ Done | Ctrl+K → SCANNER+, multi-factor custom screening |
+| Market profile / TPO | ✅ Done | Ctrl+K → MARKETPROFILE, time-price-opportunity distribution |
+| Calendar heat map | ✅ Done | Ctrl+K → HEATCAL, daily returns calendar visualization |
+| Enhanced economic calendar | ✅ Done | Ctrl+K → ECALENDAR, ForexFactory-style with impact filters |
+| Order flow analysis | ✅ Done | Ctrl+K → ORDERFLOW, trade tape aggregation + delta |
 
 ### Blocked — Needs External Resources
 
@@ -175,7 +211,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 |---|---|
 | Analyst recommendations (ANR) | No free consensus API |
 | Short interest (SI) | No free real-time API |
-| Dark pool / options flow | No free data source |
+| ~~Dark pool / options flow~~ | ~~Done — synthetic flow from options chain volume/OI~~ |
 | World equity indices | Alpaca is US-only |
 | Forex currency matrix | Alpaca has crypto not forex |
 | Congress trading | Free APIs locked down; QuiverQuant requires paid tier |

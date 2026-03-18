@@ -40,6 +40,10 @@
 | Spread tolerance | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Monte Carlo risk of ruin | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Correlation matrix | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Risk heat map (VaR contrib) | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Scenario stress testing | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Statistical anomaly alerts | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Equity curve tracker | ✅ | ❌ | ❌ | ✅ | ✅ |
 
 *MT5 has these via TyphooN EA — our own MQL5 code, not native MT5
 
@@ -63,9 +67,14 @@
 | Bid/Ask spread display | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Time & Sales | ✅ | ✅ | ❌ | ❌ | ✅ |
 | DOM / Level 2 (crypto) | ✅ | ✅ | ❌ | ❌ | ✅ |
+| Volume profile | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Market profile / TPO | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Market breadth | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Pairs trading | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Seasonality analysis | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Analyst recommendations | ❌ | ❌ | ✅ | ✅ | ✅ |
 | Short interest | ❌ | ❌ | ✅ | ✅ | ✅ |
-| Dark pool / options flow | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Options flow / unusual activity | ✅ | ❌ | ❌ | ❌ | ✅ |
 
 ## Strategy Testing
 
@@ -78,6 +87,9 @@
 | Monte Carlo simulation | ✅ | ❌ | ❌ | ✅ | ❌ |
 | Custom indicator plugins | ✅ | ✅ | ❌ | ✅ | ❌ |
 | CSV trade export | ✅ | ✅ | ❌ | ✅ | ✅ |
+| Market replay / practice | ✅ | ❌ | ❌ | ❌ | ❌ |
+| No-code strategy builder | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Scenario stress testing | ✅ | ❌ | ❌ | ❌ | ✅ |
 
 ## Platform & Infrastructure
 
@@ -105,6 +117,15 @@
 5. **Multi-broker + multi-timeframe** — Alpaca + Tastytrade with 2-5 TF grid view per symbol.
 6. **Local-first with cloud data** — Runs locally (no SaaS), caches everything in SQLite, works offline with cached data.
 7. **Draggable tab reordering** — Drag tabs to rearrange. Godel Terminal doesn't support this (tabs are fixed order, very annoying). MT5 doesn't support it either (chart windows, not tabs).
+8. **Volume Profile** — Price-at-volume distribution with POC and value area. TradingView charges for this feature (Premium plan, $24.95/mo). Free in TyphooN-Terminal.
+9. **Market Profile / TPO** — Time-Price-Opportunity charts matching Bloomberg/CQG institutional tools. No other free platform offers this.
+10. **Options flow / unusual activity** — Synthetic flow analysis from options chain volume vs open interest. Replaces FlowAlgo ($100/mo) and Unusual Whales ($40/mo) for basic flow detection.
+11. **Market replay with simulated trading** — Bar-by-bar historical replay with paper trading. Matches TradingView Replay (Premium feature). Free in TyphooN-Terminal.
+12. **Multi-leg order builder** — Complex options/stock combo orders. Matches Interactive Brokers ComboTrader.
+13. **Scenario stress testing** — Portfolio stress test against historical events (2008 crash, COVID, etc.). Matches Bloomberg PORT risk analytics.
+14. **Statistical anomaly detection** — Smart alerts that detect unusual price/volume/volatility patterns. Unique feature — no competitor offers this.
+15. **No-code strategy builder** — Visual strategy builder without writing code. Comparable to TradingView Pine Script but visual/drag-and-drop.
+16. **Pairs trading with cointegration** — Statistical pairs analysis with z-score signals. Professional quant feature usually found only in institutional platforms.
 
 ## UX Advantages Over Competitors
 
@@ -238,6 +259,6 @@ MT5, cTrader, and NinjaTrader all rely on **third-party DLLs** for indicators an
 ### Tier D — Blocked by External Dependencies
 16. Analyst consensus (needs paid data)
 17. Short interest (needs paid data)
-18. Dark pool (needs paid data)
+18. ~~Dark pool~~ — Done (synthetic flow from options chain data)
 19. World indices (needs non-US data)
-20. Community chat (needs server)
+20. ~~Community chat~~ — Done (Matrix protocol)

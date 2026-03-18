@@ -215,7 +215,7 @@ The network bottleneck is Alpaca's API design (260 bars/chunk, 200 req/min). Our
 | Wasm indicators | 32KB |
 | GPU chart Wasm | 45KB |
 | SQLite (bundled) | ~1.5MB (in binary) |
-| Frontend (JS+CSS+HTML) | ~350KB |
+| Frontend (JS+CSS+HTML) | ~500KB |
 | **Total app** | **~12-17MB** |
 
 vs Electron equivalent: ~150-200MB
@@ -320,6 +320,10 @@ LRU eviction prevents unbounded growth. SQLite mmap is OS-managed (only maps pag
 | Binary size | ✅ 10-15MB | 10-15x smaller than Electron |
 | Memory | ✅ Bounded | LRU eviction, 200-400MB typical |
 | Security | ✅ 18 passes | AES-256-GCM, CSP, no innerHTML, input validation |
+
+### Frontend Code Growth
+
+The main `main.js` has grown from ~11K lines to ~15.4K lines with the addition of 36 new Ctrl+K command palette features (options analytics, market analysis, chart tools, risk/portfolio tools, trading utilities, and data visualization). All 36 new features are implemented using **existing cached data** (bar cache, options chain, positions, watchlist) — zero new Alpaca API endpoints were required. This means no additional API rate limit pressure and no new network latency. The features compute derived analytics (breadth, flows, seasonality, divergence, volume profile, etc.) entirely from data already in the 4-tier cache.
 
 ### Remaining TODO (No Blockers)
 
