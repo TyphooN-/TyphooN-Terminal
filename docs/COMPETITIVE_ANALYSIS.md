@@ -224,13 +224,13 @@
 - **Speed** — Godel optimizes for sub-second research queries
 
 ### vs MT5
-- **Drawing tools** — MT5 has 46 drawing objects vs our 9 (trend, fib, h-line, rectangle, ray, ruler, channel, fib time zones, annotations)
+- ~~**Drawing tools**~~ **MOSTLY RESOLVED** — MT5 has 46 drawing objects, we now have **22 types** (trend, fib, h-line, v-line, rectangle, ray, ruler, channel, parallel channel, segment, arrow-line, extended-line, pitchfork, Schiff pitchfork, triangle, ellipse, circle, fib fan/arcs/channel/extension, Gann fan/line, arrow markers, price/text labels, cycle lines). Remaining gap: ~24 niche MT5 objects (Elliott Wave labels, Gann Grid, Thumbs up/down icons, etc.)
 - ~~**Indicator count**~~ **RESOLVED** — MT5 has 38+ built-in, we now have **37 unique indicators** + 22 Wasm implementations. Parity achieved with Alligator, AO, MFI, Force Index, Envelopes, StdDev, Chaikin, DeMarker, Fractals.
 - **EA/Expert Advisor system** — MT5 has a full algorithmic trading framework (MQL5). We have auto-trade + genetic optimizer but no custom language.
 - **Strategy tester** — MT5's visual tester has better drag speed. Our replay mode + visual backtester are functionally equivalent.
 
 ### vs OpenBB
-- ~~**Quantitative analysis**~~ **MOSTLY RESOLVED** — We now have Fourier analysis, Shannon entropy, fractal dimension, wavelet decomposition, cointegration testing, genetic optimization. OpenBB still has normality tests (Jarque-Bera) and CAPM factor models.
+- ~~**Quantitative analysis**~~ **RESOLVED** — Fourier analysis, Shannon entropy, fractal dimension, wavelet decomposition, cointegration testing, genetic optimization, AND Jarque-Bera normality test. Only CAPM factor model remains (needs multi-factor return data).
 - **Crypto on-chain** — Blockchain analytics (Etherscan, etc.) — blocked by external APIs
 - ~~**Government data**~~ **RESOLVED** — FRED integration provides Fed Funds, CPI, GDP, Treasury yields, VIX, M2
 - **Jupyter integration** — OpenBB runs in notebooks. We export data via CSV/clipboard for external analysis.
