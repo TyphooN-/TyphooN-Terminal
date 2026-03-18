@@ -393,3 +393,10 @@ export function closeAllWindows() {
 export function getWindowCount() {
   return Object.keys(activeWindows).length;
 }
+
+/**
+ * Get active windows map (id → handle).
+ */
+export function getActiveWindows() {
+  return activeWindows;
+}
