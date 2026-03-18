@@ -5873,7 +5873,7 @@ function cmdReplay() {
 
   const statusEl = document.createElement("div");
   statusEl.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;";
-  statusEl.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">STATUS</div>';
+  statusEl.appendChild(div("STATUS", "color:#888;font-size:10px;margin-bottom:4px;"));
   const barLabel = document.createElement("div");
   barLabel.textContent = `Bar: ${replayIndex} / ${currentChartData.length}`;
   const priceLabel = document.createElement("div");
@@ -6002,7 +6002,7 @@ function cmdReplay() {
 
   const posDiv = document.createElement("div");
   posDiv.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;";
-  posDiv.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">POSITION</div>';
+  posDiv.appendChild(div("POSITION", "color:#888;font-size:10px;margin-bottom:4px;"));
   const posLabel = document.createElement("div");
   posLabel.textContent = "No position";
   posLabel.style.color = "#888";
@@ -6014,7 +6014,7 @@ function cmdReplay() {
 
   const pnlDiv = document.createElement("div");
   pnlDiv.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;";
-  pnlDiv.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">PERFORMANCE</div>';
+  pnlDiv.appendChild(div("PERFORMANCE", "color:#888;font-size:10px;margin-bottom:4px;"));
   const pnlLabel = document.createElement("div");
   pnlLabel.style.cssText = "font-size:14px;font-weight:bold;";
   pnlLabel.textContent = "P&L: 0.00";
@@ -6027,7 +6027,7 @@ function cmdReplay() {
 
   const logDiv = document.createElement("div");
   logDiv.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;flex:1;overflow-y:auto;max-height:120px;";
-  logDiv.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">TRADE LOG</div>';
+  logDiv.appendChild(div("TRADE LOG", "color:#888;font-size:10px;margin-bottom:4px;"));
   const logList = document.createElement("div");
   logList.style.cssText = "font-size:10px;";
   logDiv.appendChild(logList);
@@ -8944,7 +8944,7 @@ async function cmdUndo() {
       const latest = orders[orders.length - 1];
       statusDiv.textContent = "Most recent open order:";
       statusDiv.style.color = "#ff8";
-      detailDiv.innerHTML = "";
+      detailDiv.textContent = "";
       const fields = [
         ["Symbol", latest.symbol],
         ["Side", latest.side],
@@ -8991,7 +8991,7 @@ async function cmdUndo() {
       const latest = positions[positions.length - 1];
       statusDiv.textContent = "No open orders. Most recent position:";
       statusDiv.style.color = "#ff8";
-      detailDiv.innerHTML = "";
+      detailDiv.textContent = "";
       const fields = [
         ["Symbol", latest.symbol],
         ["Side", latest.side],
@@ -9580,7 +9580,7 @@ function cmdStatus() {
     rows.push(["Wasm Engine", wasmReady ? "Loaded" : "Not loaded"]);
 
     // Render table
-    root.innerHTML = "";
+    root.textContent = "";
     const table = document.createElement("table");
     table.style.cssText = "width:100%;border-collapse:collapse;";
     for (const [label, val] of rows) {
@@ -10938,7 +10938,7 @@ function cmdReplayPlus() {
 
   const rpStatusEl = document.createElement("div");
   rpStatusEl.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;";
-  rpStatusEl.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">STATUS</div>';
+  rpStatusEl.appendChild(div("STATUS", "color:#888;font-size:10px;margin-bottom:4px;"));
   const rpBarLabel = document.createElement("div");
   rpBarLabel.textContent = `Bar: ${rpIdx} / ${rpSavedData.length}`;
   const rpPriceLabel = document.createElement("div");
@@ -11028,7 +11028,7 @@ function cmdReplayPlus() {
 
   const rpPosDiv = document.createElement("div");
   rpPosDiv.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;";
-  rpPosDiv.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">POSITION</div>';
+  rpPosDiv.appendChild(div("POSITION", "color:#888;font-size:10px;margin-bottom:4px;"));
   const rpPosLabel = document.createElement("div"); rpPosLabel.textContent = "No position"; rpPosLabel.style.color = "#888";
   const rpUnrealizedLabel = document.createElement("div"); rpUnrealizedLabel.style.cssText = "font-size:10px;margin-top:4px;";
   rpPosDiv.appendChild(rpPosLabel); rpPosDiv.appendChild(rpUnrealizedLabel);
@@ -11036,7 +11036,7 @@ function cmdReplayPlus() {
 
   const rpPnlDiv = document.createElement("div");
   rpPnlDiv.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;";
-  rpPnlDiv.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">PERFORMANCE</div>';
+  rpPnlDiv.appendChild(div("PERFORMANCE", "color:#888;font-size:10px;margin-bottom:4px;"));
   const rpPnlLabel = document.createElement("div"); rpPnlLabel.style.cssText = "font-size:14px;font-weight:bold;"; rpPnlLabel.textContent = "P&L: 0.00";
   const rpStatsLabel = document.createElement("div"); rpStatsLabel.style.cssText = "font-size:10px;color:#888;margin-top:4px;"; rpStatsLabel.textContent = "Trades: 0 | Win: 0 | Loss: 0 | Win%: —";
   rpPnlDiv.appendChild(rpPnlLabel); rpPnlDiv.appendChild(rpStatsLabel);
@@ -11044,7 +11044,7 @@ function cmdReplayPlus() {
 
   const rpAlertDiv = document.createElement("div");
   rpAlertDiv.style.cssText = "background:#111;border:1px solid #333;padding:8px;border-radius:4px;flex:1;overflow-y:auto;max-height:160px;";
-  rpAlertDiv.innerHTML = '<div style="color:#888;font-size:10px;margin-bottom:4px;">SIGNAL LOG</div>';
+  rpAlertDiv.appendChild(div("SIGNAL LOG", "color:#888;font-size:10px;margin-bottom:4px;"));
   const rpAlertList = document.createElement("div");
   rpAlertList.style.cssText = "font-size:10px;";
   rpAlertDiv.appendChild(rpAlertList);
@@ -13418,8 +13418,8 @@ function cmdDetach() {
   function renderWindowList() {
     listContainer.textContent = ""; const aw = getActiveWindows(); const ids = Object.keys(aw);
     if (ids.length === 0) { const empty = document.createElement("div"); empty.style.cssText = "color:#666;text-align:center;padding:20px;"; empty.textContent = "No floating windows open."; listContainer.appendChild(empty); return; }
-    const header = document.createElement("div"); header.style.cssText = "display:flex;padding:4px 0;border-bottom:1px solid #444;color:#888;font-weight:bold;font-size:10px;margin-bottom:4px;"; header.innerHTML = "<span style='flex:1;'>Window</span><span style='width:80px;text-align:center;'>Actions</span>"; listContainer.appendChild(header);
-    for (const id of ids) { const handle = aw[id]; if (!handle || !handle.element) continue; const titleEl = handle.element.querySelector(".fw-title"); const title = titleEl ? titleEl.textContent : id; const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;padding:4px 0;border-bottom:1px solid #1a1a1a;"; const nameSpan = document.createElement("span"); nameSpan.style.cssText = "flex:1;color:#ccc;"; nameSpan.textContent = title; const popBtn = document.createElement("button"); popBtn.textContent = "Pop Out"; popBtn.style.cssText = "padding:3px 10px;background:#1565c0;color:#fff;border:1px solid #2196f3;cursor:pointer;font-size:10px;font-family:inherit;"; popBtn.addEventListener("click", () => { const contentEl = handle.element.querySelector(".fw-content"); if (!contentEl) return; const popup = window.open("", "_blank", "width=600,height=400,menubar=no,toolbar=no"); if (popup) { popup.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>body{background:#0d0d0d;color:#ccc;font-family:Consolas,monospace;font-size:11px;padding:12px;margin:0;}</style></head><body>${contentEl.innerHTML}</body></html>`); popup.document.close(); log(`Popped out: ${title}`, "ok"); } }); row.appendChild(nameSpan); row.appendChild(popBtn); listContainer.appendChild(row); }
+    const header = document.createElement("div"); header.style.cssText = "display:flex;padding:4px 0;border-bottom:1px solid #444;color:#888;font-weight:bold;font-size:10px;margin-bottom:4px;"; header.appendChild(span("Window", "flex:1;")); header.appendChild(span("Actions", "width:80px;text-align:center;")); listContainer.appendChild(header);
+    for (const id of ids) { const handle = aw[id]; if (!handle || !handle.element) continue; const titleEl = handle.element.querySelector(".fw-title"); const title = titleEl ? titleEl.textContent : id; const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;padding:4px 0;border-bottom:1px solid #1a1a1a;"; const nameSpan = document.createElement("span"); nameSpan.style.cssText = "flex:1;color:#ccc;"; nameSpan.textContent = title; const popBtn = document.createElement("button"); popBtn.textContent = "Pop Out"; popBtn.style.cssText = "padding:3px 10px;background:#1565c0;color:#fff;border:1px solid #2196f3;cursor:pointer;font-size:10px;font-family:inherit;"; popBtn.addEventListener("click", () => { const contentEl = handle.element.querySelector(".fw-content"); if (!contentEl) return; const popup = window.open("", "_blank", "width=600,height=400,menubar=no,toolbar=no"); if (popup) { const safeTitle = title.replace(/[<>&"']/g, ""); const bodyText = contentEl.textContent || ""; popup.document.write("<!DOCTYPE html><html><head><title>" + safeTitle + "</title><style>body{background:#0d0d0d;color:#ccc;font-family:Consolas,monospace;font-size:11px;padding:12px;margin:0;white-space:pre-wrap;}</style></head><body></body></html>"); popup.document.close(); popup.document.body.textContent = bodyText; log("Popped out: " + safeTitle, "ok"); } }); row.appendChild(nameSpan); row.appendChild(popBtn); listContainer.appendChild(row); }
   }
   renderWindowList(); root.appendChild(listContainer);
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh List"; refreshBtn.style.cssText = "padding:6px 16px;background:#333;color:#fff;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:11px;"; refreshBtn.addEventListener("click", renderWindowList); root.appendChild(refreshBtn);
@@ -13562,7 +13562,7 @@ function cmdWorkspace() {
   importBtn.addEventListener("click", () => { const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = ".json"; fileInput.addEventListener("change", () => { const file = fileInput.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (e) => { try { const imported = JSON.parse(e.target.result); if (imported && typeof imported === "object") { const ws = getWorkspaces(); if (imported.settings && imported.tabs) { ws[file.name.replace(".json", "") || "Imported"] = imported; } else { Object.assign(ws, imported); } saveWorkspaces(ws); renderList(); log("Workspace imported", "ok"); } } catch (err) { log(`Import failed: ${err}`, "error"); } }; reader.readAsText(file); }); fileInput.click(); });
   importRow.appendChild(importBtn); root.appendChild(importRow);
   const listContainer = document.createElement("div");
-  function renderList() { listContainer.textContent = ""; const ws = getWorkspaces(); const names = Object.keys(ws); if (names.length === 0) { const empty = document.createElement("div"); empty.style.cssText = "color:#666;text-align:center;padding:20px;"; empty.textContent = "No saved workspaces."; listContainer.appendChild(empty); return; } const header = document.createElement("div"); header.style.cssText = "display:flex;padding:4px 0;border-bottom:1px solid #444;color:#888;font-weight:bold;font-size:10px;margin-bottom:4px;"; header.innerHTML = "<span style='flex:1;'>Name</span><span style='width:120px;text-align:center;'>Date</span><span style='width:180px;text-align:center;'>Actions</span>"; listContainer.appendChild(header); for (const name of names) { const w = ws[name]; const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;padding:4px 0;border-bottom:1px solid #1a1a1a;"; const nameSpan = document.createElement("span"); nameSpan.style.cssText = "flex:1;color:#ccc;font-weight:bold;"; nameSpan.textContent = name; const dateSpan = document.createElement("span"); dateSpan.style.cssText = "width:120px;text-align:center;color:#666;font-size:9px;"; dateSpan.textContent = w.savedAt ? w.savedAt.substring(0, 10) : "—"; const actions = document.createElement("div"); actions.style.cssText = "width:180px;display:flex;gap:4px;justify-content:center;"; const loadBtn = document.createElement("button"); loadBtn.textContent = "Load"; loadBtn.style.cssText = "padding:2px 8px;background:#1565c0;color:#fff;border:1px solid #2196f3;cursor:pointer;font-size:9px;font-family:inherit;"; loadBtn.addEventListener("click", () => { if (w.settings) { for (const [key, val] of Object.entries(w.settings)) localStorage.setItem(key, val); } if (w.theme) localStorage.setItem("typhoon_theme", w.theme); log(`Workspace "${name}" loaded — reloading page...`, "ok"); setTimeout(() => location.reload(), 300); }); const exportBtn = document.createElement("button"); exportBtn.textContent = "Export"; exportBtn.style.cssText = "padding:2px 8px;background:#333;color:#fff;border:1px solid #555;cursor:pointer;font-size:9px;font-family:inherit;"; exportBtn.addEventListener("click", () => { const blob = new Blob([JSON.stringify(w, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${name}.json`; a.click(); URL.revokeObjectURL(url); log(`Workspace "${name}" exported`, "ok"); }); const delBtn = document.createElement("button"); delBtn.textContent = "Delete"; delBtn.style.cssText = "padding:2px 8px;background:#b71c1c;color:#fff;border:1px solid #f44336;cursor:pointer;font-size:9px;font-family:inherit;"; delBtn.addEventListener("click", () => { const ws2 = getWorkspaces(); delete ws2[name]; saveWorkspaces(ws2); renderList(); log(`Workspace "${name}" deleted`, "ok"); }); actions.appendChild(loadBtn); actions.appendChild(exportBtn); actions.appendChild(delBtn); row.appendChild(nameSpan); row.appendChild(dateSpan); row.appendChild(actions); listContainer.appendChild(row); } }
+  function renderList() { listContainer.textContent = ""; const ws = getWorkspaces(); const names = Object.keys(ws); if (names.length === 0) { const empty = document.createElement("div"); empty.style.cssText = "color:#666;text-align:center;padding:20px;"; empty.textContent = "No saved workspaces."; listContainer.appendChild(empty); return; } const header = document.createElement("div"); header.style.cssText = "display:flex;padding:4px 0;border-bottom:1px solid #444;color:#888;font-weight:bold;font-size:10px;margin-bottom:4px;"; header.appendChild(span("Name", "flex:1;")); header.appendChild(span("Date", "width:120px;text-align:center;")); header.appendChild(span("Actions", "width:180px;text-align:center;")); listContainer.appendChild(header); for (const name of names) { const w = ws[name]; const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;padding:4px 0;border-bottom:1px solid #1a1a1a;"; const nameSpan = document.createElement("span"); nameSpan.style.cssText = "flex:1;color:#ccc;font-weight:bold;"; nameSpan.textContent = name; const dateSpan = document.createElement("span"); dateSpan.style.cssText = "width:120px;text-align:center;color:#666;font-size:9px;"; dateSpan.textContent = w.savedAt ? w.savedAt.substring(0, 10) : "—"; const actions = document.createElement("div"); actions.style.cssText = "width:180px;display:flex;gap:4px;justify-content:center;"; const loadBtn = document.createElement("button"); loadBtn.textContent = "Load"; loadBtn.style.cssText = "padding:2px 8px;background:#1565c0;color:#fff;border:1px solid #2196f3;cursor:pointer;font-size:9px;font-family:inherit;"; loadBtn.addEventListener("click", () => { if (w.settings) { for (const [key, val] of Object.entries(w.settings)) localStorage.setItem(key, val); } if (w.theme) localStorage.setItem("typhoon_theme", w.theme); log(`Workspace "${name}" loaded — reloading page...`, "ok"); setTimeout(() => location.reload(), 300); }); const exportBtn = document.createElement("button"); exportBtn.textContent = "Export"; exportBtn.style.cssText = "padding:2px 8px;background:#333;color:#fff;border:1px solid #555;cursor:pointer;font-size:9px;font-family:inherit;"; exportBtn.addEventListener("click", () => { const blob = new Blob([JSON.stringify(w, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${name}.json`; a.click(); URL.revokeObjectURL(url); log(`Workspace "${name}" exported`, "ok"); }); const delBtn = document.createElement("button"); delBtn.textContent = "Delete"; delBtn.style.cssText = "padding:2px 8px;background:#b71c1c;color:#fff;border:1px solid #f44336;cursor:pointer;font-size:9px;font-family:inherit;"; delBtn.addEventListener("click", () => { const ws2 = getWorkspaces(); delete ws2[name]; saveWorkspaces(ws2); renderList(); log(`Workspace "${name}" deleted`, "ok"); }); actions.appendChild(loadBtn); actions.appendChild(exportBtn); actions.appendChild(delBtn); row.appendChild(nameSpan); row.appendChild(dateSpan); row.appendChild(actions); listContainer.appendChild(row); } }
   renderList(); root.appendChild(listContainer);
   win.appendElement(root); log("Workspace manager opened", "ok");
 }
@@ -16442,8 +16442,19 @@ async function activateCustomPlugin(pluginInfo) {
     const name = pluginInfo.name || pluginInfo;
     const json = await invoke("get_custom_indicator_source", { name });
     const source = typeof json === "string" ? json : JSON.stringify(json);
-    // Evaluate plugin in a sandboxed function scope
-    const pluginFn = new Function("return (" + source + ")")();
+    // Validate plugin source before evaluation — reject dangerous patterns
+    const forbidden = ["fetch(", "XMLHttpRequest", "localStorage", "sessionStorage", "document.cookie",
+      "eval(", "Function(", "import(", "require(", "process.", "child_process", "__proto__",
+      "constructor[", "globalThis", "window.open", "navigator.sendBeacon"];
+    const srcLower = source.toLowerCase();
+    for (const pat of forbidden) {
+      if (srcLower.includes(pat.toLowerCase())) {
+        log(`Plugin ${name} rejected: contains forbidden pattern "${pat}"`, "error");
+        return;
+      }
+    }
+    // Evaluate plugin in a restricted function scope (no access to globals except Math/Date)
+    const pluginFn = new Function("Math", "Date", "return (" + source + ")")(Math, Date);
     if (!pluginFn || !pluginFn.calculate) {
       log(`Plugin ${name} has no calculate() function`, "error");
       return;
