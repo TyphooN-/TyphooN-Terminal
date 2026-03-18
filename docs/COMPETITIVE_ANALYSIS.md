@@ -16,7 +16,7 @@
 | Candlestick charts | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Line/Bar charts | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Multi-timeframe grid | ✅ | ✅ | ❌ | ❌ | ✅ |
-| 30 indicators | ✅ | ✅ (38+) | ❌ | ✅ (50+) | ✅ |
+| 37 indicators + 22 Wasm | ✅ | ✅ (38+) | ❌ | ✅ (50+) | ✅ |
 | Drawing tools (6 types) | ✅ | ✅ (46) | ❌ | ❌ | ✅ |
 | Auto Fibonacci | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Supply/Demand zones | ✅ | ✅* | ❌ | ❌ | ❌ |
@@ -224,16 +224,16 @@
 - **Speed** — Godel optimizes for sub-second research queries
 
 ### vs MT5
-- **Drawing tools** — MT5 has 46 drawing objects vs our 6
-- **Indicator count** — MT5 has 38+ built-in vs our 30
-- **EA/Expert Advisor system** — MT5 has a full algorithmic trading framework (MQL5)
-- **Strategy tester** — MT5's visual tester is more polished (drag speed, visual replay)
+- **Drawing tools** — MT5 has 46 drawing objects vs our 9 (trend, fib, h-line, rectangle, ray, ruler, channel, fib time zones, annotations)
+- ~~**Indicator count**~~ **RESOLVED** — MT5 has 38+ built-in, we now have **37 unique indicators** + 22 Wasm implementations. Parity achieved with Alligator, AO, MFI, Force Index, Envelopes, StdDev, Chaikin, DeMarker, Fractals.
+- **EA/Expert Advisor system** — MT5 has a full algorithmic trading framework (MQL5). We have auto-trade + genetic optimizer but no custom language.
+- **Strategy tester** — MT5's visual tester has better drag speed. Our replay mode + visual backtester are functionally equivalent.
 
 ### vs OpenBB
-- **Quantitative analysis** — OpenBB has normality tests, CAPM, factor models
-- **Crypto on-chain** — Blockchain analytics (Etherscan, etc.)
-- **Government data** — Fed speakers, treasury auctions
-- **Jupyter integration** — OpenBB runs in notebooks for research workflows
+- ~~**Quantitative analysis**~~ **MOSTLY RESOLVED** — We now have Fourier analysis, Shannon entropy, fractal dimension, wavelet decomposition, cointegration testing, genetic optimization. OpenBB still has normality tests (Jarque-Bera) and CAPM factor models.
+- **Crypto on-chain** — Blockchain analytics (Etherscan, etc.) — blocked by external APIs
+- ~~**Government data**~~ **RESOLVED** — FRED integration provides Fed Funds, CPI, GDP, Treasury yields, VIX, M2
+- **Jupyter integration** — OpenBB runs in notebooks. We export data via CSV/clipboard for external analysis.
 
 ## Future Feature Priorities (Ranked by Impact)
 

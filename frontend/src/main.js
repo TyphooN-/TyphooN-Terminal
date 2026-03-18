@@ -1737,6 +1737,131 @@ function calcHMA(data, period = 20) {
   return hma;
 }
 
+// ── Additional MT5 Parity Indicators ────────────────────────
+
+function calcAlligator(data, jawP = 13, teethP = 8, lipsP = 5) {
+  // Bill Williams Alligator: 3 smoothed MAs with forward offset
+  const smma = (d, p) => { const r = []; let s = d.slice(0,p).reduce((a,b)=>a+b,0)/p; r.push(s); for(let i=p;i<d.length;i++){s=(s*(p-1)+d[i])/p;r.push(s);} return r; };
+  const med = data.map(b => (b.high + b.low) / 2);
+  const jaw = smma(med, jawP), teeth = smma(med, teethP), lips = smma(med, lipsP);
+  // Offsets: jaw +8, teeth +5, lips +3 (shift forward)
+  return {
+    jaw: jaw.map((v, i) => ({ time: data[Math.min(i + jawP + 8 - 1, data.length - 1)].time, value: v })).filter(d => d.time),
+    teeth: teeth.map((v, i) => ({ time: data[Math.min(i + teethP + 5 - 1, data.length - 1)].time, value: v })).filter(d => d.time),
+    lips: lips.map((v, i) => ({ time: data[Math.min(i + lipsP + 3 - 1, data.length - 1)].time, value: v })).filter(d => d.time),
+  };
+}
+
+function calcAwesomeOscillator(data) {
+  // AO = SMA(5, median) - SMA(34, median)
+  const med = data.map(b => (b.high + b.low) / 2);
+  const result = [];
+  for (let i = 33; i < med.length; i++) {
+    const sma5 = med.slice(i - 4, i + 1).reduce((a, b) => a + b, 0) / 5;
+    const sma34 = med.slice(i - 33, i + 1).reduce((a, b) => a + b, 0) / 34;
+    const ao = sma5 - sma34;
+    result.push({ time: data[i].time, value: ao, color: i > 0 && ao > (result[result.length-1]?.value || 0) ? "#4caf50" : "#f44336" });
+  }
+  return result;
+}
+
+function calcMFI(data, period = 14) {
+  // Money Flow Index — volume-weighted RSI
+  if (data.length < period + 1) return [];
+  const tp = data.map(b => (b.high + b.low + b.close) / 3);
+  const mf = tp.map((t, i) => t * (data[i].volume || 1));
+  const result = [];
+  for (let i = period; i < data.length; i++) {
+    let posFlow = 0, negFlow = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (tp[j] > tp[j - 1]) posFlow += mf[j];
+      else negFlow += mf[j];
+    }
+    const mfi = negFlow > 0 ? 100 - 100 / (1 + posFlow / negFlow) : 100;
+    result.push({ time: data[i].time, value: mfi });
+  }
+  return result;
+}
+
+function calcForceIndex(data, period = 13) {
+  if (data.length < period + 1) return [];
+  const raw = [];
+  for (let i = 1; i < data.length; i++) raw.push((data[i].close - data[i-1].close) * (data[i].volume || 1));
+  // EMA of raw force
+  const k = 2 / (period + 1);
+  let ema = raw[0];
+  const result = [];
+  for (let i = 0; i < raw.length; i++) {
+    ema = raw[i] * k + ema * (1 - k);
+    if (i >= period - 1) result.push({ time: data[i + 1].time, value: ema });
+  }
+  return result;
+}
+
+function calcEnvelopes(data, period = 20, deviation = 0.1) {
+  const sma = calcSMA(data, period);
+  return {
+    upper: sma.map(d => ({ time: d.time, value: d.value * (1 + deviation) })),
+    lower: sma.map(d => ({ time: d.time, value: d.value * (1 - deviation) })),
+  };
+}
+
+function calcStdDev(data, period = 20) {
+  const result = [];
+  for (let i = period - 1; i < data.length; i++) {
+    let sum = 0, sumSq = 0;
+    for (let j = i - period + 1; j <= i; j++) { sum += data[j].close; sumSq += data[j].close ** 2; }
+    const mean = sum / period;
+    result.push({ time: data[i].time, value: Math.sqrt(sumSq / period - mean ** 2) });
+  }
+  return result;
+}
+
+function calcChaikin(data, fastP = 3, slowP = 10) {
+  // Accumulation/Distribution Line, then EMA(3) - EMA(10)
+  const ad = []; let adCum = 0;
+  for (let i = 0; i < data.length; i++) {
+    const range = data[i].high - data[i].low;
+    const mfm = range > 0 ? ((data[i].close - data[i].low) - (data[i].high - data[i].close)) / range : 0;
+    adCum += mfm * (data[i].volume || 1);
+    ad.push({ time: data[i].time, close: adCum, high: adCum, low: adCum, open: adCum });
+  }
+  const fastEma = calcEMA(ad, fastP);
+  const slowEma = calcEMA(ad, slowP);
+  const offset = fastEma.length - slowEma.length;
+  return slowEma.map((d, i) => ({ time: d.time, value: fastEma[i + offset].value - d.value }));
+}
+
+function calcDeMarker(data, period = 14) {
+  if (data.length < period + 1) return [];
+  const result = [];
+  for (let i = period; i < data.length; i++) {
+    let deMax = 0, deMin = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      const hDiff = data[j].high - data[j - 1].high;
+      const lDiff = data[j - 1].low - data[j].low;
+      deMax += hDiff > 0 ? hDiff : 0;
+      deMin += lDiff > 0 ? lDiff : 0;
+    }
+    result.push({ time: data[i].time, value: (deMax + deMin) > 0 ? deMax / (deMax + deMin) : 0.5 });
+  }
+  return result;
+}
+
+function calcFractals(data, lookback = 2) {
+  const highs = [], lows = [];
+  for (let i = lookback; i < data.length - lookback; i++) {
+    let isHigh = true, isLow = true;
+    for (let j = 1; j <= lookback; j++) {
+      if (data[i - j].high >= data[i].high || data[i + j].high >= data[i].high) isHigh = false;
+      if (data[i - j].low <= data[i].low || data[i + j].low <= data[i].low) isLow = false;
+    }
+    if (isHigh) highs.push({ time: data[i].time, position: "aboveBar", color: "#ff5722", shape: "arrowDown", text: "▼" });
+    if (isLow) lows.push({ time: data[i].time, position: "belowBar", color: "#4caf50", shape: "arrowUp", text: "▲" });
+  }
+  return [...highs, ...lows].sort((a, b) => a.time - b.time);
+}
+
 // ── BetterVolume ────────────────────────────────────────────
 // Exact port of BetterVolume.mqh — Emini-Watch classification
 // Colors: Yellow=LowVol, Red=ClimaxUp, White=ClimaxDn, Green=Churn, Magenta=Climax+Churn, SteelBlue=Normal
@@ -2577,6 +2702,57 @@ function applyIndicators(chartData) {
     } else if (ind === "hma" && chartData.length > period) {
       const hma = calcHMA(chartData, period);
       addLine("#00e5ff", 1.5, clip(hma), key);
+
+    } else if (ind === "alligator" && chartData.length > 14) {
+      const a = calcAlligator(chartData);
+      addLine("#2196f3", 1.5, clip(a.jaw), key + "_jaw");   // blue = jaw
+      addLine("#f44336", 1.5, clip(a.teeth), key + "_teeth"); // red = teeth
+      addLine("#4caf50", 1.5, clip(a.lips), key + "_lips");   // green = lips
+
+    } else if (ind === "ao" && chartData.length > 35) {
+      const ao = calcAwesomeOscillator(chartData);
+      const s = chart.addHistogramSeries({ priceScaleId: "ao", lastValueVisible: true });
+      chart.priceScale("ao").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
+      s.setData(ao); indicatorSeries[key] = s;
+
+    } else if (ind === "mfi" && chartData.length > period + 1) {
+      const mfi = calcMFI(chartData, period);
+      const s = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, title: `MFI${period}`, priceScaleId: "mfi", lastValueVisible: true });
+      chart.priceScale("mfi").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
+      s.setData(mfi); indicatorSeries[key] = s;
+
+    } else if (ind === "force" && chartData.length > period + 1) {
+      const fi = calcForceIndex(chartData, period);
+      const s = chart.addLineSeries({ color: "#00bcd4", lineWidth: 1, title: "Force", priceScaleId: "force", lastValueVisible: true });
+      chart.priceScale("force").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
+      s.setData(fi); indicatorSeries[key] = s;
+
+    } else if (ind === "envelopes" && chartData.length > period) {
+      const env = calcEnvelopes(chartData, period);
+      addLine("#ff980088", 1, clip(env.upper), key + "_u");
+      addLine("#ff980088", 1, clip(env.lower), key + "_l");
+
+    } else if (ind === "stddev" && chartData.length > period) {
+      const sd = calcStdDev(chartData, period);
+      const s = chart.addLineSeries({ color: "#e91e63", lineWidth: 1, title: "StdDev", priceScaleId: "stddev", lastValueVisible: true });
+      chart.priceScale("stddev").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
+      s.setData(sd); indicatorSeries[key] = s;
+
+    } else if (ind === "chaikin" && chartData.length > 11) {
+      const ch = calcChaikin(chartData);
+      const s = chart.addLineSeries({ color: "#ff5722", lineWidth: 1, title: "Chaikin", priceScaleId: "chaikin", lastValueVisible: true });
+      chart.priceScale("chaikin").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
+      s.setData(ch); indicatorSeries[key] = s;
+
+    } else if (ind === "demarker" && chartData.length > period + 1) {
+      const dm = calcDeMarker(chartData, period);
+      const s = chart.addLineSeries({ color: "#795548", lineWidth: 1, title: "DeMarker", priceScaleId: "demarker", lastValueVisible: true });
+      chart.priceScale("demarker").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
+      s.setData(dm); indicatorSeries[key] = s;
+
+    } else if (ind === "fractals" && chartData.length > 5) {
+      const markers = calcFractals(chartData);
+      try { candleSeries.setMarkers(markers); } catch (_) {}
 
     } else if (ind === "mtf-ma") {
       // MTF_MA: SMA from current chart + higher timeframes
