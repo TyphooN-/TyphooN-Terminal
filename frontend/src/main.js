@@ -143,7 +143,7 @@ function packBarsForWasm(bars) {
 }
 
 import { createChart, CrosshairMode } from "lightweight-charts";
-import { createWindow, openArticleWindow, openFundamentalsWindow, openFilingsWindow, tileWindows, closeAllWindows } from "./windows.js";
+import { createWindow, openArticleWindow, openFundamentalsWindow, openFilingsWindow, tileWindows, closeAllWindows, getActiveWindows } from "./windows.js";
 import "./windows.css";
 
 // ── Logging ─────────────────────────────────────────────────
@@ -1793,6 +1793,11 @@ async function loadMTFData(symbol) {
         time: Math.floor(new Date(b.timestamp).getTime() / 1000),
         open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
       }));
+      // Also populate barCache so prefetch doesn't re-fetch these TFs
+      const cacheKey = getCacheKey(symbol, tf);
+      if (!barCache[cacheKey] || !barCache[cacheKey].data || barCache[cacheKey].data.length < bars.length) {
+        barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+      }
     }
     log(`MTF data loaded: ${Object.keys(mtfData).map(tf => `${MTF_LABELS[tf] || tf}=${(mtfData[tf]||[]).length}`).join(", ")}`, "ok");
   } catch (e) {
@@ -3227,6 +3232,8 @@ async function updateDashboard() {
   } catch (_) {
   } finally {
     window._dashboardInFlight = false;
+    // Check conditional orders every dashboard tick (2s)
+    checkConditionalOrders();
   }
 }
 
@@ -4111,6 +4118,9 @@ async function loadNewsAndFundamentals(symbol) {
 }
 
 async function openArticleInline(url, title) {
+  // Track last article for session restore
+  window._lastArticleUrl = url;
+  window._lastArticleTitle = title;
   // Open article in a floating window (Godel Terminal style)
   const win = createWindow({
     title: title.substring(0, 60),
@@ -4324,13 +4334,46 @@ function saveSession() {
     const fisherH = document.getElementById("fisher-pane")?.offsetHeight || 120;
     const volumeH = document.getElementById("volume-pane")?.offsetHeight || 100;
 
+    // Chart type
+    const chartTypeEl = document.getElementById("chart-type");
+    const chartType = chartTypeEl ? chartTypeEl.value : "candles";
+
+    // Panel collapse states
+    const panelStates = {};
+    for (const id of ["positions-panel", "orders-panel", "news-panel", "indicator-panel", "log-panel"]) {
+      const el = document.getElementById(id);
+      if (el) panelStates[id] = el.classList.contains("collapsed");
+    }
+
+    // MTF grid state
+    const mtfGridState = (typeof mtfGridActive !== "undefined" && mtfGridActive) ? {
+      active: true,
+      symbol: (typeof mtfGridSymbol !== "undefined" ? mtfGridSymbol : currentSymbol),
+      timeframes: (typeof mtfGridCells !== "undefined" ? mtfGridCells.map(c => c.tf) : []),
+    } : { active: false };
+
+    // Visible chart range
+    let visibleRange = null;
+    try { visibleRange = chart.timeScale().getVisibleLogicalRange(); } catch (_) {}
+
+    // Last viewed news article
+    const lastArticle = window._lastArticleUrl || null;
+    const lastArticleTitle = window._lastArticleTitle || null;
+
     const session = {
       tabs: tabs.map(t => ({ symbol: t.symbol, timeframe: t.timeframe, barCount: t.barCount })),
       activeTabIndex: tabs.findIndex(t => t.id === activeTabId),
       indicators,
       orderMode: document.getElementById("order-mode")?.value || "VaR",
+      orderType: document.getElementById("order-type")?.value || "market",
+      chartType,
       fisherPaneHeight: fisherH,
       volumePaneHeight: volumeH,
+      panelStates,
+      mtfGridState,
+      visibleRange,
+      lastArticle,
+      lastArticleTitle,
       timestamp: Date.now(),
     };
 
@@ -4353,10 +4396,20 @@ function restoreSession() {
       });
     }
 
-    // Restore order mode
+    // Restore order mode + type
     if (session.orderMode) {
       const modeEl = document.getElementById("order-mode");
       if (modeEl) modeEl.value = session.orderMode;
+    }
+    if (session.orderType) {
+      const typeEl = document.getElementById("order-type");
+      if (typeEl) typeEl.value = session.orderType;
+    }
+
+    // Restore chart type
+    if (session.chartType) {
+      const ctEl = document.getElementById("chart-type");
+      if (ctEl) ctEl.value = session.chartType;
     }
 
     // Restore pane heights
@@ -4367,6 +4420,17 @@ function restoreSession() {
     if (session.volumePaneHeight) {
       const vp = document.getElementById("volume-pane");
       if (vp) vp.style.height = session.volumePaneHeight + "px";
+    }
+
+    // Restore panel collapse states
+    if (session.panelStates) {
+      for (const [id, collapsed] of Object.entries(session.panelStates)) {
+        const el = document.getElementById(id);
+        if (el) {
+          if (collapsed) el.classList.add("collapsed");
+          else el.classList.remove("collapsed");
+        }
+      }
     }
 
     // Restore tabs
@@ -4380,7 +4444,37 @@ function restoreSession() {
     const idx = session.activeTabIndex >= 0 ? session.activeTabIndex : 0;
     if (tabs[idx]) switchTab(tabs[idx].id);
 
-    log(`Session restored: ${session.tabs.length} tabs`, "ok");
+    // Restore chart visible range after chart loads (preserves zoom/scroll position)
+    if (session.visibleRange) {
+      const savedRange = session.visibleRange;
+      // Defer until chart data is loaded — use a one-shot listener
+      const restoreRange = () => {
+        try { chart.timeScale().setVisibleLogicalRange(savedRange); } catch (_) {}
+      };
+      // Try immediately, then retry after chart load settles
+      setTimeout(restoreRange, 500);
+      setTimeout(restoreRange, 2000);
+    }
+
+    // Restore MTF grid state (must happen after tabs are loaded)
+    if (session.mtfGridState && session.mtfGridState.active && session.mtfGridState.timeframes) {
+      const sym = session.mtfGridState.symbol || currentSymbol;
+      const tfs = session.mtfGridState.timeframes;
+      // Defer MTF grid open to let chart settle first
+      setTimeout(() => {
+        try { openMTFGrid(sym, tfs); } catch (_) {}
+      }, 3000);
+    }
+
+    // Re-open last viewed article if user was reading one
+    if (session.lastArticle) {
+      window._lastArticleUrl = session.lastArticle;
+      setTimeout(() => {
+        try { openArticleInline(session.lastArticle, session.lastArticleTitle || "Article"); } catch (_) {}
+      }, 4000); // defer to let chart load first
+    }
+
+    log(`Session restored: ${session.tabs.length} tabs, chart type: ${session.chartType || "candles"}${session.mtfGridState?.active ? ", MTF grid active" : ""}`, "ok");
     return true;
   } catch (e) {
     log(`Session restore failed: ${e}`, "warn");
@@ -4702,6 +4796,8 @@ function fireAlert(alert) {
       condition: `${alert.direction} ${alert.price.toFixed(4)}`,
     });
   }
+  // Voice alert integration
+  speakAlert(`${alert.symbol} price alert. ${alert.direction} ${alert.price.toFixed(2)}`);
 }
 
 // ── Dividend/Corporate Action Alerts ─────────────────────────
@@ -11319,6 +11415,1915 @@ function cmdAPI() {
   } root.appendChild(exportSection); win.appendElement(root); log("API reference window opened", "ok");
 }
 
+// ── MULTI — Multi-Account Portfolio View ─────────────────────
+async function cmdMultiAccount() {
+  const win = createWindow({ title: "Multi-Account Portfolio View", width: 500, height: 600 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Loading portfolio...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    const [marginJson, posJson, acctJson] = await Promise.all([
+      invoke("get_margin_info"),
+      invoke("get_positions"),
+      invokeQuiet("get_account").catch(() => "{}"),
+    ]);
+    const mi = JSON.parse(marginJson);
+    const positions = JSON.parse(posJson);
+    const acct = JSON.parse(acctJson);
+
+    win.contentElement.textContent = "";
+    const root = document.createElement("div");
+    root.style.cssText = "padding:12px;overflow-y:auto;height:100%;font-family:'Iosevka Fixed',Consolas,monospace;font-size:11px;color:#ddd;";
+
+    // Multi-account notice
+    const savedAccounts = loadSavedAccounts();
+    if (savedAccounts.length > 1) {
+      const notice = document.createElement("div");
+      notice.style.cssText = "background:#1a1a2e;border:1px solid #333;padding:8px 12px;margin-bottom:12px;font-size:10px;color:#ff9800;border-radius:4px;";
+      notice.textContent = `${savedAccounts.length} accounts configured (${savedAccounts.map(a => a.name).join(", ")}). Switch accounts via SETTINGS to view other portfolios.`;
+      root.appendChild(notice);
+    }
+
+    // Account summary
+    const equity = parseFloat(mi.equity || acct.equity || 0);
+    const balance = parseFloat(mi.balance || acct.cash || acct.balance || 0);
+    const buyingPower = parseFloat(acct.buying_power || 0);
+    const hasPositions = mi.gross_lots > 0;
+    const mlPct = hasPositions ? mi.margin_level_pct : 0;
+
+    const summaryDiv = document.createElement("div");
+    summaryDiv.style.cssText = "background:#111;border:1px solid #333;padding:12px;margin-bottom:12px;border-radius:4px;";
+    const sTitle = document.createElement("div");
+    sTitle.style.cssText = "font-size:13px;font-weight:bold;color:#2196f3;margin-bottom:8px;";
+    sTitle.textContent = "Account Summary";
+    summaryDiv.appendChild(sTitle);
+
+    const summaryGrid = document.createElement("div");
+    summaryGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px;";
+    const summaryItems = [
+      { label: "Equity", value: `$${equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, color: "#4caf50" },
+      { label: "Balance", value: `$${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, color: "#ccc" },
+      { label: "Buying Power", value: buyingPower > 0 ? `$${buyingPower.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "N/A", color: "#ff9800" },
+      { label: "Margin Level", value: hasPositions ? `${mlPct.toFixed(1)}%` : "N/A", color: mlPct > 200 ? "#4caf50" : mlPct > 100 ? "#ff9800" : "#f44336" },
+    ];
+    for (const item of summaryItems) {
+      const cell = document.createElement("div");
+      cell.style.cssText = "padding:4px 0;";
+      cell.innerHTML = `<span style="color:#888;">${item.label}:</span> <span style="color:${item.color};font-weight:bold;">${item.value}</span>`;
+      summaryGrid.appendChild(cell);
+    }
+    summaryDiv.appendChild(summaryGrid);
+    root.appendChild(summaryDiv);
+
+    if (!positions || positions.length === 0) {
+      const noPos = document.createElement("div");
+      noPos.style.cssText = "color:#888;padding:20px;text-align:center;";
+      noPos.textContent = "No open positions.";
+      root.appendChild(noPos);
+      win.appendElement(root);
+      return;
+    }
+
+    // Classify positions by type
+    const cryptoPattern = /^(BTC|ETH|SOL|DOGE|ADA|XRP|AVAX|DOT|MATIC|LINK|UNI|SHIB|LTC|ALGO)/i;
+    const etfPattern = /^(SPY|QQQ|IWM|DIA|VTI|VOO|GLD|SLV|TLT|XLF|XLE|XLK|XLV|ARKK|SOXL|TQQQ|SQQQ|UVXY|VXX|HYG|LQD|AGG|BND|EEM|EFA|VEA|IBIT|GBTC)/i;
+    const optionPattern = /\d{6}[CP]\d{8}$/;
+
+    const groups = { Crypto: [], ETFs: [], Options: [], Stocks: [] };
+    let totalPortfolioValue = 0;
+    let totalPL = 0;
+
+    for (const p of positions) {
+      const sym = p.symbol || "";
+      const qty = Math.abs(parseFloat(p.qty) || 0);
+      const price = parseFloat(p.current_price) || 0;
+      const mv = Math.abs(parseFloat(p.market_value) || qty * price);
+      const pl = parseFloat(p.unrealized_pl) || 0;
+      totalPortfolioValue += mv;
+      totalPL += pl;
+
+      const item = { symbol: sym, side: p.side, qty, price, mv, pl };
+
+      if (optionPattern.test(sym)) groups.Options.push(item);
+      else if (cryptoPattern.test(sym.replace("/", ""))) groups.Crypto.push(item);
+      else if (etfPattern.test(sym)) groups.ETFs.push(item);
+      else groups.Stocks.push(item);
+    }
+
+    // Allocation visualization (color bars)
+    const allocDiv = document.createElement("div");
+    allocDiv.style.cssText = "background:#111;border:1px solid #333;padding:12px;margin-bottom:12px;border-radius:4px;";
+    const allocTitle = document.createElement("div");
+    allocTitle.style.cssText = "font-size:12px;font-weight:bold;color:#2196f3;margin-bottom:8px;";
+    allocTitle.textContent = "Allocation";
+    allocDiv.appendChild(allocTitle);
+
+    const groupColors = { Stocks: "#2196f3", ETFs: "#ff9800", Crypto: "#9c27b0", Options: "#4caf50" };
+    const barContainer = document.createElement("div");
+    barContainer.style.cssText = "display:flex;height:24px;border-radius:4px;overflow:hidden;margin-bottom:8px;";
+
+    for (const [gName, gItems] of Object.entries(groups)) {
+      const gValue = gItems.reduce((s, i) => s + i.mv, 0);
+      const pct = totalPortfolioValue > 0 ? (gValue / totalPortfolioValue * 100) : 0;
+      if (pct < 0.5) continue;
+      const seg = document.createElement("div");
+      seg.style.cssText = `width:${pct}%;background:${groupColors[gName]};display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;font-weight:bold;min-width:20px;`;
+      seg.textContent = pct >= 5 ? `${gName} ${pct.toFixed(0)}%` : `${pct.toFixed(0)}%`;
+      seg.title = `${gName}: ${pct.toFixed(1)}%`;
+      barContainer.appendChild(seg);
+    }
+    allocDiv.appendChild(barContainer);
+
+    // Legend
+    const legendDiv = document.createElement("div");
+    legendDiv.style.cssText = "display:flex;gap:12px;flex-wrap:wrap;";
+    for (const [gName, color] of Object.entries(groupColors)) {
+      const gValue = groups[gName].reduce((s, i) => s + i.mv, 0);
+      if (gValue === 0) continue;
+      const pct = totalPortfolioValue > 0 ? (gValue / totalPortfolioValue * 100).toFixed(1) : "0.0";
+      const leg = document.createElement("span");
+      leg.style.cssText = "font-size:10px;color:#aaa;";
+      leg.innerHTML = `<span style="display:inline-block;width:8px;height:8px;background:${color};border-radius:2px;margin-right:4px;vertical-align:middle;"></span>${gName}: $${gValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })} (${pct}%)`;
+      legendDiv.appendChild(leg);
+    }
+    allocDiv.appendChild(legendDiv);
+    root.appendChild(allocDiv);
+
+    // Position groups
+    for (const [gName, gItems] of Object.entries(groups)) {
+      if (gItems.length === 0) continue;
+      const gDiv = document.createElement("div");
+      gDiv.style.cssText = "background:#111;border:1px solid #333;padding:10px;margin-bottom:8px;border-radius:4px;";
+      const gTitle = document.createElement("div");
+      gTitle.style.cssText = `font-size:12px;font-weight:bold;color:${groupColors[gName]};margin-bottom:6px;display:flex;justify-content:space-between;`;
+      const gValue = gItems.reduce((s, i) => s + i.mv, 0);
+      const gPL = gItems.reduce((s, i) => s + i.pl, 0);
+      const gPct = totalPortfolioValue > 0 ? (gValue / totalPortfolioValue * 100).toFixed(1) : "0.0";
+      gTitle.innerHTML = `<span>${gName} (${gItems.length})</span><span style="font-size:10px;color:#888;">$${gValue.toLocaleString(undefined, { maximumFractionDigits: 0 })} | <span style="color:${gPL >= 0 ? '#4caf50' : '#f44336'}">P&L: $${gPL.toFixed(2)}</span> | ${gPct}%</span>`;
+      gDiv.appendChild(gTitle);
+
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;";
+      const hdr = document.createElement("tr");
+      for (const h of ["Symbol", "Side", "Qty", "Price", "Value", "P&L"]) {
+        const th = document.createElement("td");
+        th.style.cssText = "color:#555;font-size:9px;text-transform:uppercase;padding:2px 4px;border-bottom:1px solid #222;";
+        th.textContent = h;
+        hdr.appendChild(th);
+      }
+      table.appendChild(hdr);
+
+      for (const item of gItems.sort((a, b) => b.mv - a.mv)) {
+        const tr = document.createElement("tr");
+        const vals = [
+          { text: item.symbol, css: "color:#8ff;" },
+          { text: item.side === "long" ? "L" : "S", css: `color:${item.side === "long" ? "#4caf50" : "#f44336"};` },
+          { text: String(item.qty), css: "color:#ccc;" },
+          { text: `$${item.price.toFixed(2)}`, css: "color:#aaa;" },
+          { text: `$${item.mv.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, css: "color:#ccc;" },
+          { text: `$${item.pl.toFixed(2)}`, css: `color:${item.pl >= 0 ? "#4caf50" : "#f44336"};` },
+        ];
+        for (const v of vals) {
+          const td = document.createElement("td");
+          td.style.cssText = `padding:3px 4px;font-size:10px;${v.css}`;
+          td.textContent = v.text;
+          tr.appendChild(td);
+        }
+        tr.style.cursor = "pointer";
+        tr.addEventListener("click", () => {
+          document.getElementById("symbol-input").value = item.symbol;
+          triggerLoad();
+        });
+        table.appendChild(tr);
+      }
+      gDiv.appendChild(table);
+      root.appendChild(gDiv);
+    }
+
+    // Risk metrics
+    const riskDiv = document.createElement("div");
+    riskDiv.style.cssText = "background:#111;border:1px solid #333;padding:12px;margin-bottom:8px;border-radius:4px;";
+    const rTitle = document.createElement("div");
+    rTitle.style.cssText = "font-size:12px;font-weight:bold;color:#f44336;margin-bottom:8px;";
+    rTitle.textContent = "Risk Metrics";
+    riskDiv.appendChild(rTitle);
+
+    // Largest position
+    const allItems = positions.map(p => ({
+      symbol: p.symbol,
+      mv: Math.abs(parseFloat(p.market_value) || (Math.abs(parseFloat(p.qty) || 0) * (parseFloat(p.current_price) || 0))),
+    }));
+    const largest = allItems.sort((a, b) => b.mv - a.mv)[0];
+    const largestPct = totalPortfolioValue > 0 ? (largest.mv / totalPortfolioValue * 100).toFixed(1) : "0";
+
+    // HHI (Herfindahl-Hirschman Index) — concentration risk
+    let hhi = 0;
+    for (const item of allItems) {
+      const w = totalPortfolioValue > 0 ? item.mv / totalPortfolioValue : 0;
+      hhi += w * w;
+    }
+    hhi = hhi * 10000; // standard HHI scale (0-10000)
+    const hhiLabel = hhi < 1500 ? "Diversified" : hhi < 2500 ? "Moderate" : "Concentrated";
+    const hhiColor = hhi < 1500 ? "#4caf50" : hhi < 2500 ? "#ff9800" : "#f44336";
+
+    // Estimated portfolio VaR (simple, 1-day 95% using 2% assumption per position)
+    const estVaR = totalPortfolioValue * 0.02 * Math.sqrt(positions.length) / Math.sqrt(10);
+
+    const riskGrid = document.createElement("div");
+    riskGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px;";
+    const riskItems = [
+      { label: "Largest Position", value: `${largest.symbol} (${largestPct}%)`, color: parseFloat(largestPct) > 30 ? "#f44336" : "#ccc" },
+      { label: "Concentration (HHI)", value: `${Math.round(hhi)} — ${hhiLabel}`, color: hhiColor },
+      { label: "Est. 1-Day VaR (95%)", value: `$${estVaR.toFixed(0)}`, color: "#ff9800" },
+      { label: "Total P&L", value: `$${totalPL.toFixed(2)}`, color: totalPL >= 0 ? "#4caf50" : "#f44336" },
+    ];
+    for (const item of riskItems) {
+      const cell = document.createElement("div");
+      cell.style.cssText = "padding:4px 0;";
+      cell.innerHTML = `<span style="color:#888;font-size:10px;">${item.label}:</span><br><span style="color:${item.color};font-weight:bold;">${item.value}</span>`;
+      riskGrid.appendChild(cell);
+    }
+    riskDiv.appendChild(riskGrid);
+    root.appendChild(riskDiv);
+
+    win.appendElement(root);
+    log("Multi-Account Portfolio view opened", "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load portfolio: ${e}`);
+  }
+}
+
+// ── CONDITIONAL — Conditional Order Chains ───────────────────
+const CONDITIONAL_STORAGE_KEY = "typhoon_conditional_orders";
+
+function loadConditionalOrders() {
+  try { return JSON.parse(localStorage.getItem(CONDITIONAL_STORAGE_KEY) || "[]"); } catch { return []; }
+}
+
+function saveConditionalOrders(orders) {
+  localStorage.setItem(CONDITIONAL_STORAGE_KEY, JSON.stringify(orders));
+  window._conditionalOrders = orders.filter(o => o.status === "active");
+}
+
+// Load on startup
+window._conditionalOrders = loadConditionalOrders().filter(o => o.status === "active");
+window._conditionalCheckInFlight = false;
+
+async function checkConditionalOrders() {
+  if (window._conditionalCheckInFlight) return;
+  const active = window._conditionalOrders || [];
+  if (active.length === 0) return;
+  window._conditionalCheckInFlight = true;
+
+  try {
+    const allOrders = loadConditionalOrders();
+    let changed = false;
+
+    for (const cond of active) {
+      try {
+        let triggered = false;
+
+        if (cond.triggerCondition === "price_above" || cond.triggerCondition === "price_below") {
+          const qJson = await invokeQuiet("get_latest_quote", { symbol: cond.triggerSymbol });
+          const q = JSON.parse(qJson);
+          const price = q.last || q.bid || 0;
+          if (price <= 0) continue;
+          if (cond.triggerCondition === "price_above" && price >= parseFloat(cond.triggerValue)) triggered = true;
+          if (cond.triggerCondition === "price_below" && price <= parseFloat(cond.triggerValue)) triggered = true;
+        } else if (cond.triggerCondition === "rsi_above" || cond.triggerCondition === "rsi_below") {
+          // Compute RSI from cached bars if available
+          const cKey = `${cond.triggerSymbol}:1Day`;
+          const cached = barCache[cKey];
+          if (cached && cached.data && cached.data.length >= 15) {
+            const closes = cached.data.slice(-15).map(b => b.close);
+            let gains = 0, losses = 0;
+            for (let i = 1; i < closes.length; i++) {
+              const diff = closes[i] - closes[i - 1];
+              if (diff > 0) gains += diff; else losses += Math.abs(diff);
+            }
+            const avgGain = gains / 14, avgLoss = losses / 14;
+            const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+            const rsi = 100 - 100 / (1 + rs);
+            if (cond.triggerCondition === "rsi_above" && rsi >= parseFloat(cond.triggerValue)) triggered = true;
+            if (cond.triggerCondition === "rsi_below" && rsi <= parseFloat(cond.triggerValue)) triggered = true;
+          }
+        }
+        // Fisher cross conditions use cached indicator data
+        // (simplified: skip for now if no cached Fisher data available)
+
+        if (triggered) {
+          // Place the action order
+          try {
+            if (cond.actionType === "market") {
+              await invoke("place_order", { symbol: cond.actionSymbol, qty: parseInt(cond.actionQty), side: cond.actionSide });
+            } else if (cond.actionType === "limit" && cond.actionPrice) {
+              await invoke("place_limit_order", { symbol: cond.actionSymbol, qty: parseInt(cond.actionQty), side: cond.actionSide, limitPrice: parseFloat(cond.actionPrice), tif: "gtc" });
+            }
+            log(`CONDITIONAL triggered: "${cond.name}" — ${cond.actionSide} ${cond.actionQty} ${cond.actionSymbol}`, "ok");
+          } catch (orderErr) {
+            log(`CONDITIONAL order failed for "${cond.name}": ${orderErr}`, "error");
+          }
+
+          // Update status
+          const idx = allOrders.findIndex(o => o.id === cond.id);
+          if (idx >= 0) {
+            allOrders[idx].status = "triggered";
+            allOrders[idx].triggeredAt = new Date().toISOString();
+            changed = true;
+          }
+        }
+      } catch (_) {
+        // Skip this conditional on error, try next
+      }
+    }
+
+    if (changed) {
+      saveConditionalOrders(allOrders);
+    }
+  } finally {
+    window._conditionalCheckInFlight = false;
+  }
+}
+
+function cmdConditional() {
+  const win = createWindow({ title: "Conditional Order Chains", width: 500, height: 600 });
+  win.contentElement.textContent = "";
+
+  const root = document.createElement("div");
+  root.style.cssText = "padding:12px;overflow-y:auto;height:100%;font-family:'Iosevka Fixed',Consolas,monospace;font-size:11px;color:#ddd;";
+
+  let activeTab = "add";
+
+  // Tab bar
+  const tabBar = document.createElement("div");
+  tabBar.style.cssText = "display:flex;gap:0;border-bottom:1px solid #333;margin-bottom:12px;";
+  const tabs = [
+    { id: "add", label: "Add Conditional" },
+    { id: "active", label: "Active" },
+    { id: "history", label: "History" },
+  ];
+  const tabBtns = {};
+  for (const t of tabs) {
+    const btn = document.createElement("button");
+    btn.textContent = t.label;
+    btn.style.cssText = "flex:1;padding:8px;background:none;border:none;color:#888;cursor:pointer;font-size:11px;border-bottom:2px solid transparent;font-family:inherit;";
+    btn.addEventListener("click", () => { activeTab = t.id; updateTabs(); renderContent(); });
+    tabBar.appendChild(btn);
+    tabBtns[t.id] = btn;
+  }
+  root.appendChild(tabBar);
+
+  function updateTabs() {
+    for (const [id, btn] of Object.entries(tabBtns)) {
+      btn.style.color = id === activeTab ? "#8ff" : "#888";
+      btn.style.borderBottomColor = id === activeTab ? "#8ff" : "transparent";
+    }
+  }
+  updateTabs();
+
+  const contentDiv = document.createElement("div");
+  root.appendChild(contentDiv);
+
+  function makeInput(placeholder, width) {
+    const inp = document.createElement("input");
+    inp.placeholder = placeholder;
+    inp.style.cssText = `width:${width || "100%"};padding:6px 8px;background:#111;color:#ddd;border:1px solid #444;font-family:inherit;font-size:11px;box-sizing:border-box;`;
+    return inp;
+  }
+
+  function makeSelect(options) {
+    const sel = document.createElement("select");
+    sel.style.cssText = "padding:6px 8px;background:#111;color:#ddd;border:1px solid #444;font-family:inherit;font-size:11px;";
+    for (const opt of options) {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.label;
+      sel.appendChild(o);
+    }
+    return sel;
+  }
+
+  function renderContent() {
+    contentDiv.textContent = "";
+
+    if (activeTab === "add") {
+      const form = document.createElement("div");
+      form.style.cssText = "display:flex;flex-direction:column;gap:10px;";
+
+      // Name
+      const nameInput = makeInput("Conditional name (e.g. 'BTC breakout')");
+      const nameRow = document.createElement("div");
+      const nameLabel = document.createElement("div");
+      nameLabel.style.cssText = "color:#888;font-size:10px;margin-bottom:4px;";
+      nameLabel.textContent = "NAME";
+      nameRow.appendChild(nameLabel);
+      nameRow.appendChild(nameInput);
+      form.appendChild(nameRow);
+
+      // Trigger section
+      const triggerTitle = document.createElement("div");
+      triggerTitle.style.cssText = "font-weight:bold;color:#ff9800;font-size:11px;padding-top:4px;border-top:1px solid #333;";
+      triggerTitle.textContent = "TRIGGER";
+      form.appendChild(triggerTitle);
+
+      const trigRow1 = document.createElement("div");
+      trigRow1.style.cssText = "display:flex;gap:6px;align-items:center;";
+      const trigSymbol = makeInput("Symbol", "100px");
+      trigSymbol.value = currentSymbol || "";
+      const trigCondition = makeSelect([
+        { value: "price_above", label: "Price Above" },
+        { value: "price_below", label: "Price Below" },
+        { value: "rsi_above", label: "RSI Above" },
+        { value: "rsi_below", label: "RSI Below" },
+      ]);
+      const trigValue = makeInput("Value", "80px");
+      trigRow1.appendChild(trigSymbol);
+      trigRow1.appendChild(trigCondition);
+      trigRow1.appendChild(trigValue);
+      form.appendChild(trigRow1);
+
+      // Action section
+      const actionTitle = document.createElement("div");
+      actionTitle.style.cssText = "font-weight:bold;color:#4caf50;font-size:11px;padding-top:4px;border-top:1px solid #333;";
+      actionTitle.textContent = "ACTION";
+      form.appendChild(actionTitle);
+
+      const actRow1 = document.createElement("div");
+      actRow1.style.cssText = "display:flex;gap:6px;align-items:center;";
+      const actSymbol = makeInput("Symbol", "100px");
+      actSymbol.value = currentSymbol || "";
+      const actSide = makeSelect([
+        { value: "buy", label: "Buy" },
+        { value: "sell", label: "Sell" },
+      ]);
+      const actQty = makeInput("Qty", "60px");
+      const actType = makeSelect([
+        { value: "market", label: "Market" },
+        { value: "limit", label: "Limit" },
+      ]);
+      const actPrice = makeInput("Limit $", "80px");
+      actPrice.style.display = "none";
+      actType.addEventListener("change", () => {
+        actPrice.style.display = actType.value === "limit" ? "" : "none";
+      });
+      actRow1.appendChild(actSymbol);
+      actRow1.appendChild(actSide);
+      actRow1.appendChild(actQty);
+      actRow1.appendChild(actType);
+      actRow1.appendChild(actPrice);
+      form.appendChild(actRow1);
+
+      // Status / count
+      const allOrders = loadConditionalOrders();
+      const activeCount = allOrders.filter(o => o.status === "active").length;
+      const statusDiv = document.createElement("div");
+      statusDiv.style.cssText = "font-size:10px;color:#666;padding-top:4px;";
+      statusDiv.textContent = `${activeCount}/10 active conditionals`;
+      form.appendChild(statusDiv);
+
+      // Save button
+      const saveBtn = document.createElement("button");
+      saveBtn.textContent = "Save Conditional";
+      saveBtn.style.cssText = "padding:10px;background:#1b5e20;color:#fff;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-size:12px;font-weight:bold;margin-top:4px;";
+      saveBtn.addEventListener("click", () => {
+        const name = nameInput.value.trim();
+        if (!name) { alert("Name is required"); return; }
+        if (!trigSymbol.value.trim()) { alert("Trigger symbol is required"); return; }
+        if (!trigValue.value.trim()) { alert("Trigger value is required"); return; }
+        if (!actSymbol.value.trim()) { alert("Action symbol is required"); return; }
+        if (!actQty.value.trim() || parseInt(actQty.value) <= 0) { alert("Valid quantity is required"); return; }
+        if (actType.value === "limit" && (!actPrice.value.trim() || parseFloat(actPrice.value) <= 0)) { alert("Limit price is required"); return; }
+
+        const orders = loadConditionalOrders();
+        const activeOrders = orders.filter(o => o.status === "active");
+        if (activeOrders.length >= 10) { alert("Maximum 10 active conditionals reached. Cancel one first."); return; }
+
+        const newOrder = {
+          id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          name,
+          triggerSymbol: trigSymbol.value.trim().toUpperCase(),
+          triggerCondition: trigCondition.value,
+          triggerValue: trigValue.value.trim(),
+          actionSymbol: actSymbol.value.trim().toUpperCase(),
+          actionSide: actSide.value,
+          actionQty: actQty.value.trim(),
+          actionType: actType.value,
+          actionPrice: actType.value === "limit" ? actPrice.value.trim() : null,
+          status: "active",
+          createdAt: new Date().toISOString(),
+        };
+        orders.push(newOrder);
+        saveConditionalOrders(orders);
+
+        log(`Conditional "${name}" saved: ${trigSymbol.value} ${trigCondition.value} ${trigValue.value} -> ${actSide.value} ${actQty.value} ${actSymbol.value}`, "ok");
+        nameInput.value = "";
+        trigValue.value = "";
+        actQty.value = "";
+        actPrice.value = "";
+        statusDiv.textContent = `${orders.filter(o => o.status === "active").length}/10 active conditionals`;
+      });
+      form.appendChild(saveBtn);
+      contentDiv.appendChild(form);
+
+    } else if (activeTab === "active") {
+      const orders = loadConditionalOrders().filter(o => o.status === "active");
+      if (orders.length === 0) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "color:#888;text-align:center;padding:30px;";
+        empty.textContent = "No active conditionals.";
+        contentDiv.appendChild(empty);
+        return;
+      }
+
+      for (const cond of orders) {
+        const card = document.createElement("div");
+        card.style.cssText = "background:#111;border:1px solid #333;padding:10px;margin-bottom:8px;border-radius:4px;";
+
+        const header = document.createElement("div");
+        header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;";
+        const nameSpan = document.createElement("span");
+        nameSpan.style.cssText = "font-weight:bold;color:#8ff;font-size:12px;";
+        nameSpan.textContent = cond.name;
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.style.cssText = "padding:3px 10px;background:#b71c1c;color:#fff;border:1px solid #f44336;cursor:pointer;font-size:10px;font-family:inherit;";
+        cancelBtn.addEventListener("click", () => {
+          const allOrders = loadConditionalOrders();
+          const idx = allOrders.findIndex(o => o.id === cond.id);
+          if (idx >= 0) {
+            allOrders[idx].status = "cancelled";
+            allOrders[idx].cancelledAt = new Date().toISOString();
+            saveConditionalOrders(allOrders);
+            log(`Conditional "${cond.name}" cancelled`, "info");
+            renderContent();
+          }
+        });
+        header.appendChild(nameSpan);
+        header.appendChild(cancelBtn);
+        card.appendChild(header);
+
+        const condLabel = cond.triggerCondition.replace(/_/g, " ");
+        const trigDiv = document.createElement("div");
+        trigDiv.style.cssText = "font-size:10px;color:#ff9800;margin-bottom:2px;";
+        trigDiv.textContent = `IF ${cond.triggerSymbol} ${condLabel} ${cond.triggerValue}`;
+        card.appendChild(trigDiv);
+
+        const actDiv = document.createElement("div");
+        actDiv.style.cssText = "font-size:10px;color:#4caf50;";
+        actDiv.textContent = `THEN ${cond.actionSide.toUpperCase()} ${cond.actionQty} ${cond.actionSymbol} (${cond.actionType}${cond.actionPrice ? " @ $" + cond.actionPrice : ""})`;
+        card.appendChild(actDiv);
+
+        contentDiv.appendChild(card);
+      }
+
+    } else if (activeTab === "history") {
+      const orders = loadConditionalOrders().filter(o => o.status === "triggered" || o.status === "cancelled");
+      if (orders.length === 0) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "color:#888;text-align:center;padding:30px;";
+        empty.textContent = "No triggered or cancelled conditionals.";
+        contentDiv.appendChild(empty);
+        return;
+      }
+
+      for (const cond of orders.reverse()) {
+        const card = document.createElement("div");
+        card.style.cssText = "background:#111;border:1px solid #222;padding:8px;margin-bottom:6px;border-radius:4px;opacity:0.8;";
+
+        const header = document.createElement("div");
+        header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;";
+        const nameSpan = document.createElement("span");
+        nameSpan.style.cssText = "font-weight:bold;color:#888;font-size:11px;";
+        nameSpan.textContent = cond.name;
+        const statusSpan = document.createElement("span");
+        statusSpan.style.cssText = `font-size:10px;font-weight:bold;color:${cond.status === "triggered" ? "#4caf50" : "#f44336"};`;
+        statusSpan.textContent = cond.status.toUpperCase();
+        header.appendChild(nameSpan);
+        header.appendChild(statusSpan);
+        card.appendChild(header);
+
+        const condLabel = cond.triggerCondition.replace(/_/g, " ");
+        const detailDiv = document.createElement("div");
+        detailDiv.style.cssText = "font-size:10px;color:#666;";
+        detailDiv.textContent = `${cond.triggerSymbol} ${condLabel} ${cond.triggerValue} -> ${cond.actionSide} ${cond.actionQty} ${cond.actionSymbol}`;
+        card.appendChild(detailDiv);
+
+        const tsDiv = document.createElement("div");
+        tsDiv.style.cssText = "font-size:9px;color:#555;margin-top:4px;";
+        const ts = cond.triggeredAt || cond.cancelledAt || cond.createdAt;
+        tsDiv.textContent = ts ? new Date(ts).toLocaleString() : "";
+        card.appendChild(tsDiv);
+
+        contentDiv.appendChild(card);
+      }
+
+      // Clear history button
+      const clearBtn = document.createElement("button");
+      clearBtn.textContent = "Clear History";
+      clearBtn.style.cssText = "padding:6px 12px;background:#333;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;margin-top:8px;";
+      clearBtn.addEventListener("click", () => {
+        const allOrders = loadConditionalOrders().filter(o => o.status === "active");
+        saveConditionalOrders(allOrders);
+        renderContent();
+      });
+      contentDiv.appendChild(clearBtn);
+    }
+  }
+
+  renderContent();
+  win.appendElement(root);
+  log("Conditional Order Chains opened", "ok");
+}
+
+// ── PDT — Pattern Day Trader Monitor ────────────────────────
+async function cmdPDT() {
+  const win = createWindow({ title: "PDT Monitor", width: 520, height: 420 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Analyzing day trades...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+  try {
+    const [histJson, marginJson] = await Promise.all([
+      invoke("get_order_history", { limit: 100 }),
+      invoke("get_margin_info"),
+    ]);
+    const history = JSON.parse(histJson);
+    const mi = JSON.parse(marginJson);
+    const equity = mi.equity || 0;
+    const filled = history.filter(o => o.status === "filled");
+
+    // Group fills by symbol and calendar day
+    const dayMap = {}; // "SYMBOL:YYYY-MM-DD" -> { buys: [], sells: [] }
+    for (const o of filled) {
+      const ts = o.filled_at || o.created_at || "";
+      if (!ts) continue;
+      const d = new Date(ts);
+      const dayKey = d.toISOString().slice(0, 10);
+      const key = `${o.symbol}:${dayKey}`;
+      if (!dayMap[key]) dayMap[key] = { symbol: o.symbol, date: dayKey, buys: [], sells: [] };
+      if (o.side === "buy") dayMap[key].buys.push({ time: ts, price: o.filled_avg_price });
+      else dayMap[key].sells.push({ time: ts, price: o.filled_avg_price });
+    }
+
+    // A day trade = buy+sell (or sell+buy) of same symbol on same day
+    const dayTrades = [];
+    for (const [, group] of Object.entries(dayMap)) {
+      const roundTrips = Math.min(group.buys.length, group.sells.length);
+      for (let i = 0; i < roundTrips; i++) {
+        dayTrades.push({
+          date: group.date,
+          symbol: group.symbol,
+          buyTime: group.buys[i].time,
+          sellTime: group.sells[i].time,
+        });
+      }
+    }
+
+    // Rolling 5 business days from today
+    const today = new Date();
+    const fiveBusinessDaysAgo = new Date(today);
+    let bDays = 0;
+    while (bDays < 5) {
+      fiveBusinessDaysAgo.setDate(fiveBusinessDaysAgo.getDate() - 1);
+      const dow = fiveBusinessDaysAgo.getDay();
+      if (dow !== 0 && dow !== 6) bDays++;
+    }
+    const cutoff = fiveBusinessDaysAgo.toISOString().slice(0, 10);
+    const recentDayTrades = dayTrades.filter(dt => dt.date >= cutoff);
+    const count = recentDayTrades.length;
+    const remaining = Math.max(0, 3 - count);
+
+    win.contentElement.textContent = "";
+    const root = document.createElement("div");
+    root.style.cssText = "padding:12px;font-family:'Iosevka Fixed',monospace;font-size:12px;color:#ccc;overflow:auto;max-height:calc(100% - 10px);";
+
+    // Equity check
+    if (equity > 25000) {
+      const notice = document.createElement("div");
+      notice.style.cssText = "background:#1b5e20;color:#4caf50;padding:10px;border-radius:4px;margin-bottom:12px;font-weight:bold;";
+      notice.textContent = `PDT rules do not apply (equity $${equity.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ",")} > $25,000)`;
+      root.appendChild(notice);
+    }
+
+    // Day trade counter
+    const counterColor = count >= 4 ? "#f44336" : count === 3 ? "#ff9800" : "#4caf50";
+    const counter = document.createElement("div");
+    counter.style.cssText = `font-size:20px;font-weight:bold;color:${counterColor};margin-bottom:8px;`;
+    counter.textContent = `Day Trades Used: ${count}/3`;
+    root.appendChild(counter);
+
+    const remainLabel = document.createElement("div");
+    remainLabel.style.cssText = "color:#888;margin-bottom:12px;";
+    remainLabel.textContent = `You have ${remaining} day trade${remaining !== 1 ? "s" : ""} remaining this week`;
+    root.appendChild(remainLabel);
+
+    // Warning banner
+    if (count === 3 && equity <= 25000) {
+      const warn = document.createElement("div");
+      warn.style.cssText = "background:#4a3000;color:#ff9800;padding:10px;border:1px solid #ff9800;border-radius:4px;margin-bottom:12px;font-weight:bold;text-align:center;";
+      warn.textContent = "\u26a0\ufe0f ONE MORE DAY TRADE WILL FLAG YOU AS PDT";
+      root.appendChild(warn);
+    }
+    if (count >= 4 && equity <= 25000) {
+      const flagged = document.createElement("div");
+      flagged.style.cssText = "background:#4a0000;color:#f44336;padding:10px;border:1px solid #f44336;border-radius:4px;margin-bottom:12px;font-weight:bold;text-align:center;";
+      flagged.textContent = "\u26d4 PDT FLAGGED \u2014 Account may be restricted";
+      root.appendChild(flagged);
+    }
+
+    // Day trade list
+    if (recentDayTrades.length > 0) {
+      const header = document.createElement("div");
+      header.style.cssText = "color:#2196f3;font-weight:bold;margin-bottom:6px;";
+      header.textContent = "Recent Day Trades (rolling 5 business days)";
+      root.appendChild(header);
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Date</th><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:left;padding:4px;'>Buy Time</th><th style='text-align:left;padding:4px;'>Sell Time</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      for (const dt of recentDayTrades) {
+        const tr = document.createElement("tr");
+        tr.style.borderBottom = "1px solid #222";
+        const fmt = (ts) => { try { return new Date(ts).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }); } catch { return ts; } };
+        tr.innerHTML = `<td style="padding:4px;">${dt.date}</td><td style="padding:4px;color:#fff;font-weight:bold;">${dt.symbol}</td><td style="padding:4px;color:#4caf50;">${fmt(dt.buyTime)}</td><td style="padding:4px;color:#f44336;">${fmt(dt.sellTime)}</td>`;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      root.appendChild(table);
+    } else {
+      const none = document.createElement("div");
+      none.style.cssText = "color:#666;margin-top:8px;";
+      none.textContent = "No day trades in the last 5 business days.";
+      root.appendChild(none);
+    }
+    win.appendElement(root);
+    log(`PDT Monitor: ${count} day trades in rolling 5 days`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load PDT data: ${e}`);
+  }
+}
+
+// ── BACKUP — Settings Backup/Restore ────────────────────────
+function cmdBackup() {
+  const win = createWindow({ title: "Settings Backup / Restore", width: 450, height: 380 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div");
+  root.style.cssText = "padding:16px;font-family:'Iosevka Fixed',monospace;font-size:12px;color:#ccc;";
+
+  // Storage stats
+  const allKeys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("typhoon_")) allKeys.push(k);
+  }
+  let totalSize = 0;
+  for (const k of allKeys) totalSize += (localStorage.getItem(k) || "").length;
+
+  const stats = document.createElement("div");
+  stats.style.cssText = "background:#111;padding:10px;border-radius:4px;margin-bottom:16px;";
+  stats.innerHTML = `<div style="color:#2196f3;font-weight:bold;margin-bottom:6px;">Current Storage</div><div>Keys: ${allKeys.length} typhoon_ entries</div><div>Estimated size: ${(totalSize / 1024).toFixed(1)} KB</div>`;
+  root.appendChild(stats);
+
+  // Export button
+  const exportBtn = document.createElement("button");
+  exportBtn.textContent = "Export Backup";
+  exportBtn.className = "fw-btn";
+  exportBtn.style.cssText = "display:block;width:100%;padding:10px;margin-bottom:12px;background:#1b5e20;color:#4caf50;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-size:13px;font-weight:bold;";
+  exportBtn.addEventListener("click", () => {
+    const backup = { _meta: { version: "1.0", date: new Date().toISOString(), keys: allKeys.length } };
+    for (const k of allKeys) backup[k] = localStorage.getItem(k);
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    a.href = url;
+    a.download = `typhoon_backup_${dateStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    log("Settings backup exported", "ok");
+    exportBtn.textContent = "Exported!";
+    exportBtn.style.background = "#2e7d32";
+    setTimeout(() => { exportBtn.textContent = "Export Backup"; exportBtn.style.background = "#1b5e20"; }, 2000);
+  });
+  root.appendChild(exportBtn);
+
+  // Import section
+  const importLabel = document.createElement("div");
+  importLabel.style.cssText = "color:#2196f3;font-weight:bold;margin-bottom:8px;";
+  importLabel.textContent = "Import Backup";
+  root.appendChild(importLabel);
+
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json";
+  fileInput.style.cssText = "display:block;margin-bottom:12px;color:#ccc;";
+
+  const importStatus = document.createElement("div");
+  importStatus.style.cssText = "color:#888;margin-bottom:8px;min-height:20px;";
+
+  const importBtn = document.createElement("button");
+  importBtn.textContent = "Import & Restore";
+  importBtn.className = "fw-btn";
+  importBtn.style.cssText = "display:block;width:100%;padding:10px;background:#0d47a1;color:#64b5f6;border:1px solid #1976d2;cursor:pointer;font-family:inherit;font-size:13px;font-weight:bold;";
+  importBtn.addEventListener("click", () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) { importStatus.textContent = "No file selected."; importStatus.style.color = "#f44336"; return; }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!data._meta || !data._meta.version || !data._meta.date) {
+          importStatus.textContent = "Invalid backup file (missing metadata).";
+          importStatus.style.color = "#f44336";
+          return;
+        }
+        let restored = 0;
+        const total = Object.keys(data).filter(k => k !== "_meta").length;
+        for (const [key, value] of Object.entries(data)) {
+          if (key === "_meta") continue;
+          localStorage.setItem(key, value);
+          restored++;
+          importStatus.textContent = `Restored ${restored}/${total} settings...`;
+          importStatus.style.color = "#ff9800";
+        }
+        importStatus.textContent = `Restored ${restored}/${total} settings. Reloading...`;
+        importStatus.style.color = "#4caf50";
+        log(`Settings restored from backup (${restored} keys)`, "ok");
+        setTimeout(() => location.reload(), 1500);
+      } catch (e) {
+        importStatus.textContent = `Parse error: ${e.message}`;
+        importStatus.style.color = "#f44336";
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  root.appendChild(fileInput);
+  root.appendChild(importStatus);
+  root.appendChild(importBtn);
+  win.appendElement(root);
+  log("Backup/Restore window opened", "ok");
+}
+
+// ── ANNOUNCE — Earnings Surprise Tracker ────────────────────
+async function cmdAnnounce() {
+  const sym = currentSymbol || "AAPL";
+  const win = createWindow({ title: `Earnings Surprise \u2014 ${sym}`, width: 520, height: 400 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching SEC EDGAR fundamentals...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+  try {
+    const cacheKey = `fundamentals:${sym}`;
+    let data = await coldLoad(cacheKey);
+    if (!data) {
+      const json = await invoke("get_company_fundamentals", { symbol: sym });
+      data = JSON.parse(json);
+      if (data && data.entity) coldSave(cacheKey, data);
+    }
+
+    // Extract quarterly EPS from SEC EDGAR facts
+    let epsEntries = [];
+    if (data && data.facts) {
+      const usGaap = data.facts["us-gaap"] || data.facts;
+      const epsKey = usGaap["EarningsPerShareDiluted"] || usGaap["EarningsPerShareBasic"] || usGaap["earningsPerShareDiluted"] || usGaap["earningsPerShareBasic"];
+      if (epsKey) {
+        const units = epsKey.units || {};
+        const perShare = units["USD/shares"] || units["USD"] || Object.values(units)[0] || [];
+        epsEntries = perShare
+          .filter(e => e.form === "10-Q" || e.form === "10-K")
+          .map(e => ({ period: e.end || e.fy + "Q" + e.fp, value: parseFloat(e.val), form: e.form, filed: e.filed }))
+          .sort((a, b) => (b.period || "").localeCompare(a.period || ""));
+      }
+    }
+
+    // Fallback: try to extract from flat data structure
+    if (epsEntries.length === 0 && data && data.earnings_per_share) {
+      epsEntries = (Array.isArray(data.earnings_per_share) ? data.earnings_per_share : [])
+        .map(e => ({ period: e.period || e.end, value: parseFloat(e.value || e.val || 0), form: e.form || "10-Q", filed: e.filed || "" }))
+        .sort((a, b) => (b.period || "").localeCompare(a.period || ""));
+    }
+
+    win.contentElement.textContent = "";
+    const root = document.createElement("div");
+    root.style.cssText = "padding:12px;font-family:'Iosevka Fixed',monospace;font-size:12px;color:#ccc;overflow:auto;max-height:calc(100% - 10px);";
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;";
+    title.textContent = `${data && data.entity ? data.entity : sym} \u2014 Quarterly EPS`;
+    root.appendChild(title);
+
+    if (epsEntries.length === 0) {
+      const noData = document.createElement("div");
+      noData.style.cssText = "color:#888;padding:20px;";
+      noData.textContent = "No EPS data found in SEC EDGAR filings for this symbol.";
+      root.appendChild(noData);
+    } else {
+      const quarters = epsEntries.slice(0, 8);
+      let beats = 0;
+      let totalSurprise = 0;
+      let surpriseCount = 0;
+
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Quarter</th><th style='text-align:right;padding:4px;'>EPS</th><th style='text-align:right;padding:4px;'>QoQ Change</th><th style='text-align:center;padding:4px;'>Trend</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+
+      for (let i = 0; i < quarters.length; i++) {
+        const q = quarters[i];
+        const prev = quarters[i + 1];
+        let qoqChange = null;
+        let isBeat = false;
+        if (prev && prev.value !== 0) {
+          qoqChange = ((q.value - prev.value) / Math.abs(prev.value)) * 100;
+          isBeat = q.value > prev.value;
+          if (isBeat) beats++;
+          totalSurprise += qoqChange;
+          surpriseCount++;
+        }
+        const tr = document.createElement("tr");
+        tr.style.borderBottom = "1px solid #222";
+        const changeStr = qoqChange !== null ? `${qoqChange >= 0 ? "+" : ""}${qoqChange.toFixed(1)}%` : "\u2014";
+        const changeColor = qoqChange === null ? "#666" : qoqChange >= 0 ? "#4caf50" : "#f44336";
+        const trendIcon = qoqChange === null ? "\u2014" : qoqChange >= 0 ? "\u25b2" : "\u25bc";
+        const trendColor = qoqChange === null ? "#666" : qoqChange >= 0 ? "#4caf50" : "#f44336";
+        tr.innerHTML = `<td style="padding:4px;">${q.period || "\u2014"}</td><td style="padding:4px;text-align:right;color:#fff;font-weight:bold;">$${q.value.toFixed(2)}</td><td style="padding:4px;text-align:right;color:${changeColor};">${changeStr}</td><td style="padding:4px;text-align:center;color:${trendColor};font-weight:bold;">${trendIcon}</td>`;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      root.appendChild(table);
+
+      // Summary
+      const avgSurprise = surpriseCount > 0 ? (totalSurprise / surpriseCount) : 0;
+      const summary = document.createElement("div");
+      summary.style.cssText = "margin-top:12px;padding:10px;background:#111;border-radius:4px;";
+      const beatsOf = Math.min(surpriseCount, 4);
+      const summaryColor = beats >= beatsOf ? "#4caf50" : beats >= 2 ? "#ff9800" : "#f44336";
+      summary.innerHTML = `<span style="color:${summaryColor};font-weight:bold;">${beats}/${beatsOf} beats</span> <span style="color:#888;">\u2014 avg QoQ change: ${avgSurprise >= 0 ? "+" : ""}${avgSurprise.toFixed(1)}%</span>`;
+      root.appendChild(summary);
+    }
+    win.appendElement(root);
+    log(`Earnings surprise loaded for ${sym}`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load earnings data: ${e}`);
+  }
+}
+
+// ── CORRELATION — Quick Pair Correlation ────────────────────
+async function cmdQuickCorr() {
+  const sym1 = currentSymbol || "AAPL";
+  const sym2 = prompt("Compare with symbol:", "SPY") || "SPY";
+  const win = createWindow({ title: `${sym1} vs ${sym2} Correlation`, width: 320, height: 220 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Computing correlation...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    // Fetch daily bars for both symbols
+    async function getDailyBars(sym) {
+      const cKey = `${sym}:1Day`;
+      const cached = barCache[cKey];
+      if (cached && cached.data && cached.data.length > 50) {
+        cached.lastAccess = Date.now();
+        return cached.data;
+      }
+      const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 300 });
+      const bars = JSON.parse(barsJson);
+      if (bars.length > 0) barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+      return bars;
+    }
+
+    const [bars1, bars2] = await Promise.all([getDailyBars(sym1), getDailyBars(sym2)]);
+
+    // Align by date
+    const map2 = {};
+    for (const b of bars2) { const d = typeof b.time === "number" ? b.time : new Date(b.time).getTime(); map2[d] = b; }
+    const aligned = [];
+    for (const b of bars1) {
+      const d = typeof b.time === "number" ? b.time : new Date(b.time).getTime();
+      if (map2[d]) aligned.push({ c1: b.close, c2: map2[d].close });
+    }
+
+    // Compute daily returns
+    const returns1 = [], returns2 = [];
+    for (let i = 1; i < aligned.length; i++) {
+      returns1.push((aligned[i].c1 - aligned[i - 1].c1) / aligned[i - 1].c1);
+      returns2.push((aligned[i].c2 - aligned[i - 1].c2) / aligned[i - 1].c2);
+    }
+
+    function pearson(r1, r2, n) {
+      const slice1 = r1.slice(-n), slice2 = r2.slice(-n);
+      const len = Math.min(slice1.length, slice2.length);
+      if (len < 5) return null;
+      const mean1 = slice1.reduce((a, b) => a + b, 0) / len;
+      const mean2 = slice2.reduce((a, b) => a + b, 0) / len;
+      let cov = 0, var1 = 0, var2 = 0;
+      for (let i = 0; i < len; i++) {
+        const d1 = slice1[i] - mean1, d2 = slice2[i] - mean2;
+        cov += d1 * d2; var1 += d1 * d1; var2 += d2 * d2;
+      }
+      return var1 > 0 && var2 > 0 ? cov / Math.sqrt(var1 * var2) : 0;
+    }
+
+    function computeBeta(r1, r2, n) {
+      const slice1 = r1.slice(-n), slice2 = r2.slice(-n);
+      const len = Math.min(slice1.length, slice2.length);
+      if (len < 5) return null;
+      const mean2 = slice2.reduce((a, b) => a + b, 0) / len;
+      const mean1 = slice1.reduce((a, b) => a + b, 0) / len;
+      let cov = 0, var2 = 0;
+      for (let i = 0; i < len; i++) {
+        const d1 = slice1[i] - mean1, d2 = slice2[i] - mean2;
+        cov += d1 * d2; var2 += d2 * d2;
+      }
+      return var2 > 0 ? cov / var2 : 0;
+    }
+
+    const corrWindows = [
+      { label: "30D", n: 30 },
+      { label: "60D", n: 60 },
+      { label: "90D", n: 90 },
+      { label: "1Y", n: 252 },
+    ];
+
+    win.contentElement.textContent = "";
+    const root = document.createElement("div");
+    root.style.cssText = "padding:12px;font-family:'Iosevka Fixed',monospace;font-size:12px;color:#ccc;";
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;text-align:center;";
+    title.textContent = `${sym1} vs ${sym2}`;
+    root.appendChild(title);
+
+    const corrRow = document.createElement("div");
+    corrRow.style.cssText = "display:flex;gap:12px;justify-content:center;margin-bottom:12px;";
+    for (const w of corrWindows) {
+      const corr = pearson(returns1, returns2, w.n);
+      const val = corr !== null ? corr.toFixed(2) : "N/A";
+      const color = corr === null ? "#666" : corr > 0.7 ? "#4caf50" : corr < -0.3 ? "#f44336" : "#888";
+      const cell = document.createElement("div");
+      cell.style.cssText = `text-align:center;padding:8px 10px;background:#111;border-radius:4px;border:1px solid ${color};`;
+      cell.innerHTML = `<div style="color:#888;font-size:10px;margin-bottom:4px;">${w.label}</div><div style="color:${color};font-weight:bold;font-size:16px;">${val}</div>`;
+      corrRow.appendChild(cell);
+    }
+    root.appendChild(corrRow);
+
+    // Beta
+    const beta = computeBeta(returns1, returns2, 252);
+    const betaDiv = document.createElement("div");
+    betaDiv.style.cssText = "text-align:center;padding:10px;background:#111;border-radius:4px;";
+    const betaColor = beta !== null && beta > 1.2 ? "#ff9800" : beta !== null && beta < 0.5 ? "#2196f3" : "#ccc";
+    betaDiv.innerHTML = `<span style="color:#888;">Beta: </span><span style="color:${betaColor};font-weight:bold;font-size:18px;">${beta !== null ? beta.toFixed(2) : "N/A"}</span>`;
+    root.appendChild(betaDiv);
+
+    win.appendElement(root);
+    log(`Correlation ${sym1}/${sym2}: 30D=${pearson(returns1, returns2, 30)?.toFixed(2) || "N/A"}`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to compute correlation: ${e}`);
+  }
+}
+
+// ── SPLITS — Stock Split Calendar ───────────────────────────
+async function cmdSplits() {
+  const win = createWindow({ title: "Stock Split Calendar", width: 520, height: 400 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching split data...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    let symbols = getWatchlist();
+    if (!symbols || symbols.length === 0) {
+      if (currentSymbol) symbols = [currentSymbol];
+      else { win.contentElement.textContent = ""; win.setContent("No watchlist or symbol loaded. Add symbols via QM first."); return; }
+    }
+
+    const splits = [];
+    const promises = symbols.map(async (sym) => {
+      try {
+        const json = await invokeQuiet("get_corporate_actions", { symbol: sym, types: "split" });
+        const actions = JSON.parse(json);
+        if (Array.isArray(actions)) {
+          for (const a of actions) {
+            const date = a.effective_date || a.ex_date || a.date;
+            if (date) {
+              const ratio = a.new_rate && a.old_rate ? `${a.new_rate}:${a.old_rate}` : a.ratio || a.description || "N/A";
+              const isForward = a.new_rate && a.old_rate ? Number(a.new_rate) > Number(a.old_rate) : (a.type || "").toLowerCase().includes("forward") || (ratio.includes(":") && parseFloat(ratio) > 1);
+              splits.push({
+                date,
+                symbol: a.symbol || sym,
+                ratio,
+                type: isForward ? "Forward" : "Reverse",
+                isForward,
+              });
+            }
+          }
+        }
+      } catch (_) {}
+    });
+    await Promise.all(promises);
+
+    // Sort by date descending
+    splits.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+    win.contentElement.textContent = "";
+    const root = document.createElement("div");
+    root.style.cssText = "padding:12px;font-family:'Iosevka Fixed',monospace;font-size:12px;color:#ccc;overflow:auto;max-height:calc(100% - 10px);";
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;";
+    title.textContent = `Stock Splits \u2014 ${symbols.length} symbols scanned`;
+    root.appendChild(title);
+
+    if (splits.length === 0) {
+      const noData = document.createElement("div");
+      noData.style.cssText = "color:#888;padding:20px;";
+      noData.textContent = "No stock splits found for watchlist symbols.";
+      root.appendChild(noData);
+    } else {
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Date</th><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:center;padding:4px;'>Ratio</th><th style='text-align:center;padding:4px;'>Type</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      for (const s of splits) {
+        const tr = document.createElement("tr");
+        tr.style.borderBottom = "1px solid #222";
+        const typeColor = s.isForward ? "#4caf50" : "#f44336";
+        tr.innerHTML = `<td style="padding:4px;">${s.date}</td><td style="padding:4px;color:#fff;font-weight:bold;">${s.symbol}</td><td style="padding:4px;text-align:center;color:#ff9800;font-weight:bold;">${s.ratio}</td><td style="padding:4px;text-align:center;color:${typeColor};font-weight:bold;">${s.type}</td>`;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      root.appendChild(table);
+    }
+    win.appendElement(root);
+    log(`Splits: found ${splits.length} split events`, "ok");
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load split data: ${e}`);
+  }
+}
+
+// ── PREMARKET — Pre/Post-Market Movers Dashboard ────────────
+async function cmdPreMarket() {
+  const now = new Date();
+  const hour = now.getUTCHours() - 4; // EST offset (approx)
+  const titleText = (hour >= 4 && hour < 9.5) ? "Pre-Market Movers" : (hour >= 16 && hour < 20) ? "After-Hours Movers" : "Extended-Hours Movers";
+  const win = createWindow({ title: titleText, width: 600, height: 450 });
+  win.contentElement.textContent = "";
+  let refreshTimer = null;
+
+  // Cleanup on close
+  const origClose = win.close;
+  win.close = () => { if (refreshTimer) clearInterval(refreshTimer); origClose(); };
+
+  async function loadMovers() {
+    let symbols = getWatchlist();
+    if (!symbols || symbols.length === 0) {
+      if (currentSymbol) symbols = [currentSymbol];
+      else { win.contentElement.textContent = ""; win.setContent("No watchlist or symbol loaded. Add symbols via QM first."); return; }
+    }
+
+    const movers = [];
+    const promises = symbols.map(async (sym) => {
+      try {
+        const qJson = await invokeQuiet("get_latest_quote", { symbol: sym });
+        const q = typeof qJson === "string" ? JSON.parse(qJson) : qJson;
+        const lastPx = parseFloat(q.ask || q.ap || q.bid || q.bp || q.last || q.price || 0);
+        const volume = parseInt(q.volume || q.v || 0, 10);
+
+        // Get previous close from barCache
+        let prevClose = 0;
+        const cKey = `${sym}:1Day`;
+        const cached = barCache[cKey];
+        if (cached && cached.data && cached.data.length >= 2) {
+          cached.lastAccess = Date.now();
+          prevClose = cached.data[cached.data.length - 2].close || cached.data[cached.data.length - 1].close;
+        } else {
+          // Try to fetch
+          try {
+            const barsJson = await invokeQuiet("get_bars", { symbol: sym, timeframe: "1Day", limit: 5 });
+            const bars = JSON.parse(barsJson);
+            if (bars.length >= 2) {
+              prevClose = bars[bars.length - 2].close;
+              barCache[cKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+            }
+          } catch (_) {}
+        }
+
+        if (lastPx > 0 && prevClose > 0) {
+          const gapPct = ((lastPx - prevClose) / prevClose) * 100;
+          movers.push({ symbol: sym, lastPx, prevClose, gapPct, volume });
+        }
+      } catch (_) {}
+    });
+    await Promise.all(promises);
+
+    // Sort by absolute gap%
+    movers.sort((a, b) => Math.abs(b.gapPct) - Math.abs(a.gapPct));
+
+    win.contentElement.textContent = "";
+    const root = document.createElement("div");
+    root.style.cssText = "padding:12px;font-family:'Iosevka Fixed',monospace;font-size:12px;color:#ccc;overflow:auto;max-height:calc(100% - 10px);";
+
+    // Update title based on time
+    const nowRefresh = new Date();
+    const h = nowRefresh.getUTCHours() - 4;
+    const refreshTitle = (h >= 4 && h < 9.5) ? "Pre-Market Movers" : (h >= 16 && h < 20) ? "After-Hours Movers" : "Extended-Hours Movers";
+
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;";
+    header.innerHTML = `<span style="font-size:14px;font-weight:bold;color:#2196f3;">${refreshTitle}</span><span style="color:#666;font-size:10px;">Auto-refresh 30s | ${movers.length} symbols</span>`;
+    root.appendChild(header);
+
+    if (movers.length === 0) {
+      const noData = document.createElement("div");
+      noData.style.cssText = "color:#888;padding:20px;";
+      noData.textContent = "No price data available.";
+      root.appendChild(noData);
+    } else {
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Symbol</th><th style='text-align:right;padding:4px;'>Last</th><th style='text-align:right;padding:4px;'>Prev Close</th><th style='text-align:right;padding:4px;'>Gap%</th><th style='text-align:right;padding:4px;'>Volume</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      for (const m of movers) {
+        const tr = document.createElement("tr");
+        tr.style.cssText = "border-bottom:1px solid #222;cursor:pointer;";
+        tr.addEventListener("click", () => {
+          document.getElementById("symbol-input").value = m.symbol;
+          currentSymbol = m.symbol;
+          loadChart(m.symbol, currentTimeframe);
+        });
+        const gapColor = m.gapPct >= 0 ? "#4caf50" : "#f44336";
+        const gapSign = m.gapPct >= 0 ? "+" : "";
+        const volStr = m.volume >= 1e6 ? (m.volume / 1e6).toFixed(1) + "M" : m.volume >= 1e3 ? (m.volume / 1e3).toFixed(0) + "K" : m.volume.toString();
+        tr.innerHTML = `<td style="padding:4px;color:#fff;font-weight:bold;">${m.symbol}</td><td style="padding:4px;text-align:right;">$${m.lastPx.toFixed(2)}</td><td style="padding:4px;text-align:right;color:#888;">$${m.prevClose.toFixed(2)}</td><td style="padding:4px;text-align:right;color:${gapColor};font-weight:bold;">${gapSign}${m.gapPct.toFixed(2)}%</td><td style="padding:4px;text-align:right;color:#888;">${volStr}</td>`;
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      root.appendChild(table);
+    }
+    win.appendElement(root);
+  }
+
+  await loadMovers();
+  refreshTimer = setInterval(loadMovers, 30000);
+  log("Pre/Post-market movers dashboard opened", "ok");
+}
+
+// ── SHORTCUT — Custom Keyboard Shortcut Builder ─────────────
+const CUSTOM_SHORTCUTS_KEY = "typhoon_custom_shortcuts";
+
+function loadCustomShortcuts() {
+  try { return JSON.parse(localStorage.getItem(CUSTOM_SHORTCUTS_KEY) || "[]"); }
+  catch { return []; }
+}
+
+function saveCustomShortcuts(shortcuts) {
+  localStorage.setItem(CUSTOM_SHORTCUTS_KEY, JSON.stringify(shortcuts));
+}
+
+// Global handler for custom shortcuts
+function handleCustomShortcut(e) {
+  const shortcuts = loadCustomShortcuts();
+  if (shortcuts.length === 0) return;
+  for (const sc of shortcuts) {
+    const parts = sc.key.toLowerCase().split("+").map(s => s.trim());
+    const needCtrl = parts.includes("ctrl");
+    const needShift = parts.includes("shift");
+    const needAlt = parts.includes("alt");
+    const mainKey = parts.filter(p => p !== "ctrl" && p !== "shift" && p !== "alt").pop();
+    if (!mainKey) continue;
+    if (e.ctrlKey === needCtrl && e.shiftKey === needShift && e.altKey === needAlt && e.key.toLowerCase() === mainKey) {
+      e.preventDefault();
+      const cmd = CMD_PALETTE_COMMANDS.find(c => c.name === sc.command);
+      if (cmd) { cmd.action(); log(`Custom shortcut ${sc.key} \u2192 ${sc.command}`, "ok"); }
+      return;
+    }
+  }
+}
+
+// Register global listener for custom shortcuts on startup
+function registerCustomShortcutListener() {
+  const shortcuts = loadCustomShortcuts();
+  if (shortcuts.length === 0) return;
+  document.addEventListener("keydown", handleCustomShortcut);
+}
+
+function cmdShortcut() {
+  const win = createWindow({ title: "Custom Keyboard Shortcuts", width: 500, height: 420 });
+  win.contentElement.textContent = "";
+
+  function render() {
+    const shortcuts = loadCustomShortcuts();
+    win.contentElement.textContent = "";
+    const root = document.createElement("div");
+    root.style.cssText = "padding:12px;font-family:'Iosevka Fixed',monospace;font-size:12px;color:#ccc;overflow:auto;max-height:calc(100% - 10px);";
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;";
+    title.textContent = `Custom Shortcuts (${shortcuts.length}/20)`;
+    root.appendChild(title);
+
+    // List existing
+    if (shortcuts.length > 0) {
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px;";
+      table.innerHTML = "<thead><tr style='color:#888;border-bottom:1px solid #333;'><th style='text-align:left;padding:4px;'>Key Combo</th><th style='text-align:left;padding:4px;'>Command</th><th style='text-align:center;padding:4px;'>Action</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+      for (let i = 0; i < shortcuts.length; i++) {
+        const sc = shortcuts[i];
+        const tr = document.createElement("tr");
+        tr.style.borderBottom = "1px solid #222";
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "\u2716";
+        delBtn.style.cssText = "background:transparent;color:#f44336;border:none;cursor:pointer;font-size:14px;";
+        delBtn.addEventListener("click", () => {
+          const arr = loadCustomShortcuts();
+          arr.splice(i, 1);
+          saveCustomShortcuts(arr);
+          render();
+        });
+        const tdKey = document.createElement("td");
+        tdKey.style.cssText = "padding:4px;";
+        const kbd = document.createElement("kbd");
+        kbd.textContent = sc.key;
+        kbd.style.cssText = "background:#333;padding:2px 6px;border-radius:3px;border:1px solid #555;color:#fff;";
+        tdKey.appendChild(kbd);
+        const tdCmd = document.createElement("td");
+        tdCmd.style.cssText = "padding:4px;color:#ff9800;font-weight:bold;";
+        tdCmd.textContent = sc.command;
+        const tdDel = document.createElement("td");
+        tdDel.style.cssText = "padding:4px;text-align:center;";
+        tdDel.appendChild(delBtn);
+        tr.appendChild(tdKey);
+        tr.appendChild(tdCmd);
+        tr.appendChild(tdDel);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      root.appendChild(table);
+    }
+
+    // Add new shortcut form
+    if (shortcuts.length < 20) {
+      const formDiv = document.createElement("div");
+      formDiv.style.cssText = "border-top:1px solid #333;padding-top:12px;";
+      const formTitle = document.createElement("div");
+      formTitle.style.cssText = "color:#4caf50;font-weight:bold;margin-bottom:8px;";
+      formTitle.textContent = "Add New Shortcut";
+      formDiv.appendChild(formTitle);
+
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:8px;";
+
+      const keyInput = document.createElement("input");
+      keyInput.type = "text";
+      keyInput.placeholder = "Press a key combo...";
+      keyInput.readOnly = true;
+      keyInput.style.cssText = "flex:1;padding:6px 8px;background:#111;color:#fff;border:1px solid #444;font-family:inherit;font-size:12px;";
+      let capturedCombo = "";
+      keyInput.addEventListener("keydown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const parts = [];
+        if (e.ctrlKey) parts.push("Ctrl");
+        if (e.shiftKey) parts.push("Shift");
+        if (e.altKey) parts.push("Alt");
+        const key = e.key;
+        if (key !== "Control" && key !== "Shift" && key !== "Alt" && key !== "Meta") {
+          parts.push(key.length === 1 ? key.toUpperCase() : key);
+        }
+        if (parts.length > 0) {
+          capturedCombo = parts.join("+");
+          keyInput.value = capturedCombo;
+        }
+      });
+
+      const cmdSelect = document.createElement("select");
+      cmdSelect.style.cssText = "flex:1;padding:6px;background:#111;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;";
+      const defaultOpt = document.createElement("option");
+      defaultOpt.textContent = "Select command...";
+      defaultOpt.value = "";
+      cmdSelect.appendChild(defaultOpt);
+      for (const c of CMD_PALETTE_COMMANDS) {
+        const opt = document.createElement("option");
+        opt.value = c.name;
+        opt.textContent = `${c.name} \u2014 ${c.desc}`;
+        cmdSelect.appendChild(opt);
+      }
+      row.appendChild(keyInput);
+      row.appendChild(cmdSelect);
+      formDiv.appendChild(row);
+
+      const saveBtn = document.createElement("button");
+      saveBtn.textContent = "Save Shortcut";
+      saveBtn.className = "fw-btn";
+      saveBtn.style.cssText = "padding:8px 16px;background:#1b5e20;color:#4caf50;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-weight:bold;";
+      saveBtn.addEventListener("click", () => {
+        if (!capturedCombo) { log("No key combo captured", "warn"); return; }
+        if (!cmdSelect.value) { log("No command selected", "warn"); return; }
+        const arr = loadCustomShortcuts();
+        // Check for duplicate key
+        if (arr.some(s => s.key === capturedCombo)) {
+          log(`Shortcut ${capturedCombo} already exists`, "warn");
+          return;
+        }
+        arr.push({ key: capturedCombo, command: cmdSelect.value });
+        saveCustomShortcuts(arr);
+        // Re-register the listener
+        document.removeEventListener("keydown", handleCustomShortcut);
+        document.addEventListener("keydown", handleCustomShortcut);
+        log(`Custom shortcut saved: ${capturedCombo} \u2192 ${cmdSelect.value}`, "ok");
+        render();
+      });
+      formDiv.appendChild(saveBtn);
+      root.appendChild(formDiv);
+    }
+
+    win.appendElement(root);
+  }
+
+  render();
+  log("Custom shortcuts builder opened", "ok");
+}
+
+// ══════════════════════════════════════════════════════════════
+// INTERMARKET — Intermarket Analysis Dashboard
+// ══════════════════════════════════════════════════════════════
+async function cmdIntermarket() {
+  const win = createWindow({ title: "Intermarket Analysis Dashboard", width: 720, height: 600 });
+  win.contentElement.textContent = "";
+  const ld = document.createElement("div"); ld.textContent = "Fetching intermarket data..."; ld.style.cssText = "color:#888;padding:12px;"; win.appendElement(ld);
+  const imPairs = [
+    { symbol: "SPY", label: "Stocks (SPY)" }, { symbol: "TLT", label: "Bonds (TLT)" },
+    { symbol: "GLD", label: "Gold (GLD)" }, { symbol: "UUP", label: "Dollar (UUP)" },
+    { symbol: "USO", label: "Oil (USO)" }, { symbol: "BTC/USD", label: "Crypto (BTC)" },
+  ];
+  try {
+    const allBars = {};
+    for (const p of imPairs) {
+      const ck = getCacheKey(p.symbol, "1Day"); const cc = barCache[ck];
+      if (cc && cc.data && cc.data.length >= 60) { allBars[p.symbol] = cc.data; cc.lastAccess = Date.now(); }
+      else { try { const j = await invoke("get_bars", { symbol: p.symbol, timeframe: "1Day", limit: 60 }); const b = JSON.parse(j); if (b.length > 0) { barCache[ck] = { data: b, timestamp: Date.now(), lastAccess: Date.now() }; allBars[p.symbol] = b; } } catch (_) {} }
+    }
+    function imPctRet(bars, n) { if (!bars || bars.length < n + 1) return null; const c = bars[bars.length-1].close||bars[bars.length-1].c||0; const p = bars[bars.length-1-n].close||bars[bars.length-1-n].c||0; return p > 0 ? ((c-p)/p)*100 : null; }
+    function imPearson(a, b) { const n = Math.min(a.length, b.length); if (n < 5) return 0; const ax = a.slice(-n), bx = b.slice(-n); const ma = ax.reduce((s,v)=>s+v,0)/n, mb = bx.reduce((s,v)=>s+v,0)/n; let nm=0,da=0,db=0; for (let i=0;i<n;i++){const va=ax[i]-ma,vb=bx[i]-mb;nm+=va*vb;da+=va*va;db+=vb*vb;} return da>0&&db>0?nm/Math.sqrt(da*db):0; }
+    const closeArrays = {}; for (const p of imPairs) { if (allBars[p.symbol]) closeArrays[p.symbol] = allBars[p.symbol].slice(-60).map(b=>b.close||b.c||0); }
+    const assetData = imPairs.map(p => { const b = allBars[p.symbol]; const r1d=imPctRet(b,1),r1w=imPctRet(b,5),r1m=imPctRet(b,20); const trend=r1m!==null?(r1m>0?"\u25B2 Up":"\u25BC Down"):"\u2014"; const tc=r1m!==null?(r1m>0?"#4caf50":"#f44336"):"#666"; return {...p,r1d,r1w,r1m,trend,trendColor:tc,available:!!b}; });
+    const spy20=imPctRet(allBars["SPY"],20),tlt20=imPctRet(allBars["TLT"],20),gld20=imPctRet(allBars["GLD"],20),uup20=imPctRet(allBars["UUP"],20),uso20=imPctRet(allBars["USO"],20);
+    let regime="Mixed / Uncertain",regimeColor="#888",regimeDesc="No clear regime detected. Cross-asset signals are mixed.";
+    if(spy20>0&&tlt20<0&&gld20<0&&uup20<0){regime="Risk-On";regimeColor="#4caf50";regimeDesc="Stocks leading, risk appetite strong. Bonds and safe havens declining.";}
+    else if(spy20<0&&tlt20>0&&gld20>0){regime="Risk-Off";regimeColor="#f44336";regimeDesc="Flight to safety. Money flowing into bonds and gold, out of equities.";}
+    else if(uup20>0&&gld20<0&&uso20<0){regime="USD Strength";regimeColor="#2196f3";regimeDesc="Dollar strengthening. Commodities under pressure from strong USD.";}
+    else if(gld20>0&&uso20>0&&tlt20<0){regime="Inflation";regimeColor="#ff9800";regimeDesc="Inflation expectations rising. Commodities up, bonds down.";}
+    let recommendation="";
+    if(regime==="Risk-On")recommendation="Favor equities and cyclicals. Reduce bond allocation. Consider reducing hedges.";
+    else if(regime==="Risk-Off")recommendation="Reduce equity exposure. Add bond/gold hedges. Tighten stops on long positions.";
+    else if(regime==="USD Strength")recommendation="Avoid commodity-heavy positions. US domestic stocks may outperform. Consider short commodities.";
+    else if(regime==="Inflation")recommendation="Favor real assets (gold, commodities, TIPS). Avoid long-duration bonds.";
+    else recommendation="No strong regime. Maintain balanced allocation. Watch for regime shift signals.";
+    win.contentElement.textContent = "";
+    // Asset table
+    const s1=document.createElement("div");s1.style.cssText="margin-bottom:12px;";
+    const h1=document.createElement("div");h1.textContent="Asset Performance";h1.style.cssText="color:#8cf;font-size:12px;font-weight:bold;margin-bottom:4px;border-bottom:1px solid #333;padding-bottom:2px;";s1.appendChild(h1);
+    const tbl=document.createElement("table");tbl.style.cssText="width:100%;border-collapse:collapse;font-size:11px;";
+    const thd=document.createElement("tr");for(const h of["Asset","1D %","1W %","1M %","Trend"]){const th=document.createElement("td");th.style.cssText="padding:3px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;";th.textContent=h;thd.appendChild(th);}tbl.appendChild(thd);
+    for(const a of assetData){const tr=document.createElement("tr");const fmt=v=>v!==null?(v>=0?"+":"")+v.toFixed(2)+"%":"\u2014";const clr=v=>v!==null?(v>=0?"#4caf50":"#f44336"):"#666";
+      for(const v of[{text:a.label,color:a.available?"#ccc":"#555"},{text:fmt(a.r1d),color:clr(a.r1d)},{text:fmt(a.r1w),color:clr(a.r1w)},{text:fmt(a.r1m),color:clr(a.r1m)},{text:a.trend,color:a.trendColor}]){const td=document.createElement("td");td.style.cssText=`padding:3px 6px;color:${v.color};font-family:Consolas,monospace;`;td.textContent=v.text;tr.appendChild(td);}tbl.appendChild(tr);}
+    s1.appendChild(tbl);win.appendElement(s1);
+    // Regime
+    const rd=document.createElement("div");rd.style.cssText="margin-bottom:12px;padding:8px;background:#111;border-radius:4px;border-left:3px solid "+regimeColor+";";
+    const rl=document.createElement("div");rl.style.cssText=`font-size:14px;font-weight:bold;color:${regimeColor};margin-bottom:4px;`;rl.textContent=`Regime: ${regime}`;rd.appendChild(rl);
+    const rt=document.createElement("div");rt.style.cssText="font-size:11px;color:#aaa;";rt.textContent=regimeDesc;rd.appendChild(rt);win.appendElement(rd);
+    // Correlation heatmap
+    const s3=document.createElement("div");s3.style.cssText="margin-bottom:12px;";
+    const h3=document.createElement("div");h3.textContent="60-Day Correlation Matrix";h3.style.cssText="color:#8cf;font-size:12px;font-weight:bold;margin-bottom:4px;border-bottom:1px solid #333;padding-bottom:2px;";s3.appendChild(h3);
+    const ct=document.createElement("table");ct.style.cssText="border-collapse:collapse;font-size:9px;";const syms=imPairs.map(p=>p.symbol);
+    const ch=document.createElement("tr");const et=document.createElement("td");et.style.cssText="padding:2px 4px;";ch.appendChild(et);
+    for(const s of syms){const th=document.createElement("td");th.style.cssText="padding:2px 4px;color:#888;font-weight:bold;text-align:center;";th.textContent=s.replace("/USD","");ch.appendChild(th);}ct.appendChild(ch);
+    for(let i=0;i<syms.length;i++){const tr=document.createElement("tr");const rl2=document.createElement("td");rl2.style.cssText="padding:2px 4px;color:#888;font-weight:bold;";rl2.textContent=syms[i].replace("/USD","");tr.appendChild(rl2);
+      for(let j=0;j<syms.length;j++){const td=document.createElement("td");const aa=closeArrays[syms[i]],bb=closeArrays[syms[j]];const corr=(aa&&bb)?(i===j?1:imPearson(aa,bb)):0;const intensity=Math.min(Math.abs(corr),1);const rr=corr<0?Math.round(60+intensity*150):20;const gg=corr>0?Math.round(60+intensity*150):20;td.style.cssText=`padding:2px 4px;text-align:center;background:rgb(${rr},${gg},40);color:#fff;font-family:Consolas,monospace;min-width:38px;`;td.textContent=corr.toFixed(2);tr.appendChild(td);}ct.appendChild(tr);}
+    s3.appendChild(ct);win.appendElement(s3);
+    // Recommendation
+    const recD=document.createElement("div");recD.style.cssText="padding:8px;background:#0a1628;border:1px solid #1a3a5a;border-radius:4px;";
+    const recL=document.createElement("div");recL.style.cssText="color:#8cf;font-size:11px;font-weight:bold;margin-bottom:4px;";recL.textContent="What this means for your portfolio";recD.appendChild(recL);
+    const recT=document.createElement("div");recT.style.cssText="font-size:11px;color:#ccc;line-height:1.5;";recT.textContent=recommendation;recD.appendChild(recT);win.appendElement(recD);
+  } catch(e){win.contentElement.textContent="";win.setContent(`Failed to load intermarket data: ${e}`);}
+}
+
+// ══════════════════════════════════════════════════════════════
+// ATTRIBUTION — Performance Attribution
+// ══════════════════════════════════════════════════════════════
+async function cmdAttribution() {
+  const win = createWindow({ title: "Performance Attribution", width: 680, height: 580 });
+  win.contentElement.textContent = "";
+  const ld = document.createElement("div"); ld.textContent = "Analyzing trade history..."; ld.style.cssText = "color:#888;padding:12px;"; win.appendElement(ld);
+  const SECTOR_MAP = {
+    AAPL:"Tech",MSFT:"Tech",GOOGL:"Tech",GOOG:"Tech",AMZN:"Tech",META:"Tech",NVDA:"Tech",TSLA:"Tech",AMD:"Tech",INTC:"Tech",CRM:"Tech",ORCL:"Tech",ADBE:"Tech",NFLX:"Tech",AVGO:"Tech",QCOM:"Tech",
+    JPM:"Finance",BAC:"Finance",GS:"Finance",MS:"Finance",WFC:"Finance",C:"Finance",BLK:"Finance",SCHW:"Finance",V:"Finance",MA:"Finance",AXP:"Finance",PYPL:"Finance",
+    XOM:"Energy",CVX:"Energy",COP:"Energy",SLB:"Energy",EOG:"Energy",OXY:"Energy",MPC:"Energy",VLO:"Energy",PSX:"Energy",USO:"Energy",
+    JNJ:"Health",UNH:"Health",PFE:"Health",ABBV:"Health",MRK:"Health",LLY:"Health",TMO:"Health",ABT:"Health",BMY:"Health",AMGN:"Health",
+    PG:"Consumer",KO:"Consumer",PEP:"Consumer",WMT:"Consumer",COST:"Consumer",MCD:"Consumer",NKE:"Consumer",SBUX:"Consumer",TGT:"Consumer",HD:"Consumer",LOW:"Consumer",
+    SPY:"Index",QQQ:"Index",IWM:"Index",DIA:"Index",GLD:"Commodity",SLV:"Commodity",GDX:"Commodity",TLT:"Bond",IEF:"Bond",HYG:"Bond",LQD:"Bond",
+  };
+  function attrGetSector(sym){return SECTOR_MAP[sym.replace("/","")]||"Other";}
+  try {
+    const histJson = await invoke("get_order_history", { limit: 500 });
+    const orders = JSON.parse(histJson).filter(o => o.status === "filled" && o.filled_avg_price);
+    if (orders.length === 0) { win.contentElement.textContent = ""; win.setContent("No filled orders found."); return; }
+    const trades = []; const openPos = {};
+    for (const o of [...orders].reverse()) {
+      const sym=o.symbol,price=parseFloat(o.filled_avg_price),qty=parseFloat(o.qty)||1,filledAt=o.filled_at||o.submitted_at||o.created_at||"";
+      if(!openPos[sym]){openPos[sym]={side:o.side,price,qty,time:filledAt};}
+      else if(openPos[sym].side!==o.side){const entry=openPos[sym];const mq=Math.min(qty,entry.qty);const pnl=entry.side==="buy"?(price-entry.price)*mq:(entry.price-price)*mq;const holdMs=new Date(filledAt)-new Date(entry.time);const posSize=entry.price*mq;trades.push({symbol:sym,pnl,side:entry.side,holdMs,posSize,sector:attrGetSector(sym)});const rem=entry.qty-mq;if(rem>0.001)openPos[sym]={...entry,qty:rem};else delete openPos[sym];}
+      else{const total=openPos[sym].qty+qty;openPos[sym].price=(openPos[sym].price*openPos[sym].qty+price*qty)/total;openPos[sym].qty=total;}
+    }
+    if(trades.length===0){win.contentElement.textContent="";win.setContent("No round-trip trades found (need buy+sell pairs).");return;}
+    function attrBreakdown(groupFn){const groups={};for(const t of trades){const key=groupFn(t);if(!groups[key])groups[key]={trades:0,wins:0,totalPnl:0};groups[key].trades++;groups[key].totalPnl+=t.pnl;if(t.pnl>0)groups[key].wins++;}return Object.entries(groups).map(([cat,d])=>({category:cat,trades:d.trades,winRate:d.trades>0?(d.wins/d.trades*100).toFixed(1):"0.0",totalPnl:d.totalPnl,avgPnl:d.trades>0?d.totalPnl/d.trades:0})).sort((a,b)=>b.totalPnl-a.totalPnl);}
+    const bySector=attrBreakdown(t=>t.sector);
+    const bySide=attrBreakdown(t=>t.side==="buy"?"Long":"Short");
+    const byDuration=attrBreakdown(t=>{const h=t.holdMs/3600000;if(h<1)return"< 1 hour";if(h<24)return"1h - 1 day";if(h<168)return"1d - 1 week";return"> 1 week";});
+    const bySize=attrBreakdown(t=>{if(t.posSize<1000)return"Small (< $1K)";if(t.posSize<10000)return"Medium ($1K-$10K)";return"Large (> $10K)";});
+    const allGrps=[...bySector,...bySide,...byDuration,...bySize].filter(g=>g.trades>=2);
+    const bestWR=allGrps.length>0?allGrps.reduce((b,g)=>parseFloat(g.winRate)>parseFloat(b.winRate)?g:b):null;
+    const bestPnl=allGrps.length>0?allGrps.reduce((b,g)=>g.totalPnl>b.totalPnl?g:b):null;
+    win.contentElement.textContent = "";
+    function renderAttrSec(title,data){
+      const sec=document.createElement("div");sec.style.cssText="margin-bottom:14px;";
+      const hdr=document.createElement("div");hdr.textContent=title;hdr.style.cssText="color:#8cf;font-size:11px;font-weight:bold;margin-bottom:4px;border-bottom:1px solid #333;padding-bottom:2px;";sec.appendChild(hdr);
+      const tbl=document.createElement("table");tbl.style.cssText="width:100%;border-collapse:collapse;font-size:10px;";
+      const th=document.createElement("tr");for(const h of["Category","Trades","Win Rate","Total P&L","Avg P&L"]){const td=document.createElement("td");td.style.cssText="padding:3px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;";td.textContent=h;th.appendChild(td);}tbl.appendChild(th);
+      const mx=Math.max(...data.map(d=>Math.abs(d.totalPnl)),1);
+      for(const d of data){const tr=document.createElement("tr");const bw=Math.abs(d.totalPnl)/mx*100;const bc=d.totalPnl>=0?"rgba(76,175,80,0.2)":"rgba(244,67,54,0.2)";tr.style.background=`linear-gradient(90deg,${bc} ${bw}%,transparent ${bw}%)`;
+        for(const v of[{text:d.category,color:"#ccc"},{text:String(d.trades),color:"#aaa"},{text:d.winRate+"%",color:parseFloat(d.winRate)>=50?"#4caf50":"#f44336"},{text:(d.totalPnl>=0?"+":"")+"$"+d.totalPnl.toFixed(2),color:d.totalPnl>=0?"#4caf50":"#f44336"},{text:(d.avgPnl>=0?"+":"")+"$"+d.avgPnl.toFixed(2),color:d.avgPnl>=0?"#4caf50":"#f44336"}]){const td=document.createElement("td");td.style.cssText=`padding:3px 6px;color:${v.color};font-family:Consolas,monospace;`;td.textContent=v.text;tr.appendChild(td);}tbl.appendChild(tr);}
+      sec.appendChild(tbl);return sec;
+    }
+    win.appendElement(renderAttrSec("By Sector",bySector));win.appendElement(renderAttrSec("By Side",bySide));
+    win.appendElement(renderAttrSec("By Hold Duration",byDuration));win.appendElement(renderAttrSec("By Position Size",bySize));
+    const ins=document.createElement("div");ins.style.cssText="padding:8px;background:#0a1628;border:1px solid #1a3a5a;border-radius:4px;font-size:11px;color:#ccc;line-height:1.5;";
+    const il=[];if(bestWR)il.push(`Highest win rate: ${bestWR.category} trades (${bestWR.winRate}% across ${bestWR.trades} trades).`);if(bestPnl)il.push(`Most profitable category: ${bestPnl.category} (+$${bestPnl.totalPnl.toFixed(2)} total).`);if(il.length===0)il.push("Not enough data to determine performance patterns yet.");
+    ins.textContent=il.join(" ");win.appendElement(ins);
+  } catch(e){win.contentElement.textContent="";win.setContent(`Failed to load attribution data: ${e}`);}
+}
+
+// ══════════════════════════════════════════════════════════════
+// TAXLOT — Tax Lot Tracker
+// ══════════════════════════════════════════════════════════════
+async function cmdTaxLot() {
+  const win = createWindow({ title: "Tax Lot Tracker", width: 720, height: 600 });
+  win.contentElement.textContent = "";
+  const ld = document.createElement("div"); ld.textContent = "Reconstructing tax lots (FIFO)..."; ld.style.cssText = "color:#888;padding:12px;"; win.appendElement(ld);
+  try {
+    const [posJson, histJson] = await Promise.all([invoke("get_positions"), invoke("get_order_history", { limit: 500 })]);
+    const positions = JSON.parse(posJson); const orders = JSON.parse(histJson).filter(o => o.status === "filled" && o.filled_avg_price);
+    if (!positions || positions.length === 0) { win.contentElement.textContent = ""; win.setContent("No open positions."); return; }
+    const sorted = [...orders].reverse(); const symbolLots = {}; const recentLosses = {};
+    for (const o of sorted) {
+      const sym=o.symbol,price=parseFloat(o.filled_avg_price),qty=parseFloat(o.qty)||1,date=o.filled_at||o.submitted_at||o.created_at||"";
+      if(!symbolLots[sym])symbolLots[sym]=[];if(!recentLosses[sym])recentLosses[sym]=[];
+      if(o.side==="buy"){const bd=new Date(date);let ws=false;for(const loss of recentLosses[sym]){if((bd-new Date(loss.date))/86400000>=0&&(bd-new Date(loss.date))/86400000<=30){ws=true;break;}}symbolLots[sym].push({buyDate:date,qty,costBasis:price,remaining:qty,washSale:ws});}
+      else if(o.side==="sell"){let sq=qty;for(const lot of symbolLots[sym]){if(sq<=0)break;if(lot.remaining<=0)continue;const consumed=Math.min(lot.remaining,sq);const pnl=(price-lot.costBasis)*consumed;if(pnl<0)recentLosses[sym].push({date,qty:consumed});lot.remaining-=consumed;sq-=consumed;}}
+    }
+    const currentPrices={};for(const p of positions)currentPrices[p.symbol]=p.current_price||p.avg_entry_price||0;
+    const now=new Date();let totalST=0,totalLT=0,totalUR=0;
+    win.contentElement.textContent = "";
+    for(const sym of positions.map(p=>p.symbol)){
+      const lots=(symbolLots[sym]||[]).filter(l=>l.remaining>0.001);if(lots.length===0)continue;
+      const cp=currentPrices[sym]||0;
+      const sh=document.createElement("div");sh.style.cssText="color:#8cf;font-size:12px;font-weight:bold;margin:12px 0 4px;border-bottom:1px solid #333;padding-bottom:2px;";sh.textContent=`${sym} \u2014 ${lots.length} lot${lots.length>1?"s":""} (Current: $${cp.toFixed(2)})`;win.appendElement(sh);
+      const tbl=document.createElement("table");tbl.style.cssText="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:8px;";
+      const th=document.createElement("tr");for(const h of["Buy Date","Qty","Cost Basis","Current Value","Gain/Loss","Term","Wash Sale?"]){const td=document.createElement("td");td.style.cssText="padding:3px 5px;color:#666;font-weight:bold;border-bottom:1px solid #333;";td.textContent=h;th.appendChild(td);}tbl.appendChild(th);
+      for(const lot of lots){const bd=new Date(lot.buyDate);const hd=(now-bd)/86400000;const lt=hd>=365;const ct2=lot.costBasis*lot.remaining;const cv=cp*lot.remaining;const gl=cv-ct2;
+        if(lt)totalLT+=gl;else totalST+=gl;totalUR+=gl;
+        const tr=document.createElement("tr");const ds=bd.toISOString().slice(0,10);
+        for(const v of[{text:ds,color:"#aaa"},{text:lot.remaining.toFixed(2),color:"#ccc"},{text:"$"+ct2.toFixed(2),color:"#ccc"},{text:"$"+cv.toFixed(2),color:"#ccc"},{text:(gl>=0?"+":"")+"$"+gl.toFixed(2),color:gl>=0?"#4caf50":"#f44336"},{text:lt?"Long-term":"Short-term",color:lt?"#4caf50":"#ff9800"},{text:lot.washSale?"YES":"No",color:lot.washSale?"#ff9800":"#666"}]){const td=document.createElement("td");td.style.cssText=`padding:3px 5px;color:${v.color};font-family:Consolas,monospace;`;td.textContent=v.text;tr.appendChild(td);}tbl.appendChild(tr);}
+      win.appendElement(tbl);
+    }
+    const estST=totalST>0?totalST*0.37:0,estLT=totalLT>0?totalLT*0.20:0;
+    const sm=document.createElement("div");sm.style.cssText="margin-top:12px;padding:10px;background:#111;border:1px solid #333;border-radius:4px;";
+    const st=document.createElement("div");st.textContent="Tax Estimate Summary";st.style.cssText="color:#8cf;font-size:12px;font-weight:bold;margin-bottom:6px;";sm.appendChild(st);
+    const gr=document.createElement("div");gr.style.cssText="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:11px;";
+    for(const[label,value,color]of[["Short-term Gains","$"+totalST.toFixed(2),totalST>=0?"#4caf50":"#f44336"],["Long-term Gains","$"+totalLT.toFixed(2),totalLT>=0?"#4caf50":"#f44336"],["Total Unrealized","$"+totalUR.toFixed(2),totalUR>=0?"#4caf50":"#f44336"],["Est. Short-term Tax (37%)","$"+estST.toFixed(2),"#ff9800"],["Est. Long-term Tax (20%)","$"+estLT.toFixed(2),"#ff9800"],["Est. Total Tax","$"+(estST+estLT).toFixed(2),"#f44336"]]){const r=document.createElement("div");r.style.cssText="display:flex;justify-content:space-between;";const l=document.createElement("span");l.style.color="#888";l.textContent=label;const v=document.createElement("span");v.style.cssText=`color:${color};font-family:Consolas,monospace;`;v.textContent=value;r.appendChild(l);r.appendChild(v);gr.appendChild(r);}
+    sm.appendChild(gr);win.appendElement(sm);
+  } catch(e){win.contentElement.textContent="";win.setContent(`Failed to load tax lots: ${e}`);}
+}
+
+// ══════════════════════════════════════════════════════════════
+// REPORT — Generate Trading Report
+// ══════════════════════════════════════════════════════════════
+async function cmdReport() {
+  const win = createWindow({ title: "Trading Report", width: 750, height: 650 });
+  win.contentElement.textContent = "";
+  const ld = document.createElement("div"); ld.textContent = "Generating trading report..."; ld.style.cssText = "color:#888;padding:12px;"; win.appendElement(ld);
+  try {
+    const [miJson, posJson, histJson] = await Promise.all([invoke("get_margin_info"), invoke("get_positions"), invoke("get_order_history", { limit: 500 })]);
+    const mi = JSON.parse(miJson); const positions = JSON.parse(posJson); const orders = JSON.parse(histJson).filter(o => o.status === "filled" && o.filled_avg_price);
+    const trades = []; const openPos = {};
+    for (const o of [...orders].reverse()) {
+      const sym=o.symbol,price=parseFloat(o.filled_avg_price),qty=parseFloat(o.qty)||1;
+      if(!openPos[sym]){openPos[sym]={side:o.side,price,qty};}
+      else if(openPos[sym].side!==o.side){const entry=openPos[sym];const mq=Math.min(qty,entry.qty);const pnl=entry.side==="buy"?(price-entry.price)*mq:(entry.price-price)*mq;trades.push({symbol:sym,pnl,side:entry.side});const rem=entry.qty-mq;if(rem>0.001)openPos[sym]={...entry,qty:rem};else delete openPos[sym];}
+      else{const total=openPos[sym].qty+qty;openPos[sym].price=(openPos[sym].price*openPos[sym].qty+price*qty)/total;openPos[sym].qty=total;}
+    }
+    const wins=trades.filter(t=>t.pnl>0),losses=trades.filter(t=>t.pnl<=0);
+    const totalPnl=trades.reduce((s,t)=>s+t.pnl,0);const winRate=trades.length>0?(wins.length/trades.length*100).toFixed(1):"0.0";
+    const avgWin=wins.length>0?wins.reduce((s,t)=>s+t.pnl,0)/wins.length:0;const avgLoss=losses.length>0?Math.abs(losses.reduce((s,t)=>s+t.pnl,0)/losses.length):0;
+    const grossWin=wins.reduce((s,t)=>s+t.pnl,0);const grossLoss=Math.abs(losses.reduce((s,t)=>s+t.pnl,0));const profitFactor=grossLoss>0?(grossWin/grossLoss).toFixed(2):"\u221E";
+    let sharpe="\u2014";try{const sn=JSON.parse(localStorage.getItem("typhoon_equity_snapshots")||"[]");if(sn.length>5){const rets=[];for(let i=1;i<sn.length;i++)rets.push((sn[i].equity-sn[i-1].equity)/sn[i-1].equity);const mean=rets.reduce((a,b)=>a+b,0)/rets.length;const variance=rets.reduce((a,b)=>a+(b-mean)**2,0)/rets.length;const std=Math.sqrt(variance);if(std>0)sharpe=((mean/std)*Math.sqrt(252)).toFixed(3);}}catch(_){}
+    let maxDD="\u2014";try{const sn=JSON.parse(localStorage.getItem("typhoon_equity_snapshots")||"[]");if(sn.length>2){let peak=0,dd=0;for(const s of sn){if(s.equity>peak)peak=s.equity;const cur=(s.equity-peak)/peak*100;if(cur<dd)dd=cur;}maxDD=dd.toFixed(2)+"%";}}catch(_){}
+    let var95="\u2014";if(trades.length>=10){const sp=trades.map(t=>t.pnl).sort((a,b)=>a-b);var95="$"+sp[Math.floor(sp.length*0.05)].toFixed(2);}
+    const reportDate=new Date().toLocaleDateString("en-US",{year:"numeric",month:"long",day:"numeric"});
+    win.contentElement.textContent = "";
+    const reportDiv=document.createElement("div");reportDiv.id="trading-report-content";reportDiv.style.cssText="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#ccc;line-height:1.6;padding:8px;";
+    const style=document.createElement("style");style.textContent=`@media print{body *{visibility:hidden !important;}#trading-report-content,#trading-report-content *{visibility:visible !important;color:#000 !important;background:#fff !important;}#trading-report-content{position:fixed;left:0;top:0;width:100%;font-size:10pt;}.report-section{break-inside:avoid;}}`;reportDiv.appendChild(style);
+    const header=document.createElement("div");header.style.cssText="text-align:center;border-bottom:2px solid #8cf;padding-bottom:8px;margin-bottom:12px;";header.innerHTML=`<div style="font-size:16px;font-weight:bold;color:#8cf;">TyphooN-Terminal Trading Report</div><div style="font-size:11px;color:#888;">${reportDate}</div>`;reportDiv.appendChild(header);
+    function addRptSec(title,rows){const sec=document.createElement("div");sec.className="report-section";sec.style.cssText="margin-bottom:14px;";const hdr=document.createElement("div");hdr.style.cssText="color:#8cf;font-size:12px;font-weight:bold;border-bottom:1px solid #333;padding-bottom:2px;margin-bottom:4px;";hdr.textContent=title;sec.appendChild(hdr);const tbl=document.createElement("table");tbl.style.cssText="width:100%;border-collapse:collapse;font-size:11px;";for(const[label,value,color]of rows){const tr=document.createElement("tr");const td1=document.createElement("td");td1.style.cssText="padding:2px 6px;color:#888;";td1.textContent=label;const td2=document.createElement("td");td2.style.cssText=`padding:2px 6px;text-align:right;color:${color||"#ccc"};font-family:Consolas,monospace;`;td2.textContent=value;tr.appendChild(td1);tr.appendChild(td2);tbl.appendChild(tr);}sec.appendChild(tbl);reportDiv.appendChild(sec);}
+    addRptSec("Account Summary",[["Equity","$"+(mi.equity||0).toFixed(2)],["Buying Power","$"+(mi.buying_power||0).toFixed(2)],["Margin Used","$"+(mi.initial_margin||0).toFixed(2)],["Cash","$"+(mi.cash||0).toFixed(2)]]);
+    if(positions.length>0){addRptSec(`Open Positions (${positions.length})`,positions.map(p=>{const mv=Math.abs(p.market_value||p.qty*(p.current_price||0));const pl=p.unrealized_pl||0;return[`${p.symbol} ${p.side==="long"?"L":"S"} ${Math.abs(p.qty)}`,`$${mv.toFixed(2)} (${pl>=0?"+":""}$${pl.toFixed(2)})`,pl>=0?"#4caf50":"#f44336"];}));}
+    addRptSec("P&L Summary",[["Total Trades",String(trades.length)],["Total P&L",(totalPnl>=0?"+":"")+"$"+totalPnl.toFixed(2),totalPnl>=0?"#4caf50":"#f44336"],["Gross Wins","+$"+grossWin.toFixed(2),"#4caf50"],["Gross Losses","-$"+grossLoss.toFixed(2),"#f44336"],["Profit Factor",profitFactor]]);
+    addRptSec("Risk Metrics",[["VaR (95%)",var95],["Max Drawdown",maxDD,"#f44336"],["Sharpe Ratio",sharpe]]);
+    addRptSec("Performance",[["Win Rate",winRate+"%",parseFloat(winRate)>=50?"#4caf50":"#f44336"],["Avg Win","+$"+avgWin.toFixed(2),"#4caf50"],["Avg Loss","-$"+avgLoss.toFixed(2),"#f44336"],["Expectancy","$"+(avgWin*wins.length/Math.max(trades.length,1)-avgLoss*losses.length/Math.max(trades.length,1)).toFixed(2)]]);
+    win.appendElement(reportDiv);
+    const btnRow=document.createElement("div");btnRow.style.cssText="display:flex;gap:8px;padding:8px 0;";
+    const printBtn=document.createElement("button");printBtn.textContent="Print / Save PDF";printBtn.style.cssText="padding:6px 16px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:11px;border-radius:3px;";printBtn.addEventListener("click",()=>window.print());
+    const copyBtn=document.createElement("button");copyBtn.textContent="Copy as Text";copyBtn.style.cssText="padding:6px 16px;background:#222;color:#ccc;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:11px;border-radius:3px;";
+    copyBtn.addEventListener("click",async()=>{const tl=[];tl.push("TyphooN-Terminal Trading Report \u2014 "+reportDate);tl.push("=".repeat(50));tl.push("");tl.push("ACCOUNT SUMMARY");tl.push(`  Equity: $${(mi.equity||0).toFixed(2)}`);tl.push(`  Buying Power: $${(mi.buying_power||0).toFixed(2)}`);tl.push(`  Cash: $${(mi.cash||0).toFixed(2)}`);tl.push("");tl.push("P&L SUMMARY");tl.push(`  Total Trades: ${trades.length}`);tl.push(`  Total P&L: $${totalPnl.toFixed(2)}`);tl.push(`  Win Rate: ${winRate}%`);tl.push(`  Profit Factor: ${profitFactor}`);tl.push(`  Sharpe Ratio: ${sharpe}`);tl.push("");tl.push("OPEN POSITIONS");for(const p of positions){const pl=p.unrealized_pl||0;tl.push(`  ${p.symbol} ${p.side} ${Math.abs(p.qty)} | P&L: $${pl.toFixed(2)}`);}tl.push("");tl.push("RISK METRICS");tl.push(`  VaR (95%): ${var95}`);tl.push(`  Max Drawdown: ${maxDD}`);try{await navigator.clipboard.writeText(tl.join("\n"));copyBtn.textContent="Copied!";copyBtn.style.borderColor="#4caf50";setTimeout(()=>{copyBtn.textContent="Copy as Text";copyBtn.style.borderColor="#555";},2000);}catch(_){}});
+    btnRow.appendChild(printBtn);btnRow.appendChild(copyBtn);win.appendElement(btnRow);
+  } catch(e){win.contentElement.textContent="";win.setContent(`Failed to generate report: ${e}`);}
+}
+
+// ══════════════════════════════════════════════════════════════
+// ECONOMIC — Economic Surprise Index
+// ══════════════════════════════════════════════════════════════
+async function cmdEconomic() {
+  const s = loadSettings();
+  if (!s.fredApiKey) { alert("Set FRED API key in Settings (Ctrl+K \u2192 SETTINGS) to use this feature.\nFree: https://fred.stlouisfed.org/docs/api/api_key.html"); return; }
+  const win = createWindow({ title: "Economic Surprise Index", width: 620, height: 520 });
+  win.contentElement.textContent = "";
+  const ld = document.createElement("div"); ld.textContent = "Fetching economic indicators from FRED..."; ld.style.cssText = "color:#888;padding:12px;"; win.appendElement(ld);
+  const econInds = [{id:"GDP",name:"GDP (Real)"},{id:"CPIAUCSL",name:"CPI (All Items)"},{id:"PAYEMS",name:"Non-Farm Payrolls"},{id:"UNRATE",name:"Unemployment Rate"}];
+  try {
+    const results = [];
+    for (const ind of econInds) {
+      try { const json = await invoke("fetch_fred_series", { seriesId: ind.id, apiKey: s.fredApiKey, limit: 24 }); const data = JSON.parse(json); const obs = (data.observations || []).filter(o => o.value !== "."); if (obs.length >= 2) { const latest = parseFloat(obs[obs.length-1].value); const prior = parseFloat(obs[obs.length-2].value); const surprise = prior !== 0 ? ((latest-prior)/Math.abs(prior))*100 : 0; results.push({ name:ind.name, id:ind.id, latest, prior, surprise, date:obs[obs.length-1].date, history:obs.map(o=>({date:o.date,value:parseFloat(o.value)})).filter(o=>!isNaN(o.value)) }); } } catch(_){}
+    }
+    if (results.length === 0) { win.contentElement.textContent = ""; win.setContent("No economic data available from FRED. Check API key."); return; }
+    win.contentElement.textContent = "";
+    const sh = document.createElement("div"); sh.style.cssText = "color:#8cf;font-size:12px;font-weight:bold;margin-bottom:4px;border-bottom:1px solid #333;padding-bottom:2px;"; sh.textContent = "Key Economic Indicators"; win.appendElement(sh);
+    const tbl = document.createElement("table"); tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;margin-bottom:12px;";
+    const thd = document.createElement("tr"); for (const h of ["Indicator","Latest","Prior","Surprise %","Date"]) { const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;"; td.textContent = h; thd.appendChild(td); } tbl.appendChild(thd);
+    for (const r of results) { const tr = document.createElement("tr"); for (const v of [{text:r.name,color:"#ccc"},{text:r.latest.toFixed(2),color:"#ccc"},{text:r.prior.toFixed(2),color:"#888"},{text:(r.surprise>=0?"+":"")+r.surprise.toFixed(2)+"%",color:r.surprise>=0?"#4caf50":"#f44336"},{text:r.date,color:"#888"}]) { const td = document.createElement("td"); td.style.cssText = `padding:3px 6px;color:${v.color};font-family:Consolas,monospace;`; td.textContent = v.text; tr.appendChild(td); } tbl.appendChild(tr); }
+    win.appendElement(tbl);
+    // Cumulative surprise SVG
+    const allPts = []; for (const r of results) { for (let i = 1; i < r.history.length; i++) { const prev = r.history[i-1].value; const cur = r.history[i].value; const surp = prev !== 0 ? (cur-prev)/Math.abs(prev) : 0; allPts.push({ date: r.history[i].date, surprise: surp }); } }
+    allPts.sort((a,b) => a.date.localeCompare(b.date));
+    const dateMap = {}; let runSum = 0; for (const p of allPts) { runSum += p.surprise; dateMap[p.date] = runSum; }
+    const dedupData = Object.entries(dateMap).sort((a,b) => a[0].localeCompare(b[0])).map(([date, value]) => ({ date, value }));
+    if (dedupData.length >= 2) {
+      const ch2 = document.createElement("div"); ch2.style.cssText = "color:#8cf;font-size:12px;font-weight:bold;margin-bottom:4px;border-bottom:1px solid #333;padding-bottom:2px;"; ch2.textContent = "Cumulative Economic Surprise Index"; win.appendElement(ch2);
+      const svgW=580,svgH=180,padL=50,padR=10,padT=10,padB=30;const plotW=svgW-padL-padR,plotH=svgH-padT-padB;const cvals=dedupData.map(d=>d.value);const minV=Math.min(...cvals,0),maxV=Math.max(...cvals,0);const range=maxV-minV||1;
+      let pathD="";for(let i=0;i<dedupData.length;i++){const x=padL+(i/(dedupData.length-1))*plotW;const y=padT+plotH-((dedupData[i].value-minV)/range)*plotH;pathD+=(i===0?"M":"L")+x.toFixed(1)+","+y.toFixed(1);}
+      const zeroY=padT+plotH-((0-minV)/range)*plotH;const lc=dedupData[dedupData.length-1].value>=0?"#4caf50":"#f44336";
+      const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.setAttribute("width",svgW);svg.setAttribute("height",svgH);svg.style.cssText="display:block;margin:0 auto;";
+      svg.innerHTML=`<rect width="${svgW}" height="${svgH}" fill="#0a0a0a" rx="4"/><line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${svgW-padR}" y2="${zeroY.toFixed(1)}" stroke="#333" stroke-dasharray="4,4"/><path d="${pathD}" fill="none" stroke="${lc}" stroke-width="2"/><text x="${padL-4}" y="${padT+8}" fill="#666" font-size="9" text-anchor="end">${maxV.toFixed(2)}</text><text x="${padL-4}" y="${padT+plotH}" fill="#666" font-size="9" text-anchor="end">${minV.toFixed(2)}</text><text x="${padL}" y="${svgH-4}" fill="#666" font-size="9">${dedupData[0].date}</text><text x="${svgW-padR}" y="${svgH-4}" fill="#666" font-size="9" text-anchor="end">${dedupData[dedupData.length-1].date}</text><text x="${padL-4}" y="${zeroY.toFixed(1)+3}" fill="#555" font-size="8" text-anchor="end">0</text>`;
+      win.appendElement(svg);
+    }
+    // Regime
+    const totalSurprise = results.reduce((s2,r) => s2 + r.surprise, 0);
+    const rd = document.createElement("div"); rd.style.cssText = "margin-top:12px;padding:10px;border-radius:4px;border-left:3px solid " + (totalSurprise >= 0 ? "#4caf50" : "#f44336") + ";background:#111;";
+    const rl2 = document.createElement("div"); rl2.style.cssText = `font-size:14px;font-weight:bold;color:${totalSurprise >= 0 ? "#4caf50" : "#f44336"};margin-bottom:4px;`; rl2.textContent = totalSurprise >= 0 ? "Economy BEATING expectations" : "Economy MISSING expectations"; rd.appendChild(rl2);
+    const rdesc = document.createElement("div"); rdesc.style.cssText = "font-size:11px;color:#aaa;"; const bc = results.filter(r => r.surprise >= 0).length; rdesc.textContent = `${bc} of ${results.length} indicators beat prior readings. Cumulative surprise: ${totalSurprise >= 0 ? "+" : ""}${totalSurprise.toFixed(2)}%.`; rd.appendChild(rdesc);
+    win.appendElement(rd);
+  } catch(e){win.contentElement.textContent="";win.setContent(`Failed to fetch economic data: ${e}`);}
+}
+
+// ── VOICE — Voice Alert System ──────────────────────────────
+
+function speakAlert(text) {
+  if (localStorage.getItem("typhoon_voice_enabled") !== "true") return;
+  if (!window.speechSynthesis) return;
+  const utter = new SpeechSynthesisUtterance(text);
+  const vol = parseInt(localStorage.getItem("typhoon_voice_volume") || "80", 10);
+  utter.volume = Math.max(0, Math.min(1, vol / 100));
+  const rate = parseFloat(localStorage.getItem("typhoon_voice_rate") || "1");
+  utter.rate = Math.max(0.5, Math.min(2, rate));
+  const voiceName = localStorage.getItem("typhoon_voice_name") || "";
+  if (voiceName) { const voices = speechSynthesis.getVoices(); const match = voices.find(v => v.name === voiceName); if (match) utter.voice = match; }
+  speechSynthesis.speak(utter);
+}
+
+function cmdVoice() {
+  const win = createWindow({ title: "Voice Alert System", width: 420, height: 400 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "padding:12px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+  const enabled = localStorage.getItem("typhoon_voice_enabled") === "true";
+  const volume = parseInt(localStorage.getItem("typhoon_voice_volume") || "80", 10);
+  const rate = parseFloat(localStorage.getItem("typhoon_voice_rate") || "1");
+  const savedVoice = localStorage.getItem("typhoon_voice_name") || "";
+  const hdr = document.createElement("div"); hdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;"; hdr.textContent = "Voice Alert System"; root.appendChild(hdr);
+  const toggleRow = document.createElement("div"); toggleRow.style.cssText = "display:flex;align-items:center;gap:12px;margin-bottom:12px;padding:8px;background:#111;border:1px solid #333;";
+  const toggleLabel = document.createElement("span"); toggleLabel.style.cssText = "flex:1;font-weight:bold;"; toggleLabel.textContent = "Voice Alerts";
+  const toggleBtn = document.createElement("button"); toggleBtn.style.cssText = `padding:6px 16px;font-family:inherit;font-size:11px;cursor:pointer;border:1px solid ${enabled ? "#4caf50" : "#666"};background:${enabled ? "#1b5e20" : "#222"};color:#fff;`; toggleBtn.textContent = enabled ? "ON" : "OFF";
+  toggleBtn.addEventListener("click", () => { const now = localStorage.getItem("typhoon_voice_enabled") !== "true"; localStorage.setItem("typhoon_voice_enabled", now ? "true" : "false"); toggleBtn.textContent = now ? "ON" : "OFF"; toggleBtn.style.background = now ? "#1b5e20" : "#222"; toggleBtn.style.borderColor = now ? "#4caf50" : "#666"; log(`Voice alerts ${now ? "enabled" : "disabled"}`, "ok"); });
+  toggleRow.appendChild(toggleLabel); toggleRow.appendChild(toggleBtn); root.appendChild(toggleRow);
+  const volRow = document.createElement("div"); volRow.style.cssText = "margin-bottom:10px;";
+  const volLabel = document.createElement("div"); volLabel.style.cssText = "margin-bottom:4px;color:#888;"; volLabel.textContent = `Volume: ${volume}%`;
+  const volSlider = document.createElement("input"); volSlider.type = "range"; volSlider.min = "0"; volSlider.max = "100"; volSlider.value = volume; volSlider.style.cssText = "width:100%;";
+  volSlider.addEventListener("input", () => { localStorage.setItem("typhoon_voice_volume", volSlider.value); volLabel.textContent = `Volume: ${volSlider.value}%`; });
+  volRow.appendChild(volLabel); volRow.appendChild(volSlider); root.appendChild(volRow);
+  const spdRow = document.createElement("div"); spdRow.style.cssText = "margin-bottom:10px;";
+  const spdLabel = document.createElement("div"); spdLabel.style.cssText = "margin-bottom:4px;color:#888;"; spdLabel.textContent = `Speed: ${rate.toFixed(1)}x`;
+  const spdSlider = document.createElement("input"); spdSlider.type = "range"; spdSlider.min = "50"; spdSlider.max = "200"; spdSlider.value = Math.round(rate * 100); spdSlider.style.cssText = "width:100%;";
+  spdSlider.addEventListener("input", () => { const r = parseInt(spdSlider.value, 10) / 100; localStorage.setItem("typhoon_voice_rate", r.toString()); spdLabel.textContent = `Speed: ${r.toFixed(1)}x`; });
+  spdRow.appendChild(spdLabel); spdRow.appendChild(spdSlider); root.appendChild(spdRow);
+  const voiceRow = document.createElement("div"); voiceRow.style.cssText = "margin-bottom:12px;";
+  const voiceLbl = document.createElement("div"); voiceLbl.style.cssText = "margin-bottom:4px;color:#888;"; voiceLbl.textContent = "Voice:";
+  const voiceSelect = document.createElement("select"); voiceSelect.style.cssText = "width:100%;padding:4px;background:#111;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;";
+  function populateVoices() { voiceSelect.textContent = ""; const voices = speechSynthesis.getVoices(); const defOpt = document.createElement("option"); defOpt.value = ""; defOpt.textContent = "(Default)"; voiceSelect.appendChild(defOpt); for (const v of voices) { const opt = document.createElement("option"); opt.value = v.name; opt.textContent = `${v.name} (${v.lang})`; if (v.name === savedVoice) opt.selected = true; voiceSelect.appendChild(opt); } }
+  populateVoices(); if (speechSynthesis.onvoiceschanged !== undefined) speechSynthesis.onvoiceschanged = populateVoices;
+  voiceSelect.addEventListener("change", () => { localStorage.setItem("typhoon_voice_name", voiceSelect.value); });
+  voiceRow.appendChild(voiceLbl); voiceRow.appendChild(voiceSelect); root.appendChild(voiceRow);
+  const testBtn = document.createElement("button"); testBtn.textContent = "Test Voice"; testBtn.style.cssText = "padding:8px 20px;background:#1565c0;color:#fff;border:1px solid #2196f3;cursor:pointer;font-family:inherit;font-size:11px;margin-bottom:12px;";
+  testBtn.addEventListener("click", () => { const utter = new SpeechSynthesisUtterance("TyphooN Terminal voice alerts active"); utter.volume = Math.max(0, Math.min(1, parseInt(localStorage.getItem("typhoon_voice_volume") || "80", 10) / 100)); utter.rate = Math.max(0.5, Math.min(2, parseFloat(localStorage.getItem("typhoon_voice_rate") || "1"))); const vn = localStorage.getItem("typhoon_voice_name") || ""; if (vn) { const m = speechSynthesis.getVoices().find(x => x.name === vn); if (m) utter.voice = m; } speechSynthesis.speak(utter); });
+  root.appendChild(testBtn);
+  const info = document.createElement("div"); info.style.cssText = "padding:8px;background:#0a0a0a;border:1px solid #333;color:#888;font-size:10px;line-height:1.6;"; info.innerHTML = "<b style='color:#ff9800;'>Voice triggers:</b><br>Price alert trigger<br>Fisher Transform crossover<br>RSI extreme (&gt;70 / &lt;30)<br>Unusual volume spike<br>All notification-based alerts"; root.appendChild(info);
+  win.appendElement(root); log("Voice alert system opened", "ok");
+}
+
+// ── DETACH — Detachable Window Info ─────────────────────────
+
+function cmdDetach() {
+  const win = createWindow({ title: "Detach / Pop-Out Windows", width: 500, height: 420 }); win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "padding:12px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+  const hdr = document.createElement("div"); hdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;"; hdr.textContent = "Pop-Out Windows"; root.appendChild(hdr);
+  const note = document.createElement("div"); note.style.cssText = "padding:8px;background:#1a1a00;border:1px solid #665500;color:#ff9800;font-size:10px;margin-bottom:12px;"; note.textContent = "Full multi-monitor support requires Tauri multi-window API (planned feature). Current pop-out copies window content to a new browser window."; root.appendChild(note);
+  const listContainer = document.createElement("div"); listContainer.style.cssText = "margin-bottom:12px;";
+  function renderWindowList() {
+    listContainer.textContent = ""; const aw = getActiveWindows(); const ids = Object.keys(aw);
+    if (ids.length === 0) { const empty = document.createElement("div"); empty.style.cssText = "color:#666;text-align:center;padding:20px;"; empty.textContent = "No floating windows open."; listContainer.appendChild(empty); return; }
+    const header = document.createElement("div"); header.style.cssText = "display:flex;padding:4px 0;border-bottom:1px solid #444;color:#888;font-weight:bold;font-size:10px;margin-bottom:4px;"; header.innerHTML = "<span style='flex:1;'>Window</span><span style='width:80px;text-align:center;'>Actions</span>"; listContainer.appendChild(header);
+    for (const id of ids) { const handle = aw[id]; if (!handle || !handle.element) continue; const titleEl = handle.element.querySelector(".fw-title"); const title = titleEl ? titleEl.textContent : id; const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;padding:4px 0;border-bottom:1px solid #1a1a1a;"; const nameSpan = document.createElement("span"); nameSpan.style.cssText = "flex:1;color:#ccc;"; nameSpan.textContent = title; const popBtn = document.createElement("button"); popBtn.textContent = "Pop Out"; popBtn.style.cssText = "padding:3px 10px;background:#1565c0;color:#fff;border:1px solid #2196f3;cursor:pointer;font-size:10px;font-family:inherit;"; popBtn.addEventListener("click", () => { const contentEl = handle.element.querySelector(".fw-content"); if (!contentEl) return; const popup = window.open("", "_blank", "width=600,height=400,menubar=no,toolbar=no"); if (popup) { popup.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>body{background:#0d0d0d;color:#ccc;font-family:Consolas,monospace;font-size:11px;padding:12px;margin:0;}</style></head><body>${contentEl.innerHTML}</body></html>`); popup.document.close(); log(`Popped out: ${title}`, "ok"); } }); row.appendChild(nameSpan); row.appendChild(popBtn); listContainer.appendChild(row); }
+  }
+  renderWindowList(); root.appendChild(listContainer);
+  const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh List"; refreshBtn.style.cssText = "padding:6px 16px;background:#333;color:#fff;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:11px;"; refreshBtn.addEventListener("click", renderWindowList); root.appendChild(refreshBtn);
+  win.appendElement(root); log("Detach window manager opened", "ok");
+}
+
+// ── INDICATOR-TUNE — Auto Indicator Parameter Tuning ────────
+
+function cmdIndicatorTune() {
+  const win = createWindow({ title: "Indicator Parameter Tuning", width: 600, height: 580 }); win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "padding:12px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+  const hdr = document.createElement("div"); hdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;"; hdr.textContent = "Indicator Parameter Optimization"; root.appendChild(hdr);
+  if (!currentChartData || currentChartData.length < 50) { const msg = document.createElement("div"); msg.textContent = "Load a chart with at least 50 bars first."; msg.style.cssText = "color:#f44336;text-align:center;padding:20px;"; root.appendChild(msg); win.appendElement(root); return; }
+  const form = document.createElement("div"); form.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;";
+  const indLabel = document.createElement("label"); indLabel.textContent = "Indicator:"; indLabel.style.cssText = "color:#888;";
+  const indSelect = document.createElement("select"); indSelect.style.cssText = "padding:4px;background:#111;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;";
+  for (const ind of ["Fisher Period", "RSI Period", "KAMA Period", "SMA Period"]) { const opt = document.createElement("option"); opt.value = ind; opt.textContent = ind; indSelect.appendChild(opt); }
+  const metLabel = document.createElement("label"); metLabel.textContent = "Metric:"; metLabel.style.cssText = "color:#888;";
+  const metSelect = document.createElement("select"); metSelect.style.cssText = "padding:4px;background:#111;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;";
+  for (const m of ["Signal Accuracy", "Profit Factor", "Win Rate"]) { const opt = document.createElement("option"); opt.value = m; opt.textContent = m; metSelect.appendChild(opt); }
+  const minLabel = document.createElement("label"); minLabel.textContent = "Min:"; minLabel.style.cssText = "color:#888;"; const minInput = document.createElement("input"); minInput.type = "number"; minInput.value = "10"; minInput.style.cssText = "padding:4px;background:#111;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;width:60px;";
+  const maxLabel = document.createElement("label"); maxLabel.textContent = "Max:"; maxLabel.style.cssText = "color:#888;"; const maxInput = document.createElement("input"); maxInput.type = "number"; maxInput.value = "100"; maxInput.style.cssText = "padding:4px;background:#111;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;width:60px;";
+  const stepLabel = document.createElement("label"); stepLabel.textContent = "Step:"; stepLabel.style.cssText = "color:#888;"; const stepInput = document.createElement("input"); stepInput.type = "number"; stepInput.value = "2"; stepInput.style.cssText = "padding:4px;background:#111;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;width:60px;";
+  form.appendChild(indLabel); form.appendChild(indSelect); form.appendChild(metLabel); form.appendChild(metSelect); form.appendChild(minLabel); form.appendChild(minInput); form.appendChild(maxLabel); form.appendChild(maxInput); form.appendChild(stepLabel); form.appendChild(stepInput); root.appendChild(form);
+  const runBtn = document.createElement("button"); runBtn.textContent = "Run Optimization"; runBtn.style.cssText = "padding:8px 20px;background:#1b5e20;color:#fff;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-size:11px;margin-bottom:12px;display:block;width:100%;"; root.appendChild(runBtn);
+  const progressDiv = document.createElement("div"); progressDiv.style.cssText = "color:#888;margin-bottom:8px;font-size:10px;"; root.appendChild(progressDiv);
+  const resultsDiv = document.createElement("div"); root.appendChild(resultsDiv);
+  const chartArea = document.createElement("div"); chartArea.style.cssText = "height:120px;border:1px solid #333;background:#0a0a0a;margin-top:8px;position:relative;overflow:hidden;"; root.appendChild(chartArea);
+  runBtn.addEventListener("click", async () => {
+    const indicator = indSelect.value; const metric = metSelect.value; const minP = parseInt(minInput.value, 10); const maxP = parseInt(maxInput.value, 10); const stepP = parseInt(stepInput.value, 10) || 1;
+    if (minP >= maxP || stepP < 1) { progressDiv.textContent = "Invalid range."; return; }
+    runBtn.disabled = true; runBtn.textContent = "Running..."; resultsDiv.textContent = ""; chartArea.textContent = "";
+    const data = currentChartData; const closes = data.map(b => b.close); const results = []; const params = []; for (let p = minP; p <= maxP; p += stepP) params.push(p); const total = params.length;
+    for (let idx = 0; idx < params.length; idx++) {
+      const p = params[idx]; progressDiv.textContent = `Testing ${idx + 1}/${total}... (period=${p})`; let signals = [];
+      if (indicator === "Fisher Period") { const fResult = calcEhlersFisher(data, p); const fLine = fResult.fisher; const sLine = fResult.signal; for (let i = 1; i < fLine.length; i++) { if (fLine[i].value > sLine[i].value && fLine[i - 1].value <= sLine[i - 1].value) signals.push({ bar: p + i, dir: 1 }); else if (fLine[i].value < sLine[i].value && fLine[i - 1].value >= sLine[i - 1].value) signals.push({ bar: p + i, dir: -1 }); } }
+      else if (indicator === "RSI Period") { const rsi = calcRSI(data, p); for (let i = 1; i < rsi.length; i++) { if (rsi[i].value < 30 && rsi[i - 1].value >= 30) signals.push({ bar: p + i + 1, dir: 1 }); else if (rsi[i].value > 70 && rsi[i - 1].value <= 70) signals.push({ bar: p + i + 1, dir: -1 }); } }
+      else if (indicator === "KAMA Period") { const kama = calcKAMA(data, p); for (let i = 1; i < kama.length; i++) { const bi = data.length - kama.length + i; if (bi < 1) continue; if (data[bi].close > kama[i].value && data[bi - 1].close <= (kama[i - 1] ? kama[i - 1].value : kama[i].value)) signals.push({ bar: bi, dir: 1 }); else if (data[bi].close < kama[i].value && data[bi - 1].close >= (kama[i - 1] ? kama[i - 1].value : kama[i].value)) signals.push({ bar: bi, dir: -1 }); } }
+      else if (indicator === "SMA Period") { const sma = calcSMA(data, p); for (let i = 1; i < sma.length; i++) { const bi = p - 1 + i; if (bi < 1 || bi >= data.length) continue; if (data[bi].close > sma[i].value && data[bi - 1].close <= (sma[i - 1] ? sma[i - 1].value : sma[i].value)) signals.push({ bar: bi, dir: 1 }); else if (data[bi].close < sma[i].value && data[bi - 1].close >= (sma[i - 1] ? sma[i - 1].value : sma[i].value)) signals.push({ bar: bi, dir: -1 }); } }
+      let wins = 0, losses = 0, grossProfit = 0, grossLoss = 0, pos = 0, entryPrice = 0;
+      for (const sig of signals) { if (sig.bar >= closes.length) continue; if (pos === 0) { pos = sig.dir; entryPrice = closes[sig.bar]; } else if (sig.dir !== pos) { const pnl = (closes[sig.bar] - entryPrice) * pos; if (pnl > 0) { wins++; grossProfit += pnl; } else { losses++; grossLoss += Math.abs(pnl); } pos = sig.dir; entryPrice = closes[sig.bar]; } }
+      const totalTrades = wins + losses; let metricVal = 0;
+      if (metric === "Signal Accuracy" || metric === "Win Rate") metricVal = totalTrades > 0 ? wins / totalTrades : 0;
+      else if (metric === "Profit Factor") metricVal = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99 : 0;
+      results.push({ period: p, metric: metricVal, trades: totalTrades }); if (idx % 10 === 0) await new Promise(r => setTimeout(r, 0));
+    }
+    runBtn.disabled = false; runBtn.textContent = "Run Optimization"; results.sort((a, b) => b.metric - a.metric); const top10 = results.slice(0, 10); progressDiv.textContent = `Done. ${total} parameter values tested.`;
+    if (top10.length > 0) { const opt = document.createElement("div"); opt.style.cssText = "padding:8px;background:#1b5e20;border:1px solid #4caf50;color:#fff;font-weight:bold;text-align:center;margin-bottom:8px;"; opt.textContent = `Optimal: period=${top10[0].period} (${metric}=${top10[0].metric.toFixed(4)}, ${top10[0].trades} trades)`; resultsDiv.appendChild(opt); }
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;"; const thead = document.createElement("tr"); thead.innerHTML = "<th style='text-align:left;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Rank</th><th style='text-align:left;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Period</th><th style='text-align:right;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Metric</th><th style='text-align:right;padding:2px 6px;border-bottom:1px solid #444;color:#888;'>Trades</th>"; table.appendChild(thead);
+    for (let i = 0; i < top10.length; i++) { const r = top10[i]; const tr = document.createElement("tr"); tr.style.cssText = i === 0 ? "background:#1b5e20;" : ""; tr.innerHTML = `<td style="padding:2px 6px;color:#ccc;">${i + 1}</td><td style="padding:2px 6px;color:#fff;font-weight:bold;">${r.period}</td><td style="padding:2px 6px;text-align:right;color:#4caf50;">${r.metric.toFixed(4)}</td><td style="padding:2px 6px;text-align:right;color:#888;">${r.trades}</td>`; table.appendChild(tr); }
+    resultsDiv.appendChild(table);
+    const sorted = [...results].sort((a, b) => a.period - b.period); const maxMetric = Math.max(...sorted.map(r => r.metric), 0.001); chartArea.textContent = "";
+    const chartLabel = document.createElement("div"); chartLabel.style.cssText = "position:absolute;top:2px;left:4px;font-size:9px;color:#666;z-index:1;"; chartLabel.textContent = `${metric} by Period`; chartArea.appendChild(chartLabel);
+    const barsDiv = document.createElement("div"); barsDiv.style.cssText = "display:flex;align-items:flex-end;height:100%;padding:16px 4px 4px 4px;gap:1px;";
+    for (const r of sorted) { const bar = document.createElement("div"); const pct = (r.metric / maxMetric) * 100; const isOpt = top10.length > 0 && r.period === top10[0].period; bar.style.cssText = `flex:1;min-width:2px;height:${Math.max(1, pct)}%;background:${isOpt ? "#4caf50" : "#1565c0"};`; bar.title = `Period ${r.period}: ${r.metric.toFixed(4)}`; barsDiv.appendChild(bar); }
+    chartArea.appendChild(barsDiv);
+  });
+  win.appendElement(root); log("Indicator tuning window opened", "ok");
+}
+
+// ── SENTIMENT+ — News Volume Tracker ────────────────────────
+
+async function cmdSentimentPlus() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — News Volume Tracker`, width: 620, height: 520 }); win.contentElement.textContent = "";
+  const loading = document.createElement("div"); loading.textContent = "Fetching news data..."; loading.style.cssText = "color:#888;padding:20px;"; win.appendElement(loading);
+  try {
+    const json = await invoke("get_news", { symbol: currentSymbol, limit: 50 }); const articles = JSON.parse(json);
+    if (!articles || articles.length === 0) { win.contentElement.textContent = ""; win.setContent("No news available."); return; }
+    const posWords = ["rally","surge","beat","upgrade","bullish","profit","growth","record","breakthrough"]; const negWords = ["crash","plunge","miss","downgrade","bearish","loss","decline","warning","default"];
+    function scoreSentiment(text) { if (!text) return 0; const lower = text.toLowerCase(); let score = 0; for (const w of posWords) { if (lower.includes(w)) score++; } for (const w of negWords) { if (lower.includes(w)) score--; } return Math.max(-1, Math.min(1, score / Math.max(1, Math.max(posWords.length, negWords.length)))); }
+    const byDate = {}; for (const a of articles) { const headline = a.headline || a.title || ""; const score = scoreSentiment(headline + " " + (a.summary || "")); const date = (a.created_at || a.updated_at || "").substring(0, 10); if (!date) continue; if (!byDate[date]) byDate[date] = { count: 0, totalScore: 0 }; byDate[date].count++; byDate[date].totalScore += score; }
+    const dates = Object.keys(byDate).sort(); const avgCount = dates.length > 0 ? dates.reduce((s, d) => s + byDate[d].count, 0) / dates.length : 0; const maxCount = Math.max(...dates.map(d => byDate[d].count), 1);
+    const todayStr = new Date().toISOString().substring(0, 10); const todayCount = byDate[todayStr] ? byDate[todayStr].count : 0;
+    const countTrend = dates.length >= 4 ? (function() { const half = Math.floor(dates.length / 2); const first = dates.slice(0, half).reduce((s, d) => s + byDate[d].count, 0) / half; const second = dates.slice(half).reduce((s, d) => s + byDate[d].count, 0) / (dates.length - half); return second > first * 1.2 ? "Increasing" : second < first * 0.8 ? "Decreasing" : "Stable"; })() : "N/A";
+    win.contentElement.textContent = ""; const root = document.createElement("div"); root.style.cssText = "padding:12px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+    const hdr = document.createElement("div"); hdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;"; hdr.textContent = `${currentSymbol} News Volume Tracker`; root.appendChild(hdr);
+    if (todayCount > avgCount * 2 && todayCount > 3) { const spike = document.createElement("div"); spike.style.cssText = "padding:8px;background:#b71c1c;border:1px solid #f44336;color:#fff;font-weight:bold;text-align:center;margin-bottom:8px;"; spike.textContent = `NEWS SPIKE: ${todayCount} articles today (avg: ${avgCount.toFixed(1)}/day)`; root.appendChild(spike); speakAlert(`News spike detected for ${currentSymbol}. ${todayCount} articles today.`); }
+    const statsRow = document.createElement("div"); statsRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px;";
+    for (const [label, value, color] of [["Avg/Day", avgCount.toFixed(1), "#2196f3"], ["Today", todayCount.toString(), todayCount > avgCount * 2 ? "#f44336" : "#4caf50"], ["Trend", countTrend, countTrend === "Increasing" ? "#f44336" : countTrend === "Decreasing" ? "#4caf50" : "#ff9800"], ["Days", dates.length.toString(), "#888"]]) { const cell = document.createElement("div"); cell.style.cssText = "text-align:center;padding:8px;background:#111;border:1px solid #333;"; cell.innerHTML = `<div style="color:#888;font-size:9px;">${label}</div><div style="color:${color};font-size:16px;font-weight:bold;">${value}</div>`; statsRow.appendChild(cell); }
+    root.appendChild(statsRow);
+    const chartDiv = document.createElement("div"); chartDiv.style.cssText = "height:140px;border:1px solid #333;background:#0a0a0a;margin-bottom:12px;position:relative;overflow:hidden;"; const chartLabel = document.createElement("div"); chartLabel.style.cssText = "position:absolute;top:2px;left:4px;font-size:9px;color:#666;z-index:1;"; chartLabel.textContent = "Articles per Day (color = sentiment)"; chartDiv.appendChild(chartLabel);
+    const barsDiv = document.createElement("div"); barsDiv.style.cssText = "display:flex;align-items:flex-end;height:100%;padding:16px 4px 18px 4px;gap:2px;";
+    for (const d of dates) { const nfo = byDate[d]; const pct = (nfo.count / maxCount) * 100; const avgSent = nfo.count > 0 ? nfo.totalScore / nfo.count : 0; const color = avgSent > 0.05 ? "#4caf50" : avgSent < -0.05 ? "#f44336" : "#ff9800"; const barWrap = document.createElement("div"); barWrap.style.cssText = "flex:1;display:flex;flex-direction:column;align-items:center;min-width:12px;height:100%;justify-content:flex-end;"; const bar = document.createElement("div"); bar.style.cssText = `width:100%;height:${Math.max(2, pct)}%;background:${color};min-height:2px;`; bar.title = `${d}: ${nfo.count} articles, sentiment: ${avgSent.toFixed(2)}`; barWrap.appendChild(bar); const dl = document.createElement("div"); dl.style.cssText = "font-size:7px;color:#666;transform:rotate(-45deg);white-space:nowrap;margin-top:2px;"; dl.textContent = d.substring(5); barWrap.appendChild(dl); barsDiv.appendChild(barWrap); }
+    chartDiv.appendChild(barsDiv); root.appendChild(chartDiv);
+    const listTitle = document.createElement("div"); listTitle.style.cssText = "font-weight:bold;color:#888;margin-bottom:4px;border-bottom:1px solid #333;padding-bottom:2px;"; listTitle.textContent = "Articles by Date"; root.appendChild(listTitle);
+    for (const d of dates.slice().reverse()) { const dateHdr = document.createElement("div"); dateHdr.style.cssText = "color:#ff9800;font-weight:bold;margin-top:8px;font-size:10px;"; dateHdr.textContent = `${d} (${byDate[d].count} articles)`; root.appendChild(dateHdr); const dayArticles = articles.filter(a => (a.created_at || a.updated_at || "").startsWith(d)); for (const a of dayArticles) { const item = document.createElement("div"); item.style.cssText = "padding:2px 0 2px 12px;color:#aaa;font-size:10px;border-bottom:1px solid #111;"; item.textContent = a.headline || a.title || "(no headline)"; if (a.url) { item.style.cursor = "pointer"; item.addEventListener("click", () => openArticleInline(a.url, a.headline || a.title)); } root.appendChild(item); } }
+    win.appendElement(root);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Error: ${e}`); }
+  log("Sentiment+ news volume tracker opened", "ok");
+}
+
+// ── RISK-PARITY — Risk Parity Position Sizing ───────────────
+
+async function cmdRiskParity() {
+  const win = createWindow({ title: "Risk Parity Position Sizing", width: 650, height: 500 }); win.contentElement.textContent = "";
+  const loading = document.createElement("div"); loading.textContent = "Fetching positions and computing volatility..."; loading.style.cssText = "color:#888;padding:20px;"; win.appendElement(loading);
+  try {
+    const posJson = await invoke("get_positions"); const positions = JSON.parse(posJson);
+    if (!positions || positions.length === 0) { win.contentElement.textContent = ""; win.setContent("No open positions."); return; }
+    const posData = []; let totalValue = 0;
+    for (const pos of positions) { const sym = pos.symbol; const qty = parseFloat(pos.qty) || 0; const mktVal = Math.abs(parseFloat(pos.market_value) || (qty * (parseFloat(pos.current_price) || 0))); totalValue += mktVal; let annVol = 0; try { const cacheKey = `${sym}:1Day`; let bars; if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length >= 21) { bars = barCache[cacheKey].data; } else { const barsJson = await invoke("get_bars", { symbol: sym, timeframe: "1Day", limit: 30 }); bars = JSON.parse(barsJson); } if (bars && bars.length >= 21) { const returns = []; for (let i = bars.length - 20; i < bars.length; i++) { if (bars[i - 1].close > 0) returns.push(Math.log(bars[i].close / bars[i - 1].close)); } const mean = returns.reduce((a, b) => a + b, 0) / returns.length; const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1); annVol = Math.sqrt(variance) * Math.sqrt(252); } } catch (_) {} posData.push({ symbol: sym, qty, mktVal, annVol, currentPrice: parseFloat(pos.current_price) || parseFloat(pos.avg_entry_price) || 0 }); }
+    if (totalValue === 0) { win.contentElement.textContent = ""; win.setContent("No position value."); return; }
+    const invVols = posData.map(p => p.annVol > 0.001 ? 1 / p.annVol : 0); const sumInvVol = invVols.reduce((a, b) => a + b, 0); const parityWeights = invVols.map(iv => sumInvVol > 0 ? iv / sumInvVol : 1 / posData.length);
+    const currentRisk = posData.reduce((s, p) => s + (p.mktVal / totalValue) * p.annVol, 0); const parityRisk = posData.reduce((s, p, i) => s + parityWeights[i] * p.annVol, 0);
+    win.contentElement.textContent = ""; const root = document.createElement("div"); root.style.cssText = "padding:12px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+    const hdr = document.createElement("div"); hdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;"; hdr.textContent = "Risk Parity Analysis"; root.appendChild(hdr);
+    const riskRow = document.createElement("div"); riskRow.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px;";
+    for (const [label, value, color] of [["Current Risk", `${(currentRisk * 100).toFixed(1)}%`, "#f44336"], ["Risk Parity", `${(parityRisk * 100).toFixed(1)}%`, "#4caf50"], ["Positions", posData.length.toString(), "#2196f3"]]) { const cell = document.createElement("div"); cell.style.cssText = "text-align:center;padding:8px;background:#111;border:1px solid #333;"; cell.innerHTML = `<div style="color:#888;font-size:9px;">${label}</div><div style="color:${color};font-size:16px;font-weight:bold;">${value}</div>`; riskRow.appendChild(cell); }
+    root.appendChild(riskRow);
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-bottom:12px;"; const theadRow = document.createElement("tr"); theadRow.innerHTML = "<th style='text-align:left;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Symbol</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Current Wt</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Vol (ann)</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Parity Wt</th><th style='text-align:right;padding:4px 6px;border-bottom:1px solid #444;color:#888;'>Change</th>"; table.appendChild(theadRow);
+    for (let i = 0; i < posData.length; i++) { const p = posData[i]; const curW = p.mktVal / totalValue; const parW = parityWeights[i]; const diff = parW - curW; const diffPct = diff * 100; const close = Math.abs(diffPct) < 3; const color = close ? "#4caf50" : "#f44336"; const tr = document.createElement("tr"); tr.style.cssText = `background:${close ? "transparent" : "#1a0000"};`; tr.innerHTML = `<td style="padding:4px 6px;color:#fff;font-weight:bold;">${p.symbol}</td><td style="padding:4px 6px;text-align:right;color:#ccc;">${(curW * 100).toFixed(1)}%</td><td style="padding:4px 6px;text-align:right;color:#ff9800;">${(p.annVol * 100).toFixed(1)}%</td><td style="padding:4px 6px;text-align:right;color:#4caf50;">${(parW * 100).toFixed(1)}%</td><td style="padding:4px 6px;text-align:right;color:${color};font-weight:bold;">${diffPct >= 0 ? "+" : ""}${diffPct.toFixed(1)}%</td>`; table.appendChild(tr); }
+    root.appendChild(table);
+    const sugTitle = document.createElement("div"); sugTitle.style.cssText = "font-weight:bold;color:#ff9800;margin-bottom:6px;border-bottom:1px solid #333;padding-bottom:4px;"; sugTitle.textContent = "Rebalance Suggestions"; root.appendChild(sugTitle);
+    for (let i = 0; i < posData.length; i++) { const p = posData[i]; const curW = p.mktVal / totalValue; const parW = parityWeights[i]; const diff = parW - curW; if (Math.abs(diff) < 0.01) continue; const dollarChange = diff * totalValue; const shareChange = p.currentPrice > 0 ? Math.round(dollarChange / p.currentPrice) : 0; const action = dollarChange > 0 ? "Buy" : "Sell"; const sug = document.createElement("div"); sug.style.cssText = `padding:4px 8px;margin-bottom:2px;color:${dollarChange > 0 ? "#4caf50" : "#f44336"};`; sug.textContent = `${action} ${Math.abs(shareChange)} shares of ${p.symbol} ($${Math.abs(dollarChange).toFixed(0)})`; root.appendChild(sug); }
+    win.appendElement(root);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Error: ${e}`); }
+  log("Risk parity analysis opened", "ok");
+}
+
+// ── WORKSPACE — Full Workspace Save/Restore ─────────────────
+
+function cmdWorkspace() {
+  const win = createWindow({ title: "Workspace Manager", width: 520, height: 480 }); win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "padding:12px;font-family:Consolas,monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%;";
+  const hdr = document.createElement("div"); hdr.style.cssText = "text-align:center;font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:12px;"; hdr.textContent = "Workspace Manager"; root.appendChild(hdr);
+  const WORKSPACES_KEY = "typhoon_workspaces";
+  function getWorkspaces() { try { return JSON.parse(localStorage.getItem(WORKSPACES_KEY) || "{}"); } catch { return {}; } }
+  function saveWorkspaces(ws) { localStorage.setItem(WORKSPACES_KEY, JSON.stringify(ws)); }
+  function captureState() { const settings = {}; for (let i = 0; i < localStorage.length; i++) { const key = localStorage.key(i); if (key && key.startsWith("typhoon_") && key !== WORKSPACES_KEY) settings[key] = localStorage.getItem(key); } const tabState = tabs.map(t => ({ symbol: t.symbol || currentSymbol, timeframe: t.timeframe || currentTimeframe })); const activeIdx = tabs.findIndex(t => t.id === activeTabId); const indicators = {}; document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => { if (cb.id || cb.name) indicators[cb.id || cb.name] = cb.checked; }); return { settings, tabs: tabState, activeTabIndex: activeIdx >= 0 ? activeIdx : 0, indicators, theme: localStorage.getItem("typhoon_theme") || "dark", savedAt: new Date().toISOString() }; }
+  const saveSection = document.createElement("div"); saveSection.style.cssText = "margin-bottom:16px;padding:8px;background:#111;border:1px solid #333;";
+  const saveLbl = document.createElement("div"); saveLbl.style.cssText = "font-weight:bold;color:#ff9800;margin-bottom:6px;"; saveLbl.textContent = "Save Current Workspace"; saveSection.appendChild(saveLbl);
+  const saveRow = document.createElement("div"); saveRow.style.cssText = "display:flex;gap:8px;";
+  const nameInput = document.createElement("input"); nameInput.type = "text"; nameInput.placeholder = "Workspace name"; nameInput.style.cssText = "flex:1;padding:6px;background:#0a0a0a;color:#ccc;border:1px solid #444;font-family:inherit;font-size:11px;";
+  const saveBtn = document.createElement("button"); saveBtn.textContent = "Save"; saveBtn.style.cssText = "padding:6px 16px;background:#1b5e20;color:#fff;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-size:11px;";
+  saveBtn.addEventListener("click", () => { const name = nameInput.value.trim(); if (!name) return; const ws = getWorkspaces(); ws[name] = captureState(); saveWorkspaces(ws); nameInput.value = ""; renderList(); log(`Workspace "${name}" saved`, "ok"); });
+  saveRow.appendChild(nameInput); saveRow.appendChild(saveBtn); saveSection.appendChild(saveRow); root.appendChild(saveSection);
+  const importRow = document.createElement("div"); importRow.style.cssText = "margin-bottom:12px;display:flex;gap:8px;";
+  const importBtn = document.createElement("button"); importBtn.textContent = "Import from File"; importBtn.style.cssText = "padding:6px 16px;background:#333;color:#fff;border:1px solid #555;cursor:pointer;font-family:inherit;font-size:11px;";
+  importBtn.addEventListener("click", () => { const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = ".json"; fileInput.addEventListener("change", () => { const file = fileInput.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (e) => { try { const imported = JSON.parse(e.target.result); if (imported && typeof imported === "object") { const ws = getWorkspaces(); if (imported.settings && imported.tabs) { ws[file.name.replace(".json", "") || "Imported"] = imported; } else { Object.assign(ws, imported); } saveWorkspaces(ws); renderList(); log("Workspace imported", "ok"); } } catch (err) { log(`Import failed: ${err}`, "error"); } }; reader.readAsText(file); }); fileInput.click(); });
+  importRow.appendChild(importBtn); root.appendChild(importRow);
+  const listContainer = document.createElement("div");
+  function renderList() { listContainer.textContent = ""; const ws = getWorkspaces(); const names = Object.keys(ws); if (names.length === 0) { const empty = document.createElement("div"); empty.style.cssText = "color:#666;text-align:center;padding:20px;"; empty.textContent = "No saved workspaces."; listContainer.appendChild(empty); return; } const header = document.createElement("div"); header.style.cssText = "display:flex;padding:4px 0;border-bottom:1px solid #444;color:#888;font-weight:bold;font-size:10px;margin-bottom:4px;"; header.innerHTML = "<span style='flex:1;'>Name</span><span style='width:120px;text-align:center;'>Date</span><span style='width:180px;text-align:center;'>Actions</span>"; listContainer.appendChild(header); for (const name of names) { const w = ws[name]; const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;padding:4px 0;border-bottom:1px solid #1a1a1a;"; const nameSpan = document.createElement("span"); nameSpan.style.cssText = "flex:1;color:#ccc;font-weight:bold;"; nameSpan.textContent = name; const dateSpan = document.createElement("span"); dateSpan.style.cssText = "width:120px;text-align:center;color:#666;font-size:9px;"; dateSpan.textContent = w.savedAt ? w.savedAt.substring(0, 10) : "—"; const actions = document.createElement("div"); actions.style.cssText = "width:180px;display:flex;gap:4px;justify-content:center;"; const loadBtn = document.createElement("button"); loadBtn.textContent = "Load"; loadBtn.style.cssText = "padding:2px 8px;background:#1565c0;color:#fff;border:1px solid #2196f3;cursor:pointer;font-size:9px;font-family:inherit;"; loadBtn.addEventListener("click", () => { if (w.settings) { for (const [key, val] of Object.entries(w.settings)) localStorage.setItem(key, val); } if (w.theme) localStorage.setItem("typhoon_theme", w.theme); log(`Workspace "${name}" loaded — reloading page...`, "ok"); setTimeout(() => location.reload(), 300); }); const exportBtn = document.createElement("button"); exportBtn.textContent = "Export"; exportBtn.style.cssText = "padding:2px 8px;background:#333;color:#fff;border:1px solid #555;cursor:pointer;font-size:9px;font-family:inherit;"; exportBtn.addEventListener("click", () => { const blob = new Blob([JSON.stringify(w, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `${name}.json`; a.click(); URL.revokeObjectURL(url); log(`Workspace "${name}" exported`, "ok"); }); const delBtn = document.createElement("button"); delBtn.textContent = "Delete"; delBtn.style.cssText = "padding:2px 8px;background:#b71c1c;color:#fff;border:1px solid #f44336;cursor:pointer;font-size:9px;font-family:inherit;"; delBtn.addEventListener("click", () => { const ws2 = getWorkspaces(); delete ws2[name]; saveWorkspaces(ws2); renderList(); log(`Workspace "${name}" deleted`, "ok"); }); actions.appendChild(loadBtn); actions.appendChild(exportBtn); actions.appendChild(delBtn); row.appendChild(nameSpan); row.appendChild(dateSpan); row.appendChild(actions); listContainer.appendChild(row); } }
+  renderList(); root.appendChild(listContainer);
+  win.appendElement(root); log("Workspace manager opened", "ok");
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "SNAPSHOT", desc: "Portfolio snapshot to clipboard", action: cmdSnapshot },
   { name: "HOTLIST", desc: "Real-time top movers dashboard", action: cmdHotlist },
@@ -11441,6 +13446,26 @@ const CMD_PALETTE_COMMANDS = [
   { name: "PORTFOLIO+", desc: "Portfolio construction optimizer (mean-variance, efficient frontier)", action: cmdPortfolioPlus },
   { name: "TEACH", desc: "Interactive trading tutorial (step-by-step guide)", action: cmdTeach },
   { name: "API", desc: "API reference & data export (invoke commands, clipboard)", action: cmdAPI },
+  { name: "MULTI", desc: "Multi-account portfolio view (allocation, risk, HHI)", action: cmdMultiAccount },
+  { name: "CONDITIONAL", desc: "Conditional order chains (if X then trade Y)", action: cmdConditional },
+  { name: "PDT", desc: "Pattern Day Trader monitor (day trade count, warnings)", action: cmdPDT },
+  { name: "BACKUP", desc: "Settings backup / restore (export & import typhoon_ keys)", action: cmdBackup },
+  { name: "ANNOUNCE", desc: "Earnings surprise tracker (quarterly EPS from SEC EDGAR)", action: cmdAnnounce },
+  { name: "QUICKCORR", desc: "Quick pair correlation (Pearson 30/60/90/252D + beta)", action: cmdQuickCorr },
+  { name: "SPLITS", desc: "Stock split calendar (watchlist forward/reverse splits)", action: cmdSplits },
+  { name: "PREMARKET", desc: "Pre/Post-market movers dashboard (gap%, auto-refresh)", action: cmdPreMarket },
+  { name: "SHORTCUT", desc: "Custom keyboard shortcut builder (map keys to commands)", action: cmdShortcut },
+  { name: "INTERMARKET", desc: "Intermarket analysis dashboard (SPY, TLT, GLD, UUP, USO, BTC)", action: cmdIntermarket },
+  { name: "ATTRIBUTION", desc: "Performance attribution (sector, side, duration, size breakdown)", action: cmdAttribution },
+  { name: "TAXLOT", desc: "Tax lot tracker (FIFO cost basis, wash sale, estimated tax)", action: cmdTaxLot },
+  { name: "REPORT", desc: "Generate printable trading report (account, P&L, risk, performance)", action: cmdReport },
+  { name: "ECONOMIC", desc: "Economic surprise index (FRED GDP, CPI, NFP, unemployment)", action: cmdEconomic },
+  { name: "VOICE", desc: "Voice alert system (Web Speech API, configurable)", action: cmdVoice },
+  { name: "DETACH", desc: "Pop-out / detach floating windows", action: cmdDetach },
+  { name: "INDICATOR-TUNE", desc: "Auto indicator parameter tuning (optimize Fisher, RSI, KAMA, SMA)", action: cmdIndicatorTune },
+  { name: "SENTIMENT+", desc: "News volume tracker (article count, spike detection)", action: cmdSentimentPlus },
+  { name: "RISK-PARITY", desc: "Risk parity position sizing (volatility-weighted allocation)", action: cmdRiskParity },
+  { name: "WORKSPACE", desc: "Full workspace save/restore (settings, tabs, indicators)", action: cmdWorkspace },
 ];
 
 function fuzzyMatch(query, target) {
@@ -14559,6 +16584,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupCustomPluginUI();
   setupChartContextMenu();
   setupOrderPriceLines();
+  registerCustomShortcutListener(); // Load saved custom keyboard shortcuts
 
   // Auto-save session periodically and on shutdown
   setInterval(saveSession, 30000); // every 30s
@@ -21093,6 +23119,7 @@ async function checkWatchlistSMA200Alerts() {
         const direction = nowAbove ? "CROSSED ABOVE" : "CROSSED BELOW";
         log(`WATCHLIST ALERT: ${sym} ${direction} SMA200 ($${sma200.toFixed(2)}) — Price: $${price.toFixed(2)}`, "warn");
         try { new Notification(`${sym} ${direction} SMA200`, { body: `Price: $${price.toFixed(2)}, SMA200: $${sma200.toFixed(2)}` }); } catch (_) {}
+        speakAlert(`${sym} ${direction.replace("CROSSED ", "crossed ")} SMA 200 at ${price.toFixed(2)}`);
       }
       watchlistSMA200Cache[cacheKey] = { ts: now, above: nowAbove };
     } catch (_) {}
