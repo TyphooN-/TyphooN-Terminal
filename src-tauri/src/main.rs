@@ -1091,7 +1091,34 @@ async fn get_news(state: State<'_, SharedState>, symbol: String, limit: u32) -> 
         let s = state.lock().await;
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
-    let news = broker.get_news(&symbol, limit).await?;
+    // Fetch from multiple sources in parallel
+    let alpaca_fut = broker.get_news(&symbol, limit);
+
+    // Finnhub (secondary source — needs API key from localStorage, passed via frontend)
+    // For now, just use Alpaca. Finnhub integration available via get_finnhub_news command.
+    let mut news = alpaca_fut.await?;
+
+    // Sort by date descending and dedup by headline
+    news.sort_by(|a, b| {
+        let ta = a["created_at"].as_str().unwrap_or("");
+        let tb = b["created_at"].as_str().unwrap_or("");
+        tb.cmp(ta)
+    });
+    news.dedup_by(|a, b| a["headline"].as_str() == b["headline"].as_str());
+    news.truncate(limit as usize);
+
+    Ok(serde_json::to_string(&news).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
+async fn get_finnhub_news(state: State<'_, SharedState>, symbol: String, finnhub_key: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+    let news = broker.get_finnhub_news(&symbol, &finnhub_key).await?;
     Ok(serde_json::to_string(&news).map_err(|e| format!("JSON error: {e}"))?)
 }
 
@@ -2455,6 +2482,7 @@ fn main() {
             send_discord_notification,
             // News, Events & Fundamentals
             get_news,
+            get_finnhub_news,
             get_corporate_actions,
             get_sec_filings,
             get_company_fundamentals,

@@ -4568,14 +4568,37 @@ async function loadNewsAndFundamentals(symbol) {
     log(`Fundamentals failed for ${symbol}: ${e}`, "warn");
   }
 
-  // Load news (Alpaca News API — cached)
+  // Load news from multiple sources (Alpaca + Finnhub)
   try {
     const cacheKey = `news:${symbol}`;
     let articles = await coldLoad(cacheKey);
-    const cacheAge = articles ? 0 : Infinity; // cold cache doesn't track age, always refresh
+    const cacheAge = articles ? 0 : Infinity;
     if (!articles || cacheAge > 15 * 60 * 1000) {
-      const json = await invoke("get_news", { symbol, limit: 20 });
-      articles = JSON.parse(json);
+      // Fetch Alpaca news
+      const alpacaJson = await invoke("get_news", { symbol, limit: 20 });
+      articles = JSON.parse(alpacaJson);
+
+      // Fetch Finnhub news if API key is set
+      const finnhubKey = localStorage.getItem("typhoon_finnhub_key") || "";
+      if (finnhubKey) {
+        try {
+          const finnhubJson = await invoke("get_finnhub_news", { symbol, finnhubKey });
+          const finnhubArticles = JSON.parse(finnhubJson);
+          if (finnhubArticles.length > 0) {
+            articles = [...articles, ...finnhubArticles];
+            // Sort by date descending and dedup by headline
+            articles.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+            const seen = new Set();
+            articles = articles.filter(a => {
+              const h = (a.headline || a.title || "").toLowerCase().substring(0, 50);
+              if (seen.has(h)) return false;
+              seen.add(h);
+              return true;
+            });
+          }
+        } catch (_) {} // Finnhub failure is non-critical
+      }
+
       if (articles && articles.length > 0) coldSave(cacheKey, articles);
     }
     if (articles && articles.length > 0) {

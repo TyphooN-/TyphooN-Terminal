@@ -649,6 +649,50 @@ impl AlpacaBroker {
         Ok(json["news"].as_array().cloned().unwrap_or_default())
     }
 
+    // ── Finnhub News (secondary source, free API key) ──────────────
+
+    pub async fn get_finnhub_news(&self, symbol: &str, finnhub_key: &str) -> Result<Vec<serde_json::Value>, String> {
+        if finnhub_key.is_empty() { return Ok(vec![]); }
+        // Strip /USD for crypto symbols (Finnhub uses BINANCE:BTCUSDT format for crypto)
+        let clean_sym = symbol.replace("/USD", "").replace("/", "");
+
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let week_ago = (chrono::Utc::now() - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
+
+        let resp = sec_client()
+            .get("https://finnhub.io/api/v1/company-news")
+            .query(&[
+                ("symbol", clean_sym.as_str()),
+                ("from", week_ago.as_str()),
+                ("to", today.as_str()),
+                ("token", finnhub_key),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Finnhub news failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Finnhub news: HTTP {}", resp.status()));
+        }
+
+        let articles: Vec<serde_json::Value> = resp.json().await
+            .map_err(|e| format!("Finnhub parse failed: {e}"))?;
+
+        // Normalize to same format as Alpaca news
+        Ok(articles.iter().map(|a| {
+            serde_json::json!({
+                "headline": a["headline"].as_str().unwrap_or(""),
+                "summary": a["summary"].as_str().unwrap_or(""),
+                "url": a["url"].as_str().unwrap_or(""),
+                "source": a["source"].as_str().unwrap_or("Finnhub"),
+                "created_at": chrono::DateTime::from_timestamp(a["datetime"].as_i64().unwrap_or(0), 0)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default(),
+                "images": [],
+            })
+        }).take(20).collect())
+    }
+
     // ── Corporate Actions (Earnings/Dividends) ──────────────────
 
     pub async fn get_corporate_actions(&self, symbol: &str, types: &str) -> Result<Vec<serde_json::Value>, String> {
