@@ -2918,8 +2918,13 @@ async function loadChart(symbol, timeframe) {
 const ALL_NATIVE_TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month"];
 
 const prefetchInProgress = new Set();
-// Track which symbol:tf combos are fully loaded (don't re-fetch)
-const fullyLoadedTFs = new Set();
+// Track which symbol:tf combos are fully loaded (persisted across restarts)
+const fullyLoadedTFs = new Set((() => {
+  try { return JSON.parse(localStorage.getItem("fullyLoadedTFs") || "[]"); } catch { return []; }
+})());
+function saveFullyLoaded() {
+  try { localStorage.setItem("fullyLoadedTFs", JSON.stringify([...fullyLoadedTFs])); } catch (_) {}
+}
 
 async function prefetchAllTimeframes(symbol, currentTF) {
   if (prefetchInProgress.has(symbol)) return;
@@ -2936,8 +2941,6 @@ async function prefetchAllTimeframes(symbol, currentTF) {
 
     const cached = barCache[cacheKey];
     if (cached && cached.data && cached.data.length > 0) {
-      // Already have data — mark as loaded, don't re-fetch
-      // (updateLatestBar handles new bars every 10s)
       fullyLoadedTFs.add(fullyLoadedKey);
       continue;
     }
@@ -2959,6 +2962,7 @@ async function prefetchAllTimeframes(symbol, currentTF) {
   }
 
   if (fetched > 0) log(`Pre-cached ${fetched} timeframes for ${symbol}`, "ok");
+  saveFullyLoaded();
   prefetchInProgress.delete(symbol);
 }
 
@@ -3098,15 +3102,22 @@ async function updateDashboard() {
         }
       } catch (_) {}
 
-      // VaR
+      // VaR — throttled to avoid fetching 1Day bars every 2s dashboard cycle
       if (lastPrice > 0) {
-        try {
-          const varJson = await invoke("calculate_position_var", {
-            symbol: currentSymbol, positionSize: posQty, currentPrice: lastPrice,
-          });
-          const v = JSON.parse(varJson);
-          setText("info-var", `VaR: $${v.var_dollars.toFixed(2)}`);
-        } catch (_) { setText("info-var", "VaR: —"); }
+        const varKey = `${currentSymbol}:${posQty}`;
+        const now = Date.now();
+        if (!window._varCache || window._varCache.key !== varKey || (now - window._varCache.ts) > 60000) {
+          try {
+            const varJson = await invoke("calculate_position_var", {
+              symbol: currentSymbol, positionSize: posQty, currentPrice: lastPrice,
+            });
+            const v = JSON.parse(varJson);
+            window._varCache = { key: varKey, ts: now, val: v.var_dollars };
+            setText("info-var", `VaR: $${v.var_dollars.toFixed(2)}`);
+          } catch (_) { setText("info-var", "VaR: —"); }
+        } else if (window._varCache) {
+          setText("info-var", `VaR: $${window._varCache.val.toFixed(2)}`);
+        }
       }
     } else {
       setText("info-sl-pl", "SL P/L: —");
