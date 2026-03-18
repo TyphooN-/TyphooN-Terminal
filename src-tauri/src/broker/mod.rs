@@ -1,11 +1,9 @@
 pub mod alpaca;
-pub mod tastytrade;
 
 use alpaca::{AccountInfo, AssetInfo, Bar, OrderInfo, OrderResult, PositionInfo};
 use async_trait::async_trait;
 
-/// Multi-broker abstraction. AlpacaBroker implements this.
-/// AlpacaBroker and TastytradeBroker implement this trait.
+/// Broker abstraction trait. AlpacaBroker implements this.
 #[async_trait]
 pub trait BrokerTrait: Send + Sync {
     /// Get account info (equity, balance, margin, etc.).

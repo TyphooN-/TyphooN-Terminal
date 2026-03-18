@@ -4392,15 +4392,7 @@ function setupConnect() {
   populateAccountDropdown();
 
   // When saved account selected, fill form (async — loads from keychain)
-  // Update placeholders when broker changes
-  const brokerSel = document.getElementById("broker-select");
-  if (brokerSel) {
-    brokerSel.addEventListener("change", () => {
-      const isTasty = brokerSel.value === "tastytrade";
-      document.getElementById("api-key").placeholder = isTasty ? "Username / Email" : "API Key";
-      document.getElementById("secret-key").placeholder = isTasty ? "Password" : "Secret Key";
-    });
-  }
+  // Broker selector (Alpaca only)
 
   document.getElementById("saved-accounts").addEventListener("change", (e) => {
     fillFormFromAccount(e.target.value);
@@ -4442,7 +4434,7 @@ function setupConnect() {
     const paper = accountType === "paper";
 
     if (!apiKey || !secretKey) {
-      status.textContent = brokerType === "tastytrade" ? "Username and Password required" : "API Key and Secret Key required";
+      status.textContent = "API Key and Secret Key required";
       return;
     }
 
@@ -4450,12 +4442,7 @@ function setupConnect() {
     status.style.color = "#ff8";
 
     try {
-      let result;
-      if (brokerType === "tastytrade") {
-        result = await invoke("connect_tastytrade", { username: apiKey, password: secretKey, isSandbox: paper });
-      } else {
-        result = await invoke("connect", { apiKey, secretKey, paper });
-      }
+      const result = await invoke("connect", { apiKey, secretKey, paper });
       const acct = JSON.parse(result);
 
       // Set broker ID for per-broker data isolation
@@ -9092,7 +9079,6 @@ function cmdImportTrades() {
   const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
   const impInputStyle = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
   const formatSel = document.createElement("select"); formatSel.style.cssText = impInputStyle;
-  for (const [v, l] of [["auto","Auto-Detect"],["generic","Generic CSV"],["mt5","MT5 Export"],["ib","Interactive Brokers"],["tasty","Tastytrade"]]) { const o = document.createElement("option"); o.value = v; o.textContent = l; formatSel.appendChild(o); }
   const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = ".csv"; fileInput.style.cssText = "font-size:10px;color:#ccc;";
   const importBtn = document.createElement("button"); importBtn.textContent = "Import"; importBtn.style.cssText = "padding:4px 10px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;"; importBtn.disabled = true;
   const clearBtn = document.createElement("button"); clearBtn.textContent = "Clear Imported Data"; clearBtn.style.cssText = "padding:4px 10px;background:#5f0a0a;color:#f88;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;margin-left:auto;";
@@ -18094,7 +18080,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "WEBHOOK", desc: "Custom Webhook Alert Endpoints", action: cmdWebhook },
   { name: "JOURNAL+", desc: "Enhanced Trade Journal (tags, ratings, calendar, stats)", action: cmdJournalPlus },
   { name: "CORRELATION3D", desc: "Correlation Network Graph (force-directed)", action: cmdCorrelation3D },
-  { name: "IMPORTTRADES", desc: "Import external trade history (CSV: MT5, IB, Tastytrade)", action: cmdImportTrades },
+  { name: "IMPORTTRADES", desc: "Import external trade history (CSV: MT5, IB, generic)", action: cmdImportTrades },
   { name: "SIGNAL", desc: "Composite trading signal generator (Fisher, RSI, KAMA, SMA200, volume, ATR)", action: cmdSignal },
   { name: "PROFILE", desc: "Trading profile analytics (P&L by symbol, day of week, hold time)", action: cmdProfile },
   { name: "FIBO+", desc: "Fibonacci time zones (markers at Fib intervals from swing low)", action: cmdFiboTime },

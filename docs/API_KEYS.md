@@ -63,12 +63,9 @@ Optional API keys that unlock additional features. All are free to register.
 
 ---
 
-## Tastytrade
 
 **Used for:** Trading stocks, options, futures, crypto — alternative to Alpaca with better options support
 
-- **Sign up:** https://www.tastytrade.com/
-- **Paper trading:** Free sandbox at `api.cert.tastyworks.com`
 - **Live trading:** Requires funded account
 - **Auth:** Username + password (session token based)
 - **Data:** DXLink streaming for real-time quotes

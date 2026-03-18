@@ -110,7 +110,7 @@
 | Native desktop (local render) | ✅ | ✅ | ❌ (web) | ❌ (CLI) | ✅ |
 | Linux native | ✅ | ❌ (Wine) | ✅ (web) | ✅ | ❌ |
 | Open source | ✅ | ❌ | ❌ | ✅ | ❌ |
-| Multi-broker support | ✅ (2) | ❌ (1) | ❌ | ✅ | ✅ |
+| Broker support | ✅ (Alpaca) | ❌ (1) | ❌ | ✅ | ✅ |
 | OS keychain storage | ✅ | ❌ | ❌ | ❌ | ✅ |
 | SQLite + zstd cache | ✅ | ❌ | ❌ | ❌ | ❌ |
 | WebSocket streaming | ✅ | ✅ | ✅ | ❌ | ✅ |
@@ -136,7 +136,7 @@
 2. **Auto Fibonacci** — Automatic fractal-based swing detection with 13 levels including extensions. Unique feature.
 3. **Supply/Demand zones** — Fractal-based detection with strength tiers. Only available as paid MT5 indicators.
 4. **Integrated NNFX system** — Full No Nonsense Forex system ported from MQL5 with exact visual parity.
-5. **Multi-broker + multi-timeframe** — Alpaca + Tastytrade with 2-5 TF grid view per symbol.
+5. **Multi-broker + multi-timeframe** — Alpaca with 2-5 TF grid view per symbol.
 6. **Local-first with cloud data** — Runs locally (no SaaS), caches everything in SQLite, works offline with cached data.
 7. **Draggable tab reordering** — Drag tabs to rearrange. Godel Terminal doesn't support this (tabs are fixed order, very annoying). MT5 doesn't support it either (chart windows, not tabs).
 8. **Volume Profile** — Price-at-volume distribution with POC and value area. TradingView charges for this feature (Premium plan, $24.95/mo). Free in TyphooN-Terminal.
@@ -354,7 +354,7 @@ MT5, cTrader, and NinjaTrader all rely on **third-party DLLs** for indicators an
 | Language | C# (.NET) | Rust + JavaScript |
 | Linux native | No (Windows only) | Yes |
 | DLL required | Yes (cBots) | No |
-| Broker lock-in | Yes (per broker) | No (multi-broker) |
+| Broker lock-in | Yes (per broker) | No (Alpaca) |
 | Risk management | Basic | 4 modes + VaR + martingale |
 | Strategy testing | Yes (cAlgo) | Yes (Strategy trait) |
 | Custom indicators | C# (compiled) | JavaScript (readable) |

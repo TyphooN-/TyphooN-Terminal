@@ -238,7 +238,7 @@ All dependencies are justified:
 - `tokio-tungstenite/futures-util` — WebSocket
 - `async-trait` — broker trait
 - `tracing/tracing-subscriber` — logging
-- `hmac` — HMAC for Tastytrade auth
+
 
 Shell plugin removed (unnecessary attack surface). Keyring removed (unreliable on Linux). Tokio reduced from `full` to `rt-multi-thread+sync+time+macros`.
 

@@ -105,7 +105,7 @@ After completing the core trading terminal, research platform, and strategy test
 | CHAIN+ | `Ctrl+K → CHAIN+` | Options chain visualizer (vol smile, OI profile, volume heatmap) | Options chain |
 | SPREAD+ | `Ctrl+K → SPREAD+` | Live bid-ask spread monitor with 2-sigma alert | WebSocket quotes |
 | WEBHOOK | `Ctrl+K → WEBHOOK` | Custom webhook endpoints for alert automation | localStorage + fetch() |
-| IMPORTTRADES | `Ctrl+K → IMPORTTRADES` | Import trade history CSV (MT5, IB, Tastytrade formats) | File input |
+| IMPORTTRADES | `Ctrl+K → IMPORTTRADES` | Import trade history CSV (MT5, IB, generic) | File input |
 
 #### High (6)
 

@@ -35,7 +35,6 @@ Both repositories use GNU General Public License v3.0:
 
 ### Apache-2.0 (Permissive)
 **Pros:**
-- **Broker-friendly** — Alpaca, Tastytrade, or any company can use/modify/embed freely
 - **Acquisition-friendly** — if Alpaca wants to acquire or partner, no license conflict
 - Patent grant protects users and contributors
 - Compatible with GPL (can be combined with GPL code)

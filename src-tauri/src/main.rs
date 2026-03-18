@@ -18,7 +18,6 @@ mod notifications;
 mod strategies;
 
 use broker::alpaca::{AlpacaBroker, StreamMessage};
-use broker::tastytrade::TastytradeBroker;
 use core::risk::{self, OrderMode, RiskConfig, SymbolSpec};
 use core::var;
 use core::margin;
@@ -45,8 +44,6 @@ fn shared_client() -> &'static reqwest::Client {
 /// Shared application state.
 struct AppState {
     broker: Option<AlpacaBroker>,
-    tastytrade: Option<TastytradeBroker>,
-    active_broker: String, // "alpaca" or "tastytrade"
     risk_config: RiskConfig,
     martingale: MartingaleState,
     /// Per-symbol SL/TP tracked locally (Alpaca can't modify after placement).
@@ -107,28 +104,6 @@ async fn connect(
     Ok(serde_json::to_string(&account).map_err(|e| format!("JSON error: {e}"))?)
 }
 
-// ── Tastytrade Connect ──────────────────────────────────────────────
-
-#[tauri::command]
-async fn connect_tastytrade(
-    state: State<'_, SharedState>,
-    username: String,
-    password: String,
-    is_sandbox: bool,
-) -> Result<String, String> {
-    if username.is_empty() || username.len() > 100 {
-        return Err("Invalid username".to_string());
-    }
-    if password.is_empty() || password.len() > 200 {
-        return Err("Invalid password".to_string());
-    }
-    let broker = TastytradeBroker::login(username, password, is_sandbox).await?;
-    let account = broker.get_account_info().await?;
-    let mut s = state.lock().await;
-    s.tastytrade = Some(broker);
-    s.active_broker = "tastytrade".to_string();
-    Ok(serde_json::to_string(&account).map_err(|e| format!("JSON error: {e}"))?)
-}
 
 // ── Credential Storage (AES-256-GCM encrypted, SQLite-backed) ───────
 
@@ -2398,8 +2373,6 @@ fn main() {
 
     let state: SharedState = Arc::new(Mutex::new(AppState {
         broker: None,
-        tastytrade: None,
-        active_broker: "alpaca".to_string(),
         risk_config: RiskConfig::default(),
         martingale: MartingaleState::new(MartingaleConfig::default()),
         sl_levels: std::collections::HashMap::new(),
@@ -2428,8 +2401,6 @@ fn main() {
         // tauri-plugin-shell removed — not used, reduces attack surface
         .manage(state)
         .invoke_handler(tauri::generate_handler![
-            // Tastytrade
-            connect_tastytrade,
             // Keychain
             keychain_save,
             keychain_load,

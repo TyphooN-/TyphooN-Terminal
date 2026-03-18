@@ -232,10 +232,6 @@ Full cross-reference of MQL5 EA (TyphooN.mq5 v1.420, 2730 lines) against Rust/Ta
 ### Pass 13 — Last innerHTML
 66. **Last innerHTML in Monte Carlo stats**: Template literal replaced with createElement + textContent
 
-### Pass 14 — Tastytrade broker audit
-67. **Tastytrade password handling**: Password passed via HTTPS POST body, never logged, dropped after use
-68. **Tastytrade session token**: Stored in `Arc<Mutex<Zeroizing<String>>>` — zeroed on drop
-69. **Input validation**: username ≤100 chars, password ≤200 chars on `connect_tastytrade`
 70. **(Verified clean)**: 0 innerHTML, 0 eval, 0 Client::new(), 0 unwrap on user input, 0 resp body leaks across entire codebase (15.5K lines)
 
 ## Summary

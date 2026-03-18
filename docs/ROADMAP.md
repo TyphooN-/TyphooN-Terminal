@@ -10,7 +10,7 @@ Replace both MetaTrader 5 and Godel Terminal with a single open-source desktop t
 
 ### Current
 - **Alpaca** — Stocks, ETFs, Options, Crypto (free paper trading, IEX data)
-- **Tastytrade** — Stocks, Options, Futures, Crypto (free paper trading, session auth)
+
 
 ### Architecture
 Each broker implements a Rust trait. Adding a new broker means one new file — no changes to risk engine, indicators, or UI.
@@ -128,7 +128,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 
 | Feature | Status | Notes |
 |---|---|---|
-| Multi-broker support | ✅ Done | BrokerTrait with async methods, AlpacaBroker impl |
+| Alpaca broker | ✅ Done | Full Alpaca API integration (stocks, ETFs, options, crypto) |
 | Push notifications (mobile) | ✅ Done | Pushover + ntfy.sh integration |
 | Multi-chart layouts | ✅ Done | MTF Grid view (2-5 TFs with full indicators per cell) |
 | Chart screenshot export | ✅ Done | Ctrl+Shift+S, copy to clipboard + toast |
@@ -223,7 +223,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Algorithm monitor | ✅ Done | Ctrl+K → ALGO, live auto-trade strategy status |
 | Enhanced journal | ✅ Done | Ctrl+K → JOURNAL+, tags/ratings/monthly P&L calendar |
 | Correlation network | ✅ Done | Ctrl+K → CORRELATION3D, force-directed graph (canvas) |
-| Import trade history | ✅ Done | Ctrl+K → IMPORTTRADES, CSV from MT5/IB/Tastytrade |
+| Import trade history | ✅ Done | Ctrl+K → IMPORTTRADES, CSV from MT5/IB/generic |
 
 ### Blocked — Needs External Resources
 
