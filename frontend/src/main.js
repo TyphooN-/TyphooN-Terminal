@@ -4830,8 +4830,6 @@ function saveWorkspaceProfile(name) {
     orderMode: document.getElementById("order-mode")?.value || "VaR",
     fisherPaneHeight: document.getElementById("fisher-pane")?.offsetHeight || 120,
     volumePaneHeight: document.getElementById("volume-pane")?.offsetHeight || 100,
-    splitActive: splitActive,
-    splitSymbol: splitSymbol,
     timestamp: Date.now(),
   };
   localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
@@ -4877,13 +4875,6 @@ function loadWorkspaceProfile(name) {
     if (tabs[idx]) switchTab(tabs[idx].id);
   } else {
     createTab();
-  }
-
-  // Restore split if applicable
-  if (profile.splitActive && profile.splitSymbol) {
-    activateSplit(profile.splitSymbol);
-  } else {
-    deactivateSplit();
   }
 
   log(`Profile "${name}" loaded`, "ok");

@@ -46,4 +46,4 @@ LUMN (2021-04-05 → 2026-03-14 · 1000 bars) | SLV (loading...) | SMCI (loading
 - **Pro**: Cache shared across tabs — switching back to a cached symbol is instant
 - **Pro**: Rate limiter shared — multiple tabs don't double-spend API budget
 - **Con**: Single chart instance reused — tab switch requires full chart rebuild
-- **Con**: No side-by-side comparison (future: split view)
+- **Con**: No side-by-side comparison (use MTF Grid for multi-chart layout)

@@ -205,7 +205,7 @@ MT5, cTrader, and NinjaTrader all rely on **third-party DLLs** for indicators an
 - **100% open source** — every line auditable (17,268 lines, 16 security passes)
 - **No DLLs** — pure Rust backend + JavaScript frontend, no binary dependencies
 - **Custom indicator plugins** are plain JavaScript files you can read
-- **API keys stored in OS keychain** (gnome-keyring/KWallet), not in config files
+- **API keys AES-256-GCM encrypted** (PBKDF2 100K iterations), stored in SQLite — not in config files
 - **CSP prevents** external script injection even if the app is compromised
 - **zeroize** crate erases credentials from memory on drop
 
