@@ -21384,11 +21384,23 @@ async function updateOrderPriceLines() {
         if (!price || price <= 0) return;
         for (const cell of mtfGridCells) {
           try {
-            const line = cell.candleSeries.createPriceLine({
-              price, color, lineWidth: 1, lineStyle: style,
-              axisLabelVisible: true, title,
-            });
-            mtfGridOrderLines.push({ cell, line });
+            if (cell.gpuChart) {
+              // GPU mode: draw as a horizontal line via add_line with constant values
+              const hex = color.replace("#", "");
+              const r = parseInt(hex.substring(0, 2), 16) / 255;
+              const g = parseInt(hex.substring(2, 4), 16) / 255;
+              const b = parseInt(hex.substring(4, 6), 16) / 255;
+              const totalBars = cell.gpuChart.total_bar_count();
+              const vals = new Float64Array(totalBars).fill(price);
+              cell.gpuChart.add_line(vals, r, g, b, 0.8);
+              cell.gpuChart.render();
+            } else {
+              const line = cell.candleSeries.createPriceLine({
+                price, color, lineWidth: 1, lineStyle: style,
+                axisLabelVisible: true, title,
+              });
+              mtfGridOrderLines.push({ cell, line });
+            }
           } catch (_) {}
         }
       };
