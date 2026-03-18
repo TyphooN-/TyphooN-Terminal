@@ -1153,8 +1153,17 @@ function setupLineDrag() {
 // Lines stored as [{ type, p1: {time, price}, p2: {time, price} }].
 // Fibonacci retracements auto-compute 0/23.6/38.2/50/61.8/78.6/100% levels.
 
-let drawings = []; // [{ type: "trendline"|"fibonacci", p1, p2 }]
-let drawingMode = null; // null | "trendline" | "fibonacci"
+let drawings = []; // [{ type: string, p1, p2, p3?, ... }]
+// All supported drawing types (MT5 + TradingView parity):
+// Lines: trendline, horizontal, vertical, ray, segment, arrow-line, extended-line
+// Channels: channel, regression, pitchfork, schiff-pitchfork
+// Fibonacci: fibonacci, fib-fan, fib-arcs, fib-channel, fib-extension
+// Gann: gann-fan, gann-line
+// Shapes: rectangle, triangle, ellipse, circle
+// Arrows/markers: arrow-up, arrow-down, price-label, text-label
+// Elliott: elliott-impulse, elliott-corrective
+// Other: cycle-lines, parallel-channel
+let drawingMode = null;
 let drawingAnchor = null; // first click point { time, price }
 let drawCanvas = null;
 // Per-broker localStorage key — drawings are symbol-specific, so broker-scoped
@@ -15781,6 +15790,62 @@ function cmdFourier() {
     N + " bars analyzed. Period (days) assumes current chart timeframe = 1 bar. Detrended before DFT."));
 }
 
+// ── NORMALITY — Jarque-Bera Normality Test ───────────────────
+function cmdNormality() {
+  if (!currentChartData || currentChartData.length < 30) { log("Need 30+ bars", "warn"); return; }
+  const win = createWindow({ title: `Normality Test — ${currentSymbol}`, width: 400, height: 350 });
+  const returns = [];
+  for (let i = 1; i < currentChartData.length; i++) {
+    if (currentChartData[i-1].close > 0) returns.push(Math.log(currentChartData[i].close / currentChartData[i-1].close));
+  }
+  const n = returns.length;
+  const mean = returns.reduce((a, b) => a + b, 0) / n;
+  const m2 = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / n;
+  const m3 = returns.reduce((s, r) => s + (r - mean) ** 3, 0) / n;
+  const m4 = returns.reduce((s, r) => s + (r - mean) ** 4, 0) / n;
+  const std = Math.sqrt(m2);
+  const skewness = std > 0 ? m3 / (std ** 3) : 0;
+  const kurtosis = std > 0 ? m4 / (std ** 4) : 3;
+  const excessKurtosis = kurtosis - 3;
+  // Jarque-Bera test: JB = n/6 * (S² + K²/4)
+  const jb = (n / 6) * (skewness ** 2 + excessKurtosis ** 2 / 4);
+  // Chi-squared critical values (df=2): 5.99 (5%), 9.21 (1%)
+  const isNormal5 = jb < 5.99;
+  const isNormal1 = jb < 9.21;
+  const verdict = isNormal5 ? "NORMAL (fail to reject at 5%)" : "NOT NORMAL (reject at 5%)";
+  const verdictColor = isNormal5 ? "#4caf50" : "#f44336";
+
+  const frag = document.createDocumentFragment();
+  const hdr = div(verdict, `text-align:center;font-size:14px;font-weight:bold;color:${verdictColor};padding:8px;border-bottom:1px solid #333;`);
+  frag.appendChild(hdr);
+
+  const stats = [
+    ["Sample size", n], ["Mean return", (mean * 100).toFixed(4) + "%"],
+    ["Std deviation", (std * 100).toFixed(4) + "%"],
+    ["Skewness", skewness.toFixed(4) + (Math.abs(skewness) > 0.5 ? " ⚠️" : "")],
+    ["Excess Kurtosis", excessKurtosis.toFixed(4) + (excessKurtosis > 1 ? " (fat tails)" : "")],
+    ["JB Statistic", jb.toFixed(4)],
+    ["Critical (5%)", "5.99"], ["Critical (1%)", "9.21"],
+    ["Normal at 5%?", isNormal5 ? "YES" : "NO"],
+    ["Normal at 1%?", isNormal1 ? "YES" : "NO"],
+  ];
+  const table = document.createElement("table");
+  table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;margin-top:8px;";
+  for (const [k, v] of stats) {
+    const tr = document.createElement("tr");
+    tr.appendChild(td(k, "padding:4px 8px;color:#888;"));
+    const vtd = td(String(v), "padding:4px 8px;text-align:right;font-family:Consolas,monospace;color:#ccc;");
+    if (k.includes("Normal")) vtd.style.color = String(v) === "YES" ? "#4caf50" : "#f44336";
+    tr.appendChild(vtd);
+    table.appendChild(tr);
+  }
+  frag.appendChild(table);
+
+  const note = div("Jarque-Bera tests if returns follow a normal distribution. Skewness ≠ 0 or excess kurtosis ≠ 0 → non-normal. Fat tails = larger moves than expected.", "font-size:9px;color:#666;padding:8px;border-top:1px solid #333;margin-top:8px;");
+  frag.appendChild(note);
+  win.contentElement.replaceChildren(frag);
+}
+
 // ── ENTROPY — Shannon Entropy of Returns ─────────────────────
 function cmdEntropy() {
   if (!currentChartData || currentChartData.length < 30) { log("Need chart data for entropy analysis", "err"); return; }
@@ -18088,6 +18153,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "WAVEFORM", desc: "Audio-style price waveform (returns, volume thickness, zoom)", action: cmdWaveform },
   { name: "COMMAND-HISTORY", desc: "Command execution history (replay, stats, search)", action: cmdCommandHistory },
   { name: "DOMINANCE", desc: "Crypto dominance calculator (BTC, ETH, SOL, pie chart)", action: cmdDominance },
+  { name: "NORMALITY", desc: "Jarque-Bera normality test (skewness, kurtosis, JB statistic)", action: cmdNormality },
   { name: "FOURIER", desc: "Frequency domain analysis (DFT, dominant cycles, phase)", action: cmdFourier },
   { name: "ENTROPY", desc: "Shannon entropy of returns (randomness, rolling sparkline)", action: cmdEntropy },
   { name: "FRACTAL-DIM", desc: "Higuchi fractal dimension (trend vs random vs mean-revert)", action: cmdFractalDim },
@@ -20804,6 +20870,149 @@ function renderDrawingsExtended() {
       ctx.fillStyle = priceDiff >= 0 ? "#4caf50" : "#f44336";
       ctx.font = "11px Consolas";
       ctx.fillText(label, midX + 2, midY - 2);
+
+    } else if (d.type === "vertical") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
+      if (x1 === null) continue;
+      ctx.beginPath(); ctx.strokeStyle = d.color || "#9c27b0"; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+      ctx.moveTo(x1, 0); ctx.lineTo(x1, drawCanvas.height); ctx.stroke(); ctx.setLineDash([]);
+
+    } else if (d.type === "segment" || d.type === "arrow-line" || d.type === "gann-line") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      ctx.beginPath(); ctx.strokeStyle = d.color || "#ff9800"; ctx.lineWidth = 1.5;
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      if (d.type === "arrow-line") { // arrowhead
+        const angle = Math.atan2(y2 - y1, x2 - x1); const sz = 8;
+        ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(x2 - sz * Math.cos(angle - 0.4), y2 - sz * Math.sin(angle - 0.4));
+        ctx.lineTo(x2 - sz * Math.cos(angle + 0.4), y2 - sz * Math.sin(angle + 0.4)); ctx.closePath(); ctx.fillStyle = d.color || "#ff9800"; ctx.fill();
+      }
+
+    } else if (d.type === "extended-line") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const dx = x2 - x1, dy = y2 - y1;
+      const extL = dx !== 0 ? -x1 / dx : -10, extR = dx !== 0 ? (drawCanvas.width - x1) / dx : 10;
+      ctx.beginPath(); ctx.strokeStyle = d.color || "#00bcd4"; ctx.lineWidth = 1;
+      ctx.moveTo(x1 + dx * extL, y1 + dy * extL); ctx.lineTo(x1 + dx * extR, y1 + dy * extR); ctx.stroke();
+
+    } else if (d.type === "pitchfork" || d.type === "schiff-pitchfork") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      const x3 = chart.timeScale().timeToCoordinate(d.p3.time), y3 = candleSeries.priceToCoordinate(d.p3.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null || x3 === null || y3 === null) continue;
+      const midX = (x2 + x3) / 2, midY = (y2 + y3) / 2; // median line starts from pivot through midpoint
+      ctx.strokeStyle = "#ff5722"; ctx.lineWidth = 1.5;
+      // Median line (pivot → midpoint, extended)
+      const dx = midX - x1, dy = midY - y1; const ext = dx !== 0 ? (drawCanvas.width - x1) / dx : 5;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 + dx * ext, y1 + dy * ext); ctx.stroke();
+      // Upper prong (through p2)
+      ctx.beginPath(); ctx.setLineDash([4,2]); ctx.moveTo(x2, y2); ctx.lineTo(x2 + dx * ext, y2 + dy * ext); ctx.stroke();
+      // Lower prong (through p3)
+      ctx.beginPath(); ctx.moveTo(x3, y3); ctx.lineTo(x3 + dx * ext, y3 + dy * ext); ctx.stroke(); ctx.setLineDash([]);
+
+    } else if (d.type === "triangle") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      const x3 = chart.timeScale().timeToCoordinate(d.p3.time), y3 = candleSeries.priceToCoordinate(d.p3.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null || x3 === null || y3 === null) continue;
+      ctx.beginPath(); ctx.strokeStyle = d.color || "#e91e63"; ctx.lineWidth = 1.5;
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.closePath(); ctx.stroke();
+      ctx.fillStyle = (d.color || "#e91e63") + "22"; ctx.fill();
+
+    } else if (d.type === "ellipse" || d.type === "circle") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const rx = Math.abs(x2 - x1), ry = d.type === "circle" ? rx : Math.abs(y2 - y1);
+      ctx.beginPath(); ctx.strokeStyle = d.color || "#9c27b0"; ctx.lineWidth = 1.5;
+      ctx.ellipse(x1, y1, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = (d.color || "#9c27b0") + "15"; ctx.fill();
+
+    } else if (d.type === "fib-fan") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const levels = [0.236, 0.382, 0.5, 0.618, 0.786]; const colors = ["#f44336", "#ff9800", "#ffeb3b", "#8bc34a", "#00bcd4"];
+      for (let li = 0; li < levels.length; li++) {
+        const ly = y1 + (y2 - y1) * levels[li]; const ext = drawCanvas.width - x1;
+        ctx.beginPath(); ctx.strokeStyle = colors[li]; ctx.lineWidth = 1;
+        ctx.moveTo(x1, y1); ctx.lineTo(x1 + ext, y1 + (ly - y1) / (x2 - x1) * ext); ctx.stroke();
+      }
+
+    } else if (d.type === "fib-arcs") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const dist = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+      const levels = [0.382, 0.5, 0.618]; const colors = ["#ff9800", "#ffeb3b", "#00bcd4"];
+      for (let li = 0; li < levels.length; li++) {
+        ctx.beginPath(); ctx.strokeStyle = colors[li]; ctx.lineWidth = 1;
+        ctx.arc(x2, y2, dist * levels[li], 0, Math.PI, true); ctx.stroke();
+      }
+
+    } else if (d.type === "fib-channel" || d.type === "fib-extension") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const levels = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618];
+      const colors = ["#888", "#f44336", "#ff9800", "#ffeb3b", "#8bc34a", "#00bcd4", "#3f51b5", "#9c27b0", "#e91e63"];
+      for (let li = 0; li < levels.length; li++) {
+        const ly = candleSeries.priceToCoordinate(d.p1.price + (d.p2.price - d.p1.price) * levels[li]);
+        if (ly === null) continue;
+        ctx.beginPath(); ctx.strokeStyle = colors[li]; ctx.lineWidth = li === 4 ? 1.5 : 0.8;
+        ctx.setLineDash(li > 6 ? [4,2] : []); ctx.moveTo(x1, ly); ctx.lineTo(drawCanvas.width, ly); ctx.stroke(); ctx.setLineDash([]);
+      }
+
+    } else if (d.type === "gann-fan") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const angles = [1/8, 1/4, 1/3, 1/2, 1, 2, 3, 4, 8]; // Gann angles (1x1 = 45°)
+      for (const a of angles) {
+        const dx = x2 - x1; const dy = (y2 - y1) * a;
+        ctx.beginPath(); ctx.strokeStyle = a === 1 ? "#ff9800" : "#ff980066"; ctx.lineWidth = a === 1 ? 1.5 : 0.8;
+        ctx.moveTo(x1, y1); ctx.lineTo(x1 + dx * 3, y1 + dy * 3); ctx.stroke();
+      }
+
+    } else if (d.type === "arrow-up" || d.type === "arrow-down") {
+      const x = chart.timeScale().timeToCoordinate(d.p1.time), y = candleSeries.priceToCoordinate(d.p1.price);
+      if (x === null || y === null) continue;
+      const sz = 10; const dir = d.type === "arrow-up" ? -1 : 1;
+      ctx.beginPath(); ctx.fillStyle = d.type === "arrow-up" ? "#4caf50" : "#f44336";
+      ctx.moveTo(x, y + dir * sz); ctx.lineTo(x - sz/2, y); ctx.lineTo(x + sz/2, y); ctx.closePath(); ctx.fill();
+
+    } else if (d.type === "price-label" || d.type === "text-label") {
+      const x = chart.timeScale().timeToCoordinate(d.p1.time), y = candleSeries.priceToCoordinate(d.p1.price);
+      if (x === null || y === null) continue;
+      const text = d.text || `$${d.p1.price.toFixed(2)}`;
+      ctx.font = "10px Consolas"; const w = ctx.measureText(text).width;
+      ctx.fillStyle = "#000c"; ctx.fillRect(x - 2, y - 12, w + 6, 14);
+      ctx.fillStyle = d.type === "price-label" ? "#ff0" : "#ccc"; ctx.fillText(text, x + 1, y - 1);
+
+    } else if (d.type === "cycle-lines") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+      if (x1 === null || x2 === null) continue;
+      const period = Math.abs(x2 - x1); if (period < 5) continue;
+      ctx.strokeStyle = "#9c27b066"; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+      for (let cx = x1; cx < drawCanvas.width; cx += period) {
+        ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, drawCanvas.height); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+    } else if (d.type === "parallel-channel") {
+      // Same as "channel" but with fill
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const offset = d.offset || 0;
+      const oY1 = candleSeries.priceToCoordinate(d.p1.price + offset), oY2 = candleSeries.priceToCoordinate(d.p2.price + offset);
+      if (oY1 === null || oY2 === null) continue;
+      ctx.fillStyle = "#00bcd410"; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x2, oY2); ctx.lineTo(x1, oY1); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = "#00bcd4"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      ctx.setLineDash([4,2]); ctx.beginPath(); ctx.moveTo(x1, oY1); ctx.lineTo(x2, oY2); ctx.stroke(); ctx.setLineDash([]);
     }
   }
 }
@@ -20880,14 +21089,55 @@ function setupExtendedDrawings() {
         renderDrawings();
         e.stopImmediatePropagation();
       }
+    } else if (drawingMode === "vertical") {
+      drawings.push({ type: "vertical", p1: { time, price }, p2: { time, price } });
+      saveDrawings(); log("Vertical line drawn", "ok");
+      drawingMode = null; drawingAnchor = null; container.style.cursor = ""; renderDrawings();
+      e.stopImmediatePropagation();
+
+    } else if (drawingMode === "segment" || drawingMode === "arrow-line" || drawingMode === "extended-line" || drawingMode === "gann-line") {
+      if (!drawingAnchor) { drawingAnchor = { time, price }; log(`${drawingMode}: first point — click second`, "info"); e.stopImmediatePropagation(); }
+      else { drawings.push({ type: drawingMode, p1: drawingAnchor, p2: { time, price } }); saveDrawings(); log(`${drawingMode} drawn`, "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "pitchfork" || drawingMode === "schiff-pitchfork") {
+      if (!drawingAnchor) { drawingAnchor = { time, price, _step: 1 }; log("Pitchfork: point 1 (pivot) — click point 2", "info"); e.stopImmediatePropagation(); }
+      else if (drawingAnchor._step === 1) { drawingAnchor._p2 = { time, price }; drawingAnchor._step = 2; log("Pitchfork: point 2 — click point 3", "info"); e.stopImmediatePropagation(); }
+      else { drawings.push({ type: drawingMode, p1: { time: drawingAnchor.time, price: drawingAnchor.price }, p2: drawingAnchor._p2, p3: { time, price } }); saveDrawings(); log("Pitchfork drawn", "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "triangle") {
+      if (!drawingAnchor) { drawingAnchor = { time, price, _step: 1 }; log("Triangle: point 1 — click point 2", "info"); e.stopImmediatePropagation(); }
+      else if (drawingAnchor._step === 1) { drawingAnchor._p2 = { time, price }; drawingAnchor._step = 2; log("Triangle: point 2 — click point 3", "info"); e.stopImmediatePropagation(); }
+      else { drawings.push({ type: "triangle", p1: { time: drawingAnchor.time, price: drawingAnchor.price }, p2: drawingAnchor._p2, p3: { time, price } }); saveDrawings(); log("Triangle drawn", "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "ellipse" || drawingMode === "circle") {
+      if (!drawingAnchor) { drawingAnchor = { time, price }; log(`${drawingMode}: center — click edge`, "info"); e.stopImmediatePropagation(); }
+      else { drawings.push({ type: drawingMode, p1: drawingAnchor, p2: { time, price } }); saveDrawings(); log(`${drawingMode} drawn`, "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "fib-fan" || drawingMode === "fib-arcs" || drawingMode === "fib-channel" || drawingMode === "fib-extension" || drawingMode === "gann-fan") {
+      if (!drawingAnchor) { drawingAnchor = { time, price }; log(`${drawingMode}: first point — click second`, "info"); e.stopImmediatePropagation(); }
+      else { drawings.push({ type: drawingMode, p1: drawingAnchor, p2: { time, price } }); saveDrawings(); log(`${drawingMode} drawn`, "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "arrow-up" || drawingMode === "arrow-down" || drawingMode === "price-label" || drawingMode === "text-label") {
+      const text = drawingMode === "text-label" ? (prompt("Label text:") || "Label") : drawingMode === "price-label" ? `$${price.toFixed(2)}` : "";
+      drawings.push({ type: drawingMode, p1: { time, price }, text });
+      saveDrawings(); log(`${drawingMode} placed`, "ok");
+      drawingMode = null; drawingAnchor = null; container.style.cursor = ""; renderDrawings();
+      e.stopImmediatePropagation();
+
+    } else if (drawingMode === "cycle-lines") {
+      if (!drawingAnchor) { drawingAnchor = { time, price }; log("Cycle lines: first point — click second (sets period)", "info"); e.stopImmediatePropagation(); }
+      else { drawings.push({ type: "cycle-lines", p1: drawingAnchor, p2: { time, price } }); saveDrawings(); log("Cycle lines drawn", "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "parallel-channel") {
+      if (!drawingAnchor) { drawingAnchor = { time, price }; log("Parallel channel: first point — click second", "info"); e.stopImmediatePropagation(); }
+      else if (!channelThirdClick) { drawingAnchor._p2 = { time, price }; channelThirdClick = true; log("Parallel channel: click to set width", "info"); e.stopImmediatePropagation(); }
+      else { const offset = price - drawingAnchor.price; drawings.push({ type: "parallel-channel", p1: { time: drawingAnchor.time, price: drawingAnchor.price }, p2: drawingAnchor._p2, offset }); saveDrawings(); log("Parallel channel drawn", "ok"); drawingAnchor = null; drawingMode = null; channelThirdClick = false; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
     }
   }, true); // capture phase to run before existing handler
 }
 
 // patchRenderDrawings is no longer needed - renderDrawings delegates to renderDrawingsExtended
-function patchRenderDrawings() {
-  // No-op: delegation handled in renderDrawings() directly
-}
+function patchRenderDrawings() {}
 
 // ── Init ────────────────────────────────────────────────────
 
