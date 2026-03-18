@@ -14,6 +14,40 @@
 let wasmReady = false;
 let wasmModule = null;
 
+// ── Web Worker for off-thread indicator computation ─────────
+let indicatorWorker = null;
+let workerCallbacks = {};
+let workerNextId = 0;
+
+function initIndicatorWorker() {
+  try {
+    indicatorWorker = new Worker(new URL("./indicator-worker.js", import.meta.url), { type: "module" });
+    indicatorWorker.onmessage = (e) => {
+      const { id, type, values } = e.data;
+      if (type === "wasm_ready") { console.log("Worker: Wasm indicator engine ready"); return; }
+      if (type === "wasm_fallback") { console.log("Worker: using JS fallback"); return; }
+      if (workerCallbacks[id]) { workerCallbacks[id](values); delete workerCallbacks[id]; }
+    };
+    console.log("Indicator Worker initialized (off-thread computation)");
+  } catch (e) {
+    console.warn("Worker init failed, using main thread:", e);
+  }
+}
+
+// Compute indicator in worker (returns Promise)
+function workerCompute(type, bars, period, fastP, slowP) {
+  return new Promise((resolve) => {
+    if (!indicatorWorker) { resolve(null); return; }
+    const id = workerNextId++;
+    workerCallbacks[id] = resolve;
+    // Send compact bar data (only OHLCV, no timestamps — worker returns values only)
+    const compact = bars.map(b => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume || 0 }));
+    indicatorWorker.postMessage({ id, type, bars: compact, period, fastP, slowP });
+    // Timeout fallback: if worker doesn't respond in 5s, resolve null (use main thread)
+    setTimeout(() => { if (workerCallbacks[id]) { delete workerCallbacks[id]; resolve(null); } }, 5000);
+  });
+}
+
 async function loadWasm() {
   if (wasmReady) return wasmModule;
   try {
@@ -80,16 +114,37 @@ function activateGpuChart(chartData, gpuType) {
   const flat = packBarsForWasm(chartData);
   gpuChartInstance.set_data(flat);
 
-  // Add SMA 200 as indicator line (if enough data)
+  // GPU Phase 4: Render ALL checked indicators as GPU line overlays (Wasm-accelerated)
   gpuChartInstance.clear_lines();
-  if (chartData.length > 200) {
-    const sma = [];
-    for (let i = 199; i < chartData.length; i++) {
-      let sum = 0;
-      for (let j = i - 199; j <= i; j++) sum += chartData[j].close;
-      sma.push(sum / 200);
-    }
-    gpuChartInstance.add_line(new Float64Array(sma), 1.0, 0.84, 0.0, 1.0); // gold
+  const checked = document.querySelectorAll("#indicator-list input[type=checkbox]:checked");
+  for (const cb of checked) {
+    const ind = cb.dataset.ind;
+    const period = parseInt(cb.dataset.period) || 14;
+    try {
+      if (ind === "mtf-ma" && chartData.length > period) {
+        // SMA on GPU: gold for 200, magenta for 100
+        const vals = wasmCalcSMA(chartData, period).map(d => d.value);
+        if (vals.length > 0) {
+          const r = period === 200 ? 1.0 : 1.0, g = period === 200 ? 0.84 : 0.0, b = period === 200 ? 0.0 : 1.0;
+          gpuChartInstance.add_line(new Float64Array(vals), r, g, b, 1.0);
+        }
+      } else if (ind === "kama" && chartData.length > period + 1) {
+        const vals = wasmCalcKAMA(chartData, period).map(d => d.value);
+        if (vals.length > 0) gpuChartInstance.add_line(new Float64Array(vals), 1.0, 1.0, 1.0, 1.0); // white
+      } else if (ind === "sma" && chartData.length > period) {
+        const vals = wasmCalcSMA(chartData, period).map(d => d.value);
+        if (vals.length > 0) gpuChartInstance.add_line(new Float64Array(vals), 0.13, 0.59, 0.95, 1.0); // blue
+      } else if (ind === "ema" && chartData.length > period) {
+        const vals = wasmCalcEMA(chartData, period).map(d => d.value);
+        if (vals.length > 0) gpuChartInstance.add_line(new Float64Array(vals), 1.0, 0.60, 0.0, 1.0); // orange
+      } else if (ind === "bollinger" && chartData.length > period) {
+        const bb = calcBollinger(chartData, period);
+        if (bb.upper.length > 0) {
+          gpuChartInstance.add_line(new Float64Array(bb.upper.map(d => d.value)), 0.61, 0.15, 0.69, 0.7); // purple
+          gpuChartInstance.add_line(new Float64Array(bb.lower.map(d => d.value)), 0.61, 0.15, 0.69, 0.7);
+        }
+      }
+    } catch (_) {}
   }
 
   // Render loop
@@ -17312,6 +17367,7 @@ document.addEventListener("DOMContentLoaded", () => {
   window._apiCallCount = 0;
   loadBarCacheFromDisk().then(() => migrateLocalStorageCache());
   loadWasm(); // Preload 32KB Wasm indicator engine
+  initIndicatorWorker(); // Off-thread indicator computation
   initChart();
   setupDrawingCanvas();
   loadDrawings();
