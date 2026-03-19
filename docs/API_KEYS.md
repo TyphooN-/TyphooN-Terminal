@@ -61,6 +61,30 @@ Optional API keys that unlock additional features. All are free to register.
 - **Cost:** Free tier available
 - **Key format:** API token string
 
+## Finnhub
+
+**Used for:** Analyst ratings, short interest, IPO calendar, earnings, insider sentiment, company news
+
+- **Sign up:** https://finnhub.io/register
+- **Cost:** Free tier: 60 calls/minute
+- **Key format:** API token string
+
+## Financial Modeling Prep (FMP)
+
+**Used for:** Analyst estimates, financial ratios, DCF valuation, company profiles
+
+- **Sign up:** https://financialmodelingprep.com/developer
+- **Cost:** Free tier: 250 calls/day
+- **Key format:** API token string
+
+## Alpha Vantage
+
+**Used for:** Earnings surprises, company overview, fundamental data
+
+- **Sign up:** https://www.alphavantage.co/support/#api-key
+- **Cost:** Free tier: 25 calls/day
+- **Key format:** API token string
+
 ---
 
 ## How to Add Keys

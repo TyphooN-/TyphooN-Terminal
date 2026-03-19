@@ -1,10 +1,10 @@
 # TyphooN-Terminal Licensing Analysis
 
-## Current License: GPL-3.0
+## Current License: Apache-2.0
 
-Both repositories use GNU General Public License v3.0:
-- `MQL5-NNFX-Risk_Management_System` — GPL-3.0
-- `TyphooN-Terminal` — GPL-3.0
+Both repositories use Apache License 2.0:
+- `MQL5-NNFX-Risk_Management_System` — Apache-2.0
+- `TyphooN-Terminal` — Apache-2.0
 
 ## License Comparison for Open Source Trading Software
 

@@ -154,3 +154,27 @@ It was chosen because:
 - Supports real-time bar updates
 - 170KB — tiny footprint
 - MIT license — no restrictions
+
+## Wasm Indicator Engine
+
+Performance-critical indicators are compiled from Rust to WebAssembly:
+
+- **Binary size:** ~32KB compiled (all indicators combined)
+- **Performance:** 10-20x faster than equivalent JavaScript for large datasets
+- **Interop:** Flat `Float64Array` buffers passed between JS and Wasm — zero copy overhead
+- **Indicators in Wasm:** SMA, EMA, KAMA, RSI, Fisher Transform, ATR, MACD, Stochastic, Bollinger Bands
+- **Fallback:** JS implementations exist for all indicators — Wasm is an acceleration layer, not a requirement
+
+The Wasm module is built from `wasm-indicators/src/lib.rs` via `wasm-pack`. The JS side calls exported functions with typed array views, receives results in the same buffer format, and passes them to the charting library.
+
+## GPU Chart Engine
+
+Candlestick rendering and drawing tools are GPU-accelerated via WebGL2:
+
+- **Binary size:** ~45KB compiled Wasm
+- **Rendering:** WebGL2 shaders for candlesticks, wicks, drawing tools — all rendered on GPU
+- **Drawing tools:** 44 tools including trend lines, Fibonacci retracements, channels, pitchforks, Elliott waves, Gann fans, regression lines, rectangles, rays, arrows, labels
+- **Performance:** 10K+ bars rendered at 60fps without CPU bottleneck
+- **5 implementation phases:** Candlestick rendering → drawing tools → interaction handling → state management → multi-pane sync
+
+The GPU engine is built from `gpu-charts/src/lib.rs`. It receives OHLCV data as flat arrays, generates WebGL vertex buffers, and renders directly to a canvas overlay. Drawing tool state is managed in JavaScript with GPU rendering for the visual output.
