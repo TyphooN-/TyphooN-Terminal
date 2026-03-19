@@ -761,6 +761,77 @@ async fn calculate_position_var(
     }
 }
 
+/// Portfolio-aware VaR lot sizing: how many lots of a new symbol can be added
+/// before total portfolio VaR exceeds the target budget.
+/// Returns { lots, marginal_var_per_lot, existing_portfolio_var, diversification_factor, avg_correlation }.
+#[tauri::command]
+async fn calculate_portfolio_var_lots(
+    state: State<'_, SharedState>,
+    symbol: String,
+    current_price: f64,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !current_price.is_finite() || current_price <= 0.0 { return Err("Invalid price".into()); }
+
+    let (broker, var_tf, var_periods, var_confidence, var_pct) = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        let rc = &s.risk_config;
+        (broker, rc.var_timeframe.clone(), rc.var_periods, rc.var_confidence, rc.var_risk_pct)
+    };
+
+    // Fetch live equity from account
+    let account = broker.get_account().await?;
+    let equity = account.equity;
+
+    // Get all existing positions
+    let positions = broker.get_positions().await.unwrap_or_default();
+
+    // Fetch close prices for the new symbol
+    let new_bars = broker.get_bars(&symbol, &var_tf, var_periods + 1).await?;
+    let new_closes: Vec<f64> = new_bars.iter().map(|b| b.close).collect();
+
+    // Fetch close prices for each existing position (parallel)
+    let mut existing_data: Vec<(Vec<f64>, f64, f64)> = Vec::new();
+    for p in &positions {
+        let sym = &p.symbol;
+        let qty = p.qty.abs();
+        let mv = p.market_value.abs();
+        let price = if qty > 0.0 { mv / qty } else { p.avg_entry_price };
+        match broker.get_bars(sym, &var_tf, var_periods + 1).await {
+            Ok(bars) => {
+                let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
+                existing_data.push((closes, qty, price));
+            }
+            Err(_) => {} // skip positions we can't get data for
+        }
+    }
+
+    let asset = broker.get_asset(&symbol).await?;
+    let tick_size = asset.price_increment.unwrap_or(0.01);
+    let tick_value = tick_size;
+
+    match var::portfolio_aware_lot_size(
+        &new_closes, &existing_data,
+        tick_value, tick_size, current_price,
+        var_confidence, equity, var_pct,
+    ) {
+        Some((lots, marginal_var, existing_var)) => {
+            Ok(serde_json::to_string(&serde_json::json!({
+                "lots": lots,
+                "marginal_var_per_lot": marginal_var,
+                "existing_portfolio_var": existing_var,
+                "var_budget": (var_pct / 100.0) * equity,
+                "remaining_budget": ((var_pct / 100.0) * equity - existing_var).max(0.0),
+                "equity": equity,
+                "var_pct_target": var_pct,
+                "positions_count": positions.len(),
+            })).unwrap())
+        }
+        None => Err("Portfolio VaR calculation failed — insufficient data".into()),
+    }
+}
+
 // ── Risk Config Commands ────────────────────────────────────────────
 
 #[tauri::command]
@@ -3099,6 +3170,7 @@ fn main() {
             // Risk
             calculate_lots,
             calculate_position_var,
+            calculate_portfolio_var_lots,
             get_risk_config,
             set_order_mode,
             set_risk_config,

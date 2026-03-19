@@ -165,6 +165,115 @@ pub fn lot_size_from_var(
     Some(max_var / unit_var)
 }
 
+/// Calculate portfolio-aware lot size for a new position.
+///
+/// Instead of treating each position in isolation, this considers the
+/// existing portfolio's VaR and computes how many lots of the new symbol
+/// can be added before the TOTAL portfolio VaR exceeds the target budget.
+///
+/// Marginal VaR = change in portfolio VaR from adding one lot of the new symbol.
+/// Max lots = remaining VaR budget / marginal VaR per lot.
+///
+/// The correlation effect is approximated: if the new position has low
+/// correlation with existing positions, more lots are allowed (diversification
+/// benefit). If highly correlated, fewer lots.
+pub fn portfolio_aware_lot_size(
+    new_symbol_closes: &[f64],
+    existing_positions: &[(Vec<f64>, f64, f64)], // (close_prices, position_size, current_price) per existing position
+    tick_value: f64,
+    tick_size: f64,
+    new_price: f64,
+    confidence: f64,
+    equity: f64,
+    var_pct_target: f64, // target total portfolio VaR as % of equity
+) -> Option<(f64, f64, f64)> { // (lots, marginal_var_per_lot, total_portfolio_var)
+    if new_symbol_closes.len() < 2 || tick_size <= 0.0 || new_price <= 0.0 || equity <= 0.0 {
+        return None;
+    }
+
+    // 1. Compute existing portfolio VaR (sum of individual VaRs with correlation adjustment)
+    let mut existing_total_var = 0.0;
+    let mut existing_return_series: Vec<Vec<f64>> = Vec::new();
+
+    for (closes, size, price) in existing_positions {
+        if let Some(var_result) = calculate_var(closes, *size, tick_value, tick_size, *price, confidence) {
+            existing_total_var += var_result.var_dollars;
+        }
+        existing_return_series.push(compute_daily_returns(closes));
+    }
+
+    // 2. Compute VaR for 1 lot of the new symbol
+    let new_returns = compute_daily_returns(new_symbol_closes);
+    let sd_new = std_dev(&new_returns);
+    if sd_new == 0.0 || !sd_new.is_finite() { return None; }
+
+    let z = inverse_cumulative_normal(confidence);
+    if z == 0.0 { return None; }
+
+    let nominal_per_unit = tick_value / tick_size;
+    let unit_var = z * sd_new * nominal_per_unit * new_price;
+    if unit_var < 1e-10 { return None; }
+
+    // 3. Compute average correlation of new symbol with existing positions
+    let avg_corr = if existing_return_series.is_empty() {
+        0.0 // no existing positions = no correlation
+    } else {
+        let mut corr_sum = 0.0;
+        let mut corr_count = 0;
+        for existing_returns in &existing_return_series {
+            let c = pearson_correlation(&new_returns, existing_returns);
+            if c.is_finite() {
+                corr_sum += c.abs(); // use absolute correlation
+                corr_count += 1;
+            }
+        }
+        if corr_count > 0 { corr_sum / corr_count as f64 } else { 0.0 }
+    };
+
+    // 4. Marginal VaR per lot, adjusted for correlation
+    // Low correlation (0.0) = full diversification benefit → marginal VaR is reduced
+    // High correlation (1.0) = no diversification → marginal VaR = full unit VaR
+    // Formula: marginal_var = unit_var * (0.5 + 0.5 * avg_corr)
+    // At corr=0: marginal = 50% of unit var (diversification)
+    // At corr=1: marginal = 100% of unit var (no benefit)
+    let diversification_factor = 0.5 + 0.5 * avg_corr.clamp(0.0, 1.0);
+    let marginal_var_per_lot = unit_var * diversification_factor;
+
+    // 5. Remaining VaR budget
+    let max_portfolio_var = (var_pct_target / 100.0) * equity;
+    let remaining_budget = (max_portfolio_var - existing_total_var).max(0.0);
+
+    // 6. Max lots from remaining budget
+    let lots = remaining_budget / marginal_var_per_lot;
+
+    Some((lots, marginal_var_per_lot, existing_total_var))
+}
+
+/// Pearson correlation coefficient between two return series.
+fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
+    let n = x.len().min(y.len());
+    if n < 3 { return 0.0; }
+
+    let n_f = n as f64;
+    let mut sum_x = 0.0;
+    let mut sum_y = 0.0;
+    let mut sum_xy = 0.0;
+    let mut sum_x2 = 0.0;
+    let mut sum_y2 = 0.0;
+
+    for i in 0..n {
+        sum_x += x[i];
+        sum_y += y[i];
+        sum_xy += x[i] * y[i];
+        sum_x2 += x[i] * x[i];
+        sum_y2 += y[i] * y[i];
+    }
+
+    let denom = ((n_f * sum_x2 - sum_x * sum_x) * (n_f * sum_y2 - sum_y * sum_y)).sqrt();
+    if denom < 1e-20 { return 0.0; }
+    (n_f * sum_xy - sum_x * sum_y) / denom
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
