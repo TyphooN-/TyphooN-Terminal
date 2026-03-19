@@ -235,6 +235,64 @@ fn extract_last_number(line: &str) -> Option<f64> {
     re_like.last().and_then(|s| s.replace(',', "").parse::<f64>().ok())
 }
 
+/// Resolve timeframe shortcodes to Alpaca API format + aggregation factor.
+/// Supports: M1,M5,M15,M30,H1,H2,H3,H4,H6,H8,H12,D1,W1,MN1 + Alpaca native names.
+/// Returns (api_timeframe, aggregation_factor).
+fn resolve_timeframe(tf: &str) -> (String, usize) {
+    match tf.to_uppercase().as_str() {
+        // MT5-style shortcodes
+        "M1" | "1M" => ("1Min".into(), 1),
+        "M5" | "5M" => ("5Min".into(), 1),
+        "M10" | "10M" => ("5Min".into(), 2),
+        "M15" | "15M" => ("15Min".into(), 1),
+        "M20" | "20M" => ("5Min".into(), 4),
+        "M30" | "30M" => ("30Min".into(), 1),
+        "H1" | "1H" => ("1Hour".into(), 1),
+        "H2" | "2H" => ("1Hour".into(), 2),
+        "H3" | "3H" => ("1Hour".into(), 3),
+        "H4" | "4H" => ("4Hour".into(), 1),
+        "H6" | "6H" => ("1Hour".into(), 6),
+        "H8" | "8H" => ("4Hour".into(), 2),
+        "H12" | "12H" => ("4Hour".into(), 3),
+        "D1" | "1D" | "DAILY" => ("1Day".into(), 1),
+        "D2" | "2D" => ("1Day".into(), 2),
+        "D3" | "3D" => ("1Day".into(), 3),
+        "W1" | "1W" | "WEEKLY" => ("1Week".into(), 1),
+        "W2" | "2W" => ("1Week".into(), 2),
+        "MN1" | "MN" | "1MN" | "MONTHLY" => ("1Month".into(), 1),
+        // Already Alpaca format — pass through
+        "1MIN" | "5MIN" | "15MIN" | "30MIN" => (tf.into(), 1),
+        "1HOUR" | "4HOUR" => (tf.into(), 1),
+        "1DAY" | "1WEEK" | "1MONTH" => (tf.into(), 1),
+        // Custom hour TFs
+        s if s.ends_with("HOUR") => {
+            if let Ok(n) = s.trim_end_matches("HOUR").parse::<usize>() {
+                if n <= 4 { ("1Hour".into(), n) } else { ("4Hour".into(), n / 4) }
+            } else { (tf.into(), 1) }
+        }
+        // Default: pass through as-is
+        _ => (tf.into(), 1),
+    }
+}
+
+/// Aggregate bars by factor (combine N bars into 1).
+fn aggregate_bars(bars: &[broker::Bar], factor: usize) -> Vec<broker::Bar> {
+    if factor <= 1 { return bars.to_vec(); }
+    let mut result = Vec::new();
+    for chunk in bars.chunks(factor) {
+        if chunk.is_empty() { break; }
+        result.push(broker::Bar {
+            timestamp: chunk[0].timestamp.clone(),
+            open: chunk[0].open,
+            high: chunk.iter().map(|b| b.high).fold(f64::MIN, f64::max),
+            low: chunk.iter().map(|b| b.low).fold(f64::MAX, f64::min),
+            close: chunk.last().unwrap().close,
+            volume: chunk.iter().map(|b| b.volume).sum(),
+        });
+    }
+    result
+}
+
 #[derive(Parser)]
 #[command(name = "typhoon", about = "TyphooN Terminal CLI — trading terminal for your terminal")]
 struct Args {
@@ -366,12 +424,20 @@ impl App {
             Err(e) => { self.log(&format!("Orders error: {e}"), Color::Red); }
         }
 
-        // Chart bars
+        // Chart bars (resolve custom TFs → Alpaca format + aggregation)
         if !self.chart_symbol.is_empty() {
-            match self.broker.get_bars(&self.chart_symbol, &self.chart_timeframe, 100).await {
+            let (api_tf, agg_factor) = resolve_timeframe(&self.chart_timeframe);
+            let fetch_limit = if agg_factor > 1 { 100 * agg_factor as u32 } else { 100 };
+            match self.broker.get_bars(&self.chart_symbol, &api_tf, fetch_limit).await {
                 Ok(bars) => {
-                    self.chart_bars = bars;
-                    self.log(&format!("Loaded {} bars for {} @ {}", self.chart_bars.len(), self.chart_symbol, self.chart_timeframe), Color::Green);
+                    self.chart_bars = if agg_factor > 1 {
+                        let agg = aggregate_bars(&bars, agg_factor);
+                        self.log(&format!("Loaded {} bars for {} @ {} ({}x from {})", agg.len(), self.chart_symbol, self.chart_timeframe, agg_factor, api_tf), Color::Green);
+                        agg
+                    } else {
+                        self.log(&format!("Loaded {} bars for {} @ {}", bars.len(), self.chart_symbol, self.chart_timeframe), Color::Green);
+                        bars
+                    };
                 }
                 Err(e) => { self.log(&format!("Bars error: {e}"), Color::Red); }
             }
@@ -1058,7 +1124,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Interactive TUI mode
     let watchlist = args.watch.map(|w| w.split(',').map(|s| s.trim().to_uppercase()).collect())
-        .unwrap_or_else(|| vec!["AAPL".into(), "MSFT".into(), "TSLA".into()]);
+        .unwrap_or_else(|| {
+            // Default watchlist: symbols from open positions (fetched at startup)
+            match tokio::runtime::Handle::current().block_on(broker.get_positions()) {
+                Ok(positions) => {
+                    let mut syms: Vec<String> = positions.iter().map(|p| p.symbol.clone()).collect();
+                    syms.dedup();
+                    if syms.is_empty() { vec!["SPY".into()] } else { syms }
+                }
+                Err(_) => vec!["SPY".into()],
+            }
+        });
     let symbol = args.symbol.unwrap_or_else(|| "SMCI".to_string());
 
     let mut app = App::new(broker, symbol, watchlist);
