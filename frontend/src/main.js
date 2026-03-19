@@ -19739,6 +19739,451 @@ async function cmdInsiderSentiment() {
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Congress Trades (CONGRESS)
+// ══════════════════════════════════════════════════════════════
+async function cmdCongressTrades() {
+  const win = createWindow({ title: "Congress Trades", type: "custom", width: 900, height: 600 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching congressional trading data (~5MB)...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("fetch_congress_trades");
+    const allTrades = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+    if (!Array.isArray(allTrades) || allTrades.length === 0) {
+      win.setContent("No congress trade data available.");
+      return;
+    }
+
+    // Sort by date descending
+    allTrades.sort((a, b) => (b.transaction_date || "").localeCompare(a.transaction_date || ""));
+
+    // Filter bar
+    const filterDiv = document.createElement("div");
+    filterDiv.style.cssText = "padding:6px 8px;border-bottom:1px solid #222;display:flex;gap:8px;align-items:center;";
+    const filterInput = document.createElement("input");
+    filterInput.type = "text";
+    filterInput.placeholder = "Filter by symbol, name, or party...";
+    filterInput.style.cssText = "flex:1;background:#111;border:1px solid #333;color:#ccc;padding:4px 8px;font-size:11px;border-radius:3px;font-family:Consolas,monospace;";
+    const countLabel = document.createElement("span");
+    countLabel.style.cssText = "color:#666;font-size:10px;white-space:nowrap;";
+    filterDiv.appendChild(filterInput);
+    filterDiv.appendChild(countLabel);
+    win.appendElement(filterDiv);
+
+    // Table container
+    const tableDiv = document.createElement("div");
+    tableDiv.style.cssText = "overflow-y:auto;max-height:480px;";
+    win.appendElement(tableDiv);
+
+    let visibleLimit = 200;
+
+    function renderTable(filter) {
+      tableDiv.textContent = "";
+      const q = (filter || "").toLowerCase();
+      const filtered = q ? allTrades.filter(t =>
+        (t.ticker || "").toLowerCase().includes(q) ||
+        (t.representative || "").toLowerCase().includes(q) ||
+        (t.party || "").toLowerCase().includes(q) ||
+        (t.type || "").toLowerCase().includes(q)
+      ) : allTrades;
+
+      countLabel.textContent = `${filtered.length} trades${q ? " (filtered)" : ""}`;
+
+      // Header
+      const header = document.createElement("div");
+      header.style.cssText = "display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid #333;font-size:10px;color:#888;font-weight:bold;position:sticky;top:0;background:#0a0a0a;";
+      const cols = [
+        { label: "Date", flex: "0 0 80px" },
+        { label: "Representative", flex: "1" },
+        { label: "Symbol", flex: "0 0 60px" },
+        { label: "Type", flex: "0 0 70px" },
+        { label: "Amount", flex: "0 0 120px" },
+        { label: "Party", flex: "0 0 40px" },
+      ];
+      for (const col of cols) {
+        const sp = document.createElement("span");
+        sp.style.cssText = `flex:${col.flex};`;
+        sp.textContent = col.label;
+        header.appendChild(sp);
+      }
+      tableDiv.appendChild(header);
+
+      const shown = filtered.slice(0, visibleLimit);
+      for (const t of shown) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:4px;padding:3px 8px;border-bottom:1px solid #111;font-size:10px;";
+        const isBuy = (t.type || "").toLowerCase().includes("purchase");
+        const typeColor = isBuy ? "#4caf50" : "#f44336";
+
+        const date = document.createElement("span"); date.style.cssText = "flex:0 0 80px;color:#888;"; date.textContent = (t.transaction_date || "").slice(0, 10);
+        const rep = document.createElement("span"); rep.style.cssText = "flex:1;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"; rep.textContent = t.representative || "";
+        const sym = document.createElement("span"); sym.style.cssText = "flex:0 0 60px;color:#8cf;font-weight:bold;"; sym.textContent = t.ticker || "";
+        const typ = document.createElement("span"); typ.style.cssText = `flex:0 0 70px;color:${typeColor};`; typ.textContent = isBuy ? "BUY" : "SELL";
+        const amt = document.createElement("span"); amt.style.cssText = "flex:0 0 120px;color:#ccc;"; amt.textContent = t.amount || "";
+        const party = document.createElement("span");
+        const pColor = (t.party || "").startsWith("D") ? "#2196f3" : (t.party || "").startsWith("R") ? "#f44336" : "#888";
+        party.style.cssText = `flex:0 0 40px;color:${pColor};font-weight:bold;`; party.textContent = (t.party || "").charAt(0) || "?";
+
+        row.appendChild(date); row.appendChild(rep); row.appendChild(sym); row.appendChild(typ); row.appendChild(amt); row.appendChild(party);
+        tableDiv.appendChild(row);
+      }
+
+      // Show more button
+      if (filtered.length > visibleLimit) {
+        const moreBtn = document.createElement("div");
+        moreBtn.textContent = `Show more (${visibleLimit} of ${filtered.length})`;
+        moreBtn.style.cssText = "text-align:center;padding:8px;color:#4caf50;cursor:pointer;font-size:11px;border-top:1px solid #222;";
+        moreBtn.addEventListener("click", () => { visibleLimit += 200; renderTable(filter); });
+        tableDiv.appendChild(moreBtn);
+      }
+    }
+
+    renderTable("");
+    filterInput.addEventListener("input", () => { visibleLimit = 200; renderTable(filterInput.value); });
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load congress trades: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Forex Dashboard (FX)
+// ══════════════════════════════════════════════════════════════
+async function cmdForexDashboard() {
+  const win = createWindow({ title: "Forex Currency Matrix", type: "custom", width: 560, height: 380 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching ECB exchange rates...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("fetch_forex_rates");
+    const rates = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+    if (!Array.isArray(rates) || rates.length === 0) {
+      win.setContent("No forex rate data available.");
+      return;
+    }
+
+    // Build rate lookup (EUR-based)
+    const rateMap = {};
+    for (const r of rates) rateMap[r.currency] = r.rate;
+
+    // USD rate for cross calculation
+    const usdRate = rateMap["USD"] || 1;
+
+    // Major pairs to display (all vs USD)
+    const pairs = [
+      { pair: "EUR/USD", calc: () => usdRate, flag: "EU" },
+      { pair: "GBP/USD", calc: () => usdRate / (rateMap["GBP"] || 1), flag: "GB" },
+      { pair: "USD/JPY", calc: () => (rateMap["JPY"] || 1) / usdRate, flag: "JP" },
+      { pair: "USD/CHF", calc: () => (rateMap["CHF"] || 1) / usdRate, flag: "CH" },
+      { pair: "USD/CAD", calc: () => (rateMap["CAD"] || 1) / usdRate, flag: "CA" },
+      { pair: "AUD/USD", calc: () => usdRate / (rateMap["AUD"] || 1), flag: "AU" },
+      { pair: "NZD/USD", calc: () => usdRate / (rateMap["NZD"] || 1), flag: "NZ" },
+      { pair: "USD/SEK", calc: () => (rateMap["SEK"] || 1) / usdRate, flag: "SE" },
+      { pair: "USD/NOK", calc: () => (rateMap["NOK"] || 1) / usdRate, flag: "NO" },
+      { pair: "USD/SGD", calc: () => (rateMap["SGD"] || 1) / usdRate, flag: "SG" },
+    ];
+
+    const title = document.createElement("div");
+    title.textContent = "Major Currency Pairs (ECB Reference Rates)";
+    title.style.cssText = "color:#888;font-size:11px;padding:6px 8px;border-bottom:1px solid #222;";
+    win.appendElement(title);
+
+    // Pairs table
+    for (const p of pairs) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:6px 12px;border-bottom:1px solid #111;font-size:12px;";
+      const left = document.createElement("span");
+      left.style.cssText = "color:#ccc;font-weight:bold;font-family:Consolas,monospace;";
+      left.textContent = `${p.pair}`;
+      const right = document.createElement("span");
+      const rate = p.calc();
+      const decimals = p.pair.includes("JPY") ? 3 : (p.pair.includes("SEK") || p.pair.includes("NOK")) ? 4 : 5;
+      right.style.cssText = "color:#8cf;font-family:Consolas,monospace;font-size:13px;";
+      right.textContent = rate.toFixed(decimals);
+      row.appendChild(left);
+      row.appendChild(right);
+      win.appendElement(row);
+    }
+
+    // Cross rate matrix (EUR, GBP, JPY, CHF)
+    const matrixTitle = document.createElement("div");
+    matrixTitle.textContent = "Cross Rate Matrix";
+    matrixTitle.style.cssText = "color:#888;font-size:11px;padding:6px 8px;border-top:1px solid #333;border-bottom:1px solid #222;margin-top:4px;";
+    win.appendElement(matrixTitle);
+
+    const currencies = ["USD", "EUR", "GBP", "JPY", "CHF", "CAD"];
+    const eurRates = { "EUR": 1 };
+    for (const c of currencies) if (c !== "EUR") eurRates[c] = rateMap[c] || 1;
+
+    const matrixDiv = document.createElement("div");
+    matrixDiv.style.cssText = "padding:4px 8px;overflow-x:auto;";
+    const table = document.createElement("table");
+    table.style.cssText = "border-collapse:collapse;font-size:10px;font-family:Consolas,monospace;width:100%;";
+
+    // Header row
+    const thead = document.createElement("tr");
+    const emptyTh = document.createElement("th"); emptyTh.style.cssText = "padding:3px 6px;color:#888;"; emptyTh.textContent = ""; thead.appendChild(emptyTh);
+    for (const c of currencies) {
+      const th = document.createElement("th"); th.style.cssText = "padding:3px 6px;color:#8cf;text-align:right;"; th.textContent = c; thead.appendChild(th);
+    }
+    table.appendChild(thead);
+
+    for (const base of currencies) {
+      const tr = document.createElement("tr");
+      const th = document.createElement("td"); th.style.cssText = "padding:3px 6px;color:#8cf;font-weight:bold;"; th.textContent = base; tr.appendChild(th);
+      for (const quote of currencies) {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;text-align:right;";
+        if (base === quote) {
+          td.textContent = "—";
+          td.style.color = "#333";
+        } else {
+          const rate = eurRates[quote] / eurRates[base];
+          const dec = (base === "JPY" || quote === "JPY") ? 4 : 5;
+          td.textContent = rate.toFixed(dec);
+          td.style.color = "#ccc";
+        }
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    matrixDiv.appendChild(table);
+    win.appendElement(matrixDiv);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load forex rates: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Crypto Market (CRYPTO)
+// ══════════════════════════════════════════════════════════════
+async function cmdCryptoMarket() {
+  const win = createWindow({ title: "Crypto Market — Top 50", type: "custom", width: 820, height: 620 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching crypto market data...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const [marketJson, trendingJson] = await Promise.all([
+      invoke("fetch_crypto_market"),
+      invoke("fetch_crypto_trending"),
+    ]);
+    const coins = typeof marketJson === "string" ? JSON.parse(marketJson) : marketJson;
+    const trending = typeof trendingJson === "string" ? JSON.parse(trendingJson) : trendingJson;
+    win.contentElement.textContent = "";
+
+    // Trending section
+    const trendCoins = trending?.coins || [];
+    if (trendCoins.length > 0) {
+      const trendTitle = document.createElement("div");
+      trendTitle.textContent = "Trending";
+      trendTitle.style.cssText = "color:#ff9800;font-size:11px;padding:4px 8px;border-bottom:1px solid #222;font-weight:bold;";
+      win.appendElement(trendTitle);
+      const trendDiv = document.createElement("div");
+      trendDiv.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;padding:6px 8px;border-bottom:1px solid #222;";
+      for (const c of trendCoins.slice(0, 10)) {
+        const item = c.item || c;
+        const chip = document.createElement("span");
+        chip.style.cssText = "background:#1a1a2e;border:1px solid #333;border-radius:12px;padding:3px 10px;font-size:10px;color:#ff9800;white-space:nowrap;";
+        chip.textContent = `#${item.market_cap_rank || "?"} ${item.symbol?.toUpperCase() || item.name || ""}`;
+        chip.title = item.name || "";
+        trendDiv.appendChild(chip);
+      }
+      win.appendElement(trendDiv);
+    }
+
+    // Market table
+    if (!Array.isArray(coins) || coins.length === 0) {
+      win.setContent("No crypto market data available.");
+      return;
+    }
+
+    const tableDiv = document.createElement("div");
+    tableDiv.style.cssText = "overflow-y:auto;max-height:480px;";
+    win.appendElement(tableDiv);
+
+    // Header
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid #333;font-size:10px;color:#888;font-weight:bold;position:sticky;top:0;background:#0a0a0a;align-items:center;";
+    const hCols = [
+      { label: "#", w: "30px" }, { label: "Name", w: "1" }, { label: "Price", w: "90px" },
+      { label: "24h %", w: "65px" }, { label: "Market Cap", w: "100px" }, { label: "7d", w: "64px" },
+    ];
+    for (const col of hCols) {
+      const sp = document.createElement("span");
+      sp.style.cssText = col.w.includes("px") ? `flex:0 0 ${col.w};text-align:right;` : `flex:${col.w};`;
+      if (col.label === "#" || col.label === "Name") sp.style.textAlign = "left";
+      sp.textContent = col.label;
+      header.appendChild(sp);
+    }
+    tableDiv.appendChild(header);
+
+    for (const coin of coins) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:4px;padding:3px 8px;border-bottom:1px solid #111;font-size:10px;align-items:center;";
+
+      const rank = document.createElement("span"); rank.style.cssText = "flex:0 0 30px;color:#666;"; rank.textContent = coin.market_cap_rank || "";
+      const name = document.createElement("span"); name.style.cssText = "flex:1;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      name.textContent = `${coin.symbol?.toUpperCase() || ""} ${coin.name || ""}`;
+      const price = document.createElement("span"); price.style.cssText = "flex:0 0 90px;color:#8cf;text-align:right;font-family:Consolas,monospace;";
+      const p = coin.current_price;
+      price.textContent = p != null ? (p >= 1 ? `$${p.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : `$${p.toPrecision(4)}`) : "—";
+      const change = document.createElement("span");
+      const ch24 = coin.price_change_percentage_24h;
+      const chColor = ch24 >= 0 ? "#4caf50" : "#f44336";
+      change.style.cssText = `flex:0 0 65px;color:${chColor};text-align:right;font-family:Consolas,monospace;`;
+      change.textContent = ch24 != null ? `${ch24 >= 0 ? "+" : ""}${ch24.toFixed(2)}%` : "—";
+      const mcap = document.createElement("span"); mcap.style.cssText = "flex:0 0 100px;color:#888;text-align:right;";
+      const mc = coin.market_cap;
+      mcap.textContent = mc ? (mc >= 1e12 ? `$${(mc / 1e12).toFixed(2)}T` : mc >= 1e9 ? `$${(mc / 1e9).toFixed(1)}B` : mc >= 1e6 ? `$${(mc / 1e6).toFixed(0)}M` : `$${mc.toLocaleString()}`) : "—";
+
+      // Sparkline canvas (7d)
+      const sparkCell = document.createElement("span"); sparkCell.style.cssText = "flex:0 0 64px;text-align:right;";
+      const sparkData = coin.sparkline_in_7d?.price;
+      if (sparkData && sparkData.length > 1) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 60; canvas.height = 20;
+        canvas.style.cssText = "display:block;margin-left:auto;";
+        const ctx = canvas.getContext("2d");
+        const min = Math.min(...sparkData);
+        const max = Math.max(...sparkData);
+        const range = max - min || 1;
+        const sparkColor = sparkData[sparkData.length - 1] >= sparkData[0] ? "#4caf50" : "#f44336";
+        ctx.strokeStyle = sparkColor;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (let i = 0; i < sparkData.length; i++) {
+          const x = (i / (sparkData.length - 1)) * 60;
+          const y = 20 - ((sparkData[i] - min) / range) * 18 - 1;
+          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        sparkCell.appendChild(canvas);
+      }
+
+      row.appendChild(rank); row.appendChild(name); row.appendChild(price); row.appendChild(change); row.appendChild(mcap); row.appendChild(sparkCell);
+      tableDiv.appendChild(row);
+    }
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load crypto market data: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Reddit Sentiment (REDDIT)
+// ══════════════════════════════════════════════════════════════
+async function cmdRedditSentiment() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const sym = currentSymbol.replace(/USD$/, "");
+  const win = createWindow({ title: `${sym} — Reddit Sentiment`, type: "custom", width: 700, height: 500 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = `Searching Reddit for ${sym} mentions...`;
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("fetch_reddit_mentions", { symbol: sym });
+    const result = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+
+    const posts = (result?.data?.children || []).map(c => c.data).filter(Boolean);
+    if (posts.length === 0) {
+      win.setContent(`No Reddit posts found for ${sym}.`);
+      return;
+    }
+
+    // Sentiment analysis (simple keyword-based)
+    const bullishWords = ["moon", "rocket", "buy", "calls", "bullish", "long", "squeeze", "undervalued", "breakout", "tendies", "diamond", "hold"];
+    const bearishWords = ["puts", "short", "sell", "crash", "overvalued", "dump", "bearish", "dead", "bubble", "bag"];
+    let bullCount = 0, bearCount = 0;
+    const now = Date.now() / 1000;
+    const weekAgo = now - 7 * 86400;
+    let weekMentions = 0;
+    let totalScore = 0;
+
+    for (const p of posts) {
+      const titleLower = (p.title || "").toLowerCase();
+      for (const w of bullishWords) if (titleLower.includes(w)) { bullCount++; break; }
+      for (const w of bearishWords) if (titleLower.includes(w)) { bearCount++; break; }
+      if ((p.created_utc || 0) >= weekAgo) weekMentions++;
+      totalScore += (p.score || 0);
+    }
+
+    const avgScore = posts.length > 0 ? (totalScore / posts.length).toFixed(1) : "0";
+    const sentimentIcon = bullCount > bearCount ? "\u{1F680}" : bearCount > bullCount ? "\u{1F43B}" : "\u{1F937}";
+    const sentimentLabel = bullCount > bearCount ? "Bullish" : bearCount > bullCount ? "Bearish" : "Neutral";
+    const sentimentColor = bullCount > bearCount ? "#4caf50" : bearCount > bullCount ? "#f44336" : "#ff9800";
+
+    // Summary bar
+    const summary = document.createElement("div");
+    summary.style.cssText = "padding:8px 12px;border-bottom:1px solid #222;display:flex;gap:16px;align-items:center;font-size:11px;";
+    summary.innerHTML = `<span style="font-size:18px;">${sentimentIcon}</span>` +
+      `<span style="color:${sentimentColor};font-weight:bold;">${sentimentLabel}</span>` +
+      `<span style="color:#888;">${weekMentions} mentions this week</span>` +
+      `<span style="color:#888;">Avg score: ${avgScore}</span>` +
+      `<span style="color:#888;">Bull: ${bullCount} / Bear: ${bearCount}</span>`;
+    win.appendElement(summary);
+
+    // Posts table
+    const tableDiv = document.createElement("div");
+    tableDiv.style.cssText = "overflow-y:auto;max-height:380px;";
+    win.appendElement(tableDiv);
+
+    // Header
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid #333;font-size:10px;color:#888;font-weight:bold;position:sticky;top:0;background:#0a0a0a;";
+    const hCols = [
+      { label: "Time", w: "0 0 70px" }, { label: "Title", w: "1" },
+      { label: "Score", w: "0 0 50px" }, { label: "Comments", w: "0 0 60px" },
+    ];
+    for (const col of hCols) {
+      const sp = document.createElement("span");
+      sp.style.cssText = `flex:${col.w};${col.w.includes("50px") || col.w.includes("60px") ? "text-align:right;" : ""}`;
+      sp.textContent = col.label;
+      header.appendChild(sp);
+    }
+    tableDiv.appendChild(header);
+
+    // Sort by created_utc descending
+    posts.sort((a, b) => (b.created_utc || 0) - (a.created_utc || 0));
+
+    for (const p of posts.slice(0, 100)) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:4px;padding:3px 8px;border-bottom:1px solid #111;font-size:10px;cursor:pointer;";
+      row.title = "Click to open on Reddit";
+      row.addEventListener("click", () => {
+        try { window.__TAURI__?.shell?.open(`https://reddit.com${p.permalink}`); } catch (_) {}
+      });
+
+      const elapsed = now - (p.created_utc || 0);
+      let timeStr;
+      if (elapsed < 3600) timeStr = `${Math.floor(elapsed / 60)}m ago`;
+      else if (elapsed < 86400) timeStr = `${Math.floor(elapsed / 3600)}h ago`;
+      else timeStr = `${Math.floor(elapsed / 86400)}d ago`;
+
+      const time = document.createElement("span"); time.style.cssText = "flex:0 0 70px;color:#888;"; time.textContent = timeStr;
+      const title = document.createElement("span"); title.style.cssText = "flex:1;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"; title.textContent = p.title || "";
+      const score = document.createElement("span"); score.style.cssText = `flex:0 0 50px;text-align:right;color:${(p.score || 0) >= 10 ? "#4caf50" : "#888"};`; score.textContent = p.score || 0;
+      const comments = document.createElement("span"); comments.style.cssText = "flex:0 0 60px;text-align:right;color:#888;"; comments.textContent = p.num_comments || 0;
+
+      row.appendChild(time); row.appendChild(title); row.appendChild(score); row.appendChild(comments);
+      tableDiv.appendChild(row);
+    }
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load Reddit data: ${e}`);
+  }
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
@@ -19954,6 +20399,10 @@ const CMD_PALETTE_COMMANDS = [
   { name: "YIELD", desc: "Treasury yield curve (inversion detection, 2Y-10Y spread)", action: cmdYieldCurve },
   { name: "ACTIONS", desc: "Corporate actions (dividends, splits, mergers)", action: cmdCorporateActions },
   { name: "INSIDERFLOW", desc: "Insider sentiment — Finnhub MSPR (buy/sell ratio chart)", action: cmdInsiderSentiment },
+  { name: "CONGRESS", desc: "Congress trades — recent congressional stock transactions", action: cmdCongressTrades },
+  { name: "FX", desc: "Forex currency matrix (ECB rates, major pairs + cross rates)", action: cmdForexDashboard },
+  { name: "CRYPTO", desc: "Crypto market — top 50 coins + trending (CoinGecko)", action: cmdCryptoMarket },
+  { name: "REDDIT", desc: "Reddit sentiment — WSB/investing mentions for current symbol", action: cmdRedditSentiment },
 ];
 
 function fuzzyMatch(query, target) {
@@ -26589,6 +27038,10 @@ function setupMenuBar() {
     "yield-curve": () => cmdYieldCurve(),
     "corporate-actions": () => cmdCorporateActions(),
     "insider-sentiment": () => cmdInsiderSentiment(),
+    "congress-trades": () => cmdCongressTrades(),
+    "forex-dashboard": () => cmdForexDashboard(),
+    "crypto-market": () => cmdCryptoMarket(),
+    "reddit-sentiment": () => cmdRedditSentiment(),
   };
 
   document.querySelectorAll(".menu-entry").forEach(entry => {

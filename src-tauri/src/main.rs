@@ -1276,6 +1276,168 @@ async fn fetch_treasury_yields() -> Result<String, String> {
     serde_json::to_string(&results).map_err(|e| format!("Treasury JSON error: {e}"))
 }
 
+// ── Congress Trading ────────────────────────────────────────────────
+
+#[tauri::command]
+async fn fetch_congress_trades() -> Result<String, String> {
+    let resp = shared_client()
+        .get("https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json")
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Congress trades request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Congress trades: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("Congress trades read failed: {e}"))
+}
+
+// ── ECB Forex Rates ─────────────────────────────────────────────────
+
+#[tauri::command]
+async fn fetch_forex_rates() -> Result<String, String> {
+    let resp = shared_client()
+        .get("https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("ECB forex request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("ECB forex: HTTP {}", resp.status()));
+    }
+    let xml = resp.text().await.map_err(|e| format!("ECB forex read failed: {e}"))?;
+
+    // Parse currency="XXX" rate="Y.YYYY" pairs from the XML via string splitting
+    let mut rates: Vec<serde_json::Value> = Vec::new();
+    let mut usd_rate: Option<f64> = None;
+    let mut gbp_rate: Option<f64> = None;
+    let mut jpy_rate: Option<f64> = None;
+    let mut chf_rate: Option<f64> = None;
+    let mut cad_rate: Option<f64> = None;
+    let mut aud_rate: Option<f64> = None;
+
+    // Each <Cube currency="XXX" rate="Y.YYYY"/> appears on its own or inline
+    for segment in xml.split("currency=\"") {
+        // segment starts with e.g. `USD" rate="1.0856"/>`
+        let Some(cur_end) = segment.find('"') else { continue };
+        let currency = &segment[..cur_end];
+        if currency.len() != 3 || !currency.chars().all(|c| c.is_ascii_uppercase()) {
+            continue;
+        }
+        // Find rate="..." after the currency
+        let Some(rate_start) = segment.find("rate=\"") else { continue };
+        let after_rate = &segment[rate_start + 6..];
+        let Some(rate_end) = after_rate.find('"') else { continue };
+        let Ok(rate) = after_rate[..rate_end].parse::<f64>() else { continue };
+
+        // Track specific rates for cross-rate computation
+        match currency {
+            "USD" => usd_rate = Some(rate),
+            "GBP" => gbp_rate = Some(rate),
+            "JPY" => jpy_rate = Some(rate),
+            "CHF" => chf_rate = Some(rate),
+            "CAD" => cad_rate = Some(rate),
+            "AUD" => aud_rate = Some(rate),
+            _ => {}
+        }
+
+        rates.push(serde_json::json!({
+            "currency": currency,
+            "rate": rate
+        }));
+    }
+
+    // Add computed USD-based cross rates
+    if let Some(usd) = usd_rate {
+        // EUR/USD is just the USD rate itself (ECB rates are per 1 EUR)
+        rates.push(serde_json::json!({ "currency": "EUR/USD", "rate": (1.0 / usd) }));
+        if let Some(gbp) = gbp_rate {
+            // USD/GBP = USD_per_EUR / GBP_per_EUR
+            rates.push(serde_json::json!({ "currency": "GBP/USD", "rate": (usd / gbp) }));
+        }
+        if let Some(jpy) = jpy_rate {
+            rates.push(serde_json::json!({ "currency": "USD/JPY", "rate": (jpy / usd) }));
+        }
+        if let Some(chf) = chf_rate {
+            rates.push(serde_json::json!({ "currency": "USD/CHF", "rate": (chf / usd) }));
+        }
+        if let Some(cad) = cad_rate {
+            rates.push(serde_json::json!({ "currency": "USD/CAD", "rate": (cad / usd) }));
+        }
+        if let Some(aud) = aud_rate {
+            rates.push(serde_json::json!({ "currency": "AUD/USD", "rate": (usd / aud) }));
+        }
+    }
+
+    serde_json::to_string(&rates).map_err(|e| format!("ECB forex JSON error: {e}"))
+}
+
+// ── CoinGecko Trending + Market ─────────────────────────────────────
+
+#[tauri::command]
+async fn fetch_crypto_trending() -> Result<String, String> {
+    let resp = shared_client()
+        .get("https://api.coingecko.com/api/v3/search/trending")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("CoinGecko trending request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("CoinGecko trending: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("CoinGecko trending read failed: {e}"))
+}
+
+#[tauri::command]
+async fn fetch_crypto_market() -> Result<String, String> {
+    let resp = shared_client()
+        .get("https://api.coingecko.com/api/v3/coins/markets")
+        .query(&[
+            ("vs_currency", "usd"),
+            ("order", "market_cap_desc"),
+            ("per_page", "50"),
+            ("page", "1"),
+            ("sparkline", "true"),
+        ])
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("CoinGecko market request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("CoinGecko market: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("CoinGecko market read failed: {e}"))
+}
+
+// ── Reddit WSB Mentions ─────────────────────────────────────────────
+
+#[tauri::command]
+async fn fetch_reddit_mentions(symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) {
+        return Err("Invalid symbol".into());
+    }
+    let url = format!(
+        "https://www.reddit.com/r/wallstreetbets/search.json?q={}&sort=new&t=week&limit=25",
+        symbol
+    );
+    let resp = shared_client()
+        .get(&url)
+        .header("User-Agent", "TyphooN-Terminal/1.0 (trading dashboard)")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Reddit mentions request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Reddit mentions: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("Reddit mentions read failed: {e}"))
+}
+
 #[tauri::command]
 async fn run_walk_forward(
     state: State<'_, SharedState>,
@@ -2671,6 +2833,11 @@ fn main() {
             get_finnhub_insider_sentiment,
             fetch_fear_greed,
             fetch_treasury_yields,
+            fetch_congress_trades,
+            fetch_forex_rates,
+            fetch_crypto_trending,
+            fetch_crypto_market,
+            fetch_reddit_mentions,
             get_sec_filings,
             get_company_fundamentals,
             // Bid/Ask, Activities, Insider
