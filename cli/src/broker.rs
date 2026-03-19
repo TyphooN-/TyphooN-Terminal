@@ -1,0 +1,234 @@
+//! Lightweight Alpaca broker client for CLI.
+//! Shares the same REST API logic as the main terminal but without Tauri dependencies.
+
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+const PAPER_BASE: &str = "https://paper-api.alpaca.markets";
+const LIVE_BASE: &str = "https://api.alpaca.markets";
+const DATA_BASE: &str = "https://data.alpaca.markets";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountInfo {
+    pub equity: f64,
+    pub cash: f64,
+    pub buying_power: f64,
+    pub portfolio_value: f64,
+    pub initial_margin: f64,
+    pub maintenance_margin: f64,
+    pub pattern_day_trader: bool,
+    pub trading_blocked: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PositionInfo {
+    pub symbol: String,
+    pub qty: f64,
+    pub side: String,
+    pub avg_entry_price: f64,
+    pub market_value: f64,
+    pub unrealized_pl: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderInfo {
+    pub id: String,
+    pub symbol: String,
+    pub side: String,
+    pub qty: String,
+    pub order_type: String,
+    pub status: String,
+    pub limit_price: Option<String>,
+    pub stop_price: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderResult {
+    pub id: String,
+    pub symbol: String,
+    pub qty: String,
+    pub side: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bar {
+    pub timestamp: String,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub volume: f64,
+}
+
+fn parse_f64(v: &serde_json::Value, field: &str) -> f64 {
+    v[field].as_str().and_then(|s| s.parse().ok())
+        .or_else(|| v[field].as_f64())
+        .unwrap_or(0.0)
+}
+
+#[derive(Clone)]
+pub struct AlpacaBroker {
+    client: Client,
+    base_url: String,
+    api_key: String,
+    secret_key: String,
+}
+
+impl AlpacaBroker {
+    pub fn new(api_key: &str, secret_key: &str, paper: bool) -> Self {
+        Self {
+            client: Client::new(),
+            base_url: if paper { PAPER_BASE } else { LIVE_BASE }.to_string(),
+            api_key: api_key.to_string(),
+            secret_key: secret_key.to_string(),
+        }
+    }
+
+    fn headers(&self) -> reqwest::header::HeaderMap {
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert("APCA-API-KEY-ID", self.api_key.parse().unwrap());
+        h.insert("APCA-API-SECRET-KEY", self.secret_key.parse().unwrap());
+        h
+    }
+
+    pub async fn get_account(&self) -> Result<AccountInfo, String> {
+        let resp = self.client.get(format!("{}/v2/account", self.base_url))
+            .headers(self.headers()).send().await.map_err(|e| e.to_string())?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        Ok(AccountInfo {
+            equity: parse_f64(&json, "equity"),
+            cash: parse_f64(&json, "cash"),
+            buying_power: parse_f64(&json, "buying_power"),
+            portfolio_value: parse_f64(&json, "portfolio_value"),
+            initial_margin: parse_f64(&json, "initial_margin"),
+            maintenance_margin: parse_f64(&json, "maintenance_margin"),
+            pattern_day_trader: json["pattern_day_trader"].as_bool().unwrap_or(false),
+            trading_blocked: json["trading_blocked"].as_bool().unwrap_or(false),
+        })
+    }
+
+    pub async fn get_positions(&self) -> Result<Vec<PositionInfo>, String> {
+        let resp = self.client.get(format!("{}/v2/positions", self.base_url))
+            .headers(self.headers()).send().await.map_err(|e| e.to_string())?;
+        let json: Vec<serde_json::Value> = resp.json().await.map_err(|e| e.to_string())?;
+        Ok(json.iter().map(|p| PositionInfo {
+            symbol: p["symbol"].as_str().unwrap_or("").to_string(),
+            qty: parse_f64(p, "qty"),
+            side: p["side"].as_str().unwrap_or("").to_string(),
+            avg_entry_price: parse_f64(p, "avg_entry_price"),
+            market_value: parse_f64(p, "market_value"),
+            unrealized_pl: parse_f64(p, "unrealized_pl"),
+        }).collect())
+    }
+
+    pub async fn get_orders(&self, status: &str, limit: u32) -> Result<Vec<OrderInfo>, String> {
+        let resp = self.client.get(format!("{}/v2/orders", self.base_url))
+            .headers(self.headers())
+            .query(&[("status", status), ("limit", &limit.to_string())])
+            .send().await.map_err(|e| e.to_string())?;
+        let json: Vec<serde_json::Value> = resp.json().await.map_err(|e| e.to_string())?;
+        Ok(json.iter().map(|o| OrderInfo {
+            id: o["id"].as_str().unwrap_or("").to_string(),
+            symbol: o["symbol"].as_str().unwrap_or("").to_string(),
+            side: o["side"].as_str().unwrap_or("").to_string(),
+            qty: o["qty"].as_str().unwrap_or("0").to_string(),
+            order_type: o["type"].as_str().unwrap_or("").to_string(),
+            status: o["status"].as_str().unwrap_or("").to_string(),
+            limit_price: o["limit_price"].as_str().map(String::from),
+            stop_price: o["stop_price"].as_str().map(String::from),
+            created_at: o["created_at"].as_str().unwrap_or("").to_string(),
+        }).collect())
+    }
+
+    pub async fn market_order(&self, symbol: &str, qty: f64, side: &str) -> Result<OrderResult, String> {
+        let mut body = HashMap::new();
+        body.insert("symbol", symbol.to_string());
+        body.insert("qty", qty.to_string());
+        body.insert("side", side.to_string());
+        body.insert("type", "market".to_string());
+        body.insert("time_in_force", "gtc".to_string());
+
+        let resp = self.client.post(format!("{}/v2/orders", self.base_url))
+            .headers(self.headers()).json(&body).send().await.map_err(|e| e.to_string())?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        Ok(OrderResult {
+            id: json["id"].as_str().unwrap_or("").to_string(),
+            symbol: json["symbol"].as_str().unwrap_or("").to_string(),
+            qty: json["qty"].as_str().unwrap_or("0").to_string(),
+            side: json["side"].as_str().unwrap_or("").to_string(),
+            status: json["status"].as_str().unwrap_or("").to_string(),
+        })
+    }
+
+    pub async fn close_position(&self, symbol: &str, qty: Option<f64>) -> Result<OrderResult, String> {
+        let url = format!("{}/v2/positions/{}", self.base_url, symbol);
+        let mut req = self.client.delete(&url).headers(self.headers());
+        if let Some(q) = qty {
+            req = req.query(&[("qty", q.to_string())]);
+        }
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        Ok(OrderResult {
+            id: json["id"].as_str().unwrap_or("").to_string(),
+            symbol: json["symbol"].as_str().unwrap_or(symbol).to_string(),
+            qty: json["qty"].as_str().unwrap_or("0").to_string(),
+            side: json["side"].as_str().unwrap_or("").to_string(),
+            status: json["status"].as_str().unwrap_or("closed").to_string(),
+        })
+    }
+
+    pub async fn get_bars(&self, symbol: &str, timeframe: &str, limit: u32) -> Result<Vec<Bar>, String> {
+        let is_crypto = symbol.contains('/');
+        let base = if is_crypto {
+            format!("{}/v1beta3/crypto/us/bars", DATA_BASE)
+        } else {
+            format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
+        };
+
+        let lookback = chrono::Utc::now() - chrono::Duration::days(365);
+        let start = lookback.format("%Y-%m-%dT00:00:00Z").to_string();
+
+        let mut params = vec![
+            ("timeframe", timeframe.to_string()),
+            ("limit", limit.to_string()),
+            ("start", start),
+            ("sort", "asc".to_string()),
+        ];
+        if is_crypto {
+            params.push(("symbols", symbol.to_string()));
+        } else {
+            params.push(("feed", "iex".to_string()));
+        }
+
+        let resp = self.client.get(&base)
+            .headers(self.headers())
+            .query(&params)
+            .send().await.map_err(|e| e.to_string())?;
+
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}", resp.status()));
+        }
+
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+        let bars_array = if is_crypto {
+            json["bars"][symbol].as_array()
+        } else {
+            json["bars"].as_array()
+        };
+
+        Ok(bars_array.map(|arr| {
+            arr.iter().map(|b| Bar {
+                timestamp: b["t"].as_str().unwrap_or("").to_string(),
+                open: b["o"].as_f64().unwrap_or(0.0),
+                high: b["h"].as_f64().unwrap_or(0.0),
+                low: b["l"].as_f64().unwrap_or(0.0),
+                close: b["c"].as_f64().unwrap_or(0.0),
+                volume: b["v"].as_f64().unwrap_or(0.0),
+            }).collect()
+        }).unwrap_or_default())
+    }
+}
