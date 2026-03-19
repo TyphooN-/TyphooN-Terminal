@@ -112,12 +112,12 @@ Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new f
 | QM — Quote monitor (watchlist) | ✅ Done | Multi-symbol dashboard with live prices, Ctrl+K → QM |
 | Interactive news/filing panels | ✅ Done | In-app article reading in floating windows |
 | FA — Financial analysis | ✅ Done | Income stmt, balance sheet, cash flow from SEC EDGAR us-gaap |
-| **ANR — Analyst recommendations** | 🔲 Deferred | No free consensus data API |
-| **SI — Short interest** | 🔲 Deferred | No free reliable API |
+| **ANR — Analyst recommendations** | ✅ Done | Finnhub recommendations + price targets (Ctrl+K → ANR) |
+| **SI — Short interest** | ✅ Done | Finnhub bi-weekly short interest + trend chart (Ctrl+K → SI) |
 | HDS — Institutional holders | ✅ Done | 13F filing history from SEC EDGAR submissions |
 | MOST — Most active | ✅ Done | Alpaca screener most-actives + top movers endpoints |
-| **WEI — World equity indices** | 🔲 Deferred | Alpaca is US-only |
-| **FX — Currency matrix** | 🔲 Deferred | Needs forex data source |
+| **WEI — World equity indices** | ✅ Done | Yahoo Finance world indices, auto-refresh (Ctrl+K → WEI) |
+| **FX — Currency matrix** | ✅ Done | ECB rates + cross rate matrix (Ctrl+K → FX) |
 | HMS — Historical market stats (FRED) | ✅ Done | Ctrl+K → FRED (user provides free API key) |
 | AI chat | ✅ Done | Ctrl+K → AI (Claude/GPT with market context) |
 | **Community chat** | ✅ Done | Matrix protocol — Ctrl+K → CHAT, no server needed |
@@ -227,11 +227,8 @@ Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new f
 
 | Feature | Status | Notes |
 |---|---|---|
-| Analyst recommendations (ANR) | 🔲 Deferred | Financial Modeling Prep free tier (250 req/day) has consensus data |
-| Short interest (SI) | 🔲 Deferred | FINRA short interest (2-week delay) or SEC daily short sale volume |
-| Congress trading | 🔲 Deferred | House/Senate disclosure XML feeds directly parseable (no API key) |
-| World equity indices | 🔲 Deferred | FRED has ^GSPC, ^DJI; delayed data possible via Yahoo Finance |
-| Forex currency matrix | 🔲 Deferred | ECB daily rates (free XML) or exchangerate.host free tier |
+| **Plugin marketplace** | 🔲 Blocked | Needs distribution infrastructure |
+| **Pure Rust GUI migration** | 🔲 Blocked | Egui/Iced — long-term architectural goal |
 
 ---
 
@@ -244,7 +241,10 @@ Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new f
 | **FRED** | Economic data, interest rates, GDP | API key (free) | 120/min |
 | **ForexFactory** | Economic calendar | None (scrape) | — |
 | **Congress API** | Legislative data, lobbying | None | — |
-| **Yahoo Finance** | Backup quotes, earnings calendar | None (unofficial) | — |
+| **Yahoo Finance** | Backup quotes, earnings calendar, world indices | None (unofficial) | — |
+| **Finnhub** | Analyst recommendations, price targets, short interest, insider sentiment | API key (free) | 60/min |
+| **ECB** | Forex exchange rates (daily reference) | None (XML feed) | — |
+| **House Stock Watcher** | Congressional stock trades | None | — |
 
 ---
 

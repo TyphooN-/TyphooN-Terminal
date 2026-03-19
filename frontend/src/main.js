@@ -20184,6 +20184,335 @@ async function cmdRedditSentiment() {
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Short Interest (SI) — Finnhub bi-weekly short interest
+// ══════════════════════════════════════════════════════════════
+async function cmdShortInterest() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const s = loadSettings();
+  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Short Interest`, type: "custom", width: 650, height: 520 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching short interest data...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("get_finnhub_short_interest", { symbol: currentSymbol, finnhubKey: s.finnhubKey });
+    const data = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+
+    const records = Array.isArray(data) ? data : (data.data || []);
+    if (records.length === 0) {
+      win.setContent("No short interest data available for this symbol.");
+      return;
+    }
+
+    // Sort by date descending
+    records.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+    // Current short interest summary
+    const latest = records[0];
+    const summaryDiv = document.createElement("div");
+    summaryDiv.style.cssText = "padding:10px 12px;border-bottom:1px solid #222;";
+    const summaryTitle = document.createElement("div");
+    summaryTitle.textContent = "Current Short Interest";
+    summaryTitle.style.cssText = "color:#888;font-size:11px;margin-bottom:6px;";
+    summaryDiv.appendChild(summaryTitle);
+
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:12px;";
+    const siVal = latest.shortInterest || latest.shares || latest.short_interest || 0;
+    const metrics = [
+      ["Short Interest", siVal ? siVal.toLocaleString() : "N/A", "#f44336"],
+      ["Report Date", latest.date || "N/A", "#ccc"],
+    ];
+    // Short ratio if available
+    if (latest.shortRatio || latest.short_ratio) {
+      metrics.push(["Short Ratio (Days to Cover)", (latest.shortRatio || latest.short_ratio).toFixed(2), "#ff9800"]);
+    }
+    if (latest.percentFloat || latest.percent_float) {
+      metrics.push(["% of Float", `${(latest.percentFloat || latest.percent_float).toFixed(2)}%`, siVal > 0 ? "#f44336" : "#ccc"]);
+    }
+    for (const [label, value, color] of metrics) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:space-between;";
+      const lbl = document.createElement("span"); lbl.style.color = "#666"; lbl.textContent = label;
+      const val = document.createElement("span"); val.style.color = color; val.textContent = value;
+      row.appendChild(lbl); row.appendChild(val); grid.appendChild(row);
+    }
+    summaryDiv.appendChild(grid);
+    win.appendElement(summaryDiv);
+
+    // Short interest trend chart (bar chart)
+    const chartRecords = records.slice(0, 24).reverse(); // last 24 bi-weekly readings (~1 year)
+    if (chartRecords.length > 1) {
+      const chartTitle = document.createElement("div");
+      chartTitle.textContent = "Short Interest Trend (bi-weekly)";
+      chartTitle.style.cssText = "color:#888;font-size:11px;padding:6px 8px;border-bottom:1px solid #222;";
+      win.appendElement(chartTitle);
+
+      const chartDiv = document.createElement("div");
+      chartDiv.style.cssText = "padding:8px 12px;";
+      const canvas = document.createElement("canvas");
+      canvas.width = 600;
+      canvas.height = 140;
+      canvas.style.cssText = "width:100%;height:140px;";
+      chartDiv.appendChild(canvas);
+      win.appendElement(chartDiv);
+
+      const ctx = canvas.getContext("2d");
+      const values = chartRecords.map(r => r.shortInterest || r.shares || r.short_interest || 0);
+      const maxVal = Math.max(...values, 1);
+      const barWidth = (canvas.width - 20) / values.length;
+      const chartHeight = canvas.height - 25;
+
+      // Grid lines
+      ctx.strokeStyle = "#222";
+      ctx.lineWidth = 0.5;
+      for (let i = 0; i <= 4; i++) {
+        const y = 5 + (chartHeight / 4) * i;
+        ctx.beginPath(); ctx.moveTo(10, y); ctx.lineTo(canvas.width - 10, y); ctx.stroke();
+      }
+
+      // Bars
+      for (let i = 0; i < values.length; i++) {
+        const h = (values[i] / maxVal) * chartHeight;
+        const x = 10 + i * barWidth + 1;
+        const y = 5 + chartHeight - h;
+        // Color: red if increasing, green if decreasing from previous
+        const color = i > 0 && values[i] > values[i - 1] ? "#f44336" : "#4caf50";
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y, barWidth - 2, h);
+      }
+
+      // Date labels (first, middle, last)
+      ctx.fillStyle = "#666";
+      ctx.font = "9px monospace";
+      ctx.textAlign = "left";
+      if (chartRecords.length > 0) ctx.fillText((chartRecords[0].date || "").slice(0, 10), 10, canvas.height - 2);
+      ctx.textAlign = "center";
+      if (chartRecords.length > 2) {
+        const mid = Math.floor(chartRecords.length / 2);
+        ctx.fillText((chartRecords[mid].date || "").slice(0, 10), canvas.width / 2, canvas.height - 2);
+      }
+      ctx.textAlign = "right";
+      if (chartRecords.length > 1) ctx.fillText((chartRecords[chartRecords.length - 1].date || "").slice(0, 10), canvas.width - 10, canvas.height - 2);
+
+      // Trend indicator
+      if (values.length >= 2) {
+        const first = values[0], last = values[values.length - 1];
+        const changePct = ((last - first) / (first || 1) * 100).toFixed(1);
+        const trendDiv = document.createElement("div");
+        trendDiv.style.cssText = "padding:4px 12px;font-size:11px;";
+        if (last > first) {
+          trendDiv.innerHTML = `<span style="color:#f44336;">&#9650; Short interest increasing</span> (+${changePct}% over period) — bearish signal`;
+        } else if (last < first) {
+          trendDiv.innerHTML = `<span style="color:#4caf50;">&#9660; Short interest decreasing</span> (${changePct}% over period) — short covering`;
+        } else {
+          trendDiv.innerHTML = `<span style="color:#ff9800;">&#9654; Short interest flat</span> over period`;
+        }
+        win.appendElement(trendDiv);
+      }
+    }
+
+    // Bi-weekly readings table
+    const tableTitle = document.createElement("div");
+    tableTitle.textContent = "Bi-Weekly Readings";
+    tableTitle.style.cssText = "color:#888;font-size:11px;padding:6px 8px;border-top:1px solid #333;border-bottom:1px solid #222;margin-top:4px;";
+    win.appendElement(tableTitle);
+
+    const tableDiv = document.createElement("div");
+    tableDiv.style.cssText = "overflow-y:auto;max-height:200px;";
+
+    // Header
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex;gap:4px;padding:4px 8px;border-bottom:1px solid #333;font-size:10px;color:#888;font-weight:bold;position:sticky;top:0;background:#0a0a0a;";
+    for (const [label, flex] of [["Date", "0 0 100px"], ["Short Interest", "1"], ["Change", "0 0 80px"]]) {
+      const sp = document.createElement("span");
+      sp.style.cssText = `flex:${flex};${label !== "Date" ? "text-align:right;" : ""}`;
+      sp.textContent = label;
+      header.appendChild(sp);
+    }
+    tableDiv.appendChild(header);
+
+    for (let i = 0; i < Math.min(records.length, 50); i++) {
+      const r = records[i];
+      const si = r.shortInterest || r.shares || r.short_interest || 0;
+      const prevSi = i + 1 < records.length ? (records[i + 1].shortInterest || records[i + 1].shares || records[i + 1].short_interest || 0) : 0;
+      const change = prevSi > 0 ? ((si - prevSi) / prevSi * 100).toFixed(1) : "—";
+
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:4px;padding:3px 8px;border-bottom:1px solid #111;font-size:10px;";
+      const date = document.createElement("span"); date.style.cssText = "flex:0 0 100px;color:#888;"; date.textContent = (r.date || "").slice(0, 10);
+      const siSpan = document.createElement("span"); siSpan.style.cssText = "flex:1;text-align:right;color:#ccc;font-family:Consolas,monospace;"; siSpan.textContent = si ? si.toLocaleString() : "—";
+      const chgSpan = document.createElement("span");
+      const chgNum = parseFloat(change);
+      chgSpan.style.cssText = `flex:0 0 80px;text-align:right;color:${isNaN(chgNum) ? "#888" : chgNum > 0 ? "#f44336" : chgNum < 0 ? "#4caf50" : "#888"};`;
+      chgSpan.textContent = isNaN(chgNum) ? "—" : `${chgNum > 0 ? "+" : ""}${change}%`;
+
+      row.appendChild(date); row.appendChild(siSpan); row.appendChild(chgSpan);
+      tableDiv.appendChild(row);
+    }
+    win.appendElement(tableDiv);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load short interest: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: World Equity Indices (WEI) — live dashboard
+// ══════════════════════════════════════════════════════════════
+async function cmdWorldIndices() {
+  const win = createWindow({ title: "World Equity Indices", type: "custom", width: 560, height: 520 });
+  win.contentElement.textContent = "";
+
+  // Define region groups
+  const REGIONS = {
+    "Americas": ["^GSPC", "^DJI", "^IXIC", "^RUT", "^GSPTSE"],
+    "Europe": ["^FTSE", "^GDAXI", "^FCHI"],
+    "Asia-Pacific": ["^N225", "^HSI", "^AXJO", "^STI"],
+    "Volatility": ["^VIX"],
+  };
+  const DISPLAY_NAMES = {
+    "^GSPC": "S&P 500", "^DJI": "Dow Jones", "^IXIC": "Nasdaq", "^RUT": "Russell 2000", "^GSPTSE": "TSX Composite",
+    "^FTSE": "FTSE 100", "^GDAXI": "DAX", "^FCHI": "CAC 40",
+    "^N225": "Nikkei 225", "^HSI": "Hang Seng", "^AXJO": "ASX 200", "^STI": "STI",
+    "^VIX": "VIX",
+  };
+
+  let refreshTimer = null;
+  const contentDiv = document.createElement("div");
+  contentDiv.style.cssText = "height:100%;overflow-y:auto;";
+  win.contentElement.textContent = "";
+  win.appendElement(contentDiv);
+
+  async function refreshIndices() {
+    contentDiv.textContent = "";
+    const loading = document.createElement("div");
+    loading.textContent = "Fetching world indices...";
+    loading.style.cssText = "color:#888;padding:12px;";
+    contentDiv.appendChild(loading);
+
+    try {
+      const json = await invoke("fetch_world_indices");
+      const indices = typeof json === "string" ? JSON.parse(json) : json;
+      contentDiv.textContent = "";
+
+      if (!Array.isArray(indices) || indices.length === 0) {
+        const msg = document.createElement("div");
+        msg.textContent = "No index data available.";
+        msg.style.cssText = "color:#888;padding:12px;";
+        contentDiv.appendChild(msg);
+        return;
+      }
+
+      // Build lookup by symbol
+      const lookup = {};
+      for (const idx of indices) lookup[idx.symbol] = idx;
+
+      // Last updated timestamp
+      const tsDiv = document.createElement("div");
+      tsDiv.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:6px 12px;border-bottom:1px solid #222;font-size:9px;color:#555;";
+      tsDiv.textContent = `Last updated: ${new Date().toLocaleTimeString("en-GB", { hour12: false })} | Auto-refresh: 60s`;
+      contentDiv.appendChild(tsDiv);
+
+      for (const [region, symbols] of Object.entries(REGIONS)) {
+        // Region header
+        const regionHeader = document.createElement("div");
+        regionHeader.style.cssText = "padding:6px 12px;font-size:11px;font-weight:bold;color:#8cf;border-bottom:1px solid #222;background:#0a0a14;";
+        regionHeader.textContent = region;
+        contentDiv.appendChild(regionHeader);
+
+        for (const sym of symbols) {
+          const idx = lookup[sym];
+          const row = document.createElement("div");
+          row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:5px 12px;border-bottom:1px solid #111;font-size:11px;";
+
+          const nameSpan = document.createElement("span");
+          nameSpan.style.cssText = "color:#ccc;flex:1;";
+          nameSpan.textContent = DISPLAY_NAMES[sym] || (idx ? idx.name : sym);
+
+          const priceSpan = document.createElement("span");
+          priceSpan.style.cssText = "width:90px;text-align:right;font-family:Consolas,monospace;color:#ddd;margin-right:12px;";
+
+          const changeSpan = document.createElement("span");
+          changeSpan.style.cssText = "width:80px;text-align:right;font-family:Consolas,monospace;";
+
+          const pctSpan = document.createElement("span");
+          pctSpan.style.cssText = "width:70px;text-align:right;font-family:Consolas,monospace;font-weight:bold;";
+
+          if (idx) {
+            const price = idx.price || 0;
+            const change = idx.change || 0;
+            const changePct = idx.changePct || idx.change_pct || 0;
+
+            priceSpan.textContent = price >= 1000 ? price.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ",") : price.toFixed(2);
+            changeSpan.textContent = `${change >= 0 ? "+" : ""}${change.toFixed(2)}`;
+            changeSpan.style.color = change >= 0 ? "#4caf50" : "#f44336";
+            pctSpan.textContent = `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`;
+            pctSpan.style.color = changePct >= 0 ? "#4caf50" : "#f44336";
+          } else {
+            priceSpan.textContent = "—";
+            changeSpan.textContent = "—"; changeSpan.style.color = "#555";
+            pctSpan.textContent = "—"; pctSpan.style.color = "#555";
+          }
+
+          row.appendChild(nameSpan);
+          row.appendChild(priceSpan);
+          row.appendChild(changeSpan);
+          row.appendChild(pctSpan);
+          contentDiv.appendChild(row);
+        }
+      }
+
+      // Also show any extra indices from the backend not in our regions
+      const knownSymbols = new Set(Object.values(REGIONS).flat());
+      const extras = indices.filter(i => !knownSymbols.has(i.symbol));
+      if (extras.length > 0) {
+        const extraHeader = document.createElement("div");
+        extraHeader.style.cssText = "padding:6px 12px;font-size:11px;font-weight:bold;color:#8cf;border-bottom:1px solid #222;background:#0a0a14;";
+        extraHeader.textContent = "Other";
+        contentDiv.appendChild(extraHeader);
+
+        for (const idx of extras) {
+          const row = document.createElement("div");
+          row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:5px 12px;border-bottom:1px solid #111;font-size:11px;";
+          const nameSpan = document.createElement("span"); nameSpan.style.cssText = "color:#ccc;flex:1;"; nameSpan.textContent = idx.name || idx.symbol;
+          const priceSpan = document.createElement("span"); priceSpan.style.cssText = "width:90px;text-align:right;font-family:Consolas,monospace;color:#ddd;margin-right:12px;";
+          priceSpan.textContent = (idx.price || 0) >= 1000 ? (idx.price || 0).toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ",") : (idx.price || 0).toFixed(2);
+          const changeSpan = document.createElement("span"); changeSpan.style.cssText = "width:80px;text-align:right;font-family:Consolas,monospace;";
+          changeSpan.textContent = `${(idx.change || 0) >= 0 ? "+" : ""}${(idx.change || 0).toFixed(2)}`;
+          changeSpan.style.color = (idx.change || 0) >= 0 ? "#4caf50" : "#f44336";
+          const pctSpan = document.createElement("span"); pctSpan.style.cssText = "width:70px;text-align:right;font-family:Consolas,monospace;font-weight:bold;";
+          const pct = idx.changePct || idx.change_pct || 0;
+          pctSpan.textContent = `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+          pctSpan.style.color = pct >= 0 ? "#4caf50" : "#f44336";
+          row.appendChild(nameSpan); row.appendChild(priceSpan); row.appendChild(changeSpan); row.appendChild(pctSpan);
+          contentDiv.appendChild(row);
+        }
+      }
+    } catch (e) {
+      contentDiv.textContent = "";
+      const msg = document.createElement("div");
+      msg.textContent = `Failed to load world indices: ${e}`;
+      msg.style.cssText = "color:#f44;padding:12px;font-size:11px;";
+      contentDiv.appendChild(msg);
+    }
+  }
+
+  await refreshIndices();
+  refreshTimer = setInterval(refreshIndices, 60000);
+
+  // Clean up on window close
+  const origClose = win.close;
+  win.close = () => {
+    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    origClose.call(win);
+  };
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
@@ -20403,6 +20732,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "FX", desc: "Forex currency matrix (ECB rates, major pairs + cross rates)", action: cmdForexDashboard },
   { name: "CRYPTO", desc: "Crypto market — top 50 coins + trending (CoinGecko)", action: cmdCryptoMarket },
   { name: "REDDIT", desc: "Reddit sentiment — WSB/investing mentions for current symbol", action: cmdRedditSentiment },
+  { name: "SI", desc: "Short interest — Finnhub bi-weekly short interest + trend chart", action: cmdShortInterest },
+  { name: "WEI", desc: "World equity indices — live dashboard (Americas, Europe, Asia-Pacific)", action: cmdWorldIndices },
 ];
 
 function fuzzyMatch(query, target) {
@@ -22645,6 +22976,62 @@ function cmdWatchlist() {
   addInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addBtn.click(); });
   addRow.appendChild(addInput);
   addRow.appendChild(addBtn);
+
+  // Alpaca sync buttons
+  const syncBtn = document.createElement("button");
+  syncBtn.textContent = "Sync to Alpaca";
+  syncBtn.title = "Push watchlist to Alpaca";
+  syncBtn.style.cssText = "background:#1a3a5c;color:#8cf;border:1px solid #555;padding:4px 8px;cursor:pointer;font-family:inherit;font-size:10px;white-space:nowrap;";
+  syncBtn.addEventListener("click", async () => {
+    const symbols = getWatchlist();
+    if (symbols.length === 0) { log("Watchlist is empty", "warn"); return; }
+    syncBtn.disabled = true; syncBtn.textContent = "Syncing...";
+    try {
+      await invoke("sync_watchlist_to_alpaca", { name: "TyphooN Watchlist", symbols });
+      log("Watchlist synced to Alpaca", "info");
+      syncBtn.textContent = "Synced!";
+      setTimeout(() => { syncBtn.textContent = "Sync to Alpaca"; syncBtn.disabled = false; }, 2000);
+    } catch (e) {
+      log(`Alpaca sync failed: ${e}`, "error");
+      syncBtn.textContent = "Failed";
+      setTimeout(() => { syncBtn.textContent = "Sync to Alpaca"; syncBtn.disabled = false; }, 2000);
+    }
+  });
+  addRow.appendChild(syncBtn);
+
+  const loadBtn = document.createElement("button");
+  loadBtn.textContent = "Load from Alpaca";
+  loadBtn.title = "Import watchlist from Alpaca";
+  loadBtn.style.cssText = "background:#1a3a5c;color:#8cf;border:1px solid #555;padding:4px 8px;cursor:pointer;font-family:inherit;font-size:10px;white-space:nowrap;";
+  loadBtn.addEventListener("click", async () => {
+    loadBtn.disabled = true; loadBtn.textContent = "Loading...";
+    try {
+      const json = await invoke("get_alpaca_watchlists");
+      const watchlists = typeof json === "string" ? JSON.parse(json) : json;
+      const allSymbols = new Set(getWatchlist());
+      let imported = 0;
+      if (Array.isArray(watchlists)) {
+        for (const wl of watchlists) {
+          const assets = wl.assets || wl.symbols || [];
+          for (const a of assets) {
+            const sym = (typeof a === "string" ? a : a.symbol || "").toUpperCase();
+            if (sym && !allSymbols.has(sym)) { allSymbols.add(sym); imported++; }
+          }
+        }
+      }
+      saveWatchlist([...allSymbols]);
+      refreshWatchlist(tableBody);
+      log(`Imported ${imported} symbols from Alpaca`, "info");
+      loadBtn.textContent = `+${imported} imported`;
+      setTimeout(() => { loadBtn.textContent = "Load from Alpaca"; loadBtn.disabled = false; }, 2000);
+    } catch (e) {
+      log(`Alpaca load failed: ${e}`, "error");
+      loadBtn.textContent = "Failed";
+      setTimeout(() => { loadBtn.textContent = "Load from Alpaca"; loadBtn.disabled = false; }, 2000);
+    }
+  });
+  addRow.appendChild(loadBtn);
+
   container.appendChild(addRow);
 
   // Table
@@ -27042,6 +27429,8 @@ function setupMenuBar() {
     "forex-dashboard": () => cmdForexDashboard(),
     "crypto-market": () => cmdCryptoMarket(),
     "reddit-sentiment": () => cmdRedditSentiment(),
+    "short-interest": () => cmdShortInterest(),
+    "world-indices": () => cmdWorldIndices(),
   };
 
   document.querySelectorAll(".menu-entry").forEach(entry => {

@@ -2161,6 +2161,107 @@ async fn send_ntfy_notification(
     notifications::send_ntfy(&topic, &message).await
 }
 
+// ── FINRA Short Interest (Finnhub) ──────────────────────────────
+
+#[tauri::command]
+async fn fetch_short_interest(state: State<'_, SharedState>, symbol: String, finnhub_key: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+    let data = broker.get_finnhub_short_interest(&symbol, &finnhub_key).await?;
+    Ok(serde_json::to_string(&data).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+// ── World Equity Indices (Yahoo Finance) ────────────────────────
+
+#[tauri::command]
+async fn fetch_world_indices() -> Result<String, String> {
+    let symbols = "^GSPC,^DJI,^IXIC,^RUT,^VIX,^FTSE,^GDAXI,^FCHI,^N225,^HSI,^STI,^AXJO,^BVSP,^GSPTSE";
+    let resp = shared_client()
+        .get("https://query1.finance.yahoo.com/v7/finance/quote")
+        .query(&[("symbols", symbols)])
+        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("Yahoo Finance request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Yahoo Finance: HTTP {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp.json().await
+        .map_err(|e| format!("Yahoo Finance parse failed: {e}"))?;
+
+    // Yahoo wraps results in quoteResponse.result[]
+    let quotes = body
+        .pointer("/quoteResponse/result")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "Yahoo Finance: unexpected response format".to_string())?;
+
+    let indices: Vec<serde_json::Value> = quotes.iter().map(|q| {
+        serde_json::json!({
+            "symbol": q["symbol"].as_str().unwrap_or(""),
+            "name": q["shortName"].as_str().unwrap_or(q["longName"].as_str().unwrap_or("")),
+            "price": q["regularMarketPrice"].as_f64().unwrap_or(0.0),
+            "change": q["regularMarketChange"].as_f64().unwrap_or(0.0),
+            "changePct": q["regularMarketChangePercent"].as_f64().unwrap_or(0.0),
+        })
+    }).collect();
+
+    serde_json::to_string(&indices).map_err(|e| format!("Indices JSON error: {e}"))
+}
+
+// ── Alpaca Watchlist Sync ───────────────────────────────────────
+
+#[tauri::command]
+async fn get_alpaca_watchlists(state: State<'_, SharedState>) -> Result<String, String> {
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+    let watchlists = broker.get_watchlists().await?;
+    Ok(serde_json::to_string(&watchlists).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
+async fn sync_watchlist_to_alpaca(
+    state: State<'_, SharedState>,
+    name: String,
+    symbols: Vec<String>,
+) -> Result<String, String> {
+    if name.is_empty() || name.len() > 64 {
+        return Err("Watchlist name must be 1-64 characters".into());
+    }
+    for s in &symbols {
+        if !is_valid_symbol(s) {
+            return Err(format!("Invalid symbol: {s}"));
+        }
+    }
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+
+    // Check if a watchlist with this name already exists
+    let existing = broker.get_watchlists().await?;
+    for wl in &existing {
+        if wl["name"].as_str() == Some(&name) {
+            if let Some(id) = wl["id"].as_str() {
+                let updated = broker.update_watchlist(id, &symbols).await?;
+                return Ok(serde_json::to_string(&updated).map_err(|e| format!("JSON error: {e}"))?);
+            }
+        }
+    }
+
+    // No existing watchlist — create a new one
+    let created = broker.create_watchlist(&name, &symbols).await?;
+    Ok(serde_json::to_string(&created).map_err(|e| format!("JSON error: {e}"))?)
+}
+
 // ── SQLite Cache Commands ───────────────────────────────────────
 
 #[tauri::command]
@@ -2894,6 +2995,11 @@ fn main() {
             // Push Notifications
             send_pushover_notification,
             send_ntfy_notification,
+            // Short Interest, World Indices, Watchlists
+            fetch_short_interest,
+            fetch_world_indices,
+            get_alpaca_watchlists,
+            sync_watchlist_to_alpaca,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TyphooN Terminal");

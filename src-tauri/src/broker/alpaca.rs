@@ -1894,6 +1894,99 @@ impl AlpacaBroker {
         Ok(insider_trades)
     }
 
+    // ── Finnhub Short Interest ────────────────────────────────────
+
+    /// Fetch FINRA short interest data from Finnhub (bi-weekly reports).
+    pub async fn get_finnhub_short_interest(&self, symbol: &str, finnhub_key: &str) -> Result<Vec<serde_json::Value>, String> {
+        if finnhub_key.is_empty() { return Err("Finnhub API key required".into()); }
+        let resp = sec_client()
+            .get("https://finnhub.io/api/v1/stock/short-interest")
+            .query(&[("symbol", symbol), ("token", finnhub_key), ("from", "2025-01-01"), ("to", "2026-12-31")])
+            .send()
+            .await
+            .map_err(|e| format!("Finnhub short interest failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Finnhub short interest: HTTP {}", resp.status()));
+        }
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Finnhub short interest parse failed: {e}"))?;
+        // Finnhub returns { "data": [...], "symbol": "..." }
+        match body.get("data").and_then(|d| d.as_array()) {
+            Some(arr) => Ok(arr.clone()),
+            None => Ok(vec![body]),
+        }
+    }
+
+    // ── Alpaca Watchlists ────────────────────────────────────────────
+
+    /// Fetch all watchlists from Alpaca.
+    pub async fn get_watchlists(&self) -> Result<Vec<serde_json::Value>, String> {
+        self.rate_limiter.wait().await;
+        let resp = self
+            .client
+            .get(format!("{}/v2/watchlists", self.base_url))
+            .headers(self.headers())
+            .send()
+            .await
+            .map_err(|e| format!("Get watchlists failed: {e}"))?;
+
+        if resp.status().as_u16() == 429 { self.rate_limiter.trigger_cooldown().await; }
+        if !resp.status().is_success() {
+            return Err(format!("Get watchlists: HTTP {}", resp.status()));
+        }
+        resp.json().await.map_err(|e| format!("Watchlists parse failed: {e}"))
+    }
+
+    /// Create a new watchlist on Alpaca.
+    pub async fn create_watchlist(&self, name: &str, symbols: &[String]) -> Result<serde_json::Value, String> {
+        self.rate_limiter.wait().await;
+        let body = serde_json::json!({
+            "name": name,
+            "symbols": symbols,
+        });
+        let resp = self
+            .client
+            .post(format!("{}/v2/watchlists", self.base_url))
+            .headers(self.headers())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Create watchlist failed: {e}"))?;
+
+        if resp.status().as_u16() == 429 { self.rate_limiter.trigger_cooldown().await; }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Create watchlist: HTTP {status} — {text}"));
+        }
+        resp.json().await.map_err(|e| format!("Create watchlist parse failed: {e}"))
+    }
+
+    /// Update an existing watchlist on Alpaca (replace symbols).
+    pub async fn update_watchlist(&self, id: &str, symbols: &[String]) -> Result<serde_json::Value, String> {
+        self.rate_limiter.wait().await;
+        let body = serde_json::json!({
+            "symbols": symbols,
+        });
+        let resp = self
+            .client
+            .put(format!("{}/v2/watchlists/{}", self.base_url, id))
+            .headers(self.headers())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Update watchlist failed: {e}"))?;
+
+        if resp.status().as_u16() == 429 { self.rate_limiter.trigger_cooldown().await; }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Update watchlist: HTTP {status} — {text}"));
+        }
+        resp.json().await.map_err(|e| format!("Update watchlist parse failed: {e}"))
+    }
+
     // ── WebSocket Streaming ─────────────────────────────────────────
 
     /// Start a WebSocket connection to Alpaca's real-time data stream.
