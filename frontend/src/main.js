@@ -7331,10 +7331,17 @@ async function cmdRiskMap() {
   const win = createWindow({ title: "Portfolio Risk Heatmap", width: 700, height: 500 });
   win.contentElement.textContent = "";
 
-  const loading = document.createElement("div");
-  loading.textContent = "Loading positions and calculating VaR...";
-  loading.style.cssText = "color:#888;padding:20px;";
-  win.appendElement(loading);
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+  const addLog = (msg, color) => {
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (color) line.style.color = color;
+    logDiv.appendChild(line);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  };
+  addLog("Fetching positions...");
+  win.appendElement(logDiv);
 
   try {
     const posJson = await invoke("get_positions");
@@ -7345,6 +7352,8 @@ async function cmdRiskMap() {
       win.setContent("No open positions for risk heatmap.");
       return;
     }
+
+    addLog(`Found ${positions.length} positions, computing VaR...`, "#4caf50");
 
     // Compute market value and weight for each position
     let totalValue = 0;
@@ -7358,13 +7367,16 @@ async function cmdRiskMap() {
     }
 
     // Fetch VaR for each position (best-effort, non-blocking)
+    let varCompleted = 0;
     const varPromises = items.map(item =>
       invokeQuiet("calculate_position_var", {
         symbol: item.symbol, positionSize: item.qty, currentPrice: item.price,
       }).then(json => {
         const v = JSON.parse(json);
         item.var_dollars = v.var_dollars || 0;
-      }).catch(() => { item.var_dollars = null; })
+        varCompleted++;
+        addLog(`  \u2713 ${item.symbol} VaR: $${item.var_dollars.toFixed(2)} (${varCompleted}/${items.length})`, "#4caf50");
+      }).catch(() => { item.var_dollars = null; varCompleted++; addLog(`  \u2717 ${item.symbol} VaR failed (${varCompleted}/${items.length})`, "#f44336"); })
     );
     await Promise.all(varPromises);
 
@@ -10192,19 +10204,38 @@ async function cmdJournalPlus() {
 async function cmdCorrelation3D() {
   const win = createWindow({ title: "Correlation Network Graph", width: 500, height: 560 });
   win.contentElement.textContent = "";
-  const loadingMsg = document.createElement("div"); loadingMsg.textContent = "Building correlation network..."; loadingMsg.style.cssText = "color:#888;padding:20px;"; win.appendElement(loadingMsg);
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+  const addLog = (msg, color) => {
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (color) line.style.color = color;
+    logDiv.appendChild(line);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  };
+  addLog("Fetching bar data for correlation network...");
+  win.appendElement(logDiv);
   try {
     const symbols = getWatchlist();
     if (symbols.length < 2) { win.contentElement.textContent = ""; win.setContent("Need at least 2 watchlist symbols. Add via QM first."); return; }
+    addLog(`Found ${symbols.length} watchlist symbols`, "#4caf50");
     const closePrices = {};
-    for (const sym of symbols) {
+    let completed = 0;
+    await Promise.all(symbols.map(async (sym) => {
       let data = null;
       for (const tf of ["1Day", "4Hour", "1Hour"]) { const key = getCacheKey(sym, tf); const cached = barCache[key]; if (cached && cached.data && cached.data.length > 20) { data = cached.data; break; } }
       if (!data) { try { const barsJson = await cachedGetBars(sym, "1Day", 100); const bars = JSON.parse(barsJson); if (bars.length > 20) data = bars; } catch (_) {} }
-      if (data) closePrices[sym] = data.slice(-100).map(b => b.close || b.c || 0);
-    }
+      completed++;
+      if (data) {
+        closePrices[sym] = data.slice(-100).map(b => b.close || b.c || 0);
+        addLog(`  \u2713 ${sym} bars loaded (${completed}/${symbols.length})`, "#4caf50");
+      } else {
+        addLog(`  \u2717 ${sym} no data (${completed}/${symbols.length})`, "#ff9800");
+      }
+    }));
     const validSymbols = Object.keys(closePrices).filter(s => closePrices[s].length > 10);
     if (validSymbols.length < 2) { win.contentElement.textContent = ""; win.setContent("Insufficient cached bar data. Load some charts first."); return; }
+    addLog("Computing Pearson correlations...", "#888");
     const corrReturns = {};
     for (const sym of validSymbols) { const prices = closePrices[sym]; corrReturns[sym] = []; for (let i = 1; i < prices.length; i++) corrReturns[sym].push(prices[i] > 0 ? (prices[i] - prices[i - 1]) / prices[i - 1] : 0); }
     function pearsonCorr(a, b) { const n = Math.min(a.length, b.length); if (n < 5) return 0; let sA = 0, sB = 0, sAB = 0, sA2 = 0, sB2 = 0; for (let i = 0; i < n; i++) { sA += a[i]; sB += b[i]; sAB += a[i] * b[i]; sA2 += a[i] * a[i]; sB2 += b[i] * b[i]; } const num = n * sAB - sA * sB; const den = Math.sqrt((n * sA2 - sA * sA) * (n * sB2 - sB * sB)); return den > 0 ? num / den : 0; }
@@ -13297,7 +13328,7 @@ async function cmdMultiAccount() {
     // Largest position
     const allItems = positions.map(p => ({
       symbol: p.symbol,
-      mv: Math.abs(parseFloat(p.market_value) || (Math.abs(parseFloat(p.qty) || 0) * (parseFloat(p.current_price) || 0))),
+      mv: Math.abs(parseFloat(p.market_value) || (Math.abs(parseFloat(p.qty) || 0) * (parseFloat(p.avg_entry_price) || 0))),
     }));
     const largest = allItems.sort((a, b) => b.mv - a.mv)[0];
     const largestPct = totalPortfolioValue > 0 ? (largest.mv / totalPortfolioValue * 100).toFixed(1) : "0";
@@ -14806,7 +14837,7 @@ async function cmdTaxLot() {
       if(o.side==="buy"){const bd=new Date(date);let ws=false;for(const loss of recentLosses[sym]){if((bd-new Date(loss.date))/86400000>=0&&(bd-new Date(loss.date))/86400000<=30){ws=true;break;}}symbolLots[sym].push({buyDate:date,qty,costBasis:price,remaining:qty,washSale:ws});}
       else if(o.side==="sell"){let sq=qty;for(const lot of symbolLots[sym]){if(sq<=0)break;if(lot.remaining<=0)continue;const consumed=Math.min(lot.remaining,sq);const pnl=(price-lot.costBasis)*consumed;if(pnl<0)recentLosses[sym].push({date,qty:consumed});lot.remaining-=consumed;sq-=consumed;}}
     }
-    const currentPrices={};for(const p of positions)currentPrices[p.symbol]=p.current_price||p.avg_entry_price||0;
+    const currentPrices={};for(const p of positions)currentPrices[p.symbol]=p.avg_entry_price||p.avg_entry_price||0;
     const now=new Date();let totalST=0,totalLT=0,totalUR=0;
     win.contentElement.textContent = "";
     for(const sym of positions.map(p=>p.symbol)){
@@ -14861,7 +14892,7 @@ async function cmdReport() {
     const header=document.createElement("div");header.style.cssText="text-align:center;border-bottom:2px solid #8cf;padding-bottom:8px;margin-bottom:12px;";header.appendChild(div("TyphooN-Terminal Trading Report","font-size:16px;font-weight:bold;color:#8cf;"));header.appendChild(div(reportDate,"font-size:11px;color:#888;"));reportDiv.appendChild(header);
     function addRptSec(title,rows){const sec=document.createElement("div");sec.className="report-section";sec.style.cssText="margin-bottom:14px;";const hdr=document.createElement("div");hdr.style.cssText="color:#8cf;font-size:12px;font-weight:bold;border-bottom:1px solid #333;padding-bottom:2px;margin-bottom:4px;";hdr.textContent=title;sec.appendChild(hdr);const tbl=document.createElement("table");tbl.style.cssText="width:100%;border-collapse:collapse;font-size:11px;";for(const[label,value,color]of rows){const tr=document.createElement("tr");const td1=document.createElement("td");td1.style.cssText="padding:2px 6px;color:#888;";td1.textContent=label;const td2=document.createElement("td");td2.style.cssText=`padding:2px 6px;text-align:right;color:${color||"#ccc"};font-family:Consolas,monospace;`;td2.textContent=value;tr.appendChild(td1);tr.appendChild(td2);tbl.appendChild(tr);}sec.appendChild(tbl);reportDiv.appendChild(sec);}
     addRptSec("Account Summary",[["Equity","$"+(mi.equity||0).toFixed(2)],["Buying Power","$"+(mi.buying_power||0).toFixed(2)],["Margin Used","$"+(mi.initial_margin||0).toFixed(2)],["Cash","$"+(mi.cash||0).toFixed(2)]]);
-    if(positions.length>0){addRptSec(`Open Positions (${positions.length})`,positions.map(p=>{const mv=Math.abs(p.market_value||p.qty*(p.current_price||0));const pl=p.unrealized_pl||0;return[`${p.symbol} ${p.side==="long"?"L":"S"} ${Math.abs(p.qty)}`,`$${mv.toFixed(2)} (${pl>=0?"+":""}$${pl.toFixed(2)})`,pl>=0?"#4caf50":"#f44336"];}));}
+    if(positions.length>0){addRptSec(`Open Positions (${positions.length})`,positions.map(p=>{const mv=Math.abs(p.market_value||p.qty*(p.avg_entry_price||0));const pl=p.unrealized_pl||0;return[`${p.symbol} ${p.side==="long"?"L":"S"} ${Math.abs(p.qty)}`,`$${mv.toFixed(2)} (${pl>=0?"+":""}$${pl.toFixed(2)})`,pl>=0?"#4caf50":"#f44336"];}));}
     addRptSec("P&L Summary",[["Total Trades",String(trades.length)],["Total P&L",(totalPnl>=0?"+":"")+"$"+totalPnl.toFixed(2),totalPnl>=0?"#4caf50":"#f44336"],["Gross Wins","+$"+grossWin.toFixed(2),"#4caf50"],["Gross Losses","-$"+grossLoss.toFixed(2),"#f44336"],["Profit Factor",profitFactor]]);
     addRptSec("Risk Metrics",[["VaR (95%)",var95],["Max Drawdown",maxDD,"#f44336"],["Sharpe Ratio",sharpe]]);
     addRptSec("Performance",[["Win Rate",winRate+"%",parseFloat(winRate)>=50?"#4caf50":"#f44336"],["Avg Win","+$"+avgWin.toFixed(2),"#4caf50"],["Avg Loss","-$"+avgLoss.toFixed(2),"#f44336"],["Expectancy","$"+(avgWin*wins.length/Math.max(trades.length,1)-avgLoss*losses.length/Math.max(trades.length,1)).toFixed(2)]]);
@@ -15361,7 +15392,7 @@ function cmdRiskDashboard() {
     try {
       const [miJson, posJson] = await Promise.all([invoke("get_margin_info"), invoke("get_positions")]);
       const mi = JSON.parse(miJson); const positions = JSON.parse(posJson);
-      const totalValue = positions.reduce((s, p) => s + Math.abs(p.qty * p.current_price), 0);
+      const totalValue = positions.reduce((s, p) => s + Math.abs(p.qty * p.avg_entry_price), 0);
       const totalPL = positions.reduce((s, p) => s + p.unrealized_pl, 0);
       const totalMV = positions.reduce((s, p) => s + Math.abs(p.market_value || 0), 0);
       const weights = positions.map(p => Math.abs(p.market_value || 0) / (totalMV || 1));
@@ -16094,7 +16125,7 @@ function cmdTreemapLive() {
       const items = positions.map(p => ({
         symbol: p.symbol,
         qty: parseFloat(p.qty) || 0,
-        price: parseFloat(p.current_price) || 0,
+        price: parseFloat(p.avg_entry_price) || 0,
         pnl: parseFloat(p.unrealized_pl) || 0,
       })).map(p => ({ ...p, value: Math.abs(p.qty * p.price) })).filter(p => p.value > 0);
 
@@ -18998,7 +19029,7 @@ function cmdShadowTrade() {
       const positions = JSON.parse(posJson);
       const shadow = stLoad();
       const mult = parseFloat(stRiskInput.value) || 2;
-      shadow.positions = positions.map(p => ({ symbol: p.symbol, side: parseFloat(p.qty) > 0 ? "long" : "short", qty: Math.abs(parseFloat(p.qty)) * mult, entry: parseFloat(p.avg_entry_price || p.current_price || 0), timestamp: new Date().toISOString() }));
+      shadow.positions = positions.map(p => ({ symbol: p.symbol, side: parseFloat(p.qty) > 0 ? "long" : "short", qty: Math.abs(parseFloat(p.qty)) * mult, entry: parseFloat(p.avg_entry_price || p.avg_entry_price || 0), timestamp: new Date().toISOString() }));
       stSave(shadow); stRender();
       log("Shadow: synced " + positions.length + " positions at " + mult + "x", "ok");
     } catch (e) { log("Shadow sync failed: " + e, "error"); }
@@ -19433,13 +19464,22 @@ async function cmdAnalystRatings() {
 async function cmdPortfolioHistory() {
   const win = createWindow({ title: "Portfolio History — Equity Curve", type: "custom", width: 700, height: 520 });
   win.contentElement.textContent = "";
-  const loading = document.createElement("div");
-  loading.textContent = "Fetching portfolio history from Alpaca...";
-  loading.style.cssText = "color:#888;padding:12px;";
-  win.appendElement(loading);
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+  const addLog = (msg, color) => {
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (color) line.style.color = color;
+    logDiv.appendChild(line);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  };
+  addLog("Fetching 1-year portfolio history from Alpaca...");
+  win.appendElement(logDiv);
   try {
     const json = await invoke("get_portfolio_history", { period: "1Y", timeframe: "1D" });
     const data = typeof json === "string" ? JSON.parse(json) : json;
+    const eqCount = (data.equity || []).length;
+    addLog(`\u2713 Loaded ${eqCount} data points, computing statistics...`, "#4caf50");
     win.contentElement.textContent = "";
 
     const equity = data.equity || [];
@@ -20027,13 +20067,22 @@ async function cmdInsiderSentiment() {
 async function cmdCongressTrades() {
   const win = createWindow({ title: "Congress Trades", type: "custom", width: 900, height: 600 });
   win.contentElement.textContent = "";
-  const loading = document.createElement("div");
-  loading.textContent = "Fetching congressional trading data (~5MB)...";
-  loading.style.cssText = "color:#888;padding:12px;";
-  win.appendElement(loading);
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+  const addLog = (msg, color) => {
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (color) line.style.color = color;
+    logDiv.appendChild(line);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  };
+  addLog("Downloading congressional trading data (~5MB)...");
+  win.appendElement(logDiv);
   try {
     const json = await invoke("fetch_congress_trades");
+    addLog("\u2713 Downloaded, parsing trades...", "#4caf50");
     const allTrades = typeof json === "string" ? JSON.parse(json) : json;
+    addLog(`\u2713 Parsed ${Array.isArray(allTrades) ? allTrades.length : 0} trades`, "#4caf50");
     win.contentElement.textContent = "";
     if (!Array.isArray(allTrades) || allTrades.length === 0) {
       win.setContent("No congress trade data available.");
@@ -20249,17 +20298,25 @@ async function cmdForexDashboard() {
 async function cmdCryptoMarket() {
   const win = createWindow({ title: "Crypto Market — Top 50", type: "custom", width: 820, height: 620 });
   win.contentElement.textContent = "";
-  const loading = document.createElement("div");
-  loading.textContent = "Fetching crypto market data...";
-  loading.style.cssText = "color:#888;padding:12px;";
-  win.appendElement(loading);
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+  const addLog = (msg, color) => {
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (color) line.style.color = color;
+    logDiv.appendChild(line);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  };
+  addLog("Fetching CoinGecko market data...");
+  win.appendElement(logDiv);
   try {
     const [marketJson, trendingJson] = await Promise.all([
-      invoke("fetch_crypto_market"),
-      invoke("fetch_crypto_trending"),
+      invoke("fetch_crypto_market").then(r => { addLog("  \u2713 Market data loaded", "#4caf50"); return r; }),
+      invoke("fetch_crypto_trending").then(r => { addLog("  \u2713 Trending coins loaded", "#4caf50"); return r; }),
     ]);
     const coins = typeof marketJson === "string" ? JSON.parse(marketJson) : marketJson;
     const trending = typeof trendingJson === "string" ? JSON.parse(trendingJson) : trendingJson;
+    addLog(`  \u2713 ${Array.isArray(coins) ? coins.length : 0} coins, rendering...`, "#4caf50");
     win.contentElement.textContent = "";
 
     // Trending section
@@ -20672,14 +20729,21 @@ async function cmdWorldIndices() {
 
   async function refreshIndices() {
     contentDiv.textContent = "";
-    const loading = document.createElement("div");
-    loading.textContent = "Fetching world indices...";
-    loading.style.cssText = "color:#888;padding:12px;";
-    contentDiv.appendChild(loading);
+    const logDiv = document.createElement("div");
+    logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+    const addLog = (msg, color) => {
+      const line = document.createElement("div");
+      line.textContent = msg;
+      if (color) line.style.color = color;
+      logDiv.appendChild(line);
+    };
+    addLog("Fetching 14 world indices from Yahoo Finance...");
+    contentDiv.appendChild(logDiv);
 
     try {
       const json = await invoke("fetch_world_indices");
       const indices = typeof json === "string" ? JSON.parse(json) : json;
+      addLog(`\u2713 Loaded ${Array.isArray(indices) ? indices.length : 0} indices`, "#4caf50");
       contentDiv.textContent = "";
 
       if (!Array.isArray(indices) || indices.length === 0) {
@@ -21124,7 +21188,17 @@ async function cmdPeerComparison() {
   if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
   const win = createWindow({ title: `${currentSymbol} — Peer Comparison`, width: 750, height: 450 });
   win.contentElement.textContent = "";
-  win.appendElement(div("Loading peers and fundamentals...", "color:#888;padding:20px;"));
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+  const addLog = (msg, color) => {
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (color) line.style.color = color;
+    logDiv.appendChild(line);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  };
+  addLog(`Fetching peer symbols for ${currentSymbol}...`);
+  win.appendElement(logDiv);
   try {
     const peersJson = await invoke("fetch_sector_peers", { symbol: currentSymbol });
     let peers = JSON.parse(peersJson);
@@ -21132,17 +21206,22 @@ async function cmdPeerComparison() {
     // Include current symbol + max 5 peers
     peers = peers.filter(p => p !== currentSymbol).slice(0, 5);
     const allSymbols = [currentSymbol, ...peers];
-    // Fetch fundamentals for each
-    const fundData = [];
-    for (const sym of allSymbols) {
+    addLog(`Found ${peers.length} peers: ${peers.join(", ")}`, "#4caf50");
+    // Fetch fundamentals for each (parallel)
+    let completed = 0;
+    const fundData = await Promise.all(allSymbols.map(async (sym) => {
       try {
         const json = await invoke("get_company_fundamentals", { symbol: sym });
         const d = JSON.parse(json);
-        fundData.push({ symbol: sym, ...d });
+        completed++;
+        addLog(`  \u2713 ${sym} fundamentals loaded (${completed}/${allSymbols.length})`, "#4caf50");
+        return { symbol: sym, ...d };
       } catch (_) {
-        fundData.push({ symbol: sym });
+        completed++;
+        addLog(`  \u2717 ${sym} fundamentals failed (${completed}/${allSymbols.length})`, "#f44336");
+        return { symbol: sym };
       }
-    }
+    }));
     win.contentElement.textContent = "";
     // Calculate medians for color coding
     const vals = (key) => fundData.map(d => parseFloat(d[key])).filter(v => !isNaN(v));
@@ -21186,20 +21265,32 @@ async function cmdPeerComparison() {
 async function cmdSectorFlow() {
   const win = createWindow({ title: "Sector Flow — Accumulation / Distribution", width: 700, height: 420 });
   win.contentElement.textContent = "";
-  win.appendElement(div("Loading sector ETF data...", "color:#888;padding:20px;"));
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+  const addLog = (msg, color) => {
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (color) line.style.color = color;
+    logDiv.appendChild(line);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  };
   const etfs = [
     { sym: "XLK", name: "Technology" }, { sym: "XLV", name: "Healthcare" }, { sym: "XLF", name: "Financials" },
     { sym: "XLE", name: "Energy" }, { sym: "XLI", name: "Industrials" }, { sym: "XLC", name: "Comm Services" },
     { sym: "XLY", name: "Consumer Disc" }, { sym: "XLP", name: "Consumer Stap" }, { sym: "XLB", name: "Materials" },
     { sym: "XLRE", name: "Real Estate" }, { sym: "XLU", name: "Utilities" },
   ];
+  addLog(`Fetching sector ETF bars (${etfs.length} sectors)...`);
+  win.appendElement(logDiv);
   try {
-    const results = [];
-    for (const etf of etfs) {
+    let completed = 0;
+    const resultEntries = await Promise.all(etfs.map(async (etf) => {
       try {
         const json = await cachedGetBars(etf.sym, "1Day", 25);
         const bars = JSON.parse(json);
-        if (!bars || bars.length < 6) continue;
+        completed++;
+        if (!bars || bars.length < 6) { addLog(`  \u2717 ${etf.sym} insufficient data (${completed}/${etfs.length})`, "#ff9800"); return null; }
+        addLog(`  \u2713 ${etf.sym} loaded (${completed}/${etfs.length})`, "#4caf50");
         const last5 = bars.slice(-5);
         const prev20 = bars.slice(-25, -5);
         const priceChg = last5.length >= 2 ? ((last5[last5.length - 1].close - last5[0].open) / last5[0].open * 100) : 0;
@@ -21212,9 +21303,10 @@ async function cmdSectorFlow() {
         else if (priceChg < 0 && volRatio > 1.1) { signal = "Distribution"; color = "#f44336"; }
         else if (priceChg > 0 && volRatio <= 1.1) { signal = "Quiet Rally"; color = "#8cf"; }
         else if (priceChg < 0 && volRatio <= 1.1) { signal = "Quiet Decline"; color = "#ff9800"; }
-        results.push({ ...etf, priceChg, volRatio, signal, color });
-      } catch (_) {}
-    }
+        return { ...etf, priceChg, volRatio, signal, color };
+      } catch (_) { completed++; addLog(`  \u2717 ${etf.sym} failed (${completed}/${etfs.length})`, "#f44336"); return null; }
+    }));
+    const results = resultEntries.filter(r => r !== null);
     win.contentElement.textContent = "";
     if (results.length === 0) { win.setContent("Could not load sector ETF data."); return; }
     results.sort((a, b) => b.priceChg - a.priceChg);
@@ -22299,7 +22391,7 @@ async function cmdPortfolio() {
       }
 
       if (!groups[assetClass]) groups[assetClass] = { count: 0, value: 0, positions: [] };
-      const mv = Math.abs(p.market_value || p.qty * (p.current_price || 0));
+      const mv = Math.abs(p.market_value || p.qty * (p.avg_entry_price || 0));
       groups[assetClass].count++;
       groups[assetClass].value += mv;
       groups[assetClass].positions.push(p);
@@ -22359,7 +22451,7 @@ async function cmdPortfolio() {
         name.textContent = `${p.symbol} ${p.side === "long" ? "L" : "S"} ${Math.abs(p.qty)}`;
         name.style.color = "#ccc";
         const val = document.createElement("span");
-        const mv = Math.abs(p.market_value || p.qty * (p.current_price || 0));
+        const mv = Math.abs(p.market_value || p.qty * (p.avg_entry_price || 0));
         const pl = p.unrealized_pl || 0;
         val.textContent = `$${mv.toFixed(2)} (${pl >= 0 ? "+" : ""}$${pl.toFixed(2)})`;
         val.style.color = pl >= 0 ? "#4caf50" : "#f44336";
@@ -22381,10 +22473,17 @@ async function cmdPortfolio() {
 async function cmdCorrelation() {
   const win = createWindow({ title: "Correlation Matrix", width: 600, height: 500 });
   win.contentElement.textContent = "";
-  const loading = document.createElement("div");
-  loading.textContent = "Calculating correlations from cached data...";
-  loading.style.cssText = "color:#888;padding:20px;";
-  win.appendElement(loading);
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+  const addLog = (msg, color) => {
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (color) line.style.color = color;
+    logDiv.appendChild(line);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  };
+  addLog("Fetching bar data for correlation matrix...");
+  win.appendElement(logDiv);
 
   try {
     const posJson = await invoke("get_positions");
@@ -22397,10 +22496,12 @@ async function cmdCorrelation() {
     }
 
     const symbols = positions.map(p => p.symbol);
+    addLog(`Found ${symbols.length} positions: ${symbols.join(", ")}`, "#4caf50");
 
-    // Get close prices from barCache for each symbol
+    // Get close prices from barCache for each symbol (parallel fetching)
     const closePrices = {};
-    for (const sym of symbols) {
+    let completed = 0;
+    await Promise.all(symbols.map(async (sym) => {
       // Try common timeframes in cache
       let data = null;
       for (const tf of ["1Day", "4Hour", "1Hour"]) {
@@ -22419,10 +22520,14 @@ async function cmdCorrelation() {
           if (bars.length > 20) data = bars;
         } catch (_) {}
       }
+      completed++;
       if (data) {
         closePrices[sym] = data.slice(-100).map(b => b.close || b.c || 0);
+        addLog(`  \u2713 ${sym} bars loaded (${completed}/${symbols.length})`, "#4caf50");
+      } else {
+        addLog(`  \u2717 ${sym} no data (${completed}/${symbols.length})`, "#ff9800");
       }
-    }
+    }));
 
     const validSymbols = Object.keys(closePrices).filter(s => closePrices[s].length > 10);
     if (validSymbols.length < 2) {
@@ -22432,6 +22537,7 @@ async function cmdCorrelation() {
     }
 
     // Calculate returns
+    addLog("Computing Pearson correlations...", "#888");
     const returns = {};
     for (const sym of validSymbols) {
       const prices = closePrices[sym];
@@ -28084,7 +28190,7 @@ async function cmdHeatmap() {
     const items = [];
     let totalValue = 0;
     for (const p of positions) {
-      const mv = Math.abs(p.market_value || p.qty * (p.current_price || 0));
+      const mv = Math.abs(p.market_value || p.qty * (p.avg_entry_price || 0));
       const unrealizedPl = p.unrealized_pl || p.unrealized_plpc * mv || 0;
       const costBasis = mv - unrealizedPl;
       const pctChange = costBasis > 0 ? (unrealizedPl / costBasis) * 100 : 0;
@@ -28097,7 +28203,7 @@ async function cmdHeatmap() {
         pctChange: dailyPct,
         pl: dailyPl,
         qty: p.qty,
-        price: p.current_price || 0,
+        price: p.avg_entry_price || 0,
       });
       totalValue += mv;
     }
@@ -31361,7 +31467,7 @@ async function cmdRiskSim() {
     const rd = document.createElement("div");
     function runSc(nm, pm) {
       rd.textContent = ""; let tPnL = 0; const rows = [];
-      for (const p of positions) { const sy = p.symbol||""; const mv = parseFloat(p.market_value||(parseFloat(p.qty||p.quantity||0)*parseFloat(p.current_price||p.avg_entry_price||0))||0); const sec = cls(sy); const sp = pm[sec]!==undefined?pm[sec]:(pm.other||0); const pnl = mv*(sp/100); tPnL += pnl; rows.push({sym:sy,mktVal:mv,sector:sec,scenarioPct:sp,pnl,newVal:mv+pnl}); }
+      for (const p of positions) { const sy = p.symbol||""; const mv = parseFloat(p.market_value||(parseFloat(p.qty||p.quantity||0)*parseFloat(p.avg_entry_price||p.avg_entry_price||0))||0); const sec = cls(sy); const sp = pm[sec]!==undefined?pm[sec]:(pm.other||0); const pnl = mv*(sp/100); tPnL += pnl; rows.push({sym:sy,mktVal:mv,sector:sec,scenarioPct:sp,pnl,newVal:mv+pnl}); }
       const pi = acEq > 0 ? (tPnL/acEq)*100 : 0; const ma = acEq > 0 && acMg > 0 ? ((acEq+tPnL)/acMg)*100 : 0; const md = ma > 0 && ma < 150;
       const pc = tPnL >= 0 ? "#4caf50" : "#f44336"; const mc = md ? "#f44336" : "#4caf50";
       const sm = document.createElement("div"); sm.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;";
@@ -31380,7 +31486,7 @@ async function cmdRiskSim() {
       for (const p of positions) { const rw = document.createElement("div"); rw.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:4px;"; const lb = document.createElement("span"); lb.textContent = p.symbol; lb.style.cssText = "width:80px;"; const ip = document.createElement("input"); ip.type = "number"; ip.value = "-10"; ip.style.cssText = "background:#222;color:#ddd;border:1px solid #444;border-radius:3px;padding:3px 6px;width:80px;font-family:monospace;"; const pl = document.createElement("span"); pl.textContent = "%"; pl.style.cssText = "color:#666;"; inp[p.symbol] = ip; rw.appendChild(lb); rw.appendChild(ip); rw.appendChild(pl); fm.appendChild(rw); }
       const ab = document.createElement("button"); ab.textContent = "Apply"; ab.style.cssText = "background:#2e7d32;color:#fff;border:none;border-radius:4px;padding:6px 16px;cursor:pointer;margin-top:8px;font-family:monospace;";
       ab.addEventListener("click", () => { const ps = {}; for (const p of positions) ps[p.symbol] = parseFloat(inp[p.symbol].value||0); rd.textContent = ""; let tPnL = 0; const rows = [];
-        for (const p of positions) { const sy = p.symbol||""; const mv = parseFloat(p.market_value||(parseFloat(p.qty||p.quantity||0)*parseFloat(p.current_price||p.avg_entry_price||0))||0); const sp = ps[sy]||0; const pnl = mv*(sp/100); tPnL += pnl; rows.push({sym:sy,mktVal:mv,scenarioPct:sp,pnl,newVal:mv+pnl}); }
+        for (const p of positions) { const sy = p.symbol||""; const mv = parseFloat(p.market_value||(parseFloat(p.qty||p.quantity||0)*parseFloat(p.avg_entry_price||p.avg_entry_price||0))||0); const sp = ps[sy]||0; const pnl = mv*(sp/100); tPnL += pnl; rows.push({sym:sy,mktVal:mv,scenarioPct:sp,pnl,newVal:mv+pnl}); }
         const pi = acEq>0?(tPnL/acEq)*100:0; const ma = acEq>0&&acMg>0?((acEq+tPnL)/acMg)*100:0; const md = ma>0&&ma<150; const pc = tPnL>=0?"#4caf50":"#f44336"; const mc2 = md?"#f44336":"#4caf50";
         const sm = document.createElement("div"); sm.style.cssText = "background:#111;border:1px solid #333;border-radius:6px;padding:10px;margin-bottom:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;";
         function smCell2(label, value, color) { const d = document.createElement("div"); d.style.cssText = "text-align:center;"; d.appendChild(div(label, "color:#888;font-size:10px;")); d.appendChild(div(value, "color:" + color + ";font-size:16px;font-weight:bold;")); return d; }
