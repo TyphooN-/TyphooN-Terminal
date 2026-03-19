@@ -7469,10 +7469,17 @@ async function cmdVarBreakdown() {
   const win = createWindow({ title: "Portfolio VaR Analysis \u2014 95% Confidence, 1-Day Horizon", width: 820, height: 560 });
   win.contentElement.textContent = "";
 
-  const loading = document.createElement("div");
-  loading.textContent = "Calculating per-position VaR breakdown...";
-  loading.style.cssText = "color:#888;padding:20px;";
-  win.appendElement(loading);
+  const logDiv = document.createElement("div");
+  logDiv.style.cssText = "color:#888;padding:12px;font-size:11px;line-height:1.6;";
+  const addLog = (msg, color) => {
+    const line = document.createElement("div");
+    line.textContent = msg;
+    if (color) line.style.color = color;
+    logDiv.appendChild(line);
+    logDiv.scrollTop = logDiv.scrollHeight;
+  };
+  addLog("Fetching account and positions...");
+  win.appendElement(logDiv);
 
   try {
     const [posJson, acctJson] = await Promise.all([
@@ -7482,6 +7489,7 @@ async function cmdVarBreakdown() {
     const positions = JSON.parse(posJson);
     const account = JSON.parse(acctJson);
     const equity = parseFloat(account.equity) || parseFloat(account.portfolio_value) || 0;
+    addLog(`Account: $${equity.toLocaleString()} equity, ${positions.length} positions`, "#4caf50");
 
     if (!positions || positions.length === 0) {
       win.contentElement.textContent = "";
@@ -7500,18 +7508,33 @@ async function cmdVarBreakdown() {
       const upl = parseFloat(p.unrealized_pl) || 0;
       totalValue += mv;
       items.push({ symbol: p.symbol, qty, price, mv, side, upl, var_dollars: null });
+      addLog(`  ${p.symbol}: ${side} ${qty} @ $${price.toFixed(2)} (MV: $${mv.toLocaleString()})`);
     }
 
-    // Fetch VaR for each position in parallel
+    // Fetch VaR for each position with progress
+    addLog("Computing per-position VaR (fetching historical bars)...", "#ff9800");
+    let completed = 0;
     const varPromises = items.map(item =>
       invokeQuiet("calculate_position_var", {
         symbol: item.symbol, positionSize: item.qty, currentPrice: item.price,
       }).then(json => {
         const v = JSON.parse(json);
         item.var_dollars = v.var_dollars || 0;
-      }).catch(() => { item.var_dollars = null; })
+        completed++;
+        addLog(`  ✓ ${item.symbol} VaR: $${item.var_dollars.toFixed(2)} (${completed}/${items.length})`, "#4caf50");
+      }).catch((e) => {
+        item.var_dollars = null;
+        completed++;
+        addLog(`  ✗ ${item.symbol} VaR failed: ${e} (${completed}/${items.length})`, "#f44336");
+      })
     );
     await Promise.all(varPromises);
+    addLog("Building VaR breakdown...", "#2196f3");
+
+    // Clear the log and show results
+    await new Promise(r => setTimeout(r, 100)); // brief pause so user sees "Building..." message
+    logDiv.remove();
+    win.contentElement.textContent = "";
 
     // Compute totals
     const totalVaR = items.reduce((s, i) => s + (i.var_dollars || 0), 0);
