@@ -27,6 +27,7 @@ use std::io::stdout;
 use std::time::{Duration, Instant};
 
 mod broker;
+mod creds;
 
 #[derive(Parser)]
 #[command(name = "typhoon", about = "TyphooN Terminal CLI — trading terminal for your terminal")]
@@ -503,11 +504,29 @@ fn draw(f: &mut Frame, app: &App) {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    // Load keys from env or args
-    let api_key = args.api_key.or_else(|| std::env::var("ALPACA_API_KEY").ok())
-        .expect("Set ALPACA_API_KEY env var or --api-key");
-    let secret_key = args.secret_key.or_else(|| std::env::var("ALPACA_SECRET_KEY").ok())
-        .expect("Set ALPACA_SECRET_KEY env var or --secret-key");
+    // Load keys: CLI args → env vars → GUI terminal's encrypted storage
+    let (api_key, secret_key) = match (args.api_key.clone(), args.secret_key.clone()) {
+        (Some(k), Some(s)) => (k, s),
+        _ => {
+            // Try env vars
+            match (std::env::var("ALPACA_API_KEY").ok(), std::env::var("ALPACA_SECRET_KEY").ok()) {
+                (Some(k), Some(s)) => (k, s),
+                _ => {
+                    // Try GUI terminal's encrypted credential storage
+                    match creds::load_saved_credentials(args.paper) {
+                        Some((k, s, name)) => {
+                            eprintln!("Using saved credentials: {} ({})", name, if args.paper { "paper" } else { "live" });
+                            (k, s)
+                        }
+                        None => {
+                            eprintln!("No API keys found. Provide via --api-key/--secret-key, ALPACA_API_KEY/ALPACA_SECRET_KEY env vars, or save credentials in the GUI terminal (Ctrl+K → SETTINGS).");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+        }
+    };
 
     let broker = broker::AlpacaBroker::new(&api_key, &secret_key, args.paper);
 

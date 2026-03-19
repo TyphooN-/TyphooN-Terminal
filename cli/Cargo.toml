@@ -26,6 +26,14 @@ rusqlite = { version = "0.34", features = ["bundled"] }
 clap = { version = "4", features = ["derive", "env"] }
 dirs = "6"
 
+# Credential decryption (shares format with GUI terminal)
+aes-gcm = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+pbkdf2 = "0.12"
+rand = "0.9"
+base64 = "0.22"
+
 [profile.release]
 opt-level = "z"
 lto = true
