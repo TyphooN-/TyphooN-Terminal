@@ -10460,7 +10460,7 @@ async function cmdUndo() {
         ["Side", latest.side],
         ["Qty", Math.abs(latest.qty)],
         ["Entry", `$${Number(latest.avg_entry_price).toFixed(2)}`],
-        ["Current", `$${Number(latest.current_price || 0).toFixed(2)}`],
+        ["Current", `$${(Math.abs(latest.qty) > 0 ? Math.abs(latest.market_value) / Math.abs(latest.qty) : 0).toFixed(2)}`],
         ["P&L", `$${Number(latest.unrealized_pl || 0).toFixed(2)}`],
       ];
       for (const [k, v] of fields) {
@@ -15118,7 +15118,7 @@ async function cmdRiskParity() {
     const posJson = await invoke("get_positions"); const positions = JSON.parse(posJson);
     if (!positions || positions.length === 0) { win.contentElement.textContent = ""; win.setContent("No open positions."); return; }
     const posData = []; let totalValue = 0;
-    for (const pos of positions) { const sym = pos.symbol; const qty = parseFloat(pos.qty) || 0; const mktVal = Math.abs(parseFloat(pos.market_value) || (qty * (parseFloat(pos.current_price) || 0))); totalValue += mktVal; let annVol = 0; try { const cacheKey = `${sym}:1Day`; let bars; if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length >= 21) { bars = barCache[cacheKey].data; } else { const barsJson = await cachedGetBars(sym, "1Day", 30); bars = JSON.parse(barsJson); } if (bars && bars.length >= 21) { const returns = []; for (let i = bars.length - 20; i < bars.length; i++) { if (bars[i - 1].close > 0) returns.push(Math.log(bars[i].close / bars[i - 1].close)); } const mean = returns.reduce((a, b) => a + b, 0) / returns.length; const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1); annVol = Math.sqrt(variance) * Math.sqrt(252); } } catch (_) {} posData.push({ symbol: sym, qty, mktVal, annVol, currentPrice: parseFloat(pos.current_price) || parseFloat(pos.avg_entry_price) || 0 }); }
+    for (const pos of positions) { const sym = pos.symbol; const qty = parseFloat(pos.qty) || 0; const mktVal = Math.abs(parseFloat(pos.market_value) || (Math.abs(qty) * (parseFloat(pos.avg_entry_price) || 0))); totalValue += mktVal; let annVol = 0; try { const cacheKey = `${sym}:1Day`; let bars; if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length >= 21) { bars = barCache[cacheKey].data; } else { const barsJson = await cachedGetBars(sym, "1Day", 30); bars = JSON.parse(barsJson); } if (bars && bars.length >= 21) { const returns = []; for (let i = bars.length - 20; i < bars.length; i++) { if (bars[i - 1].close > 0) returns.push(Math.log(bars[i].close / bars[i - 1].close)); } const mean = returns.reduce((a, b) => a + b, 0) / returns.length; const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1); annVol = Math.sqrt(variance) * Math.sqrt(252); } } catch (_) {} posData.push({ symbol: sym, qty, mktVal, annVol, currentPrice: qty !== 0 ? mktVal / Math.abs(qty) : parseFloat(pos.avg_entry_price) || 0 }); }
     if (totalValue === 0) { win.contentElement.textContent = ""; win.setContent("No position value."); return; }
     const invVols = posData.map(p => p.annVol > 0.001 ? 1 / p.annVol : 0); const sumInvVol = invVols.reduce((a, b) => a + b, 0); const parityWeights = invVols.map(iv => sumInvVol > 0 ? iv / sumInvVol : 1 / posData.length);
     const currentRisk = posData.reduce((s, p) => s + (p.mktVal / totalValue) * p.annVol, 0); const parityRisk = posData.reduce((s, p, i) => s + parityWeights[i] * p.annVol, 0);
