@@ -1072,6 +1072,8 @@ impl AlpacaBroker {
             // We fetch chunks from oldest to newest, advancing the start date each time.
             let mut chunk_start = earliest_start;
             let mut consecutive_empty = 0;
+            let mut rate_limit_retries = 0;
+            const MAX_RATE_LIMIT_RETRIES: u32 = 3;
 
             loop {
                 // Centralized rate limiter — respects global request budget
@@ -1109,11 +1111,20 @@ impl AlpacaBroker {
                 if !resp.status().is_success() {
                     let status = resp.status();
                     if status.as_u16() == 429 {
+                        rate_limit_retries += 1;
                         self.rate_limiter.trigger_cooldown().await;
-                        // Return what we have so far rather than retrying
+                        if rate_limit_retries <= MAX_RATE_LIMIT_RETRIES {
+                            // Wait for cooldown then continue — don't return partial stale data
+                            // (oldest bars load first, so partial = historical only, no recent prices)
+                            tracing::warn!("429 rate limit for {} @ {}: retry {}/{} ({} bars so far)",
+                                symbol, actual_tf, rate_limit_retries, MAX_RATE_LIMIT_RETRIES, all_bars.len());
+                            self.rate_limiter.wait().await;
+                            continue; // retry the same chunk
+                        }
+                        // Max retries exhausted — return what we have (trimmed to most recent)
                         if !all_bars.is_empty() {
-                            tracing::warn!("429 rate limit: returning {}/{} bars for {} @ {} (partial dataset)",
-                                all_bars.len(), actual_limit, symbol, actual_tf);
+                            tracing::warn!("429 rate limit: max retries for {} @ {}, returning {} bars",
+                                symbol, actual_tf, all_bars.len());
                             break;
                         }
                     }
