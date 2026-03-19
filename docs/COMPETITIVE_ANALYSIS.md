@@ -17,7 +17,7 @@
 | Line/Bar charts | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Multi-timeframe grid | ✅ | ✅ | ❌ | ❌ | ✅ |
 | 37 indicators + 22 Wasm | ✅ | ✅ (38+) | ❌ | ✅ (50+) | ✅ |
-| Drawing tools (6 types) | ✅ | ✅ (46) | ❌ | ❌ | ✅ |
+| Drawing tools (44 types) | ✅ | ✅ (46) | ❌ | ❌ | ✅ |
 | Auto Fibonacci | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Supply/Demand zones | ✅ | ✅* | ❌ | ❌ | ❌ |
 | Draggable SL/TP lines | ✅ | ✅ | ❌ | ❌ | ❌ |
@@ -77,9 +77,28 @@
 | Market breadth | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Pairs trading | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Seasonality analysis | ✅ | ❌ | ❌ | ✅ | ✅ |
-| Analyst recommendations | ❌ | ❌ | ✅ | ✅ | ✅ |
-| Short interest | ❌ | ❌ | ✅ | ✅ | ✅ |
+| Analyst recommendations | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Short interest | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Options flow / unusual activity | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Fear & Greed index | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Treasury yield curve | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Forex currency matrix | ✅ | ❌ | ❌ | ✅ | ✅ |
+| World equity indices | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Congress trading alerts | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Dark pool volume % | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Earnings surprise tracker | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Earnings overlay on chart | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Crypto whale alerts | ✅ | ❌ | ❌ | ❌ | ❌ |
+| IPO calendar | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Economic calendar + impact | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Peer financial comparison | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Sector ETF flow analysis | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Dividend calendar | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Reddit WSB sentiment | ✅ | ❌ | ❌ | ❌ | ❌ |
+| CoinGecko crypto market | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Portfolio history chart | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Watchlist broker sync | ✅ | ✅ | ❌ | ❌ | ✅ |
+| Market clock (live) | ✅ | ❌ | ✅ | ❌ | ✅ |
 
 ## Strategy Testing
 
@@ -124,7 +143,7 @@
 | Focus mode (distraction-free) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | PDT rule monitor | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Tax lot tracker (FIFO + wash sale) | ✅ | ❌ | ❌ | ❌ | ✅ |
-| 228 command palette entries | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 286 command palette entries | ✅ | ❌ | ❌ | ❌ | ❌ |
 | 602 static analysis assertions | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cost | Free | Free* | $80-118/mo | Free | $24K/yr |
 
@@ -155,7 +174,7 @@
 21. **Price ladder / DOM** — Vertical bid-ask depth with volume bars. Standard on CQG and TT.
 22. **Theme switcher** — Dark, pitch black (OLED), light themes. Accessibility feature competitors lack.
 23. **Webhook alert automation** — Custom webhook endpoints for integrating with Discord bots, Zapier, etc.
-24. **228 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
+24. **286 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
 25. **AI-powered strategy suggestions** — Contextual NNFX analysis via Claude/GPT with Fisher/RSI/KAMA/SMA200/volume context.
 26. **Voice alerts** — Web Speech API reads alerts aloud. No competitor has this.
 27. **Data quality monitoring** — Automatic detection of missing bars, OHLC violations, suspicious spikes.
@@ -183,6 +202,34 @@
 49. **PDT monitor** — Pattern Day Trader rule tracking with countdown and warning banners.
 50. **Tax lot tracker** — FIFO cost basis with wash sale detection and estimated tax impact.
 51. **602 static analysis assertions** — Static analysis smoke test covering every command, function, and security invariant.
+52. **Analyst ratings + price targets** — Finnhub consensus with stacked bar chart over 4 quarters. Replaces Godel ($80/mo).
+53. **Portfolio equity curve** — Alpaca portfolio history with Sharpe ratio, max drawdown, total return.
+54. **Market clock** — Live market open/closed status with countdown timer in status bar. Auto-updates every 2s.
+55. **Fear & Greed index** — Color-coded gauge (0-100) + 30-day sparkline. Free, no API key needed.
+56. **Treasury yield curve** — Canvas-rendered curve with 2Y-10Y inversion detection. Free.
+57. **Corporate actions dashboard** — Dividend/split/merger/spinoff table per symbol from Alpaca.
+58. **Insider sentiment (MSPR)** — Finnhub monthly buy/sell ratio with canvas bar chart.
+59. **Congress trading alerts** — House Stock Watcher data, filterable by symbol/representative/party. Unique — no competitor has this.
+60. **Forex dashboard** — ECB rates + 6x6 cross rate matrix (USD/EUR/GBP/JPY/CHF/CAD). Free.
+61. **Crypto market dashboard** — CoinGecko top 50 + trending coins + 7-day inline sparklines. Free.
+62. **Reddit WSB sentiment** — Bull/bear keyword analysis + mention counts + post scores. Unique.
+63. **Short interest trends** — Finnhub bi-weekly FINRA data with trend chart and short ratio.
+64. **World equity indices** — 14 major indices across Americas/Europe/Asia-Pacific, auto-refresh 60s.
+65. **Watchlist broker sync** — Create/update Alpaca server-side watchlists from local watchlist.
+66. **Earnings surprise tracker** — Beat/miss table for 8 quarters + win rate + surprise % SVG chart.
+67. **Earnings/events overlay on chart** — Toggle purple E (earnings) / yellow D (dividend) / blue S (split) markers directly on chart canvas.
+68. **Dark pool volume %** — FINRA RegSHO daily short volume with gauge visualization. Replaces Unusual Whales ($40/mo).
+69. **Crypto whale alerts** — Large on-chain transactions ($1M+) from whale-alert.io. Auto-refresh 5min.
+70. **IPO calendar** — Finnhub 90-day IPO calendar with company, exchange, price range, shares.
+71. **Economic calendar + impact ratings** — High/medium/low impact color-coded events with surprise highlighting.
+72. **Peer financial comparison** — Side-by-side P/E, ROE, debt/equity vs up to 5 sector peers. Replaces Godel.
+73. **Sector ETF flow analysis** — 11 sector ETFs classified as accumulation/distribution/quiet. Replaces Unusual Whales.
+74. **Dividend calendar** — Watchlist ex-div dates with 7-day highlight and yield/frequency display.
+75. **44 GPU-accelerated drawing tools** — WebGL2 rendering for all drawing types. 96% MT5 parity (44/46 tools).
+76. **SEC filings viewer** — Browse and read 10-K, 10-Q, 8-K, S-1 filings in-app (Ctrl+K → SEC).
+77. **Cache manager** — Per-symbol/timeframe storage stats with delete controls (Ctrl+K → CACHE).
+78. **API key testing** — Per-key "Test" button validates each API key against its respective service.
+79. **286 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
 
 ## UX Advantages Over Competitors
 
@@ -214,17 +261,15 @@
 ### vs Bloomberg ($24K/yr)
 - **Real-time news speed** — Bloomberg has fastest news delivery (milliseconds)
 - **Historical depth** — Bloomberg has 30+ years of tick data
-- **Fixed income / credit** — Bond trading, yield curves, credit analysis
+- **Fixed income / credit** — Bond trading, credit analysis (we now have yield curve)
 - **IM/Chat** — Bloomberg messaging is an industry social network
 - **Portfolio analytics** — Multi-asset attribution, factor analysis
 
 ### vs Godel Terminal ($80-118/mo)
-- **Analyst consensus** — Godel aggregates sell-side analyst ratings
-- **Short interest** — Real-time short interest data
-- **Speed** — Godel optimizes for sub-second research queries
+- **Speed** — Godel is web-native, optimized for sub-second queries
 
 ### vs MT5
-- **Drawing tools** — 22 types implemented (trend, fib, h-line, rectangle, channel, ray, ruler, etc.). MT5 has 46 total; remaining ~24 are niche objects (Elliott Wave labels, Gann Grid, etc.)
+- **Drawing tools** — 44 types implemented (trend, fib, h-line, rectangle, channel, ray, ruler, etc.). MT5 has 46 total; remaining 2 are niche objects.
 - ~~**Indicator count**~~ **RESOLVED** — MT5 has 38+ built-in, we now have **37 unique indicators** + 22 Wasm implementations. Parity achieved with Alligator, AO, MFI, Force Index, Envelopes, StdDev, Chaikin, DeMarker, Fractals.
 - **EA/Expert Advisor system** — MT5 has a full algorithmic trading framework (MQL5). We have auto-trade + genetic optimizer but no custom language.
 - **Strategy tester** — MT5's visual tester has better drag speed. Our replay mode + visual backtester are functionally equivalent.
@@ -242,7 +287,7 @@ TradingView is the most popular retail charting platform. Feature comparison:
 |---|---|---|---|
 | Candlestick charts | ✅ | ✅ | ✅ |
 | 37 indicators | ✅ | ✅ (limited) | ✅ (100+) |
-| 22 drawing tools | ✅ | ✅ (limited) | ✅ (50+) |
+| 44 drawing tools | ✅ | ✅ (limited) | ✅ (50+) |
 | Custom timeframes | ✅ | ❌ | ✅ |
 | Volume Profile | ✅ (free) | ❌ | ✅ ($24.95/mo+) |
 | Market Replay | ✅ (free) | ❌ | ✅ ($24.95/mo+) |
@@ -260,12 +305,41 @@ TradingView is the most popular retail charting platform. Feature comparison:
 | AI strategy suggestions | ✅ | ❌ | ❌ |
 | Voice/audio alerts | ✅ | ❌ | ❌ |
 | Fourier/wavelet/entropy | ✅ | ❌ | ❌ |
-| 228 Ctrl+K commands | ✅ | ❌ | ❌ |
+| Earnings overlay on chart | ✅ | ❌ | ✅ ($24.95/mo+) |
+| Earnings surprise tracker | ✅ | ❌ | ❌ |
+| Dark pool volume | ✅ | ❌ | ❌ |
+| Congress trading alerts | ✅ | ❌ | ❌ |
+| Fear & Greed index | ✅ | ❌ | ❌ |
+| Crypto whale alerts | ✅ | ❌ | ❌ |
+| Sector ETF flow | ✅ | ❌ | ❌ |
+| Peer comparison | ✅ | ❌ | ❌ |
+| 286 Ctrl+K commands | ✅ | ❌ | ❌ |
 | Cost | **Free** | Free (limited) | **$60/mo ($720/yr)** |
 
-**TyphooN-Terminal advantages**: Volume Profile and Market Replay are free (TradingView charges $24.95+/mo). Local-first with no ads. Real order execution via broker API. GPU charts, Wasm indicators, 4 risk modes, AI strategy — none available on TradingView at any price.
+**TyphooN-Terminal advantages**: Volume Profile, Market Replay, and Earnings Overlay are free (TradingView charges $24.95+/mo). Dark pool volume, Congress trading alerts, crypto whale alerts, sector ETF flow, and peer comparison — none available on TradingView at any price. Local-first with no ads. Real order execution via broker API. GPU charts, Wasm indicators, 4 risk modes, AI strategy.
 
 **TradingView advantages**: Pine Script ecosystem, server-side alerts (work when PC is off), mobile app, social features (ideas, chat), 100+ indicators, 50+ drawing tools, professional data feeds.
+
+### vs Unusual Whales ($40/mo)
+
+| Feature | TyphooN-Terminal | Unusual Whales |
+|---|---|---|
+| Dark pool volume % | ✅ (FINRA RegSHO) | ✅ (real-time) |
+| Options flow (OPRA) | ❌ (synthetic from OI) | ✅ (real-time OPRA) |
+| Congress trading | ✅ (House Stock Watcher) | ✅ |
+| Short interest | ✅ (Finnhub bi-weekly) | ✅ (real-time) |
+| Sector ETF flow | ✅ (Alpaca volume) | ✅ |
+| Crypto whale alerts | ✅ (whale-alert.io) | ❌ |
+| Earnings surprises | ✅ (Finnhub) | ❌ |
+| Charting + trading | ✅ (full terminal) | ❌ (data only) |
+| Risk management | ✅ (4 modes + VaR) | ❌ |
+| Order execution | ✅ (Alpaca) | ❌ |
+| GPU charts | ✅ | ❌ |
+| Cost | **Free** | **$40/mo ($480/yr)** |
+
+**TyphooN-Terminal advantages**: Full trading terminal with charting, order execution, risk management, and 286 commands vs Unusual Whales which is data-only (no charting, no trading). Crypto whale alerts, earnings surprises, GPU charts — none available on UW.
+
+**Unusual Whales advantages**: Real-time OPRA options flow data (requires expensive OPRA license we can't replicate for free), real-time short interest (vs our bi-weekly FINRA delay), political donations tracking.
 
 ### vs cTrader / NinjaTrader / Thinkorswim
 
@@ -372,9 +446,13 @@ MT5, cTrader, and NinjaTrader all rely on **third-party DLLs** for indicators an
 | Data fees | $99-299/mo for CME/CBOT | Free (Alpaca IEX) |
 | Risk management | Basic | 4 modes + VaR + martingale |
 
-### Tier D — Blocked by External Dependencies
-16. Analyst consensus (needs paid data)
-17. Short interest (needs paid data)
-18. ~~Dark pool~~ — Done (synthetic flow from options chain data)
-19. World indices (needs non-US data)
-20. ~~Community chat~~ — Done (Matrix protocol)
+### Tier D — Previously Blocked, Now Resolved
+16. ~~Analyst consensus~~ — ✅ Done (Finnhub recommendations + price targets, Ctrl+K → ANR)
+17. ~~Short interest~~ — ✅ Done (Finnhub bi-weekly FINRA data, Ctrl+K → SI)
+18. ~~Dark pool~~ — ✅ Done (FINRA RegSHO daily short volume, Ctrl+K → DARKPOOL)
+19. ~~World indices~~ — ✅ Done (Yahoo Finance 14 major indices, Ctrl+K → WEI)
+20. ~~Community chat~~ — ✅ Done (Matrix protocol, Ctrl+K → CHAT)
+21. ~~Forex currency matrix~~ — ✅ Done (ECB daily rates, Ctrl+K → FX)
+22. ~~Congress trading~~ — ✅ Done (House Stock Watcher, Ctrl+K → CONGRESS)
+
+**All previously blocked features have been resolved.** Only Plugin Marketplace (needs distribution infrastructure) and Pure Rust GUI Migration (architectural) remain blocked — see ROADMAP.md.

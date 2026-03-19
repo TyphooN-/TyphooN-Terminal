@@ -24,7 +24,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Watchlist** | Multi-symbol quote monitor with live prices and daily change |
 | **Chart Templates** | Save/load indicator configs and order mode |
 | **Workspace Profiles** | Save/load entire layout (tabs, indicators, pane sizes) |
-| **Drawing Tools** | Trend lines, Fibonacci, horizontal lines, rectangles, channels |
+| **Drawing Tools** | 44 types: trend, fib, ray, ruler, rectangle, channel, pitchfork, Elliott, Gann, regression, arrows, labels + GPU rendering |
 | **Multi-Chart Layouts** | MTF grid (2-5 timeframes with full NNFX indicators per cell) |
 | **Screenshot Export** | Ctrl+Shift+S to clipboard with toast notification |
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
@@ -72,7 +72,18 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), AES-256-GCM encrypted credential storage |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
-| **Security** | 19-pass audit (88 findings): AES-256-GCM credential encryption, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
+| **Security** | 21-pass audit (97 findings): AES-256-GCM credential encryption, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
+| **Analyst Ratings** | Finnhub consensus: stacked buy/hold/sell chart + price targets (Ctrl+K → ANR) |
+| **Fear & Greed** | Market sentiment gauge (0-100) + 30-day sparkline (Ctrl+K → FEAR) |
+| **Dark Pool** | FINRA RegSHO daily short volume with gauge visualization (Ctrl+K → DARKPOOL) |
+| **Congress Trading** | House Stock Watcher: congressional trades filterable by symbol/rep/party (Ctrl+K → CONGRESS) |
+| **Earnings Overlay** | Toggle E/D/S markers on chart for earnings, dividends, splits (Ctrl+K → EARNINGS-OVERLAY) |
+| **World Indices** | 14 major indices across Americas/Europe/Asia-Pacific, auto-refresh (Ctrl+K → WEI) |
+| **Forex Dashboard** | ECB rates + 6×6 cross rate matrix (Ctrl+K → FX) |
+| **Crypto Market** | CoinGecko top 50 + trending + 7-day sparklines (Ctrl+K → CRYPTO) |
+| **Yield Curve** | Treasury rates with 2Y-10Y inversion detection (Ctrl+K → YIELD) |
+| **GPU Chart Engine** | WebGL2 candlesticks, 44 drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
+| **286 Commands** | Most command palette entries of any trading terminal, open or proprietary |
 
 ---
 
