@@ -2703,15 +2703,35 @@ const ALL_MTF_PCL_TFS = ["1Hour", "4Hour", "1Day", "1Week"];
 // Timeframe hierarchy — only show TFs HIGHER than current chart (like MT5)
 const TF_RANK = { "1Min": 0, "5Min": 1, "15Min": 2, "30Min": 3, "1Hour": 4, "4Hour": 5, "1Day": 6, "1Week": 7, "1Month": 8 };
 
-// Resolve rank for custom timeframes (e.g., "2Day" → 1Day rank + 0.5, "3Hour" → 1Hour rank + 0.5)
+// Duration in minutes for each native TF (used for custom TF rank interpolation)
+const TF_MINUTES = { "1Min": 1, "5Min": 5, "15Min": 15, "30Min": 30, "1Hour": 60, "4Hour": 240, "1Day": 1440, "1Week": 10080, "1Month": 43200 };
+const TF_RANK_ENTRIES = Object.entries(TF_MINUTES).sort((a, b) => a[1] - b[1]); // sorted by duration
+
+// Resolve rank for custom timeframes based on actual duration.
+// E.g., "8Hour" = 480 min → between 4Hour (240min, rank 5) and 1Day (1440min, rank 6) → rank ~5.17
+// This ensures H8 behaves like a sub-daily TF, not like H1-H4.
 function getTFRank(tf) {
   if (TF_RANK[tf] !== undefined) return TF_RANK[tf];
-  // Parse custom TF string to find base: "2Day" → "1Day", "3Hour" → "1Hour", "10Min" → "1Min"
   const m = tf.match(/^(\d+)(Min|Hour|Day|Week|Month)$/);
   if (m) {
-    const baseKey = "1" + m[2];
-    const baseRank = TF_RANK[baseKey];
-    if (baseRank !== undefined) return baseRank + 0.5; // between base and next standard TF
+    const multiplier = parseInt(m[1]);
+    const unitMinutes = { "Min": 1, "Hour": 60, "Day": 1440, "Week": 10080, "Month": 43200 }[m[2]];
+    if (unitMinutes) {
+      const totalMinutes = multiplier * unitMinutes;
+      // Find where this duration falls between native TFs and interpolate rank
+      for (let i = 0; i < TF_RANK_ENTRIES.length - 1; i++) {
+        const [loTf, loMin] = TF_RANK_ENTRIES[i];
+        const [hiTf, hiMin] = TF_RANK_ENTRIES[i + 1];
+        if (totalMinutes >= loMin && totalMinutes <= hiMin) {
+          const loRank = TF_RANK[loTf];
+          const hiRank = TF_RANK[hiTf];
+          const t = (totalMinutes - loMin) / (hiMin - loMin);
+          return loRank + t * (hiRank - loRank);
+        }
+      }
+      // Beyond 1Month
+      return 8 + (totalMinutes / 43200 - 1) * 0.5;
+    }
   }
   return 3; // fallback
 }
@@ -2975,13 +2995,15 @@ function applyIndicators(chartData) {
 
     } else if (ind === "prev-levels") {
       // PreviousCandleLevels.mqh: multi-TF previous high/low (horizontal lines only, no current-TF per-bar)
-      // MQL5 TF filtering: chart < H1 shows all HTF; H1-H4 shows D1+ only; D1 shows W1+ only; W1+ nothing
+      // TF filtering: show only HTF levels that are meaningfully higher than the chart TF.
+      // Uses interpolated ranks so custom TFs (H8, H12, 2Day) work seamlessly.
+      // Rule: show levels from TFs whose rank is at least 2 steps above current.
       const currentRank = getTFRank(currentTimeframe);
       const pclTFs = ALL_MTF_PCL_TFS.filter(tf => {
         const tfRank = TF_RANK[tf] ?? 0;
         if (currentRank < TF_RANK["1Hour"]) return tfRank > currentRank; // chart < H1: show all higher
-        if (currentRank <= TF_RANK["4Hour"]) return tfRank >= TF_RANK["1Day"]; // chart H1-H4: D1+ only
-        if (currentRank >= TF_RANK["1Day"] && currentRank < TF_RANK["1Week"]) return tfRank >= TF_RANK["1Week"]; // chart D1-D6: W1+ only
+        if (currentRank < TF_RANK["1Day"]) return tfRank >= TF_RANK["1Day"]; // chart H1-H12: D1+ only
+        if (currentRank < TF_RANK["1Week"]) return tfRank >= TF_RANK["1Week"]; // chart D1-D6: W1+ only
         return false; // W1+ chart: nothing in our set
       });
       // HTF previous candle levels — solid lines from HTF bar start to last candle
