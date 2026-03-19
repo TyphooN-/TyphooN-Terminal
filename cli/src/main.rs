@@ -293,6 +293,11 @@ struct App {
     chart_timeframe: String,
     // Multi-Account
     imported_accounts: Vec<ImportedAccount>,
+    // Selection state (for interactive list navigation)
+    selected_position: usize,
+    selected_order: usize,
+    // Action confirmation
+    pending_action: Option<String>, // "close:SYMBOL" or "cancel:ORDER_ID"
     // Command
     command_input: String,
     command_mode: bool,
@@ -319,6 +324,9 @@ impl App {
             chart_symbol: symbol,
             chart_bars: vec![],
             chart_timeframe: "1Day".to_string(),
+            selected_position: 0,
+            selected_order: 0,
+            pending_action: None,
             command_input: String::new(),
             command_mode: false,
             log_messages: vec![
@@ -663,24 +671,49 @@ fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_orders(f: &mut Frame, app: &App, area: Rect) {
-    let rows: Vec<Row> = app.orders.iter().map(|o| {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .split(area);
+
+    let rows: Vec<Row> = app.orders.iter().enumerate().map(|(i, o)| {
         let side_color = if o.side == "buy" { Color::Green } else { Color::Red };
+        let selected = i == app.selected_order;
+        let row_style = if selected { Style::default().bg(Color::DarkGray) } else { Style::default() };
+        let marker = if selected { "▸ " } else { "  " };
+        let price_str = o.limit_price.as_deref()
+            .or(o.stop_price.as_deref())
+            .unwrap_or("market");
         Row::new(vec![
-            Cell::from(o.symbol.clone()).style(Style::default().fg(Color::White)),
+            Cell::from(format!("{}{}", marker, o.symbol)).style(Style::default().fg(Color::White)),
             Cell::from(o.side.clone()).style(Style::default().fg(side_color)),
             Cell::from(o.order_type.clone()).style(Style::default().fg(Color::Cyan)),
             Cell::from(o.qty.clone()).style(Style::default().fg(Color::Yellow)),
+            Cell::from(price_str.to_string()).style(Style::default().fg(Color::Magenta)),
             Cell::from(o.status.clone()).style(Style::default().fg(Color::DarkGray)),
-        ])
+        ]).style(row_style)
     }).collect();
 
     let table = Table::new(
         rows,
-        [Constraint::Length(10), Constraint::Length(6), Constraint::Length(10), Constraint::Length(10), Constraint::Length(12)],
+        [Constraint::Length(12), Constraint::Length(6), Constraint::Length(10), Constraint::Length(10), Constraint::Length(12), Constraint::Length(12)],
     )
-    .header(Row::new(vec!["Symbol", "Side", "Type", "Qty", "Status"]).style(Style::default().fg(Color::DarkGray)))
-    .block(Block::default().borders(Borders::ALL).title(format!(" Open Orders ({}) ", app.orders.len())));
-    f.render_widget(table, area);
+    .header(Row::new(vec!["  Symbol", "Side", "Type", "Qty", "Price", "Status"]).style(Style::default().fg(Color::DarkGray)))
+    .block(Block::default().borders(Borders::ALL).title(format!(" Open Orders ({}) — ↑↓ select, d=cancel ", app.orders.len())));
+    f.render_widget(table, chunks[0]);
+
+    // Selected order detail
+    if !app.orders.is_empty() {
+        let sel = &app.orders[app.selected_order.min(app.orders.len() - 1)];
+        let detail = Paragraph::new(Line::from(vec![
+            Span::styled(format!("{} ", sel.symbol), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{} {} {} ", sel.side, sel.order_type, sel.qty), Style::default().fg(Color::White)),
+            Span::styled(format!("ID: {} ", &sel.id[..sel.id.len().min(8)]), Style::default().fg(Color::DarkGray)),
+            Span::styled(&sel.created_at[..sel.created_at.len().min(19)], Style::default().fg(Color::DarkGray)),
+        ]))
+        .block(Block::default().borders(Borders::ALL));
+        f.render_widget(detail, chunks[1]);
+    }
 }
 
 fn draw_accounts(f: &mut Frame, app: &App, area: Rect) {
@@ -830,27 +863,50 @@ fn draw(f: &mut Frame, app: &App) {
         0 => draw_dashboard(f, app, main_layout[1]),
         1 => draw_chart(f, app, main_layout[1]),
         2 => {
-            // Full positions view
-            let rows: Vec<Row> = app.positions.iter().map(|p| {
+            // Interactive positions view with selection
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(5), Constraint::Length(3)])
+                .split(main_layout[1]);
+
+            let rows: Vec<Row> = app.positions.iter().enumerate().map(|(i, p)| {
                 let pl_color = if p.unrealized_pl >= 0.0 { Color::Green } else { Color::Red };
                 let price = if p.qty.abs() > 0.0 { p.market_value.abs() / p.qty.abs() } else { p.avg_entry_price };
+                let selected = i == app.selected_position;
+                let row_style = if selected { Style::default().bg(Color::DarkGray) } else { Style::default() };
+                let marker = if selected { "▸ " } else { "  " };
                 Row::new(vec![
-                    Cell::from(p.symbol.clone()).style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Cell::from(format!("{}{}", marker, p.symbol)).style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                     Cell::from(p.side.clone()).style(Style::default().fg(if p.side == "long" { Color::Green } else { Color::Red })),
                     Cell::from(format!("{:.0}", p.qty.abs())),
                     Cell::from(format!("${:.2}", p.avg_entry_price)).style(Style::default().fg(Color::Cyan)),
                     Cell::from(format!("${:.2}", price)).style(Style::default().fg(Color::White)),
                     Cell::from(format!("${:.2}", p.market_value.abs())),
                     Cell::from(format!("{:+.2}", p.unrealized_pl)).style(Style::default().fg(pl_color)),
-                ])
+                ]).style(row_style)
             }).collect();
             let table = Table::new(
                 rows,
-                [Constraint::Length(10), Constraint::Length(6), Constraint::Length(8), Constraint::Length(12), Constraint::Length(12), Constraint::Length(14), Constraint::Length(12)],
+                [Constraint::Length(12), Constraint::Length(6), Constraint::Length(8), Constraint::Length(12), Constraint::Length(12), Constraint::Length(14), Constraint::Length(12)],
             )
-            .header(Row::new(vec!["Symbol", "Side", "Qty", "Entry", "Current", "Mkt Value", "P&L"]).style(Style::default().fg(Color::DarkGray)))
-            .block(Block::default().borders(Borders::ALL).title(" Positions "));
-            f.render_widget(table, main_layout[1]);
+            .header(Row::new(vec!["  Symbol", "Side", "Qty", "Entry", "Current", "Mkt Value", "P&L"]).style(Style::default().fg(Color::DarkGray)))
+            .block(Block::default().borders(Borders::ALL).title(format!(" Positions ({}) — ↑↓ select, Enter=chart, x=close, p=partial ", app.positions.len())));
+            f.render_widget(table, chunks[0]);
+
+            // Selected position detail
+            if !app.positions.is_empty() {
+                let sel = &app.positions[app.selected_position.min(app.positions.len() - 1)];
+                let price = if sel.qty.abs() > 0.0 { sel.market_value.abs() / sel.qty.abs() } else { sel.avg_entry_price };
+                let pl_pct = if sel.avg_entry_price > 0.0 { (price / sel.avg_entry_price - 1.0) * 100.0 } else { 0.0 };
+                let detail = Paragraph::new(Line::from(vec![
+                    Span::styled(format!("{} ", sel.symbol), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("{} {:.0} @ ${:.2} ", sel.side, sel.qty.abs(), sel.avg_entry_price), Style::default().fg(Color::White)),
+                    Span::styled(format!("→ ${:.2} ({:+.1}%) ", price, pl_pct), Style::default().fg(if pl_pct >= 0.0 { Color::Green } else { Color::Red })),
+                    Span::styled(format!("P&L: {:+.2}", sel.unrealized_pl), Style::default().fg(if sel.unrealized_pl >= 0.0 { Color::Green } else { Color::Red }).add_modifier(Modifier::BOLD)),
+                ]))
+                .block(Block::default().borders(Borders::ALL));
+                f.render_widget(detail, chunks[1]);
+            }
         }
         3 => draw_orders(f, app, main_layout[1]),
         4 => {
@@ -1044,6 +1100,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('r') => {
                             app.last_refresh = Instant::now() - Duration::from_secs(60);
                             app.log("Refreshing...", Color::Yellow);
+                        }
+                        // Arrow keys for list navigation (Positions=2, Orders=3)
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if app.active_tab == 2 && app.selected_position > 0 { app.selected_position -= 1; }
+                            if app.active_tab == 3 && app.selected_order > 0 { app.selected_order -= 1; }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if app.active_tab == 2 && app.selected_position + 1 < app.positions.len() { app.selected_position += 1; }
+                            if app.active_tab == 3 && app.selected_order + 1 < app.orders.len() { app.selected_order += 1; }
+                        }
+                        // Enter: action on selected item
+                        KeyCode::Enter => {
+                            if app.active_tab == 2 && !app.positions.is_empty() {
+                                let pos = &app.positions[app.selected_position];
+                                let sym = pos.symbol.clone();
+                                // Switch chart to this symbol
+                                app.chart_symbol = sym.clone();
+                                app.last_refresh = Instant::now() - Duration::from_secs(60);
+                                app.log(&format!("Selected {sym} — press 'x' to close, 'p' for partial close"), Color::Cyan);
+                            }
+                            if app.active_tab == 3 && !app.orders.is_empty() {
+                                let order = &app.orders[app.selected_order];
+                                app.log(&format!("Order {} {} {} — press 'd' to cancel", order.symbol, order.side, order.order_type), Color::Cyan);
+                            }
+                        }
+                        // x: close selected position entirely
+                        KeyCode::Char('x') => {
+                            if app.active_tab == 2 && !app.positions.is_empty() {
+                                let pos = &app.positions[app.selected_position];
+                                let sym = pos.symbol.clone();
+                                let qty = pos.qty.abs();
+                                app.log(&format!("Closing {sym} ({qty} shares)..."), Color::Yellow);
+                                match app.broker.close_position(&sym, None).await {
+                                    Ok(r) => {
+                                        app.log(&format!("CLOSED {sym}: {}", r.status), Color::Green);
+                                        app.last_refresh = Instant::now() - Duration::from_secs(60);
+                                    }
+                                    Err(e) => app.log(&format!("Close failed: {e}"), Color::Red),
+                                }
+                            }
+                        }
+                        // p: partial close (50%)
+                        KeyCode::Char('p') => {
+                            if app.active_tab == 2 && !app.positions.is_empty() {
+                                let pos = &app.positions[app.selected_position];
+                                let sym = pos.symbol.clone();
+                                let half = (pos.qty.abs() / 2.0).floor().max(1.0);
+                                app.log(&format!("Partial close {sym} ({half} of {:.0})...", pos.qty.abs()), Color::Yellow);
+                                match app.broker.close_position(&sym, Some(half)).await {
+                                    Ok(r) => {
+                                        app.log(&format!("PARTIAL CLOSE {sym} {half}: {}", r.status), Color::Green);
+                                        app.last_refresh = Instant::now() - Duration::from_secs(60);
+                                    }
+                                    Err(e) => app.log(&format!("Partial close failed: {e}"), Color::Red),
+                                }
+                            }
+                        }
+                        // d: cancel selected order
+                        KeyCode::Char('d') => {
+                            if app.active_tab == 3 && !app.orders.is_empty() {
+                                let order = &app.orders[app.selected_order];
+                                let id = order.id.clone();
+                                let sym = order.symbol.clone();
+                                app.log(&format!("Cancelling order {sym} ({id})..."), Color::Yellow);
+                                match app.broker.cancel_order(&id).await {
+                                    Ok(_) => {
+                                        app.log(&format!("CANCELLED {sym} order"), Color::Green);
+                                        app.last_refresh = Instant::now() - Duration::from_secs(60);
+                                    }
+                                    Err(e) => app.log(&format!("Cancel failed: {e}"), Color::Red),
+                                }
+                            }
                         }
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                         _ => {}

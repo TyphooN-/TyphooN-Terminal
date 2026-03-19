@@ -180,6 +180,16 @@ impl AlpacaBroker {
         })
     }
 
+    pub async fn cancel_order(&self, order_id: &str) -> Result<(), String> {
+        let resp = self.client.delete(format!("{}/v2/orders/{}", self.base_url, order_id))
+            .headers(self.headers()).send().await.map_err(|e| e.to_string())?;
+        if resp.status().is_success() || resp.status().as_u16() == 204 {
+            Ok(())
+        } else {
+            Err(format!("Cancel failed: HTTP {}", resp.status()))
+        }
+    }
+
     pub async fn get_bars(&self, symbol: &str, timeframe: &str, limit: u32) -> Result<Vec<Bar>, String> {
         let is_crypto = symbol.contains('/');
         let base = if is_crypto {
