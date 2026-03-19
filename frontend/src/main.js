@@ -10907,9 +10907,14 @@ function cmdCheat() {
       ["FLOWMAP", "Sector rotation flow map"],
       ["REGIME+", "Regime detection dashboard"],
       ["ECON", "Economic calendar"],
+      ["ECONCAL", "Economic calendar (Finnhub, impact ratings)"],
       ["ECALENDAR", "Earnings + ex-div calendar"],
       ["FRED", "FRED economic data"],
       ["CAL", "Economic calendar"],
+      ["IPO", "IPO calendar (90 days)"],
+      ["WHALE", "Whale alerts (crypto)"],
+      ["SECTORFLOW", "Sector ETF accumulation/distribution"],
+      ["DARKPOOL", "Dark pool volume analysis"],
     ]},
     { title: "Tools & Utilities", keys: [
       ["NOTES", "Per-symbol trading notes"],
@@ -10941,6 +10946,10 @@ function cmdCheat() {
       ["INSIDER", "Insider trading (SEC Form 4)"],
       ["SEC", "SEC Filings (10-K, 10-Q, 8-K, S-1, etc.)"],
       ["EARNINGS", "Earnings & corporate actions"],
+      ["SURPRISE", "Earnings surprise history"],
+      ["EARNINGS-OVERLAY", "Toggle earnings/dividend/split on chart"],
+      ["DIVCAL", "Dividend calendar (watchlist)"],
+      ["PEERS", "Peer comparison table"],
       ["SENTIMENT", "News sentiment analysis"],
     ]},
     { title: "Social & AI", keys: [
@@ -20513,6 +20522,506 @@ async function cmdWorldIndices() {
   };
 }
 
+// ══════════════════════════════════════════════════════════════
+// SURPRISE — Earnings Surprise History (Finnhub)
+// ══════════════════════════════════════════════════════════════
+async function cmdEarningsSurprise() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const s = loadSettings();
+  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Earnings Surprise`, width: 580, height: 480 });
+  win.contentElement.textContent = "";
+  win.appendElement(div("Loading earnings surprise data...", "color:#888;padding:20px;"));
+  try {
+    const json = await invoke("fetch_earnings_surprise", { symbol: currentSymbol, finnhubKey: s.finnhubKey });
+    const data = JSON.parse(json);
+    if (!Array.isArray(data) || data.length === 0) { win.contentElement.textContent = ""; win.setContent("No earnings surprise data found."); return; }
+    win.contentElement.textContent = "";
+    const last8 = data.slice(0, 8);
+    // Win rate
+    const beats = last8.filter(q => q.actual > q.estimate).length;
+    const hdr = document.createElement("div");
+    hdr.style.cssText = `text-align:center;padding:8px;border-bottom:1px solid #333;font-size:13px;font-weight:bold;color:${beats > last8.length / 2 ? "#4caf50" : "#f44336"};`;
+    hdr.textContent = `${beats}/${last8.length} beats in last ${last8.length} quarters`;
+    win.appendElement(hdr);
+    // Table
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-top:6px;";
+    table.appendChild(theadRow(["Quarter", "EPS Est", "EPS Actual", "Surprise %", "Result"], "padding:3px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;text-align:right;"));
+    for (const q of last8) {
+      const beat = q.actual >= q.estimate;
+      const sp = q.surprisePercent != null ? q.surprisePercent : (q.estimate !== 0 ? ((q.actual - q.estimate) / Math.abs(q.estimate) * 100) : 0);
+      const tr = document.createElement("tr");
+      const label = q.period || (q.quarter && q.year ? `Q${q.quarter} ${q.year}` : "—");
+      tr.appendChild(td(label, "padding:3px 6px;color:#888;text-align:left;"));
+      tr.appendChild(td((q.estimate || 0).toFixed(2), "padding:3px 6px;color:#ccc;text-align:right;font-family:Consolas,monospace;"));
+      tr.appendChild(td((q.actual || 0).toFixed(2), `padding:3px 6px;text-align:right;font-family:Consolas,monospace;font-weight:bold;color:${beat ? "#4caf50" : "#f44336"};`));
+      tr.appendChild(td((sp >= 0 ? "+" : "") + sp.toFixed(1) + "%", `padding:3px 6px;text-align:right;font-family:Consolas,monospace;color:${beat ? "#4caf50" : "#f44336"};`));
+      tr.appendChild(td(beat ? "BEAT" : "MISS", `padding:3px 6px;text-align:center;font-weight:bold;color:${beat ? "#4caf50" : "#f44336"};`));
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+    // Bar chart of surprise %
+    if (last8.length >= 2) {
+      const svgW = 540, svgH = 140, padL = 50, padR = 10, padT = 10, padB = 25;
+      const plotW = svgW - padL - padR, plotH = svgH - padT - padB;
+      const vals = last8.slice().reverse().map(q => q.surprisePercent != null ? q.surprisePercent : (q.estimate !== 0 ? ((q.actual - q.estimate) / Math.abs(q.estimate) * 100) : 0));
+      const maxV = Math.max(...vals.map(Math.abs), 1);
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(ns, "svg");
+      svg.setAttribute("width", svgW); svg.setAttribute("height", svgH);
+      svg.style.cssText = "display:block;margin:8px auto 0;";
+      const bg = document.createElementNS(ns, "rect");
+      bg.setAttribute("width", svgW); bg.setAttribute("height", svgH); bg.setAttribute("fill", "#0a0a0a"); bg.setAttribute("rx", "4");
+      svg.appendChild(bg);
+      const zeroY = padT + plotH / 2;
+      const zl = document.createElementNS(ns, "line");
+      zl.setAttribute("x1", padL); zl.setAttribute("y1", zeroY); zl.setAttribute("x2", svgW - padR); zl.setAttribute("y2", zeroY);
+      zl.setAttribute("stroke", "#333"); zl.setAttribute("stroke-dasharray", "4,4");
+      svg.appendChild(zl);
+      const barW = plotW / vals.length * 0.7;
+      const gap = plotW / vals.length;
+      for (let i = 0; i < vals.length; i++) {
+        const v = vals[i];
+        const barH = Math.abs(v) / maxV * (plotH / 2);
+        const bx = padL + i * gap + (gap - barW) / 2;
+        const by = v >= 0 ? zeroY - barH : zeroY;
+        const bar = document.createElementNS(ns, "rect");
+        bar.setAttribute("x", bx); bar.setAttribute("y", by); bar.setAttribute("width", barW); bar.setAttribute("height", barH);
+        bar.setAttribute("fill", v >= 0 ? "#4caf50" : "#f44336"); bar.setAttribute("rx", "2");
+        svg.appendChild(bar);
+      }
+      win.appendElement(svg);
+    }
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// EARNINGS-OVERLAY — Toggle earnings/dividend/split markers on chart
+// ══════════════════════════════════════════════════════════════
+async function cmdEarningsOverlay() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  window._chartEventOverlayEnabled = !window._chartEventOverlayEnabled;
+  if (!window._chartEventOverlayEnabled) {
+    log("Event overlay OFF", "info");
+    if (typeof renderDrawingsExtended === "function") renderDrawingsExtended();
+    return;
+  }
+  log("Loading event overlay for " + currentSymbol + "...", "info");
+  if (!window._chartEventOverlayCache) window._chartEventOverlayCache = {};
+  try {
+    const events = [];
+    // Fetch corporate actions (dividends + splits)
+    try {
+      const divJson = await invokeQuiet("get_corporate_actions", { symbol: currentSymbol, types: "dividend,split" });
+      const actions = JSON.parse(divJson);
+      if (Array.isArray(actions)) {
+        for (const a of actions) {
+          const dateStr = a.ex_date || a.effective_date || a.date;
+          if (!dateStr) continue;
+          const ts = Math.floor(new Date(dateStr).getTime() / 1000);
+          const type = (a.type || a.ca_type || a.sub_type || "").toLowerCase().includes("split") ? "split" : "dividend";
+          events.push({ time: ts, type });
+        }
+      }
+    } catch (_) {}
+    // Fetch earnings calendar via Finnhub if key available
+    const s = loadSettings();
+    if (s.finnhubKey) {
+      try {
+        const earnJson = await invoke("fetch_earnings_surprise", { symbol: currentSymbol, finnhubKey: s.finnhubKey });
+        const earnings = JSON.parse(earnJson);
+        if (Array.isArray(earnings)) {
+          for (const e of earnings) {
+            const dateStr = e.period || e.date;
+            if (!dateStr) continue;
+            const ts = Math.floor(new Date(dateStr).getTime() / 1000);
+            events.push({ time: ts, type: "earnings" });
+          }
+        }
+      } catch (_) {}
+    }
+    window._chartEventOverlayCache[currentSymbol] = events;
+    log(`Event overlay ON: ${events.length} events (E=earnings, D=dividend, S=split)`, "ok");
+    if (typeof renderDrawingsExtended === "function") renderDrawingsExtended();
+  } catch (e) { log("Event overlay error: " + e, "warn"); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// DARKPOOL — Dark Pool Volume (FINRA short volume)
+// ══════════════════════════════════════════════════════════════
+async function cmdDarkPool() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Dark Pool Volume`, width: 480, height: 350 });
+  win.contentElement.textContent = "";
+  win.appendElement(div("Loading dark pool data...", "color:#888;padding:20px;"));
+  try {
+    const json = await invoke("fetch_dark_pool_volume", { symbol: currentSymbol });
+    const data = JSON.parse(json);
+    win.contentElement.textContent = "";
+    if (!data || (!data.darkPoolPct && data.darkPoolPct !== 0)) { win.setContent("No dark pool data available for " + currentSymbol); return; }
+    const frag = document.createDocumentFragment();
+    // Header
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "text-align:center;padding:12px;font-size:14px;font-weight:bold;color:#8cf;border-bottom:1px solid #333;";
+    hdr.textContent = `${currentSymbol} Dark Pool Analysis — ${data.date || "Latest"}`;
+    frag.appendChild(hdr);
+    // Key metrics
+    const metrics = [
+      { label: "Dark Pool %", value: (data.darkPoolPct || 0).toFixed(1) + "%", color: data.darkPoolPct > 50 ? "#f44336" : "#4caf50" },
+      { label: "Short Volume", value: (data.shortVolume || 0).toLocaleString(), color: "#ff9800" },
+      { label: "Total Volume", value: (data.totalVolume || 0).toLocaleString(), color: "#ccc" },
+    ];
+    if (data.shortExemptVolume) metrics.push({ label: "Short Exempt", value: data.shortExemptVolume.toLocaleString(), color: "#888" });
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px;";
+    for (const m of metrics) {
+      const card = document.createElement("div");
+      card.style.cssText = "background:#111;border-radius:4px;padding:10px;text-align:center;";
+      card.innerHTML = `<div style="font-size:10px;color:#888;margin-bottom:4px;">${m.label}</div><div style="font-size:16px;font-weight:bold;color:${m.color};font-family:Consolas,monospace;">${m.value}</div>`;
+      grid.appendChild(card);
+    }
+    frag.appendChild(grid);
+    // Gauge bar
+    const gauge = document.createElement("div");
+    gauge.style.cssText = "padding:8px 12px;";
+    const pct = Math.min(100, Math.max(0, data.darkPoolPct || 0));
+    gauge.innerHTML = `<div style="font-size:10px;color:#888;margin-bottom:4px;">Dark Pool vs Lit Exchange</div>` +
+      `<div style="width:100%;height:20px;background:#1a1a2e;border-radius:4px;overflow:hidden;position:relative;">` +
+      `<div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#f4433666,#f44336);"></div>` +
+      `<div style="position:absolute;top:2px;left:50%;transform:translateX(-50%);font-size:10px;color:#fff;font-weight:bold;">${pct.toFixed(1)}% Dark Pool</div></div>`;
+    frag.appendChild(gauge);
+    win.contentElement.appendChild(frag);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// WHALE — Whale Alerts (large crypto transactions)
+// ══════════════════════════════════════════════════════════════
+async function cmdWhaleAlert() {
+  const win = createWindow({ title: "Whale Alerts — Large Crypto Transactions", width: 700, height: 450 });
+  win.contentElement.textContent = "";
+  win.appendElement(div("Loading whale alerts...", "color:#888;padding:20px;"));
+  let refreshTimer = null;
+  async function loadAlerts() {
+    try {
+      const json = await invoke("fetch_whale_alerts");
+      const alerts = JSON.parse(json);
+      win.contentElement.textContent = "";
+      if (!Array.isArray(alerts) || alerts.length === 0) { win.setContent("No whale alerts found."); return; }
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+      table.appendChild(theadRow(["Time", "Coin", "Amount (USD)", "From", "To", "TX Hash"], "padding:3px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;"));
+      for (const a of alerts.slice(0, 50)) {
+        const tr = document.createElement("tr");
+        const usd = parseFloat(a.amount_usd || a.amountUsd || 0);
+        const rowColor = usd >= 10000000 ? "#f44336" : usd >= 1000000 ? "#ff9800" : "#ccc";
+        const time = a.timestamp ? new Date(a.timestamp * 1000).toLocaleString() : (a.time || a.date || "—");
+        const coin = a.currency || a.coin || a.symbol || "—";
+        const from = (a.from || a.sender || "—").substring(0, 12) + "...";
+        const to = (a.to || a.receiver || "—").substring(0, 12) + "...";
+        const hash = (a.hash || a.tx_hash || a.txHash || "—").substring(0, 10) + "...";
+        tr.appendChild(td(time, "padding:3px 6px;color:#888;"));
+        tr.appendChild(td(coin, `padding:3px 6px;color:${rowColor};font-weight:bold;`));
+        tr.appendChild(td("$" + usd.toLocaleString(undefined, { maximumFractionDigits: 0 }), `padding:3px 6px;color:${rowColor};font-family:Consolas,monospace;text-align:right;`));
+        tr.appendChild(td(from, "padding:3px 6px;color:#888;font-family:Consolas,monospace;font-size:9px;"));
+        tr.appendChild(td(to, "padding:3px 6px;color:#888;font-family:Consolas,monospace;font-size:9px;"));
+        tr.appendChild(td(hash, "padding:3px 6px;color:#555;font-family:Consolas,monospace;font-size:9px;"));
+        table.appendChild(tr);
+      }
+      win.appendElement(table);
+      const footer = document.createElement("div");
+      footer.style.cssText = "text-align:center;padding:6px;color:#555;font-size:9px;";
+      footer.textContent = `${alerts.length} alerts | Auto-refreshes every 5 min | Last: ${new Date().toLocaleTimeString()}`;
+      win.appendElement(footer);
+    } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
+  }
+  await loadAlerts();
+  refreshTimer = setInterval(loadAlerts, 300000); // 5 min
+  const origClose = win.close;
+  win.close = () => { if (refreshTimer) clearInterval(refreshTimer); origClose.call(win); };
+}
+
+// ══════════════════════════════════════════════════════════════
+// IPO — IPO Calendar (Finnhub)
+// ══════════════════════════════════════════════════════════════
+async function cmdIPOCalendar() {
+  const s = loadSettings();
+  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  const win = createWindow({ title: "IPO Calendar — Upcoming 90 Days", width: 700, height: 450 });
+  win.contentElement.textContent = "";
+  win.appendElement(div("Loading IPO calendar...", "color:#888;padding:20px;"));
+  try {
+    const json = await invoke("fetch_ipo_calendar", { finnhubKey: s.finnhubKey });
+    const data = JSON.parse(json);
+    const ipos = data.ipoCalendar || data || [];
+    win.contentElement.textContent = "";
+    if (!Array.isArray(ipos) || ipos.length === 0) { win.setContent("No upcoming IPOs found."); return; }
+    ipos.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    table.appendChild(theadRow(["Date", "Company", "Symbol", "Exchange", "Price Range", "Shares"], "padding:3px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;"));
+    const now = new Date();
+    const weekAhead = new Date(now.getTime() + 7 * 86400000);
+    for (const ipo of ipos) {
+      const tr = document.createElement("tr");
+      const ipoDate = new Date(ipo.date);
+      const isUpcoming = ipoDate >= now && ipoDate <= weekAhead;
+      const fw = isUpcoming ? "font-weight:bold;" : "";
+      tr.appendChild(td(ipo.date || "—", `padding:3px 6px;color:#ccc;${fw}`));
+      tr.appendChild(td(ipo.name || ipo.company || "—", `padding:3px 6px;color:#8cf;${fw}font-size:9px;`));
+      tr.appendChild(td(ipo.symbol || "—", `padding:3px 6px;color:#ff9800;font-weight:bold;`));
+      tr.appendChild(td(ipo.exchange || "—", "padding:3px 6px;color:#888;"));
+      const priceRange = ipo.price ? `$${ipo.price}` : (ipo.priceRangeLow && ipo.priceRangeHigh ? `$${ipo.priceRangeLow}-$${ipo.priceRangeHigh}` : "—");
+      tr.appendChild(td(priceRange, "padding:3px 6px;color:#ccc;font-family:Consolas,monospace;"));
+      tr.appendChild(td(ipo.numberOfShares ? ipo.numberOfShares.toLocaleString() : (ipo.shares || "—"), "padding:3px 6px;color:#888;text-align:right;"));
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// ECONCAL — Enhanced Economic Calendar with Impact (Finnhub)
+// (Enhances existing ECON with Finnhub real data + impact ratings)
+// ══════════════════════════════════════════════════════════════
+async function cmdEconCalendarPlus() {
+  const s = loadSettings();
+  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  const win = createWindow({ title: "Economic Calendar — Events & Impact", width: 750, height: 500 });
+  win.contentElement.textContent = "";
+  win.appendElement(div("Loading economic calendar...", "color:#888;padding:20px;"));
+  try {
+    const json = await invoke("fetch_economic_calendar", { finnhubKey: s.finnhubKey });
+    const data = JSON.parse(json);
+    const events = data.economicCalendar || data.result || data || [];
+    win.contentElement.textContent = "";
+    if (!Array.isArray(events) || events.length === 0) { win.setContent("No economic events found."); return; }
+    // Filter toolbar
+    let showHighOnly = false;
+    const toolbar = document.createElement("div");
+    toolbar.style.cssText = "padding:6px 8px;border-bottom:1px solid #333;display:flex;gap:8px;";
+    const btnAll = document.createElement("button");
+    btnAll.textContent = "All Events";
+    btnAll.style.cssText = "padding:3px 10px;background:#333;color:#ccc;border:1px solid #555;cursor:pointer;font-size:10px;border-radius:3px;";
+    const btnHigh = document.createElement("button");
+    btnHigh.textContent = "High Impact Only";
+    btnHigh.style.cssText = "padding:3px 10px;background:#222;color:#888;border:1px solid #444;cursor:pointer;font-size:10px;border-radius:3px;";
+    toolbar.appendChild(btnAll);
+    toolbar.appendChild(btnHigh);
+    win.appendElement(toolbar);
+    const tableWrap = document.createElement("div");
+    tableWrap.style.cssText = "overflow-y:auto;max-height:400px;";
+    win.appendElement(tableWrap);
+    function renderEvents() {
+      tableWrap.textContent = "";
+      const filtered = showHighOnly ? events.filter(e => (e.impact || "").toLowerCase() === "high" || e.impact === 3) : events;
+      const table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+      table.appendChild(theadRow(["Date/Time", "Country", "Event", "Impact", "Actual", "Estimate", "Previous"], "padding:3px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;"));
+      for (const ev of filtered.slice(0, 100)) {
+        const tr = document.createElement("tr");
+        const imp = (ev.impact || "").toString().toLowerCase();
+        const impLevel = imp === "high" || ev.impact === 3 ? "high" : imp === "medium" || ev.impact === 2 ? "medium" : "low";
+        const impColor = impLevel === "high" ? "#f44336" : impLevel === "medium" ? "#ff9800" : "#4caf50";
+        const impIcon = impLevel === "high" ? "\uD83D\uDD34" : impLevel === "medium" ? "\uD83D\uDFE1" : "\uD83D\uDFE2";
+        const hasSurprise = ev.actual != null && ev.estimate != null && ev.actual !== ev.estimate;
+        tr.style.cssText = hasSurprise ? "background:#1a1a2e;" : "";
+        tr.appendChild(td(ev.time || ev.date || "—", "padding:3px 6px;color:#888;"));
+        tr.appendChild(td(ev.country || "—", "padding:3px 6px;color:#ccc;"));
+        tr.appendChild(td(ev.event || ev.name || "—", "padding:3px 6px;color:#8cf;font-size:9px;"));
+        tr.appendChild(td(impIcon, `padding:3px 6px;text-align:center;color:${impColor};`));
+        tr.appendChild(td(ev.actual != null ? String(ev.actual) : "—", `padding:3px 6px;color:#ccc;font-family:Consolas,monospace;text-align:right;${hasSurprise ? "font-weight:bold;" : ""}`));
+        tr.appendChild(td(ev.estimate != null ? String(ev.estimate) : "—", "padding:3px 6px;color:#888;font-family:Consolas,monospace;text-align:right;"));
+        tr.appendChild(td(ev.prev != null ? String(ev.prev) : (ev.previous != null ? String(ev.previous) : "—"), "padding:3px 6px;color:#888;font-family:Consolas,monospace;text-align:right;"));
+        table.appendChild(tr);
+      }
+      tableWrap.appendChild(table);
+    }
+    btnAll.addEventListener("click", () => { showHighOnly = false; btnAll.style.background = "#333"; btnAll.style.color = "#ccc"; btnHigh.style.background = "#222"; btnHigh.style.color = "#888"; renderEvents(); });
+    btnHigh.addEventListener("click", () => { showHighOnly = true; btnHigh.style.background = "#333"; btnHigh.style.color = "#ccc"; btnAll.style.background = "#222"; btnAll.style.color = "#888"; renderEvents(); });
+    renderEvents();
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// PEERS — Peer Comparison Table
+// ══════════════════════════════════════════════════════════════
+async function cmdPeerComparison() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Peer Comparison`, width: 750, height: 450 });
+  win.contentElement.textContent = "";
+  win.appendElement(div("Loading peers and fundamentals...", "color:#888;padding:20px;"));
+  try {
+    const peersJson = await invoke("fetch_sector_peers", { symbol: currentSymbol });
+    let peers = JSON.parse(peersJson);
+    if (!Array.isArray(peers) || peers.length === 0) { win.contentElement.textContent = ""; win.setContent("No peer data found for " + currentSymbol); return; }
+    // Include current symbol + max 5 peers
+    peers = peers.filter(p => p !== currentSymbol).slice(0, 5);
+    const allSymbols = [currentSymbol, ...peers];
+    // Fetch fundamentals for each
+    const fundData = [];
+    for (const sym of allSymbols) {
+      try {
+        const json = await invoke("get_company_fundamentals", { symbol: sym });
+        const d = JSON.parse(json);
+        fundData.push({ symbol: sym, ...d });
+      } catch (_) {
+        fundData.push({ symbol: sym });
+      }
+    }
+    win.contentElement.textContent = "";
+    // Calculate medians for color coding
+    const vals = (key) => fundData.map(d => parseFloat(d[key])).filter(v => !isNaN(v));
+    const median = (arr) => { if (arr.length === 0) return 0; const s = arr.slice().sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    const fields = [
+      { key: "marketCap", label: "Market Cap", fmt: v => { const n = parseFloat(v); return isNaN(n) ? "—" : n >= 1e12 ? `$${(n/1e12).toFixed(1)}T` : n >= 1e9 ? `$${(n/1e9).toFixed(1)}B` : `$${(n/1e6).toFixed(0)}M`; }, higher: true },
+      { key: "peRatio", label: "P/E", fmt: v => { const n = parseFloat(v); return isNaN(n) ? "—" : n.toFixed(1); }, higher: false },
+      { key: "returnOnEquity", label: "ROE", fmt: v => { const n = parseFloat(v); return isNaN(n) ? "—" : (n * 100).toFixed(1) + "%"; }, higher: true },
+      { key: "debtToEquity", label: "D/E", fmt: v => { const n = parseFloat(v); return isNaN(n) ? "—" : n.toFixed(2); }, higher: false },
+      { key: "revenueGrowth", label: "Rev Growth", fmt: v => { const n = parseFloat(v); return isNaN(n) ? "—" : (n * 100).toFixed(1) + "%"; }, higher: true },
+      { key: "netMargin", label: "Net Margin", fmt: v => { const n = parseFloat(v); return isNaN(n) ? "—" : (n * 100).toFixed(1) + "%"; }, higher: true },
+    ];
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    table.appendChild(theadRow(["Symbol", ...fields.map(f => f.label)], "padding:4px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;text-align:right;"));
+    for (const d of fundData) {
+      const tr = document.createElement("tr");
+      const isCurrent = d.symbol === currentSymbol;
+      tr.style.cssText = isCurrent ? "background:#1a1a3e;" : "";
+      tr.appendChild(td(d.symbol, `padding:4px 6px;color:${isCurrent ? "#ff9800" : "#ccc"};font-weight:bold;`));
+      for (const f of fields) {
+        const v = parseFloat(d[f.key]);
+        const med = median(vals(f.key));
+        const better = f.higher ? v >= med : v <= med;
+        const color = isNaN(v) ? "#555" : (better ? "#4caf50" : "#f44336");
+        tr.appendChild(td(f.fmt(d[f.key]), `padding:4px 6px;color:${color};text-align:right;font-family:Consolas,monospace;`));
+      }
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+    const legend = document.createElement("div");
+    legend.style.cssText = "padding:8px;color:#555;font-size:9px;text-align:center;";
+    legend.textContent = "Green = better than peer median | Red = worse than peer median | Current symbol highlighted";
+    win.appendElement(legend);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// SECTORFLOW — Sector ETF Accumulation / Distribution
+// ══════════════════════════════════════════════════════════════
+async function cmdSectorFlow() {
+  const win = createWindow({ title: "Sector Flow — Accumulation / Distribution", width: 700, height: 420 });
+  win.contentElement.textContent = "";
+  win.appendElement(div("Loading sector ETF data...", "color:#888;padding:20px;"));
+  const etfs = [
+    { sym: "XLK", name: "Technology" }, { sym: "XLV", name: "Healthcare" }, { sym: "XLF", name: "Financials" },
+    { sym: "XLE", name: "Energy" }, { sym: "XLI", name: "Industrials" }, { sym: "XLC", name: "Comm Services" },
+    { sym: "XLY", name: "Consumer Disc" }, { sym: "XLP", name: "Consumer Stap" }, { sym: "XLB", name: "Materials" },
+    { sym: "XLRE", name: "Real Estate" }, { sym: "XLU", name: "Utilities" },
+  ];
+  try {
+    const results = [];
+    for (const etf of etfs) {
+      try {
+        const json = await cachedGetBars(etf.sym, "1Day", 25);
+        const bars = JSON.parse(json);
+        if (!bars || bars.length < 6) continue;
+        const last5 = bars.slice(-5);
+        const prev20 = bars.slice(-25, -5);
+        const priceChg = last5.length >= 2 ? ((last5[last5.length - 1].close - last5[0].open) / last5[0].open * 100) : 0;
+        const vol5 = last5.reduce((s, b) => s + (b.volume || 0), 0) / last5.length;
+        const vol20 = prev20.length > 0 ? prev20.reduce((s, b) => s + (b.volume || 0), 0) / prev20.length : vol5;
+        const volRatio = vol20 > 0 ? vol5 / vol20 : 1;
+        let signal = "Neutral";
+        let color = "#888";
+        if (priceChg > 0 && volRatio > 1.1) { signal = "Accumulation"; color = "#4caf50"; }
+        else if (priceChg < 0 && volRatio > 1.1) { signal = "Distribution"; color = "#f44336"; }
+        else if (priceChg > 0 && volRatio <= 1.1) { signal = "Quiet Rally"; color = "#8cf"; }
+        else if (priceChg < 0 && volRatio <= 1.1) { signal = "Quiet Decline"; color = "#ff9800"; }
+        results.push({ ...etf, priceChg, volRatio, signal, color });
+      } catch (_) {}
+    }
+    win.contentElement.textContent = "";
+    if (results.length === 0) { win.setContent("Could not load sector ETF data."); return; }
+    results.sort((a, b) => b.priceChg - a.priceChg);
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    table.appendChild(theadRow(["Sector ETF", "Sector", "5D Price %", "Vol vs 20D Avg", "Flow Signal"], "padding:4px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;"));
+    for (const r of results) {
+      const tr = document.createElement("tr");
+      tr.appendChild(td(r.sym, "padding:4px 6px;color:#ff9800;font-weight:bold;"));
+      tr.appendChild(td(r.name, "padding:4px 6px;color:#ccc;"));
+      tr.appendChild(td((r.priceChg >= 0 ? "+" : "") + r.priceChg.toFixed(2) + "%", `padding:4px 6px;color:${r.priceChg >= 0 ? "#4caf50" : "#f44336"};font-family:Consolas,monospace;text-align:right;`));
+      tr.appendChild(td(r.volRatio.toFixed(2) + "x", `padding:4px 6px;color:${r.volRatio > 1.1 ? "#ff9800" : "#888"};font-family:Consolas,monospace;text-align:right;`));
+      tr.appendChild(td(r.signal, `padding:4px 6px;color:${r.color};font-weight:bold;text-align:center;`));
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
+}
+
+// ══════════════════════════════════════════════════════════════
+// DIVCAL — Dividend Calendar
+// ══════════════════════════════════════════════════════════════
+async function cmdDividendCalendar() {
+  const win = createWindow({ title: "Dividend Calendar", width: 700, height: 450 });
+  win.contentElement.textContent = "";
+  win.appendElement(div("Loading dividend data...", "color:#888;padding:20px;"));
+  try {
+    let symbols = getWatchlist();
+    if (!symbols || symbols.length === 0) {
+      if (currentSymbol) symbols = [currentSymbol];
+      else { win.contentElement.textContent = ""; win.setContent("No watchlist or symbol loaded. Add symbols via QM first."); return; }
+    }
+    const divEvents = [];
+    for (const sym of symbols) {
+      try {
+        const json = await invokeQuiet("get_corporate_actions", { symbol: sym, types: "dividend" });
+        const actions = JSON.parse(json);
+        if (Array.isArray(actions)) {
+          for (const a of actions) {
+            const exDate = a.ex_date || a.effective_date || a.date;
+            if (!exDate) continue;
+            divEvents.push({
+              symbol: a.symbol || sym,
+              exDate,
+              payDate: a.payable_date || a.payment_date || "—",
+              amount: a.cash_amount ? `$${parseFloat(a.cash_amount).toFixed(4)}` : "—",
+              frequency: a.frequency || a.declaration_date ? "Quarterly" : "—",
+            });
+          }
+        }
+      } catch (_) {}
+    }
+    win.contentElement.textContent = "";
+    if (divEvents.length === 0) { win.setContent("No dividend data found for watchlist symbols."); return; }
+    divEvents.sort((a, b) => (a.exDate || "").localeCompare(b.exDate || ""));
+    const now = new Date();
+    const weekAhead = new Date(now.getTime() + 7 * 86400000);
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    table.appendChild(theadRow(["Symbol", "Ex-Date", "Payment Date", "Amount", "Frequency"], "padding:4px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;"));
+    for (const d of divEvents) {
+      const tr = document.createElement("tr");
+      const exDateObj = new Date(d.exDate);
+      const isUpcoming = exDateObj >= now && exDateObj <= weekAhead;
+      if (isUpcoming) tr.style.cssText = "background:#1a2a1a;";
+      tr.appendChild(td(d.symbol, `padding:4px 6px;color:#ff9800;font-weight:bold;${isUpcoming ? "color:#fdd835;" : ""}`));
+      tr.appendChild(td(d.exDate, `padding:4px 6px;color:#ccc;${isUpcoming ? "font-weight:bold;" : ""}`));
+      tr.appendChild(td(d.payDate, "padding:4px 6px;color:#888;"));
+      tr.appendChild(td(d.amount, "padding:4px 6px;color:#4caf50;font-family:Consolas,monospace;"));
+      tr.appendChild(td(d.frequency, "padding:4px 6px;color:#888;"));
+      table.appendChild(tr);
+    }
+    win.appendElement(table);
+    const legend = document.createElement("div");
+    legend.style.cssText = "padding:6px 8px;color:#555;font-size:9px;text-align:center;";
+    legend.textContent = "Highlighted rows = ex-dividend within next 7 days";
+    win.appendElement(legend);
+  } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
@@ -20734,6 +21243,15 @@ const CMD_PALETTE_COMMANDS = [
   { name: "REDDIT", desc: "Reddit sentiment — WSB/investing mentions for current symbol", action: cmdRedditSentiment },
   { name: "SI", desc: "Short interest — Finnhub bi-weekly short interest + trend chart", action: cmdShortInterest },
   { name: "WEI", desc: "World equity indices — live dashboard (Americas, Europe, Asia-Pacific)", action: cmdWorldIndices },
+  { name: "SURPRISE", desc: "Earnings surprise history (Finnhub, beat/miss, bar chart)", action: cmdEarningsSurprise },
+  { name: "EARNINGS-OVERLAY", desc: "Toggle earnings/dividend/split markers on chart (E/D/S)", action: cmdEarningsOverlay },
+  { name: "DARKPOOL", desc: "Dark pool volume analysis (FINRA short volume, gauge)", action: cmdDarkPool },
+  { name: "WHALE", desc: "Whale alerts — large crypto transactions (auto-refresh 5m)", action: cmdWhaleAlert },
+  { name: "IPO", desc: "IPO calendar — upcoming 90 days (Finnhub)", action: cmdIPOCalendar },
+  { name: "ECONCAL", desc: "Economic calendar with impact ratings (Finnhub, filter by impact)", action: cmdEconCalendarPlus },
+  { name: "PEERS", desc: "Peer comparison table (fundamentals, color-coded vs median)", action: cmdPeerComparison },
+  { name: "SECTORFLOW", desc: "Sector ETF accumulation/distribution (5D price vs volume)", action: cmdSectorFlow },
+  { name: "DIVCAL", desc: "Dividend calendar (watchlist ex-dates, payment dates, amounts)", action: cmdDividendCalendar },
 ];
 
 function fuzzyMatch(query, target) {
@@ -23916,6 +24434,39 @@ function renderDrawingsExtended() {
       }
     }
     ctx.restore();
+  }
+
+  // ── Earnings / Dividend / Split Event Overlay ──────────────
+  if (window._chartEventOverlayEnabled && currentSymbol && currentChartData.length > 0) {
+    const evCache = window._chartEventOverlayCache || {};
+    const evKey = currentSymbol;
+    const evData = evCache[evKey];
+    if (evData && Array.isArray(evData)) {
+      ctx.save();
+      for (const ev of evData) {
+        const x = chart.timeScale().timeToCoordinate(ev.time);
+        if (x === null || x < 0 || x > drawCanvas.width) continue;
+        // Vertical dashed line
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = ev.type === "earnings" ? "#9c27b0" : ev.type === "dividend" ? "#fdd835" : "#2196f3";
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, drawCanvas.height);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Label at top
+        const label = ev.type === "earnings" ? "E" : ev.type === "dividend" ? "D" : "S";
+        ctx.font = "bold 10px Consolas";
+        ctx.fillStyle = ctx.strokeStyle;
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = "#000c";
+        ctx.fillRect(x - tw / 2 - 2, 2, tw + 4, 14);
+        ctx.fillStyle = ev.type === "earnings" ? "#9c27b0" : ev.type === "dividend" ? "#fdd835" : "#2196f3";
+        ctx.fillText(label, x - tw / 2, 13);
+      }
+      ctx.restore();
+    }
   }
 }
 
@@ -29437,6 +29988,15 @@ function showHelpOverlay() {
       ["SENTIMENT", "News sentiment analysis"],
       ["PCRATIO", "Put/Call ratio dashboard"],
       ["UNUSUAL", "Unusual options activity scanner"],
+      ["SURPRISE", "Earnings surprise history (Finnhub)"],
+      ["EARNINGS-OVERLAY", "Toggle E/D/S markers on chart"],
+      ["DARKPOOL", "Dark pool volume analysis"],
+      ["WHALE", "Whale alerts (crypto)"],
+      ["IPO", "IPO calendar (90 days)"],
+      ["ECONCAL", "Economic calendar (impact ratings)"],
+      ["PEERS", "Peer comparison table"],
+      ["SECTORFLOW", "Sector ETF accumulation/distribution"],
+      ["DIVCAL", "Dividend calendar (watchlist)"],
       ["AI", "AI trading assistant (Claude/GPT)"],
       ["SETTINGS", "API keys & configuration"],
       ["HELP", "This help screen"],

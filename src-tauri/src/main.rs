@@ -28,6 +28,7 @@ use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 use tauri::State;
+use chrono::Datelike;
 
 /// Shared HTTP client for non-broker requests (articles, FRED, AI chat).
 /// Reuses TCP connections across calls. Per-request timeouts override the default.
@@ -2823,6 +2824,207 @@ fn run_headless_backtest(args: &[String]) {
     });
 }
 
+// ── Earnings Surprise (Finnhub) ─────────────────────────────────
+
+#[tauri::command]
+async fn fetch_earnings_surprise(symbol: String, finnhub_key: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
+    let resp = shared_client()
+        .get("https://finnhub.io/api/v1/stock/earnings")
+        .query(&[("symbol", symbol.as_str()), ("token", finnhub_key.as_str())])
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Earnings surprise request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Earnings surprise: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("Earnings surprise read failed: {e}"))
+}
+
+// ── Earnings Calendar (Finnhub) ─────────────────────────────────
+
+#[tauri::command]
+async fn fetch_earnings_calendar(finnhub_key: String) -> Result<String, String> {
+    if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
+    let today = chrono::Utc::now().date_naive();
+    let from = (today - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
+    let to = (today + chrono::Duration::days(30)).format("%Y-%m-%d").to_string();
+    let resp = shared_client()
+        .get("https://finnhub.io/api/v1/calendar/earnings")
+        .query(&[("from", from.as_str()), ("to", to.as_str()), ("token", finnhub_key.as_str())])
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("Earnings calendar request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Earnings calendar: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("Earnings calendar read failed: {e}"))
+}
+
+// ── Dark Pool Volume (FINRA) ────────────────────────────────────
+
+#[tauri::command]
+async fn fetch_dark_pool_volume(symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    let sym_upper = symbol.to_uppercase();
+
+    // Try today, then up to 5 days back (skipping weekends)
+    let today = chrono::Utc::now().date_naive();
+    let mut candidates = Vec::new();
+    let mut d = today;
+    while candidates.len() < 3 {
+        let weekday = d.weekday();
+        if weekday != chrono::Weekday::Sat && weekday != chrono::Weekday::Sun {
+            candidates.push(d);
+        }
+        d -= chrono::Duration::days(1);
+    }
+
+    for date in &candidates {
+        let date_str = date.format("%Y%m%d").to_string();
+        let url = format!("https://cdn.finra.org/equity/regsho/daily/CNMSshvol{date_str}.txt");
+        let resp = shared_client()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await;
+        let resp = match resp {
+            Ok(r) if r.status().is_success() => r,
+            _ => continue,
+        };
+        let body = match resp.text().await {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        // Pipe-delimited: Date|Symbol|ShortVolume|ShortExemptVolume|TotalVolume|Market
+        for line in body.lines() {
+            let fields: Vec<&str> = line.split('|').collect();
+            if fields.len() < 5 { continue; }
+            if fields[1].eq_ignore_ascii_case(&sym_upper) {
+                let short_vol: f64 = fields[2].parse().unwrap_or(0.0);
+                let short_exempt: f64 = fields[3].parse().unwrap_or(0.0);
+                let total_vol: f64 = fields[4].parse().unwrap_or(0.0);
+                let dark_pool_pct = if total_vol > 0.0 { (short_vol + short_exempt) / total_vol * 100.0 } else { 0.0 };
+                let result = serde_json::json!({
+                    "date": date.format("%Y-%m-%d").to_string(),
+                    "symbol": sym_upper,
+                    "shortVolume": short_vol as u64,
+                    "shortExemptVolume": short_exempt as u64,
+                    "totalVolume": total_vol as u64,
+                    "darkPoolPct": (dark_pool_pct * 100.0).round() / 100.0,
+                });
+                return serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"));
+            }
+        }
+    }
+
+    Err(format!("No FINRA dark pool data found for {sym_upper} in recent trading days"))
+}
+
+// ── Whale Alert (Crypto) ────────────────────────────────────────
+
+#[tauri::command]
+async fn fetch_whale_alerts() -> Result<String, String> {
+    // Try Whale Alert API with demo key first
+    let start = chrono::Utc::now().timestamp() - 3600; // 1 hour ago
+    let resp = shared_client()
+        .get("https://api.whale-alert.io/v1/transactions")
+        .query(&[
+            ("api_key", "demo"),
+            ("min_value", "1000000"),
+            ("start", &start.to_string()),
+        ])
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+
+    if let Ok(r) = resp {
+        if r.status().is_success() {
+            if let Ok(text) = r.text().await {
+                return Ok(text);
+            }
+        }
+    }
+
+    // Fallback: Blockchair large BTC transactions (free, no key)
+    let resp = shared_client()
+        .get("https://api.blockchair.com/bitcoin/transactions")
+        .query(&[("q", "output_total(100000000..)"), ("limit", "10")])
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Whale alert request failed: {e}"))?;
+    if !resp.status().is_success() {
+        // Return empty array on failure rather than error
+        return Ok("[]".to_string());
+    }
+    resp.text().await.map_err(|e| format!("Whale alert read failed: {e}"))
+}
+
+// ── IPO Calendar (Finnhub) ──────────────────────────────────────
+
+#[tauri::command]
+async fn fetch_ipo_calendar(finnhub_key: String) -> Result<String, String> {
+    if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
+    let today = chrono::Utc::now().date_naive();
+    let from = today.format("%Y-%m-%d").to_string();
+    let to = (today + chrono::Duration::days(90)).format("%Y-%m-%d").to_string();
+    let resp = shared_client()
+        .get("https://finnhub.io/api/v1/calendar/ipo")
+        .query(&[("from", from.as_str()), ("to", to.as_str()), ("token", finnhub_key.as_str())])
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("IPO calendar request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("IPO calendar: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("IPO calendar read failed: {e}"))
+}
+
+// ── Economic Calendar (Finnhub) ─────────────────────────────────
+
+#[tauri::command]
+async fn fetch_economic_calendar(finnhub_key: String) -> Result<String, String> {
+    if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
+    let today = chrono::Utc::now().date_naive();
+    let from = (today - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
+    let to = (today + chrono::Duration::days(14)).format("%Y-%m-%d").to_string();
+    let resp = shared_client()
+        .get("https://finnhub.io/api/v1/calendar/economic")
+        .query(&[("from", from.as_str()), ("to", to.as_str()), ("token", finnhub_key.as_str())])
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("Economic calendar request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Economic calendar: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("Economic calendar read failed: {e}"))
+}
+
+// ── Sector Peers (Finnhub) ──────────────────────────────────────
+
+#[tauri::command]
+async fn fetch_sector_peers(symbol: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    let resp = shared_client()
+        .get("https://finnhub.io/api/v1/stock/peers")
+        .query(&[("symbol", symbol.as_str()), ("token", "demo")])
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Sector peers request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Sector peers: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("Sector peers read failed: {e}"))
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -3000,6 +3202,14 @@ fn main() {
             fetch_world_indices,
             get_alpaca_watchlists,
             sync_watchlist_to_alpaca,
+            // Earnings, Calendars, Dark Pool, Whale, Peers
+            fetch_earnings_surprise,
+            fetch_earnings_calendar,
+            fetch_dark_pool_volume,
+            fetch_whale_alerts,
+            fetch_ipo_calendar,
+            fetch_economic_calendar,
+            fetch_sector_peers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TyphooN Terminal");
