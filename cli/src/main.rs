@@ -286,7 +286,7 @@ struct App {
     positions: Vec<broker::PositionInfo>,
     orders: Vec<broker::OrderInfo>,
     watchlist: Vec<String>,
-    watchlist_prices: Vec<(String, f64, f64)>, // (symbol, price, change%)
+    _watchlist_prices: Vec<(String, f64, f64)>, // reserved for live quote fetching
     // Chart
     chart_symbol: String,
     chart_bars: Vec<broker::Bar>,
@@ -297,7 +297,7 @@ struct App {
     selected_position: usize,
     selected_order: usize,
     // Action confirmation
-    pending_action: Option<String>, // "close:SYMBOL" or "cancel:ORDER_ID"
+    _pending_action: Option<String>, // reserved for confirmation dialogs
     // Command
     command_input: String,
     command_mode: bool,
@@ -319,14 +319,14 @@ impl App {
             positions: vec![],
             orders: vec![],
             watchlist,
-            watchlist_prices: vec![],
+            _watchlist_prices: vec![],
             imported_accounts,
             chart_symbol: symbol,
             chart_bars: vec![],
             chart_timeframe: "1Day".to_string(),
             selected_position: 0,
             selected_order: 0,
-            pending_action: None,
+            _pending_action: None,
             command_input: String::new(),
             command_mode: false,
             log_messages: vec![
@@ -923,12 +923,22 @@ fn draw(f: &mut Frame, app: &App) {
         _ => {}
     }
 
-    // Command input
+    // Context-sensitive keybinds bar + command input
     let cmd_style = if app.command_mode { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::DarkGray) };
     let cmd_text = if app.command_mode {
         format!(":{}", app.command_input)
     } else {
-        "Press : to enter command mode | Tab: switch views | q: quit".to_string()
+        // Show relevant keybinds for current tab
+        match app.active_tab {
+            0 => "Tab:next  1-7:jump  ::cmd  r:refresh  q:quit".to_string(),
+            1 => "Tab:next  ::cmd  :chart SYM [TF]  :tf 1Day  r:refresh  q:quit".to_string(),
+            2 => "↑↓/jk:select  Enter:chart  x:close  p:partial(50%)  ::cmd  q:quit".to_string(),
+            3 => "↑↓:select  d:cancel order  ::cmd  r:refresh  q:quit".to_string(),
+            4 => "Tab:next  :watch SYM  ::cmd  q:quit".to_string(),
+            5 => ":import NAME /path.csv  :rmacct NAME  ::cmd  q:quit".to_string(),
+            6 => "Tab:next  ::cmd  r:refresh  q:quit".to_string(),
+            _ => "Tab:next  ::cmd  q:quit".to_string(),
+        }
     };
     let cmd_widget = Paragraph::new(cmd_text)
         .style(cmd_style)
