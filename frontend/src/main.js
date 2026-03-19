@@ -7351,8 +7351,8 @@ async function cmdRiskMap() {
     const items = [];
     for (const p of positions) {
       const qty = Math.abs(parseFloat(p.qty) || 0);
-      const price = parseFloat(p.current_price) || 0;
-      const mv = Math.abs(parseFloat(p.market_value) || qty * price);
+      const mv = Math.abs(parseFloat(p.market_value) || 0);
+      const price = qty > 0 ? mv / qty : parseFloat(p.avg_entry_price) || 0;
       totalValue += mv;
       items.push({ symbol: p.symbol, qty, price, mv, var_dollars: null });
     }
@@ -7458,6 +7458,232 @@ async function cmdRiskMap() {
   } catch (e) {
     win.contentElement.textContent = "";
     win.setContent(`Failed to load risk heatmap: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// VAR — Per-Position VaR Breakdown
+// ══════════════════════════════════════════════════════════════
+
+async function cmdVarBreakdown() {
+  const win = createWindow({ title: "Portfolio VaR Analysis \u2014 95% Confidence, 1-Day Horizon", width: 820, height: 560 });
+  win.contentElement.textContent = "";
+
+  const loading = document.createElement("div");
+  loading.textContent = "Calculating per-position VaR breakdown...";
+  loading.style.cssText = "color:#888;padding:20px;";
+  win.appendElement(loading);
+
+  try {
+    const [posJson, acctJson] = await Promise.all([
+      invoke("get_positions"),
+      invokeQuiet("get_account"),
+    ]);
+    const positions = JSON.parse(posJson);
+    const account = JSON.parse(acctJson);
+    const equity = parseFloat(account.equity) || parseFloat(account.portfolio_value) || 0;
+
+    if (!positions || positions.length === 0) {
+      win.contentElement.textContent = "";
+      win.setContent("No open positions for VaR analysis.");
+      return;
+    }
+
+    // Build items with market value, weight, side
+    let totalValue = 0;
+    const items = [];
+    for (const p of positions) {
+      const qty = Math.abs(parseFloat(p.qty) || 0);
+      const mv = Math.abs(parseFloat(p.market_value) || 0);
+      const price = qty > 0 ? mv / qty : parseFloat(p.avg_entry_price) || 0;
+      const side = parseFloat(p.qty) >= 0 ? "Long" : "Short";
+      const upl = parseFloat(p.unrealized_pl) || 0;
+      totalValue += mv;
+      items.push({ symbol: p.symbol, qty, price, mv, side, upl, var_dollars: null });
+    }
+
+    // Fetch VaR for each position in parallel
+    const varPromises = items.map(item =>
+      invokeQuiet("calculate_position_var", {
+        symbol: item.symbol, positionSize: item.qty, currentPrice: item.price,
+      }).then(json => {
+        const v = JSON.parse(json);
+        item.var_dollars = v.var_dollars || 0;
+      }).catch(() => { item.var_dollars = null; })
+    );
+    await Promise.all(varPromises);
+
+    // Compute totals
+    const totalVaR = items.reduce((s, i) => s + (i.var_dollars || 0), 0);
+    const varPctEquity = equity > 0 ? (totalVaR / equity) * 100 : 0;
+
+    // Add weight and contribution to each item
+    for (const item of items) {
+      item.weight = totalValue > 0 ? item.mv / totalValue : 1 / items.length;
+      item.varContrib = totalVaR > 0 && item.var_dollars !== null ? (item.var_dollars / totalVaR) * 100 : 0;
+      item.marginalVaR = item.qty > 0 && item.var_dollars !== null ? item.var_dollars / item.qty : 0;
+      item.riskReturn = item.var_dollars > 0 ? item.upl / item.var_dollars : 0;
+    }
+
+    // Sort by VaR contribution descending
+    items.sort((a, b) => (b.var_dollars || 0) - (a.var_dollars || 0));
+
+    // Diversification benefit: sum of individual VaR vs portfolio VaR
+    // (In practice we're summing individual VaRs; correlation-adjusted would be lower)
+    const sumIndividualVaR = totalVaR;
+    const diversBenefit = 0; // Would need correlation matrix for true diversification benefit
+
+    win.contentElement.textContent = "";
+
+    // ── Summary Cards ──
+    const cards = document.createElement("div");
+    cards.style.cssText = "display:flex;gap:10px;padding:10px 12px;flex-wrap:wrap;";
+
+    const makeCard = (label, value, color) => {
+      const card = document.createElement("div");
+      card.style.cssText = `background:#1a1a2e;border:1px solid #333;border-radius:6px;padding:10px 16px;flex:1;min-width:150px;`;
+      const lbl = document.createElement("div");
+      lbl.textContent = label;
+      lbl.style.cssText = "font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;";
+      const val = document.createElement("div");
+      val.textContent = value;
+      val.style.cssText = `font-size:16px;font-weight:bold;color:${color};`;
+      card.appendChild(lbl);
+      card.appendChild(val);
+      return card;
+    };
+
+    cards.appendChild(makeCard("Total Portfolio VaR", `$${totalVaR.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${varPctEquity.toFixed(2)}%)`, "#f44336"));
+    cards.appendChild(makeCard("Equity", `$${equity.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, "#4caf50"));
+    cards.appendChild(makeCard("Positions", `${items.length}`, "#2196f3"));
+    win.appendElement(cards);
+
+    // ── Per-Position Table ──
+    const tableWrap = document.createElement("div");
+    tableWrap.style.cssText = "overflow-x:auto;padding:4px 12px;";
+
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    const headers = ["Symbol", "Side", "Market Value", "Weight%", "Position VaR", "VaR Contrib%", "Marginal VaR", "Risk/Return"];
+    for (const h of headers) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      th.style.cssText = "text-align:right;padding:6px 8px;border-bottom:1px solid #444;color:#aaa;font-weight:600;font-size:10px;text-transform:uppercase;";
+      if (h === "Symbol" || h === "Side") th.style.textAlign = "left";
+      headerRow.appendChild(th);
+    }
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const item of items) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = "border-bottom:1px solid #222;cursor:pointer;";
+      tr.addEventListener("mouseenter", () => { tr.style.background = "#1a1a2e"; });
+      tr.addEventListener("mouseleave", () => { tr.style.background = ""; });
+      tr.addEventListener("click", () => {
+        document.getElementById("symbol-input").value = item.symbol;
+        triggerLoad();
+      });
+
+      const mkTd = (text, align = "right", color = "#ccc") => {
+        const td = document.createElement("td");
+        td.textContent = text;
+        td.style.cssText = `text-align:${align};padding:6px 8px;color:${color};`;
+        return td;
+      };
+
+      tr.appendChild(mkTd(item.symbol, "left", "#fff"));
+      tr.appendChild(mkTd(item.side, "left", item.side === "Long" ? "#4caf50" : "#f44336"));
+      tr.appendChild(mkTd(`$${item.mv.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`));
+      tr.appendChild(mkTd(`${(item.weight * 100).toFixed(1)}%`));
+      tr.appendChild(mkTd(item.var_dollars !== null ? `$${item.var_dollars.toFixed(2)}` : "\u2014", "right", "#f44336"));
+      tr.appendChild(mkTd(`${item.varContrib.toFixed(1)}%`, "right", item.varContrib > 40 ? "#ff5722" : "#ccc"));
+      tr.appendChild(mkTd(`$${item.marginalVaR.toFixed(2)}/sh`, "right", "#aaa"));
+      const rrColor = item.riskReturn >= 0 ? "#4caf50" : "#f44336";
+      tr.appendChild(mkTd(`${item.riskReturn >= 0 ? "+" : ""}${item.riskReturn.toFixed(2)}`, "right", rrColor));
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    tableWrap.appendChild(table);
+    win.appendElement(tableWrap);
+
+    // ── Horizontal Bar Chart (VaR Contribution) ──
+    const chartSection = document.createElement("div");
+    chartSection.style.cssText = "padding:10px 12px;";
+
+    const chartTitle = document.createElement("div");
+    chartTitle.textContent = "VaR Contribution by Position";
+    chartTitle.style.cssText = "font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;";
+    chartSection.appendChild(chartTitle);
+
+    const maxContrib = Math.max(...items.map(i => i.varContrib), 1);
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:3px;";
+
+      const label = document.createElement("div");
+      label.textContent = item.symbol;
+      label.style.cssText = "width:60px;font-size:10px;color:#ccc;text-align:right;flex-shrink:0;";
+
+      const barBg = document.createElement("div");
+      barBg.style.cssText = "flex:1;height:16px;background:#1a1a1a;border-radius:3px;overflow:hidden;position:relative;";
+
+      const barFill = document.createElement("div");
+      const barPct = maxContrib > 0 ? (item.varContrib / maxContrib) * 100 : 0;
+      // Color gradient: largest contributors red, smallest green
+      const intensity = item.varContrib / Math.max(maxContrib, 1);
+      let barColor;
+      if (intensity > 0.6) {
+        barColor = "#f44336";
+      } else if (intensity > 0.3) {
+        barColor = "#ff9800";
+      } else {
+        barColor = "#4caf50";
+      }
+      barFill.style.cssText = `width:${barPct}%;height:100%;background:${barColor};border-radius:3px;transition:width 0.3s;`;
+
+      const pctLabel = document.createElement("div");
+      pctLabel.textContent = `${item.varContrib.toFixed(1)}%`;
+      pctLabel.style.cssText = "width:45px;font-size:10px;color:#aaa;flex-shrink:0;";
+
+      barBg.appendChild(barFill);
+      row.appendChild(label);
+      row.appendChild(barBg);
+      row.appendChild(pctLabel);
+      chartSection.appendChild(row);
+    }
+    win.appendElement(chartSection);
+
+    // ── Recommendation Row ──
+    const warnings = [];
+    for (const item of items) {
+      if (item.varContrib > 40) {
+        warnings.push(`\u26a0\ufe0f ${item.symbol} contributes ${item.varContrib.toFixed(1)}% of portfolio risk \u2014 consider reducing`);
+      }
+    }
+    if (varPctEquity > 5) {
+      warnings.push(`\u26a0\ufe0f Portfolio VaR exceeds 5% of equity (${varPctEquity.toFixed(2)}%) \u2014 high risk`);
+    }
+
+    if (warnings.length > 0) {
+      const warnDiv = document.createElement("div");
+      warnDiv.style.cssText = "padding:8px 12px;border-top:1px solid #333;";
+      for (const w of warnings) {
+        const line = document.createElement("div");
+        line.textContent = w;
+        line.style.cssText = "font-size:11px;color:#ff9800;padding:2px 0;";
+        warnDiv.appendChild(line);
+      }
+      win.appendElement(warnDiv);
+    }
+
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load VaR breakdown: ${e}`);
   }
 }
 
@@ -10904,6 +11130,7 @@ function cmdCheat() {
       ["MONTECARLO", "Monte Carlo risk of ruin"],
       ["RISKSIM", "Scenario stress testing"],
       ["RISKMAP", "Portfolio risk heatmap"],
+      ["VAR", "Per-position VaR breakdown"],
       ["GREEKS", "Aggregate portfolio Greeks"],
       ["HEATMAP", "Portfolio heat map (daily P&L)"],
       ["HEATCAL", "Calendar heatmap of returns"],
@@ -12932,8 +13159,8 @@ async function cmdMultiAccount() {
     for (const p of positions) {
       const sym = p.symbol || "";
       const qty = Math.abs(parseFloat(p.qty) || 0);
-      const price = parseFloat(p.current_price) || 0;
-      const mv = Math.abs(parseFloat(p.market_value) || qty * price);
+      const mv = Math.abs(parseFloat(p.market_value) || 0);
+      const price = qty > 0 ? mv / qty : parseFloat(p.avg_entry_price) || 0;
       const pl = parseFloat(p.unrealized_pl) || 0;
       totalPortfolioValue += mv;
       totalPL += pl;
@@ -15113,7 +15340,8 @@ function cmdRiskDashboard() {
       const mi = JSON.parse(miJson); const positions = JSON.parse(posJson);
       const totalValue = positions.reduce((s, p) => s + Math.abs(p.qty * p.current_price), 0);
       const totalPL = positions.reduce((s, p) => s + p.unrealized_pl, 0);
-      const weights = positions.map(p => Math.abs(p.qty * p.current_price) / (totalValue || 1));
+      const totalMV = positions.reduce((s, p) => s + Math.abs(p.market_value || 0), 0);
+      const weights = positions.map(p => Math.abs(p.market_value || 0) / (totalMV || 1));
       const hhi = weights.reduce((s, w) => s + w * w, 0);
       const largest = positions.length > 0 ? Math.max(...weights) * 100 : 0;
       // PDT count
@@ -21146,6 +21374,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "RISKSIM", desc: "Scenario Stress Testing (crash, correction, custom shocks)", action: cmdRiskSim },
   { name: "SMARTALERT", desc: "Statistical Anomaly Detection (z-scores, volume, range, RSI)", action: cmdSmartAlert },
   { name: "RISKMAP", desc: "Portfolio Risk Heatmap (VaR treemap by weight)", action: cmdRiskMap },
+  { name: "VAR", desc: "Per-Position VaR Breakdown (95% confidence, 1-day horizon)", action: cmdVarBreakdown },
   { name: "ECALENDAR", desc: "Unified Earnings + Ex-Div Calendar (5-week grid)", action: cmdEarningsCalendar },
   { name: "GREEKS", desc: "Aggregate Portfolio Greeks (delta, gamma, theta, vega)", action: cmdGreeks },
   { name: "SCANNER+", desc: "Multi-condition stock screener (RSI, SMA200, volume)", action: cmdScannerPlus },
@@ -28009,6 +28238,7 @@ function setupMenuBar() {
     "reddit-sentiment": () => cmdRedditSentiment(),
     "short-interest": () => cmdShortInterest(),
     "world-indices": () => cmdWorldIndices(),
+    "var-breakdown": () => cmdVarBreakdown(),
   };
 
   document.querySelectorAll(".menu-entry").forEach(entry => {
