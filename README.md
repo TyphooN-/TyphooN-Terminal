@@ -210,6 +210,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [030](docs/adr/030-session-persistence-hardening.md) | Session persistence hardening |
 | [031](docs/adr/031-testing-framework.md) | Testing framework (602 assertions) |
 | [032](docs/adr/032-gpu-drawing-tools-roadmap.md) | GPU chart completion + drawing tools parity roadmap |
+| [033](docs/adr/033-free-api-expansion.md) | Free API expansion research — 30+ data sources catalogued |
 
 ---
 

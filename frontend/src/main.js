@@ -24851,20 +24851,19 @@ async function updateOrderPriceLines() {
     }
 
     // ── Position lines on MTF grid cells (mirrors main chart) ──
+    // Uses GPU price_line system (not add_line) so they survive indicator reloads.
     if (pos && mtfGridActive && mtfGridCells.length > 0) {
       const drawGridLine = (price, color, style, title) => {
         if (!price || price <= 0) return;
         for (const cell of mtfGridCells) {
           try {
             if (cell.gpuChart) {
-              // GPU mode: draw as a horizontal line via add_line with constant values
+              // GPU mode: use add_price_line (persists across clear_lines calls)
               const hex = color.replace("#", "");
               const r = parseInt(hex.substring(0, 2), 16) / 255;
               const g = parseInt(hex.substring(2, 4), 16) / 255;
               const b = parseInt(hex.substring(4, 6), 16) / 255;
-              const totalBars = cell.gpuChart.total_bar_count();
-              const vals = new Float64Array(totalBars).fill(price);
-              cell.gpuChart.add_line(vals, r, g, b, 0.8);
+              cell.gpuChart.add_price_line(price, r, g, b, 0.8, 1.0);
               cell.gpuChart.render();
             } else {
               const line = cell.candleSeries.createPriceLine({
@@ -24876,6 +24875,12 @@ async function updateOrderPriceLines() {
           } catch (_) {}
         }
       };
+      // Clear previous GPU price lines before adding new ones
+      for (const cell of mtfGridCells) {
+        if (cell.gpuChart) {
+          try { cell.gpuChart.clear_price_lines(); cell.gpuChart.render(); } catch (_) {}
+        }
+      }
       if (posSL) drawGridLine(posSL, "#f44336", 3, `SL`);
       if (posTP) drawGridLine(posTP, "#4caf50", 3, `TP`);
       if (pos.avg_entry_price > 0) drawGridLine(pos.avg_entry_price, pos.side === "long" ? "#2196f3" : "#e91e63", 3, `ENTRY`);
