@@ -70,6 +70,31 @@ void main() {
 }
 "#;
 
+// Per-vertex color shader — used for main-pane histograms and fills
+const VERTEX_COLOR_VS: &str = r#"#version 300 es
+precision highp float;
+layout(location = 0) in vec2 a_pos;
+layout(location = 1) in vec4 a_color;
+uniform vec2 u_price_range;
+uniform vec2 u_time_range;
+out vec4 v_color;
+void main() {
+    float x_ndc = (a_pos.x - u_time_range.x) / (u_time_range.y - u_time_range.x) * 2.0 - 1.0;
+    float y_ndc = (a_pos.y - u_price_range.x) / (u_price_range.y - u_price_range.x) * 2.0 - 1.0;
+    gl_Position = vec4(x_ndc, y_ndc, 0.0, 1.0);
+    v_color = a_color;
+}
+"#;
+
+const VERTEX_COLOR_FS: &str = r#"#version 300 es
+precision highp float;
+in vec4 v_color;
+out vec4 frag_color;
+void main() {
+    frag_color = v_color;
+}
+"#;
+
 const GRID_VS: &str = r#"#version 300 es
 precision highp float;
 layout(location = 0) in vec2 a_pos;
@@ -133,6 +158,41 @@ pub enum DrawType {
     EquidistantChannel = 37,
 }
 
+/// Line style for indicator lines.
+/// 0 = solid, 1 = dashed, 2 = dotted.
+#[wasm_bindgen]
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[repr(u32)]
+pub enum LineStyle {
+    Solid = 0,
+    Dashed = 1,
+    Dotted = 2,
+}
+
+/// An indicator line series on the main chart.
+#[derive(Clone)]
+struct IndicatorLine {
+    vbo: WebGlBuffer,
+    count: i32,
+    color: [f32; 4],
+    width: f32,
+    style: LineStyle,
+}
+
+/// A histogram series on the main chart (volume, RVOL, etc.).
+/// Uses per-vertex coloring via the vertex_color shader.
+struct HistogramBuffer {
+    vbo: WebGlBuffer,
+    vertex_count: i32,
+}
+
+/// A filled area between two lines on the main chart.
+struct FillBuffer {
+    vbo: WebGlBuffer,
+    vertex_count: i32,
+    color: [f32; 4],
+}
+
 /// A single drawing on the chart.
 #[derive(Clone)]
 struct Drawing {
@@ -188,6 +248,7 @@ pub struct GpuChart {
     candle_program: WebGlProgram,
     line_program: WebGlProgram,
     grid_program: WebGlProgram,
+    vertex_color_program: WebGlProgram,
     // Uniform locations
     candle_viewport: Option<WebGlUniformLocation>,
     candle_price_range: Option<WebGlUniformLocation>,
@@ -199,6 +260,8 @@ pub struct GpuChart {
     line_time_range: Option<WebGlUniformLocation>,
     line_color: Option<WebGlUniformLocation>,
     grid_color: Option<WebGlUniformLocation>,
+    vc_price_range: Option<WebGlUniformLocation>,
+    vc_time_range: Option<WebGlUniformLocation>,
     // Candle buffers
     candle_vbo: WebGlBuffer,
     candle_vertex_count: i32,
@@ -219,7 +282,11 @@ pub struct GpuChart {
     bar_lows: Vec<f32>,
     bar_closes: Vec<f32>,
     // Indicator line buffers
-    line_buffers: Vec<(WebGlBuffer, i32, [f32; 4])>,
+    line_buffers: Vec<IndicatorLine>,
+    // Main-pane histogram buffers
+    histogram_buffers: Vec<HistogramBuffer>,
+    // Main-pane fill buffers
+    fill_buffers: Vec<FillBuffer>,
     // Grid
     grid_vbo: WebGlBuffer,
     grid_vertex_count: i32,
@@ -249,6 +316,7 @@ impl GpuChart {
         let candle_program = compile_program(&gl, CANDLE_VS, CANDLE_FS)?;
         let line_program = compile_program(&gl, LINE_VS, LINE_FS)?;
         let grid_program = compile_program(&gl, GRID_VS, GRID_FS)?;
+        let vertex_color_program = compile_program(&gl, VERTEX_COLOR_VS, VERTEX_COLOR_FS)?;
 
         let candle_viewport = gl.get_uniform_location(&candle_program, "u_viewport");
         let candle_price_range = gl.get_uniform_location(&candle_program, "u_price_range");
@@ -260,6 +328,8 @@ impl GpuChart {
         let line_time_range = gl.get_uniform_location(&line_program, "u_time_range");
         let line_color = gl.get_uniform_location(&line_program, "u_line_color");
         let grid_color = gl.get_uniform_location(&grid_program, "u_grid_color");
+        let vc_price_range = gl.get_uniform_location(&vertex_color_program, "u_price_range");
+        let vc_time_range = gl.get_uniform_location(&vertex_color_program, "u_time_range");
 
         let candle_vbo = gl.create_buffer().ok_or("Failed to create buffer")?;
         let wick_vbo = gl.create_buffer().ok_or("Failed to create wick buffer")?;
@@ -272,11 +342,12 @@ impl GpuChart {
 
         Ok(GpuChart {
             gl, canvas,
-            candle_program, line_program, grid_program,
+            candle_program, line_program, grid_program, vertex_color_program,
             candle_viewport, candle_price_range, candle_time_range,
             candle_bull_color, candle_bear_color, candle_wick_color,
             line_price_range, line_time_range, line_color,
             grid_color,
+            vc_price_range, vc_time_range,
             candle_vbo, candle_vertex_count: 0,
             wick_vbo, wick_vertex_count: 0,
             line_chart_vbo, line_chart_count: 0,
@@ -286,6 +357,8 @@ impl GpuChart {
             total_bars: 0,
             bar_opens: vec![], bar_highs: vec![], bar_lows: vec![], bar_closes: vec![],
             line_buffers: vec![],
+            histogram_buffers: vec![],
+            fill_buffers: vec![],
             grid_vbo, grid_vertex_count: 0,
             drawings: vec![],
             price_lines: vec![],
@@ -384,8 +457,9 @@ impl GpuChart {
 
     // ── Indicator Lines ─────────────────────────────────────────
 
+    /// Add a styled indicator line with custom width and dash style.
     #[wasm_bindgen]
-    pub fn add_line(&mut self, values: &[f64], r: f32, g: f32, b: f32, a: f32) {
+    pub fn add_line_styled(&mut self, values: &[f64], r: f32, g: f32, b: f32, a: f32, width: f32, style: LineStyle) {
         let mut vertices: Vec<f32> = Vec::with_capacity(values.len() * 2);
         for (i, &v) in values.iter().enumerate() {
             vertices.push(i as f32);
@@ -397,15 +471,145 @@ impl GpuChart {
             let buf = js_sys::Float32Array::view(&vertices);
             self.gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &buf, GL::STATIC_DRAW);
         }
-        self.line_buffers.push((vbo, values.len() as i32, [r, g, b, a]));
+        self.line_buffers.push(IndicatorLine {
+            vbo,
+            count: values.len() as i32,
+            color: [r, g, b, a],
+            width,
+            style,
+        });
+    }
+
+    /// Add a solid indicator line (convenience wrapper).
+    #[wasm_bindgen]
+    pub fn add_line(&mut self, values: &[f64], r: f32, g: f32, b: f32, a: f32) {
+        self.add_line_styled(values, r, g, b, a, 1.0, LineStyle::Solid);
     }
 
     #[wasm_bindgen]
     pub fn clear_lines(&mut self) {
-        for (vbo, _, _) in &self.line_buffers {
-            self.gl.delete_buffer(Some(vbo));
+        for line in &self.line_buffers {
+            self.gl.delete_buffer(Some(&line.vbo));
         }
         self.line_buffers.clear();
+    }
+
+    // ── Histogram Series (main pane) ────────────────────────────
+
+    /// Add a histogram series to the main chart.
+    /// `values`: one value per bar.
+    /// `colors`: flat [r,g,b,a, r,g,b,a, ...] per bar (must be values.len() * 4).
+    /// `base`: the zero/baseline value.
+    #[wasm_bindgen]
+    pub fn add_histogram(&mut self, values: &[f64], colors: &[f32], base: f64) {
+        let n = values.len();
+        if n == 0 { return; }
+        let hw = 0.35f32;
+        let base_f = base as f32;
+        // 6 vertices per bar, each vertex = 2 pos + 4 color = 6 floats
+        let mut vertices: Vec<f32> = Vec::with_capacity(n * 6 * 6);
+        for i in 0..n {
+            let x = i as f32;
+            let val = values[i] as f32;
+            let top = val.max(base_f);
+            let bot = val.min(base_f);
+            // Per-bar color (default white if colors array too short)
+            let (cr, cg, cb, ca) = if i * 4 + 3 < colors.len() {
+                (colors[i*4], colors[i*4+1], colors[i*4+2], colors[i*4+3])
+            } else {
+                (1.0, 1.0, 1.0, 1.0)
+            };
+            // Triangle 1: top-left, top-right, bottom-right
+            vertices.extend_from_slice(&[x-hw, top, cr, cg, cb, ca]);
+            vertices.extend_from_slice(&[x+hw, top, cr, cg, cb, ca]);
+            vertices.extend_from_slice(&[x+hw, bot, cr, cg, cb, ca]);
+            // Triangle 2: top-left, bottom-right, bottom-left
+            vertices.extend_from_slice(&[x-hw, top, cr, cg, cb, ca]);
+            vertices.extend_from_slice(&[x+hw, bot, cr, cg, cb, ca]);
+            vertices.extend_from_slice(&[x-hw, bot, cr, cg, cb, ca]);
+        }
+        let vbo = self.gl.create_buffer().unwrap();
+        self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&vbo));
+        unsafe {
+            let buf = js_sys::Float32Array::view(&vertices);
+            self.gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &buf, GL::STATIC_DRAW);
+        }
+        self.histogram_buffers.push(HistogramBuffer {
+            vbo,
+            vertex_count: (n * 6) as i32,
+        });
+    }
+
+    /// Clear all main-pane histogram series.
+    #[wasm_bindgen]
+    pub fn clear_histograms(&mut self) {
+        for hb in &self.histogram_buffers {
+            self.gl.delete_buffer(Some(&hb.vbo));
+        }
+        self.histogram_buffers.clear();
+    }
+
+    // ── Area/Baseline Fill (main pane) ──────────────────────────
+
+    /// Add a filled area between two price-level series.
+    /// `top_values` and `bottom_values` are one value per bar (same length).
+    /// Color is uniform for the entire fill.
+    #[wasm_bindgen]
+    pub fn add_fill(&mut self, top_values: &[f64], bottom_values: &[f64], r: f32, g: f32, b: f32, a: f32) {
+        let n = top_values.len().min(bottom_values.len());
+        if n < 2 { return; }
+        // Build triangle strip: for each bar, emit (x, top) then (x, bottom)
+        let mut vertices: Vec<f32> = Vec::with_capacity(n * 2 * 2);
+        for i in 0..n {
+            vertices.push(i as f32);
+            vertices.push(top_values[i] as f32);
+            vertices.push(i as f32);
+            vertices.push(bottom_values[i] as f32);
+        }
+        let vbo = self.gl.create_buffer().unwrap();
+        self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&vbo));
+        unsafe {
+            let buf = js_sys::Float32Array::view(&vertices);
+            self.gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &buf, GL::STATIC_DRAW);
+        }
+        self.fill_buffers.push(FillBuffer {
+            vbo,
+            vertex_count: (n * 2) as i32,
+            color: [r, g, b, a],
+        });
+    }
+
+    /// Clear all main-pane fill areas.
+    #[wasm_bindgen]
+    pub fn clear_fills(&mut self) {
+        for fb in &self.fill_buffers {
+            self.gl.delete_buffer(Some(&fb.vbo));
+        }
+        self.fill_buffers.clear();
+    }
+
+    // ── Update Last Bar (real-time) ─────────────────────────────
+
+    /// Update the last bar's OHLC data and rebuild only its geometry.
+    /// Avoids rebuilding the entire candle buffer for real-time tick updates.
+    #[wasm_bindgen]
+    pub fn update_last_bar(&mut self, open: f64, high: f64, low: f64, close: f64) {
+        if self.total_bars == 0 { return; }
+        let idx = self.total_bars - 1;
+        self.bar_opens[idx] = open as f32;
+        self.bar_highs[idx] = high as f32;
+        self.bar_lows[idx] = low as f32;
+        self.bar_closes[idx] = close as f32;
+
+        // Update price range if needed
+        let h = high;
+        let l = low;
+        let padding = (self.max_price - self.min_price) * 0.05;
+        if h > self.max_price - padding { self.max_price = h + padding; }
+        if l < self.min_price + padding { self.min_price = l - padding; }
+
+        // Rebuild all geometry (chart type may be HA/Renko which needs full recalc)
+        self.rebuild_geometry();
     }
 
     // ── Phase 1: Drawing Tools ──────────────────────────────────
@@ -702,6 +906,28 @@ impl GpuChart {
         self.visible_start + (x / w) * (self.visible_end - self.visible_start)
     }
 
+    /// Convert a price value to canvas Y coordinate (inverse of price_at_y).
+    #[wasm_bindgen]
+    pub fn y_at_price(&self, price: f64) -> f64 {
+        let h = self.canvas.height() as f64;
+        if h <= 0.0 { return 0.0; }
+        let main_h = h * self.main_pane_height as f64;
+        let price_range = self.max_price - self.min_price;
+        if price_range <= 0.0 { return 0.0; }
+        let t = (price - self.min_price) / price_range;
+        main_h * (1.0 - t)
+    }
+
+    /// Convert a bar index to canvas X coordinate (inverse of bar_at_x).
+    #[wasm_bindgen]
+    pub fn x_at_bar(&self, bar: f64) -> f64 {
+        let w = self.canvas.width() as f64;
+        if w <= 0.0 { return 0.0; }
+        let bar_range = self.visible_end - self.visible_start;
+        if bar_range <= 0.0 { return 0.0; }
+        (bar - self.visible_start) / bar_range * w
+    }
+
     // ── Rendering ───────────────────────────────────────────────
 
     #[wasm_bindgen]
@@ -723,6 +949,8 @@ impl GpuChart {
             _ => self.render_candles(w, main_h),
         }
 
+        self.render_fills();
+        self.render_histograms();
         self.render_lines();
         self.render_drawings();
         self.render_price_lines();
@@ -1090,12 +1318,79 @@ impl GpuChart {
         self.gl.use_program(Some(&self.line_program));
         self.gl.uniform2f(self.line_price_range.as_ref(), self.min_price as f32, self.max_price as f32);
         self.gl.uniform2f(self.line_time_range.as_ref(), self.visible_start as f32, self.visible_end as f32);
-        for (vbo, count, color) in &self.line_buffers {
-            self.gl.uniform4f(self.line_color.as_ref(), color[0], color[1], color[2], color[3]);
-            self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(vbo));
+        for line in &self.line_buffers {
+            self.gl.line_width(line.width.max(1.0));
+            self.gl.uniform4f(self.line_color.as_ref(), line.color[0], line.color[1], line.color[2], line.color[3]);
+            self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&line.vbo));
             self.gl.enable_vertex_attrib_array(0);
             self.gl.vertex_attrib_pointer_with_i32(0, 2, GL::FLOAT, false, 0, 0);
-            self.gl.draw_arrays(GL::LINE_STRIP, 0, *count);
+            match line.style {
+                LineStyle::Solid => {
+                    self.gl.draw_arrays(GL::LINE_STRIP, 0, line.count);
+                }
+                LineStyle::Dashed => {
+                    // Draw every other segment (pairs of points) for dashed effect
+                    // Dash pattern: 4 on, 4 off (in bar units)
+                    let dash_on = 4i32;
+                    let dash_off = 4i32;
+                    let cycle = dash_on + dash_off;
+                    let mut start = 0i32;
+                    while start < line.count {
+                        let end = (start + dash_on).min(line.count);
+                        if end > start {
+                            self.gl.draw_arrays(GL::LINE_STRIP, start, end - start);
+                        }
+                        start += cycle;
+                    }
+                }
+                LineStyle::Dotted => {
+                    // Draw every other segment (pairs of points) for dotted effect
+                    // Dot pattern: 1 on, 2 off
+                    let dot_on = 2i32;
+                    let dot_off = 2i32;
+                    let cycle = dot_on + dot_off;
+                    let mut start = 0i32;
+                    while start < line.count {
+                        let end = (start + dot_on).min(line.count);
+                        if end > start {
+                            self.gl.draw_arrays(GL::LINE_STRIP, start, end - start);
+                        }
+                        start += cycle;
+                    }
+                }
+            }
+        }
+        self.gl.line_width(1.0);
+    }
+
+    fn render_histograms(&self) {
+        if self.histogram_buffers.is_empty() { return; }
+        self.gl.use_program(Some(&self.vertex_color_program));
+        self.gl.uniform2f(self.vc_price_range.as_ref(), self.min_price as f32, self.max_price as f32);
+        self.gl.uniform2f(self.vc_time_range.as_ref(), self.visible_start as f32, self.visible_end as f32);
+        for hb in &self.histogram_buffers {
+            self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&hb.vbo));
+            self.gl.enable_vertex_attrib_array(0);
+            // stride = 6 floats (2 pos + 4 color) = 24 bytes
+            self.gl.vertex_attrib_pointer_with_i32(0, 2, GL::FLOAT, false, 24, 0);
+            self.gl.enable_vertex_attrib_array(1);
+            self.gl.vertex_attrib_pointer_with_i32(1, 4, GL::FLOAT, false, 24, 8);
+            self.gl.draw_arrays(GL::TRIANGLES, 0, hb.vertex_count);
+            self.gl.disable_vertex_attrib_array(1);
+        }
+    }
+
+    fn render_fills(&self) {
+        if self.fill_buffers.is_empty() { return; }
+        self.gl.use_program(Some(&self.line_program));
+        self.gl.uniform2f(self.line_price_range.as_ref(), self.min_price as f32, self.max_price as f32);
+        self.gl.uniform2f(self.line_time_range.as_ref(), self.visible_start as f32, self.visible_end as f32);
+        for fb in &self.fill_buffers {
+            self.gl.uniform4f(self.line_color.as_ref(), fb.color[0], fb.color[1], fb.color[2], fb.color[3]);
+            self.gl.bind_buffer(GL::ARRAY_BUFFER, Some(&fb.vbo));
+            self.gl.enable_vertex_attrib_array(0);
+            self.gl.vertex_attrib_pointer_with_i32(0, 2, GL::FLOAT, false, 0, 0);
+            self.gl.draw_arrays(GL::TRIANGLE_STRIP, 0, fb.vertex_count);
         }
     }
 

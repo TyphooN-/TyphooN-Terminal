@@ -108,6 +108,276 @@ const GPU_DRAW_TYPES = {
   "gann-grid": 38, "arrow-left": 39, "arrow-right": 40, "arrow-check": 41, "arrow-stop": 42, "text-box": 43,
 };
 
+// ── GPU Chart Wrapper (lightweight-charts compatible API) ──────
+// Drop-in replacement so chart code can use either GPU or lightweight-charts backend.
+// Methods marked TODO are stubbed — will be wired up incrementally.
+class GpuChartWrapper {
+  constructor(container, options = {}) {
+    // Create canvas element
+    this.canvas = document.createElement("canvas");
+    this.canvas.style.cssText = "width:100%;height:100%;";
+    container.appendChild(this.canvas);
+    this.canvas.width = container.clientWidth || 300;
+    this.canvas.height = container.clientHeight || 200;
+    this.canvasId = "gpu-" + Math.random().toString(36).slice(2, 8);
+    this.canvas.id = this.canvasId;
+
+    // Initialize GPU chart engine
+    this.gpu = new gpuChartModule.GpuChart(this.canvasId);
+    this.container = container;
+    this._isGpuWrapper = true; // flag to distinguish from lightweight-charts
+    this._series = [];
+    this._crosshairCallbacks = [];
+    this._rangeCallbacks = [];
+    this._nextSeriesId = 0;
+
+    // Time scale proxy (lightweight-charts compatible)
+    const self = this;
+    this._timeScaleProxy = {
+      fitContent() {
+        // Reset visible range to all bars
+        const total = self.gpu.total_bar_count();
+        if (total > 0) self.gpu.set_visible_range(0, total);
+      },
+      setVisibleLogicalRange(range) {
+        self.gpu.set_visible_range(range.from, range.to);
+      },
+      getVisibleLogicalRange() {
+        const r = self.gpu.get_time_range(); // returns [start, end]
+        return { from: r[0], to: r[1] };
+      },
+      subscribeVisibleLogicalRangeChange(cb) {
+        self._rangeCallbacks.push(cb);
+        return () => { self._rangeCallbacks = self._rangeCallbacks.filter(c => c !== cb); };
+      },
+      timeToCoordinate(time) {
+        // TODO: convert unix timestamp to canvas X coordinate
+        return null;
+      },
+      coordinateToTime(x) {
+        // TODO: convert canvas X to unix timestamp
+        return null;
+      },
+      applyOptions() {}, // stub
+    };
+
+    // Mouse event handlers for crosshair emulation
+    this._setupMouseEvents();
+  }
+
+  // ── lightweight-charts compatible series factories ──────────
+  addCandlestickSeries(opts = {}) { return this._createSeries("candle", opts); }
+  addLineSeries(opts = {}) { return this._createSeries("line", opts); }
+  addHistogramSeries(opts = {}) { return this._createSeries("histogram", opts); }
+  addBaselineSeries(opts = {}) { return this._createSeries("baseline", opts); }
+  addAreaSeries(opts = {}) { return this._createSeries("area", opts); }
+  addBarSeries(opts = {}) { return this._createSeries("candle", opts); } // bars rendered as candles on GPU
+
+  // ── Chart-level methods ────────────────────────────────────
+  subscribeCrosshairMove(cb) {
+    this._crosshairCallbacks.push(cb);
+    return () => { this._crosshairCallbacks = this._crosshairCallbacks.filter(c => c !== cb); };
+  }
+
+  timeScale() { return this._timeScaleProxy; }
+  priceScale(_id) { return { applyOptions() {} }; } // stub
+
+  removeSeries(series) {
+    // Remove from tracked series list (GPU lines not individually removable yet)
+    const idx = this._series.indexOf(series);
+    if (idx >= 0) this._series.splice(idx, 1);
+  }
+
+  setCrosshairPosition(_price, _series, _time) {
+    // Stub — GPU chart manages its own crosshair via mouse events
+  }
+
+  resize(w, h) {
+    this.canvas.width = w;
+    this.canvas.height = h;
+    this.gpu.resize(w, h);
+    this.gpu.render();
+  }
+
+  remove() {
+    this.canvas.remove();
+  }
+
+  applyOptions(_opts) {} // stub — theme/layout options not yet mapped
+
+  // ── Internal: create a series proxy object ─────────────────
+  _createSeries(type, opts) {
+    const self = this;
+    const seriesId = this._nextSeriesId++;
+    let storedData = [];
+    let gpuLineIndex = -1; // track GPU line index for line/histogram series
+    const priceLines = []; // track price lines created on this series
+
+    const series = {
+      _type: type,
+      _id: seriesId,
+      _opts: opts,
+
+      setData(data) {
+        storedData = data;
+        if (type === "candle") {
+          // Pack OHLCV into flat Float64Array and send to GPU
+          const flat = new Float64Array(data.length * 5);
+          for (let i = 0; i < data.length; i++) {
+            flat[i * 5]     = data[i].open;
+            flat[i * 5 + 1] = data[i].high;
+            flat[i * 5 + 2] = data[i].low;
+            flat[i * 5 + 3] = data[i].close;
+            flat[i * 5 + 4] = data[i].volume || 0;
+          }
+          self.gpu.set_data(flat);
+        } else if (type === "line" || type === "area" || type === "baseline") {
+          // Extract values and add as GPU overlay line
+          const vals = new Float64Array(data.map(d => d.value));
+          const [r, g, b, a] = _parseSeriesColor(opts);
+          gpuLineIndex = self.gpu.add_line(vals, r, g, b, a);
+        } else if (type === "histogram") {
+          // TODO: gpu.add_pane_histogram() for separate-pane histograms
+          // For now, add as a line overlay
+          const vals = new Float64Array(data.map(d => d.value));
+          const [r, g, b, a] = _parseSeriesColor(opts);
+          gpuLineIndex = self.gpu.add_line(vals, r, g, b, a);
+        }
+      },
+
+      update(bar) {
+        // TODO: gpu engine needs update_last_bar() method
+        // For now, append to stored data
+        if (storedData.length > 0 && storedData[storedData.length - 1].time === bar.time) {
+          storedData[storedData.length - 1] = bar;
+        } else {
+          storedData.push(bar);
+        }
+        // Re-send full dataset (inefficient but correct until incremental update exists)
+        series.setData(storedData);
+      },
+
+      createPriceLine(lineOpts = {}) {
+        const price = lineOpts.price || 0;
+        const [r, g, b, a] = _parseLineColor(lineOpts.color);
+        const width = lineOpts.lineWidth || 1;
+        const idx = self.gpu.add_price_line(price, r, g, b, a, width);
+        const priceLine = {
+          _gpuIndex: idx,
+          _opts: { ...lineOpts },
+          applyOptions(newOpts) {
+            Object.assign(priceLine._opts, newOpts);
+            if (newOpts.price !== undefined) {
+              self.gpu.update_price_line(idx, newOpts.price);
+            }
+            // TODO: color/width updates need GPU engine support
+          },
+          options() { return { ...priceLine._opts }; },
+        };
+        priceLines.push(priceLine);
+        return priceLine;
+      },
+
+      removePriceLine(line) {
+        if (line && line._gpuIndex !== undefined) {
+          self.gpu.remove_price_line(line._gpuIndex);
+          const i = priceLines.indexOf(line);
+          if (i >= 0) priceLines.splice(i, 1);
+        }
+      },
+
+      data() { return storedData; },
+
+      priceToCoordinate(price) {
+        // TODO: GPU engine needs y_at_price() method
+        // Approximate using price range and canvas height
+        const pr = self.gpu.get_price_range(); // [min, max]
+        if (pr[1] === pr[0]) return 0;
+        return self.canvas.height * (1 - (price - pr[0]) / (pr[1] - pr[0]));
+      },
+
+      coordinateToPrice(y) {
+        return self.gpu.price_at_y(y);
+      },
+
+      applyOptions(newOpts) {
+        Object.assign(series._opts, newOpts);
+        // TODO: propagate color/style changes to GPU
+      },
+
+      setMarkers(_markers) {
+        // TODO: GPU engine needs marker rendering support
+      },
+
+      seriesType() { return type; },
+    };
+
+    self._series.push(series);
+    return series;
+  }
+
+  // ── Internal: mouse events for crosshair emulation ─────────
+  _setupMouseEvents() {
+    const self = this;
+    this.canvas.addEventListener("mousemove", (e) => {
+      if (self._crosshairCallbacks.length === 0) return;
+      const x = e.offsetX, y = e.offsetY;
+      // Build a lightweight-charts compatible crosshair event
+      const barIdx = Math.round(self.gpu.bar_at_x(x));
+      const price = self.gpu.price_at_y(y);
+      const param = {
+        point: { x, y },
+        time: null, // TODO: map barIdx back to unix timestamp
+        seriesData: new Map(),
+        sourceEvent: e,
+      };
+      // Populate series data if we have candle data
+      for (const s of self._series) {
+        const d = s.data();
+        if (barIdx >= 0 && barIdx < d.length) {
+          param.time = d[barIdx].time;
+          param.seriesData.set(s, d[barIdx]);
+        }
+      }
+      for (const cb of self._crosshairCallbacks) {
+        try { cb(param); } catch (_) {}
+      }
+    });
+
+    this.canvas.addEventListener("mouseleave", () => {
+      const param = { point: null, time: null, seriesData: new Map() };
+      for (const cb of self._crosshairCallbacks) {
+        try { cb(param); } catch (_) {}
+      }
+    });
+  }
+}
+
+// Helper: parse series color options to [r, g, b, a] floats
+function _parseSeriesColor(opts) {
+  const hex = opts.color || opts.lineColor || opts.topLineColor || "#00bcd4";
+  return _hexToFloatRgba(hex);
+}
+
+function _parseLineColor(hex) {
+  return _hexToFloatRgba(hex || "#FFD700");
+}
+
+function _hexToFloatRgba(hex) {
+  if (!hex || hex.length < 4) return [0, 0.74, 0.83, 1.0];
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const a = hex.length > 7 ? parseInt(hex.slice(7, 9), 16) / 255 : 1.0;
+  return [isNaN(r) ? 0 : r, isNaN(g) ? 0 : g, isNaN(b) ? 0 : b, isNaN(a) ? 1 : a];
+}
+
+// Factory: create GPU chart or fall back to lightweight-charts
+function createGpuChart(container, options) {
+  if (gpuChartModule) return new GpuChartWrapper(container, options);
+  return createChart(container, options); // fallback to lightweight-charts
+}
+
 // Convert hex color string to RGBA float array [0..1]
 function hexToRgba(hex) {
   if (!hex || hex.length < 4) return [0, 0.74, 0.83, 1.0]; // fallback cyan
@@ -135,8 +405,10 @@ function timeToBarIndex(unixTime) {
 
 // Sync all frontend drawings to the GPU engine
 function syncDrawingsToGpu() {
-  if (!gpuChartInstance || !currentChartType.startsWith("gpu")) return;
-  gpuChartInstance.clear_drawings();
+  // Use wrapper's GPU instance if available, otherwise legacy overlay
+  const gpu = (chart && chart._isGpuWrapper) ? chart.gpu : gpuChartInstance;
+  if (!gpu || !currentChartType.startsWith("gpu")) return;
+  gpu.clear_drawings();
   for (const d of drawings) {
     const gpuType = GPU_DRAW_TYPES[d.type];
     if (gpuType === undefined) continue;
@@ -148,7 +420,7 @@ function syncDrawingsToGpu() {
     const rgba = hexToRgba(d.color || "#00bcd4");
     const fill = hexToRgba(d.fillColor || "#00000000");
     try {
-      gpuChartInstance.add_drawing(gpuType, new Float64Array(points), new Float32Array(rgba), d.lineWidth || 1.5, new Float32Array(fill));
+      gpu.add_drawing(gpuType, new Float64Array(points), new Float32Array(rgba), d.lineWidth || 1.5, new Float32Array(fill));
     } catch (e) {
       console.warn("GPU add_drawing failed for", d.type, e);
     }
@@ -156,6 +428,9 @@ function syncDrawingsToGpu() {
 }
 
 function activateGpuChart(chartData, gpuType) {
+  // When the GpuChartWrapper IS the chart, it handles its own rendering — no overlay needed
+  if (chart && chart._isGpuWrapper) return;
+
   const canvas = document.getElementById("gpu-chart-canvas");
   const container = document.getElementById("chart-container");
   if (!canvas || !container || !gpuChartModule) return;
@@ -341,11 +616,13 @@ function activateGpuChart(chartData, gpuType) {
 }
 
 function deactivateGpuChart() {
+  // Stop GPU render loop (used by both overlay mode and wrapper mode)
+  if (gpuAnimFrame) { cancelAnimationFrame(gpuAnimFrame); gpuAnimFrame = null; }
+  // Hide legacy overlay canvas (not used when GpuChartWrapper is the chart)
   const canvas = document.getElementById("gpu-chart-canvas");
   if (canvas) canvas.style.display = "none";
   const overlay = document.getElementById("gpu-text-overlay");
   if (overlay) overlay.style.display = "none";
-  if (gpuAnimFrame) { cancelAnimationFrame(gpuAnimFrame); gpuAnimFrame = null; }
 }
 
 // ── Safe DOM helpers (innerHTML elimination) ─────────────────
@@ -861,6 +1138,16 @@ function initChart() {
 
   // Tooltip for indicator values on crosshair
   setupTooltip();
+
+  // If default chart type is GPU, preload GPU module and switch to wrapper
+  // once data arrives (rebuildMainSeries will handle the swap)
+  if (currentChartType.startsWith("gpu")) {
+    loadGpuChart().then(() => {
+      if (gpuChartModule && !chart._isGpuWrapper) {
+        rebuildMainSeries(currentChartType);
+      }
+    });
+  }
 }
 
 function setupTooltip() {
@@ -930,19 +1217,150 @@ function setupTooltip() {
 
 // ── Chart Type Switching ─────────────────────────────────────
 
+// Re-wire time scale sync and crosshair sync after chart recreation.
+// Fisher/Volume stay as lightweight-charts, so sync from main chart to sub-panes.
+function _rewireChartSync() {
+  const fisherContainer = document.getElementById("fisher-pane");
+  const volumeContainer = document.getElementById("volume-pane");
+  const container = document.getElementById("chart-container");
+
+  // Time scale sync: main → sub-panes
+  if (_chartTimeRangeUnsub) _chartTimeRangeUnsub();
+  let syncing = false;
+  _chartTimeRangeUnsub = chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (range && !syncing) {
+      syncing = true;
+      try { fisherChart.timeScale().setVisibleLogicalRange(range); } catch (_) {}
+      try { volumeChart.timeScale().setVisibleLogicalRange(range); } catch (_) {}
+      syncing = false;
+    }
+  });
+
+  // Crosshair sync: main → sub-panes
+  if (_chartCrosshairUnsub) _chartCrosshairUnsub();
+  _chartCrosshairUnsub = chart.subscribeCrosshairMove((param) => {
+    if (param.time) {
+      try { fisherChart.setCrosshairPosition(undefined, undefined, param.time); } catch (_) {}
+      try { volumeChart.setCrosshairPosition(undefined, undefined, param.time); } catch (_) {}
+    }
+  });
+
+  // Resize observer for new chart
+  const ro = new ResizeObserver(() => {
+    chart.resize(container.clientWidth, container.clientHeight);
+    fisherChart.resize(fisherContainer.clientWidth, fisherContainer.clientHeight);
+    volumeChart.resize(volumeContainer.clientWidth, volumeContainer.clientHeight);
+  });
+  ro.observe(container);
+
+  // Re-setup tooltip
+  setupTooltip();
+}
+
+// Start GPU render loop for a GpuChartWrapper instance
+function _startGpuRenderLoop(gpuWrapper) {
+  if (gpuAnimFrame) cancelAnimationFrame(gpuAnimFrame);
+  function renderLoop() {
+    if (!gpuWrapper || !gpuWrapper.gpu) return;
+    try { gpuWrapper.gpu.render(); } catch (_) {}
+    gpuAnimFrame = requestAnimationFrame(renderLoop);
+  }
+  renderLoop();
+}
+
 function rebuildMainSeries(chartType) {
   // Save existing SL/TP line prices
   const slPrice = slLine ? slLine.options().price : null;
   const tpPrice = tpLine ? tpLine.options().price : null;
 
-  // Remove old series (this also removes its price lines)
+  const wasGpu = chart && chart._isGpuWrapper;
+  const wantGpu = chartType.startsWith("gpu");
+
+  // ── Switching between GPU ↔ CPU: destroy and recreate chart ──
+  if (wasGpu && !wantGpu) {
+    // GPU → CPU: destroy wrapper, recreate lightweight-charts
+    deactivateGpuChart();
+    chart.remove();
+    const container = document.getElementById("chart-container");
+    chart = createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
+      layout: { background: { color: "#000000" }, textColor: "#d1d4dc", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+      grid: { vertLines: { color: "#333333", style: 3 }, horzLines: { color: "#333333", style: 3 } },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: "#333" },
+      timeScale: { borderColor: "#333", timeVisible: true },
+    });
+    _rewireChartSync();
+    candleSeries = null;
+    slLine = null;
+    tpLine = null;
+  } else if (!wasGpu && wantGpu) {
+    // CPU → GPU: destroy lightweight-charts, create GPU wrapper
+    slLine = null;
+    tpLine = null;
+    chart.remove();
+    const container = document.getElementById("chart-container");
+    // Async: load GPU module then create wrapper
+    currentChartType = chartType;
+    loadGpuChart().then(() => {
+      if (!gpuChartModule) {
+        // Fallback: recreate lightweight-charts if GPU load failed
+        chart = createChart(container, {
+          width: container.clientWidth, height: container.clientHeight,
+          layout: { background: { color: "#000000" }, textColor: "#d1d4dc", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+          grid: { vertLines: { color: "#333333", style: 3 }, horzLines: { color: "#333333", style: 3 } },
+          crosshair: { mode: CrosshairMode.Normal },
+          rightPriceScale: { borderColor: "#333" }, timeScale: { borderColor: "#333", timeVisible: true },
+        });
+        _rewireChartSync();
+        candleSeries = chart.addCandlestickSeries({ upColor: "#00ff00", downColor: "#ff0000", borderDownColor: "#ff0000", borderUpColor: "#00ff00", wickDownColor: "#ff0000", wickUpColor: "#00ff00" });
+        if (currentChartData && currentChartData.length > 0) candleSeries.setData(currentChartData);
+        if (slPrice) createSLLine(slPrice);
+        if (tpPrice) createTPLine(tpPrice);
+        updateOrderPriceLines();
+        return;
+      }
+      chart = new GpuChartWrapper(container, {});
+      const typeId = GPU_CHART_TYPES[chartType] ?? 0;
+      chart.gpu.set_chart_type(typeId);
+      _rewireChartSync();
+      candleSeries = chart.addCandlestickSeries({ upColor: "#00ff00", downColor: "#ff0000" });
+      if (currentChartData && currentChartData.length > 0) {
+        candleSeries.setData(currentChartData);
+      }
+      _startGpuRenderLoop(chart);
+      // Restore SL/TP lines
+      if (slPrice) createSLLine(slPrice);
+      if (tpPrice) createTPLine(tpPrice);
+      updateOrderPriceLines();
+    });
+    return; // async path — don't fall through
+  } else if (wasGpu && wantGpu) {
+    // GPU → GPU (e.g. gpu-candles → gpu-heikin): just change chart type, keep wrapper
+    const typeId = GPU_CHART_TYPES[chartType] ?? 0;
+    chart.gpu.set_chart_type(typeId);
+    slLine = null;
+    tpLine = null;
+    // Clear and re-add candle series
+    candleSeries = chart.addCandlestickSeries({ upColor: "#00ff00", downColor: "#ff0000" });
+    currentChartType = chartType;
+    if (currentChartData && currentChartData.length > 0) {
+      candleSeries.setData(currentChartData);
+    }
+    if (slPrice) createSLLine(slPrice);
+    if (tpPrice) createTPLine(tpPrice);
+    updateOrderPriceLines();
+    return;
+  }
+
+  // ── CPU → CPU: standard lightweight-charts series swap ──
   if (candleSeries) {
     slLine = null;
     tpLine = null;
     chart.removeSeries(candleSeries);
   }
 
-  // Create new series based on type
   if (chartType === "line") {
     candleSeries = chart.addLineSeries({
       color: "#2196f3",
@@ -997,21 +1415,10 @@ function rebuildMainSeries(chartType) {
       if (renkoBricks.length > 0) {
         candleSeries.setData(renkoBricks);
       }
-    } else if (chartType.startsWith("gpu")) {
-      // GPU chart: use WebGL2 renderer (all chart types)
-      deactivateGpuChart();
-      loadGpuChart().then(() => {
-        if (gpuChartModule && currentChartData.length > 0) {
-          activateGpuChart(currentChartData, chartType);
-        }
-      });
     } else {
       candleSeries.setData(currentChartData);
     }
   }
-
-  // Deactivate GPU chart if switching away from it
-  if (!chartType.startsWith("gpu")) deactivateGpuChart();
 
   // Restore SL/TP lines
   if (slPrice) createSLLine(slPrice);
@@ -1040,9 +1447,10 @@ function createSLLine(price) {
     title: "SL",
   });
   if (currentSymbol) invoke("set_sl_level", { symbol: currentSymbol, price }).catch(() => {});
-  // Sync input field
   const slInp = document.getElementById("sl-input");
   if (slInp) slInp.value = price.toFixed(2);
+  // Auto-extend price scale to include SL line (so it's always visible and draggable)
+  _ensurePriceVisible(price);
   updateRiskRewardOverlay();
   updateRiskCalcPanel();
 }
@@ -1058,10 +1466,35 @@ function createTPLine(price) {
     title: "TP",
   });
   if (currentSymbol) invoke("set_tp_level", { symbol: currentSymbol, price }).catch(() => {});
-  // Sync input field
   const tpInp = document.getElementById("tp-input");
   if (tpInp) tpInp.value = price.toFixed(2);
+  // Auto-extend price scale to include TP line
+  _ensurePriceVisible(price);
   updateRiskRewardOverlay();
+}
+
+/// Ensure a price is visible on the chart by adjusting the price scale if needed.
+/// lightweight-charts auto-scales based on visible bar data, but SL/TP may be
+/// far from current price. This forces the scale to include the given price.
+function _ensurePriceVisible(price) {
+  try {
+    if (!chart || !candleSeries) return;
+    // Check if price is within visible range
+    const series = getActiveCandleSeries();
+    const y = series.priceToCoordinate(price);
+    const container = document.getElementById("chart-container");
+    if (!container) return;
+    const h = container.clientHeight;
+    // If the price coordinate is off-screen (null, negative, or beyond container),
+    // switch to percentage-based auto-scale which includes all price lines
+    if (y === null || y < 0 || y > h) {
+      // Force chart to include this price by temporarily adjusting price scale
+      chart.priceScale("right").applyOptions({
+        autoScale: true,
+        scaleMargins: { top: 0.05, bottom: 0.05 },
+      });
+    }
+  } catch (_) {}
 }
 
 function removeSLLine() {
@@ -1209,8 +1642,24 @@ function setupLineDrag() {
     const rect = container.getBoundingClientRect();
     const y = e.clientY - rect.top;
     try {
-      const newPrice = getActiveSeries().coordinateToPrice(y);
-      if (newPrice === null || newPrice <= 0) return;
+      let newPrice = getActiveSeries().coordinateToPrice(y);
+      // If drag goes beyond visible chart area, extrapolate price linearly
+      // so user can drag SL/TP to any price (not limited by visible range)
+      if (newPrice === null) {
+        const h = rect.height;
+        const priceRange = chart.priceScale ? null : null; // lightweight-charts doesn't expose this directly
+        // Use two known points to extrapolate: top of chart = max price, bottom = min price
+        const topPrice = getActiveSeries().coordinateToPrice(0);
+        const botPrice = getActiveSeries().coordinateToPrice(h);
+        if (topPrice !== null && botPrice !== null && h > 0) {
+          const pricePerPixel = (topPrice - botPrice) / h;
+          newPrice = topPrice - y * pricePerPixel;
+        }
+      }
+      // Clamp to minimum tick (0.000001 for crypto, 0.01 for stocks)
+      const minPrice = currentSymbol && currentSymbol.includes("/") ? 0.000001 : 0.01;
+      if (newPrice === null || !isFinite(newPrice)) return;
+      newPrice = Math.max(newPrice, minPrice);
       const line = draggingLine === "sl" ? slLine : tpLine;
       if (line) line.applyOptions({ price: newPrice });
 
@@ -3837,6 +4286,30 @@ async function updateDashboard() {
         }
       });
     }
+    // Market clock — non-blocking, update status bar
+    invoke("get_market_clock").then(json => {
+      const clock = typeof json === "string" ? JSON.parse(json) : json;
+      const el = document.getElementById("market-clock-status");
+      if (!el) return;
+      if (clock.is_open) {
+        el.textContent = "Market: OPEN";
+        el.style.color = "#4caf50";
+      } else {
+        let countdown = "";
+        if (clock.next_open) {
+          const nextOpen = new Date(clock.next_open);
+          const now = new Date();
+          const diffMs = nextOpen - now;
+          if (diffMs > 0) {
+            const hours = Math.floor(diffMs / 3600000);
+            const mins = Math.floor((diffMs % 3600000) / 60000);
+            countdown = ` (opens in ${hours}h ${mins}m)`;
+          }
+        }
+        el.textContent = `Market: CLOSED${countdown}`;
+        el.style.color = "#ff9800";
+      }
+    }).catch(() => {});
   } catch (_) {
   } finally {
     window._dashboardInFlight = false;
@@ -18528,6 +19001,744 @@ function setupSmartAutocomplete() {
 
 if (localStorage.getItem("typhoon_smart_autocomplete") === "true") { setTimeout(setupSmartAutocomplete, 1000); }
 
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Analyst Ratings — Finnhub Recommendations + Price Targets (ANR)
+// ══════════════════════════════════════════════════════════════
+async function cmdAnalystRatings() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const s = loadSettings();
+  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Analyst Ratings`, type: "custom", width: 600, height: 500 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching analyst recommendations...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const [recsJson, ptJson] = await Promise.all([
+      invoke("get_finnhub_recommendations", { symbol: currentSymbol, finnhubKey: s.finnhubKey }),
+      invoke("get_finnhub_price_target", { symbol: currentSymbol, finnhubKey: s.finnhubKey }),
+    ]);
+    const recs = typeof recsJson === "string" ? JSON.parse(recsJson) : recsJson;
+    const pt = typeof ptJson === "string" ? JSON.parse(ptJson) : ptJson;
+    win.contentElement.textContent = "";
+
+    // Analyst recommendations bar chart (last 4 quarters)
+    const quarters = (Array.isArray(recs) ? recs : []).slice(0, 4).reverse();
+    if (quarters.length > 0) {
+      const chartTitle = document.createElement("div");
+      chartTitle.textContent = "Quarterly Recommendations";
+      chartTitle.style.cssText = "color:#888;font-size:11px;padding:4px 8px;border-bottom:1px solid #222;";
+      win.appendElement(chartTitle);
+
+      const chartDiv = document.createElement("div");
+      chartDiv.style.cssText = "padding:8px;";
+      win.appendElement(chartDiv);
+
+      const maxTotal = Math.max(...quarters.map(q => (q.strongBuy || 0) + (q.buy || 0) + (q.hold || 0) + (q.sell || 0) + (q.strongSell || 0)), 1);
+      for (const q of quarters) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:10px;";
+        const label = document.createElement("span");
+        label.style.cssText = "width:60px;color:#888;flex-shrink:0;";
+        label.textContent = (q.period || "").slice(0, 7);
+        row.appendChild(label);
+
+        const barContainer = document.createElement("div");
+        barContainer.style.cssText = "flex:1;display:flex;height:18px;border-radius:2px;overflow:hidden;";
+        const segments = [
+          { val: q.strongBuy || 0, color: "#1b5e20", label: "Strong Buy" },
+          { val: q.buy || 0, color: "#4caf50", label: "Buy" },
+          { val: q.hold || 0, color: "#ff9800", label: "Hold" },
+          { val: q.sell || 0, color: "#f44336", label: "Sell" },
+          { val: q.strongSell || 0, color: "#b71c1c", label: "Strong Sell" },
+        ];
+        const total = segments.reduce((s, seg) => s + seg.val, 0) || 1;
+        for (const seg of segments) {
+          if (seg.val > 0) {
+            const bar = document.createElement("div");
+            bar.style.cssText = `width:${(seg.val / total * 100).toFixed(1)}%;background:${seg.color};display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;`;
+            bar.textContent = seg.val;
+            bar.title = `${seg.label}: ${seg.val}`;
+            barContainer.appendChild(bar);
+          }
+        }
+        row.appendChild(barContainer);
+        chartDiv.appendChild(row);
+      }
+
+      // Legend
+      const legend = document.createElement("div");
+      legend.style.cssText = "display:flex;gap:8px;padding:4px 8px;font-size:9px;color:#888;flex-wrap:wrap;";
+      for (const [label, color] of [["Strong Buy", "#1b5e20"], ["Buy", "#4caf50"], ["Hold", "#ff9800"], ["Sell", "#f44336"], ["Strong Sell", "#b71c1c"]]) {
+        const item = document.createElement("span");
+        item.style.cssText = "display:flex;align-items:center;gap:3px;";
+        const dot = document.createElement("span");
+        dot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${color};display:inline-block;`;
+        item.appendChild(dot);
+        item.appendChild(document.createTextNode(label));
+        legend.appendChild(item);
+      }
+      win.appendElement(legend);
+
+      // Trend arrow
+      if (quarters.length >= 2) {
+        const latest = quarters[quarters.length - 1];
+        const prev = quarters[quarters.length - 2];
+        const latestBull = (latest.strongBuy || 0) + (latest.buy || 0);
+        const prevBull = (prev.strongBuy || 0) + (prev.buy || 0);
+        const trendDiv = document.createElement("div");
+        trendDiv.style.cssText = "padding:4px 8px;font-size:11px;";
+        if (latestBull > prevBull) {
+          trendDiv.innerHTML = `<span style="color:#4caf50;">&#9650; Improving</span> — bullish ratings increasing`;
+        } else if (latestBull < prevBull) {
+          trendDiv.innerHTML = `<span style="color:#f44336;">&#9660; Deteriorating</span> — bullish ratings declining`;
+        } else {
+          trendDiv.innerHTML = `<span style="color:#ff9800;">&#9654; Stable</span> — ratings unchanged`;
+        }
+        win.appendElement(trendDiv);
+      }
+    } else {
+      const noData = document.createElement("div");
+      noData.textContent = "No recommendation data available.";
+      noData.style.cssText = "color:#888;padding:8px;font-size:11px;";
+      win.appendElement(noData);
+    }
+
+    // Price target section
+    const ptTitle = document.createElement("div");
+    ptTitle.textContent = "Price Targets";
+    ptTitle.style.cssText = "color:#888;font-size:11px;padding:4px 8px;border-top:1px solid #222;border-bottom:1px solid #222;margin-top:8px;";
+    win.appendElement(ptTitle);
+
+    const ptDiv = document.createElement("div");
+    ptDiv.style.cssText = "padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:11px;";
+    const curPrice = lastPrice || 0;
+    const targets = [
+      ["Target High", pt.targetHigh, pt.targetHigh && curPrice ? (curPrice < pt.targetHigh ? "#4caf50" : "#f44336") : "#ccc"],
+      ["Target Mean", pt.targetMean, pt.targetMean && curPrice ? (curPrice < pt.targetMean ? "#4caf50" : "#f44336") : "#ccc"],
+      ["Target Median", pt.targetMedian, pt.targetMedian && curPrice ? (curPrice < pt.targetMedian ? "#4caf50" : "#f44336") : "#ccc"],
+      ["Target Low", pt.targetLow, pt.targetLow && curPrice ? (curPrice < pt.targetLow ? "#4caf50" : "#f44336") : "#ccc"],
+      ["Current Price", curPrice, "#8cf"],
+    ];
+    for (const [label, value, color] of targets) {
+      if (value === undefined || value === null) continue;
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:space-between;";
+      const lbl = document.createElement("span"); lbl.style.color = "#666"; lbl.textContent = label;
+      const val = document.createElement("span"); val.style.color = color; val.textContent = `$${Number(value).toFixed(2)}`;
+      row.appendChild(lbl); row.appendChild(val); ptDiv.appendChild(row);
+    }
+    // Upside/downside from mean
+    if (pt.targetMean && curPrice > 0) {
+      const upside = ((pt.targetMean - curPrice) / curPrice * 100).toFixed(1);
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:space-between;grid-column:span 2;border-top:1px solid #222;padding-top:4px;margin-top:4px;";
+      const lbl = document.createElement("span"); lbl.style.color = "#666"; lbl.textContent = "Upside to Mean Target";
+      const val = document.createElement("span"); val.style.color = Number(upside) >= 0 ? "#4caf50" : "#f44336"; val.textContent = `${Number(upside) >= 0 ? "+" : ""}${upside}%`;
+      row.appendChild(lbl); row.appendChild(val); ptDiv.appendChild(row);
+    }
+    win.appendElement(ptDiv);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load analyst ratings: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Portfolio History — Alpaca equity curve (EQUITY enhanced)
+// ══════════════════════════════════════════════════════════════
+async function cmdPortfolioHistory() {
+  const win = createWindow({ title: "Portfolio History — Equity Curve", type: "custom", width: 700, height: 520 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching portfolio history from Alpaca...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("get_portfolio_history", { period: "1Y", timeframe: "1D" });
+    const data = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+
+    const equity = data.equity || [];
+    const timestamps = data.timestamp || [];
+    const plPct = data.profit_loss_pct || [];
+    const pl = data.profit_loss || [];
+
+    if (equity.length < 2) {
+      win.setContent("Not enough portfolio history data. Check back after a few trading days.");
+      return;
+    }
+
+    // Equity curve chart
+    const chartDiv = document.createElement("div");
+    chartDiv.style.cssText = "width:100%;height:240px;";
+    win.appendElement(chartDiv);
+
+    const eqChart = createChart(chartDiv, {
+      width: chartDiv.clientWidth || 660, height: 240,
+      layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false },
+      grid: { vertLines: { color: "#1a1a2e" }, horzLines: { color: "#1a1a2e" } },
+      rightPriceScale: { borderColor: "#333" }, timeScale: { borderColor: "#333" },
+    });
+
+    const eqData = [];
+    for (let i = 0; i < equity.length; i++) {
+      if (equity[i] === null || equity[i] === undefined) continue;
+      const ts = timestamps[i];
+      const dateStr = typeof ts === "number"
+        ? new Date(ts * (ts < 1e12 ? 1000 : 1)).toISOString().slice(0, 10)
+        : String(ts).slice(0, 10);
+      eqData.push({ time: dateStr, value: equity[i] });
+    }
+
+    const startEq = eqData[0]?.value || 0;
+    const endEq = eqData[eqData.length - 1]?.value || 0;
+    const isAbove = endEq >= startEq;
+    const eqSeries = eqChart.addLineSeries({ color: isAbove ? "#4caf50" : "#f44336", lineWidth: 2, title: "Equity" });
+    eqSeries.setData(eqData);
+
+    // P&L % overlay on secondary scale
+    const plData = [];
+    for (let i = 0; i < plPct.length; i++) {
+      if (plPct[i] === null || plPct[i] === undefined) continue;
+      const ts = timestamps[i];
+      const dateStr = typeof ts === "number"
+        ? new Date(ts * (ts < 1e12 ? 1000 : 1)).toISOString().slice(0, 10)
+        : String(ts).slice(0, 10);
+      plData.push({ time: dateStr, value: plPct[i] * 100 });
+    }
+    if (plData.length > 0) {
+      const plSeries = eqChart.addAreaSeries({
+        topColor: "rgba(33,150,243,0.2)", bottomColor: "rgba(33,150,243,0.0)",
+        lineColor: "rgba(33,150,243,0.6)", lineWidth: 1, title: "P&L %",
+        priceScaleId: "pnl",
+      });
+      plSeries.setData(plData);
+      eqChart.priceScale("pnl").applyOptions({ scaleMargins: { top: 0.7, bottom: 0 } });
+    }
+    eqChart.timeScale().fitContent();
+
+    // Stats
+    const totalReturn = startEq > 0 ? ((endEq - startEq) / startEq * 100) : 0;
+    let peak = 0, maxDD = 0;
+    for (const d of eqData) {
+      if (d.value > peak) peak = d.value;
+      const dd = (d.value - peak) / peak * 100;
+      if (dd < maxDD) maxDD = dd;
+    }
+    let sharpe = "\u2014";
+    if (eqData.length > 5) {
+      const rets = [];
+      for (let i = 1; i < eqData.length; i++) rets.push((eqData[i].value - eqData[i - 1].value) / eqData[i - 1].value);
+      const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+      const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / rets.length;
+      const std = Math.sqrt(variance);
+      if (std > 0) sharpe = ((mean / std) * Math.sqrt(252)).toFixed(3);
+    }
+
+    const statsDiv = document.createElement("div");
+    statsDiv.style.cssText = "padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:11px;border-top:1px solid #222;";
+    for (const [label, value, color] of [
+      ["Total Return", `${totalReturn >= 0 ? "+" : ""}${totalReturn.toFixed(2)}%`, totalReturn >= 0 ? "#4caf50" : "#f44336"],
+      ["Max Drawdown", `${maxDD.toFixed(2)}%`, "#f44336"],
+      ["Sharpe Ratio", sharpe, "#ccc"],
+      ["Current Equity", `$${endEq.toLocaleString(undefined, { maximumFractionDigits: 2 })}`, "#8cf"],
+      ["Period", `${eqData.length} days`, "#888"],
+      ["Start Equity", `$${startEq.toLocaleString(undefined, { maximumFractionDigits: 2 })}`, "#888"],
+    ]) {
+      const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;";
+      const lbl = document.createElement("span"); lbl.style.color = "#666"; lbl.textContent = label;
+      const val = document.createElement("span"); val.style.color = color; val.textContent = value;
+      row.appendChild(lbl); row.appendChild(val); statsDiv.appendChild(row);
+    }
+    win.appendElement(statsDiv);
+
+    const ro = new ResizeObserver(() => { if (chartDiv.clientWidth > 0) eqChart.applyOptions({ width: chartDiv.clientWidth }); });
+    ro.observe(chartDiv);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load portfolio history: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Fear & Greed Index (FEAR)
+// ══════════════════════════════════════════════════════════════
+async function cmdFearGreed() {
+  const win = createWindow({ title: "Fear & Greed Index", type: "custom", width: 500, height: 420 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching Fear & Greed data...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("fetch_fear_greed");
+    const result = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+
+    const dataArr = result.data || result || [];
+    if (!Array.isArray(dataArr) || dataArr.length === 0) {
+      win.setContent("No Fear & Greed data available.");
+      return;
+    }
+
+    const current = dataArr[0];
+    const val = Number(current.value);
+    const classification = current.value_classification || "";
+
+    // Color based on value
+    function fgColor(v) {
+      if (v <= 25) return "#f44336";
+      if (v <= 45) return "#ff9800";
+      if (v <= 55) return "#ffeb3b";
+      if (v <= 75) return "#4caf50";
+      return "#00e676";
+    }
+
+    // Current value display — large gauge
+    const gaugeDiv = document.createElement("div");
+    gaugeDiv.style.cssText = "text-align:center;padding:16px;";
+    const valSpan = document.createElement("div");
+    valSpan.style.cssText = `font-size:48px;font-weight:bold;color:${fgColor(val)};font-family:Consolas,monospace;`;
+    valSpan.textContent = val;
+    gaugeDiv.appendChild(valSpan);
+    const classSpan = document.createElement("div");
+    classSpan.style.cssText = `font-size:16px;color:${fgColor(val)};margin-top:4px;`;
+    classSpan.textContent = classification;
+    gaugeDiv.appendChild(classSpan);
+
+    // Gauge bar
+    const barOuter = document.createElement("div");
+    barOuter.style.cssText = "width:80%;margin:12px auto;height:12px;background:linear-gradient(to right, #f44336, #ff9800, #ffeb3b, #4caf50, #00e676);border-radius:6px;position:relative;";
+    const marker = document.createElement("div");
+    marker.style.cssText = `position:absolute;top:-3px;left:${val}%;width:4px;height:18px;background:#fff;border-radius:2px;transform:translateX(-50%);box-shadow:0 0 4px rgba(255,255,255,0.5);`;
+    barOuter.appendChild(marker);
+    gaugeDiv.appendChild(barOuter);
+
+    // Scale labels
+    const scaleLabels = document.createElement("div");
+    scaleLabels.style.cssText = "display:flex;justify-content:space-between;width:80%;margin:0 auto;font-size:9px;color:#666;";
+    for (const l of ["Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed"]) {
+      const sp = document.createElement("span"); sp.textContent = l; scaleLabels.appendChild(sp);
+    }
+    gaugeDiv.appendChild(scaleLabels);
+    win.appendElement(gaugeDiv);
+
+    // 30-day sparkline chart
+    const last30 = dataArr.slice(0, 30).reverse();
+    if (last30.length > 1) {
+      const sparkTitle = document.createElement("div");
+      sparkTitle.textContent = "30-Day History";
+      sparkTitle.style.cssText = "color:#888;font-size:11px;padding:4px 8px;border-top:1px solid #222;";
+      win.appendElement(sparkTitle);
+
+      const chartDiv = document.createElement("div");
+      chartDiv.style.cssText = "width:100%;height:140px;";
+      win.appendElement(chartDiv);
+
+      const sparkChart = createChart(chartDiv, {
+        width: chartDiv.clientWidth || 460, height: 140,
+        layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false },
+        grid: { vertLines: { color: "#1a1a2e" }, horzLines: { color: "#1a1a2e" } },
+        rightPriceScale: { borderColor: "#333" }, timeScale: { borderColor: "#333" },
+      });
+
+      const sparkData = last30.map(d => {
+        const ts = d.timestamp;
+        const dateStr = typeof ts === "number"
+          ? new Date(ts * (ts < 1e12 ? 1000 : 1)).toISOString().slice(0, 10)
+          : String(ts || "").slice(0, 10);
+        return { time: dateStr, value: Number(d.value) };
+      }).filter(d => d.time && !isNaN(d.value));
+
+      if (sparkData.length > 1) {
+        const sparkSeries = sparkChart.addAreaSeries({
+          topColor: "rgba(76,175,80,0.3)", bottomColor: "rgba(244,67,54,0.3)",
+          lineColor: fgColor(val), lineWidth: 2,
+        });
+        sparkSeries.setData(sparkData);
+        sparkChart.timeScale().fitContent();
+      }
+
+      const ro = new ResizeObserver(() => { if (chartDiv.clientWidth > 0) sparkChart.applyOptions({ width: chartDiv.clientWidth }); });
+      ro.observe(chartDiv);
+    }
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load Fear & Greed data: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Yield Curve — Treasury Yields (YIELD)
+// ══════════════════════════════════════════════════════════════
+async function cmdYieldCurve() {
+  const win = createWindow({ title: "Treasury Yield Curve", type: "custom", width: 600, height: 480 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching treasury yields...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("fetch_treasury_yields");
+    const data = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+
+    const yields = Array.isArray(data) ? data : [];
+    if (yields.length === 0) {
+      win.setContent("No treasury yield data available.");
+      return;
+    }
+
+    // Use the latest data point
+    const latest = yields[0];
+    const maturities = ["1mo", "2mo", "3mo", "6mo", "1yr", "2yr", "3yr", "5yr", "7yr", "10yr", "20yr", "30yr"];
+    const maturityLabels = ["1M", "2M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "20Y", "30Y"];
+    const maturityKeys = ["1mo", "2mo", "3mo", "6mo", "1yr", "2yr", "3yr", "5yr", "7yr", "10yr", "20yr", "30yr"];
+
+    // Extract yield values
+    const curvePoints = [];
+    for (let i = 0; i < maturityKeys.length; i++) {
+      const key = maturityKeys[i];
+      const val = latest[key] !== undefined ? latest[key] : latest[key.replace("yr", "Y").replace("mo", "M")];
+      if (val !== undefined && val !== null && val !== "") {
+        curvePoints.push({ label: maturityLabels[i], value: Number(val), key });
+      }
+    }
+
+    if (curvePoints.length < 2) {
+      win.setContent("Insufficient yield data points.");
+      return;
+    }
+
+    // Title with date
+    const titleDiv = document.createElement("div");
+    titleDiv.style.cssText = "padding:4px 8px;font-size:11px;color:#888;border-bottom:1px solid #222;";
+    titleDiv.textContent = `Yield Curve as of ${latest.date || "latest"}`;
+    win.appendElement(titleDiv);
+
+    // Canvas-based yield curve chart
+    const chartDiv = document.createElement("div");
+    chartDiv.style.cssText = "width:100%;height:250px;padding:8px;box-sizing:border-box;";
+    win.appendElement(chartDiv);
+    const canvas = document.createElement("canvas");
+    canvas.width = 560;
+    canvas.height = 240;
+    canvas.style.cssText = "width:100%;height:100%;";
+    chartDiv.appendChild(canvas);
+    const ctx = canvas.getContext("2d");
+
+    const minY = Math.min(...curvePoints.map(p => p.value)) - 0.3;
+    const maxY = Math.max(...curvePoints.map(p => p.value)) + 0.3;
+    const padL = 40, padR = 20, padT = 10, padB = 30;
+    const w = canvas.width - padL - padR;
+    const h = canvas.height - padT - padB;
+
+    function toX(i) { return padL + (i / (curvePoints.length - 1)) * w; }
+    function toY(v) { return padT + (1 - (v - minY) / (maxY - minY)) * h; }
+
+    // Grid
+    ctx.strokeStyle = "#1a1a2e";
+    ctx.lineWidth = 0.5;
+    for (let y = Math.ceil(minY * 2) / 2; y <= maxY; y += 0.5) {
+      ctx.beginPath(); ctx.moveTo(padL, toY(y)); ctx.lineTo(padL + w, toY(y)); ctx.stroke();
+      ctx.fillStyle = "#666"; ctx.font = "9px Consolas"; ctx.textAlign = "right";
+      ctx.fillText(`${y.toFixed(1)}%`, padL - 4, toY(y) + 3);
+    }
+
+    // X labels
+    ctx.textAlign = "center";
+    for (let i = 0; i < curvePoints.length; i++) {
+      ctx.fillStyle = "#666"; ctx.font = "9px Consolas";
+      ctx.fillText(curvePoints[i].label, toX(i), canvas.height - 8);
+    }
+
+    // Detect inversion — color segments
+    ctx.lineWidth = 2;
+    for (let i = 0; i < curvePoints.length - 1; i++) {
+      const inverted = curvePoints[i].value > curvePoints[i + 1].value;
+      ctx.strokeStyle = inverted ? "#f44336" : "#4caf50";
+      ctx.beginPath();
+      ctx.moveTo(toX(i), toY(curvePoints[i].value));
+      ctx.lineTo(toX(i + 1), toY(curvePoints[i + 1].value));
+      ctx.stroke();
+    }
+
+    // Data points
+    for (let i = 0; i < curvePoints.length; i++) {
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(toX(i), toY(curvePoints[i].value), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 2Y-10Y spread
+    const y2 = curvePoints.find(p => p.label === "2Y");
+    const y10 = curvePoints.find(p => p.label === "10Y");
+    const spreadDiv = document.createElement("div");
+    spreadDiv.style.cssText = "padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:11px;border-top:1px solid #222;";
+
+    if (y2 && y10) {
+      const spread210 = (y10.value - y2.value).toFixed(3);
+      const isInverted = Number(spread210) < 0;
+      for (const [label, value, color] of [
+        ["2Y Yield", `${y2.value.toFixed(3)}%`, "#8cf"],
+        ["10Y Yield", `${y10.value.toFixed(3)}%`, "#8cf"],
+        ["2Y-10Y Spread", `${spread210}%`, isInverted ? "#f44336" : "#4caf50"],
+        ["Status", isInverted ? "INVERTED" : "Normal", isInverted ? "#f44336" : "#4caf50"],
+      ]) {
+        const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;";
+        const lbl = document.createElement("span"); lbl.style.color = "#666"; lbl.textContent = label;
+        const val = document.createElement("span"); val.style.color = color; val.textContent = value;
+        row.appendChild(lbl); row.appendChild(val); spreadDiv.appendChild(row);
+      }
+      if (isInverted) {
+        const warnRow = document.createElement("div");
+        warnRow.style.cssText = "grid-column:span 2;padding:6px;background:#2a0a0a;border:1px solid #f44336;border-radius:4px;color:#f44336;font-size:10px;text-align:center;margin-top:4px;";
+        warnRow.textContent = "WARNING: Yield curve is inverted — historically a recession indicator";
+        spreadDiv.appendChild(warnRow);
+      }
+    }
+
+    // Show all yields
+    for (const p of curvePoints) {
+      const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;";
+      const lbl = document.createElement("span"); lbl.style.color = "#666"; lbl.textContent = p.label;
+      const val = document.createElement("span"); val.style.color = "#ccc"; val.textContent = `${p.value.toFixed(3)}%`;
+      row.appendChild(lbl); row.appendChild(val); spreadDiv.appendChild(row);
+    }
+    win.appendElement(spreadDiv);
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load treasury yields: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Corporate Actions (ACTIONS)
+// ══════════════════════════════════════════════════════════════
+async function cmdCorporateActions() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Corporate Actions`, type: "custom", width: 600, height: 400 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching corporate actions...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("get_corporate_actions", { symbol: currentSymbol });
+    const actions = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+
+    const items = Array.isArray(actions) ? actions : [];
+    if (items.length === 0) {
+      win.setContent(`No corporate actions found for ${currentSymbol}.`);
+      return;
+    }
+
+    // Type color mapping
+    function typeColor(type) {
+      const t = (type || "").toLowerCase();
+      if (t.includes("dividend")) return "#4caf50";
+      if (t.includes("split")) return "#2196f3";
+      if (t.includes("merger") || t.includes("acquisition")) return "#ff9800";
+      if (t.includes("spinoff") || t.includes("spin")) return "#9c27b0";
+      return "#888";
+    }
+
+    // Table header
+    const header = document.createElement("div");
+    header.style.cssText = "display:flex;gap:8px;padding:6px 8px;border-bottom:1px solid #333;color:#888;font-size:10px;font-family:Consolas,monospace;";
+    for (const [col, flex] of [["Date", "1"], ["Type", "1"], ["Details", "2"]]) {
+      const span = document.createElement("span");
+      span.textContent = col;
+      span.style.flex = flex;
+      header.appendChild(span);
+    }
+    win.appendElement(header);
+
+    const listEl = document.createElement("div");
+    listEl.style.cssText = "overflow-y:auto;max-height:calc(100% - 50px);";
+    win.appendElement(listEl);
+
+    for (const item of items) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;padding:4px 8px;border-bottom:1px solid #111;font-size:11px;";
+
+      const date = document.createElement("span");
+      date.style.cssText = "flex:1;color:#ccc;";
+      date.textContent = item.date || item.record_date || item.ex_date || item.effective_date || "\u2014";
+
+      const type = document.createElement("span");
+      const actionType = item.type || item.ca_type || item.action || "Unknown";
+      type.style.cssText = `flex:1;color:${typeColor(actionType)};font-weight:bold;`;
+      type.textContent = actionType;
+
+      const details = document.createElement("span");
+      details.style.cssText = "flex:2;color:#aaa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+      // Build details string from available fields
+      const detailParts = [];
+      if (item.description) detailParts.push(item.description);
+      if (item.cash) detailParts.push(`Cash: $${item.cash}`);
+      if (item.old_rate !== undefined && item.new_rate !== undefined) detailParts.push(`${item.old_rate}:${item.new_rate}`);
+      if (item.sub_type) detailParts.push(item.sub_type);
+      details.textContent = detailParts.join(" | ") || "\u2014";
+      details.title = detailParts.join(" | ");
+
+      row.appendChild(date);
+      row.appendChild(type);
+      row.appendChild(details);
+      listEl.appendChild(row);
+    }
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load corporate actions: ${e}`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// FEATURE: Insider Sentiment — Finnhub MSPR (INSIDERFLOW)
+// ══════════════════════════════════════════════════════════════
+async function cmdInsiderSentiment() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const s = loadSettings();
+  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  const win = createWindow({ title: `${currentSymbol} — Insider Sentiment`, type: "custom", width: 600, height: 480 });
+  win.contentElement.textContent = "";
+  const loading = document.createElement("div");
+  loading.textContent = "Fetching insider sentiment data...";
+  loading.style.cssText = "color:#888;padding:12px;";
+  win.appendElement(loading);
+  try {
+    const json = await invoke("get_finnhub_insider_sentiment", { symbol: currentSymbol, finnhubKey: s.finnhubKey });
+    const result = typeof json === "string" ? JSON.parse(json) : json;
+    win.contentElement.textContent = "";
+
+    const sentimentData = result.data || result || [];
+    if (!Array.isArray(sentimentData) || sentimentData.length === 0) {
+      win.setContent(`No insider sentiment data found for ${currentSymbol}.`);
+      return;
+    }
+
+    // Title
+    const titleDiv = document.createElement("div");
+    titleDiv.style.cssText = "color:#888;font-size:11px;padding:4px 8px;border-bottom:1px solid #222;";
+    titleDiv.textContent = `Insider Sentiment — Monthly MSPR (${sentimentData.length} months)`;
+    win.appendElement(titleDiv);
+
+    // MSPR bar chart — canvas
+    const chartDiv = document.createElement("div");
+    chartDiv.style.cssText = "width:100%;height:200px;padding:8px;box-sizing:border-box;";
+    win.appendElement(chartDiv);
+    const canvas = document.createElement("canvas");
+    canvas.width = 560;
+    canvas.height = 190;
+    canvas.style.cssText = "width:100%;height:100%;";
+    chartDiv.appendChild(canvas);
+    const ctx = canvas.getContext("2d");
+
+    // Sort by year/month
+    const sorted = [...sentimentData].sort((a, b) => {
+      if (a.year !== b.year) return a.year - b.year;
+      return a.month - b.month;
+    });
+
+    const msprValues = sorted.map(d => d.mspr || 0);
+    const changeValues = sorted.map(d => d.change || 0);
+    const maxAbs = Math.max(Math.abs(Math.min(...msprValues)), Math.abs(Math.max(...msprValues)), 0.01);
+    const padL = 40, padR = 10, padT = 10, padB = 30;
+    const w = canvas.width - padL - padR;
+    const h = canvas.height - padT - padB;
+    const midY = padT + h / 2;
+    const barW = Math.max(2, Math.min(20, (w / sorted.length) - 2));
+
+    // Zero line
+    ctx.strokeStyle = "#333"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, midY); ctx.lineTo(padL + w, midY); ctx.stroke();
+
+    // Y-axis labels
+    ctx.fillStyle = "#666"; ctx.font = "9px Consolas"; ctx.textAlign = "right";
+    ctx.fillText(`+${maxAbs.toFixed(2)}`, padL - 4, padT + 8);
+    ctx.fillText("0", padL - 4, midY + 3);
+    ctx.fillText(`-${maxAbs.toFixed(2)}`, padL - 4, padT + h - 2);
+
+    // Bars
+    for (let i = 0; i < sorted.length; i++) {
+      const mspr = sorted[i].mspr || 0;
+      const x = padL + (i / sorted.length) * w + (w / sorted.length - barW) / 2;
+      const barH = Math.abs(mspr / maxAbs) * (h / 2);
+      const y = mspr >= 0 ? midY - barH : midY;
+      ctx.fillStyle = mspr >= 0 ? "#4caf50" : "#f44336";
+      ctx.fillRect(x, y, barW, barH);
+
+      // X labels (show month for every bar if few, else every 3rd)
+      const showLabel = sorted.length <= 12 || i % 3 === 0;
+      if (showLabel) {
+        ctx.fillStyle = "#666"; ctx.font = "8px Consolas"; ctx.textAlign = "center";
+        const months = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+        ctx.fillText(`${months[(sorted[i].month || 1) - 1]}${String(sorted[i].year || "").slice(2)}`, x + barW / 2, canvas.height - 8);
+      }
+    }
+
+    // Aggregate stats
+    const totalMSPR = msprValues.reduce((a, b) => a + b, 0);
+    const totalChange = changeValues.reduce((a, b) => a + b, 0);
+    const posMonths = msprValues.filter(v => v > 0).length;
+    const negMonths = msprValues.filter(v => v < 0).length;
+
+    const statsDiv = document.createElement("div");
+    statsDiv.style.cssText = "padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:11px;border-top:1px solid #222;";
+    for (const [label, value, color] of [
+      ["Aggregate MSPR", totalMSPR.toFixed(4), totalMSPR >= 0 ? "#4caf50" : "#f44336"],
+      ["Net Share Change", totalChange.toLocaleString(), totalChange >= 0 ? "#4caf50" : "#f44336"],
+      ["Positive Months", `${posMonths}`, "#4caf50"],
+      ["Negative Months", `${negMonths}`, "#f44336"],
+      ["Buy/Sell Ratio", negMonths > 0 ? (posMonths / negMonths).toFixed(2) : "\u221E", posMonths >= negMonths ? "#4caf50" : "#f44336"],
+      ["Latest MSPR", msprValues.length > 0 ? msprValues[msprValues.length - 1].toFixed(4) : "\u2014", (msprValues[msprValues.length - 1] || 0) >= 0 ? "#4caf50" : "#f44336"],
+    ]) {
+      const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;";
+      const lbl = document.createElement("span"); lbl.style.color = "#666"; lbl.textContent = label;
+      const val = document.createElement("span"); val.style.color = color; val.textContent = value;
+      row.appendChild(lbl); row.appendChild(val); statsDiv.appendChild(row);
+    }
+    win.appendElement(statsDiv);
+
+    // Monthly table
+    const tableTitle = document.createElement("div");
+    tableTitle.textContent = "Monthly Breakdown";
+    tableTitle.style.cssText = "color:#888;font-size:11px;padding:4px 8px;border-top:1px solid #222;border-bottom:1px solid #222;";
+    win.appendElement(tableTitle);
+
+    const listEl = document.createElement("div");
+    listEl.style.cssText = "overflow-y:auto;max-height:120px;";
+    win.appendElement(listEl);
+
+    const headerRow = document.createElement("div");
+    headerRow.style.cssText = "display:flex;gap:8px;padding:4px 8px;color:#888;font-size:10px;font-family:Consolas,monospace;border-bottom:1px solid #222;";
+    for (const [col, flex] of [["Period", "1"], ["MSPR", "1"], ["Change", "1"]]) {
+      const sp = document.createElement("span"); sp.style.flex = flex; sp.textContent = col; headerRow.appendChild(sp);
+    }
+    listEl.appendChild(headerRow);
+
+    for (const d of [...sorted].reverse()) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;padding:3px 8px;border-bottom:1px solid #111;font-size:10px;";
+      const period = document.createElement("span"); period.style.cssText = "flex:1;color:#ccc;";
+      period.textContent = `${d.year}-${String(d.month || 0).padStart(2, "0")}`;
+      const mspr = document.createElement("span"); mspr.style.cssText = `flex:1;color:${(d.mspr || 0) >= 0 ? "#4caf50" : "#f44336"};`;
+      mspr.textContent = (d.mspr || 0).toFixed(4);
+      const change = document.createElement("span"); change.style.cssText = `flex:1;color:${(d.change || 0) >= 0 ? "#4caf50" : "#f44336"};`;
+      change.textContent = (d.change || 0).toLocaleString();
+      row.appendChild(period); row.appendChild(mspr); row.appendChild(change);
+      listEl.appendChild(row);
+    }
+  } catch (e) {
+    win.contentElement.textContent = "";
+    win.setContent(`Failed to load insider sentiment: ${e}`);
+  }
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
@@ -18737,6 +19948,12 @@ const CMD_PALETTE_COMMANDS = [
   { name: "DRAW-ARROWSTOP", desc: "Arrow Stop (red X marker)", action: () => { drawingMode = "arrow-stop"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
   { name: "DRAW-TEXTBOX", desc: "Text Box (label with background and border)", action: () => { drawingMode = "text-box"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
   { name: "CACHE", desc: "Bar data cache manager — storage stats, cleanup", action: cmdCacheManager },
+  { name: "ANR", desc: "Analyst ratings — Finnhub recommendations + price targets", action: cmdAnalystRatings },
+  { name: "PORTHIST", desc: "Portfolio history — Alpaca equity curve (1Y daily)", action: cmdPortfolioHistory },
+  { name: "FEAR", desc: "Fear & Greed Index (30-day gauge + sparkline)", action: cmdFearGreed },
+  { name: "YIELD", desc: "Treasury yield curve (inversion detection, 2Y-10Y spread)", action: cmdYieldCurve },
+  { name: "ACTIONS", desc: "Corporate actions (dividends, splits, mergers)", action: cmdCorporateActions },
+  { name: "INSIDERFLOW", desc: "Insider sentiment — Finnhub MSPR (buy/sell ratio chart)", action: cmdInsiderSentiment },
 ];
 
 function fuzzyMatch(query, target) {
@@ -25366,6 +26583,12 @@ function setupMenuBar() {
     "journal": () => cmdTradeJournal(),
     "activities": () => cmdActivities(),
     "alertboard": () => cmdAlertBoard(),
+    "analyst-ratings": () => cmdAnalystRatings(),
+    "portfolio-history": () => cmdPortfolioHistory(),
+    "fear-greed": () => cmdFearGreed(),
+    "yield-curve": () => cmdYieldCurve(),
+    "corporate-actions": () => cmdCorporateActions(),
+    "insider-sentiment": () => cmdInsiderSentiment(),
   };
 
   document.querySelectorAll(".menu-entry").forEach(entry => {

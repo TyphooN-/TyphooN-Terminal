@@ -732,18 +732,54 @@ impl AlpacaBroker {
         resp.json().await.map_err(|e| format!("FMP parse failed: {e}"))
     }
 
-    // ── Corporate Actions (Earnings/Dividends) ──────────────────
+    // ── Portfolio History ────────────────────────────────────────
 
-    pub async fn get_corporate_actions(&self, symbol: &str, types: &str) -> Result<Vec<serde_json::Value>, String> {
+    pub async fn get_portfolio_history(&self, period: &str, timeframe: &str) -> Result<serde_json::Value, String> {
         self.rate_limiter.wait().await;
-        // Alpaca corporate actions endpoint
         let resp = self
             .client
-            .get(format!("{}/v1/corporate-actions", self.base_url))
+            .get(format!("{}/v2/account/portfolio/history", self.base_url))
+            .headers(self.headers())
+            .query(&[("period", period), ("timeframe", timeframe)])
+            .send()
+            .await
+            .map_err(|e| format!("Portfolio history request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Portfolio history: HTTP {}", resp.status()));
+        }
+        resp.json().await.map_err(|e| format!("Portfolio history parse failed: {e}"))
+    }
+
+    // ── Market Clock ─────────────────────────────────────────────
+
+    pub async fn get_market_clock(&self) -> Result<serde_json::Value, String> {
+        self.rate_limiter.wait().await;
+        let resp = self
+            .client
+            .get(format!("{}/v2/clock", self.base_url))
+            .headers(self.headers())
+            .send()
+            .await
+            .map_err(|e| format!("Market clock request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Market clock: HTTP {}", resp.status()));
+        }
+        resp.json().await.map_err(|e| format!("Market clock parse failed: {e}"))
+    }
+
+    // ── Corporate Actions (Earnings/Dividends) ──────────────────
+
+    pub async fn get_corporate_actions(&self, symbol: &str) -> Result<Vec<serde_json::Value>, String> {
+        self.rate_limiter.wait().await;
+        let resp = self
+            .client
+            .get(format!("{}/v1beta1/corporate-actions", DATA_BASE))
             .headers(self.headers())
             .query(&[
                 ("symbols", symbol),
-                ("types", types), // "dividend", "merger", "spinoff", "split"
+                ("types", "dividend,split,merger,spinoff"),
             ])
             .send()
             .await;
@@ -757,6 +793,57 @@ impl AlpacaBroker {
             Ok(r) => Err(format!("Corporate actions: HTTP {}", r.status())),
             Err(e) => Err(format!("Corporate actions request failed: {e}")),
         }
+    }
+
+    // ── Finnhub Recommendation Trends ────────────────────────────
+
+    pub async fn get_finnhub_recommendations(&self, symbol: &str, finnhub_key: &str) -> Result<Vec<serde_json::Value>, String> {
+        if finnhub_key.is_empty() { return Err("Finnhub API key required".into()); }
+        let resp = sec_client()
+            .get("https://finnhub.io/api/v1/stock/recommendation")
+            .query(&[("symbol", symbol), ("token", finnhub_key)])
+            .send()
+            .await
+            .map_err(|e| format!("Finnhub recommendations failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Finnhub recommendations: HTTP {}", resp.status()));
+        }
+        resp.json().await.map_err(|e| format!("Finnhub recommendations parse failed: {e}"))
+    }
+
+    // ── Finnhub Price Targets ────────────────────────────────────
+
+    pub async fn get_finnhub_price_target(&self, symbol: &str, finnhub_key: &str) -> Result<serde_json::Value, String> {
+        if finnhub_key.is_empty() { return Err("Finnhub API key required".into()); }
+        let resp = sec_client()
+            .get("https://finnhub.io/api/v1/stock/price-target")
+            .query(&[("symbol", symbol), ("token", finnhub_key)])
+            .send()
+            .await
+            .map_err(|e| format!("Finnhub price target failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Finnhub price target: HTTP {}", resp.status()));
+        }
+        resp.json().await.map_err(|e| format!("Finnhub price target parse failed: {e}"))
+    }
+
+    // ── Finnhub Insider Sentiment ────────────────────────────────
+
+    pub async fn get_finnhub_insider_sentiment(&self, symbol: &str, finnhub_key: &str) -> Result<serde_json::Value, String> {
+        if finnhub_key.is_empty() { return Err("Finnhub API key required".into()); }
+        let resp = sec_client()
+            .get("https://finnhub.io/api/v1/stock/insider-sentiment")
+            .query(&[("symbol", symbol), ("token", finnhub_key), ("from", "2024-01-01")])
+            .send()
+            .await
+            .map_err(|e| format!("Finnhub insider sentiment failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Finnhub insider sentiment: HTTP {}", resp.status()));
+        }
+        resp.json().await.map_err(|e| format!("Finnhub insider sentiment parse failed: {e}"))
     }
 
     // ── SEC EDGAR Filings ─────────────────────────────────────────

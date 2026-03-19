@@ -1141,15 +1141,139 @@ async fn get_finnhub_news(state: State<'_, SharedState>, symbol: String, finnhub
 }
 
 #[tauri::command]
-async fn get_corporate_actions(state: State<'_, SharedState>, symbol: String, types: Option<String>) -> Result<String, String> {
+async fn get_corporate_actions(state: State<'_, SharedState>, symbol: String) -> Result<String, String> {
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     let broker = {
         let s = state.lock().await;
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
-    let action_types = types.as_deref().unwrap_or("dividend");
-    let actions = broker.get_corporate_actions(&symbol, action_types).await?;
+    let actions = broker.get_corporate_actions(&symbol).await?;
     Ok(serde_json::to_string(&actions).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
+async fn get_portfolio_history(state: State<'_, SharedState>, period: String, timeframe: String) -> Result<String, String> {
+    if period.is_empty() || period.len() > 20 { return Err("Invalid period".into()); }
+    if timeframe.is_empty() || timeframe.len() > 20 { return Err("Invalid timeframe".into()); }
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+    let history = broker.get_portfolio_history(&period, &timeframe).await?;
+    Ok(serde_json::to_string(&history).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
+async fn get_market_clock(state: State<'_, SharedState>) -> Result<String, String> {
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+    let clock = broker.get_market_clock().await?;
+    Ok(serde_json::to_string(&clock).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
+async fn get_finnhub_recommendations(state: State<'_, SharedState>, symbol: String, finnhub_key: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+    let data = broker.get_finnhub_recommendations(&symbol, &finnhub_key).await?;
+    Ok(serde_json::to_string(&data).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
+async fn get_finnhub_price_target(state: State<'_, SharedState>, symbol: String, finnhub_key: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+    let data = broker.get_finnhub_price_target(&symbol, &finnhub_key).await?;
+    Ok(serde_json::to_string(&data).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
+async fn get_finnhub_insider_sentiment(state: State<'_, SharedState>, symbol: String, finnhub_key: String) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if finnhub_key.is_empty() || finnhub_key.len() > 100 { return Err("Invalid Finnhub API key".into()); }
+    let broker = {
+        let s = state.lock().await;
+        s.broker.as_ref().ok_or("Not connected")?.clone()
+    };
+    let data = broker.get_finnhub_insider_sentiment(&symbol, &finnhub_key).await?;
+    Ok(serde_json::to_string(&data).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+#[tauri::command]
+async fn fetch_fear_greed() -> Result<String, String> {
+    let resp = shared_client()
+        .get("https://api.alternative.me/fng/?limit=30&format=json")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Fear & Greed request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Fear & Greed: HTTP {}", resp.status()));
+    }
+    resp.text().await.map_err(|e| format!("Fear & Greed read failed: {e}"))
+}
+
+#[tauri::command]
+async fn fetch_treasury_yields() -> Result<String, String> {
+    let resp = shared_client()
+        .get("https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/all/2026")
+        .query(&[
+            ("type", "daily_treasury_yield_curve"),
+            ("field_tdr_date_value", "2026"),
+            ("page", ""),
+            ("_format", "csv"),
+        ])
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("Treasury yields request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Treasury yields: HTTP {}", resp.status()));
+    }
+    let csv_text = resp.text().await.map_err(|e| format!("Treasury yields read failed: {e}"))?;
+
+    // Parse CSV into JSON array
+    let mut lines = csv_text.lines();
+    let header = lines.next().ok_or("Treasury CSV: no header row")?;
+    let cols: Vec<&str> = header.split(',').collect();
+
+    // Find column indices for the maturities we want
+    let maturity_map: &[(&str, &str)] = &[
+        ("1 Mo", "1mo"), ("3 Mo", "3mo"), ("6 Mo", "6mo"),
+        ("1 Yr", "1yr"), ("2 Yr", "2yr"), ("5 Yr", "5yr"),
+        ("10 Yr", "10yr"), ("20 Yr", "20yr"), ("30 Yr", "30yr"),
+    ];
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    for line in lines {
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() < 2 { continue; }
+        let mut row = serde_json::json!({ "date": fields.first().unwrap_or(&"") });
+        for (csv_col, json_key) in maturity_map {
+            if let Some(idx) = cols.iter().position(|c| c.contains(csv_col)) {
+                if let Some(val) = fields.get(idx) {
+                    if let Ok(rate) = val.parse::<f64>() {
+                        row[*json_key] = serde_json::json!(rate);
+                    }
+                }
+            }
+        }
+        results.push(row);
+    }
+
+    serde_json::to_string(&results).map_err(|e| format!("Treasury JSON error: {e}"))
 }
 
 #[tauri::command]
@@ -2540,6 +2664,13 @@ fn main() {
             get_av_earnings,
             get_fmp_ratings,
             get_corporate_actions,
+            get_portfolio_history,
+            get_market_clock,
+            get_finnhub_recommendations,
+            get_finnhub_price_target,
+            get_finnhub_insider_sentiment,
+            fetch_fear_greed,
+            fetch_treasury_yields,
             get_sec_filings,
             get_company_fundamentals,
             // Bid/Ask, Activities, Insider
