@@ -13166,6 +13166,848 @@ function cmdAPI() {
   } root.appendChild(exportSection); win.appendElement(root); log("API reference window opened", "ok");
 }
 
+// ── ACCOUNTS — Multi-Account Manager (Alpaca + MT5 Imports) ──
+const ACCOUNTS_REGISTRY_KEY = "typhoon_account_registry";
+
+function loadAccountRegistry() {
+  try { return JSON.parse(localStorage.getItem(ACCOUNTS_REGISTRY_KEY) || "[]"); } catch { return []; }
+}
+function saveAccountRegistry(reg) {
+  // 5 MB guard
+  const s = JSON.stringify(reg);
+  if (s.length > 5 * 1024 * 1024) { log("Account registry exceeds 5 MB, cannot save", "warn"); return; }
+  localStorage.setItem(ACCOUNTS_REGISTRY_KEY, s);
+}
+
+function parseMT5StatementCSV(text) {
+  // MT5 Statement CSV has sections: header rows, Positions, Orders, Deals, and a summary.
+  // We parse: equity/balance from summary, open positions, and closed deal history.
+  const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+  const result = { equity: 0, balance: 0, currency: "USD", positions: [], history: [] };
+
+  // Generic CSV row parser (handles quoted fields)
+  function parseRow(line) {
+    const vals = []; let inQuote = false, current = "";
+    for (const ch of line) {
+      if (ch === '"') { inQuote = !inQuote; continue; }
+      if (ch === "," && !inQuote) { vals.push(current.trim()); current = ""; continue; }
+      if (ch === "\t" && !inQuote) { vals.push(current.trim()); current = ""; continue; }
+      current += ch;
+    }
+    vals.push(current.trim());
+    return vals;
+  }
+
+  // Detect section headers and data
+  let section = "header";
+  let sectionHeaders = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lower = line.toLowerCase();
+
+    // Detect summary values (Balance, Equity lines)
+    if (lower.startsWith("balance") || lower.includes("balance:") || lower.includes("balance\t")) {
+      const nums = line.match(/[\d,]+\.?\d*/g);
+      if (nums && nums.length > 0) result.balance = parseFloat(nums[nums.length - 1].replace(/,/g, "")) || 0;
+    }
+    if (lower.startsWith("equity") || lower.includes("equity:") || lower.includes("equity\t")) {
+      const nums = line.match(/[\d,]+\.?\d*/g);
+      if (nums && nums.length > 0) result.equity = parseFloat(nums[nums.length - 1].replace(/,/g, "")) || 0;
+    }
+    // Currency detection
+    const currMatch = line.match(/\b(USD|EUR|GBP|CHF|JPY|AUD|NZD|CAD)\b/);
+    if (currMatch && result.currency === "USD") result.currency = currMatch[1];
+
+    // Section detection: "Positions", "Deals", "Orders", "Open Positions"
+    if (lower.match(/^(positions|open positions|deals|orders|closed transactions|trade history)/)) {
+      section = lower.includes("deal") || lower.includes("closed") || lower.includes("history") ? "deals" : lower.includes("order") ? "orders" : "positions";
+      // Next line should be headers
+      if (i + 1 < lines.length) {
+        sectionHeaders = parseRow(lines[i + 1]).map(h => h.toLowerCase().replace(/^"|"$/g, ""));
+        i++; // skip header line
+      }
+      continue;
+    }
+
+    // Parse data rows based on section
+    if ((section === "positions" || section === "deals") && sectionHeaders.length > 0) {
+      const vals = parseRow(line);
+      if (vals.length < 3) continue; // too short to be data
+
+      const rowObj = {};
+      for (let j = 0; j < sectionHeaders.length && j < vals.length; j++) {
+        rowObj[sectionHeaders[j]] = vals[j];
+      }
+
+      // Need at least a symbol field
+      const symbol = rowObj["symbol"] || rowObj["instrument"] || rowObj["asset"] || "";
+      if (!symbol || symbol.toLowerCase() === "symbol") continue;
+
+      const type = (rowObj["type"] || rowObj["action"] || rowObj["side"] || "").toLowerCase();
+      const side = type.includes("buy") ? "buy" : type.includes("sell") ? "sell" : "unknown";
+      const lots = parseFloat(rowObj["volume"] || rowObj["lots"] || rowObj["qty"] || rowObj["quantity"] || "0");
+      const price = parseFloat(rowObj["price"] || rowObj["open price"] || rowObj["entry"] || "0");
+      const profit = parseFloat(rowObj["profit"] || rowObj["p/l"] || rowObj["pnl"] || rowObj["net profit"] || "0");
+      const commission = parseFloat(rowObj["commission"] || rowObj["comm"] || "0");
+      const swap = parseFloat(rowObj["swap"] || "0");
+      const time = rowObj["time"] || rowObj["open time"] || rowObj["date"] || "";
+
+      if (section === "positions") {
+        const sl = parseFloat(rowObj["s/l"] || rowObj["sl"] || rowObj["stop loss"] || "0");
+        const tp = parseFloat(rowObj["t/p"] || rowObj["tp"] || rowObj["take profit"] || "0");
+        result.positions.push({ symbol, side, lots, price, profit, commission, swap, sl, tp, time });
+      } else {
+        result.history.push({ symbol, side, lots, price, profit, commission, swap, time });
+      }
+    }
+  }
+
+  // If no equity parsed but balance found, use balance
+  if (result.equity === 0 && result.balance > 0) result.equity = result.balance;
+  // Also try to parse from "Deposit:" or "Credit:" lines
+  return result;
+}
+
+// Fallback: use existing normalizeTrades-style parsing for generic MT5 deal CSVs
+function parseMT5DealsCSV(text) {
+  const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+  if (lines.length < 2) return null;
+  const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+  const hSet = new Set(headers.map(h => h.toLowerCase()));
+  // Must look like MT5 deal export
+  if (!hSet.has("symbol") && !hSet.has("deal")) return null;
+
+  const result = { equity: 0, balance: 0, currency: "USD", positions: [], history: [] };
+  for (let i = 1; i < lines.length; i++) {
+    const vals = []; let inQuote = false, current = "";
+    for (const ch of lines[i]) { if (ch === '"') { inQuote = !inQuote; continue; } if (ch === "," && !inQuote) { vals.push(current.trim()); current = ""; continue; } current += ch; }
+    vals.push(current.trim());
+    const row = {};
+    for (let j = 0; j < headers.length; j++) row[headers[j]] = vals[j] || "";
+
+    const symbol = row["Symbol"] || row["symbol"] || "";
+    if (!symbol) {
+      // Summary row? Check for balance
+      const profitVal = parseFloat(row["Profit"] || row["profit"] || "0");
+      if (profitVal !== 0) result.balance += profitVal;
+      continue;
+    }
+    const type = (row["Type"] || row["type"] || "").toLowerCase();
+    const side = type.includes("buy") ? "buy" : "sell";
+    const lots = parseFloat(row["Volume"] || row["Lots"] || row["volume"] || "1");
+    const price = parseFloat(row["Price"] || row["price"] || "0");
+    const profit = parseFloat(row["Profit"] || row["profit"] || "0");
+    const commission = parseFloat(row["Commission"] || row["commission"] || "0");
+    const swap = parseFloat(row["Swap"] || row["swap"] || "0");
+    const time = row["Time"] || row["Open Time"] || row["time"] || "";
+    result.history.push({ symbol, side, lots, price, profit, commission, swap, time });
+  }
+  return result;
+}
+
+async function cmdAccountManager() {
+  const win = createWindow({ title: "Account Manager — Multi-Account", width: 720, height: 620 });
+  win.contentElement.textContent = "";
+
+  const ACCT_STYLES = {
+    root: "display:flex;flex-direction:column;height:100%;font-family:'Iosevka Fixed',Consolas,monospace;font-size:11px;color:#ddd;",
+    tabBar: "display:flex;border-bottom:1px solid #333;background:#0a0a14;",
+    tab: "padding:8px 16px;cursor:pointer;color:#888;border-bottom:2px solid transparent;font-size:11px;transition:all 0.15s;",
+    tabActive: "padding:8px 16px;cursor:pointer;color:#2196f3;border-bottom:2px solid #2196f3;font-size:11px;font-weight:bold;background:#111;",
+    panel: "flex:1;overflow-y:auto;padding:12px;",
+    card: "background:#111;border:1px solid #333;border-radius:4px;padding:12px;margin-bottom:10px;",
+    btn: "padding:6px 14px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;border-radius:3px;",
+    btnDanger: "padding:6px 14px;background:#5f0a0a;color:#f88;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;border-radius:3px;",
+    input: "background:#111;color:#fff;border:1px solid #555;padding:5px 8px;font-size:11px;font-family:inherit;border-radius:3px;",
+  };
+
+  const root = document.createElement("div"); root.style.cssText = ACCT_STYLES.root;
+
+  // Tab bar
+  const tabBar = document.createElement("div"); tabBar.style.cssText = ACCT_STYLES.tabBar;
+  const tabNames = ["All Accounts", "Import MT5", "Aggregate"];
+  const tabEls = [];
+  const panelEl = document.createElement("div"); panelEl.style.cssText = ACCT_STYLES.panel;
+
+  let activeTab = 0;
+
+  function setActiveTab(idx) {
+    activeTab = idx;
+    tabEls.forEach((t, i) => { t.style.cssText = i === idx ? ACCT_STYLES.tabActive : ACCT_STYLES.tab; });
+    renderPanel();
+  }
+
+  for (let i = 0; i < tabNames.length; i++) {
+    const t = document.createElement("div"); t.textContent = tabNames[i];
+    t.style.cssText = i === 0 ? ACCT_STYLES.tabActive : ACCT_STYLES.tab;
+    t.addEventListener("click", () => setActiveTab(i));
+    tabEls.push(t); tabBar.appendChild(t);
+  }
+  root.appendChild(tabBar);
+  root.appendChild(panelEl);
+  win.appendElement(root);
+
+  // Load Alpaca live data
+  let alpacaAccount = null;
+  let alpacaPositions = [];
+  try {
+    const [acctJson, posJson] = await Promise.all([
+      invokeQuiet("get_account").catch(() => "{}"),
+      invokeQuiet("get_positions").catch(() => "[]"),
+    ]);
+    alpacaAccount = JSON.parse(acctJson);
+    alpacaPositions = JSON.parse(posJson);
+  } catch (_) {}
+
+  // Build the Alpaca account entry
+  function getAlpacaEntry() {
+    if (!alpacaAccount || !alpacaAccount.equity) return null;
+    const equity = parseFloat(alpacaAccount.equity || 0);
+    const pl = alpacaPositions.reduce((s, p) => s + (parseFloat(p.unrealized_pl) || 0), 0);
+    return {
+      name: alpacaAccount.account_number ? `Alpaca_${alpacaAccount.account_number.slice(-4)}` : "Alpaca_Paper",
+      type: "alpaca",
+      active: true,
+      equity,
+      currency: "USD",
+      positions: alpacaPositions.map(p => ({
+        symbol: p.symbol,
+        side: p.side || (parseFloat(p.qty) > 0 ? "buy" : "sell"),
+        lots: Math.abs(parseFloat(p.qty) || 0),
+        price: parseFloat(p.avg_entry_price) || 0,
+        profit: parseFloat(p.unrealized_pl) || 0,
+        marketValue: Math.abs(parseFloat(p.market_value) || 0),
+      })),
+      positionCount: alpacaPositions.length,
+      pnl: pl,
+      status: "Connected",
+    };
+  }
+
+  function getAllAccounts() {
+    const accounts = [];
+    const alpaca = getAlpacaEntry();
+    if (alpaca) accounts.push(alpaca);
+    const registry = loadAccountRegistry();
+    for (const acct of registry) {
+      accounts.push({
+        ...acct,
+        type: "mt5-import",
+        active: false,
+        positionCount: (acct.positions || []).length,
+        pnl: (acct.positions || []).reduce((s, p) => s + (p.profit || 0), 0) + (acct.history || []).reduce((s, h) => s + (h.profit || 0), 0),
+        status: "Imported",
+      });
+    }
+    return accounts;
+  }
+
+  function fmtMoney(val, currency) {
+    const sym = { USD: "$", EUR: "\u20ac", GBP: "\u00a3", CHF: "CHF ", JPY: "\u00a5", AUD: "A$", CAD: "C$" }[currency || "USD"] || "$";
+    return `${sym}${Math.abs(val).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  function renderPanel() {
+    panelEl.textContent = "";
+    if (activeTab === 0) renderAccountList();
+    else if (activeTab === 1) renderImportPanel();
+    else if (activeTab === 2) renderAggregateView();
+  }
+
+  // ── Tab 0: Account List ──────────────────────────────────────
+  function renderAccountList() {
+    const accounts = getAllAccounts();
+    if (accounts.length === 0) {
+      panelEl.appendChild(div("No accounts found. Connect Alpaca or import MT5 CSV.", "color:#888;padding:20px;text-align:center;"));
+      return;
+    }
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:13px;font-weight:bold;color:#2196f3;margin-bottom:10px;";
+    title.textContent = `Registered Accounts (${accounts.length})`;
+    panelEl.appendChild(title);
+
+    // Account table
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;margin-bottom:12px;";
+    const hdr = document.createElement("tr");
+    for (const h of ["Account", "Type", "Equity", "Positions", "P&L", "Status", ""]) {
+      const th = document.createElement("td");
+      th.style.cssText = "color:#666;font-weight:bold;padding:6px 8px;border-bottom:1px solid #333;font-size:10px;text-transform:uppercase;";
+      th.textContent = h;
+      hdr.appendChild(th);
+    }
+    table.appendChild(hdr);
+
+    for (const acct of accounts) {
+      const tr = document.createElement("tr");
+      tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      tr.addEventListener("mouseenter", () => { tr.style.background = "#1a1a2e"; });
+      tr.addEventListener("mouseleave", () => { tr.style.background = ""; });
+
+      const cells = [
+        { text: acct.name, style: "color:#8ff;font-weight:bold;" },
+        { text: acct.type === "alpaca" ? "Alpaca" : "MT5 Import", style: `color:${acct.type === "alpaca" ? "#4caf50" : "#ff9800"};` },
+        { text: fmtMoney(acct.equity, acct.currency), style: "color:#ccc;font-family:Consolas,monospace;" },
+        { text: String(acct.positionCount), style: "color:#aaa;text-align:center;" },
+        { text: (acct.pnl >= 0 ? "+" : "") + fmtMoney(acct.pnl, acct.currency), style: `color:${acct.pnl >= 0 ? "#4caf50" : "#f44336"};font-family:Consolas,monospace;` },
+        { text: acct.status, style: `color:${acct.status === "Connected" ? "#4caf50" : "#ff9800"};` },
+      ];
+
+      for (const c of cells) {
+        const td = document.createElement("td");
+        td.style.cssText = `padding:6px 8px;font-size:11px;${c.style}`;
+        td.textContent = c.text;
+        tr.appendChild(td);
+      }
+
+      // Actions column
+      const actionTd = document.createElement("td");
+      actionTd.style.cssText = "padding:4px;";
+      if (acct.type === "mt5-import") {
+        const delBtn = document.createElement("button");
+        delBtn.textContent = "X";
+        delBtn.title = "Remove account";
+        delBtn.style.cssText = "background:#5f0a0a;color:#f88;border:1px solid #555;cursor:pointer;font-size:9px;padding:2px 6px;border-radius:2px;";
+        delBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (!confirm(`Remove imported account "${acct.name}"?`)) return;
+          const reg = loadAccountRegistry().filter(a => a.name !== acct.name);
+          saveAccountRegistry(reg);
+          log(`Removed imported account: ${acct.name}`, "warn");
+          renderPanel();
+        });
+        actionTd.appendChild(delBtn);
+      }
+      tr.appendChild(actionTd);
+
+      // Click row to expand details
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", () => renderAccountDetail(acct));
+      table.appendChild(tr);
+    }
+    panelEl.appendChild(table);
+
+    // Summary card
+    const summaryCard = document.createElement("div"); summaryCard.style.cssText = ACCT_STYLES.card;
+    const sTitle = document.createElement("div"); sTitle.style.cssText = "font-size:12px;font-weight:bold;color:#ff9800;margin-bottom:8px;"; sTitle.textContent = "Quick Summary";
+    summaryCard.appendChild(sTitle);
+
+    const totalEquity = accounts.reduce((s, a) => s + (a.equity || 0), 0);
+    const totalPnL = accounts.reduce((s, a) => s + (a.pnl || 0), 0);
+    const totalPositions = accounts.reduce((s, a) => s + (a.positionCount || 0), 0);
+    const grid = document.createElement("div"); grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;";
+    for (const item of [
+      { label: "Total Equity", value: fmtMoney(totalEquity, "USD"), color: "#4caf50" },
+      { label: "Total P&L", value: (totalPnL >= 0 ? "+" : "") + fmtMoney(totalPnL, "USD"), color: totalPnL >= 0 ? "#4caf50" : "#f44336" },
+      { label: "Total Positions", value: String(totalPositions), color: "#2196f3" },
+    ]) {
+      const cell = document.createElement("div"); cell.style.cssText = "text-align:center;";
+      cell.appendChild(div(item.label, "color:#888;font-size:9px;margin-bottom:2px;"));
+      cell.appendChild(div(item.value, `color:${item.color};font-weight:bold;font-size:13px;`));
+      grid.appendChild(cell);
+    }
+    summaryCard.appendChild(grid);
+    panelEl.appendChild(summaryCard);
+  }
+
+  // ── Account Detail View ──────────────────────────────────────
+  function renderAccountDetail(acct) {
+    panelEl.textContent = "";
+
+    // Back button
+    const backBtn = document.createElement("button"); backBtn.textContent = "\u2190 Back to Account List";
+    backBtn.style.cssText = ACCT_STYLES.btn + ";margin-bottom:10px;";
+    backBtn.addEventListener("click", () => { setActiveTab(0); });
+    panelEl.appendChild(backBtn);
+
+    // Account header
+    const headerCard = document.createElement("div"); headerCard.style.cssText = ACCT_STYLES.card;
+    const hTitle = document.createElement("div"); hTitle.style.cssText = "font-size:14px;font-weight:bold;color:#2196f3;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;";
+    hTitle.appendChild(span(acct.name));
+    hTitle.appendChild(span(acct.status, `font-size:10px;padding:2px 8px;border-radius:10px;background:${acct.status === "Connected" ? "#1b5e20" : "#4a3000"};color:${acct.status === "Connected" ? "#4caf50" : "#ff9800"};`));
+    headerCard.appendChild(hTitle);
+
+    const infoGrid = document.createElement("div"); infoGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px;";
+    const infoItems = [
+      { label: "Type", value: acct.type === "alpaca" ? "Alpaca (Live)" : "MT5 Import", color: "#ccc" },
+      { label: "Currency", value: acct.currency || "USD", color: "#ccc" },
+      { label: "Equity", value: fmtMoney(acct.equity, acct.currency), color: "#4caf50" },
+      { label: "P&L", value: (acct.pnl >= 0 ? "+" : "") + fmtMoney(acct.pnl, acct.currency), color: acct.pnl >= 0 ? "#4caf50" : "#f44336" },
+    ];
+    if (acct.importDate) infoItems.push({ label: "Imported", value: acct.importDate, color: "#888" });
+    for (const item of infoItems) {
+      const cell = document.createElement("div"); cell.style.cssText = "padding:3px 0;";
+      cell.appendChild(labelValue(item.label + ": ", item.value, item.color));
+      infoGrid.appendChild(cell);
+    }
+    headerCard.appendChild(infoGrid);
+    panelEl.appendChild(headerCard);
+
+    // Positions
+    const positions = acct.positions || [];
+    if (positions.length > 0) {
+      const posCard = document.createElement("div"); posCard.style.cssText = ACCT_STYLES.card;
+      const pTitle = document.createElement("div"); pTitle.style.cssText = "font-size:12px;font-weight:bold;color:#8ff;margin-bottom:8px;";
+      pTitle.textContent = `Open Positions (${positions.length})`;
+      posCard.appendChild(pTitle);
+
+      const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;";
+      const headerCols = acct.type === "alpaca" ? ["Symbol", "Side", "Qty", "Entry", "Mkt Value", "P&L"] : ["Symbol", "Side", "Lots", "Entry", "S/L", "T/P", "P&L"];
+      const hdr = document.createElement("tr");
+      for (const h of headerCols) { const th = document.createElement("td"); th.style.cssText = "color:#555;font-size:9px;text-transform:uppercase;padding:3px 4px;border-bottom:1px solid #222;"; th.textContent = h; hdr.appendChild(th); }
+      table.appendChild(hdr);
+
+      for (const p of positions) {
+        const tr = document.createElement("tr");
+        const sideColor = (p.side || "").includes("buy") || p.side === "long" ? "#4caf50" : "#f44336";
+        const plColor = (p.profit || 0) >= 0 ? "#4caf50" : "#f44336";
+
+        let cells;
+        if (acct.type === "alpaca") {
+          cells = [
+            { text: p.symbol, css: "color:#8ff;" },
+            { text: (p.side || "").includes("buy") || p.side === "long" ? "L" : "S", css: `color:${sideColor};` },
+            { text: String(p.lots || p.qty || 0), css: "color:#ccc;" },
+            { text: `$${(p.price || 0).toFixed(2)}`, css: "color:#aaa;" },
+            { text: `$${(p.marketValue || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, css: "color:#ccc;" },
+            { text: `$${(p.profit || 0).toFixed(2)}`, css: `color:${plColor};` },
+          ];
+        } else {
+          cells = [
+            { text: p.symbol, css: "color:#8ff;" },
+            { text: (p.side || "").includes("buy") ? "L" : "S", css: `color:${sideColor};` },
+            { text: String(p.lots || 0), css: "color:#ccc;" },
+            { text: (p.price || 0).toFixed(5), css: "color:#aaa;" },
+            { text: p.sl ? p.sl.toFixed(5) : "-", css: "color:#f44336;" },
+            { text: p.tp ? p.tp.toFixed(5) : "-", css: "color:#4caf50;" },
+            { text: (p.profit || 0).toFixed(2), css: `color:${plColor};` },
+          ];
+        }
+        for (const c of cells) {
+          const td = document.createElement("td"); td.style.cssText = `padding:3px 4px;font-size:10px;${c.css}`; td.textContent = c.text; tr.appendChild(td);
+        }
+        table.appendChild(tr);
+      }
+      posCard.appendChild(table);
+      panelEl.appendChild(posCard);
+    }
+
+    // Trade history (MT5 imports)
+    const history = acct.history || [];
+    if (history.length > 0) {
+      const histCard = document.createElement("div"); histCard.style.cssText = ACCT_STYLES.card;
+      const hTitle2 = document.createElement("div"); hTitle2.style.cssText = "font-size:12px;font-weight:bold;color:#ff9800;margin-bottom:8px;";
+      hTitle2.textContent = `Trade History (${history.length})`;
+      histCard.appendChild(hTitle2);
+
+      // Summary stats
+      const wins = history.filter(h => h.profit > 0);
+      const losses = history.filter(h => h.profit < 0);
+      const totalHPnL = history.reduce((s, h) => s + (h.profit || 0), 0);
+      const winRate = history.length > 0 ? (wins.length / history.length * 100).toFixed(1) : "0";
+      const statRow = document.createElement("div"); statRow.style.cssText = "display:flex;gap:16px;margin-bottom:8px;font-size:10px;";
+      statRow.appendChild(span(`Trades: ${history.length}`, "color:#aaa;"));
+      statRow.appendChild(span(`Win Rate: ${winRate}%`, `color:${parseFloat(winRate) >= 50 ? "#4caf50" : "#f44336"};`));
+      statRow.appendChild(span(`P&L: ${totalHPnL >= 0 ? "+" : ""}${totalHPnL.toFixed(2)}`, `color:${totalHPnL >= 0 ? "#4caf50" : "#f44336"};font-weight:bold;`));
+      histCard.appendChild(statRow);
+
+      // Recent trades table (last 20)
+      const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;";
+      const hdr = document.createElement("tr");
+      for (const h of ["Symbol", "Side", "Lots", "Price", "P&L", "Time"]) { const th = document.createElement("td"); th.style.cssText = "color:#555;font-size:9px;text-transform:uppercase;padding:3px 4px;border-bottom:1px solid #222;"; th.textContent = h; hdr.appendChild(th); }
+      table.appendChild(hdr);
+
+      const shown = history.slice(-20).reverse();
+      for (const h of shown) {
+        const tr = document.createElement("tr");
+        const sideColor = (h.side || "").includes("buy") ? "#4caf50" : "#f44336";
+        const plColor = (h.profit || 0) >= 0 ? "#4caf50" : "#f44336";
+        const cells = [
+          { text: h.symbol, css: "color:#8ff;" },
+          { text: (h.side || "").includes("buy") ? "BUY" : "SELL", css: `color:${sideColor};` },
+          { text: String(h.lots || 0), css: "color:#ccc;" },
+          { text: (h.price || 0).toFixed(5), css: "color:#aaa;" },
+          { text: (h.profit || 0).toFixed(2), css: `color:${plColor};` },
+          { text: (h.time || "").substring(0, 16), css: "color:#666;" },
+        ];
+        for (const c of cells) { const td = document.createElement("td"); td.style.cssText = `padding:3px 4px;font-size:10px;${c.css}`; td.textContent = c.text; tr.appendChild(td); }
+        table.appendChild(tr);
+      }
+      if (history.length > 20) {
+        const moreRow = document.createElement("tr");
+        const moreTd = document.createElement("td"); moreTd.colSpan = 6; moreTd.style.cssText = "color:#555;font-size:9px;padding:4px;text-align:center;"; moreTd.textContent = `... and ${history.length - 20} more trades`;
+        moreRow.appendChild(moreTd); table.appendChild(moreRow);
+      }
+      histCard.appendChild(table);
+      panelEl.appendChild(histCard);
+    }
+  }
+
+  // ── Tab 1: Import MT5 Account ────────────────────────────────
+  function renderImportPanel() {
+    const card = document.createElement("div"); card.style.cssText = ACCT_STYLES.card;
+    const title = document.createElement("div"); title.style.cssText = "font-size:13px;font-weight:bold;color:#ff9800;margin-bottom:10px;";
+    title.textContent = "Import MT5 Account from CSV";
+    card.appendChild(title);
+
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;margin-bottom:12px;line-height:1.5;";
+    desc.textContent = "Export your MT5 statement as CSV (Account History tab > right-click > Save as Detailed Report). The importer parses balance, equity, open positions, and closed trades.";
+    card.appendChild(desc);
+
+    // Account name input
+    const nameRow = document.createElement("div"); nameRow.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:10px;";
+    nameRow.appendChild(span("Account Name:", "color:#aaa;font-size:10px;min-width:90px;"));
+    const nameInput = document.createElement("input"); nameInput.style.cssText = ACCT_STYLES.input + ";flex:1;";
+    nameInput.placeholder = "e.g., DARWIN_EUR, MT5_Live_01";
+    nameRow.appendChild(nameInput);
+    card.appendChild(nameRow);
+
+    // Currency override
+    const curRow = document.createElement("div"); curRow.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:10px;";
+    curRow.appendChild(span("Currency:", "color:#aaa;font-size:10px;min-width:90px;"));
+    const curSelect = document.createElement("select"); curSelect.style.cssText = ACCT_STYLES.input;
+    for (const c of ["Auto-Detect", "USD", "EUR", "GBP", "CHF", "JPY", "AUD", "CAD"]) { const opt = document.createElement("option"); opt.value = c; opt.textContent = c; curSelect.appendChild(opt); }
+    curRow.appendChild(curSelect);
+    card.appendChild(curRow);
+
+    // Equity override
+    const eqRow = document.createElement("div"); eqRow.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:10px;";
+    eqRow.appendChild(span("Equity (opt):", "color:#aaa;font-size:10px;min-width:90px;"));
+    const eqInput = document.createElement("input"); eqInput.type = "number"; eqInput.style.cssText = ACCT_STYLES.input + ";width:120px;";
+    eqInput.placeholder = "Auto from CSV";
+    eqRow.appendChild(eqInput);
+    eqRow.appendChild(span("Override if CSV doesn't have it", "color:#555;font-size:9px;"));
+    card.appendChild(eqRow);
+
+    // File picker
+    const fileRow = document.createElement("div"); fileRow.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:10px;";
+    const fileInput = document.createElement("input"); fileInput.type = "file"; fileInput.accept = ".csv,.tsv,.txt";
+    fileInput.style.cssText = "font-size:10px;color:#ccc;";
+    fileRow.appendChild(fileInput);
+    card.appendChild(fileRow);
+
+    // Preview area
+    const previewDiv = document.createElement("div"); previewDiv.style.cssText = "background:#0a0a14;border:1px solid #222;border-radius:3px;padding:6px;max-height:140px;overflow-y:auto;font-size:9px;color:#666;margin-bottom:10px;";
+    previewDiv.textContent = "Select a CSV file to preview...";
+    card.appendChild(previewDiv);
+
+    // Import button
+    const importBtn = document.createElement("button"); importBtn.textContent = "Import Account"; importBtn.style.cssText = ACCT_STYLES.btn + ";font-size:12px;padding:8px 20px;"; importBtn.disabled = true;
+    card.appendChild(importBtn);
+
+    panelEl.appendChild(card);
+
+    // Existing imports list
+    const registry = loadAccountRegistry();
+    if (registry.length > 0) {
+      const existCard = document.createElement("div"); existCard.style.cssText = ACCT_STYLES.card;
+      const eTitle = document.createElement("div"); eTitle.style.cssText = "font-size:12px;font-weight:bold;color:#888;margin-bottom:8px;";
+      eTitle.textContent = `Imported Accounts (${registry.length})`;
+      existCard.appendChild(eTitle);
+      for (const acct of registry) {
+        const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #1a1a1a;";
+        const info = document.createElement("div");
+        info.appendChild(span(acct.name, "color:#8ff;font-weight:bold;margin-right:12px;"));
+        info.appendChild(span(fmtMoney(acct.equity, acct.currency), "color:#ccc;margin-right:12px;"));
+        info.appendChild(span(`${(acct.positions || []).length} pos, ${(acct.history || []).length} trades`, "color:#666;font-size:9px;"));
+        if (acct.importDate) info.appendChild(span(` | ${acct.importDate}`, "color:#555;font-size:9px;"));
+        row.appendChild(info);
+        const delBtn = document.createElement("button"); delBtn.textContent = "Remove"; delBtn.style.cssText = ACCT_STYLES.btnDanger;
+        delBtn.addEventListener("click", () => {
+          if (!confirm(`Remove "${acct.name}"?`)) return;
+          const reg = loadAccountRegistry().filter(a => a.name !== acct.name);
+          saveAccountRegistry(reg);
+          log(`Removed imported account: ${acct.name}`, "warn");
+          renderPanel();
+        });
+        row.appendChild(delBtn);
+        existCard.appendChild(row);
+      }
+      panelEl.appendChild(existCard);
+    }
+
+    // File change handler
+    let parsedData = null;
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target.result;
+        previewDiv.textContent = "";
+
+        // Show first 8 lines as preview
+        const previewLines = text.split("\n").slice(0, 8);
+        for (const line of previewLines) {
+          const pLine = document.createElement("div"); pLine.textContent = line.substring(0, 120); pLine.style.cssText = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+          previewDiv.appendChild(pLine);
+        }
+        const totalLines = text.split("\n").filter(l => l.trim()).length;
+        previewDiv.appendChild(div(`... ${totalLines} lines total`, "color:#888;margin-top:4px;font-style:italic;"));
+
+        // Try statement parser first, then deals parser
+        parsedData = parseMT5StatementCSV(text);
+        if (parsedData.positions.length === 0 && parsedData.history.length === 0 && parsedData.equity === 0) {
+          const fallback = parseMT5DealsCSV(text);
+          if (fallback && (fallback.history.length > 0 || fallback.equity > 0)) parsedData = fallback;
+        }
+
+        // Show parse results
+        const resultDiv = document.createElement("div"); resultDiv.style.cssText = "margin-top:6px;padding-top:6px;border-top:1px solid #333;color:#aaa;";
+        resultDiv.appendChild(div(`Parsed: ${parsedData.positions.length} open positions, ${parsedData.history.length} closed trades`, "color:#4caf50;"));
+        if (parsedData.equity > 0) resultDiv.appendChild(div(`Equity: ${fmtMoney(parsedData.equity, parsedData.currency)}`, "color:#ccc;"));
+        if (parsedData.balance > 0) resultDiv.appendChild(div(`Balance: ${fmtMoney(parsedData.balance, parsedData.currency)}`, "color:#ccc;"));
+        previewDiv.appendChild(resultDiv);
+
+        // Auto-fill name from filename if empty
+        if (!nameInput.value) {
+          const baseName = file.name.replace(/\.(csv|tsv|txt)$/i, "").replace(/[^a-zA-Z0-9_-]/g, "_");
+          nameInput.value = baseName;
+        }
+
+        importBtn.disabled = false;
+      };
+      reader.readAsText(file);
+    });
+
+    // Import handler
+    importBtn.addEventListener("click", () => {
+      if (!parsedData) return;
+      const name = nameInput.value.trim();
+      if (!name) { alert("Enter an account name."); return; }
+
+      // Check for duplicate
+      const registry = loadAccountRegistry();
+      const existing = registry.findIndex(a => a.name === name);
+      if (existing >= 0) {
+        if (!confirm(`Account "${name}" already exists. Replace it?`)) return;
+        registry.splice(existing, 1);
+      }
+
+      // Apply overrides
+      const currency = curSelect.value === "Auto-Detect" ? (parsedData.currency || "USD") : curSelect.value;
+      const equity = eqInput.value ? parseFloat(eqInput.value) : parsedData.equity;
+
+      const entry = {
+        name,
+        type: "mt5-import",
+        equity: equity || parsedData.balance || 0,
+        balance: parsedData.balance || equity || 0,
+        currency,
+        positions: parsedData.positions,
+        history: parsedData.history,
+        importDate: new Date().toISOString().slice(0, 10),
+      };
+
+      registry.push(entry);
+      saveAccountRegistry(registry);
+      log(`Imported MT5 account "${name}": ${entry.positions.length} positions, ${entry.history.length} trades, equity ${fmtMoney(entry.equity, currency)}`, "ok");
+      setActiveTab(0); // go to account list
+    });
+  }
+
+  // ── Tab 2: Aggregate View ────────────────────────────────────
+  function renderAggregateView() {
+    const accounts = getAllAccounts();
+    if (accounts.length === 0) {
+      panelEl.appendChild(div("No accounts to aggregate. Import MT5 accounts or connect Alpaca.", "color:#888;padding:20px;text-align:center;"));
+      return;
+    }
+
+    // Combined metrics
+    const totalEquity = accounts.reduce((s, a) => s + (a.equity || 0), 0);
+    const totalPnL = accounts.reduce((s, a) => s + (a.pnl || 0), 0);
+    const totalPositions = accounts.reduce((s, a) => s + (a.positionCount || 0), 0);
+    const totalTrades = accounts.reduce((s, a) => s + ((a.history || []).length), 0);
+
+    // Header card
+    const headerCard = document.createElement("div"); headerCard.style.cssText = ACCT_STYLES.card + "background:#0d1117;border-color:#1f6feb;";
+    const hTitle = document.createElement("div"); hTitle.style.cssText = "font-size:14px;font-weight:bold;color:#58a6ff;margin-bottom:12px;";
+    hTitle.textContent = "Aggregate Portfolio — All Accounts";
+    headerCard.appendChild(hTitle);
+
+    const metricGrid = document.createElement("div"); metricGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;";
+    for (const m of [
+      { label: "Total Equity", value: fmtMoney(totalEquity, "USD"), color: "#4caf50" },
+      { label: "Total P&L", value: (totalPnL >= 0 ? "+" : "") + fmtMoney(totalPnL, "USD"), color: totalPnL >= 0 ? "#4caf50" : "#f44336" },
+      { label: "Open Positions", value: String(totalPositions), color: "#2196f3" },
+      { label: "Closed Trades", value: String(totalTrades), color: "#ff9800" },
+    ]) {
+      const cell = document.createElement("div"); cell.style.cssText = "text-align:center;padding:8px;background:#111;border-radius:4px;";
+      cell.appendChild(div(m.label, "color:#888;font-size:9px;margin-bottom:4px;"));
+      cell.appendChild(div(m.value, `color:${m.color};font-weight:bold;font-size:15px;`));
+      metricGrid.appendChild(cell);
+    }
+    headerCard.appendChild(metricGrid);
+    panelEl.appendChild(headerCard);
+
+    // Account weight breakdown (visual bar + pie-style segments)
+    const weightCard = document.createElement("div"); weightCard.style.cssText = ACCT_STYLES.card;
+    const wTitle = document.createElement("div"); wTitle.style.cssText = "font-size:12px;font-weight:bold;color:#2196f3;margin-bottom:10px;";
+    wTitle.textContent = "Account Weight";
+    weightCard.appendChild(wTitle);
+
+    const barContainer = document.createElement("div"); barContainer.style.cssText = "display:flex;height:28px;border-radius:4px;overflow:hidden;margin-bottom:8px;";
+    const acctColors = ["#2196f3", "#ff9800", "#9c27b0", "#4caf50", "#e91e63", "#00bcd4", "#ff5722"];
+
+    for (let i = 0; i < accounts.length; i++) {
+      const acct = accounts[i];
+      const pct = totalEquity > 0 ? (acct.equity / totalEquity * 100) : 0;
+      if (pct < 0.5) continue;
+      const seg = document.createElement("div");
+      seg.style.cssText = `width:${pct}%;background:${acctColors[i % acctColors.length]};display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;font-weight:bold;min-width:24px;`;
+      seg.textContent = pct >= 8 ? `${acct.name} ${pct.toFixed(0)}%` : `${pct.toFixed(0)}%`;
+      seg.title = `${acct.name}: ${fmtMoney(acct.equity, acct.currency)} (${pct.toFixed(1)}%)`;
+      barContainer.appendChild(seg);
+    }
+    weightCard.appendChild(barContainer);
+
+    // Legend
+    const legendDiv = document.createElement("div"); legendDiv.style.cssText = "display:flex;gap:14px;flex-wrap:wrap;";
+    for (let i = 0; i < accounts.length; i++) {
+      const acct = accounts[i];
+      const pct = totalEquity > 0 ? (acct.equity / totalEquity * 100).toFixed(1) : "0.0";
+      const leg = document.createElement("span"); leg.style.cssText = "font-size:10px;color:#aaa;";
+      const dot = document.createElement("span"); dot.style.cssText = `display:inline-block;width:8px;height:8px;background:${acctColors[i % acctColors.length]};border-radius:50%;margin-right:4px;vertical-align:middle;`;
+      leg.appendChild(dot);
+      leg.appendChild(document.createTextNode(`${acct.name}: ${fmtMoney(acct.equity, acct.currency)} (${pct}%)`));
+      legendDiv.appendChild(leg);
+    }
+    weightCard.appendChild(legendDiv);
+    panelEl.appendChild(weightCard);
+
+    // Per-account breakdown table
+    const breakdownCard = document.createElement("div"); breakdownCard.style.cssText = ACCT_STYLES.card;
+    const bTitle = document.createElement("div"); bTitle.style.cssText = "font-size:12px;font-weight:bold;color:#ccc;margin-bottom:8px;";
+    bTitle.textContent = "Per-Account Breakdown";
+    breakdownCard.appendChild(bTitle);
+
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;";
+    const hdr = document.createElement("tr");
+    for (const h of ["Account", "Type", "Equity", "Weight", "Positions", "P&L"]) {
+      const th = document.createElement("td"); th.style.cssText = "color:#555;font-size:9px;text-transform:uppercase;padding:4px 6px;border-bottom:1px solid #333;font-weight:bold;"; th.textContent = h; hdr.appendChild(th);
+    }
+    table.appendChild(hdr);
+
+    for (let i = 0; i < accounts.length; i++) {
+      const acct = accounts[i];
+      const pct = totalEquity > 0 ? (acct.equity / totalEquity * 100).toFixed(1) : "0.0";
+      const tr = document.createElement("tr");
+      const cells = [
+        { text: acct.name, css: `color:${acctColors[i % acctColors.length]};font-weight:bold;` },
+        { text: acct.type === "alpaca" ? "Alpaca" : "MT5", css: "color:#888;" },
+        { text: fmtMoney(acct.equity, acct.currency), css: "color:#ccc;font-family:Consolas,monospace;" },
+        { text: `${pct}%`, css: "color:#ff9800;" },
+        { text: String(acct.positionCount), css: "color:#aaa;text-align:center;" },
+        { text: (acct.pnl >= 0 ? "+" : "") + fmtMoney(acct.pnl, acct.currency), css: `color:${acct.pnl >= 0 ? "#4caf50" : "#f44336"};font-family:Consolas,monospace;` },
+      ];
+      for (const c of cells) { const td = document.createElement("td"); td.style.cssText = `padding:5px 6px;font-size:11px;${c.css}`; td.textContent = c.text; tr.appendChild(td); }
+      table.appendChild(tr);
+    }
+
+    // Totals row
+    const totRow = document.createElement("tr"); totRow.style.cssText = "border-top:2px solid #333;";
+    const totCells = [
+      { text: "TOTAL", css: "color:#fff;font-weight:bold;" },
+      { text: `${accounts.length} accts`, css: "color:#888;" },
+      { text: fmtMoney(totalEquity, "USD"), css: "color:#4caf50;font-weight:bold;font-family:Consolas,monospace;" },
+      { text: "100%", css: "color:#ff9800;font-weight:bold;" },
+      { text: String(totalPositions), css: "color:#fff;text-align:center;font-weight:bold;" },
+      { text: (totalPnL >= 0 ? "+" : "") + fmtMoney(totalPnL, "USD"), css: `color:${totalPnL >= 0 ? "#4caf50" : "#f44336"};font-weight:bold;font-family:Consolas,monospace;` },
+    ];
+    for (const c of totCells) { const td = document.createElement("td"); td.style.cssText = `padding:6px;font-size:11px;${c.css}`; td.textContent = c.text; totRow.appendChild(td); }
+    table.appendChild(totRow);
+    breakdownCard.appendChild(table);
+    panelEl.appendChild(breakdownCard);
+
+    // Combined VaR estimate
+    const varCard = document.createElement("div"); varCard.style.cssText = ACCT_STYLES.card;
+    const vTitle = document.createElement("div"); vTitle.style.cssText = "font-size:12px;font-weight:bold;color:#f44336;margin-bottom:8px;";
+    vTitle.textContent = "Combined Risk Estimate";
+    varCard.appendChild(vTitle);
+
+    // Simple VaR: 2% per-position assumption, sqrt-N diversification
+    const estVaR = totalEquity * 0.02 * Math.sqrt(totalPositions) / Math.sqrt(10);
+    const varPct = totalEquity > 0 ? (estVaR / totalEquity * 100).toFixed(2) : "0";
+    // Concentration: HHI on account weights
+    let hhi = 0;
+    for (const acct of accounts) { const w = totalEquity > 0 ? acct.equity / totalEquity : 0; hhi += w * w; }
+    hhi *= 10000;
+    const hhiLabel = hhi < 1500 ? "Diversified" : hhi < 2500 ? "Moderate" : "Concentrated";
+    const hhiColor = hhi < 1500 ? "#4caf50" : hhi < 2500 ? "#ff9800" : "#f44336";
+
+    const riskGrid = document.createElement("div"); riskGrid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:8px;";
+    for (const ri of [
+      { label: "Est. 1-Day VaR (95%)", value: `${fmtMoney(estVaR, "USD")} (${varPct}%)`, color: "#ff9800" },
+      { label: "Account Concentration (HHI)", value: `${Math.round(hhi)} — ${hhiLabel}`, color: hhiColor },
+    ]) {
+      const cell = document.createElement("div"); cell.style.cssText = "padding:6px;background:#0a0a14;border-radius:3px;";
+      cell.appendChild(div(ri.label, "color:#888;font-size:9px;margin-bottom:3px;"));
+      cell.appendChild(div(ri.value, `color:${ri.color};font-weight:bold;`));
+      riskGrid.appendChild(cell);
+    }
+    varCard.appendChild(riskGrid);
+    panelEl.appendChild(varCard);
+
+    // Canvas pie chart
+    const pieCard = document.createElement("div"); pieCard.style.cssText = ACCT_STYLES.card + "text-align:center;";
+    const pieTitle = document.createElement("div"); pieTitle.style.cssText = "font-size:12px;font-weight:bold;color:#2196f3;margin-bottom:8px;text-align:left;";
+    pieTitle.textContent = "Equity Distribution";
+    pieCard.appendChild(pieTitle);
+
+    const canvas = document.createElement("canvas"); canvas.width = 200; canvas.height = 200; canvas.style.cssText = "display:block;margin:0 auto;";
+    pieCard.appendChild(canvas);
+    panelEl.appendChild(pieCard);
+
+    // Draw pie chart
+    const ctx = canvas.getContext("2d");
+    const cx = 100, cy = 100, radius = 80;
+    let startAngle = -Math.PI / 2;
+    for (let i = 0; i < accounts.length; i++) {
+      const acct = accounts[i];
+      const pctVal = totalEquity > 0 ? acct.equity / totalEquity : 0;
+      const sliceAngle = pctVal * 2 * Math.PI;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, radius, startAngle, startAngle + sliceAngle);
+      ctx.closePath();
+      ctx.fillStyle = acctColors[i % acctColors.length];
+      ctx.fill();
+      ctx.strokeStyle = "#0a0a14";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Label
+      if (pctVal > 0.05) {
+        const midAngle = startAngle + sliceAngle / 2;
+        const lx = cx + (radius * 0.6) * Math.cos(midAngle);
+        const ly = cy + (radius * 0.6) * Math.sin(midAngle);
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 10px Consolas, monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(`${(pctVal * 100).toFixed(0)}%`, lx, ly);
+      }
+      startAngle += sliceAngle;
+    }
+    // Center hole (donut)
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius * 0.45, 0, 2 * Math.PI);
+    ctx.fillStyle = "#111";
+    ctx.fill();
+    ctx.fillStyle = "#ccc";
+    ctx.font = "bold 12px Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(fmtMoney(totalEquity, "USD"), cx, cy);
+  }
+
+  // Initial render
+  renderPanel();
+  log("Account Manager opened (ACCOUNTS)", "ok");
+}
+
 // ── MULTI — Multi-Account Portfolio View ─────────────────────
 async function cmdMultiAccount() {
   const win = createWindow({ title: "Multi-Account Portfolio View", width: 500, height: 600 });
@@ -21570,6 +22412,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "PORTFOLIO+", desc: "Portfolio construction optimizer (mean-variance, efficient frontier)", action: cmdPortfolioPlus },
   { name: "TEACH", desc: "Interactive trading tutorial (step-by-step guide)", action: cmdTeach },
   { name: "API", desc: "API reference & data export (invoke commands, clipboard)", action: cmdAPI },
+  { name: "ACCOUNTS", desc: "Multi-account manager (Alpaca + MT5 imports, aggregate view, CSV import)", action: cmdAccountManager },
   { name: "MULTI", desc: "Multi-account portfolio view (allocation, risk, HHI)", action: cmdMultiAccount },
   { name: "CONDITIONAL", desc: "Conditional order chains (if X then trade Y)", action: cmdConditional },
   { name: "PDT", desc: "Pattern Day Trader monitor (day trade count, warnings)", action: cmdPDT },
