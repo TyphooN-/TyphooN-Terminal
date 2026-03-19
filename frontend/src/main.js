@@ -878,7 +878,7 @@ function createTab(symbol = "", timeframe = "1Month") {
 }
 
 function switchTab(id) {
-  // Save current tab state before switching
+  // Save current tab state before switching — including chart data snapshot
   if (activeTabId !== null) {
     const cur = tabs.find(t => t.id === activeTabId);
     if (cur) {
@@ -886,6 +886,15 @@ function switchTab(id) {
       cur.timeframe = currentTimeframe;
       cur.lastPrice = lastPrice;
       cur.barCount = document.getElementById("bar-count").value;
+      // Snapshot chart data so we can restore instantly without API calls
+      if (currentChartData && currentChartData.length > 0) {
+        cur.chartData = currentChartData;
+      }
+      // Save visible range so we restore the same zoom
+      try {
+        const range = chart.timeScale().getVisibleLogicalRange();
+        if (range) cur.visibleRange = range;
+      } catch (_) {}
     }
   }
 
@@ -909,15 +918,40 @@ function switchTab(id) {
   // Clear current chart immediately before loading new
   candleSeries.setData([]);
   clearIndicators();
-  removeSLLine(); removeTPLine(); // Clear SL/TP lines from previous symbol
-  mtfData = {}; // Clear stale MTF data from previous symbol
+  removeSLLine(); removeTPLine();
+  mtfData = {};
   for (const [, s] of Object.entries(fisherSeries)) fisherChart.removeSeries(s);
   for (const [, s] of Object.entries(volumeSeries)) volumeChart.removeSeries(s);
   fisherSeries = {};
   volumeSeries = {};
   setText("connect-status-bar", "");
 
-  // Load chart if symbol set
+  // Instant restore: if tab has cached chart data, show it IMMEDIATELY
+  // then load fresh data in background (user sees chart instantly, no blank screen)
+  if (tab.chartData && tab.chartData.length > 0 && tab.symbol) {
+    currentChartData = tab.chartData;
+    if (currentChartType === "line") {
+      candleSeries.setData(tab.chartData.map(d => ({ time: d.time, value: d.close })));
+    } else if (currentChartType === "heikin-ashi") {
+      candleSeries.setData(calcHeikinAshi(tab.chartData));
+    } else {
+      candleSeries.setData(tab.chartData);
+    }
+    // Restore zoom level
+    if (tab.visibleRange) {
+      try { chart.timeScale().setVisibleLogicalRange(tab.visibleRange); } catch (_) {}
+    } else {
+      chart.timeScale().fitContent();
+    }
+    lastPrice = tab.chartData[tab.chartData.length - 1].close;
+    setText("connect-status-bar", `${tab.symbol} — ${tab.chartData.length} bars (cached)`);
+    // Apply indicators from cached data (instant, no API calls)
+    applyIndicators(tab.chartData);
+    updateTabLabel();
+    log(`${tab.symbol} @ ${tab.timeframe}: restored ${tab.chartData.length} bars from tab cache`, "ok");
+  }
+
+  // Load fresh data (will update chart if newer data available)
   if (tab.symbol) {
     loadChart(tab.symbol, tab.timeframe);
   }
@@ -3931,6 +3965,9 @@ async function loadChart(symbol, timeframe) {
     applyExtendedHoursColoring(chartData, symbol);
 
     currentChartData = chartData; // preserve volume for indicators
+    // Cache chart data on active tab for instant restore on tab switch
+    const activeTab = tabs.find(t => t.id === activeTabId);
+    if (activeTab) activeTab.chartData = chartData;
     if (currentChartType === "line") {
       candleSeries.setData(chartData.map(d => ({ time: d.time, value: d.close })));
     } else if (currentChartType === "renko") {
