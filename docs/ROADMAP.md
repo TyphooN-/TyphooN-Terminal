@@ -8,12 +8,10 @@ Replace both MetaTrader 5 and Godel Terminal with a single open-source desktop t
 
 ## Broker Support
 
-### Current
-- **Alpaca** — Stocks, ETFs, Options, Crypto (free paper trading, IEX data)
-
+- **Alpaca Markets** — Stocks, ETFs, Options, Crypto (free paper trading, IEX data) ✅ Done
 
 ### Architecture
-Each broker implements a Rust trait. Adding a new broker means one new file — no changes to risk engine, indicators, or UI.
+Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new file — no changes to risk engine, indicators, or UI.
 
 ---
 
@@ -39,7 +37,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | SEC fundamentals (EDGAR) | ✅ Done | Revenue, EPS, shares, etc. |
 | SEC filings search | ✅ Done | Hardened: parameterized queries |
 | Auto-load on timeframe change | ✅ Done | No "Load" button needed |
-| Security hardening (6 passes) | ✅ Done | 50 findings: input validation, timeouts, path traversal, CSP, config bounds, resource limits, event listener cleanup |
+| Security hardening (21 passes) | ✅ Done | 97 findings: input validation, timeouts, path traversal, CSP, config bounds, resource limits, event listener cleanup |
 | MTF MA grid | ✅ Done | SMA200/KAMA/Fisher across TFs |
 | Symbol autocomplete | ✅ Done | 11K+ symbols |
 | Rate limiter with 429 cooldown | ✅ Done | |
@@ -62,7 +60,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Auto Fibonacci | ✅ Done | Fractal-based swing detection, 13 levels (retrace + extension) |
 | Per-broker data isolation | ✅ Done | Separate IndexedDB + cold cache per account |
 | Article images | ✅ Done | HTTPS images in news reader, click to enlarge |
-| Security hardening (18 passes) | ✅ Done | 84 findings, 78 fixed, 6 accepted |
+| Security hardening (21 passes) | ✅ Done | 97 findings, 91 fixed, 6 accepted |
 
 ### Tier 2 — Competitive with MT5
 
@@ -147,7 +145,7 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | **Binary bar storage** | ✅ Done | Packed f64 format (48 bytes/bar) + zstd — 3-5x smaller than JSON |
 | **Headless CLI backtest** | ✅ Done | `--backtest` flag — run strategies from command line, no GUI |
 | **Plugin marketplace** | 🔲 Blocked | Needs distribution infrastructure |
-| **GPU chart rendering (WebGL2)** | ✅ Done | 45KB Wasm — candlesticks, indicator lines, grid, pan/zoom/scroll |
+| **GPU chart rendering (WebGL2)** | ✅ Done | 45KB Wasm — opt-in via "GPU Candles" selector. Candlesticks, indicator lines, grid, pan/zoom/scroll |
 | **Pure Rust GUI migration** | 🔲 Blocked | Egui/Iced — long-term architectural goal |
 
 | Data Window | ✅ Done | Fixed panel: OHLCV + all indicator values at cursor |
@@ -225,17 +223,15 @@ Each broker implements a Rust trait. Adding a new broker means one new file — 
 | Correlation network | ✅ Done | Ctrl+K → CORRELATION3D, force-directed graph (canvas) |
 | Import trade history | ✅ Done | Ctrl+K → IMPORTTRADES, CSV from MT5/IB/generic |
 
-### Blocked — Needs External Resources
+### Blocked / Deferred
 
-| Feature | Blocker |
-|---|---|
-| Analyst recommendations (ANR) | No free consensus API |
-| Short interest (SI) | No free real-time API |
-| ~~Dark pool / options flow~~ | ~~Done — synthetic flow from options chain volume/OI~~ |
-| World equity indices | Alpaca is US-only |
-| Forex currency matrix | Alpaca has crypto not forex |
-| Congress trading | Free APIs locked down; QuiverQuant requires paid tier |
-| ~~Community chat~~ | ~~Done — Matrix protocol, no server needed~~ |
+| Feature | Status | Notes |
+|---|---|---|
+| Analyst recommendations (ANR) | 🔲 Deferred | Financial Modeling Prep free tier (250 req/day) has consensus data |
+| Short interest (SI) | 🔲 Deferred | FINRA short interest (2-week delay) or SEC daily short sale volume |
+| Congress trading | 🔲 Deferred | House/Senate disclosure XML feeds directly parseable (no API key) |
+| World equity indices | 🔲 Deferred | FRED has ^GSPC, ^DJI; delayed data possible via Yahoo Finance |
+| Forex currency matrix | 🔲 Deferred | ECB daily rates (free XML) or exchangerate.host free tier |
 
 ---
 

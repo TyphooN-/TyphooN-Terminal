@@ -24,11 +24,11 @@ function initIndicatorWorker() {
     indicatorWorker = new Worker(new URL("./indicator-worker.js", import.meta.url), { type: "module" });
     indicatorWorker.onmessage = (e) => {
       const { id, type, values } = e.data;
-      if (type === "wasm_ready") { console.log("Worker: Wasm indicator engine ready"); return; }
-      if (type === "wasm_fallback") { console.log("Worker: using JS fallback"); return; }
-      if (workerCallbacks[id]) { workerCallbacks[id](values); delete workerCallbacks[id]; }
+      if (type === "wasm_ready") { log("Worker: Wasm indicator engine ready", "info"); return; }
+      if (type === "wasm_fallback") { log("Worker: using JS fallback", "info"); return; }
+      if (workerCallbacks[id]) { workerCallbacks[id].resolve(values); clearTimeout(workerCallbacks[id].timer); delete workerCallbacks[id]; }
     };
-    console.log("Indicator Worker initialized (off-thread computation)");
+    log("Indicator Worker initialized (off-thread computation)", "info");
   } catch (e) {
     console.warn("Worker init failed, using main thread:", e);
   }
@@ -39,12 +39,12 @@ function workerCompute(type, bars, period, fastP, slowP) {
   return new Promise((resolve) => {
     if (!indicatorWorker) { resolve(null); return; }
     const id = workerNextId++;
-    workerCallbacks[id] = resolve;
     // Send compact bar data (only OHLCV, no timestamps — worker returns values only)
     const compact = bars.map(b => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume || 0 }));
     indicatorWorker.postMessage({ id, type, bars: compact, period, fastP, slowP });
     // Timeout fallback: if worker doesn't respond in 5s, resolve null (use main thread)
-    setTimeout(() => { if (workerCallbacks[id]) { delete workerCallbacks[id]; resolve(null); } }, 5000);
+    const timer = setTimeout(() => { if (workerCallbacks[id]) { delete workerCallbacks[id]; resolve(null); } }, 5000);
+    workerCallbacks[id] = { resolve, timer };
   });
 }
 
@@ -55,7 +55,7 @@ async function loadWasm() {
     await mod.default(); // init wasm
     wasmModule = mod;
     wasmReady = true;
-    console.log("Wasm indicator engine loaded (32KB)");
+    log("Wasm indicator engine loaded (32KB)", "info");
     return mod;
   } catch (e) {
     console.warn("Wasm load failed, falling back to JS:", e);
@@ -76,7 +76,7 @@ async function loadGpuChart() {
     await mod.default(); // init wasm
     gpuChartModule = mod;
     gpuChartReady = true;
-    console.log("GPU chart engine loaded (45KB WebGL2)");
+    log("GPU chart engine loaded (45KB WebGL2)", "info");
     return mod;
   } catch (e) {
     console.warn("GPU chart load failed:", e);
@@ -92,6 +92,68 @@ const GPU_CHART_TYPES = {
   "gpu-bars": 3,      // OHLC Bars
   "gpu-renko": 4,     // Renko
 };
+
+// Map frontend drawing type strings to GPU DrawType enum values
+const GPU_DRAW_TYPES = {
+  "trendline": 0, "ray": 1, "segment": 2, "extended-line": 3, "arrow-line": 4,
+  "horizontal": 5, "vertical": 6, "rectangle": 7, "triangle": 8, "circle": 9,
+  "ellipse": 10, "channel": 11, "parallel-channel": 12, "pitchfork": 13,
+  "schiff-pitchfork": 14, "fibonacci": 15, "fib-fan": 16, "fib-arcs": 17,
+  "fib-channel": 18, "fib-extension": 19, "gann-fan": 20, "gann-line": 21,
+  "gann-box": 22, "cycle-lines": 23, "arrow-up": 24, "arrow-down": 25,
+  "price-label": 26, "text-label": 27, "regression-channel": 28,
+  "stddev-channel": 29, "risk-reward": 30, "position-box": 31,
+  "date-range": 32, "price-range": 33, "elliott-impulse": 34,
+  "elliott-corrective": 35, "speed-lines": 36, "equidistant-channel": 37,
+  "gann-grid": 38, "arrow-left": 39, "arrow-right": 40, "arrow-check": 41, "arrow-stop": 42, "text-box": 43,
+};
+
+// Convert hex color string to RGBA float array [0..1]
+function hexToRgba(hex) {
+  if (!hex || hex.length < 4) return [0, 0.74, 0.83, 1.0]; // fallback cyan
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const a = hex.length > 7 ? parseInt(hex.slice(7, 9), 16) / 255 : 1.0;
+  return [isNaN(r) ? 0 : r, isNaN(g) ? 0 : g, isNaN(b) ? 0 : b, isNaN(a) ? 1 : a];
+}
+
+// Binary search: find bar index in currentChartData for a given unix timestamp
+function timeToBarIndex(unixTime) {
+  const bars = currentChartData;
+  if (!bars || bars.length === 0) return 0;
+  let lo = 0, hi = bars.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    if (bars[mid].time < unixTime) lo = mid + 1;
+    else if (bars[mid].time > unixTime) hi = mid - 1;
+    else return mid;
+  }
+  // Return closest index
+  return Math.min(Math.max(lo, 0), bars.length - 1);
+}
+
+// Sync all frontend drawings to the GPU engine
+function syncDrawingsToGpu() {
+  if (!gpuChartInstance || !currentChartType.startsWith("gpu")) return;
+  gpuChartInstance.clear_drawings();
+  for (const d of drawings) {
+    const gpuType = GPU_DRAW_TYPES[d.type];
+    if (gpuType === undefined) continue;
+    // Build flat points array [barIndex0, price0, barIndex1, price1, ...]
+    const points = [timeToBarIndex(d.p1.time), d.p1.price];
+    if (d.p2) { points.push(timeToBarIndex(d.p2.time), d.p2.price); }
+    if (d.p3) { points.push(timeToBarIndex(d.p3.time), d.p3.price); }
+    // Convert colors
+    const rgba = hexToRgba(d.color || "#00bcd4");
+    const fill = hexToRgba(d.fillColor || "#00000000");
+    try {
+      gpuChartInstance.add_drawing(gpuType, new Float64Array(points), new Float32Array(rgba), d.lineWidth || 1.5, new Float32Array(fill));
+    } catch (e) {
+      console.warn("GPU add_drawing failed for", d.type, e);
+    }
+  }
+}
 
 function activateGpuChart(chartData, gpuType) {
   const canvas = document.getElementById("gpu-chart-canvas");
@@ -244,6 +306,7 @@ function activateGpuChart(chartData, gpuType) {
 
   // Render loop — WebGL + Canvas2D overlay
   if (gpuAnimFrame) cancelAnimationFrame(gpuAnimFrame);
+  syncDrawingsToGpu(); // Initial sync of any loaded drawings
   function renderLoop() {
     gpuChartInstance.render();
     renderOverlay();
@@ -469,6 +532,12 @@ let chart = null;
 let fisherChart = null;
 let volumeChart = null;
 let candleSeries = null;
+let _chartCrosshairUnsub = null;
+let _chartTimeRangeUnsub = null;
+let _fisherCrosshairUnsub = null;
+let _volumeCrosshairUnsub = null;
+let _chartTooltipCrosshairUnsub = null;
+let _chartDrawingRangeUnsub = null;
 let fisherSeries = {};
 let volumeSeries = {};
 let slLine = null;
@@ -484,6 +553,37 @@ let currentChartType = "gpu"; // default GPU candles, "candles" for CPU fallback
 let orderPriceLines = []; // pending order visualization lines on chart
 let mtfGridOrderLines = []; // position SL/TP/entry lines on MTF grid cells
 let lastTradePrice = 0; // for T&S uptick/downtick detection
+
+// ── Extended Hours Session Detection ────────────────────────
+
+function isRegularSession(unixSec) {
+  const d = new Date(unixSec * 1000);
+  const day = d.getUTCDay();
+  if (day === 0 || day === 6) return false; // weekend
+  // Approximate DST: March (2) through October (10) = EDT (UTC-4), else EST (UTC-5)
+  const month = d.getUTCMonth(); // 0-based
+  const offset = (month >= 2 && month <= 10) ? 4 : 5;
+  const etHour = (d.getUTCHours() - offset + 24) % 24;
+  const etMin = d.getUTCMinutes();
+  const etTime = etHour + etMin / 60.0;
+  return etTime >= 9.5 && etTime < 16.0; // 9:30 AM - 4:00 PM ET
+}
+
+function applyExtendedHoursColoring(chartData, symbol) {
+  if (!symbol || symbol.includes("/")) return; // skip crypto
+  const extBullBody = "#00ff0044";
+  const extBearBody = "#ff000044";
+  const extBullWick = "#00ff0066";
+  const extBearWick = "#ff000066";
+  for (const bar of chartData) {
+    if (!isRegularSession(bar.time)) {
+      const isBull = bar.close >= bar.open;
+      bar.color = isBull ? extBullBody : extBearBody;
+      bar.borderColor = isBull ? extBullBody : extBearBody;
+      bar.wickColor = isBull ? extBullWick : extBearWick;
+    }
+  }
+}
 
 // ── Tab State ───────────────────────────────────────────────
 
@@ -716,7 +816,8 @@ function initChart() {
 
   // Sync time scales: when main chart scrolls, sub-panes follow
   let syncing = false;
-  chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+  if (_chartTimeRangeUnsub) _chartTimeRangeUnsub();
+  _chartTimeRangeUnsub = chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
     if (range && !syncing) {
       syncing = true;
       fisherChart.timeScale().setVisibleLogicalRange(range);
@@ -726,19 +827,22 @@ function initChart() {
   });
 
   // Sync crosshair across panes
-  chart.subscribeCrosshairMove((param) => {
+  if (_chartCrosshairUnsub) _chartCrosshairUnsub();
+  _chartCrosshairUnsub = chart.subscribeCrosshairMove((param) => {
     if (param.time) {
       fisherChart.setCrosshairPosition(undefined, undefined, param.time);
       volumeChart.setCrosshairPosition(undefined, undefined, param.time);
     }
   });
-  fisherChart.subscribeCrosshairMove((param) => {
+  if (_fisherCrosshairUnsub) _fisherCrosshairUnsub();
+  _fisherCrosshairUnsub = fisherChart.subscribeCrosshairMove((param) => {
     if (param.time) {
       chart.setCrosshairPosition(undefined, undefined, param.time);
       volumeChart.setCrosshairPosition(undefined, undefined, param.time);
     }
   });
-  volumeChart.subscribeCrosshairMove((param) => {
+  if (_volumeCrosshairUnsub) _volumeCrosshairUnsub();
+  _volumeCrosshairUnsub = volumeChart.subscribeCrosshairMove((param) => {
     if (param.time) {
       chart.setCrosshairPosition(undefined, undefined, param.time);
       fisherChart.setCrosshairPosition(undefined, undefined, param.time);
@@ -766,7 +870,8 @@ function setupTooltip() {
   dataWindow.className = "data-window";
   document.getElementById("chart-container").appendChild(dataWindow);
 
-  chart.subscribeCrosshairMove((param) => {
+  if (_chartTooltipCrosshairUnsub) _chartTooltipCrosshairUnsub();
+  _chartTooltipCrosshairUnsub = chart.subscribeCrosshairMove((param) => {
     if (!param.time || !param.point || param.point.x < 0) {
       dataWindow.style.display = "none";
       return;
@@ -1192,7 +1297,8 @@ function setupDrawingCanvas() {
   resizeCanvas();
 
   // Re-render when chart scrolls or zooms
-  chart.timeScale().subscribeVisibleLogicalRangeChange(() => renderDrawings());
+  if (_chartDrawingRangeUnsub) _chartDrawingRangeUnsub();
+  _chartDrawingRangeUnsub = chart.timeScale().subscribeVisibleLogicalRangeChange(() => renderDrawings());
 
   // Click to place anchor points (only when in drawing mode)
   container.addEventListener("click", (e) => {
@@ -2285,6 +2391,49 @@ function clipToChart(indData, chartData) {
   return indData.filter(d => d.time <= lastTime);
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// INDICATOR REGISTRY — data-driven configs for simple single-line indicators.
+//
+// Indicators with complex rendering (multi-line, MTF projection, histograms,
+// cloud fills, color-changing segments, markers) remain as explicit cases below.
+//
+// Each entry:
+//   calc:     (data, period) => [{time, value}, ...]
+//   color:    string, or {period: color} map (fallback "#FFFFFF")
+//   width:    lineWidth (default 1)
+//   pane:     "overlay" (main chart) or "separate" (own priceScale)
+//   scaleId:  priceScaleId (separate pane only)
+//   scaleTop: scaleMargins.top (separate pane only, default 0.87)
+//   scaleBorder: borderVisible on scale (separate pane only, default undefined = omit)
+//   title:    series title; "$P" replaced with period (default "")
+//   lastVal:  lastValueVisible (default false)
+//   minBars:  "p" = >period (default), "p1" = >period+1, "2p" = >period*2, number = >N, 0 = no check
+//   doClip:   whether to clip output to chart time range (default true)
+// ══════════════════════════════════════════════════════════════════════
+const INDICATOR_REGISTRY = {
+  // ── Simple overlay MAs ──
+  "sma":      { calc: (d, p) => wasmCalcSMA(d, p), color: { 200: "#FFFF00", 50: "#2196f3" }, pane: "overlay" },
+  "ema":      { calc: (d, p) => wasmCalcEMA(d, p), color: { 50: "#2196f3", 200: "#ff9800" }, pane: "overlay" },
+  "dema":     { calc: (d, p) => calcDEMA(d, p),    color: "#00e676", pane: "overlay", minBars: "2p" },
+  "wma":      { calc: (d, p) => calcWMA(d, p),     color: "#ff4081", pane: "overlay" },
+  "hma":      { calc: (d, p) => calcHMA(d, p),     color: "#00e5ff", width: 1.5, pane: "overlay" },
+  "vwap":     { calc: (d) => calcVWAP(d),          color: "#ff4081", width: 2, pane: "overlay", minBars: 1, lastVal: true, title: "VWAP", doClip: false },
+
+  // ── Separate-pane single-line (no borderVisible on scale) ──
+  "cci":      { calc: (d, p) => calcCCI(d, p),          color: "#9c27b0", pane: "separate", scaleId: "cci", scaleTop: 0.8 },
+  "williams": { calc: (d, p) => calcWilliamsR(d, p),    color: "#e91e63", pane: "separate", scaleId: "wr",  scaleTop: 0.8 },
+  "obv":      { calc: (d) => calcOBV(d),                color: "#00bcd4", pane: "separate", scaleId: "obv", scaleTop: 0.85, minBars: 0 },
+  "momentum": { calc: (d, p) => calcMomentum(d, p),     color: "#ff5722", pane: "separate", scaleId: "mom", scaleTop: 0.85 },
+
+  // ── Separate-pane single-line (borderVisible: false, lastVal: true) ──
+  "atr":      { calc: (d, p) => wasmCalcATR(d, p),      color: "#ff5722", pane: "separate", scaleId: "atr",      scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "ATR$P", minBars: "p1", doClip: false },
+  "stddev":   { calc: (d, p) => calcStdDev(d, p),       color: "#e91e63", pane: "separate", scaleId: "stddev",   scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "StdDev", doClip: false },
+  "chaikin":  { calc: (d) => calcChaikin(d),             color: "#ff5722", pane: "separate", scaleId: "chaikin",  scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "Chaikin", minBars: 11, doClip: false },
+  "demarker": { calc: (d, p) => calcDeMarker(d, p),     color: "#795548", pane: "separate", scaleId: "demarker", scaleTop: 0.82, scaleBorder: false, lastVal: true, title: "DeMarker", minBars: "p1", doClip: false },
+  "mfi":      { calc: (d, p) => calcMFI(d, p),          color: "#9c27b0", pane: "separate", scaleId: "mfi",      scaleTop: 0.82, scaleBorder: false, lastVal: true, title: "MFI$P", minBars: "p1", doClip: false },
+  "force":    { calc: (d, p) => calcForceIndex(d, p),   color: "#00bcd4", pane: "separate", scaleId: "force",    scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "Force", minBars: "p1", doClip: false },
+};
+
 function applyIndicators(chartData) {
   clearIndicators();
   for (const [, s] of Object.entries(fisherSeries)) fisherChart.removeSeries(s);
@@ -2311,8 +2460,46 @@ function applyIndicators(chartData) {
     // Isolate each indicator — one failure must not break others
     try {
 
+    // ── Registry-driven indicators (simple single-line) ──────────
+    const reg = INDICATOR_REGISTRY[ind];
+    if (reg) {
+      // Check minimum bar requirement
+      const mb = reg.minBars || "p";
+      const minBars = mb === "p" ? period : mb === "p1" ? period + 1 : mb === "2p" ? period * 2 : mb;
+      if (minBars > 0 && chartData.length <= minBars) { continue; }
+
+      // Resolve color (may be a per-period map or a plain string)
+      const color = (typeof reg.color === "object") ? (reg.color[period] || "#FFFFFF") : reg.color;
+      const width = reg.width || 1;
+      const rawData = reg.calc(chartData, period);
+      const data = (reg.doClip !== false) ? clip(rawData) : rawData;
+
+      if (reg.pane === "overlay") {
+        const s = chart.addLineSeries({
+          color, lineWidth: width, title: reg.title || "",
+          lastValueVisible: reg.lastVal || false, priceLineVisible: false, crosshairMarkerVisible: false,
+        });
+        s.setData(data);
+        indicatorSeries[key] = s;
+      } else {
+        // Separate-pane single-line indicator
+        const title = (reg.title || "").replace("$P", String(period));
+        const scaleOpts = { scaleMargins: { top: reg.scaleTop || 0.87, bottom: 0 } };
+        if (reg.scaleBorder !== undefined) scaleOpts.borderVisible = reg.scaleBorder;
+        const s = chart.addLineSeries({
+          color, lineWidth: width, title, priceScaleId: reg.scaleId,
+          lastValueVisible: reg.lastVal || false, priceLineVisible: false,
+        });
+        chart.priceScale(reg.scaleId).applyOptions(scaleOpts);
+        s.setData(data);
+        indicatorSeries[key] = s;
+      }
+      continue;
+    }
+
     // ══════════════════════════════════════════════════════════
-    // NNFX SYSTEM INDICATORS — exact MQL5 ports
+    // COMPLEX INDICATORS — multi-line, MTF projection, histograms,
+    // cloud fills, color segments, markers (cannot be registry-driven)
     // ══════════════════════════════════════════════════════════
 
     if (ind === "kama") {
@@ -2643,12 +2830,6 @@ function applyIndicators(chartData) {
         indicatorSeries[key + "_k"] = sk; indicatorSeries[key + "_d"] = sd;
       }
 
-    } else if (ind === "cci" && chartData.length > period) {
-      const cci = calcCCI(chartData, period);
-      const s = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, priceScaleId: "cci", lastValueVisible: false, priceLineVisible: false });
-      chart.priceScale("cci").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-      s.setData(clip(cci)); indicatorSeries[key] = s;
-
     } else if (ind === "adx" && chartData.length > period * 3) {
       const adx = calcADX(chartData, period);
       if (adx.adx.length > 0) {
@@ -2659,12 +2840,6 @@ function applyIndicators(chartData) {
         sa.setData(clip(adx.adx)); sp.setData(clip(adx.diPlus)); sm.setData(clip(adx.diMinus));
         indicatorSeries[key + "_adx"] = sa; indicatorSeries[key + "_dip"] = sp; indicatorSeries[key + "_dim"] = sm;
       }
-
-    } else if (ind === "williams" && chartData.length > period) {
-      const wr = calcWilliamsR(chartData, period);
-      const s = chart.addLineSeries({ color: "#e91e63", lineWidth: 1, priceScaleId: "wr", lastValueVisible: false, priceLineVisible: false });
-      chart.priceScale("wr").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
-      s.setData(clip(wr)); indicatorSeries[key] = s;
 
     } else if (ind === "ichimoku" && chartData.length > 52) {
       const ich = calcIchimoku(chartData);
@@ -2692,26 +2867,6 @@ function applyIndicators(chartData) {
       const s = chart.addLineSeries({ color: "#ffeb3b", lineWidth: 0, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 1.5 });
       s.setData(clip(psar)); indicatorSeries[key] = s;
 
-    } else if (ind === "obv") {
-      const obv = calcOBV(chartData);
-      const s = chart.addLineSeries({ color: "#00bcd4", lineWidth: 1, priceScaleId: "obv", lastValueVisible: false, priceLineVisible: false });
-      chart.priceScale("obv").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-      s.setData(clip(obv)); indicatorSeries[key] = s;
-
-    } else if (ind === "momentum" && chartData.length > period) {
-      const mom = calcMomentum(chartData, period);
-      const s = chart.addLineSeries({ color: "#ff5722", lineWidth: 1, priceScaleId: "mom", lastValueVisible: false, priceLineVisible: false });
-      chart.priceScale("mom").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
-      s.setData(clip(mom)); indicatorSeries[key] = s;
-
-    } else if (ind === "wma" && chartData.length > period) {
-      const wma = calcWMA(chartData, period);
-      addLine("#ff4081", 1, clip(wma), key);
-
-    } else if (ind === "hma" && chartData.length > period) {
-      const hma = calcHMA(chartData, period);
-      addLine("#00e5ff", 1.5, clip(hma), key);
-
     } else if (ind === "alligator" && chartData.length > 14) {
       const a = calcAlligator(chartData);
       addLine("#2196f3", 1.5, clip(a.jaw), key + "_jaw");   // blue = jaw
@@ -2724,40 +2879,10 @@ function applyIndicators(chartData) {
       chart.priceScale("ao").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
       s.setData(ao); indicatorSeries[key] = s;
 
-    } else if (ind === "mfi" && chartData.length > period + 1) {
-      const mfi = calcMFI(chartData, period);
-      const s = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, title: `MFI${period}`, priceScaleId: "mfi", lastValueVisible: true });
-      chart.priceScale("mfi").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
-      s.setData(mfi); indicatorSeries[key] = s;
-
-    } else if (ind === "force" && chartData.length > period + 1) {
-      const fi = calcForceIndex(chartData, period);
-      const s = chart.addLineSeries({ color: "#00bcd4", lineWidth: 1, title: "Force", priceScaleId: "force", lastValueVisible: true });
-      chart.priceScale("force").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
-      s.setData(fi); indicatorSeries[key] = s;
-
     } else if (ind === "envelopes" && chartData.length > period) {
       const env = calcEnvelopes(chartData, period);
       addLine("#ff980088", 1, clip(env.upper), key + "_u");
       addLine("#ff980088", 1, clip(env.lower), key + "_l");
-
-    } else if (ind === "stddev" && chartData.length > period) {
-      const sd = calcStdDev(chartData, period);
-      const s = chart.addLineSeries({ color: "#e91e63", lineWidth: 1, title: "StdDev", priceScaleId: "stddev", lastValueVisible: true });
-      chart.priceScale("stddev").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
-      s.setData(sd); indicatorSeries[key] = s;
-
-    } else if (ind === "chaikin" && chartData.length > 11) {
-      const ch = calcChaikin(chartData);
-      const s = chart.addLineSeries({ color: "#ff5722", lineWidth: 1, title: "Chaikin", priceScaleId: "chaikin", lastValueVisible: true });
-      chart.priceScale("chaikin").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
-      s.setData(ch); indicatorSeries[key] = s;
-
-    } else if (ind === "demarker" && chartData.length > period + 1) {
-      const dm = calcDeMarker(chartData, period);
-      const s = chart.addLineSeries({ color: "#795548", lineWidth: 1, title: "DeMarker", priceScaleId: "demarker", lastValueVisible: true });
-      chart.priceScale("demarker").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
-      s.setData(dm); indicatorSeries[key] = s;
 
     } else if (ind === "fractals" && chartData.length > 5) {
       const markers = calcFractals(chartData);
@@ -2786,26 +2911,7 @@ function applyIndicators(chartData) {
         indicatorSeries[`${key}_${tf}`] = s;
       }
 
-    // ══════════════════════════════════════════════════════════
-    // STANDARD INDICATORS
-    // ══════════════════════════════════════════════════════════
-
-    } else if (ind === "sma" && chartData.length > period) {
-      const colors = { 200: "#FFFF00", 50: "#2196f3" };
-      const s = chart.addLineSeries({ color: colors[period] || "#FFFFFF", lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
-      s.setData(clip(wasmCalcSMA(chartData, period)));
-      indicatorSeries[key] = s;
-
-    } else if (ind === "ema" && chartData.length > period) {
-      const colors = { 50: "#2196f3", 200: "#ff9800" };
-      const s = chart.addLineSeries({ color: colors[period] || "#FFFFFF", lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
-      s.setData(clip(wasmCalcEMA(chartData, period)));
-      indicatorSeries[key] = s;
-
-    } else if (ind === "dema" && chartData.length > period * 2) {
-      const s = chart.addLineSeries({ color: "#00e676", lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
-      s.setData(clip(calcDEMA(chartData, period)));
-      indicatorSeries[key] = s;
+    // ── Remaining standard indicators (multi-line / special) ──
 
     } else if (ind === "bollinger" && chartData.length > period) {
       const bb = calcBollinger(chartData, period);
@@ -2834,14 +2940,6 @@ function applyIndicators(chartData) {
       sLine.setData(m.macd); sSig.setData(m.signal); sHist.setData(m.histogram);
       indicatorSeries[key + "_l"] = sLine; indicatorSeries[key + "_s"] = sSig; indicatorSeries[key + "_h"] = sHist;
 
-    } else if (ind === "atr" && chartData.length > period + 1) {
-      const s = chart.addLineSeries({ color: "#ff5722", lineWidth: 1, title: `ATR${period}`, priceScaleId: "atr", lastValueVisible: true });
-      chart.priceScale("atr").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
-      s.setData(wasmCalcATR(chartData, period)); indicatorSeries[key] = s;
-
-    } else if (ind === "vwap" && chartData.length > 1) {
-      const s = chart.addLineSeries({ color: "#ff4081", lineWidth: 2, title: "VWAP", lastValueVisible: true });
-      s.setData(calcVWAP(chartData)); indicatorSeries[key] = s;
     }
 
     } catch (e) { log(`Indicator ${ind} failed: ${e.message || e}`, "warn"); }
@@ -3297,6 +3395,7 @@ async function loadChart(symbol, timeframe) {
                   open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
                 }));
                 if (aggFactor > 1) freshChartData = aggregateBars(freshChartData, aggFactor);
+                applyExtendedHoursColoring(freshChartData, symbol);
                 currentChartData = freshChartData;
                 if (currentChartType === "line") {
                   candleSeries.setData(freshChartData.map(d => ({ time: d.time, value: d.close })));
@@ -3356,6 +3455,9 @@ async function loadChart(symbol, timeframe) {
       setLoadingStatus(symbol, null);
       return;
     }
+
+    // Extended hours styling (pre/post market dimmed candles) for stocks
+    applyExtendedHoursColoring(chartData, symbol);
 
     currentChartData = chartData; // preserve volume for indicators
     if (currentChartType === "line") {
@@ -3417,9 +3519,12 @@ async function loadChart(symbol, timeframe) {
       const selectedTFs = mtfGridCells.map(c => c.tf);
       closeMTFGrid();
       // Wait for DOM cleanup, then reopen grid with new symbol
+      // Capture symbol to guard against rapid tab switching
+      const gridSymbol = symbol;
       requestAnimationFrame(() => {
-        openMTFGrid(symbol, selectedTFs).then(() => {
-          // Extra resize after data loads to fix 0-dimension cells
+        // Discard if user already switched to another symbol
+        if (currentSymbol !== gridSymbol) return;
+        openMTFGrid(gridSymbol, selectedTFs).then(() => {
           setTimeout(() => resizeMTFGrid(), 100);
         }).catch(e => {
           log(`MTF grid reload failed: ${e}`, "warn");
@@ -3792,7 +3897,7 @@ let autocompleteIndex = -1;
 async function loadSymbolList() {
   try {
     const count = await invoke("load_symbols");
-    console.log(`Loaded ${count} tradable symbols`);
+    log(`Loaded ${count} tradable symbols`, "info");
     symbolsLoaded = true;
   } catch (e) {
     console.error("Failed to load symbols:", e);
@@ -3917,22 +4022,70 @@ function setupButtons() {
     }
   });
 
-  // Buy Lines: SL = lowest visible, TP = highest visible
-  document.getElementById("btn-buy-lines").addEventListener("click", () => {
-    const data = getActiveCandleSeries().data();
-    if (!data || data.length === 0) return;
-    const recent = data.slice(-50);
-    createSLLine(Math.min(...recent.map((d) => d.low)));
-    createTPLine(Math.max(...recent.map((d) => d.high)));
+  // Helper: find existing position's bracket SL/TP from open orders
+  async function getPositionBracketLevels() {
+    try {
+      const [ordersJson, posJson] = await Promise.all([
+        invoke("get_open_orders"),
+        invoke("get_positions"),
+      ]);
+      const orders = JSON.parse(ordersJson);
+      const positions = JSON.parse(posJson);
+      const sym = currentSymbol;
+      const symClean = sym ? sym.replace("/", "") : "";
+      const pos = positions.find(p => p.symbol === sym || p.symbol === symClean);
+      if (!pos) return null;
+      const oppSide = pos.side === "long" ? "sell" : "buy";
+      let sl = null, tp = null;
+      for (const o of orders) {
+        const oSym = o.symbol || "";
+        if (oSym !== sym && oSym !== symClean) continue;
+        if (o.side !== oppSide) continue;
+        if (o.order_type === "stop" && o.stop_price) {
+          const p = parseFloat(o.stop_price);
+          if (p > 0 && isFinite(p)) sl = p;
+        }
+        if (o.order_type === "limit" && o.limit_price) {
+          const p = parseFloat(o.limit_price);
+          if (p > 0 && isFinite(p)) tp = p;
+        }
+      }
+      return (sl || tp) ? { sl, tp, side: pos.side } : null;
+    } catch (_) { return null; }
+  }
+
+  // Buy Lines: snap to existing bracket SL/TP if position exists, else use recent high/low
+  document.getElementById("btn-buy-lines").addEventListener("click", async () => {
+    const bracket = await getPositionBracketLevels();
+    if (bracket && bracket.sl) createSLLine(bracket.sl);
+    else {
+      const data = getActiveCandleSeries().data();
+      if (!data || data.length === 0) return;
+      createSLLine(Math.min(...data.slice(-50).map(d => d.low)));
+    }
+    if (bracket && bracket.tp) createTPLine(bracket.tp);
+    else {
+      const data = getActiveCandleSeries().data();
+      if (!data || data.length === 0) return;
+      createTPLine(Math.max(...data.slice(-50).map(d => d.high)));
+    }
   });
 
-  // Sell Lines: SL = highest, TP = lowest
-  document.getElementById("btn-sell-lines").addEventListener("click", () => {
-    const data = getActiveCandleSeries().data();
-    if (!data || data.length === 0) return;
-    const recent = data.slice(-50);
-    createSLLine(Math.max(...recent.map((d) => d.high)));
-    createTPLine(Math.min(...recent.map((d) => d.low)));
+  // Sell Lines: snap to existing bracket SL/TP if position exists, else use recent high/low
+  document.getElementById("btn-sell-lines").addEventListener("click", async () => {
+    const bracket = await getPositionBracketLevels();
+    if (bracket && bracket.sl) createSLLine(bracket.sl);
+    else {
+      const data = getActiveCandleSeries().data();
+      if (!data || data.length === 0) return;
+      createSLLine(Math.max(...data.slice(-50).map(d => d.high)));
+    }
+    if (bracket && bracket.tp) createTPLine(bracket.tp);
+    else {
+      const data = getActiveCandleSeries().data();
+      if (!data || data.length === 0) return;
+      createTPLine(Math.min(...data.slice(-50).map(d => d.low)));
+    }
   });
 
   document.getElementById("btn-destroy-lines").addEventListener("click", () => {
@@ -4455,6 +4608,7 @@ function setupConnect() {
 
       // Set broker ID for per-broker data isolation
       activeBrokerId = `${brokerType}_${(accountName || "default").replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+      prefetchedThisSession.clear();
 
       // Save credentials to encrypted storage if requested
       if (shouldSaveCreds && accountName) {
@@ -4473,10 +4627,9 @@ function setupConnect() {
 
       setTimeout(() => modal.classList.add("hidden"), 1200);
 
-      // Start dashboard updates (only once)
-      if (!dashboardInterval) {
-        dashboardInterval = setInterval(updateDashboard, 2000);
-      }
+      // Start dashboard updates
+      if (dashboardInterval) clearInterval(dashboardInterval);
+      dashboardInterval = setInterval(updateDashboard, 2000);
     } catch (e) {
       status.textContent = `Failed: ${e}`;
       status.style.color = "#f88";
@@ -4507,15 +4660,15 @@ function setupConnect() {
       const paper = acctMeta.type === "paper";
       try {
         activeBrokerId = (acctMeta.name || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
+        prefetchedThisSession.clear();
         const result = await invoke("connect", { apiKey: creds.apiKey, secretKey: creds.secretKey, paper });
         const parsed = JSON.parse(result);
         const typeLabel = paper ? "Paper" : "LIVE";
         status.textContent = `Connected [${typeLabel}] $${Number(parsed.equity).toFixed(0)}`;
         status.style.color = "#8f8";
         modal.classList.add("hidden");
-        if (!dashboardInterval) {
-          dashboardInterval = setInterval(updateDashboard, 2000);
-        }
+        if (dashboardInterval) clearInterval(dashboardInterval);
+        dashboardInterval = setInterval(updateDashboard, 2000);
         loadSymbolList();
         log(`Auto-connected to ${acctMeta.name} (${typeLabel}) [keychain]`, "ok");
       } catch (e) {
@@ -4961,7 +5114,7 @@ function restoreSession() {
     for (const t of session.tabs) {
       createTab(t.symbol, t.timeframe);
       const tab = tabs[tabs.length - 1];
-      tab.barCount = t.barCount || "1000";
+      tab.barCount = t.barCount || "50000";
     }
 
     // Switch to previously active tab
@@ -6046,6 +6199,141 @@ async function cmdInsider() {
     win.contentElement.textContent = "";
     win.setContent(`Failed to load insider trades: ${e}`);
   }
+}
+
+// ══════════════════════════════════════════════════════════════
+// SEC — SEC Filings Viewer (10-K, 10-Q, 8-K, etc.)
+// ══════════════════════════════════════════════════════════════
+async function cmdSecFilings() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  const FILING_TYPES = ["10-K", "10-Q", "8-K", "S-1", "DEF 14A", "13F", "4", "SC 13D"];
+
+  const win = createWindow({
+    title: `${currentSymbol} — SEC Filings`,
+    type: "custom",
+    width: 650,
+    height: 500,
+  });
+  win.contentElement.textContent = "";
+
+  // Type selector row
+  const toolbar = document.createElement("div");
+  toolbar.style.cssText = "display:flex;gap:4px;padding:6px 0;flex-wrap:wrap;border-bottom:1px solid #333;margin-bottom:4px;";
+
+  let selectedType = "10-K";
+  const buttons = [];
+
+  for (const ft of FILING_TYPES) {
+    const btn = document.createElement("button");
+    btn.textContent = ft;
+    btn.style.cssText = "padding:3px 10px;font-size:10px;font-family:Consolas,monospace;cursor:pointer;border:1px solid #555;background:" + (ft === selectedType ? "#1565c0" : "#222") + ";color:" + (ft === selectedType ? "#fff" : "#aaa") + ";";
+    btn.addEventListener("click", () => {
+      selectedType = ft;
+      for (const b of buttons) {
+        b.style.background = b.textContent === ft ? "#1565c0" : "#222";
+        b.style.color = b.textContent === ft ? "#fff" : "#aaa";
+      }
+      fetchFilings(ft);
+    });
+    buttons.push(btn);
+    toolbar.appendChild(btn);
+  }
+  win.appendElement(toolbar);
+
+  const listEl = document.createElement("div");
+  listEl.style.cssText = "overflow-y:auto;max-height:calc(100% - 70px);";
+  win.appendElement(listEl);
+
+  async function fetchFilings(filingType) {
+    listEl.textContent = "";
+    const loading = document.createElement("div");
+    loading.textContent = `Fetching ${filingType} filings for ${currentSymbol}...`;
+    loading.style.cssText = "color:#888;padding:12px;font-size:11px;";
+    listEl.appendChild(loading);
+
+    try {
+      const json = await invoke("get_sec_filings", { symbol: currentSymbol, filingType });
+      const data = JSON.parse(json);
+      listEl.textContent = "";
+
+      // SEC EDGAR full-text search returns hits in various formats
+      const hits = data.hits?.hits || data.hits || [];
+      const filings = Array.isArray(hits) ? hits : [];
+
+      if (filings.length === 0) {
+        const noData = document.createElement("div");
+        noData.textContent = `No ${filingType} filings found for ${currentSymbol}.`;
+        noData.style.cssText = "color:#888;padding:12px;font-size:11px;";
+        listEl.appendChild(noData);
+        return;
+      }
+
+      // Table header
+      const header = document.createElement("div");
+      header.style.cssText = "display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #333;color:#888;font-size:10px;font-family:Consolas,monospace;";
+      const cols = [
+        { label: "Date", flex: "1" },
+        { label: "Type", flex: "0.7" },
+        { label: "Description", flex: "3" },
+        { label: "View", flex: "0.5" },
+      ];
+      for (const c of cols) {
+        const span = document.createElement("span");
+        span.textContent = c.label;
+        span.style.flex = c.flex;
+        header.appendChild(span);
+      }
+      listEl.appendChild(header);
+
+      for (const hit of filings) {
+        const src = hit._source || hit;
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #111;font-size:11px;color:#ccc;align-items:center;";
+
+        const date = document.createElement("span");
+        date.style.flex = "1";
+        date.textContent = src.file_date || src.period_of_report || src.filed || src.date || "—";
+
+        const type = document.createElement("span");
+        type.style.flex = "0.7";
+        type.textContent = src.form_type || src.form || filingType;
+        type.style.color = "#ff9800";
+
+        const desc = document.createElement("span");
+        desc.style.cssText = "flex:3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        desc.textContent = src.display_names?.join(", ") || src.entity_name || src.description || src.title || "—";
+
+        const link = document.createElement("span");
+        link.style.flex = "0.5";
+        const fileUrl = src.file_url || src.url || (src.file_num ? `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&filenum=${src.file_num}&type=${filingType}&dateb=&owner=include&count=10` : null);
+        if (fileUrl) {
+          const a = document.createElement("a");
+          a.textContent = "View";
+          a.style.cssText = "color:#2196f3;cursor:pointer;text-decoration:underline;font-size:10px;";
+          a.addEventListener("click", () => {
+            const title = `${src.form_type || filingType} — ${src.file_date || src.filed || ""} — ${currentSymbol}`;
+            openArticleInline(fileUrl, title);
+          });
+          link.appendChild(a);
+        }
+
+        row.appendChild(date);
+        row.appendChild(type);
+        row.appendChild(desc);
+        row.appendChild(link);
+        listEl.appendChild(row);
+      }
+    } catch (e) {
+      listEl.textContent = "";
+      const err = document.createElement("div");
+      err.textContent = `Failed to load filings: ${e}`;
+      err.style.cssText = "color:#f44336;padding:12px;font-size:11px;";
+      listEl.appendChild(err);
+    }
+  }
+
+  // Auto-fetch default type
+  fetchFilings(selectedType);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -7986,12 +8274,7 @@ async function cmdHotlist() {
 
   await fetchData();
   refreshTimer = setInterval(fetchData, 30000);
-
-  // Clean up interval when window is removed from DOM
-  const hotlistObs = new MutationObserver(() => {
-    if (!document.body.contains(win.element)) { clearInterval(refreshTimer); hotlistObs.disconnect(); }
-  });
-  hotlistObs.observe(document.body, { childList: true, subtree: true });
+  win.addCleanup(() => { if (refreshTimer) clearInterval(refreshTimer); });
 }
 
 // ── NOTES — Per-Symbol Trading Notes ───────────────────────
@@ -8221,11 +8504,7 @@ function cmdTimer() {
     if (!document.body.contains(win.element)) { clearInterval(tickInterval); return; }
     updateCountdowns();
   }, 1000);
-
-  const timerObs = new MutationObserver(() => {
-    if (!document.body.contains(win.element)) { clearInterval(tickInterval); timerObs.disconnect(); }
-  });
-  timerObs.observe(document.body, { childList: true, subtree: true });
+  win.addCleanup(() => clearInterval(tickInterval));
 }
 
 // ── EXPORT — Chart Data Export to CSV ──────────────────────
@@ -10187,6 +10466,7 @@ function cmdCheat() {
       ["IMPORTTRADES", "Import external trade history"],
       ["ACTIVITIES", "Account activities"],
       ["INSIDER", "Insider trading (SEC Form 4)"],
+      ["SEC", "SEC Filings (10-K, 10-Q, 8-K, S-1, etc.)"],
       ["EARNINGS", "Earnings & corporate actions"],
       ["SENTIMENT", "News sentiment analysis"],
     ]},
@@ -12920,6 +13200,131 @@ function cmdBackup() {
   root.appendChild(importBtn);
   win.appendElement(root);
   log("Backup/Restore window opened", "ok");
+}
+
+// ── ANR — Analyst Recommendations (FMP) ─────────────────────
+async function cmdANR() {
+  const s = loadSettings();
+  if (!s.fmpKey) { alert("FMP API key required.\nCtrl+K → SETTINGS → Financial Modeling Prep Key\nFree: financialmodelingprep.com/register"); return; }
+  const win = createWindow({ title: `Analyst Ratings — ${currentSymbol}`, width: 500, height: 400 });
+  win.setContent("Loading analyst ratings...");
+  try {
+    const json = await invoke("get_fmp_ratings", { symbol: currentSymbol, fmpKey: s.fmpKey });
+    const ratings = JSON.parse(json);
+    if (!ratings || ratings.length === 0) { win.setContent("No analyst ratings found for " + currentSymbol); return; }
+
+    const frag = document.createDocumentFragment();
+
+    // Summary: count by grade
+    const counts = {};
+    for (const r of ratings.slice(0, 20)) {
+      const grade = (r.newGrade || r.grade || "").toLowerCase();
+      if (grade.includes("buy") || grade.includes("outperform") || grade.includes("overweight")) counts.Buy = (counts.Buy || 0) + 1;
+      else if (grade.includes("sell") || grade.includes("underperform") || grade.includes("underweight")) counts.Sell = (counts.Sell || 0) + 1;
+      else counts.Hold = (counts.Hold || 0) + 1;
+    }
+    const summary = document.createElement("div");
+    summary.style.cssText = "display:flex;gap:12px;padding:8px;border-bottom:1px solid #333;justify-content:center;";
+    for (const [grade, count] of Object.entries(counts)) {
+      const box = document.createElement("div");
+      box.style.cssText = "text-align:center;";
+      const num = document.createElement("div");
+      num.style.cssText = `font-size:20px;font-weight:bold;color:${grade === "Buy" ? "#4caf50" : grade === "Sell" ? "#f44336" : "#ff9800"};`;
+      num.textContent = count;
+      const lbl = document.createElement("div");
+      lbl.style.cssText = "font-size:10px;color:#888;";
+      lbl.textContent = grade;
+      box.appendChild(num); box.appendChild(lbl);
+      summary.appendChild(box);
+    }
+    frag.appendChild(summary);
+
+    // Consensus
+    const total = ratings.length;
+    const buyPct = ((counts.Buy || 0) / Math.min(total, 20) * 100).toFixed(0);
+    const consensus = document.createElement("div");
+    consensus.style.cssText = `text-align:center;padding:4px;font-size:12px;font-weight:bold;color:${parseInt(buyPct) > 60 ? "#4caf50" : parseInt(buyPct) < 40 ? "#f44336" : "#ff9800"};`;
+    consensus.textContent = `Consensus: ${parseInt(buyPct) > 60 ? "BUY" : parseInt(buyPct) < 40 ? "SELL" : "HOLD"} (${buyPct}% bullish)`;
+    frag.appendChild(consensus);
+
+    // Table
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-top:6px;";
+    table.appendChild(theadRow(["Date", "Firm", "Action", "From", "To"], "padding:3px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;text-align:left;"));
+    for (const r of ratings.slice(0, 20)) {
+      const date = (r.date || "").substring(0, 10);
+      const firm = r.gradingCompany || r.company || "—";
+      const action = r.action || "—";
+      const from = r.previousGrade || "—";
+      const to = r.newGrade || r.grade || "—";
+      const toColor = to.toLowerCase().includes("buy") || to.toLowerCase().includes("outperform") ? "#4caf50" : to.toLowerCase().includes("sell") || to.toLowerCase().includes("underperform") ? "#f44336" : "#ff9800";
+      const tr = document.createElement("tr");
+      tr.appendChild(td(date, "padding:3px 6px;color:#888;"));
+      tr.appendChild(td(firm, "padding:3px 6px;color:#ccc;"));
+      tr.appendChild(td(action, "padding:3px 6px;color:#8cf;"));
+      tr.appendChild(td(from, "padding:3px 6px;color:#666;"));
+      const toTd = td(to, "padding:3px 6px;font-weight:bold;");
+      toTd.style.color = toColor;
+      tr.appendChild(toTd);
+      table.appendChild(tr);
+    }
+    frag.appendChild(table);
+    win.contentElement.replaceChildren(frag);
+  } catch (e) { win.setContent("Failed: " + e); }
+}
+
+// ── EARNINGS+ — EPS Estimates vs Actual (Alpha Vantage) ─────
+async function cmdEarningsPlus() {
+  const s = loadSettings();
+  if (!s.alphaVantageKey) { alert("Alpha Vantage API key required.\nCtrl+K → SETTINGS → Alpha Vantage API Key\nFree: alphavantage.co/support"); return; }
+  const win = createWindow({ title: `Earnings — ${currentSymbol}`, width: 480, height: 400 });
+  win.setContent("Loading earnings data...");
+  try {
+    const json = await invoke("get_av_earnings", { symbol: currentSymbol, avKey: s.alphaVantageKey });
+    const data = JSON.parse(json);
+    const quarterly = data.quarterlyEarnings || [];
+    if (quarterly.length === 0) { win.setContent("No earnings data found for " + currentSymbol); return; }
+
+    const frag = document.createDocumentFragment();
+
+    // Summary: beat/miss streak
+    let beats = 0, misses = 0, streak = 0, streakType = "";
+    for (const q of quarterly.slice(0, 8)) {
+      const est = parseFloat(q.estimatedEPS) || 0;
+      const act = parseFloat(q.reportedEPS) || 0;
+      const beat = act >= est;
+      if (beat) beats++; else misses++;
+      if (streak === 0 || (streakType === "beat" && beat) || (streakType === "miss" && !beat)) {
+        streak++;
+        streakType = beat ? "beat" : "miss";
+      }
+    }
+    const hdr = document.createElement("div");
+    hdr.style.cssText = `text-align:center;padding:8px;border-bottom:1px solid #333;font-size:13px;font-weight:bold;color:${beats > misses ? "#4caf50" : "#f44336"};`;
+    hdr.textContent = `${beats}/${Math.min(quarterly.length, 8)} beats | ${streak}-quarter ${streakType} streak`;
+    frag.appendChild(hdr);
+
+    // Table
+    const table = document.createElement("table");
+    table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-top:6px;";
+    table.appendChild(theadRow(["Quarter", "Est EPS", "Act EPS", "Surprise", "Surprise%"], "padding:3px 6px;color:#666;font-weight:bold;border-bottom:1px solid #333;text-align:right;"));
+    for (const q of quarterly.slice(0, 12)) {
+      const est = parseFloat(q.estimatedEPS) || 0;
+      const act = parseFloat(q.reportedEPS) || 0;
+      const surprise = act - est;
+      const surprisePct = est !== 0 ? (surprise / Math.abs(est) * 100) : 0;
+      const beat = act >= est;
+      const tr = document.createElement("tr");
+      tr.appendChild(td(q.fiscalDateEnding || "—", "padding:3px 6px;color:#888;text-align:left;"));
+      tr.appendChild(td(est.toFixed(2), "padding:3px 6px;color:#ccc;text-align:right;font-family:Consolas,monospace;"));
+      tr.appendChild(td(act.toFixed(2), "padding:3px 6px;text-align:right;font-family:Consolas,monospace;font-weight:bold;color:" + (beat ? "#4caf50" : "#f44336") + ";"));
+      tr.appendChild(td((surprise >= 0 ? "+" : "") + surprise.toFixed(2), "padding:3px 6px;text-align:right;font-family:Consolas,monospace;color:" + (beat ? "#4caf50" : "#f44336") + ";"));
+      tr.appendChild(td((surprisePct >= 0 ? "+" : "") + surprisePct.toFixed(1) + "%", "padding:3px 6px;text-align:right;font-family:Consolas,monospace;color:" + (beat ? "#4caf50" : "#f44336") + ";"));
+      table.appendChild(tr);
+    }
+    frag.appendChild(table);
+    win.contentElement.replaceChildren(frag);
+  } catch (e) { win.setContent("Failed: " + e); }
 }
 
 // ── ANNOUNCE — Earnings Surprise Tracker ────────────────────
@@ -18171,6 +18576,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "T&S", desc: "Time & Sales (live trades)", action: cmdTimeSales },
   { name: "ACTIVITIES", desc: "Account activities (fills, dividends, deposits)", action: cmdActivities },
   { name: "INSIDER", desc: "Insider trading (SEC Form 4)", action: cmdInsider },
+  { name: "SEC", desc: "SEC Filings — 10-K, 10-Q, 8-K, insider filings", action: cmdSecFilings },
   { name: "EARNINGS", desc: "Earnings & Corporate Actions Calendar", action: cmdEarnings },
   { name: "PORTFOLIO", desc: "Portfolio Breakdown by Sector", action: cmdPortfolio },
   { name: "CORR", desc: "Correlation Matrix (open positions)", action: cmdCorrelation },
@@ -18313,6 +18719,24 @@ const CMD_PALETTE_COMMANDS = [
   { name: "SHADOW-TRADE", desc: "Parallel paper portfolio (2x risk, what-if comparison)", action: cmdShadowTrade },
   { name: "CHART-DIFF", desc: "Compare two time periods side by side (normalized % change)", action: cmdChartDiff },
   { name: "AUTOCOMPLETE-AI", desc: "Smart symbol suggestions (recent, correlated, watchlist)", action: cmdAutocompleteAI },
+  { name: "DRAW-REGRESSION", desc: "Regression Channel (linear regression + 1-sigma bands)", action: () => { drawingMode = "regression-channel"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-STDDEV", desc: "Standard Deviation Channel (regression + 2-sigma bands)", action: () => { drawingMode = "stddev-channel"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-RISKREWARD", desc: "Risk/Reward Zone (green TP / red SL rectangles)", action: () => { drawingMode = "risk-reward"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-POSBOX", desc: "Position Box (entry/exit with P&L label)", action: () => { drawingMode = "position-box"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-DATERANGE", desc: "Date Range Highlighter (vertical band)", action: () => { drawingMode = "date-range"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-PRICERANGE", desc: "Price Range Zone (horizontal band)", action: () => { drawingMode = "price-range"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-SPEEDLINES", desc: "Speed Lines (1/3, 1/2, 2/3 fan lines)", action: () => { drawingMode = "speed-lines"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-EQCHANNEL", desc: "Equidistant Channel (symmetric upper/lower bands)", action: () => { drawingMode = "equidistant-channel"; drawingAnchor = null; channelThirdClick = false; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-GANNBOX", desc: "Gann Box (grid with diagonals)", action: () => { drawingMode = "gann-box"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-ELLIOTT", desc: "Elliott Impulse Wave (5 waves, 6 click points)", action: () => { drawingMode = "elliott-impulse"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-ELLIOTT-ABC", desc: "Elliott Corrective Wave (A-B-C, 4 click points)", action: () => { drawingMode = "elliott-corrective"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-GANNGRID", desc: "Gann Grid (fan lines with connecting gridlines)", action: () => { drawingMode = "gann-grid"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-ARROWLEFT", desc: "Arrow Left (triangle marker pointing left)", action: () => { drawingMode = "arrow-left"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-ARROWRIGHT", desc: "Arrow Right (triangle marker pointing right)", action: () => { drawingMode = "arrow-right"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-ARROWCHECK", desc: "Arrow Check (green checkmark marker)", action: () => { drawingMode = "arrow-check"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-ARROWSTOP", desc: "Arrow Stop (red X marker)", action: () => { drawingMode = "arrow-stop"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "DRAW-TEXTBOX", desc: "Text Box (label with background and border)", action: () => { drawingMode = "text-box"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; } },
+  { name: "CACHE", desc: "Bar data cache manager — storage stats, cleanup", action: cmdCacheManager },
 ];
 
 function fuzzyMatch(query, target) {
@@ -19697,7 +20121,7 @@ function setupDrawingPropertiesPanel() {
           nearestDist = dist;
           nearestIdx = di;
         }
-      } else if (d.type === "trendline" || d.type === "fibonacci" || d.type === "rectangle" || d.type === "channel") {
+      } else if (d.type === "trendline" || d.type === "fibonacci" || d.type === "rectangle" || d.type === "channel" || d.type === "regression-channel" || d.type === "stddev-channel" || d.type === "risk-reward" || d.type === "position-box" || d.type === "date-range" || d.type === "price-range" || d.type === "speed-lines" || d.type === "equidistant-channel" || d.type === "gann-box" || d.type === "gann-grid") {
         const x1 = chart.timeScale().timeToCoordinate(d.p1.time);
         const y1 = candleSeries.priceToCoordinate(d.p1.price);
         const x2 = chart.timeScale().timeToCoordinate(d.p2.time);
@@ -20345,7 +20769,9 @@ async function activateCustomPlugin(pluginInfo) {
     // Validate plugin source before evaluation — reject dangerous patterns
     const forbidden = ["fetch(", "XMLHttpRequest", "localStorage", "sessionStorage", "document.cookie",
       "eval(", "Function(", "import(", "require(", "process.", "child_process", "__proto__",
-      "constructor[", "globalThis", "window.open", "navigator.sendBeacon"];
+      "constructor[", "globalThis", "window.open", "navigator.sendBeacon",
+      "constructor", "prototype", "__lookupGetter__", "__defineGetter__",
+      "__lookupSetter__", "__defineSetter__", "getOwnPropertyDescriptor"];
     const srcLower = source.toLowerCase();
     for (const pat of forbidden) {
       if (srcLower.includes(pat.toLowerCase())) {
@@ -20353,8 +20779,10 @@ async function activateCustomPlugin(pluginInfo) {
         return;
       }
     }
-    // Evaluate plugin in a restricted function scope (no access to globals except Math/Date)
-    const pluginFn = new Function("Math", "Date", "return (" + source + ")")(Math, Date);
+    // Evaluate plugin in a restricted function scope (no access to globals except frozen Math/Date)
+    const safeMath = Object.freeze(Object.create(Math));
+    const safeDate = Object.freeze({ now: Date.now.bind(Date), UTC: Date.UTC.bind(Date) });
+    const pluginFn = new Function("Math", "Date", "return (" + source + ")")(safeMath, safeDate);
     if (!pluginFn || !pluginFn.calculate) {
       log(`Plugin ${name} has no calculate() function`, "error");
       return;
@@ -20861,6 +21289,8 @@ let channelThirdClick = false; // track channel state
 // The original renderDrawings() delegates here via the check at its top.
 
 function renderDrawingsExtended() {
+  // Sync to GPU engine (early-returns internally if not in GPU mode)
+  syncDrawingsToGpu();
   if (!drawCanvas || !chart || !candleSeries) return;
   const ctx = drawCanvas.getContext("2d");
   ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
@@ -21121,12 +21551,59 @@ function renderDrawingsExtended() {
         ctx.moveTo(x1, y1); ctx.lineTo(x1 + dx * 3, y1 + dy * 3); ctx.stroke();
       }
 
+    } else if (d.type === "gann-grid") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const angles = [1/8, 1/4, 1/3, 1/2, 1, 2, 3, 4, 8];
+      const dx = x2 - x1;
+      // Draw fan lines from origin
+      const endPoints = [];
+      for (const a of angles) {
+        const dy = (y2 - y1) * a;
+        const ex = x1 + dx * 3, ey = y1 + dy * 3;
+        endPoints.push({ x: ex, y: ey });
+        ctx.beginPath(); ctx.strokeStyle = a === 1 ? "#ff9800" : "#ff980066"; ctx.lineWidth = a === 1 ? 1.5 : 0.8;
+        ctx.moveTo(x1, y1); ctx.lineTo(ex, ey); ctx.stroke();
+      }
+      // Draw connecting grid lines between fan endpoints at intervals
+      ctx.strokeStyle = "#ff980033"; ctx.lineWidth = 0.5; ctx.setLineDash([2, 2]);
+      for (let t = 0.25; t <= 3.0; t += 0.25) {
+        ctx.beginPath();
+        for (let i = 0; i < angles.length; i++) {
+          const a = angles[i]; const dy = (y2 - y1) * a;
+          const gx = x1 + dx * t, gy = y1 + dy * t;
+          if (i === 0) ctx.moveTo(gx, gy); else ctx.lineTo(gx, gy);
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
     } else if (d.type === "arrow-up" || d.type === "arrow-down") {
       const x = chart.timeScale().timeToCoordinate(d.p1.time), y = candleSeries.priceToCoordinate(d.p1.price);
       if (x === null || y === null) continue;
       const sz = 10; const dir = d.type === "arrow-up" ? -1 : 1;
       ctx.beginPath(); ctx.fillStyle = d.type === "arrow-up" ? "#4caf50" : "#f44336";
       ctx.moveTo(x, y + dir * sz); ctx.lineTo(x - sz/2, y); ctx.lineTo(x + sz/2, y); ctx.closePath(); ctx.fill();
+
+    } else if (d.type === "arrow-left" || d.type === "arrow-right") {
+      const x = chart.timeScale().timeToCoordinate(d.p1.time), y = candleSeries.priceToCoordinate(d.p1.price);
+      if (x === null || y === null) continue;
+      const sz = 10; const dir = d.type === "arrow-left" ? -1 : 1;
+      ctx.beginPath(); ctx.fillStyle = "#00bcd4";
+      ctx.moveTo(x + dir * sz, y); ctx.lineTo(x, y - sz/2); ctx.lineTo(x, y + sz/2); ctx.closePath(); ctx.fill();
+
+    } else if (d.type === "arrow-check") {
+      const x = chart.timeScale().timeToCoordinate(d.p1.time), y = candleSeries.priceToCoordinate(d.p1.price);
+      if (x === null || y === null) continue;
+      ctx.beginPath(); ctx.strokeStyle = "#4caf50"; ctx.lineWidth = 2.5; ctx.lineCap = "round";
+      ctx.moveTo(x - 6, y); ctx.lineTo(x - 2, y + 5); ctx.lineTo(x + 7, y - 5); ctx.stroke();
+
+    } else if (d.type === "arrow-stop") {
+      const x = chart.timeScale().timeToCoordinate(d.p1.time), y = candleSeries.priceToCoordinate(d.p1.price);
+      if (x === null || y === null) continue;
+      ctx.beginPath(); ctx.strokeStyle = "#f44336"; ctx.lineWidth = 2.5; ctx.lineCap = "round";
+      ctx.moveTo(x - 6, y - 6); ctx.lineTo(x + 6, y + 6); ctx.moveTo(x + 6, y - 6); ctx.lineTo(x - 6, y + 6); ctx.stroke();
 
     } else if (d.type === "price-label" || d.type === "text-label") {
       const x = chart.timeScale().timeToCoordinate(d.p1.time), y = candleSeries.priceToCoordinate(d.p1.price);
@@ -21135,6 +21612,16 @@ function renderDrawingsExtended() {
       ctx.font = "10px Consolas"; const w = ctx.measureText(text).width;
       ctx.fillStyle = "#000c"; ctx.fillRect(x - 2, y - 12, w + 6, 14);
       ctx.fillStyle = d.type === "price-label" ? "#ff0" : "#ccc"; ctx.fillText(text, x + 1, y - 1);
+
+    } else if (d.type === "text-box") {
+      const x = chart.timeScale().timeToCoordinate(d.p1.time), y = candleSeries.priceToCoordinate(d.p1.price);
+      if (x === null || y === null) continue;
+      const text = d.text || "Label";
+      ctx.font = "10px Consolas"; const w = ctx.measureText(text).width;
+      const pad = 4; const bw = w + pad * 2 + 2, bh = 14 + pad * 2;
+      ctx.fillStyle = "#1a1a2ecc"; ctx.fillRect(x - pad, y - 12 - pad, bw, bh);
+      ctx.strokeStyle = "#8cf"; ctx.lineWidth = 1; ctx.strokeRect(x - pad, y - 12 - pad, bw, bh);
+      ctx.fillStyle = "#fff"; ctx.fillText(text, x + 1, y - 1);
 
     } else if (d.type === "cycle-lines") {
       const x1 = chart.timeScale().timeToCoordinate(d.p1.time), x2 = chart.timeScale().timeToCoordinate(d.p2.time);
@@ -21157,7 +21644,225 @@ function renderDrawingsExtended() {
       ctx.fillStyle = "#00bcd410"; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x2, oY2); ctx.lineTo(x1, oY1); ctx.closePath(); ctx.fill();
       ctx.strokeStyle = "#00bcd4"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
       ctx.setLineDash([4,2]); ctx.beginPath(); ctx.moveTo(x1, oY1); ctx.lineTo(x2, oY2); ctx.stroke(); ctx.setLineDash([]);
+
+    } else if (d.type === "regression-channel" || d.type === "stddev-channel") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      // Compute linear regression of closes between p1.time and p2.time
+      const t1 = Math.min(d.p1.time, d.p2.time), t2 = Math.max(d.p1.time, d.p2.time);
+      const bars = currentChartData.filter(b => b.time >= t1 && b.time <= t2);
+      if (bars.length < 2) { ctx.beginPath(); ctx.strokeStyle = "#00bcd4"; ctx.lineWidth = 1.5; ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); continue; }
+      let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+      for (let i = 0; i < bars.length; i++) { sumX += i; sumY += bars[i].close; sumXY += i * bars[i].close; sumXX += i * i; }
+      const n = bars.length; const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX); const intercept = (sumY - slope * sumX) / n;
+      // Compute stddev from regression
+      let sumErr2 = 0;
+      for (let i = 0; i < bars.length; i++) { const err = bars[i].close - (intercept + slope * i); sumErr2 += err * err; }
+      const stddev = Math.sqrt(sumErr2 / n);
+      const bandMult = d.type === "stddev-channel" ? 2 : 1;
+      // Draw center regression line
+      const regY1 = candleSeries.priceToCoordinate(intercept), regY2 = candleSeries.priceToCoordinate(intercept + slope * (n - 1));
+      const lx1 = chart.timeScale().timeToCoordinate(bars[0].time), lx2 = chart.timeScale().timeToCoordinate(bars[n - 1].time);
+      if (regY1 === null || regY2 === null || lx1 === null || lx2 === null) continue;
+      ctx.beginPath(); ctx.strokeStyle = "#00bcd4"; ctx.lineWidth = 1.5; ctx.moveTo(lx1, regY1); ctx.lineTo(lx2, regY2); ctx.stroke();
+      // Upper band
+      const uY1 = candleSeries.priceToCoordinate(intercept + stddev * bandMult), uY2 = candleSeries.priceToCoordinate(intercept + slope * (n - 1) + stddev * bandMult);
+      if (uY1 !== null && uY2 !== null) { ctx.beginPath(); ctx.strokeStyle = "#00bcd488"; ctx.lineWidth = 1; ctx.setLineDash([4, 2]); ctx.moveTo(lx1, uY1); ctx.lineTo(lx2, uY2); ctx.stroke(); ctx.setLineDash([]); }
+      // Lower band
+      const dY1 = candleSeries.priceToCoordinate(intercept - stddev * bandMult), dY2 = candleSeries.priceToCoordinate(intercept + slope * (n - 1) - stddev * bandMult);
+      if (dY1 !== null && dY2 !== null) { ctx.beginPath(); ctx.strokeStyle = "#00bcd488"; ctx.lineWidth = 1; ctx.setLineDash([4, 2]); ctx.moveTo(lx1, dY1); ctx.lineTo(lx2, dY2); ctx.stroke(); ctx.setLineDash([]); }
+      // Fill between bands
+      if (uY1 !== null && uY2 !== null && dY1 !== null && dY2 !== null) {
+        ctx.fillStyle = "#00bcd410"; ctx.beginPath(); ctx.moveTo(lx1, uY1); ctx.lineTo(lx2, uY2); ctx.lineTo(lx2, dY2); ctx.lineTo(lx1, dY1); ctx.closePath(); ctx.fill();
+      }
+
+    } else if (d.type === "risk-reward") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const entryY = y1, tpY = y2;
+      const entryPrice = d.p1.price, tpPrice = d.p2.price;
+      const isLong = tpPrice > entryPrice;
+      const slPrice = entryPrice - (tpPrice - entryPrice); // Mirror TP around entry for SL
+      const slY = candleSeries.priceToCoordinate(slPrice);
+      if (slY === null) continue;
+      const rx = Math.min(x1, x2), rw = Math.abs(x2 - x1);
+      // Green zone (entry to TP)
+      ctx.fillStyle = "#4caf5030"; ctx.fillRect(rx, Math.min(entryY, tpY), rw, Math.abs(tpY - entryY));
+      ctx.strokeStyle = "#4caf50"; ctx.lineWidth = 1; ctx.strokeRect(rx, Math.min(entryY, tpY), rw, Math.abs(tpY - entryY));
+      // Red zone (entry to SL)
+      ctx.fillStyle = "#f4433630"; ctx.fillRect(rx, Math.min(entryY, slY), rw, Math.abs(slY - entryY));
+      ctx.strokeStyle = "#f44336"; ctx.lineWidth = 1; ctx.strokeRect(rx, Math.min(entryY, slY), rw, Math.abs(slY - entryY));
+      // Labels
+      ctx.font = "10px Consolas"; ctx.fillStyle = "#4caf50"; ctx.fillText(`TP $${tpPrice.toFixed(2)}`, rx + 4, tpY + (isLong ? -4 : 12));
+      ctx.fillStyle = "#f44336"; ctx.fillText(`SL $${slPrice.toFixed(2)}`, rx + 4, slY + (isLong ? 12 : -4));
+      ctx.fillStyle = "#ccc"; ctx.fillText(`Entry $${entryPrice.toFixed(2)}`, rx + 4, entryY - 4);
+
+    } else if (d.type === "position-box") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const entryPrice = d.p1.price, exitPrice = d.p2.price;
+      const isLong = exitPrice > entryPrice;
+      const rx = Math.min(x1, x2), ry = Math.min(y1, y2), rw = Math.abs(x2 - x1), rh = Math.abs(y2 - y1);
+      const color = isLong ? "#4caf50" : "#f44336";
+      ctx.fillStyle = color + "20"; ctx.fillRect(rx, ry, rw, rh);
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.strokeRect(rx, ry, rw, rh);
+      // Entry line
+      ctx.beginPath(); ctx.strokeStyle = "#ccc"; ctx.lineWidth = 1; ctx.setLineDash([3,3]); ctx.moveTo(rx, y1); ctx.lineTo(rx + rw, y1); ctx.stroke(); ctx.setLineDash([]);
+      // Labels
+      const pnlPct = entryPrice !== 0 ? ((exitPrice - entryPrice) / entryPrice * 100) : 0;
+      const sign = pnlPct >= 0 ? "+" : "";
+      ctx.font = "10px Consolas";
+      ctx.fillStyle = "#ccc"; ctx.fillText(`Entry $${entryPrice.toFixed(2)}`, rx + 4, y1 - 4);
+      ctx.fillStyle = color; ctx.fillText(`${isLong ? "LONG" : "SHORT"} ${sign}${pnlPct.toFixed(2)}%`, rx + 4, ry + 12);
+      ctx.fillText(`Exit $${exitPrice.toFixed(2)}`, rx + 4, y2 + (isLong ? -4 : 12));
+
+    } else if (d.type === "date-range") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), x2 = chart.timeScale().timeToCoordinate(d.p2.time);
+      if (x1 === null || x2 === null) continue;
+      const rx = Math.min(x1, x2), rw = Math.abs(x2 - x1);
+      ctx.fillStyle = "#9c27b018"; ctx.fillRect(rx, 0, rw, drawCanvas.height);
+      ctx.strokeStyle = "#9c27b0"; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(rx, 0); ctx.lineTo(rx, drawCanvas.height); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(rx + rw, 0); ctx.lineTo(rx + rw, drawCanvas.height); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = "10px Consolas"; ctx.fillStyle = "#9c27b0"; ctx.fillText("Date Range", rx + 4, 14);
+
+    } else if (d.type === "price-range") {
+      const y1 = candleSeries.priceToCoordinate(d.p1.price), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (y1 === null || y2 === null) continue;
+      const ry = Math.min(y1, y2), rh = Math.abs(y2 - y1);
+      ctx.fillStyle = "#ff980018"; ctx.fillRect(0, ry, drawCanvas.width, rh);
+      ctx.strokeStyle = "#ff9800"; ctx.lineWidth = 1; ctx.setLineDash([3,3]);
+      ctx.beginPath(); ctx.moveTo(0, y1); ctx.lineTo(drawCanvas.width, y1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, y2); ctx.lineTo(drawCanvas.width, y2); ctx.stroke();
+      ctx.setLineDash([]);
+      const pRange = Math.abs(d.p2.price - d.p1.price);
+      ctx.font = "10px Consolas"; ctx.fillStyle = "#ff9800"; ctx.fillText(`$${Math.min(d.p1.price, d.p2.price).toFixed(2)} — $${Math.max(d.p1.price, d.p2.price).toFixed(2)} ($${pRange.toFixed(2)})`, 4, ry + 12);
+
+    } else if (d.type === "speed-lines") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const fractions = [1/3, 1/2, 2/3]; const colors = ["#ff9800", "#ffeb3b", "#8bc34a"];
+      for (let si = 0; si < fractions.length; si++) {
+        const fy = y1 + (y2 - y1) * fractions[si];
+        const dx = x2 - x1, dy = fy - y1;
+        const ext = dx !== 0 ? (drawCanvas.width - x1) / dx : 1;
+        ctx.beginPath(); ctx.strokeStyle = colors[si]; ctx.lineWidth = 1;
+        ctx.moveTo(x1, y1); ctx.lineTo(x1 + dx * ext, y1 + dy * ext); ctx.stroke();
+        ctx.font = "9px Consolas"; ctx.fillStyle = colors[si]; ctx.fillText(`${Math.round(fractions[si] * 100)}%`, x2 + 4, fy);
+      }
+
+    } else if (d.type === "equidistant-channel") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const offset = d.offset || 0;
+      // Upper parallel
+      const uY1 = candleSeries.priceToCoordinate(d.p1.price + offset), uY2 = candleSeries.priceToCoordinate(d.p2.price + offset);
+      // Lower parallel (symmetric)
+      const lY1 = candleSeries.priceToCoordinate(d.p1.price - offset), lY2 = candleSeries.priceToCoordinate(d.p2.price - offset);
+      // Center line
+      ctx.beginPath(); ctx.strokeStyle = "#00bcd4"; ctx.lineWidth = 1.5; ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      // Upper line
+      if (uY1 !== null && uY2 !== null) { ctx.beginPath(); ctx.strokeStyle = "#00bcd488"; ctx.lineWidth = 1; ctx.setLineDash([4, 2]); ctx.moveTo(x1, uY1); ctx.lineTo(x2, uY2); ctx.stroke(); ctx.setLineDash([]); }
+      // Lower line
+      if (lY1 !== null && lY2 !== null) { ctx.beginPath(); ctx.strokeStyle = "#00bcd488"; ctx.lineWidth = 1; ctx.setLineDash([4, 2]); ctx.moveTo(x1, lY1); ctx.lineTo(x2, lY2); ctx.stroke(); ctx.setLineDash([]); }
+      // Fill
+      if (uY1 !== null && uY2 !== null && lY1 !== null && lY2 !== null) {
+        ctx.fillStyle = "#00bcd410"; ctx.beginPath(); ctx.moveTo(x1, uY1); ctx.lineTo(x2, uY2); ctx.lineTo(x2, lY2); ctx.lineTo(x1, lY1); ctx.closePath(); ctx.fill();
+      }
+
+    } else if (d.type === "gann-box") {
+      const x1 = chart.timeScale().timeToCoordinate(d.p1.time), y1 = candleSeries.priceToCoordinate(d.p1.price);
+      const x2 = chart.timeScale().timeToCoordinate(d.p2.time), y2 = candleSeries.priceToCoordinate(d.p2.price);
+      if (x1 === null || y1 === null || x2 === null || y2 === null) continue;
+      const rx = Math.min(x1, x2), ry = Math.min(y1, y2), rw = Math.abs(x2 - x1), rh = Math.abs(y2 - y1);
+      // Border
+      ctx.strokeStyle = "#ff9800"; ctx.lineWidth = 1.5; ctx.strokeRect(rx, ry, rw, rh);
+      ctx.fillStyle = "#ff980008"; ctx.fillRect(rx, ry, rw, rh);
+      // Horizontal grid lines at Gann levels
+      const levels = [0, 0.25, 0.333, 0.5, 0.667, 0.75, 1.0];
+      ctx.strokeStyle = "#ff980055"; ctx.lineWidth = 0.8;
+      for (const lv of levels) {
+        const gy = ry + rh * lv;
+        ctx.beginPath(); ctx.setLineDash([2, 2]); ctx.moveTo(rx, gy); ctx.lineTo(rx + rw, gy); ctx.stroke(); ctx.setLineDash([]);
+      }
+      // Vertical grid lines
+      for (const lv of levels) {
+        const gx = rx + rw * lv;
+        ctx.beginPath(); ctx.setLineDash([2, 2]); ctx.moveTo(gx, ry); ctx.lineTo(gx, ry + rh); ctx.stroke(); ctx.setLineDash([]);
+      }
+      // Diagonals
+      ctx.strokeStyle = "#ff980088"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx + rw, ry + rh); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(rx + rw, ry); ctx.lineTo(rx, ry + rh); ctx.stroke();
+
+    } else if (d.type === "elliott-impulse") {
+      if (!d.points || d.points.length < 6) continue;
+      const labels = ["1", "2", "3", "4", "5"];
+      const coords = d.points.map(p => ({ x: chart.timeScale().timeToCoordinate(p.time), y: candleSeries.priceToCoordinate(p.price) }));
+      if (coords.some(c => c.x === null || c.y === null)) continue;
+      // Zigzag lines
+      ctx.beginPath(); ctx.strokeStyle = d.color || "#2196f3"; ctx.lineWidth = 1.5;
+      ctx.moveTo(coords[0].x, coords[0].y);
+      for (let i = 1; i < coords.length; i++) ctx.lineTo(coords[i].x, coords[i].y);
+      ctx.stroke();
+      // Labels at wave endpoints (skip first point, label points 1-5)
+      ctx.font = "bold 11px Consolas"; ctx.fillStyle = "#2196f3";
+      for (let i = 0; i < labels.length; i++) {
+        const c = coords[i + 1];
+        const above = coords[i + 1].y < coords[i].y;
+        ctx.fillText(labels[i], c.x - 4, c.y + (above ? -8 : 14));
+      }
+
+    } else if (d.type === "elliott-corrective") {
+      if (!d.points || d.points.length < 4) continue;
+      const labels = ["A", "B", "C"];
+      const coords = d.points.map(p => ({ x: chart.timeScale().timeToCoordinate(p.time), y: candleSeries.priceToCoordinate(p.price) }));
+      if (coords.some(c => c.x === null || c.y === null)) continue;
+      // Zigzag lines
+      ctx.beginPath(); ctx.strokeStyle = d.color || "#e91e63"; ctx.lineWidth = 1.5; ctx.setLineDash([6, 3]);
+      ctx.moveTo(coords[0].x, coords[0].y);
+      for (let i = 1; i < coords.length; i++) ctx.lineTo(coords[i].x, coords[i].y);
+      ctx.stroke(); ctx.setLineDash([]);
+      // Labels
+      ctx.font = "bold 11px Consolas"; ctx.fillStyle = "#e91e63";
+      for (let i = 0; i < labels.length; i++) {
+        const c = coords[i + 1];
+        const above = coords[i + 1].y < coords[i].y;
+        ctx.fillText(labels[i], c.x - 4, c.y + (above ? -8 : 14));
+      }
     }
+  }
+
+  // Session separator lines (stocks only, intraday TFs only)
+  // Only show on M1-M30 where individual sessions are meaningful.
+  // On H1+ the density makes the chart unreadable.
+  const intradayTFs = ["1Min", "5Min", "10Min", "15Min", "20Min", "30Min"];
+  if (currentSymbol && !currentSymbol.includes("/") && currentChartData.length > 1
+      && currentTimeframe && intradayTFs.includes(currentTimeframe)) {
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "rgba(100, 100, 100, 0.25)";
+    ctx.lineWidth = 1;
+    for (let i = 1; i < currentChartData.length; i++) {
+      const prev = isRegularSession(currentChartData[i - 1].time);
+      const curr = isRegularSession(currentChartData[i].time);
+      if (prev !== curr) {
+        const x = chart.timeScale().timeToCoordinate(currentChartData[i].time);
+        if (x !== null && x > 0) {
+          ctx.beginPath();
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, drawCanvas.height);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
   }
 }
 
@@ -21257,12 +21962,12 @@ function setupExtendedDrawings() {
       if (!drawingAnchor) { drawingAnchor = { time, price }; log(`${drawingMode}: center — click edge`, "info"); e.stopImmediatePropagation(); }
       else { drawings.push({ type: drawingMode, p1: drawingAnchor, p2: { time, price } }); saveDrawings(); log(`${drawingMode} drawn`, "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
 
-    } else if (drawingMode === "fib-fan" || drawingMode === "fib-arcs" || drawingMode === "fib-channel" || drawingMode === "fib-extension" || drawingMode === "gann-fan") {
+    } else if (drawingMode === "fib-fan" || drawingMode === "fib-arcs" || drawingMode === "fib-channel" || drawingMode === "fib-extension" || drawingMode === "gann-fan" || drawingMode === "gann-grid") {
       if (!drawingAnchor) { drawingAnchor = { time, price }; log(`${drawingMode}: first point — click second`, "info"); e.stopImmediatePropagation(); }
       else { drawings.push({ type: drawingMode, p1: drawingAnchor, p2: { time, price } }); saveDrawings(); log(`${drawingMode} drawn`, "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
 
-    } else if (drawingMode === "arrow-up" || drawingMode === "arrow-down" || drawingMode === "price-label" || drawingMode === "text-label") {
-      const text = drawingMode === "text-label" ? (prompt("Label text:") || "Label") : drawingMode === "price-label" ? `$${price.toFixed(2)}` : "";
+    } else if (drawingMode === "arrow-up" || drawingMode === "arrow-down" || drawingMode === "arrow-left" || drawingMode === "arrow-right" || drawingMode === "arrow-check" || drawingMode === "arrow-stop" || drawingMode === "price-label" || drawingMode === "text-label" || drawingMode === "text-box") {
+      const text = (drawingMode === "text-label" || drawingMode === "text-box") ? (prompt("Label text:") || "Label") : drawingMode === "price-label" ? `$${price.toFixed(2)}` : "";
       drawings.push({ type: drawingMode, p1: { time, price }, text });
       saveDrawings(); log(`${drawingMode} placed`, "ok");
       drawingMode = null; drawingAnchor = null; container.style.cursor = ""; renderDrawings();
@@ -21276,6 +21981,25 @@ function setupExtendedDrawings() {
       if (!drawingAnchor) { drawingAnchor = { time, price }; log("Parallel channel: first point — click second", "info"); e.stopImmediatePropagation(); }
       else if (!channelThirdClick) { drawingAnchor._p2 = { time, price }; channelThirdClick = true; log("Parallel channel: click to set width", "info"); e.stopImmediatePropagation(); }
       else { const offset = price - drawingAnchor.price; drawings.push({ type: "parallel-channel", p1: { time: drawingAnchor.time, price: drawingAnchor.price }, p2: drawingAnchor._p2, offset }); saveDrawings(); log("Parallel channel drawn", "ok"); drawingAnchor = null; drawingMode = null; channelThirdClick = false; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "regression-channel" || drawingMode === "stddev-channel" || drawingMode === "risk-reward" || drawingMode === "position-box" || drawingMode === "date-range" || drawingMode === "price-range" || drawingMode === "speed-lines" || drawingMode === "gann-box") {
+      if (!drawingAnchor) { drawingAnchor = { time, price }; log(`${drawingMode}: first point — click second`, "info"); e.stopImmediatePropagation(); }
+      else { drawings.push({ type: drawingMode, p1: drawingAnchor, p2: { time, price } }); saveDrawings(); log(`${drawingMode} drawn`, "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "equidistant-channel") {
+      if (!drawingAnchor) { drawingAnchor = { time, price }; log("Equidistant channel: first point — click second", "info"); e.stopImmediatePropagation(); }
+      else if (!channelThirdClick) { drawingAnchor._p2 = { time, price }; channelThirdClick = true; log("Equidistant channel: click to set offset", "info"); e.stopImmediatePropagation(); }
+      else { const offset = price - drawingAnchor.price; drawings.push({ type: "equidistant-channel", p1: { time: drawingAnchor.time, price: drawingAnchor.price }, p2: drawingAnchor._p2, offset }); saveDrawings(); log("Equidistant channel drawn", "ok"); drawingAnchor = null; drawingMode = null; channelThirdClick = false; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "elliott-impulse") {
+      if (!drawingAnchor) { drawingAnchor = { time, price, _step: 1, _points: [{ time, price }] }; log("Elliott impulse: point 1 — click point 2 (5 more)", "info"); e.stopImmediatePropagation(); }
+      else if (drawingAnchor._step < 5) { drawingAnchor._points.push({ time, price }); drawingAnchor._step++; log(`Elliott impulse: point ${drawingAnchor._step} — click point ${drawingAnchor._step + 1} (${6 - drawingAnchor._step} more)`, "info"); e.stopImmediatePropagation(); }
+      else { drawingAnchor._points.push({ time, price }); drawings.push({ type: "elliott-impulse", points: drawingAnchor._points }); saveDrawings(); log("Elliott impulse drawn", "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
+
+    } else if (drawingMode === "elliott-corrective") {
+      if (!drawingAnchor) { drawingAnchor = { time, price, _step: 1, _points: [{ time, price }] }; log("Elliott corrective: point 1 — click point 2 (3 more)", "info"); e.stopImmediatePropagation(); }
+      else if (drawingAnchor._step < 3) { drawingAnchor._points.push({ time, price }); drawingAnchor._step++; log(`Elliott corrective: point ${drawingAnchor._step} — click point ${drawingAnchor._step + 1} (${4 - drawingAnchor._step} more)`, "info"); e.stopImmediatePropagation(); }
+      else { drawingAnchor._points.push({ time, price }); drawings.push({ type: "elliott-corrective", points: drawingAnchor._points }); saveDrawings(); log("Elliott corrective drawn", "ok"); drawingAnchor = null; drawingMode = null; container.style.cursor = ""; renderDrawings(); e.stopImmediatePropagation(); }
     }
   }, true); // capture phase to run before existing handler
 }
@@ -21647,9 +22371,14 @@ document.addEventListener("DOMContentLoaded", () => {
   registerCustomShortcutListener(); // Load saved custom keyboard shortcuts
 
   // Auto-save session periodically and on shutdown
-  setInterval(saveSession, 30000); // every 30s
-  setInterval(checkWatchlistSMA200Alerts, 300000); // every 5min
-  window.addEventListener("beforeunload", saveSession);
+  const _saveInterval = setInterval(saveSession, 30000); // every 30s
+  const _alertInterval = setInterval(checkWatchlistSMA200Alerts, 300000); // every 5min
+  window.addEventListener("beforeunload", () => {
+    clearInterval(_saveInterval);
+    clearInterval(_alertInterval);
+    if (dashboardInterval) clearInterval(dashboardInterval);
+    saveSession();
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") saveSession();
   });
@@ -21660,7 +22389,9 @@ document.addEventListener("DOMContentLoaded", () => {
 let mtfGridActive = false;
 let mtfGridCells = []; // [{ tf, symbol, chart, candleSeries, fisherChart, volumeChart, container }]
 let mtfGridSymbol = ""; // symbol the grid was opened for
+let mtfGridGeneration = 0; // incremented on every grid open — async data loads check this to discard stale data
 let mtfActiveCell = null; // currently selected grid cell for trading
+let mtfGridResizeObserver = null;
 
 function setupMTFGrid() {
   const btn = document.getElementById("btn-mtf-grid");
@@ -21702,6 +22433,7 @@ async function openMTFGrid(symbol, timeframes) {
   if (!symbol) { log("MTF grid: no symbol", "warn"); return; }
   mtfGridActive = true;
   mtfGridSymbol = symbol;
+  const gridGen = ++mtfGridGeneration; // Capture generation — async loads check this
   const gridUseGpu = currentChartType.startsWith("gpu");
   const btn = document.getElementById("btn-mtf-grid");
   btn.textContent = "Close Grid";
@@ -21896,32 +22628,17 @@ async function openMTFGrid(symbol, timeframes) {
     });
   }
 
-  // Split: cached cells load in parallel (instant), uncached load sequentially (rate-limited)
-  const cached = [];
-  const uncached = [];
-  for (const cellInfo of mtfGridCells) {
-    const cacheKey = getCacheKey(symbol, cellInfo.tf);
-    if (barCache[cacheKey] && barCache[cacheKey].data && barCache[cacheKey].data.length > 0) {
-      cached.push(cellInfo);
-    } else {
-      uncached.push(cellInfo);
-    }
-  }
-  // Parallel: all cached cells at once (no API calls)
-  await Promise.all(cached.map(c => loadMTFCellData(c, symbol)));
-  // Sequential: uncached cells one at a time (respects rate limiter)
-  for (const cellInfo of uncached) {
-    await loadMTFCellData(cellInfo, symbol);
-  }
+  // Fire all cell loads in parallel — cached cells render instantly, uncached show "loading..."
+  // Don't await — let each cell render independently as its data arrives.
+  const allLoads = Promise.all(mtfGridCells.map(c => loadMTFCellData(c, symbol, gridGen)));
 
-  // Initial resize — multiple frames to ensure DOM has settled after grid creation.
+  // Initial resize immediately (cells that loaded from cache are already populated)
   requestAnimationFrame(() => {
     resizeMTFGrid();
     requestAnimationFrame(() => {
       resizeMTFGrid();
       for (const cell of mtfGridCells) {
         cell.chart.timeScale().fitContent();
-        // GPU cells: resize canvas and re-render after layout settles
         if (cell.gpuChart) {
           const w = cell.chartDiv.clientWidth || 300;
           const h = cell.chartDiv.clientHeight || 200;
@@ -21931,12 +22648,23 @@ async function openMTFGrid(symbol, timeframes) {
           cell.gpuChart.render();
         }
       }
+      // Draw position lines on cached cells immediately
+      updateOrderPriceLines();
+    });
+  });
+
+  // After ALL cells finish loading (including slow uncached ones), do final resize + order lines
+  allLoads.then(() => {
+    requestAnimationFrame(() => {
+      resizeMTFGrid();
+      updateOrderPriceLines();
     });
   });
 
   // Resize observer
-  const ro = new ResizeObserver(() => resizeMTFGrid());
-  ro.observe(gridContainer);
+  if (mtfGridResizeObserver) mtfGridResizeObserver.disconnect();
+  mtfGridResizeObserver = new ResizeObserver(() => resizeMTFGrid());
+  mtfGridResizeObserver.observe(gridContainer);
 
   } catch (e) {
     // Grid failed — restore main chart visibility
@@ -21950,7 +22678,7 @@ async function openMTFGrid(symbol, timeframes) {
   }
 }
 
-async function loadMTFCellData(cellInfo, symbol) {
+async function loadMTFCellData(cellInfo, symbol, expectedGen) {
   try {
     // Resolve custom timeframes (H12 → 4Hour × 3, etc.)
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
@@ -21966,11 +22694,23 @@ async function loadMTFCellData(cellInfo, symbol) {
       bars = cached.data;
       log(`MTF grid ${cellInfo.tf}: ${bars.length} bars from cache`, "info");
     } else {
+      // Show loading status on the cell label and status bar
+      setLoadingStatus(`${symbol}@${cellInfo.tf}`, "loading...");
+      const cellLabel = cellInfo.container?.querySelector(".mtf-cell-label");
+      if (cellLabel) cellLabel.textContent = `${symbol} ${cellInfo.tf} ⏳`;
       log(`MTF grid ${cellInfo.tf}: fetching ${fetchTF} (not cached)...`, "info");
       const barsJson = await cachedGetBars(symbol, fetchTF, limit);
+      // Guard: discard stale data if grid was reopened for a different symbol during async fetch
+      if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) {
+        log(`MTF grid ${cellInfo.tf}: discarding stale data (grid switched)`, "warn");
+        return;
+      }
       bars = JSON.parse(barsJson);
       barCache[cacheKey] = { data: bars, timestamp: Date.now() };
     }
+
+    // Second guard after parse — grid may have switched during JSON parse
+    if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
     let chartData = bars.map(b => ({
       time: Math.floor(new Date(b.timestamp).getTime() / 1000),
@@ -21983,6 +22723,9 @@ async function loadMTFCellData(cellInfo, symbol) {
     }
 
     if (chartData.length === 0) return;
+
+    // Final guard before DOM mutation
+    if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
     // Ensure cell has dimensions before setting data (fixes 0×0 on first load)
     const w = cellInfo.chartDiv.clientWidth;
@@ -22165,7 +22908,13 @@ async function loadMTFCellData(cellInfo, symbol) {
         }
       }
     }
+    // Clear loading status and restore label
+    setLoadingStatus(`${symbol}@${cellInfo.tf}`, null);
+    const cellLabel = cellInfo.container?.querySelector(".mtf-cell-label");
+    const tfLabel = (typeof MTF_LABELS !== "undefined" && MTF_LABELS[cellInfo.tf]) || cellInfo.tf;
+    if (cellLabel) cellLabel.textContent = `${symbol} ${tfLabel} ✓ ${chartData.length}`;
   } catch (e) {
+    setLoadingStatus(`${symbol}@${cellInfo.tf}`, null);
     log(`MTF grid load failed for ${cellInfo.tf}: ${e}`, "warn");
   }
 }
@@ -22190,6 +22939,27 @@ function resizeMTFGrid() {
   }
 }
 
+// Bar duration in seconds for a given timeframe string
+function getTimeframeDurationSec(tf) {
+  // Resolve custom timeframes to their effective duration
+  const customTF = CUSTOM_TIMEFRAME_MAP[tf];
+  if (customTF) {
+    return getTimeframeDurationSec(customTF.base) * customTF.factor;
+  }
+  switch (tf) {
+    case "1Min": return 60;
+    case "5Min": return 300;
+    case "15Min": return 900;
+    case "30Min": return 1800;
+    case "1Hour": return 3600;
+    case "4Hour": return 14400;
+    case "1Day": return 86400;
+    case "1Week": return 604800;
+    case "1Month": return 2592000; // ~30 days
+    default: return 86400;
+  }
+}
+
 // Sync live price across all MTF grid cells — update last bar's close to current price
 function syncMTFGridLivePrice() {
   if (!mtfGridActive || mtfGridCells.length === 0 || lastPrice <= 0) return;
@@ -22197,18 +22967,35 @@ function syncMTFGridLivePrice() {
   // Prevents cross-symbol contamination during tab switches (e.g. LUMN grid
   // getting SMCI's lastPrice, creating a false $8→$868 wick).
   if (mtfGridSymbol !== currentSymbol) return;
+  const nowSec = Math.floor(Date.now() / 1000);
   for (const cell of mtfGridCells) {
     try {
       const data = cell.candleSeries.data();
       if (!data || data.length === 0) continue;
       const lastBar = data[data.length - 1];
-      cell.candleSeries.update({
-        time: lastBar.time,
-        open: lastBar.open,
-        high: Math.max(lastBar.high, lastPrice),
-        low: Math.min(lastBar.low, lastPrice),
-        close: lastPrice,
-      });
+      const barDuration = getTimeframeDurationSec(cell.tf);
+
+      if (nowSec - lastBar.time >= barDuration) {
+        // Current time is past the last bar's period — append a new bar
+        // instead of corrupting the old one with hours/days of price drift
+        const newBarTime = lastBar.time + barDuration;
+        cell.candleSeries.update({
+          time: newBarTime,
+          open: lastPrice,
+          high: lastPrice,
+          low: lastPrice,
+          close: lastPrice,
+        });
+      } else {
+        // Still within the last bar's period — safe to extend high/low
+        cell.candleSeries.update({
+          time: lastBar.time,
+          open: lastBar.open,
+          high: Math.max(lastBar.high, lastPrice),
+          low: Math.min(lastBar.low, lastPrice),
+          close: lastPrice,
+        });
+      }
     } catch (_) {}
   }
 }
@@ -22555,6 +23342,7 @@ function detectRegime(data, period = 20) {
 }
 
 function closeMTFGrid() {
+  if (mtfGridResizeObserver) { mtfGridResizeObserver.disconnect(); mtfGridResizeObserver = null; }
   mtfGridActive = false;
   mtfGridSymbol = "";
   mtfActiveCell = null;
@@ -22581,6 +23369,231 @@ function closeMTFGrid() {
 
 // ── Settings Panel (API Keys) ────────────────────────────────
 
+// ── Cache Manager ────────────────────────────────────────────
+
+async function cmdCacheManager() {
+  const win = createWindow({ title: "Cache Manager", type: "custom", width: 720, height: 500 });
+  win.contentElement.textContent = "";
+
+  const container = document.createElement("div");
+  container.style.cssText = "display:flex;flex-direction:column;height:100%;font-family:Consolas,monospace;font-size:11px;";
+
+  // Summary bar
+  const summaryBar = document.createElement("div");
+  summaryBar.style.cssText = "padding:8px 10px;background:#111;border-bottom:1px solid #333;color:#888;font-size:11px;";
+  summaryBar.textContent = "Loading cache stats...";
+  container.appendChild(summaryBar);
+
+  // Toolbar
+  const toolbar = document.createElement("div");
+  toolbar.style.cssText = "display:flex;gap:6px;padding:6px 10px;border-bottom:1px solid #333;background:#0a0a0a;";
+  const toolbarButtons = [
+    { label: "Evict >30d", action: () => evictAndRefresh(30) },
+    { label: "Evict >7d", action: () => evictAndRefresh(7) },
+    { label: "Clear All", action: () => evictAndRefresh(0) },
+    { label: "Refresh", action: () => loadCacheData() },
+  ];
+  for (const tb of toolbarButtons) {
+    const btn = document.createElement("button");
+    btn.textContent = tb.label;
+    btn.style.cssText = "padding:3px 10px;font-size:10px;font-family:Consolas,monospace;cursor:pointer;border:1px solid #555;background:" + (tb.label === "Clear All" ? "#4a1a1a" : "#1a1a2e") + ";color:" + (tb.label === "Clear All" ? "#f88" : "#8cf") + ";";
+    btn.addEventListener("click", tb.action);
+    toolbar.appendChild(btn);
+  }
+  container.appendChild(toolbar);
+
+  // Table header
+  const headerRow = document.createElement("div");
+  headerRow.style.cssText = "display:flex;gap:4px;padding:6px 10px;border-bottom:1px solid #444;color:#888;font-size:10px;background:#0d0d0d;";
+  const colDefs = [
+    { label: "Symbol", flex: "2" },
+    { label: "Timeframe", flex: "1.2" },
+    { label: "Bars (est.)", flex: "1" },
+    { label: "Size", flex: "0.8" },
+    { label: "Age", flex: "1" },
+    { label: "Actions", flex: "1.2" },
+  ];
+  for (const col of colDefs) {
+    const span = document.createElement("span");
+    span.textContent = col.label;
+    span.style.flex = col.flex;
+    headerRow.appendChild(span);
+  }
+  container.appendChild(headerRow);
+
+  // Scrollable table body
+  const tableBody = document.createElement("div");
+  tableBody.style.cssText = "overflow-y:auto;flex:1;";
+  container.appendChild(tableBody);
+
+  win.appendElement(container);
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+  }
+
+  function formatAge(timestamp) {
+    const now = Date.now() / 1000;
+    const diffSec = now - timestamp;
+    if (diffSec < 60) return "just now";
+    if (diffSec < 3600) return Math.floor(diffSec / 60) + "m ago";
+    if (diffSec < 86400) return Math.floor(diffSec / 3600) + "h ago";
+    return Math.floor(diffSec / 86400) + "d ago";
+  }
+
+  async function evictAndRefresh(days) {
+    try {
+      if (days === 0) {
+        if (!confirm("Clear ALL cached bar data?")) return;
+      }
+      await invoke("db_cache_evict", { maxAgeDays: days });
+      log(`Cache evicted (>${days}d)`, "ok");
+      await loadCacheData();
+    } catch (e) {
+      log(`Cache evict failed: ${e}`, "error");
+    }
+  }
+
+  async function deleteKey(key) {
+    try {
+      await invoke("db_cache_delete_key", { key });
+      log(`Deleted cache: ${key}`, "ok");
+      await loadCacheData();
+    } catch (e) {
+      log(`Cache delete failed: ${e}`, "error");
+    }
+  }
+
+  async function deleteSymbol(symbol) {
+    try {
+      await invoke("db_cache_delete_symbol", { symbol });
+      log(`Deleted all cache for ${symbol}`, "ok");
+      await loadCacheData();
+    } catch (e) {
+      log(`Cache delete failed: ${e}`, "error");
+    }
+  }
+
+  async function loadCacheData() {
+    try {
+      const [statsJson, detailJson] = await Promise.all([
+        invoke("db_cache_stats"),
+        invoke("db_cache_detailed_stats"),
+      ]);
+      const stats = JSON.parse(statsJson);
+      const details = JSON.parse(detailJson);
+
+      // Update summary
+      const symbols = new Set(details.map(d => d.symbol));
+      summaryBar.textContent = `${symbols.size} symbols, ${details.length} entries, ${stats.total_compressed_mb?.toFixed(2) || (stats.total_compressed_bytes / (1024 * 1024)).toFixed(2)} MB total`;
+
+      // Group by symbol
+      const grouped = {};
+      for (const d of details) {
+        if (!grouped[d.symbol]) grouped[d.symbol] = [];
+        grouped[d.symbol].push(d);
+      }
+
+      // Sort symbols alphabetically, timeframes by name
+      const sortedSymbols = Object.keys(grouped).sort();
+
+      tableBody.textContent = "";
+
+      if (sortedSymbols.length === 0) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "padding:20px;color:#666;text-align:center;";
+        empty.textContent = "Cache is empty.";
+        tableBody.appendChild(empty);
+        return;
+      }
+
+      for (const sym of sortedSymbols) {
+        const entries = grouped[sym].sort((a, b) => (a.timeframe || "").localeCompare(b.timeframe || ""));
+
+        for (let i = 0; i < entries.length; i++) {
+          const d = entries[i];
+          const row = document.createElement("div");
+          row.style.cssText = "display:flex;gap:4px;padding:4px 10px;border-bottom:1px solid #1a1a1a;color:#ccc;align-items:center;";
+
+          const symCol = document.createElement("span");
+          symCol.style.cssText = "flex:2;font-weight:" + (i === 0 ? "bold" : "normal") + ";color:" + (i === 0 ? "#e0e0e0" : "transparent") + ";";
+          symCol.textContent = i === 0 ? sym : sym; // keep for layout but hide duplicates
+
+          const tfCol = document.createElement("span");
+          tfCol.style.cssText = "flex:1.2;color:#8cf;";
+          tfCol.textContent = d.timeframe || "—";
+
+          const barsCol = document.createElement("span");
+          barsCol.style.cssText = "flex:1;color:#aaa;";
+          const estBars = Math.round(d.compressed_bytes / 12);
+          barsCol.textContent = estBars.toLocaleString();
+
+          const sizeCol = document.createElement("span");
+          sizeCol.style.cssText = "flex:0.8;color:#aaa;";
+          sizeCol.textContent = formatBytes(d.compressed_bytes);
+
+          const ageCol = document.createElement("span");
+          ageCol.style.cssText = "flex:1;color:#888;";
+          ageCol.textContent = d.timestamp ? formatAge(d.timestamp) : "—";
+
+          const actCol = document.createElement("span");
+          actCol.style.cssText = "flex:1.2;display:flex;gap:4px;";
+          const delBtn = document.createElement("button");
+          delBtn.textContent = "Delete";
+          delBtn.style.cssText = "padding:1px 6px;font-size:9px;font-family:Consolas,monospace;cursor:pointer;border:1px solid #555;background:#2a1a1a;color:#f88;";
+          delBtn.addEventListener("click", () => deleteKey(d.key));
+          actCol.appendChild(delBtn);
+
+          row.appendChild(symCol);
+          row.appendChild(tfCol);
+          row.appendChild(barsCol);
+          row.appendChild(sizeCol);
+          row.appendChild(ageCol);
+          row.appendChild(actCol);
+          tableBody.appendChild(row);
+        }
+
+        // "Delete All SYMBOL" row
+        if (entries.length > 1) {
+          const delAllRow = document.createElement("div");
+          delAllRow.style.cssText = "display:flex;gap:4px;padding:3px 10px;border-bottom:1px solid #333;align-items:center;";
+          const spacer = document.createElement("span");
+          spacer.style.cssText = "flex:2;";
+          const spacer2 = document.createElement("span");
+          spacer2.style.cssText = "flex:1.2;";
+          const spacer3 = document.createElement("span");
+          spacer3.style.cssText = "flex:1;";
+          const spacer4 = document.createElement("span");
+          spacer4.style.cssText = "flex:0.8;";
+          const spacer5 = document.createElement("span");
+          spacer5.style.cssText = "flex:1;";
+          const actCol2 = document.createElement("span");
+          actCol2.style.cssText = "flex:1.2;";
+          const delAllBtn = document.createElement("button");
+          delAllBtn.textContent = `Delete All ${sym}`;
+          delAllBtn.style.cssText = "padding:1px 6px;font-size:9px;font-family:Consolas,monospace;cursor:pointer;border:1px solid #664;background:#2a2a1a;color:#fc8;";
+          delAllBtn.addEventListener("click", () => deleteSymbol(sym));
+          actCol2.appendChild(delAllBtn);
+          delAllRow.appendChild(spacer);
+          delAllRow.appendChild(spacer2);
+          delAllRow.appendChild(spacer3);
+          delAllRow.appendChild(spacer4);
+          delAllRow.appendChild(spacer5);
+          delAllRow.appendChild(actCol2);
+          tableBody.appendChild(delAllRow);
+        }
+      }
+    } catch (e) {
+      summaryBar.textContent = `Failed to load cache stats: ${e}`;
+      summaryBar.style.color = "#f66";
+    }
+  }
+
+  await loadCacheData();
+}
+
 const SETTINGS_KEY = "typhoon_settings";
 function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"); } catch { return {}; } }
 function saveSettings(s) { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }
@@ -22599,6 +23612,59 @@ function cmdSettings() {
     { key: "aiApiKey", label: "AI API Key", url: "https://console.anthropic.com/settings/keys", urlText: "Anthropic keys" },
     { key: "aiModel", label: "AI Model (opt)", ph: "claude-haiku-4-5-20251001 / gpt-4o-mini" },
   ];
+  // Per-key test functions — all go through Rust backend (browser fetch blocked by CSP)
+  const keyTests = {
+    fredApiKey: async (key) => {
+      if (!key) return { ok: false, msg: "No key entered" };
+      try {
+        const r = await invoke("fetch_fred_series", { seriesId: "DFF", apiKey: key, limit: 1 });
+        const j = JSON.parse(r);
+        return j.observations && j.observations.length > 0
+          ? { ok: true, msg: `FRED OK (Fed Funds: ${j.observations[j.observations.length - 1].value}%)` }
+          : { ok: true, msg: "FRED connected" };
+      } catch (e) { return { ok: false, msg: e.toString().substring(0, 60) }; }
+    },
+    finnhubKey: async (key) => {
+      if (!key) return { ok: false, msg: "No key entered" };
+      try {
+        const r = await invoke("get_finnhub_news", { symbol: "AAPL", finnhubKey: key });
+        const articles = JSON.parse(r);
+        return { ok: true, msg: `Finnhub OK (${articles.length} AAPL articles)` };
+      } catch (e) { return { ok: false, msg: e.toString().substring(0, 60) }; }
+    },
+    alphaVantageKey: async (key) => {
+      if (!key) return { ok: false, msg: "No key entered" };
+      try {
+        // Use a lightweight test — fetch_url goes through Rust HTTP client
+        const r = await invoke("fetch_article", { url: `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=AAPL&apikey=${key}` });
+        const j = JSON.parse(r);
+        const price = j?.["Global Quote"]?.["05. price"];
+        return price ? { ok: true, msg: `AV OK (AAPL: $${price})` } : { ok: false, msg: j?.Note || "Invalid key or rate limited" };
+      } catch (e) { return { ok: false, msg: e.toString().substring(0, 60) }; }
+    },
+    fmpKey: async (key) => {
+      if (!key) return { ok: false, msg: "No key entered" };
+      try {
+        const r = await invoke("fetch_article", { url: `https://financialmodelingprep.com/api/v3/quote/AAPL?apikey=${key}` });
+        const j = JSON.parse(r);
+        return Array.isArray(j) && j.length > 0 && j[0].price
+          ? { ok: true, msg: `FMP OK (AAPL: $${j[0].price})` }
+          : { ok: false, msg: "Invalid key or rate limited" };
+      } catch (e) { return { ok: false, msg: e.toString().substring(0, 60) }; }
+    },
+    aiApiKey: async (key) => {
+      if (!key) return { ok: false, msg: "No key entered" };
+      const provider = inputs.aiProvider?.value?.trim() || "anthropic";
+      try {
+        await invoke("ai_chat", { message: "ping", provider, apiKey: key, model: provider === "anthropic" ? "claude-haiku-4-5-20251001" : "gpt-4o-mini" });
+        return { ok: true, msg: `${provider} connected` };
+      } catch (e) {
+        const msg = e.toString();
+        return msg.includes("401") || msg.includes("invalid") ? { ok: false, msg: `Invalid ${provider} key` } : { ok: true, msg: `${provider} key accepted` };
+      }
+    },
+  };
+
   const inputs = {};
   for (const f of fields) {
     const row = document.createElement("div");
@@ -22627,6 +23693,35 @@ function cmdSettings() {
     inp.style.cssText = "width:100%;background:#111;color:#fff;border:1px solid #555;padding:5px;font-family:inherit;font-size:11px;box-sizing:border-box;";
     c.appendChild(row); c.appendChild(inp);
     inputs[f.key] = inp;
+
+    // Add per-key "Test" button for testable API keys
+    if (keyTests[f.key]) {
+      const testRow = document.createElement("div");
+      testRow.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:4px;";
+      const testBtn = document.createElement("button");
+      testBtn.textContent = "Test";
+      testBtn.style.cssText = "padding:2px 10px;background:#1a2a4a;color:#8cf;border:1px solid #336;cursor:pointer;font-family:inherit;font-size:10px;";
+      const testStatus = document.createElement("span");
+      testStatus.style.cssText = "font-size:10px;color:#555;";
+      const fieldKey = f.key; // capture for closure
+      testBtn.addEventListener("click", async () => {
+        testStatus.textContent = "Testing...";
+        testStatus.style.color = "#ff8";
+        testBtn.disabled = true;
+        try {
+          const result = await keyTests[fieldKey](inp.value.trim());
+          testStatus.textContent = result.ok ? `\u2713 ${result.msg}` : `\u2717 ${result.msg}`;
+          testStatus.style.color = result.ok ? "#4caf50" : "#f44336";
+        } catch (e) {
+          testStatus.textContent = `\u2717 ${e}`;
+          testStatus.style.color = "#f44336";
+        }
+        testBtn.disabled = false;
+      });
+      testRow.appendChild(testBtn);
+      testRow.appendChild(testStatus);
+      c.appendChild(testRow);
+    }
   }
   const btn = document.createElement("button");
   btn.textContent = "Save Settings";
@@ -22639,6 +23734,35 @@ function cmdSettings() {
     log("Settings saved", "ok"); win.close();
   });
   c.appendChild(btn);
+
+  // Test Connection button
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:8px;align-items:center;";
+  const testBtn = document.createElement("button");
+  testBtn.textContent = "Test Broker Connection";
+  testBtn.style.cssText = "padding:8px;background:#1a2a4a;color:#8cf;border:1px solid #4488cc;cursor:pointer;font-family:inherit;font-weight:bold;flex:1;";
+  const testResult = document.createElement("span");
+  testResult.style.cssText = "font-size:11px;color:#888;";
+  testBtn.addEventListener("click", async () => {
+    testResult.textContent = "Testing...";
+    testResult.style.color = "#ff8";
+    try {
+      const aj = await invoke("get_account");
+      const ac = JSON.parse(aj);
+      const equity = parseFloat(ac.equity || ac.portfolio_value || 0).toFixed(2);
+      const status = ac.status || "active";
+      const acctType = ac.account_number ? ` (#${ac.account_number})` : "";
+      testResult.innerHTML = `<span style="color:#4caf50;">&#10003;</span> Connected — $${Number(equity).toLocaleString()} equity, ${status}${acctType}`;
+      testResult.style.color = "#4caf50";
+    } catch (e) {
+      testResult.innerHTML = `<span style="color:#f44336;">&#10007;</span> Not connected — save keys and connect first.`;
+      testResult.style.color = "#f44336";
+    }
+  });
+  btnRow.appendChild(testBtn);
+  c.appendChild(btnRow);
+  c.appendChild(testResult);
+
   const note = document.createElement("div");
   note.style.cssText = "font-size:9px;color:#555;";
   note.textContent = "See API_KEYS.md for free signup links.";
@@ -24196,14 +25320,32 @@ function setupMenuBar() {
     "draw-ruler": () => { drawingMode = "ruler"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
     "draw-hline": () => { drawingMode = "horizontal"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
     "draw-rect": () => { drawingMode = "rectangle"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-regression": () => { drawingMode = "regression-channel"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-stddev": () => { drawingMode = "stddev-channel"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-riskreward": () => { drawingMode = "risk-reward"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-posbox": () => { drawingMode = "position-box"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-daterange": () => { drawingMode = "date-range"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-pricerange": () => { drawingMode = "price-range"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-speedlines": () => { drawingMode = "speed-lines"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-eqchannel": () => { drawingMode = "equidistant-channel"; drawingAnchor = null; channelThirdClick = false; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-gannbox": () => { drawingMode = "gann-box"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-elliott-impulse": () => { drawingMode = "elliott-impulse"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-elliott-corrective": () => { drawingMode = "elliott-corrective"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-ganngrid": () => { drawingMode = "gann-grid"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-arrowleft": () => { drawingMode = "arrow-left"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-arrowright": () => { drawingMode = "arrow-right"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-arrowcheck": () => { drawingMode = "arrow-check"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-arrowstop": () => { drawingMode = "arrow-stop"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
+    "draw-textbox": () => { drawingMode = "text-box"; drawingAnchor = null; document.getElementById("chart-container").style.cursor = "crosshair"; },
     "alert": () => { if (currentSymbol && lastPrice > 0) { const dir = prompt("Direction (above/below):", "above"); if (dir) addPriceAlert(currentSymbol, lastPrice, dir); } },
     "annotate": () => addChartAnnotation(),
     "delete-drawing": () => { if (drawings.length > 0) { drawings.pop(); saveDrawings(); renderDrawings(); renderDrawingsExtended(); } },
     // Research
     "fundamentals": () => { const cmds = document.querySelectorAll(".cmd-result-item"); /* trigger via palette */ document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "DES"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
     "news": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "NEWS"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
-    "filings": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "HDS"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
+    "filings": () => cmdSecFilings(),
     "insider": () => cmdInsider(),
+    "sec-filings": () => cmdSecFilings(),
     "options": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "OPT"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
     "screener": () => { document.getElementById("command-palette").classList.remove("hidden"); document.getElementById("cmd-palette-input").value = "SCAN"; document.getElementById("cmd-palette-input").dispatchEvent(new Event("input")); },
     "most-active": () => cmdMostActive(),

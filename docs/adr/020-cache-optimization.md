@@ -3,6 +3,8 @@
 **Status:** Implemented
 **Date:** 2026-03-16
 
+> **Note:** Builds on [ADR-003](003-bar-data-caching.md). Binary storage optimization in [ADR-027](027-binary-storage-wasm-gpu.md).
+
 ## Context
 
 The original three-tier cache (memory → IndexedDB → zstd files) had limitations:

@@ -291,7 +291,108 @@ order.
 
 ---
 
-## 3. Wasm Implementation Status
+## 3. MT5 Parity Indicators (9)
+
+These indicators match their MetaTrader 5 built-in counterparts. They are
+implemented in `frontend/src/main.js` and disabled by default.
+
+### 3.1 Alligator (Bill Williams)
+
+| Param | Default |
+|---|---|
+| Jaw Period | 13 |
+| Teeth Period | 8 |
+| Lips Period | 5 |
+| **Price Type** | Median `(high + low) / 2` |
+| **Algorithm** | Three Smoothed Moving Averages (SMMA) on median price, each shifted forward by a fixed offset. Jaw = SMMA(13) shifted +8 bars. Teeth = SMMA(8) shifted +5 bars. Lips = SMMA(5) shifted +3 bars. SMMA: `S[i] = (S[i-1] * (period-1) + price[i]) / period`, seeded with the SMA of the first `period` values. |
+| **Render** | Three overlay lines on the price chart |
+| **MT5 Parity** | Full parity. SMMA smoothing and forward shift offsets match MT5 `iAlligator()`. |
+
+### 3.2 Awesome Oscillator (Bill Williams)
+
+| Param | Default |
+|---|---|
+| (none) | Fixed SMA periods 5 / 34 |
+| **Price Type** | Median `(high + low) / 2` |
+| **Algorithm** | `AO = SMA(5, median) - SMA(34, median)`. Output begins at bar 33. Bar color: green `#4caf50` when AO is rising (current > previous), red `#f44336` when falling. |
+| **Render** | Color-coded histogram in a separate pane |
+| **MT5 Parity** | Full parity. SMA periods and color logic match MT5 `iAO()`. |
+
+### 3.3 MFI (Money Flow Index)
+
+| Param | Default |
+|---|---|
+| Period | 14 |
+| **Price Type** | Typical Price `(H + L + C) / 3` with Volume |
+| **Algorithm** | Volume-weighted RSI. 1. `TP = (H + L + C) / 3`. 2. `MoneyFlow = TP * volume`. 3. Over the lookback period, sum positive money flow (when TP rises) and negative money flow (when TP falls). 4. `MFI = 100 - 100 / (1 + posFlow / negFlow)`. Falls back to `volume=1` when volume data is missing. |
+| **Render** | Line in a separate pane (range 0-100) |
+| **MT5 Parity** | Full parity. Algorithm matches MT5 `iMFI()`. |
+
+### 3.4 Force Index
+
+| Param | Default |
+|---|---|
+| Period | 13 |
+| **Price Type** | Close with Volume |
+| **Algorithm** | 1. `RawForce[i] = (close[i] - close[i-1]) * volume[i]`. 2. Apply EMA smoothing: `EMA = raw * k + prevEMA * (1 - k)` where `k = 2 / (period + 1)`. Output begins after `period` bars. Falls back to `volume=1` when volume data is missing. |
+| **Render** | Line in a separate pane |
+| **MT5 Parity** | Full parity. EMA smoothing of raw force matches MT5 `iForce()`. |
+
+### 3.5 Envelopes
+
+| Param | Default |
+|---|---|
+| Period | 20 |
+| Deviation | 0.1 (10%) |
+| **Price Type** | Close (via SMA) |
+| **Algorithm** | `Upper = SMA(period) * (1 + deviation)`. `Lower = SMA(period) * (1 - deviation)`. Uses `calcSMA()` internally for the center line. |
+| **Render** | Two overlay lines (upper/lower bands) on the price chart |
+| **MT5 Parity** | Full parity. Percentage-based envelope around SMA matches MT5 `iEnvelopes()`. |
+
+### 3.6 Standard Deviation
+
+| Param | Default |
+|---|---|
+| Period | 20 |
+| **Price Type** | Close |
+| **Algorithm** | Population standard deviation over a rolling window: `StdDev = sqrt(sum(close^2) / period - mean^2)`. Uses the computational formula `sqrt(E[X^2] - (E[X])^2)`. |
+| **Render** | Line in a separate pane |
+| **MT5 Parity** | Full parity. Population StdDev calculation matches MT5 `iStdDev()`. |
+
+### 3.7 Chaikin Oscillator
+
+| Param | Default |
+|---|---|
+| Fast Period | 3 |
+| Slow Period | 10 |
+| **Price Type** | OHLCV (all fields) |
+| **Algorithm** | 1. Accumulation/Distribution Line: `MFM = ((close - low) - (high - close)) / range`. `ADL[i] = ADL[i-1] + MFM * volume`. 2. Chaikin Oscillator = `EMA(fastP, ADL) - EMA(slowP, ADL)`. Falls back to `volume=1` when volume data is missing. |
+| **Render** | Line in a separate pane |
+| **MT5 Parity** | Full parity. A/D Line accumulation and dual-EMA difference match MT5 `iChaikin()`. |
+
+### 3.8 DeMarker
+
+| Param | Default |
+|---|---|
+| Period | 14 |
+| **Price Type** | High/Low |
+| **Algorithm** | 1. `DeMax = high[i] - high[i-1]` if positive, else 0. 2. `DeMin = low[i-1] - low[i]` if positive, else 0. 3. Sum DeMax and DeMin over the lookback period. 4. `DeM = DeMax_sum / (DeMax_sum + DeMin_sum)`. Returns 0.5 when denominator is zero. Range: 0 to 1. |
+| **Render** | Line in a separate pane (range 0-1) |
+| **MT5 Parity** | Full parity. DeMax/DeMin logic and summation match MT5 `iDeMarker()`. |
+
+### 3.9 Fractals (Bill Williams)
+
+| Param | Default |
+|---|---|
+| Lookback | 2 |
+| **Price Type** | High/Low |
+| **Algorithm** | A bar is a fractal high if its high strictly exceeds the highs of all bars within `lookback` distance on both sides. Similarly, a fractal low if its low is strictly below all neighbors' lows within `lookback`. Fractal highs are marked with a red `#ff5722` down-arrow above the bar. Fractal lows are marked with a green `#4caf50` up-arrow below the bar. |
+| **Render** | Marker overlay on the price chart (above/below bars) |
+| **MT5 Parity** | Full parity. Bilateral comparison with `lookback=2` matches MT5 `iFractals()` default (5-bar pattern = 2 bars each side). |
+
+---
+
+## 4. Wasm Implementation Status
 
 The `wasm-indicators/` crate (`typhoon-indicators`) provides Rust/WebAssembly
 implementations of select indicators for batch computation paths (optimizer grid
@@ -326,6 +427,15 @@ real-time chart rendering.
 | Auto Fibonacci | `calcAutoFibonacci()` | -- | Not yet ported |
 | Prev Candle Levels | `calcPrevCandleLevels()` | -- | Not yet ported |
 | ATR Projection | `calcATRProjection()` | -- | Not yet ported |
+| Alligator | `calcAlligator()` | -- | Not yet ported |
+| Awesome Oscillator | `calcAwesomeOscillator()` | -- | Not yet ported |
+| MFI | `calcMFI()` | -- | Not yet ported |
+| Force Index | `calcForceIndex()` | -- | Not yet ported |
+| Envelopes | `calcEnvelopes()` | -- | Not yet ported |
+| Standard Deviation | `calcStdDev()` | -- | Not yet ported |
+| Chaikin Oscillator | `calcChaikin()` | -- | Not yet ported |
+| DeMarker | `calcDeMarker()` | -- | Not yet ported |
+| Fractals | `calcFractals()` | -- | Not yet ported |
 
 The Wasm crate also provides batch utilities not listed above:
 
@@ -338,7 +448,7 @@ The Wasm crate also provides batch utilities not listed above:
 
 ---
 
-## 4. Custom Plugin System
+## 5. Custom Plugin System
 
 TyphooN-Terminal supports user-authored indicator plugins loaded at runtime from
 the filesystem. Plugins are JavaScript files stored in:

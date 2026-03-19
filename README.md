@@ -69,7 +69,7 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 | **Auto-Trading** | JS plugin → live order execution, paper-only safety (Ctrl+K → AUTOTRADE) |
 | **Headless CLI** | `--backtest` mode: run strategies from command line, no GUI needed (VPS/SSH) |
 | **Community Chat** | Matrix protocol chat via Ctrl+K → CHAT, no server needed |
-| **Multi-Broker Trait** | BrokerTrait abstraction for Alpaca + Tastytrade |
+| **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), AES-256-GCM encrypted credential storage |
 | **Indicators** | 30 indicators: NNFX system (9) + standard (11) + extended (Stochastic, CCI, ADX, Williams %R, Ichimoku Cloud, Parabolic SAR, OBV, Momentum, WMA, HMA) |
 | **Security** | 19-pass audit (88 findings): AES-256-GCM credential encryption, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
@@ -162,7 +162,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Why Rust/Tauri vs Python, Electron, Qt/C++, pure Rust GUI |
 | [DESIGN_PHILOSOPHY.md](docs/DESIGN_PHILOSOPHY.md) | Core design principles (API efficiency, visual accuracy, security) |
 | [INDICATOR_PORTING.md](docs/INDICATOR_PORTING.md) | Lessons learned porting MQL5 indicators to JavaScript |
-| [docs/adr/](docs/adr/) | 23 Architecture Decision Records |
+| [docs/adr/](docs/adr/) | 31 Architecture Decision Records |
 
 ### ADR Index
 
@@ -189,12 +189,16 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [019](docs/adr/019-mtf-grid-view.md) | Multi-timeframe grid view (MT5-style) |
 | [020](docs/adr/020-cache-optimization.md) | SQLite cache + LRU eviction |
 | [021](docs/adr/021-mt5-godel-parity-roadmap.md) | MT5 + Godel parity roadmap + blockers |
-| [022](docs/adr/022-tastytrade-broker.md) | Tastytrade broker integration |
 | [023](docs/adr/023-ux-features-batch.md) | UX batch: GUI menu, tabs, drawing tools, trading |
 | [024](docs/adr/024-charting-engine-race-conditions.md) | Charting engine race conditions — cross-symbol contamination |
 | [025](docs/adr/025-new-features-batch-2.md) | Feature batch 2: NNFX strategy, options tools, sectors, auto-trading |
 | [026](docs/adr/026-architecture-future.md) | Architecture: headless CLI, WebWorker/Wasm plans, Pine Script analysis |
 | [027](docs/adr/027-binary-storage-wasm-gpu.md) | Binary bar storage, Wasm indicator engine, GPU chart architecture |
+| [028](docs/adr/028-performance-optimization-audit.md) | Performance optimization audit |
+| [029](docs/adr/029-feature-expansion-analytics-risk.md) | Feature expansion: analytics + risk |
+| [030](docs/adr/030-session-persistence-hardening.md) | Session persistence hardening |
+| [031](docs/adr/031-testing-framework.md) | Testing framework (602 assertions) |
+| [032](docs/adr/032-gpu-drawing-tools-roadmap.md) | GPU chart completion + drawing tools parity roadmap |
 
 ---
 
@@ -236,21 +240,7 @@ cargo tauri build
 
 ## Broker
 
-Supports two brokers:
-
-### Alpaca Markets
-- Paper and live trading accounts
-- REST API for orders, positions, account info
-- Historical bar data with IEX/SIP feed support
-- WebSocket streaming for real-time trades/quotes
-- Options chain with full Greeks
-
-### Tastytrade
-- Paper (sandbox) and live trading
-- Stocks, options, futures, crypto
-- Session-based auth (username/password)
-- Account balances, positions, market orders
-- Sign up: https://www.tastytrade.com/
+**Alpaca Markets** — stocks, ETFs, options, crypto. Paper and live trading via REST API + WebSocket streaming. IEX (free) or SIP (paid) market data.
 
 ---
 

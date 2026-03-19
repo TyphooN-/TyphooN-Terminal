@@ -2,6 +2,8 @@
 
 **Status:** Implemented
 **Date:** 2026-03-15
+
+> **Note:** This ADR describes the original three-tier cache design. See [ADR-020](020-cache-optimization.md) for the SQLite evolution and [ADR-027](027-binary-storage-wasm-gpu.md) for binary bar storage optimization.
 **Context:** Alpaca's free IEX data feed caps at ~260 bars per API request. Loading 1000+ bars requires multiple sequential API calls. Re-downloading the same data on every chart load wastes time and API quota.
 
 ## Decision

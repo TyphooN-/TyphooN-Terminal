@@ -63,13 +63,6 @@ Optional API keys that unlock additional features. All are free to register.
 
 ---
 
-
-**Used for:** Trading stocks, options, futures, crypto — alternative to Alpaca with better options support
-
-- **Live trading:** Requires funded account
-- **Auth:** Username + password (session token based)
-- **Data:** DXLink streaming for real-time quotes
-
 ## How to Add Keys
 
 In TyphooN-Terminal: **Ctrl+K → SETTINGS** to open the settings panel. Enter your API keys — they're stored with AES-256-GCM encryption in SQLite (PBKDF2-derived machine-specific key).

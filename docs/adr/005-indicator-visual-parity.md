@@ -1,6 +1,6 @@
 # ADR-005: Indicator Visual Parity with MT5
 
-**Status:** In Progress
+**Status:** Completed
 **Date:** 2026-03-15
 **Context:** TyphooN-Terminal must look identical to the MT5 NNFX setup for manual trading decisions.
 

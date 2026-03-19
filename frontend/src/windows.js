@@ -200,12 +200,26 @@ export function createWindow(opts) {
     }
   });
 
+  // Cleanup registry — consumers call handle.addCleanup(fn) to register
+  // teardown logic (clear intervals, remove document listeners, etc.)
+  const _cleanupCallbacks = [];
+  let _onCloseHook = null;
+
   btnClose.addEventListener("click", () => {
     // Clean up document-level listeners to prevent leaks
     document.removeEventListener("mousemove", onDragMove);
     document.removeEventListener("mouseup", onDragUp);
     document.removeEventListener("mousemove", onResizeMove);
     document.removeEventListener("mouseup", onResizeUp);
+    // Run all registered cleanup callbacks
+    for (const cb of _cleanupCallbacks) {
+      try { cb(); } catch (_) {}
+    }
+    _cleanupCallbacks.length = 0;
+    // Run the late-bound onClose hook (set via handle.onClose = fn)
+    if (_onCloseHook) {
+      try { _onCloseHook(); } catch (_) {}
+    }
     win.remove();
     delete activeWindows[id];
     if (opts.onClose) opts.onClose();
@@ -233,9 +247,16 @@ export function createWindow(opts) {
     setTitle(t) {
       titleText.textContent = t;
     },
+    /** Register a cleanup function to run when the window closes. */
+    addCleanup(fn) {
+      _cleanupCallbacks.push(fn);
+    },
     close() {
       btnClose.click();
     },
+    /** Settable onClose hook — allows `win.onClose = () => { ... }` after creation. */
+    get onClose() { return _onCloseHook; },
+    set onClose(fn) { _onCloseHook = fn; },
   };
 
   activeWindows[id] = handle;

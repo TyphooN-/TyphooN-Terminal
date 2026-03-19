@@ -3,6 +3,8 @@
 **Status:** Implemented
 **Date:** 2026-03-17
 
+> **Note:** Optimizes the caching layer from [ADR-020](020-cache-optimization.md).
+
 ## 1. Binary Bar Storage (IMPLEMENTED)
 
 ### Problem

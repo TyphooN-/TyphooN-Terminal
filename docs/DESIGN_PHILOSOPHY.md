@@ -40,7 +40,7 @@ This is a visual system for manual trading decisions. Every indicator must look 
 
 ## 5. Security by Default
 
-6-pass security audit with 50 findings addressed (see [ADR-006](docs/adr/006-security-hardening.md)):
+21-pass security audit with 97 findings addressed (see [ADR-006](adr/006-security-hardening.md)):
 
 - **CSP enabled** — scripts, connects, frames, forms restricted to self-origin only
 - **No innerHTML** — all DOM updates via createElement + textContent (XSS prevention)

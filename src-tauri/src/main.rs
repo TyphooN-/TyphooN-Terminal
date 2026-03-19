@@ -246,20 +246,9 @@ async fn keychain_load(state: State<'_, SharedState>, account_name: String) -> R
     let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
     match cache.get_kv(&db_key)? {
         Some(encrypted) => {
-            // Try decrypting (new format) — fall back to plaintext (legacy unencrypted)
             match decrypt_credential(&encrypted) {
                 Ok(json) => Ok(json),
-                Err(_) => {
-                    // Legacy unencrypted JSON — migrate to encrypted on read
-                    if encrypted.starts_with('{') {
-                        let re_encrypted = encrypt_credential(&encrypted)?;
-                        cache.put_kv(&db_key, &re_encrypted)?;
-                        tracing::info!("Migrated unencrypted credentials for '{}' to AES-256-GCM", account_name);
-                        Ok(encrypted)
-                    } else {
-                        Err("Decryption failed".into())
-                    }
-                }
+                Err(_) => Err("Decryption failed — stored credential is corrupt or was not encrypted".into()),
             }
         }
         None => Err("No credentials found".into()),
@@ -384,6 +373,11 @@ async fn place_order(
         let s = state.lock().await;
         s.broker.as_ref().ok_or("Not connected")?.clone()
     };
+    // Verify account is not blocked for trading
+    let account = broker.get_account().await?;
+    if account.trading_blocked {
+        return Err("Trading is blocked on this account".to_string());
+    }
     let result = broker.market_order(&symbol, qty, &side).await?;
     Ok(serde_json::to_string(&result).map_err(|e| format!("JSON error: {e}"))?)
 }
@@ -817,6 +811,9 @@ async fn set_sl_level(state: State<'_, SharedState>, symbol: String, price: f64)
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     if !price.is_finite() || price <= 0.0 { return Err("Invalid price".into()); }
     let mut s = state.lock().await;
+    if s.sl_levels.len() > 200 {
+        s.sl_levels.clear();
+    }
     s.sl_levels.insert(symbol, price);
     Ok(())
 }
@@ -826,6 +823,9 @@ async fn set_tp_level(state: State<'_, SharedState>, symbol: String, price: f64)
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     if !price.is_finite() || price <= 0.0 { return Err("Invalid price".into()); }
     let mut s = state.lock().await;
+    if s.tp_levels.len() > 200 {
+        s.tp_levels.clear();
+    }
     s.tp_levels.insert(symbol, price);
     Ok(())
 }
@@ -1932,6 +1932,42 @@ async fn db_cache_evict(state: State<'_, SharedState>, max_age_days: Option<i64>
     Ok(format!("Evicted {deleted} entries older than {} days", max_age / 86400))
 }
 
+#[tauri::command]
+async fn db_cache_detailed_stats(state: State<'_, SharedState>) -> Result<String, String> {
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    let entries = cache.detailed_stats()?;
+    let json_entries: Vec<serde_json::Value> = entries.iter().map(|(key, size, ts)| {
+        let parts: Vec<&str> = key.splitn(2, ':').collect();
+        let symbol = parts.first().unwrap_or(&"");
+        let tf = parts.get(1).unwrap_or(&"");
+        serde_json::json!({
+            "key": key,
+            "symbol": symbol,
+            "timeframe": tf,
+            "compressed_bytes": size,
+            "timestamp": ts,
+        })
+    }).collect();
+    Ok(serde_json::to_string(&json_entries).unwrap())
+}
+
+#[tauri::command]
+async fn db_cache_delete_key(state: State<'_, SharedState>, key: String) -> Result<String, String> {
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    let deleted = cache.delete_key(&key)?;
+    Ok(if deleted { format!("Deleted {key}") } else { format!("Key not found: {key}") })
+}
+
+#[tauri::command]
+async fn db_cache_delete_symbol(state: State<'_, SharedState>, symbol: String) -> Result<String, String> {
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    let deleted = cache.delete_symbol(&symbol)?;
+    Ok(format!("Deleted {deleted} entries for {symbol}"))
+}
+
 // ── Cold Cache (zstd-compressed files on disk) ──────────────────
 
 fn get_cache_dir() -> std::path::PathBuf {
@@ -2517,6 +2553,9 @@ fn main() {
             db_cache_put,
             db_cache_get,
             db_cache_stats,
+            db_cache_detailed_stats,
+            db_cache_delete_key,
+            db_cache_delete_symbol,
             db_cache_evict,
             // Cold cache (zstd files — legacy)
             save_cold_cache,

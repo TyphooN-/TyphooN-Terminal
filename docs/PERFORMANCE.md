@@ -322,7 +322,7 @@ LRU eviction prevents unbounded growth. SQLite mmap is OS-managed (only maps pag
 | Network | ✅ Fully optimized | Connection pooling, keep-alive, HTTP/2 |
 | Binary size | ✅ 10-15MB | 10-15x smaller than Electron |
 | Memory | ✅ Bounded | LRU eviction, 200-400MB typical |
-| Security | ✅ 20 passes | AES-256-GCM, CSP, no innerHTML, input validation, SSRF prevention |
+| Security | ✅ 21 passes | AES-256-GCM, CSP, no innerHTML, input validation, SSRF prevention |
 
 ### Frontend Code Growth
 

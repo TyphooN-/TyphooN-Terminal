@@ -5,3 +5,10 @@ dist/
 *.log
 .DS_Store
 Cargo.lock
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.tmp
+*.orig

@@ -50,11 +50,15 @@ pub fn wasm_ema(data: &[f64], period: usize) -> Vec<f64> {
     let n = bar_count(data);
     if n == 0 || period == 0 { return vec![]; }
     let k = 2.0 / (period as f64 + 1.0);
-    let mut ema = bar_close(data, 0);
-    let mut result = Vec::with_capacity(n.saturating_sub(period) + 1);
-    for i in 0..n {
+    if n < period { return vec![]; }
+    let sma_seed: f64 = (0..period).map(|i| bar_close(data, i)).sum::<f64>() / period as f64;
+    let mut ema = sma_seed;
+    let mut result = Vec::with_capacity(n - period + 1);
+    // First output value IS the SMA seed (at index period-1)
+    result.push(ema);
+    for i in period..n {
         ema = bar_close(data, i) * k + ema * (1.0 - k);
-        if i >= period - 1 { result.push(ema); }
+        result.push(ema);
     }
     result
 }
@@ -115,14 +119,14 @@ pub fn wasm_rsi(data: &[f64], period: usize) -> Vec<f64> {
 #[wasm_bindgen]
 pub fn wasm_fisher(data: &[f64], period: usize) -> Vec<f64> {
     let n = bar_count(data);
-    if n < period + 1 { return vec![]; }
+    if n < period + 1 || period == 0 { return vec![]; }
     let mut result = Vec::with_capacity(n - period);
     let mut prev_smoothed = 0.0;
     let mut prev_fisher = 0.0;
     for i in period..n {
         let mut max_h = f64::NEG_INFINITY;
         let mut min_l = f64::MAX;
-        for j in (i - period)..i {
+        for j in (i + 1 - period)..=i {
             let h = bar_high(data, j);
             let l = bar_low(data, j);
             if h > max_h { max_h = h; }
@@ -209,31 +213,24 @@ pub fn wasm_bollinger(data: &[f64], period: usize) -> Vec<f64> {
     let n = bar_count(data);
     if n < period { return vec![]; }
     let count = n - period + 1;
+    let mut upper = Vec::with_capacity(count);
+    let mut lower = Vec::with_capacity(count);
+    for i in (period - 1)..n {
+        let mut sum = 0.0;
+        let mut sum_sq = 0.0;
+        for j in (i + 1 - period)..=i {
+            let c = bar_close(data, j);
+            sum += c;
+            sum_sq += c * c;
+        }
+        let mean = sum / period as f64;
+        let std = (sum_sq / period as f64 - mean * mean).max(0.0).sqrt();
+        upper.push(mean + 2.0 * std);
+        lower.push(mean - 2.0 * std);
+    }
     let mut result = Vec::with_capacity(count * 2);
-    for i in (period - 1)..n {
-        let mut sum = 0.0;
-        let mut sum_sq = 0.0;
-        for j in (i + 1 - period)..=i {
-            let c = bar_close(data, j);
-            sum += c;
-            sum_sq += c * c;
-        }
-        let mean = sum / period as f64;
-        let std = (sum_sq / period as f64 - mean * mean).max(0.0).sqrt();
-        result.push(mean + 2.0 * std); // upper
-    }
-    for i in (period - 1)..n {
-        let mut sum = 0.0;
-        let mut sum_sq = 0.0;
-        for j in (i + 1 - period)..=i {
-            let c = bar_close(data, j);
-            sum += c;
-            sum_sq += c * c;
-        }
-        let mean = sum / period as f64;
-        let std = (sum_sq / period as f64 - mean * mean).max(0.0).sqrt();
-        result.push(mean - 2.0 * std); // lower
-    }
+    result.extend(upper);
+    result.extend(lower);
     result
 }
 
@@ -434,12 +431,16 @@ pub fn wasm_supply_demand(data: &[f64], fractal_lookback: usize) -> Vec<f64> {
     }
 
     // Test zones: count how many times price returned to the zone
+    // Early-exit after 3 touches (proven) since higher counts don't change the result.
     for zone in &mut zones {
         let mut touches = 0u32;
         for k in (zone.0 + 1)..n {
             let h = bar_high(data, k);
             let l = bar_low(data, k);
-            if l <= zone.1 && h >= zone.2 { touches += 1; }
+            if l <= zone.1 && h >= zone.2 {
+                touches += 1;
+                if touches >= 3 { break; }
+            }
         }
         zone.4 = if touches >= 3 { 2.0 } else if touches >= 1 { 1.0 } else { 0.0 };
     }
@@ -452,42 +453,6 @@ pub fn wasm_supply_demand(data: &[f64], fractal_lookback: usize) -> Vec<f64> {
         result.push(z.2);
         result.push(z.3);
         result.push(z.4);
-    }
-    result
-}
-
-// ── Ehlers Fisher Transform (with signal) ──────────────────────
-
-/// Fisher Transform returning [fisher_0, signal_0, fisher_1, signal_1, ...].
-/// Includes signal line for color determination.
-#[wasm_bindgen]
-pub fn wasm_fisher_with_signal(data: &[f64], period: usize) -> Vec<f64> {
-    let n = bar_count(data);
-    if n < period + 1 { return vec![]; }
-    let mut result = Vec::with_capacity((n - period) * 2);
-    let mut prev_smoothed = 0.0;
-    let mut prev_fisher = 0.0;
-    for i in period..n {
-        let mut max_h = f64::NEG_INFINITY;
-        let mut min_l = f64::MAX;
-        for j in (i - period)..i {
-            let h = bar_high(data, j);
-            let l = bar_low(data, j);
-            if h > max_h { max_h = h; }
-            if l < min_l { min_l = l; }
-        }
-        let price = (bar_high(data, i) + bar_low(data, i)) / 2.0;
-        let range = max_h - min_l;
-        let normalized = if range > 0.0 { (price - min_l) / range } else { 0.5 };
-        let os = 2.0 * (normalized - 0.5);
-        let mut smoothed = 0.5 * os + 0.5 * prev_smoothed;
-        smoothed = smoothed.clamp(-0.999, 0.999);
-        let ft = 0.25 * ((1.0 + smoothed) / (1.0 - smoothed)).ln() + 0.5 * prev_fisher;
-        let signal = prev_fisher;
-        result.push(ft);
-        result.push(signal);
-        prev_smoothed = smoothed;
-        prev_fisher = ft;
     }
     result
 }
@@ -558,11 +523,12 @@ pub fn wasm_stochastic(data: &[f64], k_period: usize, d_period: usize, slowing: 
 #[wasm_bindgen]
 pub fn wasm_cci(data: &[f64], period: usize) -> Vec<f64> {
     let n = bar_count(data);
-    if n < period { return vec![]; }
+    if period == 0 || n < period { return vec![]; }
     let mut result = Vec::with_capacity(n - period + 1);
+    let mut tps = Vec::with_capacity(period);
     for i in (period - 1)..n {
         let mut sum = 0.0;
-        let mut tps = Vec::with_capacity(period);
+        tps.clear();
         for j in (i + 1 - period)..=i {
             let tp = (bar_high(data, j) + bar_low(data, j) + bar_close(data, j)) / 3.0;
             tps.push(tp);

@@ -16,7 +16,7 @@
         <select id="saved-accounts">
           <option value="">— New Account —</option>
         </select>
-        <button id="btn-delete-account" class="btn-small btn-danger-small">×</button>
+        <button id="btn-delete-account" class="btn-small btn-danger-small" aria-label="Delete account">×</button>
       </div>
       <input id="account-name" type="text" placeholder="Account Name (e.g. Paper Main)" />
       <input id="api-key" type="text" placeholder="API Key" />
@@ -84,6 +84,26 @@
           <div class="menu-entry" data-action="draw-ruler">Ruler (J)</div>
           <div class="menu-entry" data-action="draw-hline">Horizontal Line (N)</div>
           <div class="menu-entry" data-action="draw-rect">Rectangle (R)</div>
+          <div class="menu-entry" data-action="draw-regression">Regression Channel</div>
+          <div class="menu-entry" data-action="draw-stddev">Std Dev Channel</div>
+          <div class="menu-entry" data-action="draw-eqchannel">Equidistant Channel</div>
+          <div class="menu-entry" data-action="draw-speedlines">Speed Lines</div>
+          <div class="menu-entry" data-action="draw-gannbox">Gann Box</div>
+          <div class="menu-entry" data-action="draw-ganngrid">Gann Grid</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="draw-arrowleft">Arrow Left</div>
+          <div class="menu-entry" data-action="draw-arrowright">Arrow Right</div>
+          <div class="menu-entry" data-action="draw-arrowcheck">Arrow Check</div>
+          <div class="menu-entry" data-action="draw-arrowstop">Arrow Stop</div>
+          <div class="menu-entry" data-action="draw-textbox">Text Box</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="draw-riskreward">Risk/Reward Zone</div>
+          <div class="menu-entry" data-action="draw-posbox">Position Box</div>
+          <div class="menu-entry" data-action="draw-daterange">Date Range</div>
+          <div class="menu-entry" data-action="draw-pricerange">Price Range</div>
+          <div class="menu-separator"></div>
+          <div class="menu-entry" data-action="draw-elliott-impulse">Elliott Impulse (1-5)</div>
+          <div class="menu-entry" data-action="draw-elliott-corrective">Elliott Corrective (A-B-C)</div>
           <div class="menu-separator"></div>
           <div class="menu-entry" data-action="alert">Set Alert (A)</div>
           <div class="menu-entry" data-action="annotate">Annotate</div>
@@ -127,7 +147,7 @@
     <!-- Tab bar -->
     <div id="tab-bar">
       <div id="tab-list"></div>
-      <button id="btn-new-tab" class="tab-add">+</button>
+      <button id="btn-new-tab" class="tab-add" aria-label="New tab">+</button>
     </div>
 
     <!-- Top bar: symbol selector + account info -->
@@ -246,30 +266,30 @@
         <option value="50000" selected>Max</option>
       </select>
       <!-- Split view removed — MTF Grid covers all multi-chart layouts -->
-      <button id="btn-mtf-grid" style="background:#3a0f60;border:1px solid #555;color:#c8f;font-size:10px;padding:3px 8px;cursor:pointer;font-family:inherit;">MTF Grid</button>
-      <span id="mtf-grid-tfs" class="hidden" style="font-size:10px;">
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="5Min" /> M5</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="10Min" /> M10</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="15Min" /> M15</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="20Min" /> M20</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="30Min" /> M30</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="40Min" /> M40</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="45Min" /> M45</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="50Min" /> M50</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Hour" /> H1</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="2Hour" /> H2</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="3Hour" /> H3</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="4Hour" checked /> H4</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="6Hour" /> H6</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="8Hour" /> H8</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="12Hour" /> H12</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Day" checked /> D1</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Week" checked /> W1</label>
-        <label style="color:#888;"><input type="checkbox" class="mtf-grid-cb" value="1Month" checked /> MN1</label>
+      <button id="btn-mtf-grid" class="mtf-grid-btn">MTF Grid</button>
+      <span id="mtf-grid-tfs" class="hidden mtf-grid-tfs">
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="5Min" /> M5</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="10Min" /> M10</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="15Min" /> M15</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="20Min" /> M20</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="30Min" /> M30</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="40Min" /> M40</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="45Min" /> M45</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="50Min" /> M50</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="1Hour" /> H1</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="2Hour" /> H2</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="3Hour" /> H3</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="4Hour" checked /> H4</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="6Hour" /> H6</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="8Hour" /> H8</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="12Hour" /> H12</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="1Day" checked /> D1</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="1Week" checked /> W1</label>
+        <label class="mtf-grid-cb-label"><input type="checkbox" class="mtf-grid-cb" value="1Month" checked /> MN1</label>
       </span>
       <span id="loading-indicator" class="loading hidden">Loading...</span>
       <span id="connect-status-bar" class="status-bar"></span>
-      <span id="bid-ask-spread" class="info-label" style="font-size:10px;color:#888;"></span>
+      <span id="bid-ask-spread" class="info-label bid-ask-info"></span>
       <span id="account-info" class="info-label"></span>
     </div>
 
@@ -278,7 +298,7 @@
       <!-- Chart area with sub-panes -->
       <div id="chart-stack">
         <div id="chart-container"></div>
-        <canvas id="gpu-chart-canvas" style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;"></canvas>
+        <canvas id="gpu-chart-canvas" class="gpu-canvas"></canvas>
         <div class="pane-resizer" data-above="chart-container" data-below="fisher-pane"></div>
         <div id="fisher-pane" class="sub-pane"></div>
         <div class="pane-resizer" data-above="fisher-pane" data-below="volume-pane"></div>
@@ -302,13 +322,13 @@
         </div>
         <!-- Unprotected position warning -->
         <div id="no-sl-warning" class="hidden">
-          <span style="font-size:14px;">&#9888;</span> NO SL/TP — UNPROTECTED <span style="font-size:14px;">&#9888;</span>
+          <span class="warn-icon">&#9888;</span> NO SL/TP — UNPROTECTED <span class="warn-icon">&#9888;</span>
         </div>
 
         <!-- SL/TP manual entry -->
-        <div id="sl-tp-inputs" style="display:flex;gap:4px;padding:2px 4px;">
-          <input id="sl-input" type="number" step="0.01" placeholder="SL Price" style="flex:1;background:#1a0a0a;color:#f44;border:1px solid #553333;padding:3px 4px;font-size:10px;font-family:inherit;text-align:center;" />
-          <input id="tp-input" type="number" step="0.01" placeholder="TP Price" style="flex:1;background:#0a1a0a;color:#4caf50;border:1px solid #335533;padding:3px 4px;font-size:10px;font-family:inherit;text-align:center;" />
+        <div id="sl-tp-inputs" class="sl-tp-row">
+          <input id="sl-input" class="sl-input-field" type="number" step="0.01" placeholder="SL Price" />
+          <input id="tp-input" class="tp-input-field" type="number" step="0.01" placeholder="TP Price" />
         </div>
 
         <!-- MTF MA Grid (matches MTF_MA indicator) -->
@@ -367,8 +387,8 @@
         </div>
 
         <!-- Risk calculator (live updates with SL/TP) -->
-        <div id="risk-calc-panel" style="border-top:1px solid #333;padding:4px 8px;font-size:10px;">
-          <div id="risk-calc-info" style="color:#888;">Set SL/TP to see risk</div>
+        <div id="risk-calc-panel" class="risk-calc-section">
+          <div id="risk-calc-info" class="risk-calc-info-text">Set SL/TP to see risk</div>
         </div>
 
         <!-- Order config -->
@@ -389,21 +409,21 @@
             <option value="stop_limit">Stop-Limit</option>
             <option value="trailing_stop">Trail Stop</option>
           </select>
-          <div id="template-row" style="margin-top:6px;display:flex;gap:4px;align-items:center;">
-            <label style="font-size:10px;color:#888;">Tpl:</label>
-            <select id="template-select" style="flex:1;font-size:10px;padding:2px 4px;">
+          <div id="template-row" class="config-row">
+            <label>Tpl:</label>
+            <select id="template-select">
               <option value="">— Templates —</option>
             </select>
-            <button id="btn-save-template" class="btn-small" style="font-size:9px;padding:2px 6px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;">Save</button>
-            <button id="btn-delete-template" class="btn-small btn-danger-small" style="font-size:9px;padding:2px 6px;cursor:pointer;">×</button>
+            <button id="btn-save-template" class="btn-small config-btn config-btn-save">Save</button>
+            <button id="btn-delete-template" class="btn-small btn-danger-small config-btn" aria-label="Delete template">×</button>
           </div>
-          <div id="profile-row" style="margin-top:4px;display:flex;gap:4px;align-items:center;">
-            <label style="font-size:10px;color:#888;">Profile:</label>
-            <select id="profile-select" style="flex:1;font-size:10px;padding:2px 4px;">
+          <div id="profile-row" class="config-row profile">
+            <label>Profile:</label>
+            <select id="profile-select">
               <option value="">— Profiles —</option>
             </select>
-            <button id="btn-save-profile" class="btn-small" style="font-size:9px;padding:2px 6px;background:#0a5f38;color:#8f8;border:1px solid #555;cursor:pointer;">Save</button>
-            <button id="btn-load-profile" class="btn-small" style="font-size:9px;padding:2px 6px;background:#0f3460;color:#8cf;border:1px solid #555;cursor:pointer;">Load</button>
+            <button id="btn-save-profile" class="btn-small config-btn config-btn-action">Save</button>
+            <button id="btn-load-profile" class="btn-small config-btn config-btn-load">Load</button>
           </div>
         </div>
 
@@ -497,7 +517,7 @@
     <div id="log-panel">
       <div id="log-header">
         <span>Log</span>
-        <button id="btn-log-toggle">▼</button>
+        <button id="btn-log-toggle" aria-label="Toggle log panel">▼</button>
         <button id="btn-log-clear">Clear</button>
       </div>
       <div id="log-content"></div>

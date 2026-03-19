@@ -229,4 +229,44 @@ impl SqliteCache {
         ).unwrap_or(0);
         Ok((bar_count, kv_count, total_size))
     }
+
+    /// Get detailed per-key cache stats: returns JSON array of {key, compressed_bytes, timestamp}.
+    /// Keys are "symbol:timeframe" format (e.g., "AAPL:1Hour").
+    pub fn detailed_stats(&self) -> Result<Vec<(String, i64, i64)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT key, LENGTH(data) as size, timestamp FROM bar_cache ORDER BY key"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let mut result = Vec::new();
+        for row in rows {
+            if let Ok(r) = row { result.push(r); }
+        }
+        Ok(result)
+    }
+
+    /// Delete a specific cache entry by key.
+    pub fn delete_key(&self, key: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let deleted = conn.execute(
+            "DELETE FROM bar_cache WHERE key = ?1", params![key]
+        ).map_err(|e| format!("SQLite delete failed: {e}"))?;
+        Ok(deleted > 0)
+    }
+
+    /// Delete all cache entries matching a symbol prefix (e.g., "AAPL:" deletes all TFs for AAPL).
+    pub fn delete_symbol(&self, symbol_prefix: &str) -> Result<u64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let pattern = format!("{}:%", symbol_prefix);
+        let deleted = conn.execute(
+            "DELETE FROM bar_cache WHERE key LIKE ?1", params![pattern]
+        ).map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
+        Ok(deleted)
+    }
 }

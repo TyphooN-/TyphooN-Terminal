@@ -69,6 +69,21 @@ const RATE_LIMIT_MS: u64 = 320;
 /// Round price to valid increment for Alpaca orders.
 /// Stocks > $1: 2 decimal places (penny). Stocks < $1: 4 decimal places (sub-penny allowed).
 /// Crypto: 8 decimal places.
+/// Parse a JSON field as f64, handling both string ("123.45") and number (123.45) formats.
+/// Alpaca returns some fields as strings, others as numbers depending on endpoint/version.
+fn parse_f64_field(json: &serde_json::Value, field: &str) -> f64 {
+    // Try as string first (Alpaca's typical format)
+    if let Some(s) = json[field].as_str() {
+        return s.parse().unwrap_or(0.0);
+    }
+    // Try as number (some endpoints/versions return raw numbers)
+    if let Some(n) = json[field].as_f64() {
+        return n;
+    }
+    // Field is null or missing — not a warning, just absent
+    0.0
+}
+
 fn round_price(price: f64) -> String {
     if price >= 1.0 {
         format!("{:.2}", price) // $1+ → 2 decimals (e.g., 15.68)
@@ -265,16 +280,16 @@ impl AlpacaBroker {
             .map_err(|e| format!("Account parse failed: {e}"))?;
 
         Ok(AccountInfo {
-            equity: json["equity"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
-            cash: json["cash"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
-            buying_power: json["buying_power"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
-            portfolio_value: json["portfolio_value"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
-            initial_margin: json["initial_margin"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
-            maintenance_margin: json["maintenance_margin"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
+            equity: parse_f64_field(&json, "equity"),
+            cash: parse_f64_field(&json, "cash"),
+            buying_power: parse_f64_field(&json, "buying_power"),
+            portfolio_value: parse_f64_field(&json, "portfolio_value"),
+            initial_margin: parse_f64_field(&json, "initial_margin"),
+            maintenance_margin: parse_f64_field(&json, "maintenance_margin"),
             currency: json["currency"].as_str().unwrap_or("USD").to_string(),
             pattern_day_trader: json["pattern_day_trader"].as_bool().unwrap_or(false),
             trading_blocked: json["trading_blocked"].as_bool().unwrap_or(false),
-            balance: json["last_equity"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
+            balance: parse_f64_field(&json, "last_equity"),
         })
     }
 
@@ -298,11 +313,11 @@ impl AlpacaBroker {
             .iter()
             .map(|p| PositionInfo {
                 symbol: p["symbol"].as_str().unwrap_or("").to_string(),
-                qty: p["qty"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
+                qty: parse_f64_field(p, "qty"),
                 side: p["side"].as_str().unwrap_or("").to_string(),
-                avg_entry_price: p["avg_entry_price"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
-                market_value: p["market_value"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
-                unrealized_pl: p["unrealized_pl"].as_str().unwrap_or("0").parse().unwrap_or(0.0),
+                avg_entry_price: parse_f64_field(p, "avg_entry_price"),
+                market_value: parse_f64_field(p, "market_value"),
+                unrealized_pl: parse_f64_field(p, "unrealized_pl"),
                 asset_class: p["asset_class"].as_str().unwrap_or("").to_string(),
                 asset_id: p["asset_id"].as_str().unwrap_or("").to_string(),
             })
@@ -1010,7 +1025,8 @@ impl AlpacaBroker {
                         self.rate_limiter.trigger_cooldown().await;
                         // Return what we have so far rather than retrying
                         if !all_bars.is_empty() {
-                            tracing::info!("429 hit, returning {} bars collected so far", all_bars.len());
+                            tracing::warn!("429 rate limit: returning {}/{} bars for {} @ {} (partial dataset)",
+                                all_bars.len(), actual_limit, symbol, actual_tf);
                             break;
                         }
                     }
@@ -1808,6 +1824,7 @@ impl AlpacaBroker {
             "wss://stream.data.alpaca.markets/v2/iex"
         };
 
+        // Initial connection to validate credentials before spawning the task
         let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url)
             .await
             .map_err(|e| format!("WebSocket connect failed: {e}"))?;
@@ -1827,7 +1844,6 @@ impl AlpacaBroker {
 
         // Wait for auth response
         if let Some(Ok(msg)) = read.next().await {
-            // First message is connection welcome
             tracing::debug!("WS welcome: {msg}");
         }
         if let Some(Ok(msg)) = read.next().await {
@@ -1835,14 +1851,14 @@ impl AlpacaBroker {
             if text.contains("\"error\"") {
                 return Err(format!("WebSocket auth failed: {text}"));
             }
-            tracing::debug!("WS auth response: {text}");
+            tracing::debug!("WS auth response: authorized");
         }
 
         // Subscribe
         let sub_msg = serde_json::json!({
             "action": "subscribe",
-            "trades": trade_symbols,
-            "quotes": quote_symbols,
+            "trades": &trade_symbols,
+            "quotes": &quote_symbols,
         });
         write
             .send(tokio_tungstenite::tungstenite::Message::Text(sub_msg.to_string().into()))
@@ -1852,45 +1868,165 @@ impl AlpacaBroker {
         // Channel for outgoing messages
         let (tx, rx) = tokio::sync::mpsc::channel::<StreamMessage>(1024);
 
-        // Spawn reader task
-        tokio::spawn(async move {
-            while let Some(Ok(msg)) = read.next().await {
-                let text = match msg.to_text() {
-                    Ok(t) => t.to_string(),
-                    Err(_) => continue,
-                };
+        // Clone credentials for the reconnection task
+        let api_key = self.api_key.clone();
+        let secret_key = self.secret_key.clone();
+        let ws_url = ws_url.to_string();
 
-                let parsed: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&text);
-                if let Ok(events) = parsed {
-                    for event in events {
-                        let msg_type = event["T"].as_str().unwrap_or("");
-                        let stream_msg = match msg_type {
-                            "t" => Some(StreamMessage::Trade(StreamTrade {
-                                symbol: event["S"].as_str().unwrap_or("").to_string(),
-                                price: event["p"].as_f64().unwrap_or(0.0),
-                                size: event["s"].as_f64().unwrap_or(0.0),
-                                timestamp: event["t"].as_str().unwrap_or("").to_string(),
-                            })),
-                            "q" => Some(StreamMessage::Quote(StreamQuote {
-                                symbol: event["S"].as_str().unwrap_or("").to_string(),
-                                bid: event["bp"].as_f64().unwrap_or(0.0),
-                                ask: event["ap"].as_f64().unwrap_or(0.0),
-                                bid_size: event["bs"].as_f64().unwrap_or(0.0),
-                                ask_size: event["as"].as_f64().unwrap_or(0.0),
-                                timestamp: event["t"].as_str().unwrap_or("").to_string(),
-                            })),
-                            _ => None,
-                        };
-                        if let Some(sm) = stream_msg {
-                            if tx.send(sm).await.is_err() {
-                                tracing::info!("Stream receiver dropped, closing WS");
-                                return;
+        // Spawn reader task with reconnection logic
+        tokio::spawn(async move {
+            let mut current_read = read;
+            let mut consecutive_failures: u32 = 0;
+            const MAX_RECONNECT_ATTEMPTS: u32 = 10;
+
+            'outer: loop {
+                // Read messages from the current connection
+                while let Some(result) = current_read.next().await {
+                    let msg = match result {
+                        Ok(m) => m,
+                        Err(e) => {
+                            tracing::warn!("WebSocket read error: {e}");
+                            break;
+                        }
+                    };
+                    let text = match msg.to_text() {
+                        Ok(t) => t.to_string(),
+                        Err(_) => continue,
+                    };
+
+                    let parsed: Result<Vec<serde_json::Value>, _> = serde_json::from_str(&text);
+                    if let Ok(events) = parsed {
+                        for event in events {
+                            let msg_type = event["T"].as_str().unwrap_or("");
+                            let stream_msg = match msg_type {
+                                "t" => {
+                                    let price = event["p"].as_f64().unwrap_or(0.0);
+                                    let size = event["s"].as_f64().unwrap_or(0.0);
+                                    if price <= 0.0 {
+                                        None
+                                    } else {
+                                        Some(StreamMessage::Trade(StreamTrade {
+                                            symbol: event["S"].as_str().unwrap_or("").to_string(),
+                                            price,
+                                            size,
+                                            timestamp: event["t"].as_str().unwrap_or("").to_string(),
+                                        }))
+                                    }
+                                }
+                                "q" => Some(StreamMessage::Quote(StreamQuote {
+                                    symbol: event["S"].as_str().unwrap_or("").to_string(),
+                                    bid: event["bp"].as_f64().unwrap_or(0.0),
+                                    ask: event["ap"].as_f64().unwrap_or(0.0),
+                                    bid_size: event["bs"].as_f64().unwrap_or(0.0),
+                                    ask_size: event["as"].as_f64().unwrap_or(0.0),
+                                    timestamp: event["t"].as_str().unwrap_or("").to_string(),
+                                })),
+                                _ => None,
+                            };
+                            if let Some(sm) = stream_msg {
+                                if tx.send(sm).await.is_err() {
+                                    tracing::info!("Stream receiver dropped, closing WS");
+                                    return;
+                                }
                             }
                         }
                     }
+                    // Successfully processed a message, reset failure counter
+                    consecutive_failures = 0;
+                }
+
+                // Stream disconnected — attempt reconnection with exponential backoff
+                tracing::warn!("WebSocket stream disconnected, will attempt reconnection");
+
+                loop {
+                    if consecutive_failures >= MAX_RECONNECT_ATTEMPTS {
+                        tracing::error!(
+                            "WebSocket reconnection failed after {MAX_RECONNECT_ATTEMPTS} consecutive attempts, giving up"
+                        );
+                        break 'outer;
+                    }
+
+                    let backoff_secs = std::cmp::min(1u64 << consecutive_failures, 30);
+                    consecutive_failures += 1;
+                    tracing::warn!(
+                        "WebSocket reconnect attempt {}/{MAX_RECONNECT_ATTEMPTS} in {backoff_secs}s",
+                        consecutive_failures
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+
+                    // Reconnect
+                    let ws_stream = match tokio_tungstenite::connect_async(&ws_url).await {
+                        Ok((stream, _)) => stream,
+                        Err(e) => {
+                            tracing::warn!("WebSocket reconnect failed: {e}");
+                            continue;
+                        }
+                    };
+                    let (mut write, new_read) = ws_stream.split();
+
+                    // Re-authenticate
+                    let auth_msg = serde_json::json!({
+                        "action": "auth",
+                        "key": api_key.as_str(),
+                        "secret": secret_key.as_str(),
+                    });
+                    if let Err(e) = write
+                        .send(tokio_tungstenite::tungstenite::Message::Text(
+                            auth_msg.to_string().into(),
+                        ))
+                        .await
+                    {
+                        tracing::warn!("WebSocket reconnect auth send failed: {e}");
+                        continue;
+                    }
+
+                    // Temporarily bind so we can read welcome/auth responses
+                    current_read = new_read;
+
+                    // Read welcome
+                    if let Some(Ok(msg)) = current_read.next().await {
+                        tracing::debug!("WS reconnect welcome: {msg}");
+                    }
+                    // Read auth response
+                    let auth_ok = if let Some(Ok(msg)) = current_read.next().await {
+                        let text = msg.to_text().unwrap_or("");
+                        if text.contains("\"error\"") {
+                            tracing::warn!("WebSocket reconnect auth failed: {text}");
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        tracing::warn!("WebSocket reconnect: no auth response");
+                        false
+                    };
+
+                    if !auth_ok {
+                        continue;
+                    }
+
+                    // Re-subscribe
+                    let sub_msg = serde_json::json!({
+                        "action": "subscribe",
+                        "trades": &trade_symbols,
+                        "quotes": &quote_symbols,
+                    });
+                    if let Err(e) = write
+                        .send(tokio_tungstenite::tungstenite::Message::Text(
+                            sub_msg.to_string().into(),
+                        ))
+                        .await
+                    {
+                        tracing::warn!("WebSocket reconnect subscribe failed: {e}");
+                        continue;
+                    }
+
+                    tracing::info!("WebSocket reconnected and re-subscribed successfully");
+                    consecutive_failures = 0;
+                    break; // Break inner retry loop, continue outer read loop
                 }
             }
-            tracing::info!("WebSocket stream ended");
+            tracing::info!("WebSocket stream ended permanently");
         });
 
         Ok(rx)

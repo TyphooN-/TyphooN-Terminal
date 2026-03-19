@@ -124,8 +124,8 @@
 | Focus mode (distraction-free) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | PDT rule monitor | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Tax lot tracker (FIFO + wash sale) | ✅ | ❌ | ❌ | ❌ | ✅ |
-| 186 command palette entries | ✅ | ❌ | ❌ | ❌ | ❌ |
-| 602 automated tests | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 228 command palette entries | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 602 static analysis assertions | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cost | Free | Free* | $80-118/mo | Free | $24K/yr |
 
 *MT5 is free but broker-locked
@@ -136,7 +136,7 @@
 2. **Auto Fibonacci** — Automatic fractal-based swing detection with 13 levels including extensions. Unique feature.
 3. **Supply/Demand zones** — Fractal-based detection with strength tiers. Only available as paid MT5 indicators.
 4. **Integrated NNFX system** — Full No Nonsense Forex system ported from MQL5 with exact visual parity.
-5. **Multi-broker + multi-timeframe** — Alpaca with 2-5 TF grid view per symbol.
+5. **Multi-timeframe** — Alpaca with 2-5 TF grid view per symbol.
 6. **Local-first with cloud data** — Runs locally (no SaaS), caches everything in SQLite, works offline with cached data.
 7. **Draggable tab reordering** — Drag tabs to rearrange. Godel Terminal doesn't support this (tabs are fixed order, very annoying). MT5 doesn't support it either (chart windows, not tabs).
 8. **Volume Profile** — Price-at-volume distribution with POC and value area. TradingView charges for this feature (Premium plan, $24.95/mo). Free in TyphooN-Terminal.
@@ -155,7 +155,7 @@
 21. **Price ladder / DOM** — Vertical bid-ask depth with volume bars. Standard on CQG and TT.
 22. **Theme switcher** — Dark, pitch black (OLED), light themes. Accessibility feature competitors lack.
 23. **Webhook alert automation** — Custom webhook endpoints for integrating with Discord bots, Zapier, etc.
-24. **187 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
+24. **228 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
 25. **AI-powered strategy suggestions** — Contextual NNFX analysis via Claude/GPT with Fisher/RSI/KAMA/SMA200/volume context.
 26. **Voice alerts** — Web Speech API reads alerts aloud. No competitor has this.
 27. **Data quality monitoring** — Automatic detection of missing bars, OHLC violations, suspicious spikes.
@@ -182,7 +182,7 @@
 48. **Workspace save/restore** — Full app state persistence including all settings and window layouts.
 49. **PDT monitor** — Pattern Day Trader rule tracking with countdown and warning banners.
 50. **Tax lot tracker** — FIFO cost basis with wash sale detection and estimated tax impact.
-51. **602 automated tests** — Static analysis smoke test covering every command, function, and security invariant.
+51. **602 static analysis assertions** — Static analysis smoke test covering every command, function, and security invariant.
 
 ## UX Advantages Over Competitors
 
@@ -224,7 +224,7 @@
 - **Speed** — Godel optimizes for sub-second research queries
 
 ### vs MT5
-- ~~**Drawing tools**~~ **MOSTLY RESOLVED** — MT5 has 46 drawing objects, we now have **22 types** (trend, fib, h-line, v-line, rectangle, ray, ruler, channel, parallel channel, segment, arrow-line, extended-line, pitchfork, Schiff pitchfork, triangle, ellipse, circle, fib fan/arcs/channel/extension, Gann fan/line, arrow markers, price/text labels, cycle lines). Remaining gap: ~24 niche MT5 objects (Elliott Wave labels, Gann Grid, Thumbs up/down icons, etc.)
+- **Drawing tools** — 22 types implemented (trend, fib, h-line, rectangle, channel, ray, ruler, etc.). MT5 has 46 total; remaining ~24 are niche objects (Elliott Wave labels, Gann Grid, etc.)
 - ~~**Indicator count**~~ **RESOLVED** — MT5 has 38+ built-in, we now have **37 unique indicators** + 22 Wasm implementations. Parity achieved with Alligator, AO, MFI, Force Index, Envelopes, StdDev, Chaikin, DeMarker, Fractals.
 - **EA/Expert Advisor system** — MT5 has a full algorithmic trading framework (MQL5). We have auto-trade + genetic optimizer but no custom language.
 - **Strategy tester** — MT5's visual tester has better drag speed. Our replay mode + visual backtester are functionally equivalent.
@@ -250,7 +250,7 @@ TradingView is the most popular retail charting platform. Feature comparison:
 | Server-side alerts | ❌ (local only) | ✅ (limited) | ✅ (unlimited) |
 | Multi-chart layout | ✅ (MTF grid) | ❌ (1 chart) | ✅ (8 charts) |
 | Paper trading | ✅ (real broker) | ✅ (simulated) | ✅ |
-| Real order execution | ✅ (Alpaca/TT) | ❌ | ✅ (limited brokers) |
+| Real order execution | ✅ (Alpaca) | ❌ | ✅ (limited brokers) |
 | Open source | ✅ | ❌ | ❌ |
 | No ads | ✅ | ❌ (heavy ads) | ✅ |
 | Local-first (no cloud) | ✅ | ❌ (cloud-only) | ❌ |
@@ -260,7 +260,7 @@ TradingView is the most popular retail charting platform. Feature comparison:
 | AI strategy suggestions | ✅ | ❌ | ❌ |
 | Voice/audio alerts | ✅ | ❌ | ❌ |
 | Fourier/wavelet/entropy | ✅ | ❌ | ❌ |
-| 187 Ctrl+K commands | ✅ | ❌ | ❌ |
+| 228 Ctrl+K commands | ✅ | ❌ | ❌ |
 | Cost | **Free** | Free (limited) | **$60/mo ($720/yr)** |
 
 **TyphooN-Terminal advantages**: Volume Profile and Market Replay are free (TradingView charges $24.95+/mo). Local-first with no ads. Real order execution via broker API. GPU charts, Wasm indicators, 4 risk modes, AI strategy — none available on TradingView at any price.
@@ -339,7 +339,7 @@ MT5, cTrader, and NinjaTrader all rely on **third-party DLLs** for indicators an
 
 ### TyphooN-Terminal's Approach
 
-- **100% open source** — every line auditable (28,035 JS + 7,009 Rust lines, 23 security passes)
+- **100% open source** — every line auditable (30,029 JS + 7,009 Rust lines, 21 security passes)
 - **No DLLs** — pure Rust backend + JavaScript frontend, no binary dependencies
 - **Custom indicator plugins** are plain JavaScript files you can read
 - **API keys AES-256-GCM encrypted** (PBKDF2 100K iterations), stored in SQLite — not in config files
