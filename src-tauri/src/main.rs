@@ -2816,6 +2816,63 @@ async fn scan_crypto_risk(
     Ok(serde_json::to_string(&results).map_err(|e| format!("JSON error: {e}"))?)
 }
 
+// ── MT5 Symbol Normalization ─────────────────────────────────────
+// MT5 uses "SOLUSD" but Alpaca/terminal uses "SOL/USD". Normalize at import boundary.
+
+/// Normalize MT5 symbol to terminal format.
+/// Crypto: SOLUSD → SOL/USD, BTCUSD → BTC/USD, DOGEUSD → DOGE/USD, etc.
+/// Forex: EURUSD → EUR/USD, GBPJPY → GBP/JPY, etc.
+/// Indices/commodities: left as-is (US30, XAUUSD, etc.)
+fn normalize_mt5_symbol(sym: &str) -> String {
+    // Known crypto base currencies (3-5 chars) that pair with USD
+    const CRYPTO_BASES: &[&str] = &[
+        "BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "AVAX", "DOT", "LINK",
+        "SHIB", "MATIC", "UNI", "AAVE", "SUSHI", "ALGO", "ATOM", "FTM",
+        "NEAR", "APE", "LTC", "BCH", "ETC", "XLM", "VET", "MANA", "SAND",
+        "AXS", "CRV", "MKR", "COMP", "YFI", "BAT", "GRT", "FIL", "ICP",
+        "HBAR", "EGLD", "THETA", "XTZ", "EOS", "TRX", "PEPE", "WIF",
+        "BONK", "JUP", "RENDER", "INJ", "SEI", "SUI", "TIA", "ARB", "OP",
+    ];
+    // Known forex base currencies (3 chars)
+    const FOREX_BASES: &[&str] = &[
+        "EUR", "GBP", "AUD", "NZD", "USD", "CAD", "CHF", "JPY",
+        "NOK", "SEK", "DKK", "PLN", "HUF", "CZK", "TRY", "ZAR",
+        "MXN", "SGD", "HKD", "CNH", "CNY",
+    ];
+
+    let upper = sym.to_uppercase();
+
+    // Already has slash — return as-is
+    if upper.contains('/') { return upper; }
+
+    // Try crypto: check if starts with known crypto base + "USD"
+    for base in CRYPTO_BASES {
+        if upper.starts_with(base) && upper.ends_with("USD") && upper.len() == base.len() + 3 {
+            return format!("{}/USD", base);
+        }
+    }
+
+    // Try forex: 6-char symbol where first 3 and last 3 are known currencies
+    if upper.len() == 6 {
+        let (base, quote) = upper.split_at(3);
+        let is_forex = FOREX_BASES.iter().any(|&c| c == base)
+            && FOREX_BASES.iter().any(|&c| c == quote);
+        if is_forex {
+            return format!("{}/{}", base, quote);
+        }
+    }
+
+    // Precious metals: XAUUSD → XAU/USD, XAGUSD → XAG/USD
+    if (upper.starts_with("XAU") || upper.starts_with("XAG") || upper.starts_with("XPT") || upper.starts_with("XPD"))
+        && upper.len() == 6 {
+        let (metal, ccy) = upper.split_at(3);
+        return format!("{}/{}", metal, ccy);
+    }
+
+    // Default: return as-is (indices like US30, US500, DE40, etc.)
+    upper
+}
+
 // ── MT5 BarServer IPC (on-demand bar requests via file-based protocol) ──
 // Writes REQUEST.txt → BarServer.mq5 reads it → exports CSV → writes RESPONSE.txt
 // This enables TyphooN-Terminal to fetch any symbol/TF from MT5 without bulk export.
@@ -2925,11 +2982,23 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
 
             let mut inst_count = 0;
             for (key, json_data, _ts, bar_count) in &entries {
-                // Ensure mt5: prefix
+                // Ensure mt5: prefix + normalize symbol (SOLUSD → SOL/USD)
                 let cache_key = if key.starts_with("mt5:") {
-                    key.clone()
+                    // key = "mt5:SOLUSD:1Hour" → normalize symbol part
+                    let parts: Vec<&str> = key.splitn(3, ':').collect();
+                    if parts.len() == 3 {
+                        format!("mt5:{}:{}", normalize_mt5_symbol(parts[1]), parts[2])
+                    } else {
+                        key.clone()
+                    }
                 } else {
-                    format!("mt5:{}", key)
+                    // key = "SOLUSD:1Hour" → add prefix + normalize
+                    let parts: Vec<&str> = key.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        format!("mt5:{}:{}", normalize_mt5_symbol(parts[0]), parts[1])
+                    } else {
+                        format!("mt5:{}", key)
+                    }
                 };
 
                 match cache.put_bars(&cache_key, json_data) {
@@ -3051,6 +3120,58 @@ async fn request_mt5_bars(
     }
 }
 
+/// Get the list of symbols available in MT5 databases (written by BarCacheWriter).
+/// Returns the symbol list from the special __SYMBOLS__ key.
+#[tauri::command]
+async fn get_mt5_symbol_list(_state: State<'_, SharedState>) -> Result<String, String> {
+    let mt5_dbs = find_all_mt5_sqlite_dbs();
+    if mt5_dbs.is_empty() {
+        return Err("No MT5 SQLite caches found".into());
+    }
+
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<String>, String> {
+        let mut all_symbols = std::collections::HashSet::new();
+
+        for db_path in &mt5_dbs {
+            let conn = match rusqlite::Connection::open_with_flags(
+                db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            // Read the __SYMBOLS__ key
+            let json: String = match conn.query_row(
+                "SELECT data FROM bar_cache WHERE key = 'mt5:__SYMBOLS__'",
+                [],
+                |row| row.get(0),
+            ) {
+                Ok(j) => j,
+                Err(_) => continue,
+            };
+
+            let symbols: Vec<String> = serde_json::from_str(&json).unwrap_or_default();
+            for sym in symbols {
+                all_symbols.insert(sym);
+            }
+        }
+
+        let mut sorted: Vec<String> = all_symbols.into_iter().collect();
+        sorted.sort();
+        Ok(sorted)
+    }).await.map_err(|e| format!("Task failed: {e}"))??;
+
+    // Normalize symbols for the frontend
+    let normalized: Vec<String> = result.iter().map(|s| normalize_mt5_symbol(s)).collect();
+
+    Ok(serde_json::json!({
+        "raw": result,
+        "normalized": normalized,
+        "count": result.len(),
+    }).to_string())
+}
+
 // ── MT5 Bar Import (Darwinex data via BarExporter EA) ───────────
 // Imports CSV files exported by BarExporter.mq5 into the SQLite cache.
 // CSV format: timestamp,open,high,low,close,volume (RFC3339 timestamps)
@@ -3070,7 +3191,7 @@ fn import_mt5_csv(cache: &core::cache::SqliteCache, filepath: &str) -> Result<(S
         return Err(format!("Invalid filename format '{}': expected SYMBOL_TIMEFRAME.csv", filename));
     }
     let timeframe = parts[0].to_string();
-    let symbol = parts[1].to_string();
+    let symbol = normalize_mt5_symbol(parts[1]); // SOLUSD → SOL/USD, EURUSD → EUR/USD
 
     // Read and parse CSV
     let content = std::fs::read_to_string(path)
@@ -3238,9 +3359,11 @@ async fn get_mt5_bars(
         s.db_cache.clone().ok_or("SQLite cache not available")?
     };
 
-    // Try MT5 cache first
-    let mt5_key = format!("mt5:{}:{}", symbol, timeframe);
-    if let Ok(Some((json, _))) = cache.get_bars(&mt5_key) {
+    // Try MT5 cache — try normalized symbol first, then raw
+    let normalized = normalize_mt5_symbol(&symbol);
+    let mt5_key = format!("mt5:{}:{}", normalized, timeframe);
+    let mt5_key_raw = format!("mt5:{}:{}", symbol, timeframe);
+    if let Ok(Some((json, _))) = cache.get_bars(&mt5_key).or_else(|_| cache.get_bars(&mt5_key_raw)) {
         if json.len() > 10 && json.contains("\"timestamp\"") {
             // Trim to limit
             let bars: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
@@ -4066,6 +4189,7 @@ fn main() {
             scan_crypto_risk,
             request_mt5_bars,
             sync_mt5_sqlite,
+            get_mt5_symbol_list,
             import_mt5_bars,
             list_mt5_symbols,
             get_mt5_bars,
