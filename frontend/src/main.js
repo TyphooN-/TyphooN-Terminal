@@ -677,12 +677,14 @@ async function cachedGetBars(symbol, timeframe, limit) {
   // Dedup: if same symbol:TF is in-flight (any limit), wait for it
   const key = `${symbol}:${timeframe}`;
   if (_barInflight.has(key)) return _barInflight.get(key);
-  const promise = invoke("get_bars", { symbol, timeframe, limit }).then(json => {
-    // Update cache with fresh data
+  const promise = invoke("get_bars_incremental", { symbol, timeframe, limit, brokerId: activeBrokerId || null }).then(json => {
+    // Update hot cache only — SQLite persistence is handled by get_bars_incremental backend
+    // (no saveBarCacheToDisk needed, avoids double-write and duplicate API calls)
     try {
       const bars = JSON.parse(json);
       if (bars.length > 0) {
         barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
+        evictLRU();
       }
     } catch (_) {}
     return json;
@@ -3892,7 +3894,7 @@ async function loadChart(symbol, timeframe) {
             const freshBars = JSON.parse(freshJson);
             if (freshBars.length > 0) {
               barCache[cacheKey] = { data: freshBars, timestamp: Date.now() };
-              saveBarCacheToDisk(cacheKey, freshBars);
+              // SQLite persistence handled by get_bars_incremental backend
               // If still on same tab/symbol, update chart (activeTabId prevents cross-tab writes)
               if (currentSymbol === symbol && currentTimeframe === timeframe && activeTabId === loadTabId) {
                 let freshChartData = freshBars.map(b => ({
@@ -3923,8 +3925,7 @@ async function loadChart(symbol, timeframe) {
       // No usable cache — fetch synchronously
       const barsJson = await cachedGetBars(symbol, fetchTimeframe, fetchLimit);
       bars = JSON.parse(barsJson);
-      barCache[cacheKey] = { data: bars, timestamp: Date.now() };
-      saveBarCacheToDisk(cacheKey, bars);
+      // Hot cache updated by cachedGetBars; SQLite by get_bars_incremental backend
       if (bars.length > 0) {
         const first = bars[0].timestamp.substring(0, 10);
         const last = bars[bars.length - 1].timestamp.substring(0, 10);
@@ -4096,12 +4097,11 @@ async function prefetchAllTimeframes(symbol, currentTF) {
     }
 
     // Fetch fresh data (always, if cache is stale or missing)
+    // cachedGetBars handles both hot cache update and SQLite persistence via get_bars_incremental
     try {
       const barsJson = await cachedGetBars(symbol, tf, 2000);
       const bars = JSON.parse(barsJson);
       if (bars.length > 0) {
-        barCache[cacheKey] = { data: bars, timestamp: Date.now(), lastAccess: Date.now() };
-        saveBarCacheToDisk(cacheKey, bars);
         fetched++;
         log(`${symbol} ${tf}: ${bars.length} bars (${cacheAge < Infinity ? "refreshed" : "new"})`, "info");
       }
@@ -4116,7 +4116,10 @@ async function prefetchAllTimeframes(symbol, currentTF) {
 }
 
 let lastBarTime = 0;
+let _wsBarPollInterval = null;
 
+/// Update chart with latest bar data. Uses WebSocket-built bars when available
+/// (sub-second latency), falls back to API polling (10s) when WS is down.
 async function updateLatestBar(symbol, timeframe) {
   if (symbol !== currentSymbol) return;
   // Use base timeframe for custom TFs
@@ -4166,6 +4169,63 @@ async function updateLatestBar(symbol, timeframe) {
     // Sync MTF grid cells with latest price
     syncMTFGridLivePrice();
   } catch (_) {}
+}
+
+/// Poll WebSocket-built bars for real-time chart updates.
+/// Completed bars = minute has ended. Active bars = still forming (live candle).
+/// This runs every 2s, much faster than the 10s API polling fallback.
+function startWsBarPolling() {
+  if (_wsBarPollInterval) clearInterval(_wsBarPollInterval);
+  _wsBarPollInterval = setInterval(async () => {
+    try {
+      const json = await invoke("poll_bars");
+      const { completed, active } = JSON.parse(json);
+
+      // Process completed bars — update cache and chart
+      for (const bar of completed) {
+        if (bar.symbol !== currentSymbol) continue;
+        const barTime = Math.floor(new Date(bar.timestamp).getTime() / 1000);
+        const chartBar = { time: barTime, open: bar.open, high: bar.high, low: bar.low, close: bar.close };
+        lastPrice = bar.close;
+
+        if (!mtfGridActive && currentTimeframe === "1Min") {
+          try {
+            if (currentChartType === "line") {
+              candleSeries.update({ time: barTime, value: bar.close });
+            } else {
+              candleSeries.update(chartBar);
+            }
+          } catch (_) {}
+        }
+
+        // New completed bar — refresh indicators
+        if (barTime !== lastBarTime && lastBarTime !== 0 && currentTimeframe === "1Min") {
+          currentChartData.push(chartBar);
+          applyIndicators(currentChartData);
+        }
+        lastBarTime = barTime;
+      }
+
+      // Process active (forming) bars — update live candle
+      for (const bar of active) {
+        if (bar.symbol !== currentSymbol) continue;
+        lastPrice = bar.close;
+        if (!mtfGridActive && currentTimeframe === "1Min") {
+          const barTime = Math.floor(new Date(bar.timestamp).getTime() / 1000);
+          try {
+            if (currentChartType === "line") {
+              candleSeries.update({ time: barTime, value: bar.close });
+            } else {
+              candleSeries.update({ time: barTime, open: bar.open, high: bar.high, low: bar.low, close: bar.close });
+            }
+          } catch (_) {}
+        }
+        syncMTFGridLivePrice();
+      }
+    } catch (_) {
+      // WS bars not available — API polling fallback handles it
+    }
+  }, 2000);
 }
 
 // ── Dashboard Update (all 11 labels) ────────────────────────
@@ -5162,6 +5222,24 @@ function setupConnect() {
       // Start dashboard updates
       if (dashboardInterval) clearInterval(dashboardInterval);
       dashboardInterval = setInterval(updateDashboard, 2000);
+
+      // Predictive prefetch: pre-fetch bar data for all position symbols.
+      // With incremental fetch, this costs almost nothing for returning users —
+      // only the gap since last session needs fetching.
+      (async () => {
+        try {
+          const posJson = await invoke("get_positions");
+          const positions = JSON.parse(posJson);
+          const symbols = [...new Set(positions.map(p => p.symbol))];
+          for (const sym of symbols) {
+            prefetchAllTimeframes(sym, null);
+          }
+          if (symbols.length > 0) log(`Predictive prefetch: ${symbols.length} position symbols`, "info");
+        } catch (_) {}
+      })();
+
+      // Start WebSocket bar builder polling (real-time candle updates)
+      startWsBarPolling();
     } catch (e) {
       status.textContent = `Failed: ${e}`;
       status.style.color = "#f88";
@@ -5511,6 +5589,52 @@ function setupPaneResizers() {
 
     resizer.addEventListener("mousedown", onMouseDown);
   }
+}
+
+// ── Panel Splitter (vertical, chart ↔ right panel) ───────────
+
+function setupPanelSplitter() {
+  const splitter = document.getElementById("panel-splitter");
+  const rightPanel = document.getElementById("right-panel");
+  if (!splitter || !rightPanel) return;
+
+  let startX = 0;
+  let startWidth = 0;
+
+  const onMouseDown = (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startWidth = rightPanel.getBoundingClientRect().width;
+    splitter.classList.add("active");
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  };
+
+  const onMouseMove = (e) => {
+    const dx = startX - e.clientX; // dragging left = wider panel
+    const newWidth = Math.max(140, Math.min(500, startWidth + dx));
+    rightPanel.style.width = newWidth + "px";
+
+    // Trigger chart resizes
+    const cc = document.getElementById("chart-container");
+    const fp = document.getElementById("fisher-pane");
+    const vp = document.getElementById("volume-pane");
+    if (chart && cc) chart.resize(cc.clientWidth, cc.clientHeight);
+    if (fisherChart && fp) fisherChart.resize(fp.clientWidth, fp.clientHeight);
+    if (volumeChart && vp) volumeChart.resize(vp.clientWidth, vp.clientHeight);
+  };
+
+  const onMouseUp = () => {
+    splitter.classList.remove("active");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+  };
+
+  splitter.addEventListener("mousedown", onMouseDown);
 }
 
 // ── Init ────────────────────────────────────────────────────
@@ -26212,6 +26336,7 @@ document.addEventListener("DOMContentLoaded", () => {
   patchRenderDrawings();
   setupDrawingPropertiesPanel();
   setupPaneResizers();
+  setupPanelSplitter();
   setupLogPanel();
   setupNewsPanel();
   setupIndicatorPanel();

@@ -1,4 +1,5 @@
 pub mod backtest;
+pub mod bar_builder;
 pub mod cache;
 pub mod margin;
 pub mod position;

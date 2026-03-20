@@ -63,8 +63,12 @@ const LIVE_BASE: &str = "https://api.alpaca.markets";
 const DATA_BASE: &str = "https://data.alpaca.markets";
 
 /// Alpaca free plan: 200 requests/minute = 1 request per 300ms.
-/// We use 320ms to leave headroom.
+/// We use 320ms to leave headroom. Adaptive logic may increase this.
 const RATE_LIMIT_MS: u64 = 320;
+
+/// If a single chunk takes longer than this, the API is throttling us progressively.
+/// Accept what we have rather than spending hours on historical data.
+const SLOW_CHUNK_THRESHOLD_SECS: u64 = 60;
 
 /// Round price to valid increment for Alpaca orders.
 /// Stocks > $1: 2 decimal places (penny). Stocks < $1: 4 decimal places (sub-penny allowed).
@@ -96,10 +100,13 @@ fn round_price(price: f64) -> String {
 
 /// Centralized rate limiter — shared across all data API requests.
 /// On 429, pauses all requests for a cooldown period.
+/// Adaptive: backs off when API responses slow down (progressive throttling).
 #[derive(Debug, Clone)]
 pub struct RateLimiter {
     last_request: Arc<Mutex<std::time::Instant>>,
     cooldown_until: Arc<Mutex<Option<std::time::Instant>>>,
+    /// Adaptive pacing: increases when API is slow, resets after cooldown
+    adaptive_ms: Arc<Mutex<u64>>,
 }
 
 impl RateLimiter {
@@ -107,11 +114,11 @@ impl RateLimiter {
         Self {
             last_request: Arc::new(Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1))),
             cooldown_until: Arc::new(Mutex::new(None)),
+            adaptive_ms: Arc::new(Mutex::new(RATE_LIMIT_MS)),
         }
     }
 
     /// Wait until we can make another request without hitting rate limit.
-    /// Returns false if in cooldown (caller should skip/fail gracefully).
     pub async fn wait(&self) -> bool {
         // Check cooldown
         {
@@ -124,10 +131,11 @@ impl RateLimiter {
                 }
             }
         }
-        // Normal pacing
+        // Adaptive pacing
+        let interval_ms = { *self.adaptive_ms.lock().await };
         let mut last = self.last_request.lock().await;
         let elapsed = last.elapsed();
-        let min_interval = std::time::Duration::from_millis(RATE_LIMIT_MS);
+        let min_interval = std::time::Duration::from_millis(interval_ms);
         if elapsed < min_interval {
             tokio::time::sleep(min_interval - elapsed).await;
         }
@@ -140,7 +148,22 @@ impl RateLimiter {
         let mut cooldown = self.cooldown_until.lock().await;
         let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
         *cooldown = Some(until);
-        tracing::warn!("Rate limit hit — cooling down for 60s");
+        // Double adaptive interval on 429 (capped at 5s)
+        let mut adaptive = self.adaptive_ms.lock().await;
+        *adaptive = (*adaptive * 2).min(5000);
+        tracing::warn!("Rate limit hit — cooling down for 60s (adaptive interval: {}ms)", *adaptive);
+    }
+
+    /// Report how long a request took. If responses are slow, back off.
+    pub async fn report_latency(&self, elapsed_ms: u64) {
+        let mut adaptive = self.adaptive_ms.lock().await;
+        if elapsed_ms > 10_000 {
+            // API taking >10s per response — progressive throttling detected
+            *adaptive = (*adaptive + 200).min(5000);
+        } else if elapsed_ms < 2_000 && *adaptive > RATE_LIMIT_MS {
+            // Fast responses — gradually recover
+            *adaptive = (*adaptive - 50).max(RATE_LIMIT_MS);
+        }
     }
 }
 
@@ -261,6 +284,19 @@ impl AlpacaBroker {
             headers.insert("APCA-API-SECRET-KEY", secret);
         }
         headers
+    }
+
+    /// Pre-warm TCP+TLS connection to the data endpoint (data.alpaca.markets).
+    /// The main API endpoint (api/paper-api) gets warmed by get_account(),
+    /// but bar data goes to a different host. Call this once after connect
+    /// to shave ~200ms off the first bar fetch.
+    pub async fn warm_data_connection(&self) {
+        // HEAD request to data endpoint — establishes connection without fetching data
+        let _ = self.client
+            .head(format!("{}/v2/stocks/AAPL/bars", DATA_BASE))
+            .headers(self.headers())
+            .send()
+            .await;
     }
 
     // ── Account ──────────────────────────────────────────────────────
@@ -1004,6 +1040,19 @@ impl AlpacaBroker {
         timeframe: &str,
         limit: u32,
     ) -> Result<Vec<Bar>, String> {
+        self.get_bars_after(symbol, timeframe, limit, None).await
+    }
+
+    /// Fetch bars, optionally starting after a given timestamp (for incremental fetching).
+    /// When `after_timestamp` is Some, fetches only bars newer than that timestamp,
+    /// dramatically reducing API calls for cached data.
+    pub async fn get_bars_after(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        limit: u32,
+        after_timestamp: Option<&str>,
+    ) -> Result<Vec<Bar>, String> {
         let is_crypto = symbol.contains('/');
 
         // Alpaca doesn't support 1Month — fetch weekly bars and aggregate
@@ -1050,42 +1099,79 @@ impl AlpacaBroker {
                 "1Day" => 0.7, "1Week" => 0.14, _ => 0.7,
             }
         };
-        let max_lookback_days: i64 = match actual_tf {
-            "1Min" => 7,
-            "5Min" | "15Min" | "30Min" => 30,
-            "1Hour" => 365,
-            "4Hour" => 730,
-            "1Day" => 3650,
-            "1Week" => 7300,
-            _ => 1825,
+        // Tighter lookback for crypto (trades 24/7, free tier throttles hard)
+        let max_lookback_days: i64 = if is_crypto {
+            match actual_tf {
+                "1Min" => 3,
+                "5Min" | "15Min" | "30Min" => 14,
+                "1Hour" => 90,     // was 365 — saves ~75% chunks
+                "4Hour" => 180,    // was 730 — saves ~75% chunks
+                "1Day" => 1825,
+                "1Week" => 3650,
+                _ => 365,
+            }
+        } else {
+            match actual_tf {
+                "1Min" => 7,
+                "5Min" | "15Min" | "30Min" => 30,
+                "1Hour" => 365,
+                "4Hour" => 730,
+                "1Day" => 3650,
+                "1Week" => 7300,
+                _ => 1825,
+            }
         };
         // Proportional lookback: bars_needed / bars_per_day * 1.5 safety margin
         let proportional_days = ((actual_limit as f64 / bars_per_day) * 1.5).ceil() as i64;
         let lookback_days = proportional_days.max(7).min(max_lookback_days);
-        let earliest_start = chrono::Utc::now() - chrono::Duration::days(lookback_days);
+
+        // Incremental fetch: if caller provides a cached timestamp, start from there
+        // instead of the full lookback. This reduces 13+ chunks to 1-2 chunks.
+        let earliest_start = if let Some(after_ts) = after_timestamp {
+            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(after_ts) {
+                let cached_start = parsed.with_timezone(&chrono::Utc);
+                tracing::info!(
+                    "{} @ {}: incremental fetch from {} (cache hit)",
+                    symbol, actual_tf, &after_ts[..19.min(after_ts.len())]
+                );
+                cached_start
+            } else {
+                chrono::Utc::now() - chrono::Duration::days(lookback_days)
+            }
+        } else {
+            chrono::Utc::now() - chrono::Duration::days(lookback_days)
+        };
 
         let mut last_error = String::new();
 
         for feed in &feeds {
             let mut all_bars: Vec<Bar> = Vec::new();
-            // Sequential chunk fetching: IEX caps at ~260 bars per request.
-            // We fetch chunks from oldest to newest, advancing the start date each time.
-            let mut chunk_start = earliest_start;
-            let mut consecutive_empty = 0;
+            // Use Alpaca's native page_token pagination for efficient chunk fetching.
+            // Fetch oldest→newest so page_token works correctly, then trim to most recent.
+            let mut next_page_token: Option<String> = None;
             let mut rate_limit_retries = 0;
+            let mut chunk_count = 0u32;
             const MAX_RATE_LIMIT_RETRIES: u32 = 3;
+            let fetch_start = std::time::Instant::now();
 
             loop {
-                // Centralized rate limiter — respects global request budget
+                // Centralized rate limiter — respects global request budget + adaptive pacing
                 self.rate_limiter.wait().await;
 
-                let start_str = chunk_start.format("%Y-%m-%dT00:00:00Z").to_string();
+                let chunk_timer = std::time::Instant::now();
+
                 let mut params = vec![
                     ("timeframe", actual_tf.to_string()),
-                    ("limit", "10000".to_string()), // max per-request; total capped by actual_limit below
-                    ("start", start_str),
+                    ("limit", "10000".to_string()),
                     ("sort", "asc".to_string()),
                 ];
+                // Use page_token for continuation, start date only for first request
+                if let Some(ref token) = next_page_token {
+                    params.push(("page_token", token.clone()));
+                } else {
+                    let start_str = earliest_start.format("%Y-%m-%dT00:00:00Z").to_string();
+                    params.push(("start", start_str));
+                }
                 if let Some(f) = feed {
                     params.push(("feed", f.to_string()));
                 }
@@ -1114,14 +1200,11 @@ impl AlpacaBroker {
                         rate_limit_retries += 1;
                         self.rate_limiter.trigger_cooldown().await;
                         if rate_limit_retries <= MAX_RATE_LIMIT_RETRIES {
-                            // Wait for cooldown then continue — don't return partial stale data
-                            // (oldest bars load first, so partial = historical only, no recent prices)
                             tracing::warn!("429 rate limit for {} @ {}: retry {}/{} ({} bars so far)",
                                 symbol, actual_tf, rate_limit_retries, MAX_RATE_LIMIT_RETRIES, all_bars.len());
                             self.rate_limiter.wait().await;
-                            continue; // retry the same chunk
+                            continue; // retry the same chunk (page_token unchanged)
                         }
-                        // Max retries exhausted — return what we have (trimmed to most recent)
                         if !all_bars.is_empty() {
                             tracing::warn!("429 rate limit: max retries for {} @ {}, returning {} bars",
                                 symbol, actual_tf, all_bars.len());
@@ -1141,87 +1224,72 @@ impl AlpacaBroker {
                     }
                 };
 
+                // Report latency for adaptive pacing
+                let chunk_elapsed_ms = chunk_timer.elapsed().as_millis() as u64;
+                self.rate_limiter.report_latency(chunk_elapsed_ms).await;
+
+                // Extract next_page_token from response for efficient pagination
+                let new_page_token = json.get("next_page_token")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string());
+
                 let chunk_bars = Self::parse_bars(&json, symbol, is_crypto);
-                let chunk_count = chunk_bars.len();
+                let bars_in_chunk = chunk_bars.len();
+                chunk_count += 1;
 
-                if chunk_count == 0 {
-                    consecutive_empty += 1;
-                    if consecutive_empty >= 3 {
-                        break; // no more data available
-                    }
-                    // Advance start by a chunk to skip empty gaps
-                    chunk_start = chunk_start + chrono::Duration::days(match actual_tf {
-                        "1Min" | "5Min" | "15Min" | "30Min" => 1,
-                        "1Hour" => 30,
-                        "4Hour" => 90,
-                        "1Day" => 365,
-                        "1Week" => 730,
-                        _ => 90,
-                    });
-                    continue;
+                if bars_in_chunk == 0 {
+                    break; // no more data
                 }
 
-                consecutive_empty = 0;
-
-                // Detect stale chunk: if the chunk's last bar date matches what we already
-                // have, we've reached the end of available data (API keeps returning same bars)
-                if !all_bars.is_empty() {
-                    let last_existing_date = all_bars.last().map(|b| &b.timestamp[..10.min(b.timestamp.len())]);
-                    let last_new_date = chunk_bars.last().map(|b| &b.timestamp[..10.min(b.timestamp.len())]);
-                    if last_existing_date == last_new_date {
-                        tracing::info!("{} @ {}: reached end of data ({} bars total)", symbol, actual_tf, all_bars.len());
-                        break;
-                    }
-                }
-
-                // Log chunk progress with date range (only for meaningful chunks)
-                if chunk_count > 5 {
+                // Log chunk progress with date range and timing
+                if bars_in_chunk > 5 {
                     if let (Some(first), Some(last)) = (chunk_bars.first(), chunk_bars.last()) {
                         let first_date = &first.timestamp[..10.min(first.timestamp.len())];
                         let last_date = &last.timestamp[..10.min(last.timestamp.len())];
+                        let total = all_bars.len() + bars_in_chunk;
+                        let elapsed_secs = fetch_start.elapsed().as_secs();
+                        // Progress %: use expected bars from lookback (not raw limit which may be 50K)
+                        let expected_bars = (lookback_days as f64 * bars_per_day).ceil() as usize;
+                        let bars_target = expected_bars.min(actual_limit as usize).max(1);
+                        let pct = (total * 100) / bars_target;
                         tracing::info!(
-                            "{} @ {}: chunk +{} bars ({} → {}), total {}",
-                            symbol, actual_tf, chunk_count, first_date, last_date, all_bars.len() + chunk_count
+                            "{} @ {}: chunk #{} +{} bars ({} → {}), total {} ({}%, {}s elapsed, {:.0}ms/chunk)",
+                            symbol, actual_tf, chunk_count, bars_in_chunk,
+                            first_date, last_date, total,
+                            pct.min(100), elapsed_secs, chunk_elapsed_ms
                         );
-                    }
-                }
-
-                // Advance start past the last bar — use period-appropriate jump
-                if let Some(last_bar) = chunk_bars.last() {
-                    if let Ok(last_time) = chrono::DateTime::parse_from_rfc3339(&last_bar.timestamp) {
-                        // Jump by at least one period to avoid re-fetching the same bar
-                        let jump = match actual_tf {
-                            "1Min" => chrono::Duration::minutes(1),
-                            "5Min" => chrono::Duration::minutes(5),
-                            "15Min" => chrono::Duration::minutes(15),
-                            "30Min" => chrono::Duration::minutes(30),
-                            "1Hour" => chrono::Duration::hours(1),
-                            "4Hour" => chrono::Duration::hours(4),
-                            "1Day" => chrono::Duration::days(1),
-                            "1Week" => chrono::Duration::weeks(1),
-                            _ => chrono::Duration::days(1),
-                        };
-                        chunk_start = last_time.with_timezone(&chrono::Utc) + jump;
-                    } else {
-                        chunk_start = chunk_start + chrono::Duration::days(30);
                     }
                 }
 
                 all_bars.extend(chunk_bars);
 
-                // Stop if we have enough bars or reached the present
+                // Stop if we have enough bars
                 if all_bars.len() as u32 >= actual_limit {
                     break;
                 }
-                if chunk_start >= chrono::Utc::now() {
+
+                // Early termination: if chunks are taking too long, accept what we have.
+                // This prevents hours-long fetches on free tier progressive throttling.
+                if chunk_elapsed_ms > (SLOW_CHUNK_THRESHOLD_SECS * 1000) as u64 && all_bars.len() > 100 {
+                    tracing::warn!(
+                        "{} @ {}: chunk took {}s (>{} threshold) — accepting {} bars to avoid progressive throttle",
+                        symbol, actual_tf, chunk_elapsed_ms / 1000,
+                        SLOW_CHUNK_THRESHOLD_SECS, all_bars.len()
+                    );
                     break;
                 }
 
-                // Rate limiting handled by self.rate_limiter.wait() at top of loop
+                // Use page_token if available, otherwise we're done
+                match new_page_token {
+                    Some(token) if !token.is_empty() => {
+                        next_page_token = Some(token);
+                    }
+                    _ => break, // no more pages
+                }
             }
 
             if !all_bars.is_empty() {
-                // Sort by timestamp (chunks may overlap) then deduplicate
+                // Sort by timestamp (safety) then deduplicate
                 all_bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
                 all_bars.dedup_by(|a, b| a.timestamp == b.timestamp);
                 // Trim to requested limit (keep most recent)
@@ -1233,10 +1301,10 @@ impl AlpacaBroker {
                     Some(f) => *f,
                     None => "crypto",
                 };
+                let elapsed_secs = fetch_start.elapsed().as_secs();
                 tracing::info!(
-                    "Loaded {} bars for {} @ {} (feed={}, {} chunks)",
-                    all_bars.len(), symbol, actual_tf, feed_label,
-                    (all_bars.len() as f64 / 260.0).ceil() as u32
+                    "Loaded {} bars for {} @ {} (feed={}, {} chunks, {}s total)",
+                    all_bars.len(), symbol, actual_tf, feed_label, chunk_count, elapsed_secs
                 );
                 return Ok(all_bars);
             }

@@ -359,7 +359,15 @@ impl AlpacaBroker {
             format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
         };
 
-        let lookback = chrono::Utc::now() - chrono::Duration::days(365);
+        // Tighter lookback for crypto (24/7 trading = more bars per day)
+        let lookback_days: i64 = if is_crypto {
+            match timeframe {
+                "1Min" => 3, "5Min" | "15Min" | "30Min" => 14,
+                "1Hour" => 90, "4Hour" => 180,
+                _ => 365,
+            }
+        } else { 365 };
+        let lookback = chrono::Utc::now() - chrono::Duration::days(lookback_days);
         let start = lookback.format("%Y-%m-%dT00:00:00Z").to_string();
 
         let mut params = vec![

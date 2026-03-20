@@ -260,6 +260,131 @@ impl SqliteCache {
         Ok(deleted > 0)
     }
 
+    /// Get the second-to-last bar's RFC3339 timestamp from a cached entry.
+    /// Returns second-to-last (not last) because the last candle is still forming —
+    /// its high/low/close/volume update until the period closes. We must always
+    /// re-fetch it from the API to get the live values.
+    /// Also returns the total bar count for logging.
+    /// Returns None if key doesn't exist or has fewer than 2 bars.
+    pub fn get_incremental_start(&self, key: &str) -> Result<Option<(String, usize)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT data FROM bar_cache WHERE key = ?1"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+
+        let result = stmt.query_row(rusqlite::params![key], |row| {
+            let data: Vec<u8> = row.get(0)?;
+            Ok(data)
+        });
+
+        match result {
+            Ok(compressed) => {
+                let decompressed = zstd::decode_all(compressed.as_slice())
+                    .map_err(|e| format!("zstd decompress failed: {e}"))?;
+                if decompressed.len() >= 8 && &decompressed[0..4] == BAR_BINARY_MAGIC {
+                    let count = u32::from_le_bytes(decompressed[4..8].try_into().unwrap()) as usize;
+                    if count < 2 { return Ok(None); }
+                    // Second-to-last bar — so we re-fetch the live candle
+                    let target_offset = 8 + (count - 2) * BYTES_PER_BAR;
+                    if decompressed.len() < target_offset + 8 { return Ok(None); }
+                    let ts_ms = i64::from_le_bytes(decompressed[target_offset..target_offset+8].try_into().unwrap());
+                    let dt = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
+                    Ok(Some((dt.to_rfc3339(), count)))
+                } else {
+                    // Legacy JSON — parse second-to-last element
+                    let json_str = String::from_utf8(decompressed)
+                        .map_err(|e| format!("UTF-8 decode failed: {e}"))?;
+                    let bars: Vec<serde_json::Value> = serde_json::from_str(&json_str)
+                        .map_err(|e| format!("JSON parse failed: {e}"))?;
+                    if bars.len() < 2 { return Ok(None); }
+                    let ts = bars[bars.len() - 2]["timestamp"].as_str().map(|s| s.to_string());
+                    Ok(ts.map(|t| (t, bars.len())))
+                }
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("SQLite query failed: {e}")),
+        }
+    }
+
+    /// Merge new bars into existing cached entry. Deduplicates by timestamp, sorts, re-stores.
+    /// Trims to max_bars (keeps most recent) to prevent unbounded cache growth.
+    /// Uses zstd level 3 for merge writes (faster than level 9; archival can re-compress).
+    /// Returns the full merged dataset as JSON.
+    pub fn merge_bars(&self, key: &str, new_json: &str, max_bars: usize) -> Result<String, String> {
+        // Parse new bars
+        let new_bars: Vec<serde_json::Value> = serde_json::from_str(new_json)
+            .map_err(|e| format!("JSON parse failed: {e}"))?;
+        if new_bars.is_empty() {
+            // Nothing to merge — return existing cache or empty
+            return match self.get_bars(key)? {
+                Some((json, _)) => Ok(json),
+                None => Ok("[]".to_string()),
+            };
+        }
+
+        // Load existing cache
+        let mut all_bars: Vec<serde_json::Value> = match self.get_bars(key)? {
+            Some((json, _)) => serde_json::from_str(&json).unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        // Merge and deduplicate by timestamp
+        all_bars.extend(new_bars);
+        all_bars.sort_by(|a, b| {
+            let ta = a["timestamp"].as_str().unwrap_or("");
+            let tb = b["timestamp"].as_str().unwrap_or("");
+            ta.cmp(tb)
+        });
+        all_bars.dedup_by(|a, b| {
+            a["timestamp"].as_str() == b["timestamp"].as_str()
+        });
+
+        // Trim to max_bars (keep most recent) — prevents unbounded cache growth
+        if max_bars > 0 && all_bars.len() > max_bars {
+            let skip = all_bars.len() - max_bars;
+            all_bars.drain(..skip);
+        }
+
+        // Store merged result (zstd level 3 for merge writes — faster than level 9)
+        let merged_json = serde_json::to_string(&all_bars)
+            .map_err(|e| format!("JSON serialize failed: {e}"))?;
+        self.put_bars_fast(key, &merged_json)?;
+
+        Ok(merged_json)
+    }
+
+    /// Store bar data with zstd level 3 (fast writes for frequent merge operations).
+    /// Level 3 is ~3× faster than level 9 with only ~15% larger output.
+    fn put_bars_fast(&self, key: &str, json_data: &str) -> Result<(), String> {
+        let binary = pack_bars(json_data)?;
+        let bar_count = u32::from_le_bytes(binary[4..8].try_into().unwrap()) as i64;
+        let compressed = zstd::encode_all(binary.as_slice(), 3)
+            .map_err(|e| format!("zstd compress failed: {e}"))?;
+        let timestamp = chrono::Utc::now().timestamp();
+
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
+            params![key, compressed, timestamp, bar_count],
+        ).map_err(|e| format!("SQLite insert failed: {e}"))?;
+        Ok(())
+    }
+
+    /// Get cache timestamp (when bars were last stored) for a key.
+    /// Returns None if key doesn't exist.
+    pub fn get_cache_age_secs(&self, key: &str) -> Result<Option<i64>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT timestamp FROM bar_cache WHERE key = ?1"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+
+        match stmt.query_row(rusqlite::params![key], |row| row.get::<_, i64>(0)) {
+            Ok(ts) => Ok(Some(chrono::Utc::now().timestamp() - ts)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("SQLite query failed: {e}")),
+        }
+    }
+
     /// Delete all cache entries matching a symbol prefix (e.g., "AAPL:" deletes all TFs for AAPL).
     pub fn delete_symbol(&self, symbol_prefix: &str) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;

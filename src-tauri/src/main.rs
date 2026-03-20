@@ -59,6 +59,12 @@ struct AppState {
     equity_sl: Option<f64>,
     /// SQLite cache for unlimited structured storage.
     db_cache: Option<SqliteCache>,
+    /// WebSocket-driven bar builder: constructs 1-min OHLCV from trade stream.
+    bar_builder: core::bar_builder::BarBuilder,
+    /// In-flight bar requests — dedup concurrent fetches for same symbol:TF.
+    /// Contains "symbol:timeframe" keys currently being fetched. Prevents page reloads
+    /// from spawning duplicate multi-chunk fetches that hammer the API.
+    bar_inflight: std::collections::HashSet<String>,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -100,6 +106,9 @@ async fn connect(
     }
     let broker = AlpacaBroker::new(api_key, secret_key, paper);
     let account = broker.get_account().await?;
+    // Pre-warm data endpoint connection (data.alpaca.markets is a different host than api.alpaca.markets)
+    // This shaves ~200ms off the first bar fetch by establishing TCP+TLS in advance.
+    broker.warm_data_connection().await;
     let mut s = state.lock().await;
     s.broker = Some(broker);
     Ok(serde_json::to_string(&account).map_err(|e| format!("JSON error: {e}"))?)
@@ -308,6 +317,172 @@ async fn get_bars(
     };
     let bars = broker.get_bars(&symbol, &timeframe, limit).await?;
     Ok(serde_json::to_string(&bars).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+/// Incremental bar fetch: checks SQLite cache for existing data, fetches only the gap.
+/// The last cached candle is always re-fetched because it may still be forming (live candle).
+/// Returns the full merged dataset. On first call, behaves like get_bars. On subsequent
+/// calls, typically fetches 1-2 chunks instead of 13+.
+#[tauri::command]
+async fn get_bars_incremental(
+    state: State<'_, SharedState>,
+    symbol: String,
+    timeframe: String,
+    limit: u32,
+    broker_id: Option<String>,
+) -> Result<String, String> {
+    if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
+    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
+    let limit = limit.min(50_000);
+
+    // Backend-level dedup: if same symbol:TF is already being fetched (e.g., Vite page reload
+    // spawned a duplicate), wait briefly then return from cache instead of hitting API again.
+    let dedup_key = format!("{}:{}", symbol, timeframe);
+    {
+        let s = state.lock().await;
+        if s.bar_inflight.contains(&dedup_key) {
+            // Another request is fetching this — wait for it and return from cache
+            drop(s);
+            tracing::debug!("{} @ {}: dedup — waiting for in-flight request", symbol, timeframe);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // Return whatever is in cache now (the other request should have stored it)
+            let s = state.lock().await;
+            if let Some(cache) = s.db_cache.as_ref() {
+                let bid = broker_id.as_deref().unwrap_or("default");
+                let key = format!("{bid}:{symbol}:{timeframe}");
+                if let Ok(Some((json, _))) = cache.get_bars(&key) {
+                    if json.len() > 10 && json.contains("\"timestamp\"") {
+                        return Ok(json);
+                    }
+                }
+                // Try default key
+                let key = format!("default:{symbol}:{timeframe}");
+                if let Ok(Some((json, _))) = cache.get_bars(&key) {
+                    if json.len() > 10 && json.contains("\"timestamp\"") {
+                        return Ok(json);
+                    }
+                }
+            }
+            // Fall through if cache still empty — proceed with fetch
+        }
+    }
+
+    // Mark as in-flight
+    {
+        let mut s = state.lock().await;
+        s.bar_inflight.insert(dedup_key.clone());
+    }
+
+    // Check SQLite cache for existing bars
+    // Try caller-provided broker_id first, then "default" as fallback
+    let (broker, cache_key, incremental_start) = {
+        let s = state.lock().await;
+        let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        let bid = broker_id.as_deref().unwrap_or("default");
+        let primary_key = format!("{bid}:{symbol}:{timeframe}");
+        let fallback_key = format!("default:{symbol}:{timeframe}");
+
+        // Try primary key first, then fallback
+        let start = s.db_cache.as_ref().and_then(|cache| {
+            cache.get_incremental_start(&primary_key).ok().flatten()
+                .map(|s| (primary_key.clone(), s))
+                .or_else(|| {
+                    if primary_key != fallback_key {
+                        cache.get_incremental_start(&fallback_key).ok().flatten()
+                            .map(|s| (fallback_key.clone(), s))
+                    } else { None }
+                })
+        });
+
+        match start {
+            Some((key, (ts, count))) => (broker, key, Some((ts, count))),
+            None => (broker, primary_key, None),
+        }
+    };
+
+    if let Some((after_ts, cached_count)) = &incremental_start {
+        // Fast path: if cache was updated very recently, return it without API call.
+        // Prevents the SLV 1Day polling loop (re-fetching every 60s for no reason).
+        // Freshness threshold = one period of the timeframe.
+        let freshness_secs: i64 = match timeframe.as_str() {
+            "1Min" => 60, "5Min" => 300, "15Min" => 900, "30Min" => 1800,
+            "1Hour" => 3600, "4Hour" => 14400, "1Day" => 86400, "1Week" => 604800,
+            _ => 3600,
+        };
+        {
+            let s = state.lock().await;
+            if let Some(cache) = s.db_cache.as_ref() {
+                if let Ok(Some(age)) = cache.get_cache_age_secs(&cache_key) {
+                    if age < freshness_secs {
+                        // Cache is fresh enough — return without API call
+                        if let Ok(Some((json, _))) = cache.get_bars(&cache_key) {
+                            // Only use if non-empty (prevents returning empty/partial data)
+                            if json.len() > 10 && json.contains("\"timestamp\"") {
+                                tracing::debug!(
+                                    "{} @ {}: cache fresh ({}s old), skipping API",
+                                    symbol, timeframe, age
+                                );
+                                drop(s);
+                                { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
+                                return Ok(json);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Incremental: fetch only bars newer than the second-to-last cached bar
+        let new_bars = broker.get_bars_after(&symbol, &timeframe, limit, Some(after_ts)).await?;
+        let new_json = serde_json::to_string(&new_bars).map_err(|e| format!("JSON error: {e}"))?;
+        let new_count = new_bars.len();
+
+        // Merge new bars into cache
+        let result = {
+            let s = state.lock().await;
+            if let Some(cache) = s.db_cache.as_ref() {
+                let merged = cache.merge_bars(&cache_key, &new_json, limit as usize)?;
+                tracing::info!(
+                    "{} @ {}: incremental merge — {} cached + {} new bars fetched",
+                    symbol, timeframe, cached_count, new_count
+                );
+                // Trim to limit (keep most recent)
+                let all: Vec<serde_json::Value> = serde_json::from_str(&merged).unwrap_or_default();
+                if all.len() > limit as usize {
+                    let trimmed = &all[all.len() - limit as usize..];
+                    serde_json::to_string(trimmed)
+                        .map_err(|e| format!("JSON error: {e}"))?
+                } else {
+                    merged
+                }
+            } else {
+                new_json
+            }
+        };
+        // Clean up in-flight tracker
+        { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
+        return Ok(result);
+    }
+
+    // No cache — full fetch, then store
+    let bars = broker.get_bars(&symbol, &timeframe, limit).await?;
+    let json = serde_json::to_string(&bars).map_err(|e| format!("JSON error: {e}"))?;
+
+    // Store to SQLite cache for future incremental fetches
+    {
+        let s = state.lock().await;
+        if let Some(cache) = s.db_cache.as_ref() {
+            let _ = cache.put_bars(&cache_key, &json);
+        }
+    }
+
+    // Clean up in-flight tracker
+    {
+        let mut s = state.lock().await;
+        s.bar_inflight.remove(&dedup_key);
+    }
+
+    Ok(json)
 }
 
 /// Fetch bars from multiple timeframes for a symbol (for MultiKAMA, ATR_Projection, PreviousCandleLevels).
@@ -1895,21 +2070,50 @@ async fn start_streaming(
 #[tauri::command]
 async fn poll_stream(state: State<'_, SharedState>) -> Result<String, String> {
     let mut s = state.lock().await;
-    let rx = s.stream_rx.as_mut().ok_or("No active stream")?;
 
+    // Drain messages from stream into a local vec first (avoids double borrow)
     let mut messages = Vec::new();
-    // Drain up to 100 messages without blocking
-    for _ in 0..100 {
-        match rx.try_recv() {
-            Ok(msg) => messages.push(msg),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                s.stream_rx = None;
-                break;
+    let mut disconnected = false;
+    if let Some(rx) = s.stream_rx.as_mut() {
+        for _ in 0..100 {
+            match rx.try_recv() {
+                Ok(msg) => messages.push(msg),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
             }
         }
+    } else {
+        return Err("No active stream".into());
     }
+    if disconnected { s.stream_rx = None; }
+
+    // Feed trades into bar builder for live candle construction
+    for msg in &messages {
+        if let StreamMessage::Trade(trade) = msg {
+            s.bar_builder.ingest_trade(
+                &trade.symbol, trade.price, trade.size, &trade.timestamp
+            );
+        }
+    }
+
     Ok(serde_json::to_string(&messages).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+/// Poll completed 1-minute bars built from WebSocket trade stream.
+/// Returns completed bars (minute has ended) + current active (forming) bars.
+/// Frontend can use these instead of the 10-second API polling loop.
+#[tauri::command]
+async fn poll_bars(state: State<'_, SharedState>) -> Result<String, String> {
+    let mut s = state.lock().await;
+    let completed = s.bar_builder.drain_completed();
+    let active = s.bar_builder.get_all_active_bars();
+    Ok(serde_json::json!({
+        "completed": completed,
+        "active": active,
+    }).to_string())
 }
 
 #[tauri::command]
@@ -3136,6 +3340,8 @@ fn main() {
                 }
             }
         },
+        bar_builder: core::bar_builder::BarBuilder::new(),
+        bar_inflight: std::collections::HashSet::new(),
     }));
 
     tauri::Builder::default()
@@ -3151,6 +3357,7 @@ fn main() {
             get_account,
             get_positions,
             get_bars,
+            get_bars_incremental,
             place_order,
             place_limit_order,
             place_stop_order,
@@ -3260,6 +3467,7 @@ fn main() {
             // WebSocket Streaming
             start_streaming,
             poll_stream,
+            poll_bars,
             stop_streaming,
             // Matrix Community Chat
             matrix_login,
