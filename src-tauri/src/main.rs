@@ -58,7 +58,9 @@ struct AppState {
     equity_tp: Option<f64>,
     equity_sl: Option<f64>,
     /// SQLite cache for unlimited structured storage.
-    db_cache: Option<SqliteCache>,
+    /// Arc-wrapped so callers can clone the reference and drop the state lock
+    /// before doing heavy operations (merge_bars, put_bars) that would block the UI.
+    db_cache: Option<Arc<SqliteCache>>,
     /// WebSocket-driven bar builder: constructs 1-min OHLCV from trade stream.
     bar_builder: core::bar_builder::BarBuilder,
     /// In-flight bar requests — dedup concurrent fetches for same symbol:TF.
@@ -373,114 +375,119 @@ async fn get_bars_incremental(
         s.bar_inflight.insert(dedup_key.clone());
     }
 
-    // Check SQLite cache for existing bars
-    // Try caller-provided broker_id first, then "default" as fallback
-    let (broker, cache_key, incremental_start) = {
+    // Check SQLite cache for existing bars.
+    // Clone broker + cache Arc and drop state lock immediately — heavy operations
+    // (API fetch, merge_bars, zstd compress) must NOT hold the state lock or UI freezes.
+    let (broker, cache, cache_key, incremental_start) = {
         let s = state.lock().await;
         let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        let cache = s.db_cache.clone(); // Arc clone — cheap
         let bid = broker_id.as_deref().unwrap_or("default");
         let primary_key = format!("{bid}:{symbol}:{timeframe}");
         let fallback_key = format!("default:{symbol}:{timeframe}");
 
         // Try primary key first, then fallback
-        let start = s.db_cache.as_ref().and_then(|cache| {
-            cache.get_incremental_start(&primary_key).ok().flatten()
+        let start = cache.as_ref().and_then(|c| {
+            c.get_incremental_start(&primary_key).ok().flatten()
                 .map(|s| (primary_key.clone(), s))
                 .or_else(|| {
                     if primary_key != fallback_key {
-                        cache.get_incremental_start(&fallback_key).ok().flatten()
+                        c.get_incremental_start(&fallback_key).ok().flatten()
                             .map(|s| (fallback_key.clone(), s))
                     } else { None }
                 })
         });
 
-        match start {
-            Some((key, (ts, count))) => (broker, key, Some((ts, count))),
-            None => (broker, primary_key, None),
-        }
-    };
+        let (key, start) = match start {
+            Some((key, (ts, count))) => (key, Some((ts, count))),
+            None => (primary_key, None),
+        };
+        (broker, cache, key, start)
+    }; // state lock dropped here — UI stays responsive
 
     if let Some((after_ts, cached_count)) = &incremental_start {
         // Fast path: if cache was updated very recently, return it without API call.
-        // Prevents the SLV 1Day polling loop (re-fetching every 60s for no reason).
-        // Freshness threshold = one period of the timeframe.
         let freshness_secs: i64 = match timeframe.as_str() {
             "1Min" => 60, "5Min" => 300, "15Min" => 900, "30Min" => 1800,
             "1Hour" => 3600, "4Hour" => 14400, "1Day" => 86400, "1Week" => 604800,
             _ => 3600,
         };
-        {
-            let s = state.lock().await;
-            if let Some(cache) = s.db_cache.as_ref() {
-                if let Ok(Some(age)) = cache.get_cache_age_secs(&cache_key) {
-                    if age < freshness_secs {
-                        // Cache is fresh enough — return without API call
-                        if let Ok(Some((json, _))) = cache.get_bars(&cache_key) {
-                            // Only use if non-empty (prevents returning empty/partial data)
-                            if json.len() > 10 && json.contains("\"timestamp\"") {
-                                tracing::debug!(
-                                    "{} @ {}: cache fresh ({}s old), skipping API",
-                                    symbol, timeframe, age
-                                );
-                                drop(s);
-                                { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
-                                return Ok(json);
-                            }
+        if let Some(c) = &cache {
+            if let Ok(Some(age)) = c.get_cache_age_secs(&cache_key) {
+                if age < freshness_secs {
+                    if let Ok(Some((json, _))) = c.get_bars(&cache_key) {
+                        if json.len() > 10 && json.contains("\"timestamp\"") {
+                            tracing::debug!("{} @ {}: cache fresh ({}s old), skipping API", symbol, timeframe, age);
+                            { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
+                            return Ok(json);
                         }
                     }
                 }
             }
         }
 
+        // Guard: if the cached data is too old (older than the max lookback window),
+        // a full fetch would be faster than incremental (avoids fetching months of data).
+        // This handles stale cache entries from old sessions.
+        let is_crypto = symbol.contains('/');
+        let max_incremental_days: i64 = if is_crypto {
+            match timeframe.as_str() {
+                "1Min" => 3, "5Min" | "15Min" | "30Min" => 14,
+                "1Hour" => 90, "4Hour" => 180, _ => 365,
+            }
+        } else {
+            match timeframe.as_str() {
+                "1Min" => 7, "5Min" | "15Min" | "30Min" => 30,
+                "1Hour" => 365, "4Hour" => 730, _ => 1825,
+            }
+        };
+        let cache_too_old = if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(after_ts) {
+            let age_days = (chrono::Utc::now() - parsed.with_timezone(&chrono::Utc)).num_days();
+            age_days > max_incremental_days
+        } else { false };
+
+        if cache_too_old {
+            tracing::warn!(
+                "{} @ {}: cached data too old (start={}), doing full fetch instead of incremental",
+                symbol, timeframe, &after_ts[..19.min(after_ts.len())]
+            );
+            // Fall through to full fetch path below
+        } else {
         // Incremental: fetch only bars newer than the second-to-last cached bar
         let new_bars = broker.get_bars_after(&symbol, &timeframe, limit, Some(after_ts)).await?;
         let new_json = serde_json::to_string(&new_bars).map_err(|e| format!("JSON error: {e}"))?;
         let new_count = new_bars.len();
 
-        // Merge new bars into cache
-        let result = {
-            let s = state.lock().await;
-            if let Some(cache) = s.db_cache.as_ref() {
-                let merged = cache.merge_bars(&cache_key, &new_json, limit as usize)?;
-                tracing::info!(
-                    "{} @ {}: incremental merge — {} cached + {} new bars fetched",
-                    symbol, timeframe, cached_count, new_count
-                );
-                // Trim to limit (keep most recent)
-                let all: Vec<serde_json::Value> = serde_json::from_str(&merged).unwrap_or_default();
-                if all.len() > limit as usize {
-                    let trimmed = &all[all.len() - limit as usize..];
-                    serde_json::to_string(trimmed)
-                        .map_err(|e| format!("JSON error: {e}"))?
-                } else {
-                    merged
-                }
+        // Merge — no state lock held! cache has its own internal Mutex<Connection>
+        let result = if let Some(c) = &cache {
+            let merged = c.merge_bars(&cache_key, &new_json, limit as usize)?;
+            tracing::info!(
+                "{} @ {}: incremental merge — {} cached + {} new bars fetched",
+                symbol, timeframe, cached_count, new_count
+            );
+            // Trim to limit (keep most recent)
+            let all: Vec<serde_json::Value> = serde_json::from_str(&merged).unwrap_or_default();
+            if all.len() > limit as usize {
+                let trimmed = &all[all.len() - limit as usize..];
+                serde_json::to_string(trimmed).map_err(|e| format!("JSON error: {e}"))?
             } else {
-                new_json
+                merged
             }
+        } else {
+            new_json
         };
-        // Clean up in-flight tracker
         { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
         return Ok(result);
-    }
+        } // end else (cache not too old)
+    } // end if incremental_start
 
-    // No cache — full fetch, then store
+    // No cache or stale cache — full fetch, then store (no state lock held during heavy ops)
     let bars = broker.get_bars(&symbol, &timeframe, limit).await?;
     let json = serde_json::to_string(&bars).map_err(|e| format!("JSON error: {e}"))?;
-
-    // Store to SQLite cache for future incremental fetches
-    {
-        let s = state.lock().await;
-        if let Some(cache) = s.db_cache.as_ref() {
-            let _ = cache.put_bars(&cache_key, &json);
-        }
+    if let Some(c) = &cache {
+        let _ = c.put_bars(&cache_key, &json);
     }
-
-    // Clean up in-flight tracker
-    {
-        let mut s = state.lock().await;
-        s.bar_inflight.remove(&dedup_key);
-    }
+    { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
 
     Ok(json)
 }
@@ -2631,6 +2638,211 @@ async fn db_cache_delete_symbol(state: State<'_, SharedState>, symbol: String) -
     Ok(format!("Deleted {deleted} entries for {symbol}"))
 }
 
+// ── MT5 Bar Import (Darwinex data via BarExporter EA) ───────────
+// Imports CSV files exported by BarExporter.mq5 into the SQLite cache.
+// CSV format: timestamp,open,high,low,close,volume (RFC3339 timestamps)
+// Supports both one-shot import and directory scan.
+
+/// Import a single MT5 bar export CSV file into the SQLite cache.
+/// Key format: "mt5:{symbol}:{timeframe}" — separate namespace from Alpaca.
+fn import_mt5_csv(cache: &core::cache::SqliteCache, filepath: &str) -> Result<(String, String, usize), String> {
+    let path = std::path::Path::new(filepath);
+    let filename = path.file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("Invalid filename")?;
+
+    // Parse filename: "EURUSD_1Hour" → symbol="EURUSD", tf="1Hour"
+    let parts: Vec<&str> = filename.rsplitn(2, '_').collect();
+    if parts.len() != 2 {
+        return Err(format!("Invalid filename format '{}': expected SYMBOL_TIMEFRAME.csv", filename));
+    }
+    let timeframe = parts[0].to_string();
+    let symbol = parts[1].to_string();
+
+    // Read and parse CSV
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Read failed: {e}"))?;
+
+    let mut bars: Vec<serde_json::Value> = Vec::new();
+    for (i, line) in content.lines().enumerate() {
+        if i == 0 { continue; } // skip header
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() < 6 { continue; }
+
+        let ts = fields[0].trim().to_string();
+        let open: f64 = fields[1].trim().parse().unwrap_or(0.0);
+        let high: f64 = fields[2].trim().parse().unwrap_or(0.0);
+        let low: f64 = fields[3].trim().parse().unwrap_or(0.0);
+        let close: f64 = fields[4].trim().parse().unwrap_or(0.0);
+        let volume: f64 = fields[5].trim().parse().unwrap_or(0.0);
+
+        // Validate
+        if ts.is_empty() || open <= 0.0 || close <= 0.0 { continue; }
+
+        bars.push(serde_json::json!({
+            "timestamp": ts,
+            "open": open,
+            "high": high.max(open).max(close).max(low),
+            "low": low.min(open).min(close).min(high),
+            "close": close,
+            "volume": volume.max(0.0),
+        }));
+    }
+
+    if bars.is_empty() {
+        return Err(format!("No valid bars in {}", filename));
+    }
+
+    let bar_count = bars.len();
+    let json = serde_json::to_string(&bars)
+        .map_err(|e| format!("JSON error: {e}"))?;
+
+    // Store with mt5: prefix — separate from Alpaca data
+    let cache_key = format!("mt5:{}:{}", symbol, timeframe);
+    cache.put_bars(&cache_key, &json)?;
+
+    Ok((symbol, timeframe, bar_count))
+}
+
+/// Scan a directory for MT5 bar export CSVs and import all of them.
+fn import_mt5_directory(cache: &core::cache::SqliteCache, dir: &str) -> Result<Vec<(String, String, usize)>, String> {
+    let path = std::path::Path::new(dir);
+    if !path.is_dir() {
+        return Err(format!("Not a directory: {dir}"));
+    }
+
+    let mut results = Vec::new();
+    let entries = std::fs::read_dir(path)
+        .map_err(|e| format!("Read dir failed: {e}"))?;
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let filepath = entry.path();
+        if filepath.extension().and_then(|s| s.to_str()) != Some("csv") { continue; }
+
+        match import_mt5_csv(cache, filepath.to_str().unwrap_or("")) {
+            Ok(result) => results.push(result),
+            Err(e) => tracing::warn!("MT5 import skip {}: {}", filepath.display(), e),
+        }
+    }
+
+    Ok(results)
+}
+
+/// Import MT5 bar CSVs from a file or directory.
+#[tauri::command]
+async fn import_mt5_bars(
+    state: State<'_, SharedState>,
+    path: String,
+) -> Result<String, String> {
+    if path.is_empty() || path.len() > 500 { return Err("Invalid path".into()); }
+
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.clone().ok_or("SQLite cache not available")?
+    };
+
+    let p = std::path::Path::new(&path);
+    let results = if p.is_dir() {
+        import_mt5_directory(&cache, &path)?
+    } else if p.is_file() {
+        vec![import_mt5_csv(&cache, &path)?]
+    } else {
+        // Try default MT5 export paths
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let default_dirs = vec![
+            format!("{}/.config/typhoon-terminal/mt5-bars", home),
+            format!("{}/AppData/Roaming/MetaQuotes/Terminal/Common/Files/typhoon-bars", home),
+        ];
+        let mut found = false;
+        let mut all_results = Vec::new();
+        for dir in &default_dirs {
+            if std::path::Path::new(dir).is_dir() {
+                match import_mt5_directory(&cache, dir) {
+                    Ok(r) => { all_results.extend(r); found = true; break; }
+                    Err(_) => continue,
+                }
+            }
+        }
+        if !found { return Err(format!("Path not found: {path}")); }
+        all_results
+    };
+
+    let total_bars: usize = results.iter().map(|(_, _, c)| c).sum();
+    let summary = serde_json::json!({
+        "imported": results.len(),
+        "total_bars": total_bars,
+        "symbols": results.iter().map(|(s, _, _)| s.as_str()).collect::<std::collections::HashSet<_>>().len(),
+        "details": results.iter().map(|(s, tf, c)| {
+            serde_json::json!({"symbol": s, "timeframe": tf, "bars": c})
+        }).collect::<Vec<_>>(),
+    });
+
+    tracing::info!("MT5 import: {} files, {} bars from {}", results.len(), total_bars, path);
+    Ok(summary.to_string())
+}
+
+/// List available MT5 symbols in cache (mt5: prefix).
+#[tauri::command]
+async fn list_mt5_symbols(state: State<'_, SharedState>) -> Result<String, String> {
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.clone().ok_or("SQLite cache not available")?
+    };
+    let stats = cache.detailed_stats()?;
+    let mt5_entries: Vec<_> = stats.iter()
+        .filter(|(key, _, _)| key.starts_with("mt5:"))
+        .map(|(key, size, ts)| {
+            let parts: Vec<&str> = key.splitn(3, ':').collect();
+            serde_json::json!({
+                "symbol": parts.get(1).unwrap_or(&""),
+                "timeframe": parts.get(2).unwrap_or(&""),
+                "compressed_bytes": size,
+                "timestamp": ts,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_string(&mt5_entries).map_err(|e| format!("JSON error: {e}"))?)
+}
+
+/// Get bars from MT5 cache. Falls back to Alpaca if not in MT5 cache.
+/// This enables symbol overlap: Darwinex data used when available, Alpaca otherwise.
+#[tauri::command]
+async fn get_mt5_bars(
+    state: State<'_, SharedState>,
+    symbol: String,
+    timeframe: String,
+    limit: u32,
+) -> Result<String, String> {
+    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
+    let limit = limit.min(50_000);
+
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.clone().ok_or("SQLite cache not available")?
+    };
+
+    // Try MT5 cache first
+    let mt5_key = format!("mt5:{}:{}", symbol, timeframe);
+    if let Ok(Some((json, _))) = cache.get_bars(&mt5_key) {
+        if json.len() > 10 && json.contains("\"timestamp\"") {
+            // Trim to limit
+            let bars: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
+            if bars.len() > limit as usize {
+                let trimmed = &bars[bars.len() - limit as usize..];
+                return Ok(serde_json::to_string(trimmed).map_err(|e| format!("JSON error: {e}"))?);
+            }
+            return Ok(json);
+        }
+    }
+
+    // No MT5 data — return empty (caller can fall back to Alpaca)
+    Ok("[]".to_string())
+}
+
 // ── Cold Cache (zstd-compressed files on disk) ──────────────────
 
 fn get_cache_dir() -> std::path::PathBuf {
@@ -3332,7 +3544,7 @@ fn main() {
             match SqliteCache::open(&db_path) {
                 Ok(cache) => {
                     tracing::info!("SQLite cache opened: {:?}", db_path);
-                    Some(cache)
+                    Some(Arc::new(cache))
                 }
                 Err(e) => {
                     tracing::warn!("SQLite cache failed: {e}. Falling back to zstd files.");
@@ -3436,6 +3648,9 @@ fn main() {
             db_cache_detailed_stats,
             db_cache_delete_key,
             db_cache_delete_symbol,
+            import_mt5_bars,
+            list_mt5_symbols,
+            get_mt5_bars,
             db_cache_evict,
             // Cold cache (zstd files — legacy)
             save_cold_cache,

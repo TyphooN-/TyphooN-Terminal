@@ -234,6 +234,7 @@ pub struct OrderInfo {
     pub filled_qty: String,
     pub side: String,
     pub order_type: String,
+    pub order_class: Option<String>,
     pub status: String,
     pub limit_price: Option<String>,
     pub stop_price: Option<String>,
@@ -242,6 +243,8 @@ pub struct OrderInfo {
     pub created_at: String,
     pub filled_at: Option<String>,
     pub filled_avg_price: Option<String>,
+    /// Bracket order legs (SL/TP child orders). Only present with nested=true.
+    pub legs: Option<Vec<OrderInfo>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -510,6 +513,7 @@ impl AlpacaBroker {
                 ("status", status),
                 ("limit", &limit.to_string()),
                 ("direction", "desc"),
+                ("nested", "true"), // include bracket legs (SL/TP child orders)
             ])
             .send()
             .await
@@ -581,21 +585,35 @@ impl AlpacaBroker {
     }
 
     fn parse_order_info(o: &serde_json::Value) -> OrderInfo {
+        // Parse bracket legs recursively
+        let legs = o["legs"].as_array().map(|arr| {
+            arr.iter().map(Self::parse_order_info).collect()
+        });
+        // Helper: parse price field that may be string or number
+        let price_field = |v: &serde_json::Value| -> Option<String> {
+            v.as_str().map(|s| s.to_string())
+                .or_else(|| v.as_f64().map(|f| f.to_string()))
+        };
         OrderInfo {
             id: o["id"].as_str().unwrap_or("").to_string(),
             symbol: o["symbol"].as_str().unwrap_or("").to_string(),
-            qty: o["qty"].as_str().unwrap_or("0").to_string(),
+            qty: o["qty"].as_str().unwrap_or_else(|| {
+                // qty may be numeric in some API responses
+                "0"
+            }).to_string(),
             filled_qty: o["filled_qty"].as_str().unwrap_or("0").to_string(),
             side: o["side"].as_str().unwrap_or("").to_string(),
             order_type: o["type"].as_str().unwrap_or("").to_string(),
+            order_class: o["order_class"].as_str().map(|s| s.to_string()),
             status: o["status"].as_str().unwrap_or("").to_string(),
-            limit_price: o["limit_price"].as_str().map(|s| s.to_string()),
-            stop_price: o["stop_price"].as_str().map(|s| s.to_string()),
-            trail_price: o["trail_price"].as_str().map(|s| s.to_string()),
-            trail_percent: o["trail_percent"].as_str().map(|s| s.to_string()),
+            limit_price: price_field(&o["limit_price"]),
+            stop_price: price_field(&o["stop_price"]),
+            trail_price: price_field(&o["trail_price"]),
+            trail_percent: price_field(&o["trail_percent"]),
             created_at: o["created_at"].as_str().unwrap_or("").to_string(),
             filled_at: o["filled_at"].as_str().map(|s| s.to_string()),
-            filled_avg_price: o["filled_avg_price"].as_str().map(|s| s.to_string()),
+            filled_avg_price: price_field(&o["filled_avg_price"]),
+            legs,
         }
     }
 
@@ -1368,13 +1386,28 @@ impl AlpacaBroker {
         bars_array
             .map(|arr| {
                 arr.iter()
-                    .map(|b| Bar {
-                        timestamp: b["t"].as_str().unwrap_or("").to_string(),
-                        open: b["o"].as_f64().unwrap_or(0.0),
-                        high: b["h"].as_f64().unwrap_or(0.0),
-                        low: b["l"].as_f64().unwrap_or(0.0),
-                        close: b["c"].as_f64().unwrap_or(0.0),
-                        volume: b["v"].as_f64().unwrap_or(0.0),
+                    .filter_map(|b| {
+                        let ts = b["t"].as_str().unwrap_or("");
+                        let o = b["o"].as_f64().unwrap_or(0.0);
+                        let h = b["h"].as_f64().unwrap_or(0.0);
+                        let l = b["l"].as_f64().unwrap_or(0.0);
+                        let c = b["c"].as_f64().unwrap_or(0.0);
+                        let v = b["v"].as_f64().unwrap_or(0.0);
+                        // Reject bars with missing timestamp or zero/NaN prices
+                        if ts.is_empty() || o <= 0.0 || c <= 0.0 || !o.is_finite() || !c.is_finite() {
+                            return None;
+                        }
+                        // Fix OHLC: high must be >= all, low must be <= all
+                        let true_high = o.max(h).max(l).max(c);
+                        let true_low = o.min(l).min(h).min(c);
+                        Some(Bar {
+                            timestamp: ts.to_string(),
+                            open: o,
+                            high: true_high,
+                            low: true_low,
+                            close: c,
+                            volume: if v.is_finite() && v >= 0.0 { v } else { 0.0 },
+                        })
                     })
                     .collect()
             })

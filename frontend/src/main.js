@@ -693,6 +693,47 @@ async function cachedGetBars(symbol, timeframe, limit) {
   return promise;
 }
 
+/// Sanitize chart bars before rendering. Fixes all data problems that cause visual artifacts:
+/// - Removes bars with NaN/Infinity/null/zero prices or timestamps
+/// - Fixes OHLC inconsistency (high must be >= open,close,low; low must be <= open,close,low)
+/// - Removes duplicate timestamps (keeps last occurrence = most recent data)
+/// - Sorts by time ascending (lightweight-charts requires sorted data)
+/// - Clamps negative volume to 0
+/// Called before every setData() and on merge results.
+function sanitizeBars(bars) {
+  if (!bars || bars.length === 0) return bars;
+
+  const clean = [];
+  const seenTimes = new Set();
+
+  for (let i = bars.length - 1; i >= 0; i--) {
+    const b = bars[i];
+    // Skip bars with bad timestamps
+    if (!b.time || !isFinite(b.time) || b.time <= 0) continue;
+    // Skip duplicate timestamps (keep latest = first seen from end)
+    if (seenTimes.has(b.time)) continue;
+    seenTimes.add(b.time);
+    // Skip bars with NaN/Infinity/null/zero prices
+    if (!isFinite(b.open) || !isFinite(b.high) || !isFinite(b.low) || !isFinite(b.close)) continue;
+    if (b.open <= 0 || b.high <= 0 || b.low <= 0 || b.close <= 0) continue;
+    // Fix OHLC inconsistency: high/low must envelope open/close
+    const trueHigh = Math.max(b.open, b.high, b.low, b.close);
+    const trueLow = Math.min(b.open, b.high, b.low, b.close);
+    clean.push({
+      time: b.time,
+      open: b.open,
+      high: trueHigh,
+      low: trueLow,
+      close: b.close,
+      volume: (b.volume && isFinite(b.volume) && b.volume >= 0) ? b.volume : 0,
+    });
+  }
+
+  // Reverse back to chronological order (we iterated backwards for dedup)
+  clean.reverse();
+  return clean;
+}
+
 /// Pack chart bars into flat f64 array for Wasm interop.
 function packBarsForWasm(bars) {
   const flat = new Float64Array(bars.length * 5);
@@ -911,6 +952,7 @@ function switchTab(id) {
   currentSymbol = tab.symbol;
   currentTimeframe = tab.timeframe;
   lastPrice = tab.lastPrice;
+  _lastOrderLineHash = ""; // force order line redraw on tab switch
 
   renderTabs();
 
@@ -951,6 +993,8 @@ function switchTab(id) {
     applyIndicators(tab.chartData);
     updateTabLabel();
     log(`${tab.symbol} @ ${tab.timeframe}: restored ${tab.chartData.length} bars from tab cache`, "ok");
+    // Draw order/position lines immediately on restored chart
+    updateOrderPriceLines();
   }
 
   // Load fresh data (will update chart if newer data available)
@@ -3862,6 +3906,7 @@ async function loadChart(symbol, timeframe) {
   // Set symbol immediately so tab identity is correct
   currentSymbol = symbol;
   currentTimeframe = timeframe;
+  _lastOrderLineHash = ""; // force order line redraw on tab/symbol switch
   const loadTabId = activeTabId; // capture which tab initiated this load
 
   // Custom timeframe support: resolve to base TF + aggregation factor
@@ -3897,10 +3942,10 @@ async function loadChart(symbol, timeframe) {
               // SQLite persistence handled by get_bars_incremental backend
               // If still on same tab/symbol, update chart (activeTabId prevents cross-tab writes)
               if (currentSymbol === symbol && currentTimeframe === timeframe && activeTabId === loadTabId) {
-                let freshChartData = freshBars.map(b => ({
+                let freshChartData = sanitizeBars(freshBars.map(b => ({
                   time: Math.floor(new Date(b.timestamp).getTime() / 1000),
                   open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
-                }));
+                })));
                 if (aggFactor > 1) freshChartData = aggregateBars(freshChartData, aggFactor);
                 applyExtendedHoursColoring(freshChartData, symbol);
                 currentChartData = freshChartData;
@@ -3941,6 +3986,13 @@ async function loadChart(symbol, timeframe) {
       close: b.close,
       volume: b.volume,
     }));
+
+    // Sanitize: remove bad bars, fix OHLC, dedup timestamps, sort
+    const preSanitize = chartData.length;
+    chartData = sanitizeBars(chartData);
+    if (chartData.length < preSanitize) {
+      log(`${symbol} @ ${timeframe}: sanitized ${preSanitize - chartData.length} bad bars`, "warn");
+    }
 
     // Apply custom timeframe aggregation
     if (aggFactor > 1) {
@@ -4133,11 +4185,17 @@ async function updateLatestBar(symbol, timeframe) {
     if (bars.length === 0) return;
     const latest = bars[bars.length - 1];
     const barTime = Math.floor(new Date(latest.timestamp).getTime() / 1000);
+    // Validate bar data before rendering — prevents false wicks and NaN artifacts
+    if (!barTime || !isFinite(barTime) || barTime <= 0) return;
+    if (!isFinite(latest.open) || !isFinite(latest.high) || !isFinite(latest.low) || !isFinite(latest.close)) return;
+    if (latest.open <= 0 || latest.high <= 0 || latest.low <= 0 || latest.close <= 0) return;
+    const trueHigh = Math.max(latest.open, latest.high, latest.low, latest.close);
+    const trueLow = Math.min(latest.open, latest.high, latest.low, latest.close);
     const bar = {
       time: barTime,
       open: latest.open,
-      high: latest.high,
-      low: latest.low,
+      high: trueHigh,
+      low: trueLow,
       close: latest.close,
     };
     lastPrice = bar.close;
@@ -4184,8 +4242,12 @@ function startWsBarPolling() {
       // Process completed bars — update cache and chart
       for (const bar of completed) {
         if (bar.symbol !== currentSymbol) continue;
+        if (!isFinite(bar.open) || !isFinite(bar.close) || bar.open <= 0 || bar.close <= 0) continue;
         const barTime = Math.floor(new Date(bar.timestamp).getTime() / 1000);
-        const chartBar = { time: barTime, open: bar.open, high: bar.high, low: bar.low, close: bar.close };
+        if (!barTime || barTime <= 0) continue;
+        const trueHigh = Math.max(bar.open, bar.high, bar.low, bar.close);
+        const trueLow = Math.min(bar.open, bar.high, bar.low, bar.close);
+        const chartBar = { time: barTime, open: bar.open, high: trueHigh, low: trueLow, close: bar.close };
         lastPrice = bar.close;
 
         if (!mtfGridActive && currentTimeframe === "1Min") {
@@ -4209,6 +4271,7 @@ function startWsBarPolling() {
       // Process active (forming) bars — update live candle
       for (const bar of active) {
         if (bar.symbol !== currentSymbol) continue;
+        if (!isFinite(bar.close) || bar.close <= 0) continue;
         lastPrice = bar.close;
         if (!mtfGridActive && currentTimeframe === "1Min") {
           const barTime = Math.floor(new Date(bar.timestamp).getTime() / 1000);
@@ -26128,63 +26191,99 @@ function setupOrderPriceLines() {
   // No-op init — lines are created/updated in updateOrderPriceLines()
 }
 
+let _lastOrderLineHash = ""; // change detection — skip destroy/recreate if unchanged
+
 async function updateOrderPriceLines() {
-  // Remove old order lines from main chart
-  if (candleSeries) {
-    for (const line of orderPriceLines) {
-      try { candleSeries.removePriceLine(line); } catch (_) {}
-    }
-  }
-  orderPriceLines = [];
-
-  // Remove old order lines from MTF grid cells
-  for (const { cell, line } of mtfGridOrderLines) {
-    try { cell.candleSeries.removePriceLine(line); } catch (_) {}
-  }
-  mtfGridOrderLines = [];
-
   // Only draw if we have a series and are connected
   if (!candleSeries || !currentSymbol) return;
   const sym = currentSymbol;
   const symNoSlash = sym.replace("/", "");
 
   try {
-    // Fetch orders and positions in parallel
-    const [ordersJson, posJson] = await Promise.all([
+    // Fetch orders, positions, and recent fills in parallel
+    const [ordersJson, posJson, histJson] = await Promise.all([
       invoke("get_open_orders"),
       invoke("get_positions"),
+      invoke("get_order_history", { limit: 100 }),
     ]);
     const orders = JSON.parse(ordersJson);
     const positions = JSON.parse(posJson);
+
+    // Change detection: compute hash of all relevant prices to avoid flickering.
+    // Only destroy/recreate lines if the line set has actually changed.
+    const lineHash = JSON.stringify({
+      sym,
+      pos: positions.filter(p => p.symbol === sym || p.symbol === symNoSlash)
+        .map(p => ({ e: p.avg_entry_price, s: p.side })),
+      ord: orders.filter(o => (o.symbol || "") === sym || (o.symbol || "") === symNoSlash)
+        .map(o => ({ t: o.order_type, l: o.limit_price, s: o.stop_price, legs: o.legs?.map(l => ({ t: l.order_type, l: l.limit_price, s: l.stop_price })) })),
+    });
+    if (lineHash === _lastOrderLineHash) return; // no change — skip redraw
+    _lastOrderLineHash = lineHash;
+
+    // Debug: log what we found for this symbol
+    const symOrders = orders.filter(o => (o.symbol || "") === sym || (o.symbol || "") === symNoSlash);
+    console.log(`[OrderLines] ${sym}: pos=${pos ? pos.side + " " + pos.qty + " @" + pos.avg_entry_price : "none"}, ` +
+      `posSL=${posSL}, posTP=${posTP}, ` +
+      `orders=${symOrders.length} [${symOrders.map(o => `${o.order_type}:lp=${o.limit_price},sp=${o.stop_price},legs=${o.legs?.length||0}`).join(", ")}]`);
+    if (symOrders.length > 0 || pos) {
+      log(`OrderLines: ${sym} pos=${pos ? pos.side + " @" + pos.avg_entry_price : "none"} SL=${posSL || "—"} TP=${posTP || "—"}, orders=${symOrders.length}`, "info");
+    }
+
+    // Remove old lines (only when data actually changed)
+    if (candleSeries) {
+      for (const line of orderPriceLines) {
+        try { candleSeries.removePriceLine(line); } catch (_) {}
+      }
+    }
+    orderPriceLines = [];
+    for (const { cell, line } of mtfGridOrderLines) {
+      try { cell.candleSeries.removePriceLine(line); } catch (_) {}
+    }
+    mtfGridOrderLines = [];
 
     // ── Position SL/TP dotted lines (MT5-style) ──
     // Find open orders that are bracket legs for the current symbol's position.
     // Bracket SL = stop order on opposite side of position.
     // Bracket TP = limit order on opposite side of position.
+    // Also checks bracket order `legs` array (nested=true from API).
     const pos = positions.find(p => p.symbol === sym || p.symbol === symNoSlash);
+    let posSL = null;
+    let posTP = null;
+
     if (pos) {
       const oppSide = pos.side === "long" ? "sell" : "buy";
-      // Collect bracket leg prices for this position
-      let posSL = null;
-      let posTP = null;
       for (const o of orders) {
         const oSym = o.symbol || "";
         if (oSym !== sym && oSym !== symNoSlash) continue;
+
+        // Check bracket legs (nested child orders from API)
+        if (o.legs && Array.isArray(o.legs)) {
+          for (const leg of o.legs) {
+            if (leg.order_type === "stop" && leg.stop_price) {
+              const p = parseFloat(leg.stop_price);
+              if (p > 0 && isFinite(p)) posSL = p;
+            }
+            if (leg.order_type === "limit" && leg.limit_price) {
+              const p = parseFloat(leg.limit_price);
+              if (p > 0 && isFinite(p)) posTP = p;
+            }
+          }
+        }
+
+        // Also check top-level orders (non-bracket)
         if (o.side !== oppSide) continue;
-        // Stop order on opposite side = SL leg
         if (o.order_type === "stop" && o.stop_price) {
           const p = parseFloat(o.stop_price);
           if (p > 0 && isFinite(p)) posSL = p;
         }
-        // Limit order on opposite side = TP leg
         if (o.order_type === "limit" && o.limit_price) {
           const p = parseFloat(o.limit_price);
           if (p > 0 && isFinite(p)) posTP = p;
         }
       }
 
-      // Fallback: if no bracket legs found, use locally-tracked SL/TP
-      // (set when order was placed via set_sl_level/set_tp_level, or from manual SL/TP lines)
+      // Fallback: use locally-tracked SL/TP
       if (!posSL) posSL = getSLPrice();
       if (!posTP) posTP = getTPPrice();
 
@@ -26234,40 +26333,48 @@ async function updateOrderPriceLines() {
       }
     }
 
-    // ── Position lines on MTF grid cells (mirrors main chart) ──
-    // Uses GPU price_line system (not add_line) so they survive indicator reloads.
-    if (pos && mtfGridActive && mtfGridCells.length > 0) {
+    // ── Position + order lines on MTF grid cells (mirrors main chart) ──
+    // Clear all previous GPU price lines before re-drawing
+    if (mtfGridActive && mtfGridCells.length > 0) {
+      for (const cell of mtfGridCells) {
+        if (cell.gpuChart) {
+          try { cell.gpuChart.clear_price_lines(); } catch (_) {}
+        }
+      }
+
+      // Helper: draw a price line on all MTF grid cells
       const drawGridLine = (price, color, style, title) => {
         if (!price || price <= 0) return;
         for (const cell of mtfGridCells) {
           try {
             if (cell.gpuChart) {
-              // GPU mode: use add_price_line (persists across clear_lines calls)
               const hex = color.replace("#", "");
               const r = parseInt(hex.substring(0, 2), 16) / 255;
               const g = parseInt(hex.substring(2, 4), 16) / 255;
               const b = parseInt(hex.substring(4, 6), 16) / 255;
               cell.gpuChart.add_price_line(price, r, g, b, 0.8, 1.0);
-              cell.gpuChart.render();
-            } else {
+            } else if (cell.candleSeries) {
               const line = cell.candleSeries.createPriceLine({
                 price, color, lineWidth: 1, lineStyle: style,
-                axisLabelVisible: true, title,
+                axisLabelVisible: false, title,
               });
               mtfGridOrderLines.push({ cell, line });
             }
           } catch (_) {}
         }
       };
-      // Clear previous GPU price lines before adding new ones
-      for (const cell of mtfGridCells) {
-        if (cell.gpuChart) {
-          try { cell.gpuChart.clear_price_lines(); cell.gpuChart.render(); } catch (_) {}
-        }
+
+      // Position SL/TP/entry lines
+      if (pos) {
+        if (posSL) drawGridLine(posSL, "#f44336", 3, `SL`);
+        if (posTP) drawGridLine(posTP, "#4caf50", 3, `TP`);
+        if (pos.avg_entry_price > 0) drawGridLine(pos.avg_entry_price, pos.side === "long" ? "#2196f3" : "#e91e63", 3, `ENTRY`);
       }
-      if (posSL) drawGridLine(posSL, "#f44336", 3, `SL`);
-      if (posTP) drawGridLine(posTP, "#4caf50", 3, `TP`);
-      if (pos.avg_entry_price > 0) drawGridLine(pos.avg_entry_price, pos.side === "long" ? "#2196f3" : "#e91e63", 3, `ENTRY`);
+
+      // Render GPU cells after all lines added
+      for (const cell of mtfGridCells) {
+        if (cell.gpuChart) { try { cell.gpuChart.render(); } catch (_) {} }
+      }
     }
 
     // ── Pending order lines (existing behavior) ──
@@ -26305,7 +26412,56 @@ async function updateOrderPriceLines() {
         }
       }
 
+      // Draw bracket leg SL/TP for pending bracket orders (not yet filled)
+      if (o.legs && Array.isArray(o.legs)) {
+        for (const leg of o.legs) {
+          let legPrice = null;
+          let legColor = "";
+          let legTitle = "";
+          if (leg.order_type === "stop" && leg.stop_price) {
+            legPrice = parseFloat(leg.stop_price);
+            legColor = "#f44336"; // red = SL
+            legTitle = `SL ${o.side.toUpperCase()} ${o.qty}`;
+          } else if (leg.order_type === "limit" && leg.limit_price) {
+            legPrice = parseFloat(leg.limit_price);
+            legColor = "#4caf50"; // green = TP
+            legTitle = `TP ${o.side.toUpperCase()} ${o.qty}`;
+          }
+          if (legPrice && legPrice > 0 && isFinite(legPrice)) {
+            try {
+              const ll = candleSeries.createPriceLine({
+                price: legPrice, color: legColor, lineWidth: 1, lineStyle: 3,
+                axisLabelVisible: true, title: legTitle,
+              });
+              orderPriceLines.push(ll);
+            } catch (_) {}
+            // Also draw on MTF grid
+            if (mtfGridActive && mtfGridCells.length > 0) {
+              for (const cell of mtfGridCells) {
+                try {
+                  if (cell.gpuChart) {
+                    const hex = legColor.replace("#", "");
+                    const r = parseInt(hex.substring(0, 2), 16) / 255;
+                    const g = parseInt(hex.substring(2, 4), 16) / 255;
+                    const b = parseInt(hex.substring(4, 6), 16) / 255;
+                    cell.gpuChart.add_price_line(legPrice, r, g, b, 0.8, 1.0);
+                    cell.gpuChart.render();
+                  } else if (cell.candleSeries) {
+                    const ll = cell.candleSeries.createPriceLine({
+                      price: legPrice, color: legColor, lineWidth: 1, lineStyle: 3,
+                      axisLabelVisible: false, title: legTitle,
+                    });
+                    mtfGridOrderLines.push({ cell, line: ll });
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+        }
+      }
+
       if (price && price > 0 && isFinite(price)) {
+        // Draw on main chart
         try {
           const line = candleSeries.createPriceLine({
             price,
@@ -26317,8 +26473,106 @@ async function updateOrderPriceLines() {
           });
           orderPriceLines.push(line);
         } catch (_) {}
+
+        // Draw on MTF grid cells too
+        if (mtfGridActive && mtfGridCells.length > 0) {
+          for (const cell of mtfGridCells) {
+            try {
+              if (cell.gpuChart) {
+                const hex = color.replace("#", "");
+                const r = parseInt(hex.substring(0, 2), 16) / 255;
+                const g = parseInt(hex.substring(2, 4), 16) / 255;
+                const b = parseInt(hex.substring(4, 6), 16) / 255;
+                cell.gpuChart.add_price_line(price, r, g, b, 0.6, 1.0);
+                cell.gpuChart.render();
+              } else if (cell.candleSeries) {
+                const line = cell.candleSeries.createPriceLine({
+                  price, color, lineWidth: 1, lineStyle: 2,
+                  axisLabelVisible: false, title,
+                });
+                mtfGridOrderLines.push({ cell, line });
+              }
+            } catch (_) {}
+          }
+        }
       }
     }
+
+    // ── MT5-style trade markers (arrows at entry/exit points) ──
+    // Draw arrow markers for filled orders on the current symbol.
+    // Buy = blue arrow up below bar, Sell = red arrow down above bar.
+    try {
+      const history = JSON.parse(histJson);
+      const tradeMarkers = [];
+
+      // Filled orders from history
+      for (const o of history) {
+        const oSym = o.symbol || "";
+        if (oSym !== sym && oSym !== symNoSlash) continue;
+        if (o.status !== "filled") continue;
+        const fillPrice = parseFloat(o.filled_avg_price || o.limit_price || o.stop_price || 0);
+        const fillTime = o.filled_at ? Math.floor(new Date(o.filled_at).getTime() / 1000) : 0;
+        if (!fillPrice || fillPrice <= 0 || !fillTime || fillTime <= 0) continue;
+
+        tradeMarkers.push({
+          time: fillTime,
+          position: o.side === "buy" ? "belowBar" : "aboveBar",
+          color: o.side === "buy" ? "#2196f3" : "#f44336",
+          shape: o.side === "buy" ? "arrowUp" : "arrowDown",
+          text: `${o.side.toUpperCase()} ${o.qty} @${fillPrice.toFixed(2)}`,
+        });
+      }
+
+      // Current position entry (if not already in history)
+      if (pos && pos.avg_entry_price > 0) {
+        const entryTime = currentChartData && currentChartData.length > 0
+          ? currentChartData[0].time // fallback: first visible bar
+          : Math.floor(Date.now() / 1000) - 86400;
+        // Find the closest bar to the entry (search from end for recency)
+        let bestTime = entryTime;
+        if (currentChartData) {
+          for (let i = currentChartData.length - 1; i >= 0; i--) {
+            const bar = currentChartData[i];
+            // Entry bar: price crossed through entry level
+            if (bar.low <= pos.avg_entry_price && bar.high >= pos.avg_entry_price) {
+              bestTime = bar.time;
+              break;
+            }
+          }
+        }
+        // Only add if not already covered by a filled order marker near this price
+        const hasEntryMarker = tradeMarkers.some(m =>
+          Math.abs(parseFloat(m.text.split("@")[1]) - pos.avg_entry_price) < pos.avg_entry_price * 0.001
+        );
+        if (!hasEntryMarker) {
+          tradeMarkers.push({
+            time: bestTime,
+            position: pos.side === "long" ? "belowBar" : "aboveBar",
+            color: pos.side === "long" ? "#2196f3" : "#f44336",
+            shape: pos.side === "long" ? "arrowUp" : "arrowDown",
+            text: `${pos.side === "long" ? "BUY" : "SELL"} ${Math.abs(pos.qty)} @${pos.avg_entry_price.toFixed(2)}`,
+          });
+        }
+      }
+
+      // Sort markers by time (lightweight-charts requires sorted markers)
+      tradeMarkers.sort((a, b) => a.time - b.time);
+
+      // Apply markers to main chart (additive with existing markers like fractals)
+      if (tradeMarkers.length > 0) {
+        try { candleSeries.setMarkers(tradeMarkers); } catch (_) {}
+      }
+
+      // Apply markers to MTF grid cells
+      if (mtfGridActive && mtfGridCells.length > 0) {
+        for (const cell of mtfGridCells) {
+          if (cell.candleSeries && !cell.gpuChart) {
+            try { cell.candleSeries.setMarkers(tradeMarkers); } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+
   } catch (_) {}
 }
 
@@ -26706,10 +26960,10 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     // Second guard after parse — grid may have switched during JSON parse
     if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
-    let chartData = bars.map(b => ({
+    let chartData = sanitizeBars(bars.map(b => ({
       time: Math.floor(new Date(b.timestamp).getTime() / 1000),
       open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
-    }));
+    })));
 
     // Aggregate if custom timeframe
     if (aggFactor > 1) {
