@@ -2873,29 +2873,39 @@ fn normalize_mt5_symbol(sym: &str) -> String {
     upper
 }
 
-// ── MT5 BarServer IPC (on-demand bar requests via file-based protocol) ──
-// Writes REQUEST.txt → BarServer.mq5 reads it → exports CSV → writes RESPONSE.txt
-// This enables TyphooN-Terminal to fetch any symbol/TF from MT5 without bulk export.
-
-/// Find the MT5 Files directory (where BarServer reads/writes)
-fn find_mt5_files_dir() -> Option<std::path::PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    // Search all MT5 instances for the typhoon-bars directory
-    for i in 1..=20 {
-        let path = std::path::PathBuf::from(&home)
-            .join(format!(".mt5_{}", i))
-            .join("drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon-bars");
-        if path.is_dir() { return Some(path); }
+/// Convert MT5 CSV bar data to JSON format for cache storage.
+/// CSV format: "2026-03-20T16:00:00Z,1.2345,1.2350,1.2340,1.2348,1234\n" per line
+/// Much faster than JSON parsing — no key names, just split on commas.
+fn mt5_csv_to_json(csv: &str) -> String {
+    let mut bars = Vec::new();
+    for line in csv.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() < 6 { continue; }
+        let ts = fields[0];
+        let o: f64 = fields[1].parse().unwrap_or(0.0);
+        let h: f64 = fields[2].parse().unwrap_or(0.0);
+        let l: f64 = fields[3].parse().unwrap_or(0.0);
+        let c: f64 = fields[4].parse().unwrap_or(0.0);
+        let v: f64 = fields[5].parse().unwrap_or(0.0);
+        if o <= 0.0 || c <= 0.0 { continue; }
+        bars.push(serde_json::json!({
+            "timestamp": ts,
+            "open": o,
+            "high": h.max(o).max(c).max(l),
+            "low": l.min(o).min(c).min(h),
+            "close": c,
+            "volume": v.max(0.0),
+        }));
     }
-    // Also check common MQL5 Files path (Common files)
-    let common = std::path::PathBuf::from(&home)
-        .join(".mt5_1/drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon-bars");
-    if common.parent().map(|p| p.is_dir()).unwrap_or(false) {
-        std::fs::create_dir_all(&common).ok();
-        return Some(common);
-    }
-    None
+    serde_json::to_string(&bars).unwrap_or_else(|_| "[]".to_string())
 }
+
+// ── MT5 Direct SQLite Sync (primary method — shared database) ────
+// BarCacheWriter.mq5 writes bars to SQLite in MQL5/Files/.
+// TyphooN-Terminal reads the DB directly via Rust (full Wine path access).
+// Supports multiple Darwinex accounts writing to separate DBs simultaneously.
 
 /// Find ALL MT5 SQLite cache databases (written by BarCacheWriter.mq5).
 /// Searches all MT5 instances — supports multiple Darwinex accounts
@@ -2912,12 +2922,7 @@ fn find_all_mt5_sqlite_dbs() -> Vec<std::path::PathBuf> {
     dbs
 }
 
-/// Backward compat: find first MT5 SQLite DB
-fn find_mt5_sqlite_db() -> Option<std::path::PathBuf> {
-    find_all_mt5_sqlite_dbs().into_iter().next()
-}
-
-/// Read bars directly from MT5's SQLite database (zero-copy, no CSV intermediary).
+/// Read bars from ALL MT5 SQLite databases, merge into terminal cache.
 /// BarCacheWriter.mq5 writes JSON bars to the same schema as TyphooN-Terminal's cache.
 /// Key format: "mt5:SYMBOL:TIMEFRAME" — same as our import format.
 #[tauri::command]
@@ -2938,9 +2943,10 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
     // Each Darwinex account (Futures, Crypto, CFD, Stocks/ETFs) has its own
     // MT5 instance with unique symbols. We merge them all.
     let db_paths = mt5_dbs.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<(usize, i64, usize, usize), String> {
+    let result = tokio::task::spawn_blocking(move || -> Result<(usize, i64, usize, usize, usize), String> {
         let mut total_imported = 0usize;
         let mut total_bars: i64 = 0;
+        let mut total_skipped = 0usize;
         let mut symbols = std::collections::HashSet::new();
         let mut dbs_read = 0usize;
 
@@ -2981,7 +2987,30 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
                 .unwrap_or("?");
 
             let mut inst_count = 0;
-            for (key, json_data, _ts, bar_count) in &entries {
+            for (key, json_data, ts, bar_count) in &entries {
+                // Skip __SYMBOLS__ meta-key (not bar data)
+                if key.contains("__SYMBOLS__") {
+                    // Still import it for symbol discovery
+                    let _ = cache.put_bars(key, json_data);
+                    continue;
+                }
+
+                // Timestamp-based skip: if terminal cache already has this entry
+                // with the same or newer timestamp, don't re-import
+                let cache_key_preview = if key.starts_with("mt5:") {
+                    let parts: Vec<&str> = key.splitn(3, ':').collect();
+                    if parts.len() == 3 { format!("mt5:{}:{}", normalize_mt5_symbol(parts[1]), parts[2]) }
+                    else { key.clone() }
+                } else { format!("mt5:{}", key) };
+
+                if let Ok(Some(cache_age)) = cache.get_cache_age_secs(&cache_key_preview) {
+                    // If our cache was updated after the MT5 entry, skip
+                    let mt5_age = chrono::Utc::now().timestamp() - ts;
+                    if cache_age < mt5_age {
+                        total_skipped += 1;
+                        continue;
+                    }
+                }
                 // Ensure mt5: prefix + normalize symbol (SOLUSD → SOL/USD)
                 let cache_key = if key.starts_with("mt5:") {
                     // key = "mt5:SOLUSD:1Hour" → normalize symbol part
@@ -3001,7 +3030,15 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
                     }
                 };
 
-                match cache.put_bars(&cache_key, json_data) {
+                // Detect format: CSV (lines with commas, no braces) or JSON (starts with [)
+                let bar_json = if json_data.starts_with('[') {
+                    json_data.clone() // already JSON
+                } else {
+                    // CSV format: "timestamp,open,high,low,close,volume\n" per line
+                    mt5_csv_to_json(json_data)
+                };
+
+                match cache.put_bars(&cache_key, &bar_json) {
                     Ok(_) => {
                         total_imported += 1;
                         total_bars += bar_count;
@@ -3023,101 +3060,28 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
             dbs_read += 1;
         }
 
-        if total_imported == 0 {
+        if total_imported == 0 && total_skipped == 0 {
             return Err("All MT5 databases were empty. Run BarCacheWriter.mq5 first.".into());
         }
 
-        Ok((total_imported, total_bars, symbols.len(), dbs_read))
+        Ok((total_imported, total_bars, symbols.len(), dbs_read, total_skipped))
     }).await.map_err(|e| format!("Task failed: {e}"))??;
 
-    let (imported, total_bars, sym_count, dbs_read) = result;
+    let (imported, total_bars, sym_count, dbs_read, skipped) = result;
 
     tracing::info!(
-        "MT5 SQLite sync complete: {} entries, {} bars, {} symbols from {} databases",
-        imported, total_bars, sym_count, dbs_read
+        "MT5 sync: {} imported, {} skipped (unchanged), {} bars, {} symbols from {} DBs",
+        imported, skipped, total_bars, sym_count, dbs_read
     );
 
     Ok(serde_json::json!({
         "imported": imported,
+        "skipped": skipped,
         "total_bars": total_bars,
         "symbols": sym_count,
         "databases_read": dbs_read,
         "databases_found": mt5_dbs.len(),
     }).to_string())
-}
-
-/// Request bars from MT5 BarServer EA via file-based IPC.
-/// Writes REQUEST.txt, waits for RESPONSE.txt, imports the resulting CSV.
-/// Returns the bar data as JSON (same format as get_bars).
-#[tauri::command]
-async fn request_mt5_bars(
-    state: State<'_, SharedState>,
-    symbol: String,
-    timeframe: String,
-    limit: Option<u32>,
-) -> Result<String, String> {
-    if symbol.is_empty() || symbol.len() > 20 { return Err("Invalid symbol".into()); }
-    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
-
-    let mt5_dir = find_mt5_files_dir()
-        .ok_or("MT5 Files directory not found. Is MT5 running with BarServer.mq5?")?;
-
-    let req_file = mt5_dir.join("REQUEST.txt");
-    let resp_file = mt5_dir.join("RESPONSE.txt");
-    let csv_file = mt5_dir.join(format!("{}_{}.csv", symbol, timeframe));
-
-    // Clean up any stale response
-    let _ = std::fs::remove_file(&resp_file);
-
-    // Write request: "SYMBOL,TIMEFRAME,LIMIT"
-    let limit_str = limit.unwrap_or(0).to_string();
-    let request = format!("{},{},{}", symbol, timeframe, limit_str);
-    std::fs::write(&req_file, &request)
-        .map_err(|e| format!("Failed to write request: {e}"))?;
-
-    tracing::info!("MT5 BarServer: requesting {} @ {} (limit={})", symbol, timeframe, limit_str);
-
-    // Poll for response (timeout 30s, poll every 100ms)
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(30);
-    loop {
-        if start.elapsed() > timeout {
-            return Err("MT5 BarServer timeout (30s). Is BarServer.mq5 running on a chart?".into());
-        }
-        if resp_file.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-
-    // Read response
-    let response = std::fs::read_to_string(&resp_file)
-        .map_err(|e| format!("Failed to read response: {e}"))?;
-    let _ = std::fs::remove_file(&resp_file); // clean up
-
-    if response.starts_with("ERR") {
-        return Err(response);
-    }
-
-    // Response format: "OK SYMBOL TIMEFRAME BAR_COUNT"
-    tracing::info!("MT5 BarServer: {}", response.trim());
-
-    // Import the CSV into cache
-    let cache = {
-        let s = state.lock().await;
-        s.db_cache.clone().ok_or("SQLite cache not available")?
-    };
-
-    let csv_path = csv_file.to_str().ok_or("Invalid CSV path")?;
-    let (sym, tf, bar_count) = import_mt5_csv(&cache, csv_path)?;
-    tracing::info!("MT5 BarServer: imported {} bars for {} @ {}", bar_count, sym, tf);
-
-    // Return the bars as JSON (read from cache)
-    let cache_key = format!("mt5:{}:{}", sym, tf);
-    match cache.get_bars(&cache_key)? {
-        Some((json, _)) => Ok(json),
-        None => Err("Import succeeded but cache read failed".into()),
-    }
 }
 
 /// Get the list of symbols available in MT5 databases (written by BarCacheWriter).
@@ -4187,7 +4151,6 @@ fn main() {
             scan_var_outliers,
             scan_atr_outliers,
             scan_crypto_risk,
-            request_mt5_bars,
             sync_mt5_sqlite,
             get_mt5_symbol_list,
             import_mt5_bars,
