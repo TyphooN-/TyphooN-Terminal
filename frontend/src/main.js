@@ -22936,6 +22936,117 @@ async function cmdMt5Import() {
   });
 }
 
+async function cmdMt5Fetch() {
+  const w = createWindow({ title: "MT5 BarServer — Fetch Bars", width: 600, height: 400 });
+  const out = w.element ? w.element.querySelector(".fw-content") : w;
+  out.innerHTML = `<div style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc">
+    <div style="margin-bottom:8px"><b style="color:#4caf50">Request bars from MT5 BarServer</b></div>
+    <div style="display:flex;gap:4px;margin-bottom:8px">
+      <input id="mt5f-sym" type="text" placeholder="Symbol (e.g. EURUSD)" value="${currentSymbol || ''}" style="flex:1;background:#1a1a2e;color:#ccc;border:1px solid #444;padding:6px;font-family:inherit;font-size:11px;border-radius:3px" />
+      <select id="mt5f-tf" style="background:#1a1a2e;color:#ccc;border:1px solid #444;padding:6px;font-family:inherit;font-size:11px;border-radius:3px">
+        <option>1Month</option><option>1Week</option><option selected>1Day</option><option>4Hour</option>
+        <option>1Hour</option><option>30Min</option><option>15Min</option><option>5Min</option><option>1Min</option>
+      </select>
+      <button id="mt5f-btn" style="background:#2196f3;color:#fff;border:none;padding:6px 12px;cursor:pointer;border-radius:3px;font-family:inherit">Fetch</button>
+      <button id="mt5f-all" style="background:#ff9800;color:#fff;border:none;padding:6px 12px;cursor:pointer;border-radius:3px;font-family:inherit">All TFs</button>
+    </div>
+    <div id="mt5f-log" style="overflow-y:auto;max-height:300px"></div>
+  </div>`;
+  const logDiv = out.querySelector("#mt5f-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  out.querySelector("#mt5f-btn").addEventListener("click", async () => {
+    const sym = out.querySelector("#mt5f-sym").value.trim();
+    const tf = out.querySelector("#mt5f-tf").value;
+    if (!sym) { addLog("Enter a symbol.", "#f44336"); return; }
+    addLog(`Requesting ${sym} @ ${tf} from MT5...`, "#2196f3");
+    try {
+      const json = await invoke("request_mt5_bars", { symbol: sym, timeframe: tf });
+      const bars = JSON.parse(json);
+      addLog(`${sym} @ ${tf}: ${bars.length} bars received and cached`, "#4caf50");
+    } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+  });
+
+  out.querySelector("#mt5f-all").addEventListener("click", async () => {
+    const sym = out.querySelector("#mt5f-sym").value.trim();
+    if (!sym) { addLog("Enter a symbol.", "#f44336"); return; }
+    const tfs = ["1Month", "1Week", "1Day", "4Hour", "1Hour", "30Min", "15Min", "5Min", "1Min"];
+    addLog(`Requesting ${sym} on ALL ${tfs.length} timeframes...`, "#ff9800");
+    for (const tf of tfs) {
+      try {
+        addLog(`  ${tf}...`, "#888");
+        const json = await invoke("request_mt5_bars", { symbol: sym, timeframe: tf });
+        const bars = JSON.parse(json);
+        addLog(`  ${tf}: ${bars.length} bars`, "#4caf50");
+      } catch (e) { addLog(`  ${tf}: ${e}`, "#f44336"); }
+    }
+    addLog(`Done — ${sym} fully synced.`, "#4caf50");
+  });
+}
+
+async function cmdMt5Sync() {
+  const w = createWindow({ title: "MT5 Full Sync — All Symbols × All TFs", width: 700, height: 500 });
+  const out = w.element ? w.element.querySelector(".fw-content") : w;
+  out.innerHTML = `<div id="mt5s-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  const logDiv = out.querySelector("#mt5s-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  addLog("<b>MT5 Full Sync</b> — Requesting ALL available symbols × 9 timeframes from BarServer", "#4caf50");
+  addLog("<span style='color:#888'>This may take several minutes depending on symbol count.</span>");
+  addLog("");
+
+  try {
+    // Get MT5 symbols from cache (from previous BarExporter runs)
+    let symbols = [];
+    try {
+      const mt5Json = await invoke("list_mt5_symbols");
+      const entries = JSON.parse(mt5Json);
+      symbols = [...new Set(entries.map(e => e.symbol))];
+    } catch (_) {}
+
+    // If no MT5 symbols cached, try requesting a known symbol to test connectivity
+    if (symbols.length === 0) {
+      addLog("No MT5 symbols in cache. Testing BarServer connectivity...", "#ff9800");
+      try {
+        await invoke("request_mt5_bars", { symbol: "EURUSD", timeframe: "1Day" });
+        addLog("BarServer connected! But no symbol list available.", "#4caf50");
+        addLog("Run BarExporter.mq5 first to populate the symbol list, then re-run MT5SYNC.", "#ff9800");
+        return;
+      } catch (e) {
+        addLog(`BarServer not responding: ${e}`, "#f44336");
+        addLog("Ensure BarServer.mq5 is attached to a chart in MT5.", "#ff9800");
+        return;
+      }
+    }
+
+    addLog(`Found ${symbols.length} symbols. Starting full sync...`, "#2196f3");
+    const tfs = ["1Month", "1Week", "1Day", "4Hour", "1Hour", "30Min", "15Min", "5Min", "1Min"];
+    let totalBars = 0;
+    let totalFiles = 0;
+    let errors = 0;
+
+    for (let si = 0; si < symbols.length; si++) {
+      const sym = symbols[si];
+      addLog(`[${si + 1}/${symbols.length}] ${sym}...`, "#2196f3");
+      for (const tf of tfs) {
+        try {
+          const json = await invoke("request_mt5_bars", { symbol: sym, timeframe: tf });
+          const bars = JSON.parse(json);
+          totalBars += bars.length;
+          totalFiles++;
+          addLog(`  ${tf}: ${bars.length} bars`, "#4caf50");
+        } catch (_) {
+          errors++;
+        }
+      }
+    }
+
+    addLog("");
+    addLog(`<b style="color:#4caf50">Sync complete!</b> ${totalFiles} files, ${totalBars.toLocaleString()} total bars, ${errors} errors`, "#4caf50");
+    addLog(`Run DARWINEX command to analyze all imported data.`, "#2196f3");
+  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
@@ -23176,6 +23287,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "SCREEN", desc: "Multi-Factor Screener — cross-reference VaR × ATR for dual-metric outliers", action: cmdScreen },
   { name: "DARWINEX", desc: "Darwinex Full Analysis — VaR + ATR + crypto risk across ALL imported MT5 symbols", action: cmdDarwinex },
   { name: "MT5IMPORT", desc: "Import MT5 bar data — load BarExporter CSVs into TyphooN-Terminal cache", action: cmdMt5Import },
+  { name: "MT5FETCH", desc: "Fetch bars from MT5 BarServer — on-demand request for any symbol/TF", action: cmdMt5Fetch },
+  { name: "MT5SYNC", desc: "Sync ALL MT5 symbols — request every TF (MN1→M1) for all Market Watch symbols", action: cmdMt5Sync },
 ];
 
 function fuzzyMatch(query, target) {

@@ -2816,6 +2816,104 @@ async fn scan_crypto_risk(
     Ok(serde_json::to_string(&results).map_err(|e| format!("JSON error: {e}"))?)
 }
 
+// ── MT5 BarServer IPC (on-demand bar requests via file-based protocol) ──
+// Writes REQUEST.txt → BarServer.mq5 reads it → exports CSV → writes RESPONSE.txt
+// This enables TyphooN-Terminal to fetch any symbol/TF from MT5 without bulk export.
+
+/// Find the MT5 Files directory (where BarServer reads/writes)
+fn find_mt5_files_dir() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    // Search all MT5 instances for the typhoon-bars directory
+    for i in 1..=20 {
+        let path = std::path::PathBuf::from(&home)
+            .join(format!(".mt5_{}", i))
+            .join("drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon-bars");
+        if path.is_dir() { return Some(path); }
+    }
+    // Also check common MQL5 Files path (Common files)
+    let common = std::path::PathBuf::from(&home)
+        .join(".mt5_1/drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon-bars");
+    if common.parent().map(|p| p.is_dir()).unwrap_or(false) {
+        std::fs::create_dir_all(&common).ok();
+        return Some(common);
+    }
+    None
+}
+
+/// Request bars from MT5 BarServer EA via file-based IPC.
+/// Writes REQUEST.txt, waits for RESPONSE.txt, imports the resulting CSV.
+/// Returns the bar data as JSON (same format as get_bars).
+#[tauri::command]
+async fn request_mt5_bars(
+    state: State<'_, SharedState>,
+    symbol: String,
+    timeframe: String,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    if symbol.is_empty() || symbol.len() > 20 { return Err("Invalid symbol".into()); }
+    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
+
+    let mt5_dir = find_mt5_files_dir()
+        .ok_or("MT5 Files directory not found. Is MT5 running with BarServer.mq5?")?;
+
+    let req_file = mt5_dir.join("REQUEST.txt");
+    let resp_file = mt5_dir.join("RESPONSE.txt");
+    let csv_file = mt5_dir.join(format!("{}_{}.csv", symbol, timeframe));
+
+    // Clean up any stale response
+    let _ = std::fs::remove_file(&resp_file);
+
+    // Write request: "SYMBOL,TIMEFRAME,LIMIT"
+    let limit_str = limit.unwrap_or(0).to_string();
+    let request = format!("{},{},{}", symbol, timeframe, limit_str);
+    std::fs::write(&req_file, &request)
+        .map_err(|e| format!("Failed to write request: {e}"))?;
+
+    tracing::info!("MT5 BarServer: requesting {} @ {} (limit={})", symbol, timeframe, limit_str);
+
+    // Poll for response (timeout 30s, poll every 100ms)
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(30);
+    loop {
+        if start.elapsed() > timeout {
+            return Err("MT5 BarServer timeout (30s). Is BarServer.mq5 running on a chart?".into());
+        }
+        if resp_file.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // Read response
+    let response = std::fs::read_to_string(&resp_file)
+        .map_err(|e| format!("Failed to read response: {e}"))?;
+    let _ = std::fs::remove_file(&resp_file); // clean up
+
+    if response.starts_with("ERR") {
+        return Err(response);
+    }
+
+    // Response format: "OK SYMBOL TIMEFRAME BAR_COUNT"
+    tracing::info!("MT5 BarServer: {}", response.trim());
+
+    // Import the CSV into cache
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.clone().ok_or("SQLite cache not available")?
+    };
+
+    let csv_path = csv_file.to_str().ok_or("Invalid CSV path")?;
+    let (sym, tf, bar_count) = import_mt5_csv(&cache, csv_path)?;
+    tracing::info!("MT5 BarServer: imported {} bars for {} @ {}", bar_count, sym, tf);
+
+    // Return the bars as JSON (read from cache)
+    let cache_key = format!("mt5:{}:{}", sym, tf);
+    match cache.get_bars(&cache_key)? {
+        Some((json, _)) => Ok(json),
+        None => Err("Import succeeded but cache read failed".into()),
+    }
+}
+
 // ── MT5 Bar Import (Darwinex data via BarExporter EA) ───────────
 // Imports CSV files exported by BarExporter.mq5 into the SQLite cache.
 // CSV format: timestamp,open,high,low,close,volume (RFC3339 timestamps)
@@ -3829,6 +3927,7 @@ fn main() {
             scan_var_outliers,
             scan_atr_outliers,
             scan_crypto_risk,
+            request_mt5_bars,
             import_mt5_bars,
             list_mt5_symbols,
             get_mt5_bars,
