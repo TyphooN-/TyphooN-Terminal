@@ -22455,6 +22455,43 @@ async function cmdDividendCalendar() {
 
 // ── Outlier Explorer Commands (replaces MarketWizardry.org VaR/ATR/EV/Crypto explorers) ──
 
+/// Gather all available symbols for scanning: positions + watchlist + MT5/Darwinex cache.
+/// Returns { symbols: string[], sectors: string[], source: string }
+async function gatherScanSymbols() {
+  const syms = new Set();
+  const sectorMap = {};
+
+  // 1. Open positions
+  try {
+    const posJson = await invoke("get_positions");
+    for (const p of JSON.parse(posJson)) { syms.add(p.symbol); sectorMap[p.symbol] = "Positions"; }
+  } catch (_) {}
+
+  // 2. Hot bar cache (watchlist + previously viewed)
+  for (const key of Object.keys(barCache)) {
+    const sym = key.split(":")[0];
+    if (sym && sym.length > 0 && sym.length < 12) { syms.add(sym); if (!sectorMap[sym]) sectorMap[sym] = "Watchlist"; }
+  }
+
+  // 3. MT5/Darwinex imported symbols (scan SQLite cache for mt5: keys)
+  try {
+    const mt5Json = await invoke("list_mt5_symbols");
+    const mt5Entries = JSON.parse(mt5Json);
+    for (const e of mt5Entries) {
+      if (e.symbol) { syms.add(e.symbol); if (!sectorMap[e.symbol]) sectorMap[e.symbol] = "Darwinex"; }
+    }
+  } catch (_) {}
+
+  const symbols = [...syms].filter(s => s.length > 0);
+  const sectors = symbols.map(s => sectorMap[s] || "Unknown");
+  const darwinexCount = symbols.filter(s => sectorMap[s] === "Darwinex").length;
+  const source = darwinexCount > 0
+    ? `${symbols.length} symbols (${darwinexCount} Darwinex + ${symbols.length - darwinexCount} Alpaca)`
+    : `${symbols.length} symbols (Alpaca + watchlist)`;
+
+  return { symbols, sectors, source };
+}
+
 async function cmdVarOutliers() {
   const w = createWindow({ title: "VaR Outlier Scanner", width: 860, height: 600 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
@@ -22462,15 +22499,10 @@ async function cmdVarOutliers() {
   const logDiv = out.querySelector("#var-out-log");
   const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
 
-  addLog("Scanning positions + watchlist for VaR outliers...", "#2196f3");
+  addLog("Gathering symbols (positions + watchlist + Darwinex)...", "#2196f3");
   try {
-    const [posJson, acctJson] = await Promise.all([invoke("get_positions"), invoke("get_account")]);
-    const positions = JSON.parse(posJson);
-    // Collect symbols from positions + watchlist
-    const symbols = [...new Set([...positions.map(p => p.symbol), ...Object.keys(barCache).map(k => k.split(":")[0])])].filter(s => s.length > 0 && s.length < 12);
-    // Use "Unknown" sector for now (Finnhub free tier is limited)
-    const sectors = symbols.map(() => "Market");
-    addLog(`Scanning ${symbols.length} symbols...`, "#ff9800");
+    const { symbols, sectors, source } = await gatherScanSymbols();
+    addLog(`Scanning ${source}...`, "#ff9800");
 
     const result = JSON.parse(await invoke("scan_var_outliers", { symbols, sectors, period: 252, confidence: 0.95 }));
     logDiv.innerHTML = ""; // clear log
@@ -22506,13 +22538,10 @@ async function cmdAtrOutliers() {
   const logDiv = out.querySelector("#atr-out-log");
   const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
 
-  addLog("Scanning for ATR volatility outliers...", "#2196f3");
+  addLog("Gathering symbols (positions + watchlist + Darwinex)...", "#2196f3");
   try {
-    const posJson = await invoke("get_positions");
-    const positions = JSON.parse(posJson);
-    const symbols = [...new Set([...positions.map(p => p.symbol), ...Object.keys(barCache).map(k => k.split(":")[0])])].filter(s => s.length > 0 && s.length < 12);
-    const sectors = symbols.map(() => "Market");
-    addLog(`Scanning ${symbols.length} symbols (ATR 14)...`, "#ff9800");
+    const { symbols, sectors, source } = await gatherScanSymbols();
+    addLog(`Scanning ${source} (ATR 14)...`, "#ff9800");
 
     const result = JSON.parse(await invoke("scan_atr_outliers", { symbols, sectors, atrPeriod: 14 }));
     logDiv.innerHTML = "";
@@ -22547,12 +22576,11 @@ async function cmdEvOutliers() {
   const logDiv = out.querySelector("#ev-out-log");
   const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
 
-  addLog("Fetching fundamental data for EV analysis...", "#2196f3");
+  addLog("Gathering equity symbols for EV analysis...", "#2196f3");
   try {
-    const posJson = await invoke("get_positions");
-    const positions = JSON.parse(posJson);
-    const symbols = [...new Set(positions.map(p => p.symbol))].filter(s => !s.includes("/"));
-    addLog(`Analyzing ${symbols.length} equity positions...`, "#ff9800");
+    const { symbols: allSyms } = await gatherScanSymbols();
+    const symbols = allSyms.filter(s => !s.includes("/")); // equities only, no crypto
+    addLog(`Analyzing ${symbols.length} equity symbols...`, "#ff9800");
 
     // Fetch fundamentals from Finnhub for each symbol
     const results = [];
@@ -22609,12 +22637,13 @@ async function cmdCryptoRisk() {
 
   addLog("Analyzing crypto risk profiles...", "#2196f3");
   try {
-    // Get crypto symbols from positions + common pairs
-    const posJson = await invoke("get_positions");
-    const positions = JSON.parse(posJson);
-    const cryptoPos = positions.filter(p => p.symbol.includes("/")).map(p => p.symbol);
+    // Get crypto symbols from positions + MT5 + common pairs
+    const { symbols: allSyms } = await gatherScanSymbols();
+    const cryptoFromCache = allSyms.filter(s => s.includes("/") || s.includes("USD"));
     const defaultCrypto = ["BTC/USD", "ETH/USD", "SOL/USD", "DOGE/USD", "ADA/USD", "AVAX/USD", "DOT/USD", "LINK/USD"];
-    const symbols = [...new Set([...cryptoPos, ...defaultCrypto])];
+    // Also include MT5 crypto CFDs (e.g., BTCUSD without slash)
+    const mt5Crypto = allSyms.filter(s => /^(BTC|ETH|SOL|DOGE|ADA|XRP|AVAX|DOT|LINK|SHIB|MATIC)USD$/i.test(s));
+    const symbols = [...new Set([...cryptoFromCache, ...mt5Crypto, ...defaultCrypto])];
     addLog(`Scanning ${symbols.length} crypto pairs...`, "#ff9800");
 
     const results = JSON.parse(await invoke("scan_crypto_risk", { symbols }));
@@ -22674,12 +22703,8 @@ async function cmdScreen() {
 
   addLog("Running multi-factor scan...", "#2196f3");
   try {
-    const posJson = await invoke("get_positions");
-    const positions = JSON.parse(posJson);
-    const symbols = [...new Set([...positions.map(p => p.symbol), ...Object.keys(barCache).map(k => k.split(":")[0])])].filter(s => s.length > 0 && s.length < 12);
-    const sectors = symbols.map(() => "Market");
-
-    addLog(`Scanning ${symbols.length} symbols on VaR + ATR...`, "#ff9800");
+    const { symbols, sectors, source } = await gatherScanSymbols();
+    addLog(`Scanning ${source} on VaR + ATR...`, "#ff9800");
     const [varJson, atrJson] = await Promise.all([
       invoke("scan_var_outliers", { symbols, sectors, period: 252, confidence: 0.95 }),
       invoke("scan_atr_outliers", { symbols, sectors, atrPeriod: 14 }),
@@ -22731,6 +22756,184 @@ async function cmdScreen() {
         `<span>${signal}</span></div>`);
     }
   } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
+async function cmdDarwinex() {
+  const w = createWindow({ title: "Darwinex Full Analysis", width: 920, height: 700 });
+  const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
+  out.innerHTML = `<div id="dwx-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  const logDiv = out.querySelector("#dwx-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  addLog("<b>Darwinex Full Analysis</b> — Scanning all imported MT5 symbols", "#4caf50");
+  addLog("", "");
+
+  try {
+    // List all MT5 symbols
+    const mt5Json = await invoke("list_mt5_symbols");
+    const mt5Entries = JSON.parse(mt5Json);
+    const symbolSet = new Set();
+    for (const e of mt5Entries) { if (e.symbol) symbolSet.add(e.symbol); }
+    const allSymbols = [...symbolSet];
+
+    if (allSymbols.length === 0) {
+      addLog("No MT5/Darwinex data imported yet.", "#f44336");
+      addLog("");
+      addLog("To import Darwinex data:", "#ff9800");
+      addLog("1. Run BarExporterFull.mq5 on MT5 (Darwinex) — downloads full history");
+      addLog("2. Run BarExporter.mq5 for ongoing updates (10s timer)");
+      addLog("3. Use Ctrl+K → MT5IMPORT to import CSVs into TyphooN-Terminal");
+      addLog("4. Re-run this command to see full analysis");
+      return;
+    }
+
+    // Classify symbols
+    const forex = allSymbols.filter(s => /^[A-Z]{6}$/.test(s) && !s.endsWith("USD"));
+    const crypto = allSymbols.filter(s => s.includes("/") || /^(BTC|ETH|SOL|DOGE|ADA|XRP)USD$/i.test(s));
+    const indices = allSymbols.filter(s => /^(US30|US500|USTEC|UK100|DE40|JP225|AU200)/i.test(s));
+    const commodities = allSymbols.filter(s => /^(XAUUSD|XAGUSD|USOIL|UKOIL|NATGAS)/i.test(s));
+    const stocks = allSymbols.filter(s => !forex.includes(s) && !crypto.includes(s) && !indices.includes(s) && !commodities.includes(s));
+
+    addLog(`<b>${allSymbols.length} Darwinex symbols imported:</b>`, "#2196f3");
+    addLog(`  Forex: ${forex.length} | Crypto: ${crypto.length} | Indices: ${indices.length} | Commodities: ${commodities.length} | Stocks/CFDs: ${stocks.length}`);
+    addLog("");
+
+    // Group for sector-based analysis
+    const symbols = allSymbols;
+    const sectors = allSymbols.map(s => {
+      if (forex.includes(s)) return "Forex";
+      if (crypto.includes(s)) return "Crypto";
+      if (indices.includes(s)) return "Indices";
+      if (commodities.includes(s)) return "Commodities";
+      return "Stocks/CFDs";
+    });
+
+    // Run VaR scan
+    addLog("Running VaR outlier scan...", "#ff9800");
+    const varResult = JSON.parse(await invoke("scan_var_outliers", { symbols, sectors, period: 252, confidence: 0.95 }));
+    addLog(`  VaR: ${varResult.total_scanned} scanned, ${varResult.outliers.length} outliers`, "#4caf50");
+
+    // Run ATR scan
+    addLog("Running ATR volatility scan...", "#ff9800");
+    const atrResult = JSON.parse(await invoke("scan_atr_outliers", { symbols, sectors, atrPeriod: 14 }));
+    addLog(`  ATR: ${atrResult.total_scanned} scanned, ${atrResult.outliers.length} outliers`, "#4caf50");
+
+    // Run crypto risk
+    let cryptoResult = [];
+    if (crypto.length > 0) {
+      addLog("Running crypto risk analysis...", "#ff9800");
+      cryptoResult = JSON.parse(await invoke("scan_crypto_risk", { symbols: crypto }));
+      addLog(`  Crypto: ${cryptoResult.length} analyzed`, "#4caf50");
+    }
+
+    addLog("");
+
+    // Dual-metric outliers
+    const varSyms = new Set(varResult.outliers.map(o => o.symbol));
+    const atrSyms = new Set(atrResult.outliers.map(o => o.symbol));
+    const dualOutliers = [...varSyms].filter(s => atrSyms.has(s));
+
+    addLog(`<b style="color:#f44336">DUAL OUTLIERS (VaR + ATR): ${dualOutliers.length}</b>`);
+    if (dualOutliers.length > 0) {
+      addLog(`<div style="display:grid;grid-template-columns:90px 60px 70px 60px 70px 60px 80px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding:4px 0">` +
+        `<span>Symbol</span><span>Sector</span><span>VaR %</span><span>VaR Z</span><span>ATR %</span><span>ATR Z</span><span>Signal</span></div>`);
+      for (const sym of dualOutliers) {
+        const v = varResult.outliers.find(o => o.symbol === sym);
+        const a = atrResult.outliers.find(o => o.symbol === sym);
+        if (!v || !a) continue;
+        const sig = (v.direction === "high" && a.direction === "high") ? "🔴 DANGER" : "⚠️ MIXED";
+        addLog(`<div style="display:grid;grid-template-columns:90px 60px 70px 60px 70px 60px 80px;gap:4px">` +
+          `<span style="color:#2196f3">${sym}</span><span style="color:#888">${v.sector}</span>` +
+          `<span style="color:#f44336">${v.metric.toFixed(2)}%</span><span>${v.z_score.toFixed(1)}σ</span>` +
+          `<span style="color:#ff9800">${a.metric.toFixed(2)}%</span><span>${a.z_score.toFixed(1)}σ</span>` +
+          `<span>${sig}</span></div>`);
+      }
+    }
+
+    // Sector stats
+    addLog("");
+    addLog("<b>SECTOR STATISTICS (VaR)</b>");
+    for (const s of varResult.sector_stats) {
+      addLog(`  ${s.sector}: ${s.count} symbols, median ${s.median.toFixed(2)}%, IQR ${s.iqr.toFixed(2)}%, ${s.outlier_count} outliers`);
+    }
+
+    addLog("");
+    addLog("<b>SECTOR STATISTICS (ATR)</b>");
+    for (const s of atrResult.sector_stats) {
+      addLog(`  ${s.sector}: ${s.count} symbols, median ${s.median.toFixed(2)}%, IQR ${s.iqr.toFixed(2)}%, ${s.outlier_count} outliers`);
+    }
+
+    // Crypto risk tiers
+    if (cryptoResult.length > 0) {
+      addLog("");
+      addLog("<b>CRYPTO RISK TIERS</b>");
+      addLog(`<div style="display:grid;grid-template-columns:90px 80px 70px 70px 70px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding:4px 0">` +
+        `<span>Symbol</span><span>Price</span><span>ATR %</span><span>VaR %</span><span>Tier</span></div>`);
+      for (const r of cryptoResult) {
+        const tc = r.tier === "EXTREME" ? "#f44336" : r.tier === "HIGH" ? "#ff9800" : r.tier === "MEDIUM" ? "#ffeb3b" : "#4caf50";
+        addLog(`<div style="display:grid;grid-template-columns:90px 80px 70px 70px 70px;gap:4px">` +
+          `<span style="color:#2196f3">${r.symbol}</span><span>$${r.price < 1 ? r.price.toFixed(4) : r.price.toFixed(2)}</span>` +
+          `<span style="color:${tc}">${r.atr_pct.toFixed(2)}%</span><span>${r.var_pct.toFixed(2)}%</span>` +
+          `<span style="color:${tc};font-weight:bold">${r.tier}</span></div>`);
+      }
+    }
+
+    // Top 20 most extreme outliers overall
+    addLog("");
+    addLog("<b>TOP 20 MOST EXTREME OUTLIERS (by |Z-score|)</b>");
+    const allOutliers = [...varResult.outliers.map(o => ({...o, type: "VaR"})), ...atrResult.outliers.map(o => ({...o, type: "ATR"}))];
+    allOutliers.sort((a, b) => Math.abs(b.z_score) - Math.abs(a.z_score));
+    addLog(`<div style="display:grid;grid-template-columns:90px 50px 60px 70px 60px 80px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding:4px 0">` +
+      `<span>Symbol</span><span>Type</span><span>Tier</span><span>Metric</span><span>Z</span><span>Sector</span></div>`);
+    for (const o of allOutliers.slice(0, 20)) {
+      const tc = o.tier === "EXTREME" ? "#f44336" : o.tier === "HIGH" ? "#ff9800" : "#ffeb3b";
+      addLog(`<div style="display:grid;grid-template-columns:90px 50px 60px 70px 60px 80px;gap:4px">` +
+        `<span style="color:#2196f3">${o.symbol}</span><span>${o.type}</span>` +
+        `<span style="color:${tc}">${o.tier}</span><span>${o.metric.toFixed(2)}%</span>` +
+        `<span>${o.z_score.toFixed(1)}σ</span><span style="color:#888">${o.sector}</span></div>`);
+    }
+
+    addLog("");
+    addLog(`<b style="color:#4caf50">Analysis complete.</b> ${allSymbols.length} symbols, ${allOutliers.length} total outliers detected.`);
+  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
+async function cmdMt5Import() {
+  const w = createWindow({ title: "MT5 Bar Import", width: 600, height: 400 });
+  const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
+  out.innerHTML = `<div style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%">
+    <div style="margin-bottom:12px">
+      <b style="color:#4caf50">Import MT5/Darwinex Bar Data</b><br>
+      <span style="color:#888">Import CSVs exported by BarExporter.mq5 into TyphooN-Terminal cache.</span>
+    </div>
+    <div style="margin-bottom:8px">
+      <input id="mt5-import-path" type="text" placeholder="Path to CSV file or directory..." style="width:100%;background:#1a1a2e;color:#ccc;border:1px solid #444;padding:6px;font-family:inherit;font-size:11px;border-radius:3px" />
+    </div>
+    <button id="mt5-import-btn" style="background:#2196f3;color:#fff;border:none;padding:8px 16px;cursor:pointer;border-radius:3px;font-family:inherit">Import</button>
+    <button id="mt5-import-auto" style="background:#4caf50;color:#fff;border:none;padding:8px 16px;cursor:pointer;border-radius:3px;font-family:inherit;margin-left:8px">Auto-Detect</button>
+    <div id="mt5-import-log" style="margin-top:12px"></div>
+  </div>`;
+
+  const logDiv = out.querySelector("#mt5-import-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; };
+
+  out.querySelector("#mt5-import-btn").addEventListener("click", async () => {
+    const path = out.querySelector("#mt5-import-path").value.trim();
+    if (!path) { addLog("Enter a path first.", "#f44336"); return; }
+    addLog(`Importing from: ${path}...`, "#2196f3");
+    try {
+      const result = JSON.parse(await invoke("import_mt5_bars", { path }));
+      addLog(`Imported ${result.imported} files, ${result.total_bars} total bars, ${result.symbols} symbols`, "#4caf50");
+    } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+  });
+
+  out.querySelector("#mt5-import-auto").addEventListener("click", async () => {
+    addLog("Auto-detecting MT5 export directory...", "#2196f3");
+    try {
+      const result = JSON.parse(await invoke("import_mt5_bars", { path: "auto" }));
+      addLog(`Imported ${result.imported} files, ${result.total_bars} total bars, ${result.symbols} symbols`, "#4caf50");
+    } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+  });
 }
 
 const CMD_PALETTE_COMMANDS = [
@@ -22971,6 +23174,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "CRYPTORISK", desc: "Crypto Risk Analysis — multi-TF volatility tiers + advanced ratios (replaces MarketWizardry Crypto Explorer)", action: cmdCryptoRisk },
   { name: "OUTLIERS", desc: "Combined Outlier Report — tabbed VaR + ATR + EV + Crypto scanner", action: cmdOutliers },
   { name: "SCREEN", desc: "Multi-Factor Screener — cross-reference VaR × ATR for dual-metric outliers", action: cmdScreen },
+  { name: "DARWINEX", desc: "Darwinex Full Analysis — VaR + ATR + crypto risk across ALL imported MT5 symbols", action: cmdDarwinex },
+  { name: "MT5IMPORT", desc: "Import MT5 bar data — load BarExporter CSVs into TyphooN-Terminal cache", action: cmdMt5Import },
 ];
 
 function fuzzyMatch(query, target) {
