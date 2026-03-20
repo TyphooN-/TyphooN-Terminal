@@ -16,7 +16,7 @@
 | Candlestick charts | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Line/Bar charts | ✅ | ✅ | ✅ | ❌ | ✅ |
 | Multi-timeframe grid | ✅ | ✅ | ❌ | ❌ | ✅ |
-| 37 indicators + 22 Wasm | ✅ | ✅ (38+) | ❌ | ✅ (50+) | ✅ |
+| 39 indicators (8 Wasm-accelerated) | ✅ | ✅ (38+) | ❌ | ✅ (50+) | ✅ |
 | Drawing tools (44 types) | ✅ | ✅ (46) | ❌ | ❌ | ✅ |
 | Auto Fibonacci | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Supply/Demand zones | ✅ | ✅* | ❌ | ❌ | ❌ |
@@ -273,7 +273,7 @@
 
 ### vs MT5
 - **Drawing tools** — 44 types implemented (trend, fib, h-line, rectangle, channel, ray, ruler, etc.). MT5 has 46 total; remaining 2 are niche objects.
-- ~~**Indicator count**~~ **RESOLVED** — MT5 has 38+ built-in, we now have **37 unique indicators** + 22 Wasm implementations. Parity achieved with Alligator, AO, MFI, Force Index, Envelopes, StdDev, Chaikin, DeMarker, Fractals.
+- ~~**Indicator count**~~ **RESOLVED** — MT5 has 38+ built-in, we now have **39 unique indicators** (8 Wasm-accelerated: SMA, EMA, KAMA, RSI, Fisher, ATR, MACD, Bollinger). Parity achieved with Alligator, AO, MFI, Force Index, Envelopes, StdDev, Chaikin, DeMarker, Fractals.
 - **EA/Expert Advisor system** — MT5 has a full algorithmic trading framework (MQL5). We have auto-trade + genetic optimizer but no custom language.
 - **Strategy tester** — MT5's visual tester has better drag speed. Our replay mode + visual backtester are functionally equivalent.
 
@@ -289,7 +289,7 @@ TradingView is the most popular retail charting platform. Feature comparison:
 | Feature | TyphooN-Terminal | TradingView Free | TradingView Premium ($60/mo) |
 |---|---|---|---|
 | Candlestick charts | ✅ | ✅ | ✅ |
-| 37 indicators | ✅ | ✅ (limited) | ✅ (100+) |
+| 39 indicators | ✅ | ✅ (limited) | ✅ (100+) |
 | 44 drawing tools | ✅ | ✅ (limited) | ✅ (50+) |
 | Custom timeframes | ✅ | ❌ | ✅ |
 | Volume Profile | ✅ (free) | ❌ | ✅ ($24.95/mo+) |

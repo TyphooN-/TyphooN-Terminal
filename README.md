@@ -99,7 +99,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Crypto Market** | CoinGecko top 50 + trending + 7-day sparklines (Ctrl+K → CRYPTO) |
 | **Yield Curve** | Treasury rates with 2Y-10Y inversion detection (Ctrl+K → YIELD) |
 | **GPU Chart Engine** | WebGL2 candlesticks, 44 drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
-| **286 Commands** | Most command palette entries of any trading terminal, open or proprietary |
+| **288 Commands** | Most command palette entries of any trading terminal, open or proprietary |
 
 ---
 
@@ -228,6 +228,7 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [032](docs/adr/032-gpu-drawing-tools-roadmap.md) | GPU chart completion + drawing tools parity roadmap |
 | [033](docs/adr/033-free-api-expansion.md) | Free API expansion research — 30+ data sources catalogued |
 | [034](docs/adr/034-cli-tui.md) | CLI / TUI terminal interface — 6.5MB standalone binary |
+| [035](docs/adr/035-bar-fetch-optimization.md) | Bar fetch optimization — page_token, adaptive pacing, 50-300x speedup |
 
 ---
 
