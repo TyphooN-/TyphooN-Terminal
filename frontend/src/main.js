@@ -23062,7 +23062,7 @@ async function cmdMt5DbSync() {
   try {
     const result = JSON.parse(await invoke("sync_mt5_sqlite"));
     addLog(`Imported ${result.imported} entries, ${result.total_bars.toLocaleString()} total bars, ${result.symbols} symbols`, "#4caf50");
-    addLog(`Source: ${result.source}`, "#888");
+    addLog(`Databases: ${result.databases_read}/${result.databases_found} MT5 instances read`, "#888");
     addLog("");
     addLog("Data is now available for charting and analysis.", "#4caf50");
     addLog("Use DARWINEX command for full outlier analysis.", "#2196f3");
