@@ -3,7 +3,7 @@
 **Status:** Implemented (v4 — Adaptive)
 **Date:** 2026-03-15 (updated 2026-03-20)
 
-> **See also:** [ADR-035](035-bar-fetch-optimization.md) for the full bar fetch optimization (pagination, lookback, early termination).
+> **See also:** [ADR-035](035-bar-fetch-optimization.md) — the authoritative reference for all bar fetch optimizations built on top of this rate limiter: adaptive pacing, page_token pagination, incremental cache-aware fetch, WebSocket bar builder, and data sanitization.
 
 **Context:** Alpaca's free plan allows 200 data API requests/minute. Multiple concurrent operations (chart loading, MTF indicators, pre-fetch, live polling, multiple tabs) can easily exceed this. The free tier also applies **progressive throttling** — sustained requests are silently slowed, with individual responses taking 1-10+ minutes.
 

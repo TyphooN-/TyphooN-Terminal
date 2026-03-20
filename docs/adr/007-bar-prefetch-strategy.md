@@ -13,7 +13,7 @@ After the primary chart loads for a symbol, silently pre-fetch all other timefra
 1. User loads `LUMN @ H1` → chart renders immediately
 2. Background task starts: fetch `LUMN` bars for all other timeframes (`M15, M30, H4, D1, W1, MN`)
 3. Each fetch respects the centralized rate limiter (320ms pacing)
-4. Results cached to both memory and localStorage
+4. Results cached to memory (LRU) + SQLite (persistent, zstd-compressed)
 5. When user clicks `D1` tab → instant chart from cache, no API call
 
 ## Rate Budget Allocation
@@ -32,12 +32,15 @@ With the centralized `RateLimiter`, all requests (primary chart chunks, MTF indi
 
 ## Cache Architecture
 
-```
-Memory (barCache):     { "LUMN:1Hour": { data: [...], timestamp: Date }, ... }
-Disk (localStorage):   { "typhoon_bars_LUMN:1Hour": { data: [...], timestamp: Date }, ... }
+> **Updated 2026-03-20:** See [ADR-020](020-cache-optimization.md) for full 4-tier architecture. localStorage is legacy (migration-only).
 
-TTL: 1 minute (memory) — prevents stale data during active trading
-Disk: Persistent — survives app restarts, only re-fetches on first load
+```
+Tier 1: Memory LRU (barCache)  — max 200 entries, instant access
+Tier 3: SQLite + zstd          — unlimited, WAL mode, broker-ID-keyed
+         (get_bars_incremental handles cache-aware fetch + merge)
+
+TTL: Timeframe-based freshness (60s for 1Min, 3600s for 1Hour, etc.)
+     Incremental fetch only retrieves bars newer than second-to-last cached bar
 ```
 
 ## Pagination Strategy
@@ -70,12 +73,13 @@ Each symbol shows its date range and bar count once primary fetch completes. Pre
 - **Pro**: Instant timeframe switching for watched symbols
 - **Pro**: Maximizes cache value per symbol
 - **Pro**: Rate limiter prevents API abuse even with aggressive pre-fetch
-- **Con**: Higher initial API usage per symbol (~20 requests vs ~4)
-- **Con**: localStorage capacity (~5-10MB) limits how many symbols can be fully cached
+- **Con**: Higher initial API usage per symbol (~20 requests vs ~4) — mitigated by incremental fetch on warm start
 - **Con**: Pre-fetch delays availability for other symbols' primary loads
 
-## Future Improvements
+## Improvements (Implemented)
 
-- Priority queue: primary chart > MTF indicators > pre-fetch > live polling
-- Incremental updates: only fetch bars newer than cached data
-- WebSocket streaming for real-time bar updates (no polling)
+- ✅ **Incremental fetch**: only fetch bars newer than cached data ([ADR-035](035-bar-fetch-optimization.md))
+- ✅ **WebSocket bar construction**: 1-min bars from trade stream, no polling ([ADR-035](035-bar-fetch-optimization.md))
+- ✅ **Predictive prefetch**: position symbols pre-cached on connect
+- ✅ **Cache freshness gate**: skip API if cache younger than TF period
+- Deferred: Priority queue (incremental fetch makes prefetch fast enough)

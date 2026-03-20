@@ -352,8 +352,8 @@ LRU eviction prevents unbounded growth. SQLite mmap is OS-managed (only maps pag
 | Rate limiting | ✅ Fully optimized (v4) | Adaptive pacing, native pagination, early termination |
 | SQLite cache | ✅ Fully optimized | WAL, mmap, prepare_cached, auto-vacuum |
 | Indicator calculation (backtester) | ✅ Wasm, 50-100x faster | Grid optimizer runs in ~100ms |
-| Indicator calculation (chart) | ⚡ JS fallback | Wasm available but not routed for chart rendering yet |
-| GPU chart rendering | ⚡ Phase 3 done | Phases 4-5 would eliminate lightweight-charts |
+| Indicator calculation (chart) | ✅ Wasm routed | SMA/EMA/KAMA/RSI/ATR through Wasm at 15+ call sites, JS fallback for Fisher/BetterVolume |
+| GPU chart rendering | ✅ All 5 phases done | WebGL2 candles + indicators + price scale + crosshair (52KB Wasm) |
 | DOM rendering | ✅ Fully optimized | Delta updates, atomic swaps, no flicker |
 | Network | ✅ Fully optimized | page_token pagination, adaptive pacing, HTTP/2 |
 | Binary size | ✅ 10-15MB | 10-15x smaller than Electron |
