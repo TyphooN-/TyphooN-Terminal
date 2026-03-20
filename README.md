@@ -99,6 +99,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Crypto Market** | CoinGecko top 50 + trending + 7-day sparklines (Ctrl+K → CRYPTO) |
 | **Yield Curve** | Treasury rates with 2Y-10Y inversion detection (Ctrl+K → YIELD) |
 | **GPU Chart Engine** | WebGL2 candlesticks, 44 drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
+| **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
 | **288 Commands** | Most command palette entries of any trading terminal, open or proprietary |
 
 ---
