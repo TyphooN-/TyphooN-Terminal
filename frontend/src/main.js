@@ -22457,7 +22457,7 @@ async function cmdDividendCalendar() {
 
 async function cmdVarOutliers() {
   const w = createWindow({ title: "VaR Outlier Scanner", width: 860, height: 600 });
-  const out = w.querySelector(".window-body") || w;
+  const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div id="var-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
   const logDiv = out.querySelector("#var-out-log");
   const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
@@ -22501,7 +22501,7 @@ async function cmdVarOutliers() {
 
 async function cmdAtrOutliers() {
   const w = createWindow({ title: "ATR Volatility Outlier Scanner", width: 860, height: 600 });
-  const out = w.querySelector(".window-body") || w;
+  const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div id="atr-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
   const logDiv = out.querySelector("#atr-out-log");
   const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
@@ -22542,7 +22542,7 @@ async function cmdAtrOutliers() {
 
 async function cmdEvOutliers() {
   const w = createWindow({ title: "EV (Enterprise Value) Outlier Scanner", width: 860, height: 600 });
-  const out = w.querySelector(".window-body") || w;
+  const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div id="ev-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
   const logDiv = out.querySelector("#ev-out-log");
   const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
@@ -22602,7 +22602,7 @@ async function cmdEvOutliers() {
 
 async function cmdCryptoRisk() {
   const w = createWindow({ title: "Crypto Risk Analysis", width: 860, height: 600 });
-  const out = w.querySelector(".window-body") || w;
+  const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div id="crypto-risk-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
   const logDiv = out.querySelector("#crypto-risk-log");
   const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
@@ -22643,7 +22643,7 @@ async function cmdCryptoRisk() {
 
 async function cmdOutliers() {
   const w = createWindow({ title: "Combined Outlier Report", width: 900, height: 650 });
-  const out = w.querySelector(".window-body") || w;
+  const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div style="padding:8px">
     <div style="display:flex;gap:4px;margin-bottom:8px">
       <button id="out-tab-var" class="btn-action" style="flex:1;padding:6px">VaR Outliers</button>
@@ -22661,7 +22661,7 @@ async function cmdOutliers() {
 
 async function cmdScreen() {
   const w = createWindow({ title: "Multi-Factor Screener", width: 900, height: 650 });
-  const out = w.querySelector(".window-body") || w;
+  const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%">
     <div style="margin-bottom:12px">
       <b style="color:#4caf50">Multi-Factor Outlier Screener</b><br>
