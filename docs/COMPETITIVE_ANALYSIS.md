@@ -174,7 +174,7 @@
 21. **Price ladder / DOM** — Vertical bid-ask depth with volume bars. Standard on CQG and TT.
 22. **Theme switcher** — Dark, pitch black (OLED), light themes. Accessibility feature competitors lack.
 23. **Webhook alert automation** — Custom webhook endpoints for integrating with Discord bots, Zapier, etc.
-24. **287 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
+24. **288 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
 25. **AI-powered strategy suggestions** — Contextual NNFX analysis via Claude/GPT with Fisher/RSI/KAMA/SMA200/volume context.
 26. **Voice alerts** — Web Speech API reads alerts aloud. No competitor has this.
 27. **Data quality monitoring** — Automatic detection of missing bars, OHLC violations, suspicious spikes.
@@ -229,7 +229,10 @@
 76. **SEC filings viewer** — Browse and read 10-K, 10-Q, 8-K, S-1 filings in-app (Ctrl+K → SEC).
 77. **Cache manager** — Per-symbol/timeframe storage stats with delete controls (Ctrl+K → CACHE).
 78. **API key testing** — Per-key "Test" button validates each API key against its respective service.
-79. **287 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
+79. **288 Ctrl+K commands** — More command palette entries than any trading terminal, open or proprietary.
+80. **Standalone CLI/TUI** — 6.5MB binary for SSH/VPS trading. Full order management, risk dashboard, ASCII charts, live watchlist. No GUI required. Shares credentials with desktop app.
+81. **Multi-account tabulation** — Import MT5 DARWIN accounts + Alpaca, view aggregate portfolio with combined VaR and weight breakdown across all accounts.
+82. **21 free data sources** — Alpaca, SEC EDGAR, FRED, Finnhub, CoinGecko, ECB, Treasury.gov, whale-alert, Reddit, House Stock Watcher, Yahoo Finance, alternative.me, FINRA + more.
 
 ## UX Advantages Over Competitors
 
@@ -313,7 +316,7 @@ TradingView is the most popular retail charting platform. Feature comparison:
 | Crypto whale alerts | ✅ | ❌ | ❌ |
 | Sector ETF flow | ✅ | ❌ | ❌ |
 | Peer comparison | ✅ | ❌ | ❌ |
-| 287 Ctrl+K commands | ✅ | ❌ | ❌ |
+| 288 Ctrl+K commands | ✅ | ❌ | ❌ |
 | Cost | **Free** | Free (limited) | **$60/mo ($720/yr)** |
 
 **TyphooN-Terminal advantages**: Volume Profile, Market Replay, and Earnings Overlay are free (TradingView charges $24.95+/mo). Dark pool volume, Congress trading alerts, crypto whale alerts, sector ETF flow, and peer comparison — none available on TradingView at any price. Local-first with no ads. Real order execution via broker API. GPU charts, Wasm indicators, 4 risk modes, AI strategy.

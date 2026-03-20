@@ -1,6 +1,6 @@
 # TyphooN-Terminal
 
-A native desktop trading terminal with full risk management, multi-timeframe charting, and hedged martingale support — built in Rust/Tauri for Alpaca Markets.
+A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in Rust/Tauri for Alpaca Markets.
 
 **Website:** [MarketWizardry.org](https://www.marketwizardry.org/) | **License:** [BSL 1.1](LICENSE) ([Commercial](LICENSE-COMMERCIAL))
 
@@ -8,15 +8,16 @@ A native desktop trading terminal with full risk management, multi-timeframe cha
 
 | Metric | Value |
 |---|---|
-| **Binary Size** | ~12-15MB (vs Electron ~200MB, Java ~500MB+) |
+| **GUI Binary** | ~12-15MB Tauri (vs Electron ~200MB) |
+| **CLI Binary** | 6.5MB standalone TUI (SSH/VPS ready) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | <1 second |
-| **Lines of Code** | ~44,000 (Rust + JS + Wasm) |
+| **Lines of Code** | ~45,500 (Rust + JS + Wasm) |
 | **Indicators** | 39 (9 NNFX + 21 standard + 9 MT5 parity) |
-| **Commands** | 286 Bloomberg-style (Ctrl+K) |
+| **Commands** | 288 Bloomberg-style (Ctrl+K) |
 | **Drawing Tools** | 44 GPU-rendered (Fibonacci, channels, pitchforks, Elliott, Gann) |
+| **Data Sources** | 21 free APIs (Alpaca, SEC, FRED, Finnhub, CoinGecko, ECB, ...) |
 | **Security Audit** | 21 passes, 97 findings, 91 fixed |
-| **Development** | 4.7 days, 218 commits |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
 ---
@@ -226,24 +227,52 @@ Full port of TyphooN EA v1.420 risk management from MQL5 to Rust:
 | [031](docs/adr/031-testing-framework.md) | Testing framework (602 assertions) |
 | [032](docs/adr/032-gpu-drawing-tools-roadmap.md) | GPU chart completion + drawing tools parity roadmap |
 | [033](docs/adr/033-free-api-expansion.md) | Free API expansion research — 30+ data sources catalogued |
+| [034](docs/adr/034-cli-tui.md) | CLI / TUI terminal interface — 6.5MB standalone binary |
 
 ---
 
 ## Building
 
-### Prerequisites
+### GUI Prerequisites
 
 - Rust (latest stable)
 - Node.js 18+
 - Tauri CLI: `cargo install tauri-cli`
 - Linux: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`
 
-### Quick Start (Hyprland/NVIDIA)
+### GUI Quick Start (Hyprland/NVIDIA)
 
 ```bash
 ./launch.sh dev    # development with hot reload
 ./launch.sh        # production build + run
 ```
+
+### CLI / TUI (no GUI required)
+
+```bash
+cd cli && ./typhoon.sh              # Interactive TUI
+./typhoon.sh --positions            # Print positions and exit
+./typhoon.sh --account              # Print account and exit
+./typhoon.sh --accounts             # All accounts (Alpaca + MT5 imports)
+./typhoon.sh -s BTC/USD             # Start with specific symbol
+./typhoon.sh --import-mt5 DARWIN_EUR:/path/to/statement.csv
+```
+
+The CLI shares encrypted credentials with the GUI — no need to re-enter API keys. 6.5MB standalone binary, works over SSH on any VPS.
+
+| CLI Feature | Command |
+|---|---|
+| Market buy/sell | `:buy SMCI 100` / `:sell SLV 50` |
+| Limit order | `:limit buy AAPL 10 150.00` |
+| Stop order | `:stop sell SMCI 100 25.00` |
+| Bracket order | `:bracket buy CC 500 15.00 25.00` |
+| Close position | `:close CC` or `x` on selected |
+| Partial close | `p` on selected (50%) |
+| Close all | `:closeall` |
+| Cancel all orders | `:cancelall` |
+| Order history | `:history 20` |
+| Chart symbol | `:chart BTC/USD H4` |
+| Import MT5 | `:import DARWIN_EUR /path.csv` |
 
 The launch script sets the required environment variables for WebKitGTK on Hyprland with NVIDIA:
 - `WEBKIT_DISABLE_DMABUF_RENDERER=1` — prevents DMABUF crash

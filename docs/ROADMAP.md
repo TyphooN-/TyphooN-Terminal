@@ -144,6 +144,8 @@ Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new f
 | **Wasm indicator engine** | ✅ Done | 32KB Wasm binary — SMA/EMA/KAMA/RSI/Fisher/ATR/MACD/Bollinger + grid optimizer |
 | **Binary bar storage** | ✅ Done | Packed f64 format (48 bytes/bar) + zstd — 3-5x smaller than JSON |
 | **Headless CLI backtest** | ✅ Done | `--backtest` flag — run strategies from command line, no GUI |
+| **CLI / TUI Terminal** | ✅ Done | 6.5MB standalone binary — ratatui TUI with full trading parity, ASCII charts, risk dashboard, shared credentials |
+| **Multi-Account Tabulation** | ✅ Done | MT5 CSV import + Alpaca, aggregate portfolio view, combined VaR, account weights |
 | **Plugin marketplace** | 🔲 Blocked | Needs distribution infrastructure |
 | **GPU chart rendering (WebGL2)** | ✅ Done | 45KB Wasm — opt-in via "GPU Candles" selector. Candlesticks, indicator lines, grid, pan/zoom/scroll |
 | **Pure Rust GUI migration** | 🔲 Blocked | Egui/Iced — long-term architectural goal |
@@ -245,6 +247,14 @@ Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new f
 | **Finnhub** | Analyst recommendations, price targets, short interest, insider sentiment | API key (free) | 60/min |
 | **ECB** | Forex exchange rates (daily reference) | None (XML feed) | — |
 | **House Stock Watcher** | Congressional stock trades | None | — |
+| **CoinGecko** | Crypto market data, trending, sparklines | None | — |
+| **Treasury.gov** | Daily treasury yield rates | None | — |
+| **alternative.me** | Crypto Fear & Greed Index | None | — |
+| **whale-alert.io** | Large crypto transactions | Free key | 10/min |
+| **Reddit JSON** | WSB/investing post search | None | — |
+| **FINRA RegSHO** | Daily short sale volume | None | — |
+| **FMP** | Analyst estimates, financial ratios, DCF | API key (free) | 250/day |
+| **Alpha Vantage** | Earnings surprises, company overview | API key (free) | 5/min |
 
 ---
 
