@@ -23048,25 +23048,94 @@ async function cmdMt5Sync() {
 }
 
 async function cmdMt5DbSync() {
-  const w = createWindow({ title: "MT5 SQLite Direct Sync", width: 650, height: 400 });
+  const w = createWindow({ title: "MT5 SQLite Direct Sync", width: 700, height: 500 });
   const out = w.element ? w.element.querySelector(".fw-content") : w;
-  out.innerHTML = `<div id="mt5db-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
-  const logDiv = out.querySelector("#mt5db-log");
-  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+  out.innerHTML = `<div style="padding:8px">
+    <div id="mt5db-status" style="font-family:'Iosevka Fixed',monospace;font-size:12px;color:#4caf50;margin-bottom:8px;font-weight:bold">Discovering MT5 databases...</div>
+    <div id="mt5db-progress" style="background:#222;border-radius:3px;height:20px;margin-bottom:8px;overflow:hidden">
+      <div id="mt5db-bar" style="background:#2196f3;height:100%;width:0%;transition:width 0.3s;border-radius:3px"></div>
+    </div>
+    <div id="mt5db-stats" style="font-family:'Iosevka Fixed',monospace;font-size:11px;color:#888;margin-bottom:8px"></div>
+    <div id="mt5db-log" style="font-family:'Iosevka Fixed',monospace;font-size:10px;color:#666;overflow-y:auto;max-height:350px"></div>
+  </div>`;
 
-  addLog("<b>MT5 SQLite Direct Sync</b>", "#4caf50");
-  addLog("Reading bars directly from BarCacheWriter's SQLite database...", "#2196f3");
-  addLog("<span style='color:#888'>No CSV files, no file IPC — shared SQLite with WAL mode.</span>");
-  addLog("");
+  const statusEl = out.querySelector("#mt5db-status");
+  const barEl = out.querySelector("#mt5db-bar");
+  const statsEl = out.querySelector("#mt5db-stats");
+  const logDiv = out.querySelector("#mt5db-log");
+
+  const setStatus = (msg, color = "#4caf50") => { statusEl.textContent = msg; statusEl.style.color = color; };
+  const setProgress = (pct) => { barEl.style.width = pct + "%"; };
+  const setStats = (msg) => { statsEl.textContent = msg; };
+  const addLog = (msg, color = "#666") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
 
   try {
+    // Step 1: Discover symbol list from MT5 databases
+    setStatus("Discovering MT5 symbols...", "#2196f3");
+    setProgress(5);
+
+    let mt5SymbolList;
+    try {
+      const listJson = await invoke("get_mt5_symbol_list");
+      mt5SymbolList = JSON.parse(listJson);
+      addLog(`Found ${mt5SymbolList.count} symbols across MT5 instances`, "#4caf50");
+    } catch (_) {
+      mt5SymbolList = { count: 0, raw: [], normalized: [] };
+      addLog("No __SYMBOLS__ key found — will import whatever is in the databases", "#ff9800");
+    }
+
+    // Step 2: Run the sync (reads all databases, imports into terminal cache)
+    setStatus(`Syncing ${mt5SymbolList.count || "all"} symbols from MT5...`, "#ff9800");
+    setProgress(15);
+    addLog("Reading SQLite databases from all MT5 instances...");
+
+    // Run sync in background — poll status via a timer to keep UI alive
+    const startTime = Date.now();
+    const statusInterval = setInterval(() => {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+      setStats(`Elapsed: ${elapsed}s — importing bars (UI stays responsive)...`);
+    }, 500);
+
     const result = JSON.parse(await invoke("sync_mt5_sqlite"));
-    addLog(`Imported ${result.imported} entries, ${result.total_bars.toLocaleString()} total bars, ${result.symbols} symbols`, "#4caf50");
-    addLog(`Databases: ${result.databases_read}/${result.databases_found} MT5 instances read`, "#888");
+
+    clearInterval(statusInterval);
+    setProgress(100);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    setStatus(`Sync complete — ${result.symbols} symbols, ${result.total_bars.toLocaleString()} bars`, "#4caf50");
+    setStats(`${result.imported} entries from ${result.databases_read}/${result.databases_found} MT5 instances in ${elapsed}s`);
+
     addLog("");
-    addLog("Data is now available for charting and analysis.", "#4caf50");
+    addLog(`Imported: ${result.imported} entries`, "#4caf50");
+    addLog(`Total bars: ${result.total_bars.toLocaleString()}`, "#4caf50");
+    addLog(`Symbols: ${result.symbols}`, "#4caf50");
+    addLog(`MT5 databases: ${result.databases_read}/${result.databases_found}`, "#888");
+    addLog(`Time: ${elapsed}s`, "#888");
+    addLog("");
+
+    // Show normalized symbol list
+    if (mt5SymbolList.normalized && mt5SymbolList.normalized.length > 0) {
+      const groups = {};
+      for (const sym of mt5SymbolList.normalized) {
+        const type = sym.includes("/") ? (sym.endsWith("USD") && sym.length <= 8 ? "Crypto" : "Forex") : "Other";
+        if (!groups[type]) groups[type] = [];
+        groups[type].push(sym);
+      }
+      for (const [type, syms] of Object.entries(groups)) {
+        addLog(`${type}: ${syms.join(", ")}`, "#888");
+      }
+    }
+
+    addLog("");
     addLog("Use DARWINEX command for full outlier analysis.", "#2196f3");
-  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+    barEl.style.background = "#4caf50";
+
+  } catch (e) {
+    setStatus(`Error: ${e}`, "#f44336");
+    setProgress(0);
+    barEl.style.background = "#f44336";
+    addLog(`${e}`, "#f44336");
+  }
 }
 
 const CMD_PALETTE_COMMANDS = [
