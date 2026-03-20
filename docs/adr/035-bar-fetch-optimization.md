@@ -256,6 +256,30 @@ for (const sym of symbols) prefetchAllTimeframes(sym, null);
 
 **Impact:** With incremental fetch, this is near-free for returning users (only the gap since last session). Position symbols are warm-cached before user clicks them.
 
+### ✅ Cache Trim After Merge
+
+`merge_bars(key, json, max_bars)` now accepts a `max_bars` limit. After merging and deduplicating, excess bars are trimmed (oldest removed) to prevent unbounded SQLite growth. The limit matches the original request (e.g., 2000 bars for prefetch, 500 for chart).
+
+### ✅ Fast Compression for Merge Writes
+
+Added `put_bars_fast()` — uses zstd level 3 instead of level 9 for frequent merge operations. Level 3 is ~3× faster with only ~15% larger output. Archival storage still uses level 9. This reduces CPU overhead on the hot merge path.
+
+### ✅ Cache Freshness Gate
+
+`get_bars_incremental` now checks `get_cache_age_secs()` before making any API call. If the cache was updated within the last period of the timeframe (e.g., <3600s for 1Hour), it returns cached data immediately. This eliminates the SLV 1Day polling loop (was re-fetching every 60s with no new data).
+
+### ✅ Connection Pre-Warming
+
+`warm_data_connection()` fires a HEAD request to `data.alpaca.markets` during the connect flow. Since `get_account()` only warms the trading endpoint (`api/paper-api.alpaca.markets`), bar fetches go to a different host. Pre-warming establishes TCP+TLS ~200ms before the first bar fetch needs it.
+
+### ✅ Broker ID Key Fix
+
+`get_bars_incremental` now accepts `broker_id` from the frontend (`activeBrokerId`). Tries the primary key first (e.g., `alpaca_Paper:BTC/USD:1Hour`), falls back to `default:` key. This fixed crypto symbols not finding cache from previous sessions (frontend saved under `alpaca_*:` prefix, backend looked for `default:`).
+
+### ✅ Double-Write Elimination
+
+Frontend `cachedGetBars` no longer calls `saveBarCacheToDisk` after receiving data from `get_bars_incremental` — the backend already persists to SQLite during merge. Only hot cache (`barCache`) is updated in the frontend. This eliminates duplicate SQLite writes and the associated zstd level 9 recompression.
+
 ### Deferred
 
 | Improvement | Reason |
@@ -263,6 +287,7 @@ for (const sym of symbols) prefetchAllTimeframes(sym, null);
 | **Priority queue** | First-come-first-served via Mutex is adequate now that incremental fetch reduces prefetch cost to 1-2 chunks per TF. Would add complexity for marginal UX improvement. |
 | **Parallel symbol fetch** | Needs testing to determine if Alpaca rate-limits per-endpoint or globally. Risk of triggering harder throttling. |
 | **Shared 1Min aggregation** | Dropped: 1Min crypto = 1440 bars/day, storing 90 days = 130K bars per symbol. Per-TF incremental fetch is more efficient. |
+| **CLI cache reading** | CLI is a one-shot tool, not persistent. Adding SQLite cache to CLI requires duplicating cache module. Low impact vs effort. |
 
 ### Remaining (Blocked by External)
 
@@ -283,24 +308,26 @@ for (const sym of symbols) prefetchAllTimeframes(sym, null);
 
 | File | Change |
 |---|---|
-| `src-tauri/src/broker/alpaca.rs` | `page_token` pagination, adaptive `RateLimiter`, `get_bars_after()` with optional `after_timestamp` for incremental fetch, tighter crypto lookback |
-| `src-tauri/src/core/cache.rs` | `get_incremental_start()` (second-to-last bar timestamp), `merge_bars(key, json, max_bars)` (dedup + sort + trim + store), `get_cache_age_secs(key)` (staleness check for refresh decisions) |
+| `src-tauri/src/broker/alpaca.rs` | `page_token` pagination, adaptive `RateLimiter`, `get_bars_after()` for incremental fetch, `warm_data_connection()` for pre-warming, tighter crypto lookback |
+| `src-tauri/src/core/cache.rs` | `get_incremental_start()`, `merge_bars(key, json, max_bars)` with trim + zstd level 3, `put_bars_fast()`, `get_cache_age_secs()` |
 | `src-tauri/src/core/bar_builder.rs` | **New**: `BarBuilder` constructs 1-min OHLCV from WebSocket trades |
-| `src-tauri/src/main.rs` | New `get_bars_incremental` + `poll_bars` Tauri commands, `BarBuilder` in AppState, trade → bar_builder feed in `poll_stream` |
-| `frontend/src/main.js` | `cachedGetBars` → `get_bars_incremental`, `startWsBarPolling()`, predictive prefetch on connect |
-| `cli/src/broker.rs` | Matching crypto lookback reduction (shares SQLite cache with GUI) |
+| `src-tauri/src/main.rs` | `get_bars_incremental` (cache-aware, broker_id, freshness gate), `poll_bars`, `warm_data_connection()` in connect, `BarBuilder` in AppState |
+| `frontend/src/main.js` | `cachedGetBars` → `get_bars_incremental` with `brokerId`, `startWsBarPolling()`, predictive prefetch on connect, removed double-write `saveBarCacheToDisk` from `cachedGetBars` |
+| `cli/src/broker.rs` | Matching crypto lookback reduction |
 
 ## Consequences
 
 - **Pro**: 60-270× faster cold loads for crypto — charts usable in seconds, not hours
 - **Pro**: Incremental fetch: 80-95% fewer API calls on warm start (1-2 chunks vs 13+)
+- **Pro**: Cache freshness gate eliminates redundant polling loops (SLV 1Day was re-fetching every 60s)
 - **Pro**: Live candle always refreshed (second-to-last bar start point preserves forming candle accuracy)
 - **Pro**: WebSocket bar builder: real-time 1Min candle updates without API polling
 - **Pro**: Predictive prefetch: position symbols warm-cached before user clicks
+- **Pro**: Cache trim prevents unbounded SQLite growth
+- **Pro**: Fast compression (zstd 3) for merge writes, archival (zstd 9) for initial storage
+- **Pro**: Connection pre-warming saves ~200ms on first bar fetch
+- **Pro**: No double-writes: backend handles SQLite, frontend handles hot cache only
 - **Pro**: Adaptive pacing prevents progressive throttling (benefits all tiers)
 - **Pro**: `page_token` pagination eliminates overlap/gap bugs (simpler, more correct)
-- **Pro**: GUI and CLI share SQLite cache — CLI benefits from GUI's cached bars
-- **Pro**: All improvements apply to paid tier too (no wasted budget)
-- **Con**: Crypto lookback capped at 90 days (1Hour) / 180 days (4Hour) — users wanting deep crypto history would need to increase `max_lookback_days`
+- **Con**: Crypto lookback capped at 90 days (1Hour) / 180 days (4Hour)
 - **Con**: WebSocket bar builder only constructs 1Min bars directly; higher TFs still need API for period-closing updates
-- **Con**: SQLite merge_bars() deserializes + reserializes full dataset — acceptable for background writes but not zero-cost
