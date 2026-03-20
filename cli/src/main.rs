@@ -414,7 +414,17 @@ impl App {
 
         // Positions
         match self.broker.get_positions().await {
-            Ok(p) => { self.positions = p; }
+            Ok(p) => {
+                // Auto-populate watchlist from positions on first load
+                if self.watchlist.is_empty() {
+                    for pos in &p {
+                        if !self.watchlist.contains(&pos.symbol) {
+                            self.watchlist.push(pos.symbol.clone());
+                        }
+                    }
+                }
+                self.positions = p;
+            }
             Err(e) => { self.log(&format!("Positions error: {e}"), Color::Red); }
         }
 
@@ -1124,17 +1134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Interactive TUI mode
     let watchlist = args.watch.map(|w| w.split(',').map(|s| s.trim().to_uppercase()).collect())
-        .unwrap_or_else(|| {
-            // Default watchlist: symbols from open positions (fetched at startup)
-            match tokio::runtime::Handle::current().block_on(broker.get_positions()) {
-                Ok(positions) => {
-                    let mut syms: Vec<String> = positions.iter().map(|p| p.symbol.clone()).collect();
-                    syms.dedup();
-                    if syms.is_empty() { vec!["SPY".into()] } else { syms }
-                }
-                Err(_) => vec!["SPY".into()],
-            }
-        });
+        .unwrap_or_default();
     let symbol = args.symbol.unwrap_or_else(|| "SMCI".to_string());
 
     let mut app = App::new(broker, symbol, watchlist);
