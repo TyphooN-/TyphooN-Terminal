@@ -260,9 +260,34 @@ This is applied per-sector so that tech stocks (naturally higher volatility) are
 
 ## Timeline
 
-| Phase | Work | Depends On |
+| Phase | Work | Status |
 |---|---|---|
-| Phase 1 | Rust outlier engine (4 scan commands) | Existing bar cache |
-| Phase 2 | Frontend commands (6 Ctrl+K entries) | Phase 1 |
-| Phase 3 | MT5 data import + full Darwinex analysis | BarExporter EA deployed |
-| Phase 4 | MarketWizardry.org cleanup | Phase 2 verified working |
+| Phase 1 | Rust outlier engine: `calculate_atr`, `detect_outliers` (IQR), `scan_var_outliers`, `scan_atr_outliers`, `scan_crypto_risk` | ✅ **DONE** |
+| Phase 2 | Frontend commands: VAROUT, ATROUT, EVOUT, CRYPTORISK, OUTLIERS, SCREEN | ✅ **DONE** |
+| Phase 3 | MT5 data import: BarExporter.mq5, BarExporterFull.mq5, `import_mt5_bars`, `get_mt5_bars` | ✅ **DONE** |
+| Phase 4 | MarketWizardry.org cleanup (see below) | Pending |
+
+### Phase 4: MarketWizardry.org Cleanup Plan
+
+1. **Create "Explorer Archive" menu item** in `/home/typhoon/git/MarketWizardry.org/`
+   - New page: `/explorer-archive/index.html`
+   - Contains all old explorer content (var-explorer, atr-explorer, ev-explorer, crypto-explorer)
+   - Static archive — no longer updated
+
+2. **Blog post at top of archive page + in blog section:**
+   - Title: "MarketWizardry Explorers are now in TyphooN-Terminal"
+   - Content: How to use TyphooN-Terminal's VAROUT, ATROUT, EVOUT, CRYPTORISK, OUTLIERS, SCREEN commands
+   - Screenshots of each command output
+   - Instructions for MT5 BarExporter setup (Darwinex data integration)
+   - Link to TyphooN-Terminal GitHub
+
+3. **Remove from main navigation:**
+   - Remove VaR Explorer, ATR Explorer, EV Explorer, Crypto Explorer menu items
+   - Replace with single "Explorer Archive" link
+   - Remove `/js/var-explorer.js`, `/js/atr-explorer.js`, `/js/ev-explorer.js`, `/js/crypto-explorer.js`
+
+4. **Redirect URLs:**
+   - `/var-explorer/` → `/explorer-archive/#var`
+   - `/atr-explorer/` → `/explorer-archive/#atr`
+   - `/ev-explorer/` → `/explorer-archive/#ev`
+   - `/crypto-explorer/` → `/explorer-archive/#crypto`

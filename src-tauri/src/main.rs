@@ -2638,6 +2638,184 @@ async fn db_cache_delete_symbol(state: State<'_, SharedState>, symbol: String) -
     Ok(format!("Deleted {deleted} entries for {symbol}"))
 }
 
+// ── Outlier Scanner (VaR/ATR/EV Explorer equivalents) ────────────
+// Scans symbols, computes risk metrics, detects statistical outliers via IQR.
+// Replaces MarketWizardry.org VaR Explorer, ATR Explorer, EV Explorer, Crypto Explorer.
+
+/// Scan for VaR outliers: compute VaR/Price ratio for each symbol, detect IQR outliers per sector.
+#[tauri::command]
+async fn scan_var_outliers(
+    state: State<'_, SharedState>,
+    symbols: Vec<String>,
+    sectors: Vec<String>, // parallel array: sectors[i] is the sector for symbols[i]
+    period: Option<u32>,
+    confidence: Option<f64>,
+) -> Result<String, String> {
+    let period = period.unwrap_or(252) as usize;
+    let confidence = confidence.unwrap_or(0.95);
+    let (broker, cache) = {
+        let s = state.lock().await;
+        (s.broker.as_ref().ok_or("Not connected")?.clone(), s.db_cache.clone())
+    };
+
+    let mut data: Vec<(String, String, f64)> = Vec::new();
+
+    for (i, sym) in symbols.iter().enumerate() {
+        let sector = sectors.get(i).cloned().unwrap_or_else(|| "Unknown".to_string());
+        // Try MT5 cache first, then Alpaca
+        let bars_json = if let Some(c) = &cache {
+            let mt5_key = format!("mt5:{}:1Day", sym);
+            c.get_bars(&mt5_key).ok().flatten().map(|(j, _)| j)
+        } else { None };
+
+        let closes: Vec<f64> = if let Some(json) = bars_json {
+            let bars: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
+            bars.iter().filter_map(|b| b["close"].as_f64()).collect()
+        } else {
+            match broker.get_bars(sym, "1Day", period as u32 + 10).await {
+                Ok(bars) => bars.iter().map(|b| b.close).collect(),
+                Err(_) => continue,
+            }
+        };
+
+        if closes.len() < 20 { continue; }
+        let returns = core::var::compute_daily_returns(&closes);
+        let sd = core::var::std_dev(&returns);
+        let z = core::var::inverse_cumulative_normal(confidence);
+        let var_pct = (returns.iter().sum::<f64>() / returns.len() as f64 - z * sd).abs() * 100.0;
+        let last_price = *closes.last().unwrap_or(&1.0);
+        let risk_ratio = if last_price > 0.0 { var_pct / last_price * closes.len() as f64 } else { 0.0 };
+
+        data.push((sym.clone(), sector, risk_ratio));
+    }
+
+    let (outliers, stats) = core::var::detect_outliers(&data, 1.5);
+    Ok(serde_json::json!({ "outliers": outliers, "sector_stats": stats, "total_scanned": data.len() }).to_string())
+}
+
+/// Scan for ATR outliers: compute ATR/Price ratio for each symbol, detect IQR outliers per sector.
+#[tauri::command]
+async fn scan_atr_outliers(
+    state: State<'_, SharedState>,
+    symbols: Vec<String>,
+    sectors: Vec<String>,
+    atr_period: Option<u32>,
+) -> Result<String, String> {
+    let atr_period = atr_period.unwrap_or(14) as usize;
+    let (broker, cache) = {
+        let s = state.lock().await;
+        (s.broker.as_ref().ok_or("Not connected")?.clone(), s.db_cache.clone())
+    };
+
+    let mut data: Vec<(String, String, f64)> = Vec::new();
+
+    for (i, sym) in symbols.iter().enumerate() {
+        let sector = sectors.get(i).cloned().unwrap_or_else(|| "Unknown".to_string());
+        let bars_json = if let Some(c) = &cache {
+            let mt5_key = format!("mt5:{}:1Day", sym);
+            c.get_bars(&mt5_key).ok().flatten().map(|(j, _)| j)
+        } else { None };
+
+        let ohlc: Vec<(f64, f64, f64, f64)> = if let Some(json) = bars_json {
+            let bars: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
+            bars.iter().filter_map(|b| {
+                Some((b["open"].as_f64()?, b["high"].as_f64()?, b["low"].as_f64()?, b["close"].as_f64()?))
+            }).collect()
+        } else {
+            match broker.get_bars(sym, "1Day", (atr_period + 20) as u32).await {
+                Ok(bars) => bars.iter().map(|b| (b.open, b.high, b.low, b.close)).collect(),
+                Err(_) => continue,
+            }
+        };
+
+        if ohlc.len() < atr_period + 1 { continue; }
+        let atr = core::var::calculate_atr(&ohlc, atr_period);
+        let last_price = ohlc.last().map(|b| b.3).unwrap_or(1.0);
+        let vol_ratio = if last_price > 0.0 { atr / last_price * 100.0 } else { 0.0 };
+
+        data.push((sym.clone(), sector, vol_ratio));
+    }
+
+    let (outliers, stats) = core::var::detect_outliers(&data, 1.5);
+    Ok(serde_json::json!({ "outliers": outliers, "sector_stats": stats, "total_scanned": data.len() }).to_string())
+}
+
+/// Scan crypto risk: multi-metric analysis (ATR tiers, VaR, advanced ratios).
+#[tauri::command]
+async fn scan_crypto_risk(
+    state: State<'_, SharedState>,
+    symbols: Vec<String>,
+) -> Result<String, String> {
+    let (broker, cache) = {
+        let s = state.lock().await;
+        (s.broker.as_ref().ok_or("Not connected")?.clone(), s.db_cache.clone())
+    };
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    for sym in &symbols {
+        // Fetch daily bars
+        let ohlc: Vec<(f64, f64, f64, f64)> = if let Some(c) = &cache {
+            let key = format!("mt5:{}:1Day", sym);
+            if let Ok(Some((json, _))) = c.get_bars(&key) {
+                let bars: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
+                bars.iter().filter_map(|b| {
+                    Some((b["open"].as_f64()?, b["high"].as_f64()?, b["low"].as_f64()?, b["close"].as_f64()?))
+                }).collect()
+            } else { Vec::new() }
+        } else { Vec::new() };
+
+        let ohlc = if ohlc.is_empty() {
+            match broker.get_bars(sym, "1Day", 100).await {
+                Ok(bars) => bars.iter().map(|b| (b.open, b.high, b.low, b.close)).collect(),
+                Err(_) => continue,
+            }
+        } else { ohlc };
+
+        if ohlc.len() < 15 { continue; }
+
+        let last_price = ohlc.last().map(|b| b.3).unwrap_or(1.0);
+        let atr_d1 = core::var::calculate_atr(&ohlc, 14);
+        let vol_pct = if last_price > 0.0 { atr_d1 / last_price * 100.0 } else { 0.0 };
+
+        // VaR
+        let closes: Vec<f64> = ohlc.iter().map(|b| b.3).collect();
+        let returns = core::var::compute_daily_returns(&closes);
+        let sd = core::var::std_dev(&returns);
+        let z = core::var::inverse_cumulative_normal(0.95);
+        let var_pct = (returns.iter().sum::<f64>() / returns.len().max(1) as f64 - z * sd).abs() * 100.0;
+
+        // Risk tier
+        let tier = if vol_pct > 8.0 { "EXTREME" }
+            else if vol_pct > 5.0 { "HIGH" }
+            else if vol_pct > 2.0 { "MEDIUM" }
+            else { "LOW" };
+
+        // Advanced ratios
+        let var_atr_ratio = if atr_d1 > 0.0 { var_pct / (atr_d1 / last_price * 100.0) } else { 0.0 };
+
+        results.push(serde_json::json!({
+            "symbol": sym,
+            "price": last_price,
+            "atr_d1": atr_d1,
+            "atr_pct": vol_pct,
+            "var_pct": var_pct,
+            "var_atr_ratio": var_atr_ratio,
+            "tier": tier,
+            "bars": ohlc.len(),
+        }));
+    }
+
+    // Sort by volatility descending
+    results.sort_by(|a, b| {
+        b["atr_pct"].as_f64().unwrap_or(0.0)
+            .partial_cmp(&a["atr_pct"].as_f64().unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(serde_json::to_string(&results).map_err(|e| format!("JSON error: {e}"))?)
+}
+
 // ── MT5 Bar Import (Darwinex data via BarExporter EA) ───────────
 // Imports CSV files exported by BarExporter.mq5 into the SQLite cache.
 // CSV format: timestamp,open,high,low,close,volume (RFC3339 timestamps)
@@ -3648,6 +3826,9 @@ fn main() {
             db_cache_detailed_stats,
             db_cache_delete_key,
             db_cache_delete_symbol,
+            scan_var_outliers,
+            scan_atr_outliers,
+            scan_crypto_risk,
             import_mt5_bars,
             list_mt5_symbols,
             get_mt5_bars,

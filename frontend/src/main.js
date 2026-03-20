@@ -22453,6 +22453,286 @@ async function cmdDividendCalendar() {
   } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
 }
 
+// ── Outlier Explorer Commands (replaces MarketWizardry.org VaR/ATR/EV/Crypto explorers) ──
+
+async function cmdVarOutliers() {
+  const w = createWindow({ title: "VaR Outlier Scanner", width: 860, height: 600 });
+  const out = w.querySelector(".window-body") || w;
+  out.innerHTML = `<div id="var-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  const logDiv = out.querySelector("#var-out-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  addLog("Scanning positions + watchlist for VaR outliers...", "#2196f3");
+  try {
+    const [posJson, acctJson] = await Promise.all([invoke("get_positions"), invoke("get_account")]);
+    const positions = JSON.parse(posJson);
+    // Collect symbols from positions + watchlist
+    const symbols = [...new Set([...positions.map(p => p.symbol), ...Object.keys(barCache).map(k => k.split(":")[0])])].filter(s => s.length > 0 && s.length < 12);
+    // Use "Unknown" sector for now (Finnhub free tier is limited)
+    const sectors = symbols.map(() => "Market");
+    addLog(`Scanning ${symbols.length} symbols...`, "#ff9800");
+
+    const result = JSON.parse(await invoke("scan_var_outliers", { symbols, sectors, period: 252, confidence: 0.95 }));
+    logDiv.innerHTML = ""; // clear log
+
+    // Summary
+    addLog(`<b>VaR Outlier Scanner</b> — ${result.total_scanned} symbols scanned, ${result.outliers.length} outliers detected`, "#4caf50");
+    addLog(`<span style="color:#666">Method: IQR (1.5×) on VaR/Price ratio, 252-day returns, 95% confidence</span>`);
+    addLog("");
+
+    if (result.outliers.length === 0) { addLog("No outliers detected.", "#888"); return; }
+
+    // Table header
+    addLog(`<div style="display:grid;grid-template-columns:80px 60px 70px 70px 70px 80px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding-bottom:4px">` +
+      `<span>Symbol</span><span>Tier</span><span>Metric</span><span>Median</span><span>Z-Score</span><span>Direction</span></div>`);
+
+    for (const o of result.outliers.slice(0, 40)) {
+      const tierColor = o.tier === "EXTREME" ? "#f44336" : o.tier === "HIGH" ? "#ff9800" : o.tier === "ELEVATED" ? "#ffeb3b" : "#4caf50";
+      addLog(`<div style="display:grid;grid-template-columns:80px 60px 70px 70px 70px 80px;gap:4px">` +
+        `<span style="color:#2196f3;cursor:pointer" onclick="document.getElementById('symbol-input').value='${o.symbol}';document.getElementById('symbol-input').dispatchEvent(new Event('change'))">${o.symbol}</span>` +
+        `<span style="color:${tierColor}">${o.tier}</span>` +
+        `<span>${o.metric.toFixed(2)}%</span>` +
+        `<span style="color:#888">${o.sector_median.toFixed(2)}%</span>` +
+        `<span style="color:${o.z_score > 0 ? '#f44336' : '#4caf50'}">${o.z_score.toFixed(2)}σ</span>` +
+        `<span>${o.direction === "high" ? "⬆ HIGH RISK" : "⬇ LOW RISK"}</span></div>`);
+    }
+  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
+async function cmdAtrOutliers() {
+  const w = createWindow({ title: "ATR Volatility Outlier Scanner", width: 860, height: 600 });
+  const out = w.querySelector(".window-body") || w;
+  out.innerHTML = `<div id="atr-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  const logDiv = out.querySelector("#atr-out-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  addLog("Scanning for ATR volatility outliers...", "#2196f3");
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+    const symbols = [...new Set([...positions.map(p => p.symbol), ...Object.keys(barCache).map(k => k.split(":")[0])])].filter(s => s.length > 0 && s.length < 12);
+    const sectors = symbols.map(() => "Market");
+    addLog(`Scanning ${symbols.length} symbols (ATR 14)...`, "#ff9800");
+
+    const result = JSON.parse(await invoke("scan_atr_outliers", { symbols, sectors, atrPeriod: 14 }));
+    logDiv.innerHTML = "";
+
+    addLog(`<b>ATR Volatility Outlier Scanner</b> — ${result.total_scanned} symbols, ${result.outliers.length} outliers`, "#4caf50");
+    addLog(`<span style="color:#666">Method: IQR (1.5×) on ATR(14)/Price %, daily timeframe</span>`);
+    addLog("");
+
+    if (result.outliers.length === 0) { addLog("No volatility outliers detected.", "#888"); return; }
+
+    addLog(`<div style="display:grid;grid-template-columns:80px 60px 80px 70px 70px 80px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding-bottom:4px">` +
+      `<span>Symbol</span><span>Tier</span><span>ATR/Price</span><span>Median</span><span>Z-Score</span><span>Signal</span></div>`);
+
+    for (const o of result.outliers.slice(0, 40)) {
+      const tierColor = o.tier === "EXTREME" ? "#f44336" : o.tier === "HIGH" ? "#ff9800" : o.tier === "ELEVATED" ? "#ffeb3b" : "#4caf50";
+      const signal = o.direction === "high" ? "🔥 HIGH VOL" : "🧊 LOW VOL";
+      addLog(`<div style="display:grid;grid-template-columns:80px 60px 80px 70px 70px 80px;gap:4px">` +
+        `<span style="color:#2196f3;cursor:pointer" onclick="document.getElementById('symbol-input').value='${o.symbol}';document.getElementById('symbol-input').dispatchEvent(new Event('change'))">${o.symbol}</span>` +
+        `<span style="color:${tierColor}">${o.tier}</span>` +
+        `<span>${o.metric.toFixed(2)}%</span>` +
+        `<span style="color:#888">${o.sector_median.toFixed(2)}%</span>` +
+        `<span style="color:${o.z_score > 0 ? '#f44336' : '#4caf50'}">${o.z_score.toFixed(2)}σ</span>` +
+        `<span>${signal}</span></div>`);
+    }
+  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
+async function cmdEvOutliers() {
+  const w = createWindow({ title: "EV (Enterprise Value) Outlier Scanner", width: 860, height: 600 });
+  const out = w.querySelector(".window-body") || w;
+  out.innerHTML = `<div id="ev-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  const logDiv = out.querySelector("#ev-out-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  addLog("Fetching fundamental data for EV analysis...", "#2196f3");
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+    const symbols = [...new Set(positions.map(p => p.symbol))].filter(s => !s.includes("/"));
+    addLog(`Analyzing ${symbols.length} equity positions...`, "#ff9800");
+
+    // Fetch fundamentals from Finnhub for each symbol
+    const results = [];
+    for (const sym of symbols) {
+      try {
+        const fundsJson = await invoke("fetch_article", { url: `https://finnhub.io/api/v1/stock/metric?symbol=${sym}&metric=all&token=demo` });
+        const data = JSON.parse(fundsJson);
+        const metric = data.metric || {};
+        const mcap = metric.marketCapitalization || 0;
+        const ev = metric.enterpriseValue || 0;
+        const pe = metric.peBasicExclExtraTTM || 0;
+        const roe = metric.roeTTM || 0;
+        if (mcap > 0 && ev !== 0) {
+          const ratio = (mcap / ev) * 100;
+          results.push({ symbol: sym, mcap, ev, ratio, pe, roe });
+        }
+      } catch (_) {}
+    }
+
+    logDiv.innerHTML = "";
+    addLog(`<b>EV Outlier Scanner</b> — ${results.length} symbols analyzed`, "#4caf50");
+    addLog(`<span style="color:#666">MCap/EV %: >150% = fortress balance sheet, <50% = heavy debt, negative = distress</span>`);
+    addLog("");
+
+    if (results.length === 0) { addLog("No fundamental data available (Finnhub demo token rate-limited).", "#888"); return; }
+
+    // Sort by MCap/EV ratio
+    results.sort((a, b) => b.ratio - a.ratio);
+
+    addLog(`<div style="display:grid;grid-template-columns:70px 90px 90px 80px 60px 60px 80px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding-bottom:4px">` +
+      `<span>Symbol</span><span>MCap ($B)</span><span>EV ($B)</span><span>MCap/EV</span><span>P/E</span><span>ROE</span><span>Signal</span></div>`);
+
+    for (const r of results) {
+      const signal = r.ratio > 150 ? "💪 STRONG" : r.ratio > 80 ? "✅ NORMAL" : r.ratio > 0 ? "⚠️ LEVERED" : "🔴 DISTRESS";
+      const ratioColor = r.ratio > 150 ? "#4caf50" : r.ratio > 80 ? "#ccc" : r.ratio > 0 ? "#ff9800" : "#f44336";
+      addLog(`<div style="display:grid;grid-template-columns:70px 90px 90px 80px 60px 60px 80px;gap:4px">` +
+        `<span style="color:#2196f3">${r.symbol}</span>` +
+        `<span>$${(r.mcap / 1000).toFixed(1)}B</span>` +
+        `<span>$${(r.ev / 1000).toFixed(1)}B</span>` +
+        `<span style="color:${ratioColor}">${r.ratio.toFixed(1)}%</span>` +
+        `<span>${r.pe ? r.pe.toFixed(1) : "—"}</span>` +
+        `<span>${r.roe ? r.roe.toFixed(1) + "%" : "—"}</span>` +
+        `<span>${signal}</span></div>`);
+    }
+  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
+async function cmdCryptoRisk() {
+  const w = createWindow({ title: "Crypto Risk Analysis", width: 860, height: 600 });
+  const out = w.querySelector(".window-body") || w;
+  out.innerHTML = `<div id="crypto-risk-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  const logDiv = out.querySelector("#crypto-risk-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  addLog("Analyzing crypto risk profiles...", "#2196f3");
+  try {
+    // Get crypto symbols from positions + common pairs
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+    const cryptoPos = positions.filter(p => p.symbol.includes("/")).map(p => p.symbol);
+    const defaultCrypto = ["BTC/USD", "ETH/USD", "SOL/USD", "DOGE/USD", "ADA/USD", "AVAX/USD", "DOT/USD", "LINK/USD"];
+    const symbols = [...new Set([...cryptoPos, ...defaultCrypto])];
+    addLog(`Scanning ${symbols.length} crypto pairs...`, "#ff9800");
+
+    const results = JSON.parse(await invoke("scan_crypto_risk", { symbols }));
+    logDiv.innerHTML = "";
+
+    addLog(`<b>Crypto Risk Analysis</b> — ${results.length} pairs analyzed`, "#4caf50");
+    addLog(`<span style="color:#666">Tiers: LOW (<2%), MEDIUM (2-5%), HIGH (5-8%), EXTREME (>8% daily ATR/Price)</span>`);
+    addLog("");
+
+    addLog(`<div style="display:grid;grid-template-columns:90px 80px 70px 70px 70px 70px 70px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding-bottom:4px">` +
+      `<span>Symbol</span><span>Price</span><span>ATR D1</span><span>ATR %</span><span>VaR %</span><span>VaR/ATR</span><span>Tier</span></div>`);
+
+    for (const r of results) {
+      const tierColor = r.tier === "EXTREME" ? "#f44336" : r.tier === "HIGH" ? "#ff9800" : r.tier === "MEDIUM" ? "#ffeb3b" : "#4caf50";
+      addLog(`<div style="display:grid;grid-template-columns:90px 80px 70px 70px 70px 70px 70px;gap:4px">` +
+        `<span style="color:#2196f3">${r.symbol}</span>` +
+        `<span>$${r.price < 1 ? r.price.toFixed(4) : r.price.toFixed(2)}</span>` +
+        `<span>$${r.atr_d1 < 1 ? r.atr_d1.toFixed(4) : r.atr_d1.toFixed(2)}</span>` +
+        `<span style="color:${tierColor}">${r.atr_pct.toFixed(2)}%</span>` +
+        `<span>${r.var_pct.toFixed(2)}%</span>` +
+        `<span>${r.var_atr_ratio.toFixed(2)}</span>` +
+        `<span style="color:${tierColor};font-weight:bold">${r.tier}</span></div>`);
+    }
+  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
+async function cmdOutliers() {
+  const w = createWindow({ title: "Combined Outlier Report", width: 900, height: 650 });
+  const out = w.querySelector(".window-body") || w;
+  out.innerHTML = `<div style="padding:8px">
+    <div style="display:flex;gap:4px;margin-bottom:8px">
+      <button id="out-tab-var" class="btn-action" style="flex:1;padding:6px">VaR Outliers</button>
+      <button id="out-tab-atr" class="btn-action" style="flex:1;padding:6px">ATR Outliers</button>
+      <button id="out-tab-ev" class="btn-action" style="flex:1;padding:6px">EV Analysis</button>
+      <button id="out-tab-crypto" class="btn-action" style="flex:1;padding:6px">Crypto Risk</button>
+    </div>
+    <div id="out-content" style="font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:calc(100% - 50px)">Click a tab to run the scan.</div>
+  </div>`;
+  out.querySelector("#out-tab-var").addEventListener("click", cmdVarOutliers);
+  out.querySelector("#out-tab-atr").addEventListener("click", cmdAtrOutliers);
+  out.querySelector("#out-tab-ev").addEventListener("click", cmdEvOutliers);
+  out.querySelector("#out-tab-crypto").addEventListener("click", cmdCryptoRisk);
+}
+
+async function cmdScreen() {
+  const w = createWindow({ title: "Multi-Factor Screener", width: 900, height: 650 });
+  const out = w.querySelector(".window-body") || w;
+  out.innerHTML = `<div style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%">
+    <div style="margin-bottom:12px">
+      <b style="color:#4caf50">Multi-Factor Outlier Screener</b><br>
+      <span style="color:#888">Cross-references VaR × ATR to find symbols that are outliers on MULTIPLE metrics.</span>
+    </div>
+    <div id="screen-log"></div>
+  </div>`;
+  const logDiv = out.querySelector("#screen-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  addLog("Running multi-factor scan...", "#2196f3");
+  try {
+    const posJson = await invoke("get_positions");
+    const positions = JSON.parse(posJson);
+    const symbols = [...new Set([...positions.map(p => p.symbol), ...Object.keys(barCache).map(k => k.split(":")[0])])].filter(s => s.length > 0 && s.length < 12);
+    const sectors = symbols.map(() => "Market");
+
+    addLog(`Scanning ${symbols.length} symbols on VaR + ATR...`, "#ff9800");
+    const [varJson, atrJson] = await Promise.all([
+      invoke("scan_var_outliers", { symbols, sectors, period: 252, confidence: 0.95 }),
+      invoke("scan_atr_outliers", { symbols, sectors, atrPeriod: 14 }),
+    ]);
+    const varResult = JSON.parse(varJson);
+    const atrResult = JSON.parse(atrJson);
+
+    // Find symbols that appear in BOTH outlier lists
+    const varOutlierSyms = new Set(varResult.outliers.map(o => o.symbol));
+    const atrOutlierSyms = new Set(atrResult.outliers.map(o => o.symbol));
+    const dualOutliers = [...varOutlierSyms].filter(s => atrOutlierSyms.has(s));
+
+    logDiv.innerHTML = "";
+    addLog(`<b>Multi-Factor Screener Results</b>`, "#4caf50");
+    addLog(`VaR outliers: ${varResult.outliers.length} | ATR outliers: ${atrResult.outliers.length} | <b style="color:#f44336">DUAL outliers: ${dualOutliers.length}</b>`);
+    addLog("");
+
+    if (dualOutliers.length === 0) {
+      addLog("No dual-metric outliers found. This is normal — dual outliers are rare.", "#888");
+      addLog("");
+      addLog("<b>VaR-only outliers (top 10):</b>", "#ff9800");
+      for (const o of varResult.outliers.slice(0, 10)) {
+        addLog(`  ${o.symbol}: VaR/Price ${o.metric.toFixed(2)}% (${o.tier}, z=${o.z_score.toFixed(1)}σ)`);
+      }
+      addLog("");
+      addLog("<b>ATR-only outliers (top 10):</b>", "#ff9800");
+      for (const o of atrResult.outliers.slice(0, 10)) {
+        addLog(`  ${o.symbol}: ATR/Price ${o.metric.toFixed(2)}% (${o.tier}, z=${o.z_score.toFixed(1)}σ)`);
+      }
+      return;
+    }
+
+    addLog(`<div style="display:grid;grid-template-columns:80px 70px 60px 70px 60px 80px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding-bottom:4px">` +
+      `<span>Symbol</span><span>VaR %</span><span>VaR Z</span><span>ATR %</span><span>ATR Z</span><span>Signal</span></div>`);
+
+    for (const sym of dualOutliers) {
+      const varO = varResult.outliers.find(o => o.symbol === sym);
+      const atrO = atrResult.outliers.find(o => o.symbol === sym);
+      if (!varO || !atrO) continue;
+      const signal = (varO.direction === "high" && atrO.direction === "high") ? "🔴 DANGER"
+        : (varO.direction === "low" && atrO.direction === "low") ? "🟢 SAFE"
+        : "⚠️ MIXED";
+      addLog(`<div style="display:grid;grid-template-columns:80px 70px 60px 70px 60px 80px;gap:4px">` +
+        `<span style="color:#2196f3">${sym}</span>` +
+        `<span style="color:#f44336">${varO.metric.toFixed(2)}%</span>` +
+        `<span>${varO.z_score.toFixed(1)}σ</span>` +
+        `<span style="color:#ff9800">${atrO.metric.toFixed(2)}%</span>` +
+        `<span>${atrO.z_score.toFixed(1)}σ</span>` +
+        `<span>${signal}</span></div>`);
+    }
+  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
@@ -22685,6 +22965,12 @@ const CMD_PALETTE_COMMANDS = [
   { name: "PEERS", desc: "Peer comparison table (fundamentals, color-coded vs median)", action: cmdPeerComparison },
   { name: "SECTORFLOW", desc: "Sector ETF accumulation/distribution (5D price vs volume)", action: cmdSectorFlow },
   { name: "DIVCAL", desc: "Dividend calendar (watchlist ex-dates, payment dates, amounts)", action: cmdDividendCalendar },
+  { name: "VAROUT", desc: "VaR Outlier Scanner — IQR detection on VaR/Price ratio (replaces MarketWizardry VaR Explorer)", action: cmdVarOutliers },
+  { name: "ATROUT", desc: "ATR Volatility Outlier Scanner — IQR detection on ATR/Price (replaces MarketWizardry ATR Explorer)", action: cmdAtrOutliers },
+  { name: "EVOUT", desc: "Enterprise Value Outlier Scanner — MCap/EV ratio + balance sheet (replaces MarketWizardry EV Explorer)", action: cmdEvOutliers },
+  { name: "CRYPTORISK", desc: "Crypto Risk Analysis — multi-TF volatility tiers + advanced ratios (replaces MarketWizardry Crypto Explorer)", action: cmdCryptoRisk },
+  { name: "OUTLIERS", desc: "Combined Outlier Report — tabbed VaR + ATR + EV + Crypto scanner", action: cmdOutliers },
+  { name: "SCREEN", desc: "Multi-Factor Screener — cross-reference VaR × ATR for dual-metric outliers", action: cmdScreen },
 ];
 
 function fuzzyMatch(query, target) {

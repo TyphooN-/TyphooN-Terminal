@@ -76,7 +76,7 @@ pub fn inverse_cumulative_normal(p: f64) -> f64 {
 
 /// Compute daily returns from close prices.
 /// Shared by calculate_var and lot_size_from_var to avoid duplication.
-fn compute_daily_returns(close_prices: &[f64]) -> Vec<f64> {
+pub fn compute_daily_returns(close_prices: &[f64]) -> Vec<f64> {
     let mut returns = Vec::with_capacity(close_prices.len().saturating_sub(1));
     for w in close_prices.windows(2) {
         if w[0] == 0.0 || w[1] == 0.0 {
@@ -272,6 +272,131 @@ fn pearson_correlation(x: &[f64], y: &[f64]) -> f64 {
     let denom = ((n_f * sum_x2 - sum_x * sum_x) * (n_f * sum_y2 - sum_y * sum_y)).sqrt();
     if denom < 1e-20 { return 0.0; }
     (n_f * sum_xy - sum_x * sum_y) / denom
+}
+
+// ── ATR Calculation ──────────────────────────────────────────────
+
+/// Calculate Average True Range from OHLC bars.
+/// Returns ATR value (average of true ranges over `period` bars).
+pub fn calculate_atr(bars: &[(f64, f64, f64, f64)], period: usize) -> f64 {
+    // bars = [(open, high, low, close), ...]
+    if bars.len() < period + 1 { return 0.0; }
+    let mut true_ranges = Vec::with_capacity(bars.len() - 1);
+    for i in 1..bars.len() {
+        let (_, h, l, _) = bars[i];
+        let prev_close = bars[i - 1].3;
+        let tr = (h - l).max((h - prev_close).abs()).max((l - prev_close).abs());
+        true_ranges.push(tr);
+    }
+    if true_ranges.len() < period { return 0.0; }
+    // Simple average of last `period` true ranges
+    let start = true_ranges.len() - period;
+    true_ranges[start..].iter().sum::<f64>() / period as f64
+}
+
+// ── IQR Outlier Detection ───────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutlierResult {
+    pub symbol: String,
+    pub sector: String,
+    pub metric: f64,
+    pub sector_median: f64,
+    pub sector_q1: f64,
+    pub sector_q3: f64,
+    pub z_score: f64,
+    pub tier: String, // "EXTREME", "HIGH", "NORMAL", "LOW"
+    pub direction: String, // "high" or "low"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectorStats {
+    pub sector: String,
+    pub count: usize,
+    pub median: f64,
+    pub q1: f64,
+    pub q3: f64,
+    pub iqr: f64,
+    pub lower_bound: f64,
+    pub upper_bound: f64,
+    pub outlier_count: usize,
+}
+
+/// Detect outliers using IQR method, grouped by sector.
+/// Returns (outliers, sector_stats).
+pub fn detect_outliers(
+    data: &[(String, String, f64)], // (symbol, sector, metric_value)
+    iqr_multiplier: f64, // typically 1.5 for standard, 3.0 for extreme
+) -> (Vec<OutlierResult>, Vec<SectorStats>) {
+    // Group by sector
+    let mut by_sector: std::collections::HashMap<String, Vec<(String, f64)>> = std::collections::HashMap::new();
+    for (sym, sector, val) in data {
+        by_sector.entry(sector.clone()).or_default().push((sym.clone(), *val));
+    }
+
+    let mut outliers = Vec::new();
+    let mut stats = Vec::new();
+
+    for (sector, mut values) in by_sector {
+        if values.len() < 4 { continue; } // need enough data for IQR
+        values.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let n = values.len();
+        let q1 = values[n / 4].1;
+        let median = values[n / 2].1;
+        let q3 = values[3 * n / 4].1;
+        let iqr = q3 - q1;
+        let lower_bound = q1 - iqr_multiplier * iqr;
+        let upper_bound = q3 + iqr_multiplier * iqr;
+
+        // Compute sector std_dev for z-scores
+        let mean = values.iter().map(|v| v.1).sum::<f64>() / n as f64;
+        let sector_sd = std_dev(&values.iter().map(|v| v.1).collect::<Vec<_>>());
+
+        let mut sector_outliers = 0;
+        for (sym, val) in &values {
+            let is_high = *val > upper_bound;
+            let is_low = *val < lower_bound;
+            if !is_high && !is_low { continue; }
+
+            let z = if sector_sd > 0.0 { (*val - mean) / sector_sd } else { 0.0 };
+            let tier = if z.abs() > 3.0 { "EXTREME" }
+                else if z.abs() > 2.0 { "HIGH" }
+                else if z.abs() > 1.0 { "ELEVATED" }
+                else { "MODERATE" };
+
+            outliers.push(OutlierResult {
+                symbol: sym.clone(),
+                sector: sector.clone(),
+                metric: *val,
+                sector_median: median,
+                sector_q1: q1,
+                sector_q3: q3,
+                z_score: z,
+                tier: tier.to_string(),
+                direction: if is_high { "high" } else { "low" }.to_string(),
+            });
+            sector_outliers += 1;
+        }
+
+        stats.push(SectorStats {
+            sector,
+            count: n,
+            median,
+            q1,
+            q3,
+            iqr,
+            lower_bound,
+            upper_bound,
+            outlier_count: sector_outliers,
+        });
+    }
+
+    // Sort outliers by |z_score| descending (most extreme first)
+    outliers.sort_by(|a, b| b.z_score.abs().partial_cmp(&a.z_score.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    stats.sort_by(|a, b| b.outlier_count.cmp(&a.outlier_count));
+
+    (outliers, stats)
 }
 
 #[cfg(test)]
