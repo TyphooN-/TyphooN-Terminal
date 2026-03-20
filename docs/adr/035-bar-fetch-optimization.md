@@ -284,7 +284,7 @@ for (const sym of symbols) prefetchAllTimeframes(sym, null);
 | File | Change |
 |---|---|
 | `src-tauri/src/broker/alpaca.rs` | `page_token` pagination, adaptive `RateLimiter`, `get_bars_after()` with optional `after_timestamp` for incremental fetch, tighter crypto lookback |
-| `src-tauri/src/core/cache.rs` | `get_incremental_start()` (second-to-last bar timestamp), `merge_bars()` (dedup + sort + store) |
+| `src-tauri/src/core/cache.rs` | `get_incremental_start()` (second-to-last bar timestamp), `merge_bars(key, json, max_bars)` (dedup + sort + trim + store), `get_cache_age_secs(key)` (staleness check for refresh decisions) |
 | `src-tauri/src/core/bar_builder.rs` | **New**: `BarBuilder` constructs 1-min OHLCV from WebSocket trades |
 | `src-tauri/src/main.rs` | New `get_bars_incremental` + `poll_bars` Tauri commands, `BarBuilder` in AppState, trade → bar_builder feed in `poll_stream` |
 | `frontend/src/main.js` | `cachedGetBars` → `get_bars_incremental`, `startWsBarPolling()`, predictive prefetch on connect |

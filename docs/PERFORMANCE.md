@@ -79,20 +79,32 @@ All consumers — chart loads, MTF indicators, background prefetch, live polling
 
 ### Status: ✅ Fully Optimized (v4 — Adaptive)
 
-Zero 429 errors in normal operation. Crypto cold loads: 30s (was 2.5+ hours). Full MTF grid: 3-5 min (was 3-4 hours). See [ADR-035](adr/035-bar-fetch-optimization.md).
+Zero 429 errors in normal operation. Measured across 3 runs:
 
-### Evaluated & Deferred (Not Worth Complexity)
+| Scenario | Before | After (measured) | Speedup |
+|---|---|---|---|
+| BTC/USD 1Hour | 2.5+ hours | 33-131s | 70-270× |
+| SOL/USD 4Hour | 2+ hours | 47-163s | 45-150× |
+| Full MTF grid + prefetch | 3-4 hours | ~3 min | 60-80× |
 
-| Improvement | Decision |
-|---|---|
-| Priority queue for rate limiter | Evaluated — prefetch completes in ~6s, adding priority queue adds complexity for <1s improvement. First-come-first-served via Mutex is simpler and correct. |
-| More aggressive incremental bar updates | Current implementation already skips fetching when cache has data. Further aggression risks missing updates. |
+See [ADR-035](adr/035-bar-fetch-optimization.md) for full benchmark data.
+
+### Next-Generation Improvements
+
+| Improvement | Status | Impact |
+|---|---|---|
+| **Incremental fetch** — only fetch bars newer than latest cached bar | ✅ **IMPLEMENTED** (`get_bars_incremental`, `get_incremental_start`, `merge_bars`) | 90% fewer chunks on warm start |
+| **SQLite cache-aware fetch** — check cache before API; fetch only the gap | ✅ **IMPLEMENTED** (`get_cache_age_secs` for staleness, second-to-last bar start) | Eliminates cold load after first session |
+| **WS live bar construction** — build bars from trade stream | ✅ **IMPLEMENTED** (`BarBuilder`, `ingest_trade`, `drain_completed`) | Real-time candle updates without API polling |
+| **Priority queue** — active tab first, prefetch yields | Deferred — incremental fetch makes prefetch fast enough | Marginal improvement |
+| **Shared bar cache across TFs** — fetch 1Min, aggregate up | Deferred — per-TF incremental fetch is more efficient | 1 fetch covers 6 TFs but 130K bars/symbol |
 
 ### Blocked by External
 
 | Improvement | Blocker |
 |---|---|
 | WebSocket bar streaming | Alpaca WS provides trades/quotes only, not aggregated bars |
+| Batch multi-symbol bar API | Alpaca doesn't support batch bar requests for stocks |
 
 ---
 
