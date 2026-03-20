@@ -106,43 +106,201 @@ Each chunk now logs: chunk number, bars added, date range, total bars, completio
 BTC/USD @ 1Hour: chunk #4 +180 bars (2026-01-11 → 2026-01-18), total 718 (71%, 17s elapsed, 292ms/chunk)
 ```
 
-## Performance (After)
+## Measured Performance (After — Three Runs)
 
-| Symbol | Timeframe | Bars | Chunks | Time (Before) | Time (After) | Speedup |
-|---|---|---|---|---|---|---|
-| BTC/USD | 1Hour | ~2,160 | ~8 | 2.5+ hours | **~30s** | **300×** |
-| SOL/USD | 4Hour | ~1,080 | ~5 | 2+ hours | **~15s** | **480×** |
-| ADA/USD | 1Hour | ~843 | 4 | ~8 min | **~17s** | **28×** |
-| CC | 4Hour | ~158 | 2 | ~3 min | **~2s** | **90×** |
-| Full MTF grid | mixed | all | ~25 | 3-4 hours | **~3-5 min** | **50-60×** |
+### Run 1: First cold load after optimization
+
+| Symbol | Timeframe | Bars | Chunks | Time | Speedup vs Before |
+|---|---|---|---|---|---|
+| BTC/USD | 1Hour | 2,175 | 13 | **131s** | **~70×** |
+| SOL/USD | 4Hour | 1,084 | 21 | **163s** | **~45×** |
+| BTC/USD | 4Hour | 500 | 12 | **35s** | — |
+| ADA/USD | 1Hour | 843 | 4 | **17s** | **~28×** |
+| CC | 4Hour | 158 | 2 | **2s** | **~90×** |
+| SLV | 1Hour | 302 | 2 | **4s** | **~30×** |
+| LUMN | 4Hour | 116 | 2 | **4s** | — |
+| SMCI | 4Hour | 142 | 2 | **5s** | — |
+
+### Run 2: Second session (warm adaptive state)
+
+| Symbol | Timeframe | Bars | Chunks | Time |
+|---|---|---|---|---|
+| BTC/USD | 1Hour | 2,175 | 13 | **33s** |
+| SOL/USD | 4Hour | 1,084 | 21 | **57s** |
+| BTC/USD | 4Hour | 500 | 12 | **30s** |
+| ADA/USD | 1Hour | 843 | 4 | **17s** |
+| CC | 4Hour | 158 | 2 | **2s** |
+
+### Run 3: Third session (consistent results)
+
+| Symbol | Timeframe | Bars | Chunks | Time |
+|---|---|---|---|---|
+| BTC/USD | 1Hour | 2,175 | 13 | **46s** |
+| SOL/USD | 4Hour | 1,084 | 21 | **47s** |
+| BTC/USD | 4Hour | 500 | 12 | **~30s** |
+| ADA/USD | 1Hour | 843 | 4 | **17s** |
+| Stocks (CC/SLV/LUMN/SMCI) | mixed | ~100-300 | 1-2 ea | **2-6s** |
+| Prefetch (all TFs) | mixed | all | ~50 | **~60s** |
+
+### Summary: Before vs After
+
+| Scenario | Before | After (avg) | Speedup |
+|---|---|---|---|
+| BTC/USD 1Hour | 2.5+ hours | **33-131s** | **70-270×** |
+| SOL/USD 4Hour | 2+ hours | **47-163s** | **45-150×** |
+| Stocks (4H) | 1-3 min each | **2-6s** | **20-90×** |
+| Full MTF grid + prefetch | **3-4 hours** | **~3 min** | **60-80×** |
+| Subsequent loads (cached) | instant | instant | — |
+
+### Chunk Latency Behavior
+
+The adaptive pacer prevents progressive throttling. Observed chunk latency patterns:
+
+| Phase | Chunk Latency | Adaptive Interval |
+|---|---|---|
+| First 5 chunks | 100-300ms | 320ms (base) |
+| Chunks 5-10 | 300-600ms | 320-520ms |
+| Chunks 10-15 | 400-1200ms | 520-720ms |
+| Chunks 15-21 (SOL 4H) | 600-2100ms | 720-920ms |
+| Recovery (next symbol) | 100-300ms | recovers to 320ms |
+
+Without adaptive pacing, chunk latency grew exponentially to 7-10 minutes. With it, worst case stays under 2.5 seconds — the pacer absorbs throttle pressure by spacing requests wider.
+
+### Progress Percentage Fix
+
+Initial implementation showed `bars_fetched / raw_limit * 100`, which gave misleading 0-4% for prefetch calls (limit=50000 vs ~2000 available bars). Fixed to:
+
+```rust
+let expected_bars = (lookback_days as f64 * bars_per_day).ceil() as usize;
+let bars_target = expected_bars.min(actual_limit as usize).max(1);
+let pct = (total * 100) / bars_target;
+```
+
+Now BTC/USD 1Hour shows: 8% → 16% → 24% → 33% → 41% → 49% → 56% → 64% → 100%.
 
 ### Paid Tier Projection
 
 Alpaca Algo Trader+ ($99/mo) provides consistent 200 req/min with no progressive throttling:
 
-| Scenario | Free + Optimized | Paid + Optimized |
-|---|---|---|
-| BTC/USD 1Hour (2,160 bars) | ~30s | ~10s |
-| SOL/USD 4Hour (1,080 bars) | ~15s | ~5s |
-| Full MTF grid cold load | ~3-5 min | ~45-90s |
-| Subsequent loads (cached) | instant | instant |
+| Scenario | Free + Optimized | Paid + Optimized | Improvement |
+|---|---|---|---|
+| BTC/USD 1Hour (2,175 bars) | ~33-131s | **~10s** | 3-13× |
+| SOL/USD 4Hour (1,084 bars) | ~47-163s | **~5s** | 9-32× |
+| Full MTF grid cold load | ~3 min | **~45-90s** | 2-4× |
+| Subsequent loads (cached) | instant | instant | — |
 
-**Verdict:** Free-tier optimizations close most of the gap. Paid tier's main advantages are now: (1) SIP feed (real-time, all exchanges), (2) consistent latency with no adaptive backoff, (3) more headroom for deep historical data.
+**Verdict:** Free-tier optimizations close most of the gap. Paid tier's remaining advantages:
+
+1. **SIP feed** — real-time all-exchange data vs IEX 15-min delayed single-exchange
+2. **Consistent latency** — no adaptive backoff needed, always 100-300ms/chunk
+3. **Deep history** — can increase crypto lookback caps without throttle risk
+4. **Larger page sizes** — crypto may return more bars per chunk on paid tier (currently ~45-65/chunk on free)
+
+## Implemented Improvements (Phase 2)
+
+### ✅ Incremental Cache-Aware Fetch
+
+New `get_bars_incremental` Tauri command checks SQLite cache before hitting the API. If cached bars exist, fetches only the gap since the **second-to-last** cached bar (not the last — because the last candle is still forming and its OHLCV values are live/updating until the period closes).
+
+**Architecture:**
+```
+Frontend: cachedGetBars() → invoke("get_bars_incremental")
+Backend:  1. Check SQLite: get_incremental_start(key) → second-to-last bar timestamp
+          2. If cache hit: broker.get_bars_after(symbol, tf, limit, after_ts) → fetch gap only
+          3. Merge new bars into cache: cache.merge_bars(key, new_json) → dedup + sort + store
+          4. Return full merged dataset
+          5. If no cache: full fetch, store to SQLite for next time
+```
+
+**Impact:** 80-95% fewer API calls on warm start. BTC/USD 1Hour goes from 13 chunks to 1-2 chunks on second session. Applies to both GUI and CLI (shared SQLite cache).
+
+**Key design decision:** Always re-fetch the live candle. Higher timeframe candles (H4, D1, W1) are "living" until the period closes — their high/low/close update continuously. The incremental start point is the second-to-last bar, ensuring the live candle is always refreshed from the API.
+
+### ✅ WebSocket Live Bar Construction
+
+New `BarBuilder` module (`core/bar_builder.rs`) constructs 1-minute OHLCV bars from the WebSocket trade stream in real-time:
+
+**Architecture:**
+```
+WebSocket → StreamTrade(symbol, price, size, timestamp)
+  → BarBuilder.ingest_trade(symbol, price, size, timestamp)
+    → Accumulate into PartialBar (same minute)
+    → When new minute starts → complete previous bar, start new one
+  → poll_bars command:
+    → BarBuilder.drain_completed() → Vec<CompletedBar> (finished 1-min candles)
+    → BarBuilder.get_all_active_bars() → Vec<CompletedBar> (live candles still forming)
+    → Returns { completed: [...], active: [...] }
+  → Frontend renders completed bars + live candle updates
+```
+
+**API:**
+- `ingest_trade(symbol, price, size, timestamp)` — feed WS trades into the builder
+- `drain_completed()` — returns and clears all completed 1-min bars since last drain
+- `get_active_bar(symbol)` — returns the currently-forming candle for a symbol
+- `get_all_active_bars()` — returns all active candles across all symbols
+
+**Impact:** Real-time candle updates (2s polling vs 10s API polling). Eliminates API calls for live bar updates when WebSocket is connected. Falls back to API polling when WS is down.
+
+**Frontend integration:** `startWsBarPolling()` runs every 2s, processes completed bars (appends to chart, triggers indicator recalc) and active bars (updates live candle). Only affects 1Min chart directly; higher TFs still use API polling for now.
+
+### ✅ Predictive Prefetch
+
+On broker connect, immediately fetches open positions and prefetches all timeframes for each position symbol:
+
+```javascript
+// After successful connect:
+const positions = await invoke("get_positions");
+const symbols = [...new Set(positions.map(p => p.symbol))];
+for (const sym of symbols) prefetchAllTimeframes(sym, null);
+```
+
+**Impact:** With incremental fetch, this is near-free for returning users (only the gap since last session). Position symbols are warm-cached before user clicks them.
+
+### Deferred
+
+| Improvement | Reason |
+|---|---|
+| **Priority queue** | First-come-first-served via Mutex is adequate now that incremental fetch reduces prefetch cost to 1-2 chunks per TF. Would add complexity for marginal UX improvement. |
+| **Parallel symbol fetch** | Needs testing to determine if Alpaca rate-limits per-endpoint or globally. Risk of triggering harder throttling. |
+| **Shared 1Min aggregation** | Dropped: 1Min crypto = 1440 bars/day, storing 90 days = 130K bars per symbol. Per-TF incremental fetch is more efficient. |
+
+### Remaining (Blocked by External)
+
+| Improvement | Blocker |
+|---|---|
+| Batch multi-symbol bar API | Alpaca doesn't support batch bar requests for stocks |
+| Paid tier larger chunk sizes | Needs testing on Algo Trader+ |
+
+### Measurement Needed
+
+| Question | How to Test |
+|---|---|
+| Does Alpaca paid tier return larger crypto chunks? | Subscribe to Algo Trader+ for 1 month, compare chunk sizes |
+| Is rate limiting per-endpoint or global? | Fire concurrent requests to `/crypto/bars` and `/stocks/bars`, check if they share a budget |
+| What's the optimal adaptive backoff curve? | A/B test linear vs exponential backoff under sustained load |
 
 ## Files Changed
 
 | File | Change |
 |---|---|
-| `src-tauri/src/broker/alpaca.rs` | Rewrote `get_bars()` chunk loop, added `adaptive_ms` to `RateLimiter`, added `report_latency()`, added `SLOW_CHUNK_THRESHOLD_SECS`, tighter crypto lookback caps |
-| `cli/src/broker.rs` | Matching crypto lookback reduction |
+| `src-tauri/src/broker/alpaca.rs` | `page_token` pagination, adaptive `RateLimiter`, `get_bars_after()` with optional `after_timestamp` for incremental fetch, tighter crypto lookback |
+| `src-tauri/src/core/cache.rs` | `get_incremental_start()` (second-to-last bar timestamp), `merge_bars()` (dedup + sort + store) |
+| `src-tauri/src/core/bar_builder.rs` | **New**: `BarBuilder` constructs 1-min OHLCV from WebSocket trades |
+| `src-tauri/src/main.rs` | New `get_bars_incremental` + `poll_bars` Tauri commands, `BarBuilder` in AppState, trade → bar_builder feed in `poll_stream` |
+| `frontend/src/main.js` | `cachedGetBars` → `get_bars_incremental`, `startWsBarPolling()`, predictive prefetch on connect |
+| `cli/src/broker.rs` | Matching crypto lookback reduction (shares SQLite cache with GUI) |
 
 ## Consequences
 
-- **Pro**: 50-300× faster cold loads for crypto — charts usable in seconds, not hours
+- **Pro**: 60-270× faster cold loads for crypto — charts usable in seconds, not hours
+- **Pro**: Incremental fetch: 80-95% fewer API calls on warm start (1-2 chunks vs 13+)
+- **Pro**: Live candle always refreshed (second-to-last bar start point preserves forming candle accuracy)
+- **Pro**: WebSocket bar builder: real-time 1Min candle updates without API polling
+- **Pro**: Predictive prefetch: position symbols warm-cached before user clicks
 - **Pro**: Adaptive pacing prevents progressive throttling (benefits all tiers)
 - **Pro**: `page_token` pagination eliminates overlap/gap bugs (simpler, more correct)
-- **Pro**: Early termination prevents unbounded fetch times
-- **Pro**: Enhanced logging gives visibility into fetch progress
+- **Pro**: GUI and CLI share SQLite cache — CLI benefits from GUI's cached bars
 - **Pro**: All improvements apply to paid tier too (no wasted budget)
 - **Con**: Crypto lookback capped at 90 days (1Hour) / 180 days (4Hour) — users wanting deep crypto history would need to increase `max_lookback_days`
-- **Con**: Early termination means some charts may have fewer historical bars than requested during heavy throttling
+- **Con**: WebSocket bar builder only constructs 1Min bars directly; higher TFs still need API for period-closing updates
+- **Con**: SQLite merge_bars() deserializes + reserializes full dataset — acceptable for background writes but not zero-cost

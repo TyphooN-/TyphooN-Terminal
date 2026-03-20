@@ -42,7 +42,7 @@ The rate limiter adjusts its interval based on observed API response times:
 | Response > 10s | Back off: increase interval by 200ms (max 5s) |
 | HTTP 429 | Emergency: double interval (max 5s) + 60s cooldown |
 
-This prevents the exponential slowdown seen on the free tier: instead of blindly hammering at 320ms while the API responds slower and slower, we match our pace to the API's capacity. On paid tier, responses stay fast so the interval stays at 320ms.
+After each API call, `report_latency(elapsed_ms)` feeds the response time back to the pacer, which adjusts the interval for the next request. This prevents the exponential slowdown seen on the free tier: instead of blindly hammering at 320ms while the API responds slower and slower, we match our pace to the API's capacity. On paid tier, responses stay fast so the interval stays at 320ms.
 
 ## 429 Cooldown
 
