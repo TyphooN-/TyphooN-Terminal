@@ -22,6 +22,7 @@ Performance is a first-class design goal. Every optimization traces back to one 
 | **v7 (+LRU eviction)** | Max 200 entries, prevents OOM | Same speed, bounded memory | Instant |
 | **v8 (+prepare_cached)** | SQLite statement caching | Same speed, less CPU per lookup | Instant |
 | **v9 (+zstd level 9)** | Higher compression for persistent storage | Same speed, ~2x smaller on disk | Instant |
+| **v10 (+adaptive fetch)** | page_token, adaptive pacing, crypto lookback caps, early termination | Crypto cold: **30s** (was 2.5h) | Instant |
 
 ### Current Architecture (4-Tier Cache)
 
@@ -44,7 +45,7 @@ Binary format: `[4B magic "TTBR"][u32 count][per bar: i64 timestamp_ms, f64 OHLC
 
 ### Status: ✅ Fully Optimized
 
-No further gains possible without changing data sources. The bottleneck is now **Alpaca API response time** (~300ms per request) and **rate limit** (200 req/min), not our pipeline.
+Bottleneck is Alpaca API, not our pipeline. Adaptive pacing + native pagination + tighter crypto lookback reduced crypto cold loads from hours to seconds. Paid tier ($99/mo) would further reduce to ~10s with consistent latency and SIP feed. See [ADR-035](adr/035-bar-fetch-optimization.md).
 
 ---
 
@@ -58,14 +59,27 @@ No further gains possible without changing data sources. The bottleneck is now *
 | **v1** | Per-request sleep(320ms) | Wasted budget when only 1 request needed |
 | **v2** | Centralized RateLimiter | All requests share one Mutex-guarded budget |
 | **v3** | +429 cooldown (60s) | Auto-backs-off on rate limit hit, partial data returned |
+| **v4** | +Adaptive pacing + `page_token` | Detects progressive throttling, backs off before 429 |
 
-### Current: Single shared budget, 320ms pacing (187.5 req/min under 200 limit)
+### Current: Adaptive pacing, 320ms base (increases to 5s under throttle)
 
 All consumers — chart loads, MTF indicators, background prefetch, live polling, multiple tabs — share one rate limiter via `Arc<Mutex<RateLimiter>>`. First-come-first-served.
 
-### Status: ✅ Fully Optimized
+**Adaptive behavior:**
+- Response < 2s → gradually recover toward 320ms base
+- Response > 10s → increase interval by 200ms (progressive throttle detected)
+- HTTP 429 → double interval + 60s cooldown
+- All intervals capped at 5s max
 
-Zero 429 errors in normal operation. The rate limiter is the correct bottleneck — it exists to prevent API abuse.
+**Pagination:** Native `next_page_token` replaces manual date-advancing. Server cursor — zero overlap, zero gaps.
+
+**Crypto lookback caps:** 90 days (1Hour), 180 days (4Hour) — down from 365/730. Reduces chunks by 75%.
+
+**Early termination:** If a single chunk takes >60s and >100 bars collected, accept data and stop.
+
+### Status: ✅ Fully Optimized (v4 — Adaptive)
+
+Zero 429 errors in normal operation. Crypto cold loads: 30s (was 2.5+ hours). Full MTF grid: 3-5 min (was 3-4 hours). See [ADR-035](adr/035-bar-fetch-optimization.md).
 
 ### Evaluated & Deferred (Not Worth Complexity)
 
@@ -192,11 +206,22 @@ No further DOM optimization needed. The 2-second dashboard interval is appropria
 - **HTTP/2** — automatic when server supports it (Alpaca does)
 - **Timeouts** — 10-30s per request, prevents hanging connections
 - **zstd Accept-Encoding** — not applicable (Alpaca API doesn't support compressed responses)
-- **Chunk fetching** — sequential chunks of ~260 bars each (IEX API limit)
+- **Native pagination** — `next_page_token` for zero-overlap chunk fetching
+- **Adaptive pacing** — backs off when progressive throttling detected
 
 ### Status: ✅ Fully Optimized
 
-The network bottleneck is Alpaca's API design (260 bars/chunk, 200 req/min). Our client is already optimal for this constraint.
+Network performance is optimal for the Alpaca free tier. Crypto cold loads improved from hours to seconds via tighter lookback + adaptive pacing + native pagination. See [ADR-035](adr/035-bar-fetch-optimization.md).
+
+### Paid Tier Projection
+
+| Scenario | Free + Optimized | Paid ($99/mo) |
+|---|---|---|
+| BTC/USD 1Hour cold load | ~30s | ~10s |
+| Full MTF grid cold load | ~3-5 min | ~45-90s |
+| Subsequent loads (cached) | instant | instant |
+
+Paid tier advantages: SIP feed (real-time, all exchanges), consistent latency (no adaptive backoff), more headroom for deep historical data.
 
 ### Future Work (Blocked)
 
@@ -204,7 +229,6 @@ The network bottleneck is Alpaca's API design (260 bars/chunk, 200 req/min). Our
 |---|---|
 | Batch bar API (multiple symbols in one request) | Alpaca API doesn't support batch bar fetching for stocks |
 | Server-side aggregation | Would need a proxy server (violates local-first principle) |
-| Alternative data source with larger page sizes | Would need SIP feed ($) or different broker |
 
 ---
 
@@ -311,15 +335,15 @@ LRU eviction prevents unbounded growth. SQLite mmap is OS-managed (only maps pag
 
 | Category | Status | Notes |
 |---|---|---|
-| Data pipeline (API → cache → chart) | ✅ Fully optimized | Bottleneck is Alpaca API, not us |
+| Data pipeline (API → cache → chart) | ✅ Fully optimized | Crypto cold load: seconds (was hours) |
 | Storage compression | ✅ Fully optimized | Binary + zstd = 15-30x savings |
-| Rate limiting | ✅ Fully optimized | Zero 429s in normal operation |
+| Rate limiting | ✅ Fully optimized (v4) | Adaptive pacing, native pagination, early termination |
 | SQLite cache | ✅ Fully optimized | WAL, mmap, prepare_cached, auto-vacuum |
 | Indicator calculation (backtester) | ✅ Wasm, 50-100x faster | Grid optimizer runs in ~100ms |
 | Indicator calculation (chart) | ⚡ JS fallback | Wasm available but not routed for chart rendering yet |
 | GPU chart rendering | ⚡ Phase 3 done | Phases 4-5 would eliminate lightweight-charts |
 | DOM rendering | ✅ Fully optimized | Delta updates, atomic swaps, no flicker |
-| Network | ✅ Fully optimized | Connection pooling, keep-alive, HTTP/2 |
+| Network | ✅ Fully optimized | page_token pagination, adaptive pacing, HTTP/2 |
 | Binary size | ✅ 10-15MB | 10-15x smaller than Electron |
 | Memory | ✅ Bounded | LRU eviction, 200-400MB typical |
 | Security | ✅ 21 passes | AES-256-GCM, CSP, no innerHTML, input validation, SSRF prevention |
@@ -338,10 +362,9 @@ The main `main.js` has grown from ~11K lines to ~23.7K lines with the addition o
 
 ### All Free-Tier Optimizations Complete
 
-Every optimization that doesn't require paid APIs or external infrastructure has been implemented. The remaining blocked items below are external dependencies, not code limitations.
+Every optimization that doesn't require paid APIs or external infrastructure has been implemented. The v10 adaptive fetch optimization alone delivered 50-300× improvement for crypto cold loads. The remaining blocked items below are external dependencies, not code limitations.
 
 ### Blocked by External Dependencies
 
 1. WebSocket bar streaming (Alpaca supports quotes/trades WS, not bar aggregation)
 2. Batch symbol fetching (Alpaca API limitation)
-3. Alternative data sources with larger page sizes (needs paid SIP feed or different broker)

@@ -40,7 +40,7 @@ Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new f
 | Security hardening (21 passes) | ✅ Done | 97 findings: input validation, timeouts, path traversal, CSP, config bounds, resource limits, event listener cleanup |
 | MTF MA grid | ✅ Done | SMA200/KAMA/Fisher across TFs |
 | Symbol autocomplete | ✅ Done | 11K+ symbols |
-| Rate limiter with 429 cooldown | ✅ Done | |
+| Rate limiter (v4 adaptive) | ✅ Done | Adaptive pacing, native page_token, crypto lookback caps, early termination — crypto cold loads: seconds (was hours) |
 | Background bar pre-fetch | ✅ Done | All TFs cached silently |
 | Limit orders | ✅ Done | Limit, stop, stop-limit via order type selector |
 | Trailing stops | ✅ Done | Trail price/percent via order type selector |

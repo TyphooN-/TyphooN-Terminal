@@ -40,12 +40,13 @@ TTL: 1 minute (memory) — prevents stale data during active trading
 Disk: Persistent — survives app restarts, only re-fetches on first load
 ```
 
-## Stale Chunk Detection
+## Pagination Strategy
 
-The API sometimes returns 1-bar chunks with the same timestamp repeatedly when all historical data has been exhausted. Detection:
+> **Updated 2026-03-20:** See [ADR-035](035-bar-fetch-optimization.md) for the full optimization.
 
-- If chunk returns ≤5 bars AND the last bar's timestamp matches the previous chunk's last timestamp → stop fetching
-- Advance `start` by a full period duration (1 week for W1, 1 day for D1) instead of 1 second
+Uses Alpaca's native `next_page_token` pagination. The server returns a cursor token with each response; passing it back fetches the next page with zero overlap and zero gaps. When `next_page_token` is absent or empty, all data has been fetched.
+
+This replaced the original manual date-advancing approach, which required stale-chunk detection, empty-gap skipping, and period-appropriate date jumps.
 
 ## Synthetic MN1
 
@@ -77,5 +78,4 @@ Each symbol shows its date range and bar count once primary fetch completes. Pre
 
 - Priority queue: primary chart > MTF indicators > pre-fetch > live polling
 - Incremental updates: only fetch bars newer than cached data
-- IndexedDB instead of localStorage for larger cache capacity
 - WebSocket streaming for real-time bar updates (no polling)
