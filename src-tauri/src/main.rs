@@ -2840,6 +2840,97 @@ fn find_mt5_files_dir() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Find the MT5 SQLite cache database (written by BarCacheWriter.mq5).
+/// Searches all MT5 instances for typhoon_mt5_cache.db in MQL5/Files/.
+fn find_mt5_sqlite_db() -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    for i in 1..=20 {
+        let path = std::path::PathBuf::from(&home)
+            .join(format!(".mt5_{}", i))
+            .join("drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon_mt5_cache.db");
+        if path.is_file() { return Some(path); }
+    }
+    None
+}
+
+/// Read bars directly from MT5's SQLite database (zero-copy, no CSV intermediary).
+/// BarCacheWriter.mq5 writes JSON bars to the same schema as TyphooN-Terminal's cache.
+/// Key format: "mt5:SYMBOL:TIMEFRAME" — same as our import format.
+#[tauri::command]
+async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String> {
+    let mt5_db_path = find_mt5_sqlite_db()
+        .ok_or("MT5 SQLite cache not found. Is BarCacheWriter.mq5 running?")?;
+
+    tracing::info!("MT5 SQLite sync: reading from {:?}", mt5_db_path);
+
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.clone().ok_or("Terminal SQLite cache not available")?
+    };
+
+    // Run SQLite read in a blocking task (rusqlite::Connection isn't Send)
+    let db_path = mt5_db_path.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<(usize, i64, usize, String), String> {
+        let mt5_conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).map_err(|e| format!("Failed to open MT5 SQLite: {e}"))?;
+
+        let mut stmt = mt5_conn.prepare(
+            "SELECT key, data, timestamp, bar_count FROM bar_cache WHERE key LIKE 'mt5:%'"
+        ).map_err(|e| format!("MT5 SQLite prepare failed: {e}"))?;
+
+        let entries: Vec<(String, String, i64, i64)> = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        }).map_err(|e| format!("MT5 SQLite query failed: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+        if entries.is_empty() {
+            return Err("MT5 database has no bar data. Run BarCacheWriter.mq5 first.".into());
+        }
+
+        let mut imported = 0usize;
+        let mut total_bars: i64 = 0;
+        let mut symbols = std::collections::HashSet::new();
+
+        for (key, json_data, _ts, bar_count) in &entries {
+            match cache.put_bars(key, json_data) {
+                Ok(_) => {
+                    imported += 1;
+                    total_bars += bar_count;
+                    if let Some(sym) = key.split(':').nth(1) {
+                        symbols.insert(sym.to_string());
+                    }
+                }
+                Err(e) => tracing::warn!("MT5 sync skip {}: {}", key, e),
+            }
+        }
+
+        let source = db_path.to_str().unwrap_or("").to_string();
+        Ok((imported, total_bars, symbols.len(), source))
+    }).await.map_err(|e| format!("Task failed: {e}"))??;
+
+    let (imported, total_bars, sym_count, source) = result;
+
+    tracing::info!(
+        "MT5 SQLite sync: {} entries, {} bars, {} symbols from {:?}",
+        imported, total_bars, sym_count, mt5_db_path
+    );
+
+    Ok(serde_json::json!({
+        "imported": imported,
+        "total_bars": total_bars,
+        "symbols": sym_count,
+        "source": source,
+    }).to_string())
+}
+
 /// Request bars from MT5 BarServer EA via file-based IPC.
 /// Writes REQUEST.txt, waits for RESPONSE.txt, imports the resulting CSV.
 /// Returns the bar data as JSON (same format as get_bars).
@@ -3928,6 +4019,7 @@ fn main() {
             scan_atr_outliers,
             scan_crypto_risk,
             request_mt5_bars,
+            sync_mt5_sqlite,
             import_mt5_bars,
             list_mt5_symbols,
             get_mt5_bars,

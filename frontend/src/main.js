@@ -23047,6 +23047,28 @@ async function cmdMt5Sync() {
   } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
 }
 
+async function cmdMt5DbSync() {
+  const w = createWindow({ title: "MT5 SQLite Direct Sync", width: 650, height: 400 });
+  const out = w.element ? w.element.querySelector(".fw-content") : w;
+  out.innerHTML = `<div id="mt5db-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  const logDiv = out.querySelector("#mt5db-log");
+  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  addLog("<b>MT5 SQLite Direct Sync</b>", "#4caf50");
+  addLog("Reading bars directly from BarCacheWriter's SQLite database...", "#2196f3");
+  addLog("<span style='color:#888'>No CSV files, no file IPC — shared SQLite with WAL mode.</span>");
+  addLog("");
+
+  try {
+    const result = JSON.parse(await invoke("sync_mt5_sqlite"));
+    addLog(`Imported ${result.imported} entries, ${result.total_bars.toLocaleString()} total bars, ${result.symbols} symbols`, "#4caf50");
+    addLog(`Source: ${result.source}`, "#888");
+    addLog("");
+    addLog("Data is now available for charting and analysis.", "#4caf50");
+    addLog("Use DARWINEX command for full outlier analysis.", "#2196f3");
+  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
@@ -23288,7 +23310,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "DARWINEX", desc: "Darwinex Full Analysis — VaR + ATR + crypto risk across ALL imported MT5 symbols", action: cmdDarwinex },
   { name: "MT5IMPORT", desc: "Import MT5 bar data — load BarExporter CSVs into TyphooN-Terminal cache", action: cmdMt5Import },
   { name: "MT5FETCH", desc: "Fetch bars from MT5 BarServer — on-demand request for any symbol/TF", action: cmdMt5Fetch },
-  { name: "MT5SYNC", desc: "Sync ALL MT5 symbols — request every TF (MN1→M1) for all Market Watch symbols", action: cmdMt5Sync },
+  { name: "MT5SYNC", desc: "Sync ALL MT5 symbols — request every TF (MN1→M1) for all Market Watch symbols via file IPC", action: cmdMt5Sync },
+  { name: "MT5DB", desc: "MT5 SQLite Direct Sync — read bars from BarCacheWriter's shared database (zero CSV)", action: cmdMt5DbSync },
 ];
 
 function fuzzyMatch(query, target) {
