@@ -344,7 +344,7 @@ struct App {
     positions: Vec<broker::PositionInfo>,
     orders: Vec<broker::OrderInfo>,
     watchlist: Vec<String>,
-    _watchlist_prices: Vec<(String, f64, f64)>, // reserved for live quote fetching
+    watchlist_quotes: Vec<(String, f64, f64, f64)>, // (symbol, bid, ask, last)
     // Chart
     chart_symbol: String,
     chart_bars: Vec<broker::Bar>,
@@ -356,6 +356,9 @@ struct App {
     selected_order: usize,
     // Action confirmation
     _pending_action: Option<String>, // reserved for confirmation dialogs
+    // Status line
+    market_open: bool,
+    market_next_event: String,
     // Command
     command_input: String,
     command_mode: bool,
@@ -364,6 +367,8 @@ struct App {
     // Refresh
     last_refresh: Instant,
     refresh_interval: Duration,
+    // Previous close prices for watchlist change tracking
+    watchlist_prev_close: std::collections::HashMap<String, f64>,
 }
 
 impl App {
@@ -377,7 +382,7 @@ impl App {
             positions: vec![],
             orders: vec![],
             watchlist,
-            _watchlist_prices: vec![],
+            watchlist_quotes: vec![],
             imported_accounts,
             chart_symbol: symbol,
             chart_bars: vec![],
@@ -385,14 +390,17 @@ impl App {
             selected_position: 0,
             selected_order: 0,
             _pending_action: None,
+            market_open: false,
+            market_next_event: String::new(),
             command_input: String::new(),
             command_mode: false,
             log_messages: vec![
-                ("TyphooN Terminal CLI v0.1.0".to_string(), Color::Cyan),
+                ("TyphooN Terminal CLI v0.2.0".to_string(), Color::Cyan),
                 ("Press Tab to switch views, : for command mode, q to quit".to_string(), Color::DarkGray),
             ],
             last_refresh: Instant::now() - Duration::from_secs(60), // force initial refresh
             refresh_interval: Duration::from_secs(5),
+            watchlist_prev_close: std::collections::HashMap::new(),
         }
     }
 
@@ -433,6 +441,29 @@ impl App {
             Ok(o) => { self.orders = o; }
             Err(e) => { self.log(&format!("Orders error: {e}"), Color::Red); }
         }
+
+        // Market clock
+        match self.broker.get_clock().await {
+            Ok((is_open, next_event)) => {
+                self.market_open = is_open;
+                self.market_next_event = next_event;
+            }
+            Err(_) => {} // non-critical, ignore
+        }
+
+        // Watchlist quotes
+        let mut new_quotes = Vec::new();
+        for sym in &self.watchlist.clone() {
+            match self.broker.get_quote(sym).await {
+                Ok((bid, ask, last)) => {
+                    new_quotes.push((sym.clone(), bid, ask, last));
+                }
+                Err(_) => {
+                    new_quotes.push((sym.clone(), 0.0, 0.0, 0.0));
+                }
+            }
+        }
+        self.watchlist_quotes = new_quotes;
 
         // Chart bars (resolve custom TFs → Alpaca format + aggregation)
         if !self.chart_symbol.is_empty() {
@@ -559,6 +590,102 @@ impl App {
                 self.active_tab = 5; // switch to Accounts tab
                 self.log("Switched to Accounts view", Color::Cyan);
             }
+            "limit" => {
+                // limit buy/sell SYMBOL QTY PRICE
+                if parts.len() < 5 {
+                    self.log("Usage: limit buy|sell SYMBOL QTY PRICE", Color::Yellow);
+                } else {
+                    let side = parts[1].to_lowercase();
+                    if side != "buy" && side != "sell" { self.log("Side must be 'buy' or 'sell'", Color::Red); return; }
+                    let symbol = parts[2].to_uppercase();
+                    let qty: f64 = parts[3].parse().unwrap_or(0.0);
+                    let price: f64 = parts[4].parse().unwrap_or(0.0);
+                    if qty <= 0.0 || price <= 0.0 { self.log("Invalid qty or price", Color::Red); return; }
+                    match self.broker.limit_order(&symbol, qty, &side, price).await {
+                        Ok(r) => self.log(&format!("LIMIT {} {qty} {symbol} @ ${price:.2}: {}", side.to_uppercase(), r.status), Color::Green),
+                        Err(e) => self.log(&format!("Limit order failed: {e}"), Color::Red),
+                    }
+                }
+            }
+            "stop" => {
+                // stop buy/sell SYMBOL QTY STOP_PRICE
+                if parts.len() < 5 {
+                    self.log("Usage: stop buy|sell SYMBOL QTY STOP_PRICE", Color::Yellow);
+                } else {
+                    let side = parts[1].to_lowercase();
+                    if side != "buy" && side != "sell" { self.log("Side must be 'buy' or 'sell'", Color::Red); return; }
+                    let symbol = parts[2].to_uppercase();
+                    let qty: f64 = parts[3].parse().unwrap_or(0.0);
+                    let stop_price: f64 = parts[4].parse().unwrap_or(0.0);
+                    if qty <= 0.0 || stop_price <= 0.0 { self.log("Invalid qty or stop price", Color::Red); return; }
+                    match self.broker.stop_order(&symbol, qty, &side, stop_price).await {
+                        Ok(r) => self.log(&format!("STOP {} {qty} {symbol} @ ${stop_price:.2}: {}", side.to_uppercase(), r.status), Color::Green),
+                        Err(e) => self.log(&format!("Stop order failed: {e}"), Color::Red),
+                    }
+                }
+            }
+            "bracket" | "brk" => {
+                // bracket buy/sell SYMBOL QTY SL TP
+                if parts.len() < 6 {
+                    self.log("Usage: bracket buy|sell SYMBOL QTY SL TP", Color::Yellow);
+                } else {
+                    let side = parts[1].to_lowercase();
+                    if side != "buy" && side != "sell" { self.log("Side must be 'buy' or 'sell'", Color::Red); return; }
+                    let symbol = parts[2].to_uppercase();
+                    let qty: f64 = parts[3].parse().unwrap_or(0.0);
+                    let sl: f64 = parts[4].parse().unwrap_or(0.0);
+                    let tp: f64 = parts[5].parse().unwrap_or(0.0);
+                    if qty <= 0.0 || sl <= 0.0 || tp <= 0.0 { self.log("Invalid qty, SL, or TP", Color::Red); return; }
+                    match self.broker.bracket_order(&symbol, qty, &side, sl, tp).await {
+                        Ok(r) => self.log(&format!("BRACKET {} {qty} {symbol} SL=${sl:.2} TP=${tp:.2}: {}", side.to_uppercase(), r.status), Color::Green),
+                        Err(e) => self.log(&format!("Bracket order failed: {e}"), Color::Red),
+                    }
+                }
+            }
+            "closeall" => {
+                self.log("Closing all positions...", Color::Yellow);
+                match self.broker.close_all().await {
+                    Ok(()) => {
+                        self.log("All positions closed", Color::Green);
+                        self.last_refresh = Instant::now() - Duration::from_secs(60);
+                    }
+                    Err(e) => self.log(&format!("Close all failed: {e}"), Color::Red),
+                }
+            }
+            "cancelall" => {
+                self.log("Cancelling all open orders...", Color::Yellow);
+                match self.broker.cancel_all().await {
+                    Ok(()) => {
+                        self.log("All orders cancelled", Color::Green);
+                        self.last_refresh = Instant::now() - Duration::from_secs(60);
+                    }
+                    Err(e) => self.log(&format!("Cancel all failed: {e}"), Color::Red),
+                }
+            }
+            "history" | "hist" => {
+                let limit = parts.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(20);
+                match self.broker.get_order_history(limit).await {
+                    Ok(orders) => {
+                        if orders.is_empty() {
+                            self.log("No recent filled orders", Color::Yellow);
+                        } else {
+                            self.log(&format!("--- Order History (last {}) ---", orders.len()), Color::Cyan);
+                            for o in &orders {
+                                let price_str = o.limit_price.as_deref()
+                                    .or(o.stop_price.as_deref())
+                                    .unwrap_or("mkt");
+                                let ts = if o.created_at.len() >= 16 { &o.created_at[..16] } else { &o.created_at };
+                                let side_color = if o.side == "buy" { Color::Green } else { Color::Red };
+                                self.log(
+                                    &format!("{} {} {} {} @ {} [{}] {}", ts, o.side.to_uppercase(), o.qty, o.symbol, price_str, o.order_type, o.status),
+                                    side_color,
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => self.log(&format!("History failed: {e}"), Color::Red),
+                }
+            }
             "rmacct" => {
                 if parts.len() < 2 {
                     self.log("Usage: rmacct ACCOUNT_NAME", Color::Yellow);
@@ -575,10 +702,19 @@ impl App {
                 }
             }
             "help" | "h" | "?" => {
-                self.log("Commands: buy/sell SYMBOL QTY, close SYMBOL, chart SYMBOL [TF],", Color::Cyan);
-                self.log("  watch SYMBOL, tf TIMEFRAME, help, quit", Color::Cyan);
-                self.log("  import NAME /path/to.csv, accounts, rmacct NAME", Color::Cyan);
-                self.log("Tabs: 1-7 or Tab to cycle. : to enter command mode.", Color::Cyan);
+                self.log("--- Trade Commands ---", Color::Cyan);
+                self.log("  buy/sell SYMBOL QTY           Market order", Color::Cyan);
+                self.log("  limit buy|sell SYM QTY PRICE  Limit order", Color::Cyan);
+                self.log("  stop buy|sell SYM QTY PRICE   Stop order", Color::Cyan);
+                self.log("  bracket buy|sell SYM QTY SL TP  Bracket (market+SL+TP)", Color::Cyan);
+                self.log("  close SYMBOL [QTY]            Close position", Color::Cyan);
+                self.log("  closeall                      Close ALL positions", Color::Cyan);
+                self.log("  cancelall                     Cancel ALL open orders", Color::Cyan);
+                self.log("--- Research ---", Color::Cyan);
+                self.log("  chart SYM [TF], tf TF, watch SYM, history [N]", Color::Cyan);
+                self.log("--- Accounts ---", Color::Cyan);
+                self.log("  import NAME /path.csv, accounts, rmacct NAME", Color::Cyan);
+                self.log("Tabs: 1-7 or Tab. : for command mode. q to quit.", Color::Cyan);
             }
             "quit" | "q" | "exit" => {
                 // Handled in main loop
@@ -593,11 +729,45 @@ impl App {
 fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(5), Constraint::Length(5)])
+        .constraints([
+            Constraint::Length(10),  // Account + Risk metrics
+            Constraint::Length(5),   // Position summary stats
+            Constraint::Min(5),      // Positions table
+            Constraint::Length(5),   // Total P&L + VaR
+        ])
         .split(area);
 
-    // Account info
+    // ── Account info + Risk metrics ──
     let account_text = if let Some(ref a) = app.account {
+        let total_pl: f64 = app.positions.iter().map(|p| p.unrealized_pl).sum();
+        let pl_color = if total_pl >= 0.0 { Color::Green } else { Color::Red };
+
+        // Margin level: equity / initial_margin * 100
+        let margin_level = if a.initial_margin > 0.0 {
+            a.equity / a.initial_margin * 100.0
+        } else {
+            0.0
+        };
+        let margin_color = if margin_level > 200.0 { Color::Green }
+            else if margin_level > 150.0 { Color::Yellow }
+            else { Color::Red };
+
+        // Buying power utilization: (portfolio_value - cash) / buying_power * 100 or equity-based
+        let bp_util = if a.buying_power > 0.0 {
+            (a.equity - a.cash) / a.buying_power * 100.0
+        } else {
+            0.0
+        };
+        let bp_color = if bp_util < 50.0 { Color::Green }
+            else if bp_util < 80.0 { Color::Yellow }
+            else { Color::Red };
+
+        // Simple VaR estimate: 2% assumption * total absolute market value * sqrt(1/N) diversification
+        let total_mv: f64 = app.positions.iter().map(|p| p.market_value.abs()).sum();
+        let n_positions = app.positions.len().max(1) as f64;
+        let diversification = 1.0 / n_positions.sqrt();
+        let portfolio_var = 0.02 * total_mv * diversification;
+
         vec![
             Line::from(vec![
                 Span::styled("Equity: ", Style::default().fg(Color::DarkGray)),
@@ -608,54 +778,138 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
                 Span::raw("  "),
                 Span::styled("Buying Power: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("${:.2}", a.buying_power), Style::default().fg(Color::Yellow)),
+                Span::raw("  "),
+                Span::styled("Total P&L: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("${:+.2}", total_pl), Style::default().fg(pl_color).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![
                 Span::styled("Portfolio: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("${:.2}", a.portfolio_value), Style::default().fg(Color::White)),
                 Span::raw("  "),
-                Span::styled("Margin: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Init Margin: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(format!("${:.2}", a.initial_margin), Style::default().fg(Color::Magenta)),
                 Span::raw("  "),
-                Span::styled(if a.pattern_day_trader { "PDT" } else { "" }, Style::default().fg(Color::Red)),
+                Span::styled("Maint Margin: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("${:.2}", a.maintenance_margin), Style::default().fg(Color::Magenta)),
+                Span::raw("  "),
+                Span::styled(if a.pattern_day_trader { "PDT " } else { "" }, Style::default().fg(Color::Red)),
+                Span::styled(if a.trading_blocked { "BLOCKED" } else { "" }, Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("Margin Level: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if a.initial_margin > 0.0 { format!("{:.1}%", margin_level) } else { "N/A".to_string() },
+                    Style::default().fg(margin_color).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled("BP Util: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{:.1}%", bp_util), Style::default().fg(bp_color)),
+                Span::raw("  "),
+                Span::styled("VaR (2%): ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("${:.2}", portfolio_var), Style::default().fg(Color::Yellow)),
+                Span::raw("  "),
+                Span::styled("VaR/Equity: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    if a.equity > 0.0 { format!("{:.2}%", portfolio_var / a.equity * 100.0) } else { "N/A".to_string() },
+                    Style::default().fg(if a.equity > 0.0 && portfolio_var / a.equity < 0.05 { Color::Green } else { Color::Yellow }),
+                ),
             ]),
         ]
     } else {
         vec![Line::from(Span::styled("Connecting...", Style::default().fg(Color::Yellow)))]
     };
     let account_block = Paragraph::new(account_text)
-        .block(Block::default().borders(Borders::ALL).title(" Account "));
+        .block(Block::default().borders(Borders::ALL).title(" Risk Dashboard "));
     f.render_widget(account_block, chunks[0]);
 
-    // Positions summary
+    // ── Position summary stats ──
+    let n_long = app.positions.iter().filter(|p| p.qty > 0.0).count();
+    let n_short = app.positions.iter().filter(|p| p.qty < 0.0).count();
+    let largest = app.positions.iter().max_by(|a, b| a.market_value.abs().partial_cmp(&b.market_value.abs()).unwrap_or(std::cmp::Ordering::Equal));
+    let best = app.positions.iter().max_by(|a, b| a.unrealized_pl.partial_cmp(&b.unrealized_pl).unwrap_or(std::cmp::Ordering::Equal));
+    let worst = app.positions.iter().min_by(|a, b| a.unrealized_pl.partial_cmp(&b.unrealized_pl).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut summary_lines = vec![
+        Line::from(vec![
+            Span::styled("Positions: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", app.positions.len()), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::raw("  ("),
+            Span::styled(format!("{}L", n_long), Style::default().fg(Color::Green)),
+            Span::raw(" / "),
+            Span::styled(format!("{}S", n_short), Style::default().fg(Color::Red)),
+            Span::raw(")  "),
+            Span::styled("Largest: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                largest.map(|p| format!("{} ${:.0}", p.symbol, p.market_value.abs())).unwrap_or_else(|| "-".to_string()),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("Best: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                best.map(|p| format!("{} {:+.2}", p.symbol, p.unrealized_pl)).unwrap_or_else(|| "-".to_string()),
+                Style::default().fg(Color::Green),
+            ),
+            Span::raw("  "),
+            Span::styled("Worst: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                worst.map(|p| format!("{} {:+.2}", p.symbol, p.unrealized_pl)).unwrap_or_else(|| "-".to_string()),
+                Style::default().fg(Color::Red),
+            ),
+        ]),
+    ];
+    if app.positions.is_empty() {
+        summary_lines = vec![Line::from(Span::styled("No open positions", Style::default().fg(Color::DarkGray)))];
+    }
+    let summary_block = Paragraph::new(summary_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Position Summary "));
+    f.render_widget(summary_block, chunks[1]);
+
+    // ── Positions table with per-position VaR ──
     let pos_rows: Vec<Row> = app.positions.iter().map(|p| {
         let pl_color = if p.unrealized_pl >= 0.0 { Color::Green } else { Color::Red };
         let price = if p.qty.abs() > 0.0 { p.market_value.abs() / p.qty.abs() } else { p.avg_entry_price };
+        let pos_var = 0.02 * p.market_value.abs(); // 2% VaR per position
         Row::new(vec![
             Cell::from(p.symbol.clone()).style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
             Cell::from(format!("{} {:.0}", if p.qty > 0.0 { "L" } else { "S" }, p.qty.abs())).style(Style::default().fg(if p.qty > 0.0 { Color::Green } else { Color::Red })),
             Cell::from(format!("${:.2}", price)).style(Style::default().fg(Color::Cyan)),
-            Cell::from(format!("${:.2}", p.market_value.abs())).style(Style::default().fg(Color::White)),
+            Cell::from(format!("${:.0}", p.market_value.abs())).style(Style::default().fg(Color::White)),
             Cell::from(format!("{:+.2}", p.unrealized_pl)).style(Style::default().fg(pl_color)),
+            Cell::from(format!("${:.0}", pos_var)).style(Style::default().fg(Color::Yellow)),
         ])
     }).collect();
 
     let pos_table = Table::new(
         pos_rows,
-        [Constraint::Length(10), Constraint::Length(10), Constraint::Length(12), Constraint::Length(14), Constraint::Length(12)],
+        [Constraint::Length(10), Constraint::Length(10), Constraint::Length(12), Constraint::Length(12), Constraint::Length(12), Constraint::Length(10)],
     )
-    .header(Row::new(vec!["Symbol", "Side/Qty", "Price", "Mkt Value", "P&L"]).style(Style::default().fg(Color::DarkGray)))
+    .header(Row::new(vec!["Symbol", "Side/Qty", "Price", "Mkt Val", "P&L", "VaR(2%)"]).style(Style::default().fg(Color::DarkGray)))
     .block(Block::default().borders(Borders::ALL).title(format!(" Positions ({}) ", app.positions.len())));
-    f.render_widget(pos_table, chunks[1]);
+    f.render_widget(pos_table, chunks[2]);
 
-    // Total P&L
+    // ── Total P&L + Portfolio VaR ──
     let total_pl: f64 = app.positions.iter().map(|p| p.unrealized_pl).sum();
     let pl_color = if total_pl >= 0.0 { Color::Green } else { Color::Red };
-    let pl_text = Paragraph::new(Line::from(vec![
-        Span::styled("Total P&L: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("${:+.2}", total_pl), Style::default().fg(pl_color).add_modifier(Modifier::BOLD)),
-    ]))
+    let total_mv: f64 = app.positions.iter().map(|p| p.market_value.abs()).sum();
+    let n_pos = app.positions.len().max(1) as f64;
+    let portfolio_var = 0.02 * total_mv * (1.0 / n_pos.sqrt());
+    let open_orders = app.orders.len();
+
+    let pl_text = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Total P&L: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("${:+.2}", total_pl), Style::default().fg(pl_color).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled("Portfolio VaR: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("${:.2}", portfolio_var), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw("  "),
+            Span::styled("Open Orders: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", open_orders), Style::default().fg(Color::Cyan)),
+        ]),
+    ])
     .block(Block::default().borders(Borders::ALL));
-    f.render_widget(pl_text, chunks[2]);
+    f.render_widget(pl_text, chunks[3]);
 }
 
 fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
@@ -926,12 +1180,30 @@ fn draw(f: &mut Frame, app: &App) {
         .constraints([Constraint::Length(3), Constraint::Min(10), Constraint::Length(3), Constraint::Length(8)])
         .split(f.area());
 
-    // Tab bar
+    // Tab bar with status line
     let tab_titles: Vec<Line> = app.tabs.iter().map(|t| Line::from(*t)).collect();
+    let market_status = if app.market_open { "OPEN" } else { "CLOSED" };
+    let market_color = if app.market_open { Color::Green } else { Color::Red };
+    let refresh_ago = app.last_refresh.elapsed().as_secs();
+    let equity_str = app.account.as_ref().map(|a| format!("${:.2}", a.equity)).unwrap_or_else(|| "---".to_string());
+    let title_str = format!(
+        " TyphooN Terminal | Mkt:{} | {}s ago | Eq:{} ",
+        market_status, refresh_ago, equity_str,
+    );
+    let title_spans = vec![
+        Span::styled(" TyphooN Terminal", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(" | Mkt:", Style::default().fg(Color::DarkGray)),
+        Span::styled(market_status, Style::default().fg(market_color).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" | {}s ago", refresh_ago), Style::default().fg(Color::DarkGray)),
+        Span::styled(" | Eq:", Style::default().fg(Color::DarkGray)),
+        Span::styled(equity_str, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+    ];
+    let _ = title_str; // suppress unused warning; we use title_spans below
     let tab_widget = Tabs::new(tab_titles)
         .select(app.active_tab)
         .highlight_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
-        .block(Block::default().borders(Borders::ALL).title(" TyphooN Terminal CLI "));
+        .block(Block::default().borders(Borders::ALL).title(Line::from(title_spans)));
     f.render_widget(tab_widget, main_layout[0]);
 
     // Main content
@@ -986,13 +1258,58 @@ fn draw(f: &mut Frame, app: &App) {
         }
         3 => draw_orders(f, app, main_layout[1]),
         4 => {
-            // Watchlist
-            let lines: Vec<Line> = app.watchlist.iter().map(|s| {
-                Line::from(Span::styled(s.clone(), Style::default().fg(Color::Cyan)))
+            // Watchlist with live quotes
+            let rows: Vec<Row> = app.watchlist_quotes.iter().map(|(sym, bid, ask, last)| {
+                // Find previous close from positions avg_entry if available, else show N/A for change
+                let pos_entry = app.positions.iter().find(|p| &p.symbol == sym).map(|p| p.avg_entry_price);
+                let prev = app.watchlist_prev_close.get(sym).copied().or(pos_entry);
+                let (change, change_pct) = if let Some(prev_price) = prev {
+                    if prev_price > 0.0 && *last > 0.0 {
+                        (last - prev_price, (last / prev_price - 1.0) * 100.0)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                } else {
+                    (0.0, 0.0)
+                };
+                let chg_color = if change >= 0.0 { Color::Green } else { Color::Red };
+                let last_str = if *last > 0.0 { format!("{:.2}", last) } else { "---".to_string() };
+                let bid_str = if *bid > 0.0 { format!("{:.2}", bid) } else { "---".to_string() };
+                let ask_str = if *ask > 0.0 { format!("{:.2}", ask) } else { "---".to_string() };
+                let chg_str = if prev.is_some() && *last > 0.0 { format!("{:+.2}", change) } else { "---".to_string() };
+                let pct_str = if prev.is_some() && *last > 0.0 { format!("{:+.2}%", change_pct) } else { "---".to_string() };
+
+                Row::new(vec![
+                    Cell::from(sym.clone()).style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Cell::from(last_str).style(Style::default().fg(Color::Cyan)),
+                    Cell::from(chg_str).style(Style::default().fg(chg_color)),
+                    Cell::from(pct_str).style(Style::default().fg(chg_color)),
+                    Cell::from(bid_str).style(Style::default().fg(Color::Green)),
+                    Cell::from(ask_str).style(Style::default().fg(Color::Red)),
+                ])
             }).collect();
-            let wl = Paragraph::new(lines)
-                .block(Block::default().borders(Borders::ALL).title(" Watchlist "));
-            f.render_widget(wl, main_layout[1]);
+
+            // Also show symbols with no quote yet
+            let quoted_syms: Vec<&String> = app.watchlist_quotes.iter().map(|(s, _, _, _)| s).collect();
+            let mut extra_rows: Vec<Row> = app.watchlist.iter()
+                .filter(|s| !quoted_syms.contains(s))
+                .map(|s| {
+                    Row::new(vec![
+                        Cell::from(s.clone()).style(Style::default().fg(Color::White)),
+                        Cell::from("---"), Cell::from("---"), Cell::from("---"),
+                        Cell::from("---"), Cell::from("---"),
+                    ])
+                }).collect();
+            let mut all_rows = rows;
+            all_rows.append(&mut extra_rows);
+
+            let wl_table = Table::new(
+                all_rows,
+                [Constraint::Length(12), Constraint::Length(12), Constraint::Length(10), Constraint::Length(10), Constraint::Length(12), Constraint::Length(12)],
+            )
+            .header(Row::new(vec!["Symbol", "Last", "Change", "Chg%", "Bid", "Ask"]).style(Style::default().fg(Color::DarkGray)))
+            .block(Block::default().borders(Borders::ALL).title(format!(" Watchlist ({}) — :watch SYM to add ", app.watchlist.len())));
+            f.render_widget(wl_table, main_layout[1]);
         }
         5 => draw_accounts(f, app, main_layout[1]),
         6 => draw_log(f, app, main_layout[1]),
@@ -1006,13 +1323,13 @@ fn draw(f: &mut Frame, app: &App) {
     } else {
         // Show relevant keybinds for current tab
         match app.active_tab {
-            0 => "Tab:next  1-7:jump  ::cmd  r:refresh  q:quit".to_string(),
-            1 => "Tab:next  ::cmd  :chart SYM [TF]  :tf 1Day  r:refresh  q:quit".to_string(),
-            2 => "↑↓/jk:select  Enter:chart  x:close  p:partial(50%)  ::cmd  q:quit".to_string(),
-            3 => "↑↓:select  d:cancel order  ::cmd  r:refresh  q:quit".to_string(),
-            4 => "Tab:next  :watch SYM  ::cmd  q:quit".to_string(),
-            5 => ":import NAME /path.csv  :rmacct NAME  ::cmd  q:quit".to_string(),
-            6 => "Tab:next  ::cmd  r:refresh  q:quit".to_string(),
+            0 => "Tab:next  1-7:jump  ::cmd  r:refresh  :closeall :cancelall  q:quit".to_string(),
+            1 => "Tab:next  :chart SYM [TF]  :tf TF  r:refresh  q:quit".to_string(),
+            2 => "↑↓/jk:sel  Enter:chart  x:close  p:partial  :closeall  q:quit".to_string(),
+            3 => "↑↓:sel  d:cancel  :cancelall  :history  q:quit".to_string(),
+            4 => ":watch SYM  :limit/:stop/:bracket  q:quit".to_string(),
+            5 => ":import NAME /path.csv  :rmacct NAME  q:quit".to_string(),
+            6 => "Tab:next  :history [N]  r:refresh  q:quit".to_string(),
             _ => "Tab:next  ::cmd  q:quit".to_string(),
         }
     };
