@@ -280,6 +280,26 @@ Added `put_bars_fast()` — uses zstd level 3 instead of level 9 for frequent me
 
 Frontend `cachedGetBars` no longer calls `saveBarCacheToDisk` after receiving data from `get_bars_incremental` — the backend already persists to SQLite during merge. Only hot cache (`barCache`) is updated in the frontend. This eliminates duplicate SQLite writes and the associated zstd level 9 recompression.
 
+### ✅ Arc Cache — Lock Contention Fix
+
+`db_cache` changed from `Option<SqliteCache>` to `Option<Arc<SqliteCache>>`. The state lock (`state.lock().await`) is now dropped immediately after cloning the `Arc` reference. Heavy operations (API fetch, `merge_bars`, zstd compress) run outside the lock. Previously the state lock was held for the entire incremental fetch cycle (seconds to minutes for crypto), which blocked all other Tauri commands and froze the UI. Now the lock is held for ~microseconds.
+
+### ✅ Bar Data Sanitization (Dual-Layer)
+
+**Backend (Rust, alpaca.rs):** Bars from the API are sanitized at parse time:
+- Reject bars with empty timestamps or zero/NaN prices (`o <= 0.0 || !o.is_finite()`)
+- Fix OHLC consistency: `true_high = max(o,h,l,c)`, `true_low = min(o,h,l,c)`
+- Reject bars where volume is negative
+
+**Frontend (JS, `sanitizeBars()`):** Called before every `setData()` and on merge results:
+- Remove bars with NaN/Infinity/null/zero prices or timestamps
+- Fix OHLC inconsistency (same formula as backend — defense in depth)
+- Remove duplicate timestamps (keeps latest occurrence)
+- Sort by time ascending (lightweight-charts requires sorted data)
+- Clamp negative volume to 0
+
+The dual-layer approach catches API anomalies (Alpaca occasionally returns malformed crypto bars) at the source and at the render boundary. Zero chart artifacts from bad data.
+
 ### Deferred
 
 | Improvement | Reason |
