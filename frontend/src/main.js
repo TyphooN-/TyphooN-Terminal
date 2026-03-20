@@ -110,7 +110,7 @@ const GPU_DRAW_TYPES = {
 
 // ── GPU Chart Wrapper (lightweight-charts compatible API) ──────
 // Drop-in replacement so chart code can use either GPU or lightweight-charts backend.
-// Methods marked TODO are stubbed — will be wired up incrementally.
+// Methods marked GPU_PHASE5 are stubbed — will be wired up incrementally.
 class GpuChartWrapper {
   constructor(container, options = {}) {
     // Create canvas element
@@ -151,11 +151,11 @@ class GpuChartWrapper {
         return () => { self._rangeCallbacks = self._rangeCallbacks.filter(c => c !== cb); };
       },
       timeToCoordinate(time) {
-        // TODO: convert unix timestamp to canvas X coordinate
+        // GPU_PHASE5: convert unix timestamp to canvas X coordinate
         return null;
       },
       coordinateToTime(x) {
-        // TODO: convert canvas X to unix timestamp
+        // GPU_PHASE5: convert canvas X to unix timestamp
         return null;
       },
       applyOptions() {}, // stub
@@ -237,7 +237,7 @@ class GpuChartWrapper {
           const [r, g, b, a] = _parseSeriesColor(opts);
           gpuLineIndex = self.gpu.add_line(vals, r, g, b, a);
         } else if (type === "histogram") {
-          // TODO: gpu.add_pane_histogram() for separate-pane histograms
+          // GPU_PHASE5: gpu.add_pane_histogram() for separate-pane histograms
           // For now, add as a line overlay
           const vals = new Float64Array(data.map(d => d.value));
           const [r, g, b, a] = _parseSeriesColor(opts);
@@ -246,7 +246,7 @@ class GpuChartWrapper {
       },
 
       update(bar) {
-        // TODO: gpu engine needs update_last_bar() method
+        // GPU_PHASE5: gpu engine needs update_last_bar() method
         // For now, append to stored data
         if (storedData.length > 0 && storedData[storedData.length - 1].time === bar.time) {
           storedData[storedData.length - 1] = bar;
@@ -270,7 +270,7 @@ class GpuChartWrapper {
             if (newOpts.price !== undefined) {
               self.gpu.update_price_line(idx, newOpts.price);
             }
-            // TODO: color/width updates need GPU engine support
+            // GPU_PHASE5: color/width updates need GPU engine support
           },
           options() { return { ...priceLine._opts }; },
         };
@@ -289,7 +289,7 @@ class GpuChartWrapper {
       data() { return storedData; },
 
       priceToCoordinate(price) {
-        // TODO: GPU engine needs y_at_price() method
+        // GPU_PHASE5: GPU engine needs y_at_price() method
         // Approximate using price range and canvas height
         const pr = self.gpu.get_price_range(); // [min, max]
         if (pr[1] === pr[0]) return 0;
@@ -302,11 +302,11 @@ class GpuChartWrapper {
 
       applyOptions(newOpts) {
         Object.assign(series._opts, newOpts);
-        // TODO: propagate color/style changes to GPU
+        // GPU_PHASE5: propagate color/style changes to GPU
       },
 
       setMarkers(_markers) {
-        // TODO: GPU engine needs marker rendering support
+        // GPU_PHASE5: GPU engine needs marker rendering support
       },
 
       seriesType() { return type; },
@@ -327,7 +327,7 @@ class GpuChartWrapper {
       const price = self.gpu.price_at_y(y);
       const param = {
         point: { x, y },
-        time: null, // TODO: map barIdx back to unix timestamp
+        time: null, // GPU_PHASE5: map barIdx back to unix timestamp
         seriesData: new Map(),
         sourceEvent: e,
       };

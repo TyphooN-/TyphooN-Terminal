@@ -143,7 +143,7 @@
 | Focus mode (distraction-free) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | PDT rule monitor | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Tax lot tracker (FIFO + wash sale) | ✅ | ❌ | ❌ | ❌ | ✅ |
-| 287 command palette entries | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 288 command palette entries | ✅ | ❌ | ❌ | ❌ | ❌ |
 | 602 static analysis assertions | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cost | Free | Free* | $80-118/mo | Free | $24K/yr |
 
@@ -340,7 +340,7 @@ TradingView is the most popular retail charting platform. Feature comparison:
 | GPU charts | ✅ | ❌ |
 | Cost | **Free** | **$40/mo ($480/yr)** |
 
-**TyphooN-Terminal advantages**: Full trading terminal with charting, order execution, risk management, and 286 commands vs Unusual Whales which is data-only (no charting, no trading). Crypto whale alerts, earnings surprises, GPU charts — none available on UW.
+**TyphooN-Terminal advantages**: Full trading terminal with charting, order execution, risk management, and 288 commands vs Unusual Whales which is data-only (no charting, no trading). Crypto whale alerts, earnings surprises, GPU charts — none available on UW.
 
 **Unusual Whales advantages**: Real-time OPRA options flow data (requires expensive OPRA license we can't replicate for free), real-time short interest (vs our bi-weekly FINRA delay), political donations tracking.
 
