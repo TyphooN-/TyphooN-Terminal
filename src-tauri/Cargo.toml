@@ -29,6 +29,7 @@ hmac = "0.12"
 pbkdf2 = { version = "0.12", features = ["simple"] }
 rand = "0.10"
 base64 = "0.22"
+rayon = "1.10"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

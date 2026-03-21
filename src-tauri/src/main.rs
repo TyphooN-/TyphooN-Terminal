@@ -2830,6 +2830,16 @@ async fn scan_crypto_risk(
 /// Forex: EURUSD → EUR/USD, GBPJPY → GBP/JPY, etc.
 /// Indices/commodities: left as-is (US30, XAUUSD, etc.)
 fn normalize_mt5_symbol(sym: &str) -> String {
+    // Cache: most symbols repeat across sync cycles — avoid re-computing
+    static NORM_CACHE: OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = OnceLock::new();
+    let norm_cache = NORM_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    {
+        let c = norm_cache.lock().unwrap();
+        if let Some(cached) = c.get(sym) {
+            return cached.clone();
+        }
+    }
+
     // Known crypto base currencies (3-5 chars) that pair with USD
     const CRYPTO_BASES: &[&str] = &[
         "BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "AVAX", "DOT", "LINK",
@@ -2848,35 +2858,31 @@ fn normalize_mt5_symbol(sym: &str) -> String {
 
     let upper = sym.to_uppercase();
 
-    // Already has slash — return as-is
-    if upper.contains('/') { return upper; }
-
-    // Try crypto: check if starts with known crypto base + "USD"
-    for base in CRYPTO_BASES {
+    let result = if upper.contains('/') {
+        upper.clone()
+    } else if let Some(r) = CRYPTO_BASES.iter().find_map(|base| {
         if upper.starts_with(base) && upper.ends_with("USD") && upper.len() == base.len() + 3 {
-            return format!("{}/USD", base);
-        }
-    }
-
-    // Try forex: 6-char symbol where first 3 and last 3 are known currencies
-    if upper.len() == 6 {
+            Some(format!("{}/USD", base))
+        } else { None }
+    }) {
+        r
+    } else if upper.len() == 6 {
         let (base, quote) = upper.split_at(3);
         let is_forex = FOREX_BASES.iter().any(|&c| c == base)
             && FOREX_BASES.iter().any(|&c| c == quote);
         if is_forex {
-            return format!("{}/{}", base, quote);
+            format!("{}/{}", base, quote)
+        } else if ["XAU", "XAG", "XPT", "XPD"].contains(&base) {
+            format!("{}/{}", base, quote)
+        } else {
+            upper.clone()
         }
-    }
+    } else {
+        upper.clone()
+    };
 
-    // Precious metals: XAUUSD → XAU/USD, XAGUSD → XAG/USD
-    if (upper.starts_with("XAU") || upper.starts_with("XAG") || upper.starts_with("XPT") || upper.starts_with("XPD"))
-        && upper.len() == 6 {
-        let (metal, ccy) = upper.split_at(3);
-        return format!("{}/{}", metal, ccy);
-    }
-
-    // Default: return as-is (indices like US30, US500, DE40, etc.)
-    upper
+    norm_cache.lock().unwrap().insert(sym.to_string(), result.clone());
+    result
 }
 
 /// Convert MT5 CSV bar data to JSON format for cache storage.
@@ -3142,13 +3148,16 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
                         let parts: Vec<&str> = entry.norm_key.splitn(3, ':').collect();
                         let sym = if parts.len() >= 2 { parts[1] } else { "?" };
                         let tf = if parts.len() >= 3 { parts[2] } else { "?" };
-                        let _ = app_ref.emit("mt5-sync-progress", serde_json::json!({
-                            "instance": instance,
-                            "symbol": sym,
-                            "tf": tf,
-                            "current": progress + 1,
-                            "total": indices.len(),
-                        }));
+                        // Throttle: emit every 10th entry + last entry (reduces IPC ~90%)
+                        if (progress + 1) % 10 == 0 || progress + 1 == indices.len() {
+                            let _ = app_ref.emit("mt5-sync-progress", serde_json::json!({
+                                "instance": instance,
+                                "symbol": sym,
+                                "tf": tf,
+                                "current": progress + 1,
+                                "total": indices.len(),
+                            }));
+                        }
 
                         let data: Vec<u8> = match conn.query_row(
                             "SELECT data FROM bar_cache WHERE key = ?1",
@@ -3178,15 +3187,20 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
         let (binary_entries, legacy_entries): (Vec<_>, Vec<_>) = ready.into_iter()
             .partition(|(data, _, _)| data.len() >= 4 && &data[0..4] == b"TTBR");
 
-        // Binary: compress in parallel with rayon
-        let compressed: Vec<(String, Vec<u8>, i64)> = binary_entries.into_par_iter()
-            .filter_map(|(data, norm_key, bar_count)| {
-                let bc = if data.len() >= 8 {
-                    u32::from_le_bytes(data[4..8].try_into().unwrap()) as i64
-                } else { bar_count };
-                let comp = zstd::encode_all(data.as_slice(), 3).ok()?;
-                Some((norm_key, comp, bc))
-            }).collect();
+        // Binary: compress — parallel only when enough entries to justify rayon overhead
+        // Rayon thread wake-up ~1-2ms per task exceeds benefit for typical ~9 entries/cycle
+        let compress_fn = |(data, norm_key, bar_count): (Vec<u8>, String, i64)| -> Option<(String, Vec<u8>, i64)> {
+            let bc = if data.len() >= 8 {
+                u32::from_le_bytes(data[4..8].try_into().unwrap()) as i64
+            } else { bar_count };
+            let comp = zstd::encode_all(data.as_slice(), 3).ok()?;
+            Some((norm_key, comp, bc))
+        };
+        let compressed: Vec<(String, Vec<u8>, i64)> = if binary_entries.len() >= 32 {
+            binary_entries.into_par_iter().filter_map(compress_fn).collect()
+        } else {
+            binary_entries.into_iter().filter_map(compress_fn).collect()
+        };
 
         // Batch write all compressed entries in one transaction
         let binary_imported = cache.put_compressed_batch(&compressed).unwrap_or(0);

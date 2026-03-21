@@ -108,6 +108,7 @@ impl SqliteCache {
                 timestamp INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_bar_cache_ts ON bar_cache(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_bar_meta ON bar_cache(key, timestamp, bar_count);
             CREATE INDEX IF NOT EXISTS idx_kv_cache_ts ON kv_cache(timestamp);
         ").map_err(|e| format!("SQLite create tables failed: {e}"))?;
 
@@ -383,6 +384,61 @@ impl SqliteCache {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(format!("SQLite query failed: {e}")),
         }
+    }
+
+    /// Get bar count for a cache entry. Returns None if key doesn't exist.
+    pub fn get_bar_count(&self, key: &str) -> Result<Option<i64>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT bar_count FROM bar_cache WHERE key = ?1"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+
+        match stmt.query_row(rusqlite::params![key], |row| row.get::<_, i64>(0)) {
+            Ok(count) => Ok(Some(count)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("SQLite query failed: {e}")),
+        }
+    }
+
+    /// Batch-write pre-compressed bar entries in a single transaction.
+    /// Takes (key, compressed_data, bar_count) tuples — compression done by caller.
+    pub fn put_compressed_batch(&self, entries: &[(String, Vec<u8>, i64)]) -> Result<usize, String> {
+        if entries.is_empty() { return Ok(0); }
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        conn.execute_batch("BEGIN").map_err(|e| format!("BEGIN failed: {e}"))?;
+        let timestamp = chrono::Utc::now().timestamp();
+        let mut count = 0;
+        for (key, compressed, bar_count) in entries {
+            match conn.execute(
+                "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
+                params![key, compressed, timestamp, bar_count],
+            ) {
+                Ok(_) => count += 1,
+                Err(e) => tracing::warn!("Batch write skip {}: {}", key, e),
+            }
+        }
+        conn.execute_batch("COMMIT").map_err(|e| format!("COMMIT failed: {e}"))?;
+        Ok(count)
+    }
+
+    /// Bulk-load cache metadata (age_secs, bar_count) for all entries.
+    /// Returns HashMap<key, (age_secs, bar_count)> — one query instead of N individual lookups.
+    pub fn get_all_cache_meta(&self) -> Result<std::collections::HashMap<String, (i64, i64)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT key, timestamp, bar_count FROM bar_cache"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let now = chrono::Utc::now().timestamp();
+        let mut map = std::collections::HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        for row in rows {
+            if let Ok((key, ts, bc)) = row {
+                map.insert(key, (now - ts, bc));
+            }
+        }
+        Ok(map)
     }
 
     /// Delete all cache entries matching a symbol prefix (e.g., "AAPL:" deletes all TFs for AAPL).
