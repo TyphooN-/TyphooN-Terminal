@@ -3,7 +3,7 @@
 **Status:** Implemented
 **Date:** 2026-03-16
 
-> **Note:** Builds on [ADR-003](003-bar-data-caching.md). Binary storage optimization in [ADR-027](027-binary-storage-wasm-gpu.md).
+> **Note:** Builds on [ADR-003](003-bar-data-caching.md). Binary storage optimization in [ADR-027](027-binary-storage-wasm-gpu.md). MT5 SQLite Direct Sync in [ADR-036](036-mt5-sqlite-direct-sync.md).
 
 ## Context
 

@@ -27,7 +27,7 @@ use core::screener::{self as screener_engine, ScreenerFilter, ScreenerSymbol};
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
-use tauri::State;
+use tauri::{Emitter, State};
 use chrono::Datelike;
 
 /// Shared HTTP client for non-broker requests (articles, FRED, AI chat).
@@ -386,7 +386,7 @@ async fn get_bars_incremental(
         let primary_key = format!("{bid}:{symbol}:{timeframe}");
         let fallback_key = format!("default:{symbol}:{timeframe}");
 
-        // Try primary key first, then fallback
+        // Try primary key first, then fallback, then MT5
         let start = cache.as_ref().and_then(|c| {
             c.get_incremental_start(&primary_key).ok().flatten()
                 .map(|s| (primary_key.clone(), s))
@@ -395,6 +395,12 @@ async fn get_bars_incremental(
                         c.get_incremental_start(&fallback_key).ok().flatten()
                             .map(|s| (fallback_key.clone(), s))
                     } else { None }
+                })
+                .or_else(|| {
+                    // MT5 fallback: BarCacheWriter stores data under mt5: prefix
+                    let mt5_key = format!("mt5:{}:{}", symbol, timeframe);
+                    c.get_incremental_start(&mt5_key).ok().flatten()
+                        .map(|s| (mt5_key, s))
                 })
         });
 
@@ -2926,7 +2932,21 @@ fn find_all_mt5_sqlite_dbs() -> Vec<std::path::PathBuf> {
 /// BarCacheWriter.mq5 writes JSON bars to the same schema as TyphooN-Terminal's cache.
 /// Key format: "mt5:SYMBOL:TIMEFRAME" — same as our import format.
 #[tauri::command]
-async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String> {
+async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -> Result<String, String> {
+    // Prevent concurrent syncs (background + foreground window can overlap → double memory)
+    static SYNC_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if SYNC_RUNNING.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_err() {
+        return Ok(r#"{"imported":0,"skipped":0,"deduped":0,"total_bars":0,"symbols":0,"databases_read":0,"databases_found":0}"#.to_string());
+    }
+    // RAII guard to always reset the flag
+    struct SyncGuard;
+    impl Drop for SyncGuard {
+        fn drop(&mut self) {
+            SYNC_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _guard = SyncGuard;
+
     let mt5_dbs = find_all_mt5_sqlite_dbs();
     if mt5_dbs.is_empty() {
         return Err("No MT5 SQLite caches found. Is BarCacheWriter.mq5 running?".into());
@@ -2939,40 +2959,56 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
         s.db_cache.clone().ok_or("Terminal SQLite cache not available")?
     };
 
-    // Two-phase sync: read metadata first (lightweight), then fetch data only for changed entries
     let db_paths = mt5_dbs.clone();
     let db_count = db_paths.len();
 
+    let app_handle = app.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<(usize, i64, usize, usize, usize, usize), String> {
-        let mut total_imported = 0usize;
-        let mut total_bars: i64 = 0;
+        use rayon::prelude::*;
+
+        let t0 = std::time::Instant::now();
         let mut total_skipped = 0usize;
         let mut total_deduped = 0usize;
         let mut symbols = std::collections::HashSet::new();
         let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut dbs_read = 0usize;
 
-        for db_path in &db_paths {
+        // Phase 1: Read metadata from all DBs, filter/dedup, collect import list
+        // Bulk-load terminal cache metadata ONCE (replaces ~7000 individual SQLite queries)
+        let cache_meta = cache.get_all_cache_meta().unwrap_or_default();
+        let now_ts = chrono::Utc::now().timestamp();
+
+        struct ImportEntry {
+            db_idx: usize,
+            key: String,
+            norm_key: String,
+            bar_count: i64,
+        }
+        let mut import_entries: Vec<ImportEntry> = Vec::new();
+
+        for (db_idx, db_path) in db_paths.iter().enumerate() {
             let mt5_conn = match rusqlite::Connection::open_with_flags(
                 db_path,
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
             ) {
-                Ok(c) => c,
+                Ok(c) => {
+                    let _ = c.busy_timeout(std::time::Duration::from_secs(30));
+                    c
+                }
                 Err(e) => {
                     tracing::warn!("MT5 sync: skip {:?}: {}", db_path, e);
                     continue;
                 }
             };
 
-            let instance = db_path.to_str().unwrap_or("")
-                .split(".mt5_").nth(1)
-                .and_then(|s| s.split('/').next())
-                .unwrap_or("?");
-
-            // Phase 1: Read ONLY metadata (no data column) — fast, <1KB per entry
+            // Force covering index scan — without INDEXED BY, SQLite does a full table scan
+            // through multi-MB blob rows (10+ seconds). The covering index has only key/ts/bar_count
+            // (~100KB), so the index-only scan takes <100ms.
             let mut meta_stmt = match mt5_conn.prepare(
-                "SELECT key, timestamp, bar_count FROM bar_cache WHERE key NOT LIKE '%:chunk_%' AND key NOT LIKE '%:chunks'"
-            ) {
+                "SELECT key, timestamp, bar_count FROM bar_cache INDEXED BY idx_bar_meta"
+            ).or_else(|_| mt5_conn.prepare(
+                "SELECT key, timestamp, bar_count FROM bar_cache"
+            )) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
@@ -2985,10 +3021,16 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
             if meta.is_empty() { continue; }
             dbs_read += 1;
 
-            let mut inst_imported = 0;
             for (key, ts, bar_count) in &meta {
-                // Import __SYMBOLS__ (small, always needed)
-                if key.contains("__SYMBOLS__") {
+                // __SYMBOLS__ / __SPECS__: text metadata — handle immediately
+                if key.contains("__SYMBOLS__") || key.contains("__SPECS__") {
+                    if let Some(&(cache_age, _)) = cache_meta.get(key.as_str()) {
+                        let mt5_age = now_ts - ts;
+                        if cache_age < mt5_age {
+                            total_skipped += 1;
+                            continue;
+                        }
+                    }
                     if let Ok(data) = mt5_conn.query_row(
                         "SELECT data FROM bar_cache WHERE key = ?1", [key], |r| r.get::<_, String>(0)
                     ) {
@@ -2996,7 +3038,6 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
                     }
                     continue;
                 }
-                if key.contains("__SPECS__") { continue; }
 
                 // Normalize key
                 let norm_key = if key.starts_with("mt5:") {
@@ -3009,73 +3050,158 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
                     else { format!("mt5:{}", key) }
                 };
 
-                // Dedup shared symbols across instances
                 if !seen_keys.insert(norm_key.clone()) {
                     total_deduped += 1;
                     continue;
                 }
 
-                // Timestamp skip: if our cache is newer, skip (don't fetch data at all)
-                if let Ok(Some(cache_age)) = cache.get_cache_age_secs(&norm_key) {
-                    let mt5_age = chrono::Utc::now().timestamp() - ts;
-                    if cache_age < mt5_age {
+                // In-memory cache lookup (O(1) HashMap) instead of per-entry SQLite query
+                if let Some(&(cache_age, cached_bc)) = cache_meta.get(norm_key.as_str()) {
+                    let mt5_age = now_ts - ts;
+                    if cache_age < mt5_age && cached_bc == *bar_count {
                         total_skipped += 1;
                         continue;
                     }
                 }
 
-                // Phase 2: Only NOW fetch the actual data (for this one entry that needs it)
-                // Also fetch any chunks for this key
-                let base_data = match mt5_conn.query_row(
-                    "SELECT data FROM bar_cache WHERE key = ?1", [key], |r| r.get::<_, String>(0)
-                ) {
-                    Ok(d) => d,
-                    Err(_) => continue,
-                };
-
-                // Check for chunks: key:chunk_0, key:chunk_1, ...
-                let mut full_csv = base_data;
-                let chunk_prefix = format!("{}:chunk_", key);
-                if let Ok(mut chunk_stmt) = mt5_conn.prepare(
-                    "SELECT key, data FROM bar_cache WHERE key LIKE ?1 ORDER BY key"
-                ) {
-                    let chunk_pattern = format!("{}%", chunk_prefix);
-                    if let Ok(chunks) = chunk_stmt.query_map([&chunk_pattern], |row| {
-                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                    }) {
-                        let mut chunk_vec: Vec<(i32, String)> = chunks.filter_map(|r| r.ok())
-                            .filter_map(|(k, d)| {
-                                k.rfind(":chunk_").and_then(|pos| {
-                                    k[pos + 7..].parse::<i32>().ok().map(|idx| (idx, d))
-                                })
-                            }).collect();
-                        chunk_vec.sort_by_key(|(idx, _)| *idx);
-                        for (_, chunk_data) in &chunk_vec {
-                            full_csv.push_str(chunk_data);
-                        }
-                    }
-                }
-
-                let bar_json = if full_csv.starts_with('[') {
-                    full_csv
-                } else {
-                    mt5_csv_to_json(&full_csv)
-                };
-
-                match cache.put_bars(&norm_key, &bar_json) {
-                    Ok(_) => {
-                        total_imported += 1;
-                        total_bars += bar_count;
-                        inst_imported += 1;
-                        if let Some(sym) = norm_key.split(':').nth(1) {
-                            symbols.insert(sym.to_string());
-                        }
-                    }
-                    Err(e) => tracing::warn!("MT5 sync skip {}: {}", norm_key, e),
-                }
+                import_entries.push(ImportEntry {
+                    db_idx, key: key.clone(), norm_key, bar_count: *bar_count,
+                });
             }
+        }
 
-            tracing::info!("MT5 sync: instance {} — {} imported of {} entries", instance, inst_imported, meta.len());
+        if import_entries.is_empty() {
+            return Ok((0, 0, symbols.len(), dbs_read, total_skipped, total_deduped));
+        }
+
+        // Cap entries per sync cycle to limit peak memory (remaining deferred to next cycle)
+        const MAX_ENTRIES_PER_SYNC: usize = 100;
+        if import_entries.len() > MAX_ENTRIES_PER_SYNC {
+            let deferred = import_entries.len() - MAX_ENTRIES_PER_SYNC;
+            import_entries.truncate(MAX_ENTRIES_PER_SYNC);
+            tracing::info!("MT5 sync: capping to {} entries this cycle ({} deferred)", MAX_ENTRIES_PER_SYNC, deferred);
+        }
+
+        let t1 = std::time::Instant::now();
+
+        // Phase 2: Read data from all MT5 DBs concurrently (each DB gets its own thread + connection)
+        let mut by_db: Vec<Vec<usize>> = vec![Vec::new(); db_paths.len()];
+        for (idx, entry) in import_entries.iter().enumerate() {
+            by_db[entry.db_idx].push(idx);
+        }
+
+        let ready: Vec<(Vec<u8>, String, i64)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = by_db.iter().enumerate().map(|(db_idx, entry_indices)| {
+                let db_path = &db_paths[db_idx];
+                let entries = &import_entries;
+                let app_ref = &app_handle;
+                let indices = entry_indices.clone();
+
+                scope.spawn(move || -> Vec<(Vec<u8>, String, i64)> {
+                    if indices.is_empty() { return Vec::new(); }
+
+                    let instance = db_path.to_str().unwrap_or("")
+                        .split(".mt5_").nth(1)
+                        .and_then(|s| s.split('/').next())
+                        .unwrap_or("?")
+                        .to_string();
+
+                    let conn = match rusqlite::Connection::open_with_flags(
+                        db_path,
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                    ) {
+                        Ok(c) => { let _ = c.busy_timeout(std::time::Duration::from_secs(30)); c }
+                        Err(_) => return Vec::new(),
+                    };
+
+                    let mut results = Vec::with_capacity(indices.len());
+
+                    for (progress, &entry_idx) in indices.iter().enumerate() {
+                        let entry = &entries[entry_idx];
+
+                        let parts: Vec<&str> = entry.norm_key.splitn(3, ':').collect();
+                        let sym = if parts.len() >= 2 { parts[1] } else { "?" };
+                        let tf = if parts.len() >= 3 { parts[2] } else { "?" };
+                        let _ = app_ref.emit("mt5-sync-progress", serde_json::json!({
+                            "instance": instance,
+                            "symbol": sym,
+                            "tf": tf,
+                            "current": progress + 1,
+                            "total": indices.len(),
+                        }));
+
+                        let data: Vec<u8> = match conn.query_row(
+                            "SELECT data FROM bar_cache WHERE key = ?1",
+                            [&entry.key], |r| r.get::<_, Vec<u8>>(0),
+                        ) {
+                            Ok(d) => d,
+                            Err(_) => continue,
+                        };
+
+                        results.push((data, entry.norm_key.clone(), entry.bar_count));
+                    }
+                    results
+                })
+            }).collect();
+
+            let mut all: Vec<(Vec<u8>, String, i64)> = Vec::with_capacity(import_entries.len());
+            for handle in handles {
+                all.extend(handle.join().unwrap_or_default());
+            }
+            all
+        });
+
+        let t2 = std::time::Instant::now();
+
+        // Phase 3: Parallel compress (rayon) → batch write (single transaction)
+        // Split binary (TTBR) from legacy (CSV/JSON)
+        let (binary_entries, legacy_entries): (Vec<_>, Vec<_>) = ready.into_iter()
+            .partition(|(data, _, _)| data.len() >= 4 && &data[0..4] == b"TTBR");
+
+        // Binary: compress in parallel with rayon
+        let compressed: Vec<(String, Vec<u8>, i64)> = binary_entries.into_par_iter()
+            .filter_map(|(data, norm_key, bar_count)| {
+                let bc = if data.len() >= 8 {
+                    u32::from_le_bytes(data[4..8].try_into().unwrap()) as i64
+                } else { bar_count };
+                let comp = zstd::encode_all(data.as_slice(), 3).ok()?;
+                Some((norm_key, comp, bc))
+            }).collect();
+
+        // Batch write all compressed entries in one transaction
+        let binary_imported = cache.put_compressed_batch(&compressed).unwrap_or(0);
+
+        // Legacy fallback: individual writes (rare — only during format transition)
+        let mut legacy_imported = 0usize;
+        for (data, norm_key, _) in &legacy_entries {
+            let text = String::from_utf8_lossy(data);
+            let json = if text.starts_with('[') { text.to_string() } else { mt5_csv_to_json(&text) };
+            if cache.put_bars(norm_key, &json).is_ok() { legacy_imported += 1; }
+        }
+
+        let t3 = std::time::Instant::now();
+        let total_imported = binary_imported + legacy_imported;
+
+        if total_imported > 0 {
+            tracing::info!(
+                "MT5 sync phases: meta={:?}, read={:?} ({} entries from {} DBs), compress+write={:?} ({} binary, {} legacy)",
+                t1.duration_since(t0), t2.duration_since(t1), import_entries.len(), dbs_read,
+                t3.duration_since(t2), binary_imported, legacy_imported,
+            );
+        }
+
+        let mut total_bars: i64 = 0;
+        for (key, _, bc) in &compressed {
+            total_bars += bc;
+            if let Some(sym) = key.split(':').nth(1) {
+                symbols.insert(sym.to_string());
+            }
+        }
+        for (_, norm_key, bar_count) in &legacy_entries {
+            total_bars += bar_count;
+            if let Some(sym) = norm_key.split(':').nth(1) {
+                symbols.insert(sym.to_string());
+            }
         }
 
         Ok((total_imported, total_bars, symbols.len(), dbs_read, total_skipped, total_deduped))
@@ -3083,10 +3209,17 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
 
     let (imported, total_bars, sym_count, dbs_read, skipped, deduped) = result;
 
-    tracing::info!(
-        "MT5 sync: {} imported, {} skipped, {} deduped, {} bars, {} symbols from {}/{} DBs",
-        imported, skipped, deduped, total_bars, sym_count, dbs_read, db_count
-    );
+    if imported > 0 {
+        tracing::info!(
+            "MT5 sync: {} imported, {} skipped, {} deduped, {} bars, {} symbols from {}/{} DBs",
+            imported, skipped, deduped, total_bars, sym_count, dbs_read, db_count
+        );
+    } else {
+        tracing::debug!(
+            "MT5 sync: {} imported, {} skipped, {} deduped, {} bars, {} symbols from {}/{} DBs",
+            imported, skipped, deduped, total_bars, sym_count, dbs_read, db_count
+        );
+    }
 
     Ok(serde_json::json!({
         "imported": imported,
@@ -3116,23 +3249,28 @@ async fn get_mt5_symbol_list(_state: State<'_, SharedState>) -> Result<String, S
                 db_path,
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
             ) {
-                Ok(c) => c,
+                Ok(c) => {
+                    let _ = c.busy_timeout(std::time::Duration::from_secs(30));
+                    c
+                }
                 Err(_) => continue,
             };
 
-            // Read the __SYMBOLS__ key
-            let json: String = match conn.query_row(
-                "SELECT data FROM bar_cache WHERE key = 'mt5:__SYMBOLS__'",
-                [],
-                |row| row.get(0),
+            // Read all __SYMBOLS__ keys (per-account: mt5:__SYMBOLS__:12345)
+            let mut sym_stmt = match conn.prepare(
+                "SELECT data FROM bar_cache WHERE key LIKE 'mt5:__SYMBOLS__%'"
             ) {
-                Ok(j) => j,
+                Ok(s) => s,
                 Err(_) => continue,
             };
-
-            let symbols: Vec<String> = serde_json::from_str(&json).unwrap_or_default();
-            for sym in symbols {
-                all_symbols.insert(sym);
+            let rows: Vec<String> = sym_stmt.query_map([], |row| row.get::<_, String>(0))
+                .map(|r| r.filter_map(|v| v.ok()).collect())
+                .unwrap_or_default();
+            for json in rows {
+                let symbols: Vec<String> = serde_json::from_str(&json).unwrap_or_default();
+                for sym in symbols {
+                    all_symbols.insert(sym);
+                }
             }
         }
 
@@ -3188,18 +3326,27 @@ async fn get_mt5_specs(state: State<'_, SharedState>) -> Result<String, String> 
                 db_path,
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
             ) {
-                Ok(c) => c,
+                Ok(c) => {
+                    let _ = c.busy_timeout(std::time::Duration::from_secs(30));
+                    c
+                }
                 Err(_) => continue,
             };
 
-            // Read __SPECS__ CSV data
-            let csv_data: String = match conn.query_row(
-                "SELECT data FROM bar_cache WHERE key = 'mt5:__SPECS__'",
-                [],
-                |row| row.get(0),
-            ) {
-                Ok(d) => d,
-                Err(_) => continue, // BarCacheWriter < v1.300, no specs yet
+            // Read __SPECS__ CSV data (per-account: mt5:__SPECS__:12345)
+            let csv_data: String = {
+                let mut specs_data = String::new();
+                if let Ok(mut stmt) = conn.prepare(
+                    "SELECT data FROM bar_cache WHERE key LIKE 'mt5:__SPECS__%'"
+                ) {
+                    if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                        for r in rows.flatten() {
+                            specs_data.push_str(&r);
+                        }
+                    }
+                }
+                if specs_data.is_empty() { continue; } // BarCacheWriter < v1.300, no specs yet
+                specs_data
             };
 
             // Also read bar keys directly from this MT5 instance for sync progress

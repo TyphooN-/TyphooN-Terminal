@@ -6,6 +6,8 @@
 > **Note:** This ADR describes the original three-tier cache design. See [ADR-020](020-cache-optimization.md) for the SQLite evolution and [ADR-027](027-binary-storage-wasm-gpu.md) for binary bar storage optimization.
 **Context:** Alpaca's free IEX data feed caps at ~260 bars per API request. Loading 1000+ bars requires multiple sequential API calls. Re-downloading the same data on every chart load wastes time and API quota.
 
+> **Note:** See [ADR-036](036-mt5-sqlite-direct-sync.md) for the MT5 SQLite Direct Sync system, which provides real-time bar data for ~895 Darwinex symbols without any API calls. Alpaca fills gaps for US equities not available on Darwinex.
+
 ## Decision
 
 Three-tier cache architecture: hot (memory) + warm (IndexedDB) + cold (zstd-compressed files).
@@ -25,6 +27,10 @@ Three-tier cache architecture: hot (memory) + warm (IndexedDB) + cold (zstd-comp
                     │  COLD (zstd)    │ ← unlimited, disk, ~5-10x compression
                     └────────┬────────┘
                              │ miss
+                    ┌────────▼────────┐
+                    │  MT5 SQLite     │ ← real-time, ~895 Darwinex symbols
+                    └────────┬────────┘
+                             │ miss (symbol not on Darwinex)
                     ┌────────▼────────┐
                     │  Alpaca API     │ ← 260 bars/request, 200 req/min
                     └─────────────────┘

@@ -125,15 +125,34 @@ TyphooN-Terminal replaces MetaTrader 5 as a local desktop trading terminal. It m
               └─────────────────────┘
 ```
 
+### Multi-Source Data Hierarchy
+
+TyphooN-Terminal uses a priority-based data hierarchy:
+
+```
+Priority 1: Darwinex MT5 (real-time) ← BarCacheWriter EA → SQLite → sync
+  └─ ~895 symbols: CFDs, forex, crypto, commodities, indices, stocks
+  └─ Zero API calls — direct SQLite read from Wine filesystem
+  └─ 3 Darwinex accounts syncing simultaneously
+
+Priority 2: Alpaca Markets (15-min delayed free tier)
+  └─ 11,000+ US equities, ETFs, options, crypto
+  └─ Fills gaps for symbols not on Darwinex
+  └─ REST API + WebSocket for order execution
+```
+
+MT5 provides the data (real-time via BarCacheWriter), Alpaca provides order execution for US equities. For symbols available on both, MT5 data takes precedence. See [ADR-036](adr/036-mt5-sqlite-direct-sync.md) for implementation details.
+
 ### Why Not Just Use MT5?
 
 MetaTrader 5 works well for Darwinex CFD trading, but:
 
-1. **Symbol coverage** — Darwinex offers ~100 instruments. Alpaca offers 11,000+ US stocks, ETFs, crypto, and options
+1. **Symbol coverage** — Darwinex offers ~895 instruments across 3 accounts. Alpaca adds 11,000+ US stocks, ETFs, crypto, and options not on Darwinex
 2. **Broker lock-in** — MT5 is tied to the broker's server. Each broker instance needs its own MT5 installation. TyphooN-Terminal connects to any Alpaca account via API keys
 3. **Linux support** — MT5 requires Wine on Linux. It works but has rendering glitches, no Wayland support, and Wine overhead. TyphooN-Terminal is native Linux
 4. **Open source** — MT5 is proprietary (MetaQuotes). The MQL5 language is closed-source and can only run inside MT5. TyphooN-Terminal's risk engine is portable Rust that can be embedded anywhere
 5. **Extensibility** — adding a new broker to TyphooN-Terminal means implementing one Rust trait. Adding a new indicator means writing one JavaScript function. In MT5, everything must be in MQL5 and compiled by MetaEditor
+6. **Unified view** — TyphooN-Terminal combines Darwinex real-time data with Alpaca execution in a single interface, eliminating alt-tabbing between MT5 instances
 
 ### The lightweight-charts Clarification
 

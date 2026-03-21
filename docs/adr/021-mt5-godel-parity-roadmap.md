@@ -42,19 +42,19 @@ TyphooN-Terminal aims to replace both MetaTrader 5 and Godel Terminal. A compreh
 
 | Feature | Blocker | Alternative |
 |---|---|---|
-| **Analyst recommendations (ANR)** | No free consensus ratings API. Paid: Refinitiv ($$$), Bloomberg ($$$). | Could scrape Yahoo Finance analyst page (fragile, TOS risk) |
-| **Short interest (SI)** | FINRA short interest is 2-week delayed, no free real-time API. Paid: Ortex, S3 Partners. | Display FINRA delayed data from SEC filings |
-| **Dark pool / options flow** | No free unusual activity data. Paid: FlowAlgo ($$$), Unusual Whales ($$$). | Not implementable without paid subscription |
-| **World equity indices (WEI)** | Alpaca is US-only. No free real-time global index data. | Could show US indices (SPY, QQQ, IWM) as proxies |
-| **Forex currency matrix (FX)** | Alpaca has crypto but not forex. Paid: OANDA, FXCM APIs. | Could show crypto pairs (BTC/USD, ETH/USD) matrix |
-| **Historical market stats (HMS)** | FRED API requires user's own API key (free but requires registration). | Add FRED API key input in settings, implement when user provides key |
+| **Analyst recommendations (ANR)** | ~~No free API~~ **Resolved**: Finnhub free tier. | ✅ Implemented |
+| **Short interest (SI)** | ~~No free real-time API~~ **Resolved**: Finnhub bi-weekly. | ✅ Implemented |
+| **Dark pool / options flow** | No free unusual activity data. | ✅ Implemented synthetically from options chain volume/OI analysis |
+| **World equity indices (WEI)** | ~~Alpaca is US-only~~ **Resolved**: Yahoo Finance world indices. | ✅ Implemented |
+| **Forex currency matrix (FX)** | ~~Alpaca has no forex~~ **Resolved**: ECB rates + Darwinex MT5 real-time forex via SQLite Direct Sync ([ADR-036](036-mt5-sqlite-direct-sync.md)). | ✅ Implemented |
+| **Historical market stats (HMS)** | ~~Needs user API key~~ **Resolved**: FRED API with user-provided key. | ✅ Implemented |
 
 ### Blocked by Infrastructure
 
 | Feature | Blocker | Path Forward |
 |---|---|---|
-| **AI chat** | Needs LLM API endpoint. Could use Anthropic/OpenAI API with user's key. | Add API key input, implement Claude/GPT integration |
-| **Community chat** | Needs WebSocket chat server + user accounts + moderation. | Would need separate server deployment (e.g., Matrix/Element) |
+| **AI chat** | ~~Needs LLM API~~ **Resolved**: Claude/GPT with user's API key. | ✅ Implemented |
+| **Community chat** | ~~Needs server~~ **Resolved**: Matrix protocol, no server needed. | ✅ Implemented |
 | **Plugin marketplace** | Needs distribution server, versioning, review system. | Start with local plugin loading (already done), add GitHub-based sharing later |
 | **Pure Rust GUI** | Architectural migration from Tauri webview to egui/iced. | Long-term goal — current webview works well |
 

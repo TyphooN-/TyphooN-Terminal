@@ -224,6 +224,7 @@ Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new f
 | Enhanced journal | ✅ Done | Ctrl+K → JOURNAL+, tags/ratings/monthly P&L calendar |
 | Correlation network | ✅ Done | Ctrl+K → CORRELATION3D, force-directed graph (canvas) |
 | Import trade history | ✅ Done | Ctrl+K → IMPORTTRADES, CSV from MT5/IB/generic |
+| MT5 SQLite Direct Sync | ✅ Done | Real-time bar data from 3 Darwinex MT5 instances via BarCacheWriter — ~895 symbols, <2s incremental sync |
 
 ### Blocked / Deferred
 
@@ -238,7 +239,8 @@ Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new f
 
 | Source | Data | Auth | Rate Limit |
 |---|---|---|---|
-| **Alpaca** | Bars, quotes, news, corporate actions | API key | 200/min |
+| **Darwinex MT5** | Real-time bars (~895 symbols: CFDs, forex, crypto, commodities, indices, stocks) | BarCacheWriter EA | None (local SQLite) |
+| **Alpaca** | Bars (15-min delayed free), quotes, news, corporate actions, order execution | API key | 200/min |
 | **SEC EDGAR** | Filings, company facts, 13F holders, insider trading | None (User-Agent) | 10/sec |
 | **FRED** | Economic data, interest rates, GDP | API key (free) | 120/min |
 | **ForexFactory** | Economic calendar | None (scrape) | — |
