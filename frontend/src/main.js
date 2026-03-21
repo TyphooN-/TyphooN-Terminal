@@ -23053,6 +23053,7 @@ async function cmdMt5DbSync() {
   const w = createWindow({ title: "MT5 SQLite Direct Sync", width: 700, height: 500 });
   const out = w.element ? w.element.querySelector(".fw-content") : w;
   out.innerHTML = `<div style="padding:8px">
+    <div id="mt5db-activity" style="font-family:'Iosevka Fixed',monospace;font-size:11px;color:#888;margin-bottom:6px;border:1px solid #333;border-radius:3px;padding:4px 6px;background:#1a1a1a"></div>
     <div id="mt5db-status" style="font-family:'Iosevka Fixed',monospace;font-size:12px;color:#4caf50;margin-bottom:8px;font-weight:bold">Discovering MT5 databases...</div>
     <div id="mt5db-progress" style="background:#222;border-radius:3px;height:20px;margin-bottom:8px;overflow:hidden">
       <div id="mt5db-bar" style="background:#2196f3;height:100%;width:0%;transition:width 0.3s;border-radius:3px"></div>
@@ -23067,10 +23068,28 @@ async function cmdMt5DbSync() {
   const statsEl = out.querySelector("#mt5db-stats");
   const logDiv = out.querySelector("#mt5db-log");
 
+  const activityEl = out.querySelector("#mt5db-activity");
+
   const setStatus = (msg, color = "#4caf50") => { statusEl.textContent = msg; statusEl.style.color = color; };
   const setProgress = (pct) => { barEl.style.width = pct + "%"; };
   const setStats = (msg) => { statsEl.textContent = msg; };
   const addLog = (msg, color = "#666") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+  // Live per-DB activity display — listens for progress events from Rust sync
+  const dbActivity = {}; // instance -> { symbol, tf, current, total }
+  let unlisten = null;
+  if (window.__TAURI__?.event?.listen) {
+    window.__TAURI__.event.listen("mt5-sync-progress", (event) => {
+      const d = event.payload;
+      dbActivity[d.instance] = d;
+      const lines = Object.keys(dbActivity).sort().map(inst => {
+        const a = dbActivity[inst];
+        return `<span style="color:#2196f3">DB ${inst}:</span> <span style="color:#4caf50">${a.symbol}</span><span style="color:#666">:${a.tf}</span> <span style="color:#888">(${a.current}/${a.total})</span>`;
+      });
+      activityEl.innerHTML = lines.join("&nbsp;&nbsp;&nbsp;");
+    }).then(fn => { unlisten = fn; });
+  }
+  w.addCleanup(() => { if (unlisten) unlisten(); });
 
   try {
     const startTime = Date.now();
@@ -23079,6 +23098,7 @@ async function cmdMt5DbSync() {
     let syncCount = 0;
     let prevSymCount = 0;
     let prevBarCount = 0;
+    let lastGoodSync = null;
 
     // Helper: run one sync cycle, update all UI elements
     async function doSync() {
@@ -23100,6 +23120,7 @@ async function cmdMt5DbSync() {
         setStats(`${r.imported} new + ${r.skipped || 0} unchanged from ${r.databases_read}/${r.databases_found} instances${dedup} | ${el}s`);
         setProgress(100);
         barEl.style.background = "#4caf50";
+        lastGoodSync = { ...r, el };
 
         // Log only meaningful changes
         if (mt5SymbolList.count !== prevSymCount) {
@@ -23110,6 +23131,12 @@ async function cmdMt5DbSync() {
           addLog(`+${r.imported} entries (${r.total_bars.toLocaleString()} total bars) from ${r.databases_read}/${r.databases_found} DBs`, "#4caf50");
           prevBarCount = r.total_bars;
         }
+      } else if (lastGoodSync) {
+        // Fast-path skip (mtime unchanged or concurrent sync) — show last known state
+        setStatus(`Sync #${syncCount} — idle (no changes) | ${el}s`, "#4caf50");
+        setStats(`Last: ${lastGoodSync.imported || 0} new + ${lastGoodSync.skipped || 0} unchanged from ${lastGoodSync.databases_read || 0}/${lastGoodSync.databases_found || 0} instances`);
+        setProgress(100);
+        barEl.style.background = "#4caf50";
       } else {
         setStatus(`Waiting for BarCacheWriter — ${r.databases_found} DBs found (${el}s)`, "#ff9800");
         setStats("BarCacheWriter must be compiled + attached in each MT5 instance");

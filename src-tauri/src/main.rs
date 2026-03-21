@@ -2952,6 +2952,26 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
         return Err("No MT5 SQLite caches found. Is BarCacheWriter.mq5 running?".into());
     }
 
+    // Fast path: skip full scan if no MT5 DB file has been modified since last sync
+    {
+        static LAST_MTIMES: std::sync::Mutex<Option<Vec<std::time::SystemTime>>> = std::sync::Mutex::new(None);
+        let current_mtimes: Vec<std::time::SystemTime> = mt5_dbs.iter()
+            .map(|p| std::fs::metadata(p).and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH))
+            .collect();
+        let mut last = LAST_MTIMES.lock().unwrap();
+        if let Some(ref prev) = *last {
+            if prev == &current_mtimes {
+                // Nothing changed — return immediately without allocating anything
+                return Ok(serde_json::json!({
+                    "imported": 0, "skipped": 0, "deduped": 0,
+                    "total_bars": 0, "symbols": 0,
+                    "databases_read": 0, "databases_found": mt5_dbs.len(),
+                }).to_string());
+            }
+        }
+        *last = Some(current_mtimes);
+    }
+
     tracing::info!("MT5 SQLite sync: found {} databases across MT5 instances", mt5_dbs.len());
 
     let cache = {
