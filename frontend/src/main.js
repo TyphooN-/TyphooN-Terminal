@@ -666,13 +666,13 @@ const _realInvoke = invoke;
 // We can't reassign invoke (it's imported), so we wrap at the get_bars call sites
 // Instead: create a dedup wrapper that callers can use
 async function cachedGetBars(symbol, timeframe, limit) {
-  // Check barCache first (< staleness threshold = skip API)
   const cacheKey = getCacheKey(symbol, timeframe);
   const cached = barCache[cacheKey];
-  const STALE = { "1Min": 60000, "5Min": 300000, "15Min": 900000, "30Min": 1800000, "1Hour": 3600000, "4Hour": 14400000, "1Day": 86400000, "1Week": 604800000 };
-  const staleness = STALE[timeframe] || 3600000;
-  if (cached && cached.data && cached.data.length > 0 && (Date.now() - (cached.timestamp || 0)) < staleness) {
-    return JSON.stringify(cached.data); // return cached JSON string, same format as invoke
+  // Short-circuit only for very rapid re-requests (< 5s) — e.g. indicator recalcs, MTF grid
+  // All other requests go through backend which has MT5-first enrichment logic
+  const RAPID_DEDUP_MS = 5000;
+  if (cached && cached.data && cached.data.length > 0 && (Date.now() - (cached.timestamp || 0)) < RAPID_DEDUP_MS) {
+    return JSON.stringify(cached.data);
   }
   // Dedup: if same symbol:TF is in-flight (any limit), wait for it
   const key = `${symbol}:${timeframe}`;
@@ -3316,15 +3316,16 @@ function applyIndicators(chartData) {
               : (retraceColors[level.label] || "#888");
             const lineStyle = level.type === "extension" ? 2 : 0; // dashed for extensions
             const lineWidth = level.label === "50%" || level.label === "61.8%" ? 1.5 : 0.8;
+            const labelText = `${level.label} (${level.price.toFixed(2)})`;
 
             const s = chart.addLineSeries({
               color,
               lineWidth,
               lineStyle,
-              lastValueVisible: false,
+              lastValueVisible: true,
               priceLineVisible: false,
               crosshairMarkerVisible: false,
-              title: "",
+              title: labelText,
             });
             s.setData(fibBars.map(d => ({ time: d.time, value: level.price })));
             indicatorSeries[`afib_${li}`] = s;
@@ -5471,6 +5472,7 @@ async function openArticleInline(url, title) {
   // Track last article for session restore
   window._lastArticleUrl = url;
   window._lastArticleTitle = title;
+  saveSession();
   // Open article in a floating window (Godel Terminal style)
   const win = createWindow({
     title: title.substring(0, 60),
@@ -5548,6 +5550,7 @@ function setupNewsPanel() {
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
     header.textContent = panel.classList.contains("collapsed") ? "News & Events ▶" : "News & Events ▼";
+    saveSession();
   });
 
 }
@@ -5563,12 +5566,14 @@ function setupIndicatorPanel() {
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
     header.textContent = panel.classList.contains("collapsed") ? "Indicators ▶" : "Indicators ▼";
+    saveSession();
   });
 
   // Re-apply indicators when checkboxes change (use currentChartData for volume)
   document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
     cb.addEventListener("change", () => {
       if (currentChartData && currentChartData.length > 0) applyIndicators(currentChartData);
+      saveSession();
     });
   });
 }
@@ -5584,6 +5589,7 @@ function setupLogPanel() {
   toggle.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
     toggle.textContent = panel.classList.contains("collapsed") ? "▼" : "▲";
+    saveSession();
   });
 
   document.getElementById("log-header").addEventListener("click", (e) => {
@@ -5736,7 +5742,7 @@ function saveSession() {
 
     // Panel collapse states
     const panelStates = {};
-    for (const id of ["positions-panel", "orders-panel", "news-panel", "indicator-panel", "log-panel"]) {
+    for (const id of ["positions-panel", "orders-panel", "news-panel", "indicator-panel", "log-panel", "tab-watchlist-panel"]) {
       const el = document.getElementById(id);
       if (el) panelStates[id] = el.classList.contains("collapsed");
     }
@@ -5890,6 +5896,7 @@ function setupTabWatchlist() {
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
     header.textContent = panel.classList.contains("collapsed") ? "Watchlist ▶" : "Watchlist ▼";
+    saveSession();
   });
 
   async function refreshWatchlist() {
@@ -6013,6 +6020,7 @@ function setupPositionsPanel() {
   header.addEventListener("click", () => {
     panel.classList.toggle("collapsed");
     updatePositionsHeader(panel);
+    saveSession();
   });
 }
 
@@ -6137,6 +6145,7 @@ function setupOrdersPanel() {
     panel.classList.toggle("collapsed");
     updateOrdersHeader(panel);
     if (!panel.classList.contains("collapsed")) updateOrdersPanel();
+    saveSession();
   });
 }
 
@@ -23185,6 +23194,15 @@ async function startMt5BackgroundSync() {
     mt5BgSyncCount++;
     if (r.imported > 0) {
       console.log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.skipped} unchanged, ${r.deduped || 0} deduped, ${r.total_bars} bars from ${r.databases_read}/${r.databases_found} DBs`);
+      // Invalidate in-memory cache for current symbol and reload chart with enriched MT5 data
+      if (currentSymbol) {
+        for (const key of Object.keys(barCache)) {
+          if (key.startsWith(currentSymbol + ":")) {
+            delete barCache[key];
+          }
+        }
+        loadChart(currentSymbol, currentTimeframe);
+      }
     }
   } catch (e) {
     console.warn("[MT5 Sync] initial:", e);
@@ -23195,6 +23213,17 @@ async function startMt5BackgroundSync() {
       mt5BgSyncCount++;
       if (r.imported > 0) {
         console.log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.total_bars} bars`);
+        // Invalidate in-memory cache for current symbol — forces next load to hit backend
+        // which will find deeper MT5 history via enrich_with_deepest_history
+        if (currentSymbol) {
+          for (const key of Object.keys(barCache)) {
+            if (key.startsWith(currentSymbol + ":")) {
+              delete barCache[key];
+            }
+          }
+          // Reload current chart with enriched data
+          loadChart(currentSymbol, currentTimeframe);
+        }
       }
     } catch (_) {}
   }, 30000);

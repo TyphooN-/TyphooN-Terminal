@@ -386,21 +386,21 @@ async fn get_bars_incremental(
         let primary_key = format!("{bid}:{symbol}:{timeframe}");
         let fallback_key = format!("default:{symbol}:{timeframe}");
 
-        // Try primary key first, then fallback, then MT5
+        // MT5 first (primary source — full history, real-time from broker),
+        // then Alpaca keys (supplementary — 15-min delayed, rate-limited)
+        let mt5_key = format!("mt5:{}:{}", symbol, timeframe);
         let start = cache.as_ref().and_then(|c| {
-            c.get_incremental_start(&primary_key).ok().flatten()
-                .map(|s| (primary_key.clone(), s))
+            c.get_incremental_start(&mt5_key).ok().flatten()
+                .map(|s| (mt5_key.clone(), s))
+                .or_else(|| {
+                    c.get_incremental_start(&primary_key).ok().flatten()
+                        .map(|s| (primary_key.clone(), s))
+                })
                 .or_else(|| {
                     if primary_key != fallback_key {
                         c.get_incremental_start(&fallback_key).ok().flatten()
                             .map(|s| (fallback_key.clone(), s))
                     } else { None }
-                })
-                .or_else(|| {
-                    // MT5 fallback: BarCacheWriter stores data under mt5: prefix
-                    let mt5_key = format!("mt5:{}:{}", symbol, timeframe);
-                    c.get_incremental_start(&mt5_key).ok().flatten()
-                        .map(|s| (mt5_key, s))
                 })
         });
 
@@ -411,8 +411,24 @@ async fn get_bars_incremental(
         (broker, cache, key, start)
     }; // state lock dropped here — UI stays responsive
 
+    let is_mt5 = cache_key.starts_with("mt5:");
+
     if let Some((after_ts, cached_count)) = &incremental_start {
-        // Fast path: if cache was updated very recently, return it without API call.
+        // MT5 fast path: MT5 data is authoritative — always return it, never hit Alpaca.
+        // BarCacheWriter syncs every 30s; the Rust MT5 sync picks it up continuously.
+        if is_mt5 {
+            if let Some(c) = &cache {
+                if let Ok(Some((json, _))) = c.get_bars(&cache_key) {
+                    if json.len() > 10 && json.contains("\"timestamp\"") {
+                        tracing::debug!("{} @ {}: MT5 cache hit ({} bars), skipping Alpaca", symbol, timeframe, cached_count);
+                        { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
+                        return Ok(json);
+                    }
+                }
+            }
+        }
+
+        // Alpaca path: if cache was updated very recently, return it without API call.
         let freshness_secs: i64 = match timeframe.as_str() {
             "1Min" => 60, "5Min" => 300, "15Min" => 900, "30Min" => 1800,
             "1Hour" => 3600, "4Hour" => 14400, "1Day" => 86400, "1Week" => 604800,
@@ -513,17 +529,34 @@ async fn get_multi_tf_bars(
         if !is_valid_timeframe(tf) { return Err(format!("Invalid timeframe: {tf}")); }
     }
     let limit = limit.min(50_000);
-    // Clone broker and drop lock before API calls to avoid blocking other commands
-    let broker = {
+    // Clone broker + cache, drop lock before API calls to avoid blocking other commands
+    let (broker, cache) = {
         let s = state.lock().await;
-        s.broker.as_ref().ok_or("Not connected")?.clone()
+        let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        let cache = s.db_cache.clone();
+        (broker, cache)
     };
-    // Fetch all timeframes concurrently (rate limiter paces them internally)
+    // Fetch all timeframes concurrently — MT5 cache first, Alpaca API as fallback
     let futures: Vec<_> = timeframes.iter().map(|tf| {
         let b = broker.clone();
         let sym = symbol.clone();
         let tf = tf.clone();
+        let c = cache.clone();
         async move {
+            // MT5 fast path: if MT5 cache has bars, use them directly
+            let mt5_key = format!("mt5:{}:{}", sym, tf);
+            if let Some(ref cache) = c {
+                if let Ok(Some((json, _))) = cache.get_bars(&mt5_key) {
+                    if json.len() > 10 && json.contains("\"timestamp\"") {
+                        let bars: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
+                        if !bars.is_empty() {
+                            tracing::debug!("MTF {} @ {}: MT5 cache hit ({} bars)", sym, tf, bars.len());
+                            return Some((tf, serde_json::Value::Array(bars)));
+                        }
+                    }
+                }
+            }
+            // Alpaca fallback
             match b.get_bars(&sym, &tf, limit).await {
                 Ok(bars) => serde_json::to_value(&bars).ok().map(|v| (tf, v)),
                 Err(e) => {
