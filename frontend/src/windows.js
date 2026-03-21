@@ -171,16 +171,27 @@ export function createWindow(opts) {
 
   // ── Controls ──────────────────────────────────────────────
   let isMinimized = false, isMaximized = false;
-  let preMaxState = {};
+  let preMaxState = {}, preMinState = {};
 
   btnMin.addEventListener("click", () => {
     isMinimized = !isMinimized;
     content.style.display = isMinimized ? "none" : "";
     resizeHandle.style.display = isMinimized ? "none" : "";
     if (isMinimized) {
+      preMinState = { width: win.style.width, height: win.style.height };
       win.style.height = "auto";
+      win.style.width = "auto";
+      titleText.style.maxWidth = "120px";
+      titleText.style.overflow = "hidden";
+      titleText.style.textOverflow = "ellipsis";
+      titleText.style.whiteSpace = "nowrap";
     } else {
-      win.style.height = h + "px";
+      win.style.width = preMinState?.width || w + "px";
+      win.style.height = preMinState?.height || h + "px";
+      titleText.style.maxWidth = "";
+      titleText.style.overflow = "";
+      titleText.style.textOverflow = "";
+      titleText.style.whiteSpace = "";
     }
   });
 

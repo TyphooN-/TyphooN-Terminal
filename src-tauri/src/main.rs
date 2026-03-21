@@ -2939,15 +2939,17 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
         s.db_cache.clone().ok_or("Terminal SQLite cache not available")?
     };
 
-    // Read from ALL MT5 instance databases and merge into terminal cache.
-    // Each Darwinex account (Futures, Crypto, CFD, Stocks/ETFs) has its own
-    // MT5 instance with unique symbols. We merge them all.
+    // Two-phase sync: read metadata first (lightweight), then fetch data only for changed entries
     let db_paths = mt5_dbs.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<(usize, i64, usize, usize, usize), String> {
+    let db_count = db_paths.len();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<(usize, i64, usize, usize, usize, usize), String> {
         let mut total_imported = 0usize;
         let mut total_bars: i64 = 0;
         let mut total_skipped = 0usize;
+        let mut total_deduped = 0usize;
         let mut symbols = std::collections::HashSet::new();
+        let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut dbs_read = 0usize;
 
         for db_path in &db_paths {
@@ -2962,121 +2964,134 @@ async fn sync_mt5_sqlite(state: State<'_, SharedState>) -> Result<String, String
                 }
             };
 
-            let mut stmt = match mt5_conn.prepare(
-                "SELECT key, data, timestamp, bar_count FROM bar_cache"
-            ) {
-                Ok(s) => s,
-                Err(_) => continue, // table might not exist yet
-            };
-
-            let entries: Vec<(String, String, i64, i64)> = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            }).map(|rows| rows.filter_map(|r| r.ok()).collect())
-            .unwrap_or_default();
-
-            if entries.is_empty() { continue; }
-
             let instance = db_path.to_str().unwrap_or("")
                 .split(".mt5_").nth(1)
                 .and_then(|s| s.split('/').next())
                 .unwrap_or("?");
 
-            let mut inst_count = 0;
-            for (key, json_data, ts, bar_count) in &entries {
-                // Skip __SYMBOLS__ meta-key (not bar data)
+            // Phase 1: Read ONLY metadata (no data column) — fast, <1KB per entry
+            let mut meta_stmt = match mt5_conn.prepare(
+                "SELECT key, timestamp, bar_count FROM bar_cache WHERE key NOT LIKE '%:chunk_%' AND key NOT LIKE '%:chunks'"
+            ) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            let meta: Vec<(String, i64, i64)> = meta_stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+            }).map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default();
+
+            if meta.is_empty() { continue; }
+            dbs_read += 1;
+
+            let mut inst_imported = 0;
+            for (key, ts, bar_count) in &meta {
+                // Import __SYMBOLS__ (small, always needed)
                 if key.contains("__SYMBOLS__") {
-                    // Still import it for symbol discovery
-                    let _ = cache.put_bars(key, json_data);
+                    if let Ok(data) = mt5_conn.query_row(
+                        "SELECT data FROM bar_cache WHERE key = ?1", [key], |r| r.get::<_, String>(0)
+                    ) {
+                        let _ = cache.put_bars(key, &data);
+                    }
                     continue;
                 }
+                if key.contains("__SPECS__") { continue; }
 
-                // Timestamp-based skip: if terminal cache already has this entry
-                // with the same or newer timestamp, don't re-import
-                let cache_key_preview = if key.starts_with("mt5:") {
+                // Normalize key
+                let norm_key = if key.starts_with("mt5:") {
                     let parts: Vec<&str> = key.splitn(3, ':').collect();
                     if parts.len() == 3 { format!("mt5:{}:{}", normalize_mt5_symbol(parts[1]), parts[2]) }
                     else { key.clone() }
-                } else { format!("mt5:{}", key) };
+                } else {
+                    let parts: Vec<&str> = key.splitn(2, ':').collect();
+                    if parts.len() == 2 { format!("mt5:{}:{}", normalize_mt5_symbol(parts[0]), parts[1]) }
+                    else { format!("mt5:{}", key) }
+                };
 
-                if let Ok(Some(cache_age)) = cache.get_cache_age_secs(&cache_key_preview) {
-                    // If our cache was updated after the MT5 entry, skip
+                // Dedup shared symbols across instances
+                if !seen_keys.insert(norm_key.clone()) {
+                    total_deduped += 1;
+                    continue;
+                }
+
+                // Timestamp skip: if our cache is newer, skip (don't fetch data at all)
+                if let Ok(Some(cache_age)) = cache.get_cache_age_secs(&norm_key) {
                     let mt5_age = chrono::Utc::now().timestamp() - ts;
                     if cache_age < mt5_age {
                         total_skipped += 1;
                         continue;
                     }
                 }
-                // Ensure mt5: prefix + normalize symbol (SOLUSD → SOL/USD)
-                let cache_key = if key.starts_with("mt5:") {
-                    // key = "mt5:SOLUSD:1Hour" → normalize symbol part
-                    let parts: Vec<&str> = key.splitn(3, ':').collect();
-                    if parts.len() == 3 {
-                        format!("mt5:{}:{}", normalize_mt5_symbol(parts[1]), parts[2])
-                    } else {
-                        key.clone()
-                    }
-                } else {
-                    // key = "SOLUSD:1Hour" → add prefix + normalize
-                    let parts: Vec<&str> = key.splitn(2, ':').collect();
-                    if parts.len() == 2 {
-                        format!("mt5:{}:{}", normalize_mt5_symbol(parts[0]), parts[1])
-                    } else {
-                        format!("mt5:{}", key)
-                    }
+
+                // Phase 2: Only NOW fetch the actual data (for this one entry that needs it)
+                // Also fetch any chunks for this key
+                let base_data = match mt5_conn.query_row(
+                    "SELECT data FROM bar_cache WHERE key = ?1", [key], |r| r.get::<_, String>(0)
+                ) {
+                    Ok(d) => d,
+                    Err(_) => continue,
                 };
 
-                // Detect format: CSV (lines with commas, no braces) or JSON (starts with [)
-                let bar_json = if json_data.starts_with('[') {
-                    json_data.clone() // already JSON
+                // Check for chunks: key:chunk_0, key:chunk_1, ...
+                let mut full_csv = base_data;
+                let chunk_prefix = format!("{}:chunk_", key);
+                if let Ok(mut chunk_stmt) = mt5_conn.prepare(
+                    "SELECT key, data FROM bar_cache WHERE key LIKE ?1 ORDER BY key"
+                ) {
+                    let chunk_pattern = format!("{}%", chunk_prefix);
+                    if let Ok(chunks) = chunk_stmt.query_map([&chunk_pattern], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    }) {
+                        let mut chunk_vec: Vec<(i32, String)> = chunks.filter_map(|r| r.ok())
+                            .filter_map(|(k, d)| {
+                                k.rfind(":chunk_").and_then(|pos| {
+                                    k[pos + 7..].parse::<i32>().ok().map(|idx| (idx, d))
+                                })
+                            }).collect();
+                        chunk_vec.sort_by_key(|(idx, _)| *idx);
+                        for (_, chunk_data) in &chunk_vec {
+                            full_csv.push_str(chunk_data);
+                        }
+                    }
+                }
+
+                let bar_json = if full_csv.starts_with('[') {
+                    full_csv
                 } else {
-                    // CSV format: "timestamp,open,high,low,close,volume\n" per line
-                    mt5_csv_to_json(json_data)
+                    mt5_csv_to_json(&full_csv)
                 };
 
-                match cache.put_bars(&cache_key, &bar_json) {
+                match cache.put_bars(&norm_key, &bar_json) {
                     Ok(_) => {
                         total_imported += 1;
                         total_bars += bar_count;
-                        inst_count += 1;
-                        if let Some(sym) = cache_key.split(':').nth(1) {
+                        inst_imported += 1;
+                        if let Some(sym) = norm_key.split(':').nth(1) {
                             symbols.insert(sym.to_string());
                         }
                     }
-                    Err(e) => tracing::warn!("MT5 sync skip {}: {}", cache_key, e),
+                    Err(e) => tracing::warn!("MT5 sync skip {}: {}", norm_key, e),
                 }
             }
 
-            tracing::info!(
-                "MT5 sync: instance {} — {} entries, {} unique symbols",
-                instance, inst_count, entries.iter()
-                    .filter_map(|(k, _, _, _)| k.split(':').nth(1).map(|s| s.to_string()))
-                    .collect::<std::collections::HashSet<_>>().len()
-            );
-            dbs_read += 1;
+            tracing::info!("MT5 sync: instance {} — {} imported of {} entries", instance, inst_imported, meta.len());
         }
 
-        if total_imported == 0 && total_skipped == 0 {
-            return Err("All MT5 databases were empty. Run BarCacheWriter.mq5 first.".into());
-        }
-
-        Ok((total_imported, total_bars, symbols.len(), dbs_read, total_skipped))
+        Ok((total_imported, total_bars, symbols.len(), dbs_read, total_skipped, total_deduped))
     }).await.map_err(|e| format!("Task failed: {e}"))??;
 
-    let (imported, total_bars, sym_count, dbs_read, skipped) = result;
+    let (imported, total_bars, sym_count, dbs_read, skipped, deduped) = result;
 
     tracing::info!(
-        "MT5 sync: {} imported, {} skipped (unchanged), {} bars, {} symbols from {} DBs",
-        imported, skipped, total_bars, sym_count, dbs_read
+        "MT5 sync: {} imported, {} skipped, {} deduped, {} bars, {} symbols from {}/{} DBs",
+        imported, skipped, deduped, total_bars, sym_count, dbs_read, db_count
     );
 
     Ok(serde_json::json!({
         "imported": imported,
         "skipped": skipped,
+        "deduped": deduped,
         "total_bars": total_bars,
         "symbols": sym_count,
         "databases_read": dbs_read,
@@ -3134,6 +3149,208 @@ async fn get_mt5_symbol_list(_state: State<'_, SharedState>) -> Result<String, S
         "normalized": normalized,
         "count": result.len(),
     }).to_string())
+}
+
+/// Get symbol specs from MT5 databases (written by BarCacheWriter v1.300+).
+/// Reads the __SPECS__ CSV key, parses per-symbol specs (Sector, Industry, TradeMode, etc.).
+/// Returns per-symbol classification and sync progress (which TFs have bar data).
+#[tauri::command]
+async fn get_mt5_specs(state: State<'_, SharedState>) -> Result<String, String> {
+    let mt5_dbs = find_all_mt5_sqlite_dbs();
+    if mt5_dbs.is_empty() {
+        return Err("No MT5 SQLite caches found".into());
+    }
+
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.clone()
+    };
+
+    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        // Collect all specs from all MT5 instances
+        let mut all_specs: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+        // Collect all bar keys from MT5 databases to compute sync progress
+        let mut bar_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Read bar keys from terminal cache if available
+        if let Some(ref c) = cache {
+            if let Ok(stats) = c.detailed_stats() {
+                for (key, _, _) in stats {
+                    if key.starts_with("mt5:") && !key.contains("__SYMBOLS__") && !key.contains("__SPECS__") {
+                        bar_keys.insert(key);
+                    }
+                }
+            }
+        }
+
+        for db_path in &mt5_dbs {
+            let conn = match rusqlite::Connection::open_with_flags(
+                db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            // Read __SPECS__ CSV data
+            let csv_data: String = match conn.query_row(
+                "SELECT data FROM bar_cache WHERE key = 'mt5:__SPECS__'",
+                [],
+                |row| row.get(0),
+            ) {
+                Ok(d) => d,
+                Err(_) => continue, // BarCacheWriter < v1.300, no specs yet
+            };
+
+            // Also read bar keys directly from this MT5 instance for sync progress
+            // Normalize chunk keys: "mt5:SYM:TF:chunk_N" → "mt5:SYM:TF"
+            if let Ok(mut stmt) = conn.prepare("SELECT key FROM bar_cache WHERE key NOT LIKE '%__SYMBOLS__%' AND key NOT LIKE '%__SPECS__%'") {
+                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                    for r in rows.flatten() {
+                        if r.contains(":chunks") || r.contains(":chunk_") {
+                            // Extract base key for progress tracking
+                            if let Some(pos) = r.rfind(":chunk") {
+                                bar_keys.insert(r[..pos].to_string());
+                            }
+                        } else {
+                            bar_keys.insert(r);
+                        }
+                    }
+                }
+            }
+
+            // Parse CSV: Symbol,Sector,Industry,TradeMode,SwapLong,SwapShort,Spread,
+            //             VolMin,VolMax,VolStep,ContractSize,TickSize,TickValue,
+            //             Digits,MarginInit,MarginMaint,BaseCcy,QuoteCcy,Description
+            for line in csv_data.lines() {
+                let line = line.trim();
+                if line.is_empty() { continue; }
+                let fields: Vec<&str> = line.splitn(19, ',').collect();
+                if fields.len() < 19 { continue; }
+
+                let symbol = fields[0].to_string();
+                let normalized = normalize_mt5_symbol(&symbol);
+
+                all_specs.insert(symbol.clone(), serde_json::json!({
+                    "symbol": symbol,
+                    "normalized": normalized,
+                    "sector": fields[1],
+                    "industry": fields[2],
+                    "trade_mode": fields[3].parse::<i32>().unwrap_or(0),
+                    "swap_long": fields[4].parse::<f64>().unwrap_or(0.0),
+                    "swap_short": fields[5].parse::<f64>().unwrap_or(0.0),
+                    "spread": fields[6].parse::<i32>().unwrap_or(0),
+                    "volume_min": fields[7].parse::<f64>().unwrap_or(0.0),
+                    "volume_max": fields[8].parse::<f64>().unwrap_or(0.0),
+                    "volume_step": fields[9].parse::<f64>().unwrap_or(0.0),
+                    "contract_size": fields[10].parse::<f64>().unwrap_or(0.0),
+                    "tick_size": fields[11].parse::<f64>().unwrap_or(0.0),
+                    "tick_value": fields[12].parse::<f64>().unwrap_or(0.0),
+                    "digits": fields[13].parse::<i32>().unwrap_or(0),
+                    "margin_initial": fields[14].parse::<f64>().unwrap_or(0.0),
+                    "margin_maintenance": fields[15].parse::<f64>().unwrap_or(0.0),
+                    "base_currency": fields[16],
+                    "quote_currency": fields[17],
+                    "description": fields[18],
+                }));
+            }
+        }
+
+        // Compute sync progress per symbol: which of the 9 TFs have bar data?
+        let all_tfs = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month"];
+        let mut sync_progress: Vec<serde_json::Value> = Vec::new();
+        let mut category_counts: std::collections::HashMap<String, (usize, usize, usize)> = std::collections::HashMap::new();
+        // category -> (total_symbols, fully_synced, partially_synced)
+
+        for (raw_sym, spec) in &all_specs {
+            let mut synced_tfs: Vec<String> = Vec::new();
+            for tf in &all_tfs {
+                let key = format!("mt5:{}:{}", raw_sym, tf);
+                let norm_key = format!("mt5:{}:{}", normalize_mt5_symbol(raw_sym), tf);
+                if bar_keys.contains(&key) || bar_keys.contains(&norm_key) {
+                    synced_tfs.push(tf.to_string());
+                }
+            }
+
+            let total_tfs = all_tfs.len();
+            let synced_count = synced_tfs.len();
+            let status = if synced_count == 0 { "none" }
+                else if synced_count == total_tfs { "complete" }
+                else { "partial" };
+
+            // Classify by sector from MT5 specs
+            let sector = spec["sector"].as_str().unwrap_or("Unknown");
+            let category = if sector.is_empty() || sector == "Unknown" || sector == "Undefined" {
+                // Fallback: use normalize_mt5_symbol heuristics
+                let norm = normalize_mt5_symbol(raw_sym);
+                if norm.contains('/') {
+                    let base = norm.split('/').next().unwrap_or("");
+                    if ["XAU","XAG","XPT","XPD"].contains(&base) { "Commodities" }
+                    else if ["EUR","GBP","AUD","NZD","USD","CAD","CHF","JPY"].contains(&base) { "Forex" }
+                    else { "Crypto" }
+                } else { "Other" }
+            } else {
+                match sector {
+                    "Currency" => "Forex",
+                    "Commodity" => "Commodities",
+                    "Crypto" | "Cryptocurrency" => "Crypto",
+                    "Indexes" | "Index" => "Indices",
+                    "Energy" => "Commodities",
+                    _ => sector, // Stocks: Technology, Healthcare, etc.
+                }
+            };
+
+            let entry = category_counts.entry(category.to_string()).or_insert((0, 0, 0));
+            entry.0 += 1;
+            if synced_count == total_tfs { entry.1 += 1; }
+            else if synced_count > 0 { entry.2 += 1; }
+
+            sync_progress.push(serde_json::json!({
+                "symbol": raw_sym,
+                "normalized": spec["normalized"],
+                "category": category,
+                "sector": sector,
+                "industry": spec["industry"],
+                "status": status,
+                "synced_tfs": synced_tfs,
+                "synced_count": synced_count,
+                "total_tfs": total_tfs,
+            }));
+        }
+
+        // Sort by category then symbol
+        sync_progress.sort_by(|a, b| {
+            let ca = a["category"].as_str().unwrap_or("");
+            let cb = b["category"].as_str().unwrap_or("");
+            ca.cmp(cb).then_with(|| {
+                let sa = a["symbol"].as_str().unwrap_or("");
+                let sb = b["symbol"].as_str().unwrap_or("");
+                sa.cmp(sb)
+            })
+        });
+
+        // Build category summary
+        let mut categories: Vec<serde_json::Value> = category_counts.iter().map(|(cat, (total, complete, partial))| {
+            let none = total - complete - partial;
+            serde_json::json!({
+                "category": cat,
+                "total": total,
+                "complete": complete,
+                "partial": partial,
+                "none": none,
+            })
+        }).collect();
+        categories.sort_by(|a, b| a["category"].as_str().unwrap_or("").cmp(b["category"].as_str().unwrap_or("")));
+
+        Ok(serde_json::json!({
+            "total_symbols": all_specs.len(),
+            "total_bar_keys": bar_keys.len(),
+            "categories": categories,
+            "symbols": sync_progress,
+        }))
+    }).await.map_err(|e| format!("Task failed: {e}"))??;
+
+    Ok(result.to_string())
 }
 
 // ── MT5 Bar Import (Darwinex data via BarExporter EA) ───────────
@@ -4153,6 +4370,7 @@ fn main() {
             scan_crypto_risk,
             sync_mt5_sqlite,
             get_mt5_symbol_list,
+            get_mt5_specs,
             import_mt5_bars,
             list_mt5_symbols,
             get_mt5_bars,

@@ -22936,6 +22936,119 @@ async function cmdMt5Import() {
   });
 }
 
+function renderSpecsToDiv(specsDiv, specs) {
+  if (!specs || !specs.categories || specs.total_symbols === 0) {
+    specsDiv.innerHTML = `<div style="color:#888">No symbol specs available yet (BarCacheWriter v1.300+ required)</div>`;
+    return;
+  }
+
+  const catColors = { Forex: "#2196f3", Crypto: "#9c27b0", Commodities: "#ff9800", Indices: "#00bcd4" };
+  let html = `<div style="color:#4caf50;font-weight:bold;margin-bottom:4px">${specs.total_symbols} symbols | ${specs.total_bar_keys} bar entries synced</div>`;
+
+  // Category progress bars
+  for (const cat of specs.categories) {
+    const pct = cat.total > 0 ? Math.round((cat.complete / cat.total) * 100) : 0;
+    const partialPct = cat.total > 0 ? Math.round((cat.partial / cat.total) * 100) : 0;
+    const color = catColors[cat.category] || "#888";
+    html += `<div style="margin:2px 0;display:flex;align-items:center;gap:6px">`;
+    html += `<span style="color:${color};width:100px;display:inline-block">${cat.category}</span>`;
+    // Mini progress bar
+    html += `<div style="background:#222;width:120px;height:10px;border-radius:2px;overflow:hidden;display:inline-flex">`;
+    html += `<div style="background:#4caf50;width:${pct}%;height:100%"></div>`;
+    html += `<div style="background:#ff9800;width:${partialPct}%;height:100%"></div>`;
+    html += `</div>`;
+    html += `<span style="color:#4caf50">${cat.complete}</span>`;
+    html += `<span style="color:#888">/</span>`;
+    html += `<span style="color:${color}">${cat.total}</span>`;
+    html += `<span style="color:#888;font-size:9px">complete</span>`;
+    if (cat.partial > 0) html += `<span style="color:#ff9800;font-size:9px">${cat.partial} partial</span>`;
+    if (cat.none > 0) html += `<span style="color:#666;font-size:9px">${cat.none} pending</span>`;
+    html += `</div>`;
+  }
+
+  // Expandable per-symbol details
+  const grouped = {};
+  for (const sym of (specs.symbols || [])) {
+    const cat = sym.category || "Other";
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(sym);
+  }
+
+  html += `<div style="margin-top:6px">`;
+  for (const [cat, syms] of Object.entries(grouped)) {
+    const color = catColors[cat] || "#888";
+    const complete = syms.filter(s => s.status === "complete");
+    const partial = syms.filter(s => s.status === "partial");
+    const none = syms.filter(s => s.status === "none");
+
+    if (partial.length > 0) {
+      html += `<div style="color:${color};margin-top:3px">${cat} in progress:</div>`;
+      for (const s of partial) {
+        const tfs = s.synced_tfs || [];
+        const missing = ["1Month","1Week","1Day","4Hour","1Hour","30Min","15Min","5Min","1Min"].filter(t => !tfs.includes(t));
+        html += `<div style="color:#ff9800;margin-left:8px">${s.normalized} ${s.synced_count}/${s.total_tfs} TFs`;
+        if (missing.length <= 4) html += ` <span style="color:#666;font-size:9px">need: ${missing.join(", ")}</span>`;
+        html += `</div>`;
+      }
+    }
+    if (complete.length > 0) {
+      html += `<div style="color:${color};margin-top:3px">${cat} complete (${complete.length}):</div>`;
+      html += `<div style="color:#4caf50;margin-left:8px;font-size:9px">${complete.map(s => s.normalized).join(", ")}</div>`;
+    }
+    if (none.length > 0 && none.length <= 20) {
+      html += `<div style="color:${color};margin-top:3px">${cat} pending (${none.length}):</div>`;
+      html += `<div style="color:#666;margin-left:8px;font-size:9px">${none.map(s => s.normalized).join(", ")}</div>`;
+    } else if (none.length > 20) {
+      html += `<div style="color:#666;margin-top:3px">${cat} pending: ${none.length} symbols</div>`;
+    }
+  }
+  html += `</div>`;
+
+  specsDiv.innerHTML = html;
+}
+
+async function showSpecsSyncProgress(addLog) {
+  try {
+    const specs = JSON.parse(await invoke("get_mt5_specs"));
+    if (!specs || !specs.categories) return;
+
+    addLog(`<b>Symbol Sync Progress</b> (${specs.total_symbols} total symbols, ${specs.total_bar_keys} bar entries)`, "#4caf50");
+    addLog("");
+
+    // Category summary with progress bars
+    const catColors = { Forex: "#2196f3", Crypto: "#9c27b0", Commodities: "#ff9800", Indices: "#00bcd4" };
+    for (const cat of specs.categories) {
+      const pct = cat.total > 0 ? Math.round((cat.complete / cat.total) * 100) : 0;
+      const color = catColors[cat.category] || "#888";
+      const bar = "\u2588".repeat(Math.round(pct / 5)) + "\u2591".repeat(20 - Math.round(pct / 5));
+      addLog(`  <span style="color:${color}">${cat.category.padEnd(14)}</span> ${bar} ${String(cat.complete).padStart(4)}/${String(cat.total).padStart(4)} complete | ${cat.partial} partial | ${cat.none} pending`, color);
+    }
+    addLog("");
+
+    // Show symbols by category with sync status
+    const grouped = {};
+    for (const sym of (specs.symbols || [])) {
+      const cat = sym.category || "Other";
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(sym);
+    }
+
+    for (const [cat, syms] of Object.entries(grouped)) {
+      const color = catColors[cat] || "#888";
+      const complete = syms.filter(s => s.status === "complete").map(s => s.normalized);
+      const partial = syms.filter(s => s.status === "partial").map(s => `${s.normalized}(${s.synced_count}/${s.total_tfs})`);
+      const none = syms.filter(s => s.status === "none").map(s => s.normalized);
+
+      if (complete.length > 0) addLog(`  <span style="color:${color}">${cat}</span> <span style="color:#4caf50">complete:</span> ${complete.join(", ")}`, "#4caf50");
+      if (partial.length > 0) addLog(`  <span style="color:${color}">${cat}</span> <span style="color:#ff9800">partial:</span> ${partial.join(", ")}`, "#ff9800");
+      if (none.length > 0) addLog(`  <span style="color:${color}">${cat}</span> <span style="color:#666">pending:</span> ${none.join(", ")}`, "#666");
+    }
+  } catch (e) {
+    // BarCacheWriter < v1.300, no specs available — fall back to basic symbol list
+    addLog("Specs not available (upgrade BarCacheWriter to v1.300+)", "#888");
+  }
+}
+
 async function cmdMt5DbSync() {
   const w = createWindow({ title: "MT5 SQLite Direct Sync", width: 700, height: 500 });
   const out = w.element ? w.element.querySelector(".fw-content") : w;
@@ -22945,7 +23058,8 @@ async function cmdMt5DbSync() {
       <div id="mt5db-bar" style="background:#2196f3;height:100%;width:0%;transition:width 0.3s;border-radius:3px"></div>
     </div>
     <div id="mt5db-stats" style="font-family:'Iosevka Fixed',monospace;font-size:11px;color:#888;margin-bottom:8px"></div>
-    <div id="mt5db-log" style="font-family:'Iosevka Fixed',monospace;font-size:10px;color:#666;overflow-y:auto;max-height:350px"></div>
+    <div id="mt5db-specs" style="font-family:'Iosevka Fixed',monospace;font-size:10px;color:#888;margin-bottom:8px"></div>
+    <div id="mt5db-log" style="font-family:'Iosevka Fixed',monospace;font-size:10px;color:#666;overflow-y:auto;max-height:250px"></div>
   </div>`;
 
   const statusEl = out.querySelector("#mt5db-status");
@@ -22959,108 +23073,112 @@ async function cmdMt5DbSync() {
   const addLog = (msg, color = "#666") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
 
   try {
-    // Step 1: Discover symbol list from MT5 databases
-    setStatus("Discovering MT5 symbols...", "#2196f3");
-    setProgress(5);
-
-    let mt5SymbolList;
-    try {
-      const listJson = await invoke("get_mt5_symbol_list");
-      mt5SymbolList = JSON.parse(listJson);
-      addLog(`Found ${mt5SymbolList.count} symbols across MT5 instances`, "#4caf50");
-    } catch (_) {
-      mt5SymbolList = { count: 0, raw: [], normalized: [] };
-      addLog("No __SYMBOLS__ key found — will import whatever is in the databases", "#ff9800");
-    }
-
-    // Step 2: Run the sync (reads all databases, imports into terminal cache)
-    setStatus(`Syncing ${mt5SymbolList.count || "all"} symbols from MT5...`, "#ff9800");
-    setProgress(15);
-    addLog("Reading SQLite databases from all MT5 instances...");
-
-    // Run sync in background — poll status via a timer to keep UI alive
     const startTime = Date.now();
-    const statusInterval = setInterval(() => {
-      const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-      setStats(`Elapsed: ${elapsed}s — importing bars (UI stays responsive)...`);
-    }, 500);
+    const specsDiv = out.querySelector("#mt5db-specs");
+    let mt5SymbolList = { count: 0 };
+    let syncCount = 0;
+    let prevSymCount = 0;
+    let prevBarCount = 0;
 
-    const result = JSON.parse(await invoke("sync_mt5_sqlite"));
+    // Helper: run one sync cycle, update all UI elements
+    async function doSync() {
+      syncCount++;
+      const el = ((Date.now() - startTime) / 1000).toFixed(0);
 
-    clearInterval(statusInterval);
-    setProgress(100);
-
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    setStatus(`Sync complete — ${result.symbols} symbols, ${result.total_bars.toLocaleString()} bars`, "#4caf50");
-    setStats(`${result.imported} new + ${result.skipped || 0} unchanged from ${result.databases_read}/${result.databases_found} instances in ${elapsed}s`);
-
-    addLog("");
-    addLog(`Imported: ${result.imported} entries`, "#4caf50");
-    addLog(`Total bars: ${result.total_bars.toLocaleString()}`, "#4caf50");
-    addLog(`Symbols: ${result.symbols}`, "#4caf50");
-    addLog(`MT5 databases: ${result.databases_read}/${result.databases_found}`, "#888");
-    addLog(`Time: ${elapsed}s`, "#888");
-    addLog("");
-
-    // Show normalized symbol list
-    if (mt5SymbolList.normalized && mt5SymbolList.normalized.length > 0) {
-      const groups = {};
-      for (const sym of mt5SymbolList.normalized) {
-        const type = sym.includes("/") ? (sym.endsWith("USD") && sym.length <= 8 ? "Crypto" : "Forex") : "Other";
-        if (!groups[type]) groups[type] = [];
-        groups[type].push(sym);
-      }
-      for (const [type, syms] of Object.entries(groups)) {
-        addLog(`${type}: ${syms.join(", ")}`, "#888");
-      }
-    }
-
-    addLog("");
-
-    // Auto-sync: keep polling every 30s until all databases are read
-    if (result.databases_read < result.databases_found) {
-      addLog(`${result.databases_found - result.databases_read} MT5 instances not yet ready — auto-retrying every 30s...`, "#ff9800");
-    }
-    barEl.style.background = "#4caf50";
-
-    // Continuous sync loop — polls every 30s, updates counts, stops when user closes window
-    let syncCount = 1;
-    const syncInterval = setInterval(async () => {
-      if (!document.body.contains(out)) { clearInterval(syncInterval); return; } // window closed
+      // Get symbol list
       try {
-        syncCount++;
-        const r = JSON.parse(await invoke("sync_mt5_sqlite"));
-        const el = ((Date.now() - startTime) / 1000).toFixed(0);
-        setStatus(`Sync #${syncCount} — ${r.symbols} symbols, ${r.total_bars.toLocaleString()} bars`, "#4caf50");
-        setStats(`${r.imported} entries from ${r.databases_read}/${r.databases_found} instances | ${el}s total`);
-        setProgress(100);
-
-        // Check if new symbols appeared
-        try {
-          const newList = JSON.parse(await invoke("get_mt5_symbol_list"));
-          if (newList.count > (mt5SymbolList?.count || 0)) {
-            addLog(`New symbols detected: ${newList.count} (was ${mt5SymbolList?.count || 0})`, "#4caf50");
-            mt5SymbolList = newList;
-          }
-        } catch (_) {}
-
-        // If all databases synced and no new data, slow down
-        if (r.databases_read >= r.databases_found) {
-          addLog(`All ${r.databases_found} instances synced. Monitoring for updates...`, "#888");
-        }
+        mt5SymbolList = JSON.parse(await invoke("get_mt5_symbol_list"));
       } catch (_) {}
-    }, 30000);
 
-    // Also provide a manual re-sync button
-    addLog("");
-    addLog("Continuous sync active (every 30s). Close window to stop.", "#2196f3");
-    addLog("Use DARWINEX command for full outlier analysis.", "#2196f3");
+      // Run bar sync
+      const r = JSON.parse(await invoke("sync_mt5_sqlite"));
+      const gotData = r.imported > 0 || (r.skipped || 0) > 0 || r.total_bars > 0;
+
+      if (gotData) {
+        setStatus(`Sync #${syncCount} — ${r.symbols} symbols, ${r.total_bars.toLocaleString()} bars`, "#4caf50");
+        const dedup = r.deduped ? `, ${r.deduped} deduped` : "";
+        setStats(`${r.imported} new + ${r.skipped || 0} unchanged from ${r.databases_read}/${r.databases_found} instances${dedup} | ${el}s`);
+        setProgress(100);
+        barEl.style.background = "#4caf50";
+
+        // Log only meaningful changes
+        if (mt5SymbolList.count !== prevSymCount) {
+          addLog(`Symbols: ${mt5SymbolList.count} (was ${prevSymCount})`, "#4caf50");
+          prevSymCount = mt5SymbolList.count;
+        }
+        if (r.total_bars > prevBarCount && r.imported > 0) {
+          addLog(`+${r.imported} entries (${r.total_bars.toLocaleString()} total bars) from ${r.databases_read}/${r.databases_found} DBs`, "#4caf50");
+          prevBarCount = r.total_bars;
+        }
+      } else {
+        setStatus(`Waiting for BarCacheWriter — ${r.databases_found} DBs found (${el}s)`, "#ff9800");
+        setStats("BarCacheWriter must be compiled + attached in each MT5 instance");
+        setProgress(10);
+        barEl.style.background = "#ff9800";
+      }
+
+      // Always update specs display in-place
+      try {
+        const specs = JSON.parse(await invoke("get_mt5_specs"));
+        renderSpecsToDiv(specsDiv, specs);
+      } catch (_) {}
+
+      return gotData;
+    }
+
+    // Initial sync
+    setStatus("Connecting to MT5 databases...", "#2196f3");
+    setProgress(5);
+    const hasData = await doSync();
+
+    // Continuous sync loop
+    const syncInterval = setInterval(async () => {
+      if (!document.body.contains(out)) { clearInterval(syncInterval); return; }
+      try { await doSync(); } catch (_) {}
+    }, hasData ? 30000 : 10000);
+
+    addLog("Continuous sync active. Close window to stop.", "#2196f3");
 
   } catch (e) {
     setStatus(`Error: ${e}`, "#f44336");
     setProgress(0);
     barEl.style.background = "#f44336";
     addLog(`${e}`, "#f44336");
+  }
+}
+
+// ── Background MT5 Sync (headless, controlled by MT5_SYNC setting) ──
+let mt5BgSyncInterval = null;
+let mt5BgSyncCount = 0;
+
+async function startMt5BackgroundSync() {
+  if (mt5BgSyncInterval) return; // already running
+  try {
+    const r = JSON.parse(await invoke("sync_mt5_sqlite"));
+    mt5BgSyncCount++;
+    if (r.imported > 0) {
+      console.log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.skipped} unchanged, ${r.deduped || 0} deduped, ${r.total_bars} bars from ${r.databases_read}/${r.databases_found} DBs`);
+    }
+  } catch (e) {
+    console.warn("[MT5 Sync] initial:", e);
+  }
+  mt5BgSyncInterval = setInterval(async () => {
+    try {
+      const r = JSON.parse(await invoke("sync_mt5_sqlite"));
+      mt5BgSyncCount++;
+      if (r.imported > 0) {
+        console.log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.total_bars} bars`);
+      }
+    } catch (_) {}
+  }, 30000);
+  console.log("[MT5 Sync] Background sync started (30s interval)");
+}
+
+function stopMt5BackgroundSync() {
+  if (mt5BgSyncInterval) {
+    clearInterval(mt5BgSyncInterval);
+    mt5BgSyncInterval = null;
+    console.log("[MT5 Sync] Background sync stopped");
   }
 }
 
@@ -27238,6 +27356,11 @@ document.addEventListener("DOMContentLoaded", () => {
   setupOrderPriceLines();
   registerCustomShortcutListener(); // Load saved custom keyboard shortcuts
 
+  // Auto-start MT5 sync if enabled in settings
+  if (loadSettings().mt5Sync) {
+    startMt5BackgroundSync();
+  }
+
   // Auto-save session periodically and on shutdown
   const _saveInterval = setInterval(saveSession, 30000); // every 30s
   const _alertInterval = setInterval(checkWatchlistSMA200Alerts, 300000); // every 5min
@@ -28591,14 +28714,42 @@ function cmdSettings() {
       c.appendChild(testRow);
     }
   }
+  // ── Toggles Section ──
+  const toggleHdr = document.createElement("div");
+  toggleHdr.style.cssText = "color:#888;font-size:10px;margin-top:8px;border-top:1px solid #333;padding-top:6px;";
+  toggleHdr.textContent = "Data Pipelines";
+  c.appendChild(toggleHdr);
+
+  const mt5Row = document.createElement("div");
+  mt5Row.style.cssText = "display:flex;align-items:center;gap:8px;";
+  const mt5Check = document.createElement("input");
+  mt5Check.type = "checkbox";
+  mt5Check.checked = !!settings.mt5Sync;
+  mt5Check.id = "mt5SyncToggle";
+  const mt5Label = document.createElement("label");
+  mt5Label.htmlFor = "mt5SyncToggle";
+  mt5Label.textContent = "MT5 Sync — Auto-sync Darwinex bar data on startup";
+  mt5Label.style.cssText = "color:#ccc;font-size:11px;cursor:pointer;";
+  const mt5Status = document.createElement("span");
+  mt5Status.style.cssText = "font-size:10px;margin-left:auto;";
+  mt5Status.textContent = mt5BgSyncInterval ? "● Running" : "○ Off";
+  mt5Status.style.color = mt5BgSyncInterval ? "#4caf50" : "#666";
+  mt5Row.appendChild(mt5Check);
+  mt5Row.appendChild(mt5Label);
+  mt5Row.appendChild(mt5Status);
+  c.appendChild(mt5Row);
+
   const btn = document.createElement("button");
   btn.textContent = "Save Settings";
-  btn.style.cssText = "padding:8px;background:#0a5f38;color:#8f8;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-weight:bold;";
+  btn.style.cssText = "padding:8px;background:#0a5f38;color:#8f8;border:1px solid #4caf50;cursor:pointer;font-family:inherit;font-weight:bold;margin-top:8px;";
   btn.addEventListener("click", () => {
     const s = {}; for (const [k, inp] of Object.entries(inputs)) s[k] = inp.value.trim();
+    s.mt5Sync = mt5Check.checked;
     saveSettings(s);
     // Also store Finnhub key in standalone localStorage for news loader
     if (s.finnhubKey) localStorage.setItem("typhoon_finnhub_key", s.finnhubKey);
+    // Start/stop MT5 sync based on toggle
+    if (s.mt5Sync) { startMt5BackgroundSync(); } else { stopMt5BackgroundSync(); }
     log("Settings saved", "ok"); win.close();
   });
   c.appendChild(btn);
