@@ -127,6 +127,8 @@ pub fn create_darwin_tables(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_darwin_deals_account ON darwin_deals(account);
         CREATE INDEX IF NOT EXISTS idx_darwin_deals_time ON darwin_deals(account, time);
         CREATE INDEX IF NOT EXISTS idx_darwin_deals_symbol ON darwin_deals(account, symbol);
+        CREATE INDEX IF NOT EXISTS idx_darwin_deals_direction ON darwin_deals(account, direction, symbol);
+        CREATE INDEX IF NOT EXISTS idx_darwin_deals_balance ON darwin_deals(account, time, balance);
         CREATE INDEX IF NOT EXISTS idx_darwin_positions_account ON darwin_positions(account);
         CREATE INDEX IF NOT EXISTS idx_darwin_positions_symbol ON darwin_positions(account, symbol);
         CREATE INDEX IF NOT EXISTS idx_darwin_positions_time ON darwin_positions(account, open_time);
@@ -852,22 +854,30 @@ pub fn get_portfolio_exposure(conn: &Connection) -> Result<Vec<PortfolioSymbolEx
 }
 
 /// Get combined equity curve across all DARWINs (daily aggregate).
+/// Single SQL query instead of N per-account queries.
 pub fn get_portfolio_equity_curve(conn: &Connection) -> Result<Vec<(String, f64)>, String> {
-    let accounts = list_darwin_accounts(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT SUBSTR(d.time, 1, 10) as date, SUM(d.balance) as total_balance
+         FROM darwin_deals d
+         INNER JOIN (
+           SELECT account, SUBSTR(time, 1, 10) as day, MAX(id) as max_id
+           FROM darwin_deals
+           WHERE balance > 0
+           GROUP BY account, SUBSTR(time, 1, 10)
+         ) g ON d.id = g.max_id
+         GROUP BY date
+         ORDER BY date"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
 
-    // Collect all equity points from all accounts, keyed by date
-    let mut daily: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    }).map_err(|e| format!("Query failed: {e}"))?;
 
-    for account in &accounts {
-        if let Ok(curve) = get_darwin_equity_curve(conn, &account.darwin_ticker) {
-            for (time, balance) in &curve {
-                let date = time.get(..10).unwrap_or(time).to_string();
-                *daily.entry(date).or_insert(0.0) += *balance;
-            }
-        }
+    let mut result = Vec::new();
+    for row in rows {
+        if let Ok(point) = row { result.push(point); }
     }
-
-    Ok(daily.into_iter().collect())
+    Ok(result)
 }
 
 fn get_portfolio_max_drawdown(conn: &Connection) -> Result<f64, String> {
@@ -937,29 +947,26 @@ pub struct CorrelationEntry {
 }
 
 /// Get daily returns from deal balance changes for a DARWIN.
+/// Uses SQL GROUP BY to deduplicate at the DB level instead of loading all 62K deals.
 pub fn get_daily_returns(conn: &Connection, darwin_ticker: &str) -> Result<Vec<DailyReturn>, String> {
-    // Get daily balance snapshots (last balance per day)
+    // SQL-level dedup: get last balance per day using MAX(id) subquery
     let mut stmt = conn.prepare(
-        "SELECT SUBSTR(time, 1, 10) as date, balance FROM darwin_deals WHERE account = ?1 AND balance > 0 ORDER BY time, id"
+        "SELECT SUBSTR(d.time, 1, 10) as date, d.balance
+         FROM darwin_deals d
+         INNER JOIN (
+           SELECT SUBSTR(time, 1, 10) as day, MAX(id) as max_id
+           FROM darwin_deals
+           WHERE account = ?1 AND balance > 0
+           GROUP BY SUBSTR(time, 1, 10)
+         ) g ON d.id = g.max_id
+         ORDER BY date"
     ).map_err(|e| format!("Prepare failed: {e}"))?;
 
-    let rows = stmt.query_map(params![darwin_ticker], |row| {
+    let daily_balances: Vec<(String, f64)> = stmt.query_map(params![darwin_ticker], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-    }).map_err(|e| format!("Query failed: {e}"))?;
-
-    // Deduplicate to last balance per day
-    let mut daily_balances: Vec<(String, f64)> = Vec::new();
-    let mut last_date = String::new();
-    for row in rows {
-        if let Ok((date, balance)) = row {
-            if date == last_date {
-                if let Some(last) = daily_balances.last_mut() { last.1 = balance; }
-            } else {
-                daily_balances.push((date.clone(), balance));
-                last_date = date;
-            }
-        }
-    }
+    }).map_err(|e| format!("Query failed: {e}"))?
+    .filter_map(|r| r.ok())
+    .collect();
 
     // Compute returns and drawdown
     let mut result = Vec::new();
