@@ -5040,7 +5040,8 @@ async fn backfill_crypto_binance(
     let timeframes = if let Some(ref tf) = timeframe {
         vec![tf.clone()]
     } else {
-        vec!["1Day".to_string(), "4Hour".to_string(), "1Hour".to_string(), "1Week".to_string(), "1Month".to_string()]
+        // All 9 timeframes — intraday (1Min-30Min) limited to recent data by Kraken's 720 bar/page limit
+        vec!["1Min".to_string(), "5Min".to_string(), "15Min".to_string(), "30Min".to_string(), "1Hour".to_string(), "4Hour".to_string(), "1Day".to_string(), "1Week".to_string(), "1Month".to_string()]
     };
 
     // If no symbol specified, do all crypto symbols in cache
@@ -5067,15 +5068,22 @@ async fn backfill_crypto_binance(
     let mut total_filled = 0usize;
     let mut results = Vec::new();
 
-    // Kraken start: 2013 for BTC, earlier pairs may not have data (Kraken returns empty)
-    let kraken_start_ms: i64 = 1357027200000; // 2013-01-01 00:00:00 UTC
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     // Two tracking keys per symbol:TF:
-    // "kraken_full:{sym}:{tf}" = "1" when full 2013→now backfill is done (fills ALL gaps)
+    // "kraken_full:{sym}:{tf}" = "1" when full backfill is done (fills ALL gaps)
     // "kraken_sync:{sym}:{tf}" = last_synced_ms for incremental forward fill
     for sym in &symbols {
         for tf in &timeframes {
+            // Start date depends on timeframe — full history for daily+, limited for intraday
+            // 1Min: 30 days, 5Min: 90 days, 15Min: 1 year, 30Min: 2 years, 1Hour+: 2013
+            let kraken_start_ms: i64 = match tf.as_str() {
+                "1Min"  => now_ms - 30 * 86400000,      // 30 days
+                "5Min"  => now_ms - 90 * 86400000,      // 90 days
+                "15Min" => now_ms - 365 * 86400000,      // 1 year
+                "30Min" => now_ms - 730 * 86400000,      // 2 years
+                _       => 1357027200000,                 // 2013-01-01 for 1Hour+
+            };
             let cache_key = format!("mt5:{}:{}", sym, tf);
             let full_key = format!("kraken_full:{}:{}", sym, tf);
             let sync_key = format!("kraken_sync:{}:{}", sym, tf);
