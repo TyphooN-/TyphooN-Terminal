@@ -5149,6 +5149,9 @@ async fn backfill_crypto_binance(
 
             // If full backfill done AND no forward gap → skip entirely
             if full_done && !needs_forward {
+                let _ = app.emit("binance_backfill_progress", serde_json::json!({
+                    "symbol": sym, "timeframe": tf, "status": "synced", "new_bars": 0, "total_bars": existing_count,
+                }));
                 results.push(serde_json::json!({
                     "symbol": sym, "timeframe": tf,
                     "new_bars": 0, "total_bars": existing_count,
@@ -5252,6 +5255,13 @@ async fn backfill_crypto_binance(
             if new_count > 0 || (all_bars.len() == existing_count && existing_count > 0) {
                 let _ = cache.put_kv(&sync_key, &now_ms.to_string());
             }
+
+            // Emit per-symbol/TF completion event for live UI updates
+            let status_str = if new_count > 0 { "ok" } else if existing_count > 0 { "synced" } else { "pending" };
+            let _ = app.emit("binance_backfill_progress", serde_json::json!({
+                "symbol": sym, "timeframe": tf, "status": status_str,
+                "new_bars": new_count, "total_bars": all_bars.len(),
+            }));
 
             total_filled += new_count;
             results.push(serde_json::json!({

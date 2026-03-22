@@ -13291,17 +13291,57 @@ function cmdBinanceBackfill() {
     contentDiv.appendChild(grid);
   }
 
+  // Estimated max bars per TF (based on years of data available × bars per year)
+  // BTC: ~13 years, most alts: ~6-8 years
+  const TF_MAX_ESTIMATES = {
+    "1Min": 525600,   // 1yr of minutes (only fetch 30 days though)
+    "5Min": 105120,   // 1yr
+    "15Min": 35040,   // 1yr
+    "30Min": 50000,   // ~2yr
+    "1Hour": 50000,   // ~6yr
+    "4Hour": 20000,   // ~9yr
+    "1Day": 5000,     // ~14yr
+    "1Week": 800,     // ~15yr
+    "1Month": 200,    // ~16yr
+  };
+
   function updateCell(sym, tf, status, newBars, totalBars) {
     const cell = document.getElementById("bf-" + sym.replace("/", "") + "-" + tf);
     if (!cell) return;
     cell.style.color = statusColors[status] || "#888";
-    if (status === "synced") cell.textContent = "✓";
-    else if (status === "ok") cell.textContent = "+" + (newBars || 0);
-    else if (status === "fetching") cell.textContent = "⟳";
-    else if (status === "pending") cell.textContent = "⏳";
-    else if (status === "error") cell.textContent = "✗";
-    else cell.textContent = "...";
-    if (totalBars > 0) cell.title = totalBars.toLocaleString() + " bars";
+    if (status === "synced") {
+      cell.textContent = "✓";
+      cell.style.color = "#4caf50";
+    } else if (status === "ok") {
+      cell.textContent = "+" + (newBars || 0);
+      cell.style.color = "#4caf50";
+    } else if (status === "fetching") {
+      cell.textContent = "⟳";
+      cell.style.color = "#42a5f5";
+    } else if (status === "pending") {
+      cell.textContent = "⏳";
+      cell.style.color = "#ff9800";
+    } else if (status === "error") {
+      cell.textContent = "✗";
+      cell.style.color = "#f44336";
+    } else {
+      cell.textContent = "...";
+    }
+    if (totalBars > 0) {
+      const maxEst = TF_MAX_ESTIMATES[tf] || 5000;
+      const pct = Math.min(100, (totalBars / maxEst * 100)).toFixed(0);
+      cell.title = `${totalBars.toLocaleString()} bars (${pct}% est)`;
+    }
+  }
+
+  // Listen for real-time progress events from backend
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen("binance_backfill_progress", (event) => {
+      const d = event.payload;
+      if (d && d.symbol && d.timeframe) {
+        updateCell(d.symbol, d.timeframe, d.status, d.new_bars, d.total_bars);
+      }
+    });
   }
 
   async function runBackfill(symbol) {
