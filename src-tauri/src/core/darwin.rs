@@ -860,12 +860,9 @@ pub fn get_portfolio_equity_curve(conn: &Connection) -> Result<Vec<(String, f64)
 
     for account in &accounts {
         if let Ok(curve) = get_darwin_equity_curve(conn, &account.darwin_ticker) {
-            // Track last known balance per account
-            let mut last_bal = account.initial_balance;
             for (time, balance) in &curve {
                 let date = time.get(..10).unwrap_or(time).to_string();
-                last_bal = *balance;
-                *daily.entry(date).or_insert(0.0) += last_bal;
+                *daily.entry(date).or_insert(0.0) += *balance;
             }
         }
     }
