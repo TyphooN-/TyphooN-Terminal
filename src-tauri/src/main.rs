@@ -3338,10 +3338,53 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
 
     let (imported, total_bars, sym_count, dbs_read, skipped, deduped) = result;
 
-    if imported > 0 {
+    // Sync bid/ask quotes from MT5 databases
+    let mut quotes_synced = 0usize;
+    let cache_for_quotes = {
+        let s = state.lock().await;
+        s.db_cache.clone()
+    };
+    if let Some(cache_for_quotes) = cache_for_quotes {
+        for db_path in &mt5_dbs {
+            let mt5_conn = match rusqlite::Connection::open_with_flags(
+                db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                Ok(c) => { let _ = c.busy_timeout(std::time::Duration::from_secs(5)); c }
+                Err(_) => continue,
+            };
+
+            // Check if bid_ask table exists
+            let has_bid_ask: bool = mt5_conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='bid_ask'",
+                [], |r| r.get::<_, i64>(0)
+            ).unwrap_or(0) > 0;
+
+            if !has_bid_ask { continue; }
+
+            let mut stmt = match mt5_conn.prepare("SELECT symbol, bid, ask, spread, timestamp FROM bid_ask") {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+
+            let quotes: Vec<(String, f64, f64, f64, i64)> = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?, row.get::<_, f64>(3)?, row.get::<_, i64>(4)?))
+            }).map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default();
+
+            if !quotes.is_empty() {
+                let json = serde_json::to_string(&quotes.iter().map(|(sym, bid, ask, spread, ts)| {
+                    serde_json::json!({"s": sym, "b": bid, "a": ask, "sp": spread, "t": ts})
+                }).collect::<Vec<_>>()).unwrap_or_default();
+                let _ = cache_for_quotes.put_kv("__MT5_QUOTES__", &json);
+                quotes_synced = quotes.len();
+            }
+        }
+    } // end if let Some(cache_for_quotes)
+
+    if imported > 0 || quotes_synced > 0 {
         tracing::info!(
-            "MT5 sync: {} imported, {} skipped, {} deduped, {} bars, {} symbols from {}/{} DBs",
-            imported, skipped, deduped, total_bars, sym_count, dbs_read, db_count
+            "MT5 sync: {} imported, {} skipped, {} deduped, {} bars, {} symbols, {} quotes from {}/{} DBs",
+            imported, skipped, deduped, total_bars, sym_count, quotes_synced, dbs_read, db_count
         );
     } else {
         tracing::debug!(
@@ -3356,9 +3399,23 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
         "deduped": deduped,
         "total_bars": total_bars,
         "symbols": sym_count,
+        "quotes_synced": quotes_synced,
         "databases_read": dbs_read,
         "databases_found": mt5_dbs.len(),
     }).to_string())
+}
+
+/// Get live MT5 bid/ask quotes from cache (synced from BarCacheWriter's bid_ask table).
+#[tauri::command]
+async fn get_mt5_quotes(state: State<'_, SharedState>) -> Result<String, String> {
+    let db = {
+        let s = state.lock().await;
+        s.db_cache.as_ref().ok_or("No database")?.clone()
+    };
+    match db.get_kv("__MT5_QUOTES__")? {
+        Some(json) => Ok(json),
+        None => Ok("[]".to_string()),
+    }
 }
 
 /// Get the list of symbols available in MT5 databases (written by BarCacheWriter).
@@ -5300,6 +5357,7 @@ fn main() {
             scan_atr_outliers,
             scan_crypto_risk,
             sync_mt5_sqlite,
+            get_mt5_quotes,
             get_mt5_symbol_list,
             get_mt5_specs,
             import_mt5_bars,

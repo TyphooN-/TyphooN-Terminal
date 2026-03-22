@@ -4450,19 +4450,41 @@ async function updateDashboard() {
           try { localStorage.setItem(`typhoon_lastprice_${currentSymbol}`, JSON.stringify({ bid: q.bid, ask: q.ask, ts: q.timestamp })); } catch (_) {}
         }
       }).catch(() => {
-        // No live quote — show cached last known price
+        // No Alpaca quote — try MT5 bid/ask from BarCacheWriter sync
         const spreadEl = document.getElementById("bid-ask-spread");
         if (spreadEl) {
-          try {
-            const cached = JSON.parse(localStorage.getItem(`typhoon_lastprice_${currentSymbol}`) || "null");
-            if (cached && cached.bid > 0) {
-              const dp = cached.bid > 100 ? 2 : cached.bid > 1 ? 4 : 6;
-              const ts = cached.ts ? new Date(cached.ts) : null;
-              const timeStr = ts ? ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" }) : "";
-              spreadEl.textContent = `Last: ${cached.bid.toFixed(dp)} ${timeStr ? "@ " + timeStr : ""} (cached)`;
-              spreadEl.style.color = "#666";
+          invoke("get_mt5_quotes").then(qJson => {
+            const quotes = JSON.parse(qJson);
+            const mt5q = quotes.find(q => q.s === currentSymbol || q.s === currentSymbol.replace("/", ""));
+            if (mt5q && mt5q.b > 0) {
+              const dp = mt5q.b > 100 ? 2 : mt5q.b > 1 ? 4 : 6;
+              spreadEl.textContent = `Bid: ${mt5q.b.toFixed(dp)} | Ask: ${mt5q.a.toFixed(dp)} | Spread: ${mt5q.sp.toFixed(dp)} (MT5)`;
+              spreadEl.style.color = "#42a5f5"; // blue = MT5 source
+              lastPrice = mt5q.b;
+              try { localStorage.setItem(`typhoon_lastprice_${currentSymbol}`, JSON.stringify({ bid: mt5q.b, ask: mt5q.a, ts: mt5q.t * 1000 })); } catch (_) {}
+            } else {
+              // Fall back to localStorage cache
+              try {
+                const cached = JSON.parse(localStorage.getItem(`typhoon_lastprice_${currentSymbol}`) || "null");
+                if (cached && cached.bid > 0) {
+                  const dp = cached.bid > 100 ? 2 : cached.bid > 1 ? 4 : 6;
+                  const ts = cached.ts ? new Date(cached.ts) : null;
+                  const timeStr = ts ? ts.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", month: "short", day: "numeric" }) : "";
+                  spreadEl.textContent = `Last: ${cached.bid.toFixed(dp)} ${timeStr ? "@ " + timeStr : ""} (cached)`;
+                  spreadEl.style.color = "#666";
+                }
+              } catch (_) {}
             }
-          } catch (_) {}
+          }).catch(() => {
+            try {
+              const cached = JSON.parse(localStorage.getItem(`typhoon_lastprice_${currentSymbol}`) || "null");
+              if (cached && cached.bid > 0 && spreadEl) {
+                const dp = cached.bid > 100 ? 2 : cached.bid > 1 ? 4 : 6;
+                spreadEl.textContent = `Last: ${cached.bid.toFixed(dp)} (cached)`;
+                spreadEl.style.color = "#666";
+              }
+            } catch (_) {}
+          });
         }
       });
     }
