@@ -1166,6 +1166,537 @@ pub fn get_portfolio_daily_returns(conn: &Connection) -> Result<Vec<DailyReturn>
     Ok(result)
 }
 
+// ── Trade Pattern Analytics ──────────────────────────────────────────
+
+/// Parse MT5 datetime string "YYYY.MM.DD HH:MM:SS" into chrono NaiveDateTime.
+fn parse_mt5_datetime(s: &str) -> Option<chrono::NaiveDateTime> {
+    chrono::NaiveDateTime::parse_from_str(s, "%Y.%m.%d %H:%M:%S").ok()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreakAnalysis {
+    pub max_win_streak: i64,
+    pub max_loss_streak: i64,
+    pub current_streak: i64, // positive = wins, negative = losses
+    pub avg_win_streak: f64,
+    pub avg_loss_streak: f64,
+    pub streak_distribution: Vec<(i64, i64)>, // (streak_length, count) — positive = win, negative = loss
+}
+
+/// Analyze win/loss streaks from closed positions ordered by open_time.
+/// A "win" is profit + commission + swap > 0.
+pub fn get_streak_analysis(conn: &Connection, darwin_ticker: &str) -> Result<StreakAnalysis, String> {
+    let mut stmt = conn.prepare(
+        "SELECT profit, commission, swap FROM darwin_positions WHERE account = ?1 ORDER BY open_time, id"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt.query_map(params![darwin_ticker], |row| {
+        Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?))
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    let mut outcomes: Vec<bool> = Vec::new(); // true = win
+    for row in rows {
+        if let Ok((profit, commission, swap)) = row {
+            outcomes.push(profit + commission + swap > 0.0);
+        }
+    }
+
+    if outcomes.is_empty() {
+        return Ok(StreakAnalysis {
+            max_win_streak: 0, max_loss_streak: 0, current_streak: 0,
+            avg_win_streak: 0.0, avg_loss_streak: 0.0, streak_distribution: Vec::new(),
+        });
+    }
+
+    // Build streaks: list of signed streak lengths
+    let mut streaks: Vec<i64> = Vec::new();
+    let mut current_len: i64 = 0;
+    let mut current_is_win = outcomes[0];
+
+    for &win in &outcomes {
+        if win == current_is_win {
+            current_len += 1;
+        } else {
+            streaks.push(if current_is_win { current_len } else { -current_len });
+            current_is_win = win;
+            current_len = 1;
+        }
+    }
+    // Push final streak
+    streaks.push(if current_is_win { current_len } else { -current_len });
+
+    let max_win_streak = streaks.iter().filter(|s| **s > 0).copied().max().unwrap_or(0);
+    let max_loss_streak = streaks.iter().filter(|s| **s < 0).map(|s| s.abs()).max().unwrap_or(0);
+    let current_streak = *streaks.last().unwrap_or(&0);
+
+    let win_streaks: Vec<i64> = streaks.iter().filter(|s| **s > 0).copied().collect();
+    let loss_streaks: Vec<i64> = streaks.iter().filter(|s| **s < 0).map(|s| s.abs()).collect();
+
+    let avg_win_streak = if !win_streaks.is_empty() {
+        win_streaks.iter().sum::<i64>() as f64 / win_streaks.len() as f64
+    } else { 0.0 };
+    let avg_loss_streak = if !loss_streaks.is_empty() {
+        loss_streaks.iter().sum::<i64>() as f64 / loss_streaks.len() as f64
+    } else { 0.0 };
+
+    // Distribution: count occurrences of each streak length
+    let mut dist_map: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+    for &s in &streaks {
+        *dist_map.entry(s).or_insert(0) += 1;
+    }
+    let streak_distribution: Vec<(i64, i64)> = dist_map.into_iter().collect();
+
+    Ok(StreakAnalysis {
+        max_win_streak, max_loss_streak, current_streak,
+        avg_win_streak, avg_loss_streak, streak_distribution,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HourlyPnL {
+    pub hour: i32, // 0-23
+    pub total_pnl: f64,
+    pub trade_count: i64,
+    pub win_count: i64,
+    pub avg_pnl: f64,
+}
+
+/// Get P/L broken down by hour of day (from open_time).
+pub fn get_hourly_pnl(conn: &Connection, darwin_ticker: &str) -> Result<Vec<HourlyPnL>, String> {
+    let mut stmt = conn.prepare(
+        "SELECT open_time, profit, commission, swap FROM darwin_positions WHERE account = ?1"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt.query_map(params![darwin_ticker], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?, row.get::<_, f64>(3)?))
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    // hour -> (total_pnl, count, wins)
+    let mut buckets: [( f64, i64, i64); 24] = [(0.0, 0, 0); 24];
+
+    for row in rows {
+        if let Ok((open_time, profit, commission, swap)) = row {
+            if let Some(dt) = parse_mt5_datetime(&open_time) {
+                let h = dt.format("%H").to_string().parse::<usize>().unwrap_or(0);
+                if h < 24 {
+                    let net = profit + commission + swap;
+                    buckets[h].0 += net;
+                    buckets[h].1 += 1;
+                    if net > 0.0 { buckets[h].2 += 1; }
+                }
+            }
+        }
+    }
+
+    let result: Vec<HourlyPnL> = (0..24).map(|h| {
+        let (total_pnl, trade_count, win_count) = buckets[h];
+        HourlyPnL {
+            hour: h as i32,
+            total_pnl,
+            trade_count,
+            win_count,
+            avg_pnl: if trade_count > 0 { total_pnl / trade_count as f64 } else { 0.0 },
+        }
+    }).collect();
+
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayOfWeekPnL {
+    pub day: String, // "Monday" etc
+    pub day_num: i32, // 0=Mon..6=Sun
+    pub total_pnl: f64,
+    pub trade_count: i64,
+    pub win_rate: f64,
+    pub avg_pnl: f64,
+}
+
+/// Get P/L broken down by day of week (from open_time).
+pub fn get_day_of_week_pnl(conn: &Connection, darwin_ticker: &str) -> Result<Vec<DayOfWeekPnL>, String> {
+    use chrono::Datelike;
+
+    let mut stmt = conn.prepare(
+        "SELECT open_time, profit, commission, swap FROM darwin_positions WHERE account = ?1"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt.query_map(params![darwin_ticker], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?, row.get::<_, f64>(3)?))
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    // day_num (0=Mon..6=Sun) -> (total_pnl, count, wins)
+    let mut buckets: [(f64, i64, i64); 7] = [(0.0, 0, 0); 7];
+
+    for row in rows {
+        if let Ok((open_time, profit, commission, swap)) = row {
+            if let Some(dt) = parse_mt5_datetime(&open_time) {
+                let dow = dt.date().weekday().num_days_from_monday() as usize; // 0=Mon
+                if dow < 7 {
+                    let net = profit + commission + swap;
+                    buckets[dow].0 += net;
+                    buckets[dow].1 += 1;
+                    if net > 0.0 { buckets[dow].2 += 1; }
+                }
+            }
+        }
+    }
+
+    let day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    let result: Vec<DayOfWeekPnL> = (0..7).map(|d| {
+        let (total_pnl, trade_count, win_count) = buckets[d];
+        DayOfWeekPnL {
+            day: day_names[d].to_string(),
+            day_num: d as i32,
+            total_pnl,
+            trade_count,
+            win_rate: if trade_count > 0 { win_count as f64 / trade_count as f64 * 100.0 } else { 0.0 },
+            avg_pnl: if trade_count > 0 { total_pnl / trade_count as f64 } else { 0.0 },
+        }
+    }).collect();
+
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HoldTimeStats {
+    pub avg_hold_hours: f64,
+    pub median_hold_hours: f64,
+    pub min_hold_hours: f64,
+    pub max_hold_hours: f64,
+    pub buckets: Vec<(String, i64, f64)>, // (label like "<1h", count, avg_pnl)
+}
+
+/// Compute hold time distribution from open_time to close_time.
+pub fn get_hold_time_stats(conn: &Connection, darwin_ticker: &str) -> Result<HoldTimeStats, String> {
+    let mut stmt = conn.prepare(
+        "SELECT open_time, close_time, profit, commission, swap FROM darwin_positions WHERE account = ?1 AND close_time != ''"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt.query_map(params![darwin_ticker], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, f64>(2)?,
+            row.get::<_, f64>(3)?,
+            row.get::<_, f64>(4)?,
+        ))
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    struct HoldEntry {
+        hours: f64,
+        pnl: f64,
+    }
+
+    let mut entries: Vec<HoldEntry> = Vec::new();
+
+    for row in rows {
+        if let Ok((open_time, close_time, profit, commission, swap)) = row {
+            if let (Some(open_dt), Some(close_dt)) = (parse_mt5_datetime(&open_time), parse_mt5_datetime(&close_time)) {
+                let duration = close_dt.signed_duration_since(open_dt);
+                let hours = duration.num_seconds() as f64 / 3600.0;
+                if hours >= 0.0 {
+                    entries.push(HoldEntry { hours, pnl: profit + commission + swap });
+                }
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        return Ok(HoldTimeStats {
+            avg_hold_hours: 0.0, median_hold_hours: 0.0,
+            min_hold_hours: 0.0, max_hold_hours: 0.0, buckets: Vec::new(),
+        });
+    }
+
+    let mut hours_list: Vec<f64> = entries.iter().map(|e| e.hours).collect();
+    hours_list.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let avg_hold_hours = hours_list.iter().sum::<f64>() / hours_list.len() as f64;
+    let median_hold_hours = if hours_list.len() % 2 == 0 {
+        (hours_list[hours_list.len() / 2 - 1] + hours_list[hours_list.len() / 2]) / 2.0
+    } else {
+        hours_list[hours_list.len() / 2]
+    };
+    let min_hold_hours = hours_list.first().copied().unwrap_or(0.0);
+    let max_hold_hours = hours_list.last().copied().unwrap_or(0.0);
+
+    // Bucket definitions: (label, min_hours, max_hours)
+    let bucket_defs: Vec<(&str, f64, f64)> = vec![
+        ("<1h",   0.0,    1.0),
+        ("1-4h",  1.0,    4.0),
+        ("4-24h", 4.0,   24.0),
+        ("1-3d", 24.0,   72.0),
+        ("3-7d", 72.0,  168.0),
+        ("1-4w", 168.0, 672.0),
+        (">4w",  672.0, f64::MAX),
+    ];
+
+    let mut buckets: Vec<(String, i64, f64)> = Vec::new();
+    for (label, lo, hi) in &bucket_defs {
+        let matching: Vec<&HoldEntry> = entries.iter()
+            .filter(|e| e.hours >= *lo && e.hours < *hi)
+            .collect();
+        let count = matching.len() as i64;
+        let avg_pnl = if count > 0 {
+            matching.iter().map(|e| e.pnl).sum::<f64>() / count as f64
+        } else { 0.0 };
+        buckets.push((label.to_string(), count, avg_pnl));
+    }
+
+    Ok(HoldTimeStats { avg_hold_hours, median_hold_hours, min_hold_hours, max_hold_hours, buckets })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolActivity {
+    pub symbol: String,
+    pub first_trade: String,
+    pub last_trade: String,
+    pub trade_count: i64,
+    pub total_pnl: f64,
+    pub active_months: i64,
+}
+
+/// Get symbol rotation timeline showing when each symbol was first/last traded.
+pub fn get_symbol_rotation(conn: &Connection, darwin_ticker: &str) -> Result<Vec<SymbolActivity>, String> {
+    let mut stmt = conn.prepare(
+        "SELECT symbol, MIN(open_time) as first_trade, MAX(open_time) as last_trade, COUNT(*) as trade_count, SUM(profit + commission + swap) as total_pnl FROM darwin_positions WHERE account = ?1 GROUP BY symbol ORDER BY MIN(open_time)"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt.query_map(params![darwin_ticker], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, f64>(4)?,
+        ))
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        if let Ok((symbol, first_trade, last_trade, trade_count, total_pnl)) = row {
+            // Compute active months from first to last trade
+            let active_months = match (parse_mt5_datetime(&first_trade), parse_mt5_datetime(&last_trade)) {
+                (Some(first), Some(last)) => {
+                    use chrono::Datelike;
+                    let months = (last.date().year() - first.date().year()) * 12
+                        + (last.date().month() as i32 - first.date().month() as i32)
+                        + 1; // inclusive
+                    months.max(1) as i64
+                }
+                _ => 1,
+            };
+            result.push(SymbolActivity { symbol, first_trade, last_trade, trade_count, total_pnl, active_months });
+        }
+    }
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SizingEfficiency {
+    pub quartile: String, // "Q1 (smallest)" etc
+    pub avg_volume: f64,
+    pub trade_count: i64,
+    pub avg_pnl: f64,
+    pub win_rate: f64,
+    pub total_pnl: f64,
+}
+
+/// Split trades into quartiles by volume and compute stats per quartile.
+pub fn get_sizing_efficiency(conn: &Connection, darwin_ticker: &str) -> Result<Vec<SizingEfficiency>, String> {
+    let mut stmt = conn.prepare(
+        "SELECT volume, profit, commission, swap FROM darwin_positions WHERE account = ?1 ORDER BY volume"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt.query_map(params![darwin_ticker], |row| {
+        Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?, row.get::<_, f64>(3)?))
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    struct Trade { volume: f64, pnl: f64 }
+    let mut trades: Vec<Trade> = Vec::new();
+    for row in rows {
+        if let Ok((volume, profit, commission, swap)) = row {
+            trades.push(Trade { volume, pnl: profit + commission + swap });
+        }
+    }
+
+    if trades.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Already sorted by volume from SQL ORDER BY
+    let n = trades.len();
+    let quartile_size = n / 4;
+    let remainder = n % 4;
+
+    let labels = [
+        "Q1 (smallest)",
+        "Q2",
+        "Q3",
+        "Q4 (largest)",
+    ];
+
+    let mut result = Vec::new();
+    let mut offset = 0;
+    for q in 0..4 {
+        // Distribute remainder trades across first quartiles
+        let size = quartile_size + if q < remainder { 1 } else { 0 };
+        if size == 0 { continue; }
+        let slice = &trades[offset..offset + size];
+        offset += size;
+
+        let total_vol: f64 = slice.iter().map(|t| t.volume).sum();
+        let total_pnl: f64 = slice.iter().map(|t| t.pnl).sum();
+        let win_count = slice.iter().filter(|t| t.pnl > 0.0).count();
+        let count = slice.len() as i64;
+
+        result.push(SizingEfficiency {
+            quartile: labels[q].to_string(),
+            avg_volume: total_vol / count as f64,
+            trade_count: count,
+            avg_pnl: total_pnl / count as f64,
+            win_rate: win_count as f64 / count as f64 * 100.0,
+            total_pnl,
+        });
+    }
+
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostAnalysis {
+    pub total_commission: f64,
+    pub total_swap: f64,
+    pub commission_pct_of_equity: f64,
+    pub avg_commission_per_trade: f64,
+    pub commission_per_symbol: Vec<(String, f64, i64)>, // (symbol, total_commission, trade_count)
+    pub cumulative_costs: Vec<(String, f64)>, // (date, running total)
+}
+
+/// Analyze commission and swap costs.
+pub fn get_cost_analysis(conn: &Connection, darwin_ticker: &str) -> Result<CostAnalysis, String> {
+    // Total commission and swap
+    let (total_commission, total_swap, trade_count): (f64, f64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(commission), 0), COALESCE(SUM(swap), 0), COUNT(*) FROM darwin_positions WHERE account = ?1",
+        params![darwin_ticker],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).map_err(|e| format!("Query failed: {e}"))?;
+
+    // Get final balance for percentage calculation
+    let final_balance: f64 = conn.query_row(
+        "SELECT balance FROM darwin_deals WHERE account = ?1 AND balance > 0 ORDER BY time DESC, id DESC LIMIT 1",
+        params![darwin_ticker],
+        |row| row.get(0),
+    ).unwrap_or(0.0);
+
+    let commission_pct_of_equity = if final_balance > 0.0 {
+        total_commission.abs() / final_balance * 100.0
+    } else { 0.0 };
+
+    let avg_commission_per_trade = if trade_count > 0 {
+        total_commission / trade_count as f64
+    } else { 0.0 };
+
+    // Commission per symbol
+    let mut stmt = conn.prepare(
+        "SELECT symbol, SUM(commission), COUNT(*) FROM darwin_positions WHERE account = ?1 GROUP BY symbol ORDER BY SUM(commission)"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt.query_map(params![darwin_ticker], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, i64>(2)?))
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    let mut commission_per_symbol = Vec::new();
+    for row in rows {
+        if let Ok(r) = row { commission_per_symbol.push(r); }
+    }
+
+    // Cumulative costs over time (by date from positions ordered by open_time)
+    let mut stmt2 = conn.prepare(
+        "SELECT open_time, commission, swap FROM darwin_positions WHERE account = ?1 ORDER BY open_time, id"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows2 = stmt2.query_map(params![darwin_ticker], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?))
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    let mut running_total = 0.0f64;
+    let mut cumulative_costs: Vec<(String, f64)> = Vec::new();
+    let mut last_date = String::new();
+    for row in rows2 {
+        if let Ok((open_time, comm, swp)) = row {
+            running_total += comm.abs() + swp.abs();
+            let date = open_time.get(..10).unwrap_or(&open_time).to_string();
+            if date == last_date {
+                if let Some(last) = cumulative_costs.last_mut() {
+                    last.1 = running_total;
+                }
+            } else {
+                cumulative_costs.push((date.clone(), running_total));
+                last_date = date;
+            }
+        }
+    }
+
+    Ok(CostAnalysis {
+        total_commission,
+        total_swap,
+        commission_pct_of_equity,
+        avg_commission_per_trade,
+        commission_per_symbol,
+        cumulative_costs,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeOverlap {
+    pub symbol: String,
+    pub darwins: Vec<String>,
+    pub darwin_count: i64,
+    pub combined_volume: f64,
+    pub combined_notional: f64,
+}
+
+/// Find symbols held simultaneously across multiple DARWINs from open positions.
+pub fn get_trade_overlaps(conn: &Connection) -> Result<Vec<TradeOverlap>, String> {
+    let accounts = list_darwin_accounts(conn)?;
+
+    // symbol -> vec of (darwin_ticker, volume, notional)
+    let mut symbol_map: std::collections::HashMap<String, Vec<(String, f64, f64)>> = std::collections::HashMap::new();
+
+    for account in &accounts {
+        if let Ok(positions) = get_darwin_open_positions(conn, &account.darwin_ticker) {
+            for p in positions {
+                symbol_map.entry(p.symbol.clone()).or_default().push((
+                    account.darwin_ticker.clone(),
+                    p.total_volume,
+                    p.notional,
+                ));
+            }
+        }
+    }
+
+    // Filter to only symbols held in multiple DARWINs
+    let mut result: Vec<TradeOverlap> = symbol_map.into_iter()
+        .filter(|(_, entries)| {
+            let unique_darwins: std::collections::HashSet<&str> = entries.iter().map(|(d, _, _)| d.as_str()).collect();
+            unique_darwins.len() > 1
+        })
+        .map(|(symbol, entries)| {
+            let combined_volume: f64 = entries.iter().map(|(_, v, _)| v).sum();
+            let combined_notional: f64 = entries.iter().map(|(_, _, n)| n).sum();
+            let mut darwins: Vec<String> = entries.iter().map(|(d, _, _)| d.clone()).collect();
+            darwins.sort();
+            darwins.dedup();
+            let darwin_count = darwins.len() as i64;
+            TradeOverlap { symbol, darwins, darwin_count, combined_volume, combined_notional }
+        })
+        .collect();
+
+    result.sort_by(|a, b| b.combined_notional.partial_cmp(&a.combined_notional).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(result)
+}
+
 /// Delete a DARWIN account and all its data.
 pub fn delete_darwin_account(conn: &Connection, darwin_ticker: &str) -> Result<(), String> {
     conn.execute("DELETE FROM darwin_deals WHERE account = ?1", params![darwin_ticker])

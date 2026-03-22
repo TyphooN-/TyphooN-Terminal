@@ -4642,6 +4642,80 @@ async fn get_darwin_open_positions(
     serde_json::to_string(&positions).map_err(|e| format!("Serialize failed: {e}"))
 }
 
+// ── Trade Pattern Analytics Commands ────────────────────────────────
+
+#[tauri::command]
+async fn get_darwin_streaks(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_streak_analysis(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_hourly_pnl(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_hourly_pnl(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_day_of_week(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_day_of_week_pnl(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_hold_time(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_hold_time_stats(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_symbol_rotation(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_symbol_rotation(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_sizing(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_sizing_efficiency(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_costs(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_cost_analysis(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_trade_overlaps(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_trade_overlaps(&conn)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+// ── VaR & Risk Commands ────────────────────────────────────────────
+
 #[tauri::command]
 async fn get_darwin_var(
     _state: State<'_, SharedState>,
@@ -5012,6 +5086,16 @@ fn main() {
             get_darwin_equity_curve,
             get_darwin_pnl_by_symbol,
             get_darwin_open_positions,
+            // Trade Pattern Analytics
+            get_darwin_streaks,
+            get_darwin_hourly_pnl,
+            get_darwin_day_of_week,
+            get_darwin_hold_time,
+            get_darwin_symbol_rotation,
+            get_darwin_sizing,
+            get_darwin_costs,
+            get_trade_overlaps,
+            // VaR & Risk
             get_darwin_var,
             get_darwin_daily_returns,
             get_darwin_monthly_returns,
