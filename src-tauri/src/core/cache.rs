@@ -441,6 +441,92 @@ impl SqliteCache {
         Ok(map)
     }
 
+    /// Export entire cache to a compressed backup file.
+    /// Format: zstd-compressed copy of the SQLite database file (via VACUUM INTO).
+    pub fn export_backup(&self, path: &str) -> Result<String, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+
+        // Use SQLite's VACUUM INTO to create a consistent snapshot
+        let backup_path = format!("{}.tmp", path);
+        conn.execute("VACUUM INTO ?1", [&backup_path])
+            .map_err(|e| format!("VACUUM INTO failed: {e}"))?;
+
+        // Read the temp file and compress with zstd level 9
+        let data = std::fs::read(&backup_path)
+            .map_err(|e| format!("Read backup failed: {e}"))?;
+        let compressed = zstd::encode_all(data.as_slice(), 9)
+            .map_err(|e| format!("Compress failed: {e}"))?;
+        std::fs::write(path, &compressed)
+            .map_err(|e| format!("Write backup failed: {e}"))?;
+        let _ = std::fs::remove_file(&backup_path);
+
+        let size_mb = compressed.len() as f64 / 1_048_576.0;
+        Ok(format!("{{\"size_bytes\":{},\"size_mb\":{:.1}}}", compressed.len(), size_mb))
+    }
+
+    /// Import cache from a compressed backup file. Merges with existing data (newer wins).
+    pub fn import_backup(&self, path: &str) -> Result<String, String> {
+        let compressed = std::fs::read(path)
+            .map_err(|e| format!("Read backup failed: {e}"))?;
+        let data = zstd::decode_all(compressed.as_slice())
+            .map_err(|e| format!("Decompress failed: {e}"))?;
+
+        // Write to temp file
+        let tmp_path = format!("{}.import.tmp", path);
+        std::fs::write(&tmp_path, &data)
+            .map_err(|e| format!("Write temp failed: {e}"))?;
+
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+
+        // Attach the backup DB
+        conn.execute("ATTACH DATABASE ?1 AS backup_db", [&tmp_path])
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&tmp_path);
+                format!("Attach failed: {e}")
+            })?;
+
+        // Merge bar_cache: import entries where backup has newer timestamp or key doesn't exist
+        let bar_count = conn.execute(
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count)
+             SELECT b.key, b.data, b.timestamp, b.bar_count
+             FROM backup_db.bar_cache b
+             LEFT JOIN main.bar_cache c ON c.key = b.key
+             WHERE c.key IS NULL OR b.timestamp > c.timestamp",
+            [],
+        ).map_err(|e| {
+            let _ = conn.execute("DETACH DATABASE backup_db", []);
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Merge bar_cache failed: {e}")
+        })?;
+
+        // Merge kv_cache: same newer-wins strategy
+        let kv_count = conn.execute(
+            "INSERT OR REPLACE INTO kv_cache (key, value, timestamp)
+             SELECT b.key, b.value, b.timestamp
+             FROM backup_db.kv_cache b
+             LEFT JOIN main.kv_cache c ON c.key = b.key
+             WHERE c.key IS NULL OR b.timestamp > c.timestamp",
+            [],
+        ).map_err(|e| {
+            let _ = conn.execute("DETACH DATABASE backup_db", []);
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Merge kv_cache failed: {e}")
+        })?;
+
+        conn.execute("DETACH DATABASE backup_db", [])
+            .map_err(|e| format!("Detach failed: {e}"))?;
+
+        let _ = std::fs::remove_file(&tmp_path);
+
+        Ok(format!("{{\"bars_imported\":{},\"kv_imported\":{}}}", bar_count, kv_count))
+    }
+
+    /// Get a lock on the underlying connection for direct SQL operations.
+    /// Used by darwin import to run table creation and batch inserts.
+    pub fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        self.conn.lock().map_err(|e| format!("Lock failed: {e}"))
+    }
+
     /// Delete all cache entries matching a symbol prefix (e.g., "AAPL:" deletes all TFs for AAPL).
     pub fn delete_symbol(&self, symbol_prefix: &str) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;

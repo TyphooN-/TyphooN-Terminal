@@ -947,46 +947,59 @@ select option {
 .log-entry.log-error { color: var(--danger); }
 .log-entry .log-time { color: var(--text-dim); margin-right: 6px; }
 
-/* ── Command Palette ────────────────────────────────────── */
+/* ── Command Console (Quake-style drop-down) ───────────── */
+
+@keyframes console-slide-down {
+  from { transform: translateY(-100%); opacity: 0.8; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+@keyframes console-slide-up {
+  from { transform: translateY(0);     opacity: 1; }
+  to   { transform: translateY(-100%); opacity: 0; }
+}
 
 #command-palette {
   position: fixed;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
+  top: 0; left: 0; right: 0;
   z-index: 2000;
-  display: flex;
-  justify-content: center;
-  padding-top: 80px;
+  animation: console-slide-down 150ms ease-out forwards;
 }
 
-#command-palette.hidden { display: none; }
+#command-palette.hidden {
+  animation: console-slide-up 120ms ease-in forwards;
+  pointer-events: none;
+}
+
+#command-palette.instant-hide { display: none; }
 
 #cmd-palette-inner {
-  width: 500px;
-  max-height: 400px;
-  background: #111122;
-  border: 1px solid #444;
-  border-radius: 6px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+  width: 100%;
+  max-height: 50vh;
+  background: rgba(8, 8, 24, 0.97);
+  border-bottom: 2px solid #4caf50;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.9);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
 #cmd-palette-input {
-  background: #0a0a1e;
+  background: #060614;
   border: none;
-  border-bottom: 1px solid var(--border);
-  color: #fff;
-  padding: 12px 16px;
-  font-family: inherit;
-  font-size: 15px;
+  border-bottom: 1px solid #333;
+  color: #4caf50;
+  padding: 10px 16px;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 14px;
   outline: none;
+  caret-color: #4caf50;
 }
+
+#cmd-palette-input::placeholder { color: #335; }
 
 #cmd-palette-results {
   overflow-y: auto;
-  max-height: 320px;
+  max-height: calc(50vh - 44px);
 }
 
 .cmd-result-item {

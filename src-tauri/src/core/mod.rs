@@ -1,6 +1,7 @@
 pub mod backtest;
 pub mod bar_builder;
 pub mod cache;
+pub mod darwin;
 pub mod margin;
 pub mod position;
 pub mod risk;

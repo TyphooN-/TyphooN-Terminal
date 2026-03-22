@@ -23,6 +23,7 @@ use core::var;
 use core::margin;
 use core::backtest::{self as backtest_engine, SMACrossStrategy, NNFXStrategy, BacktestResult, BarByBarResult};
 use core::cache::SqliteCache;
+use core::darwin;
 use core::screener::{self as screener_engine, ScreenerFilter, ScreenerSymbol};
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
 use std::sync::{Arc, OnceLock};
@@ -333,8 +334,9 @@ async fn get_bars_incremental(
     limit: u32,
     broker_id: Option<String>,
 ) -> Result<String, String> {
+    tracing::info!("get_bars_incremental called: {} @ {} (limit={}, broker={:?})", symbol, timeframe, limit, broker_id);
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
-    if !is_valid_timeframe(&timeframe) { return Err("Invalid timeframe".into()); }
+    if !is_valid_timeframe(&timeframe) { return Err(format!("Invalid timeframe: {}", timeframe)); }
     let limit = limit.min(50_000);
 
     // Backend-level dedup: if same symbol:TF is already being fetched (e.g., Vite page reload
@@ -390,18 +392,30 @@ async fn get_bars_incremental(
         // then Alpaca keys (supplementary — 15-min delayed, rate-limited)
         let mt5_key = format!("mt5:{}:{}", symbol, timeframe);
         let start = cache.as_ref().and_then(|c| {
-            c.get_incremental_start(&mt5_key).ok().flatten()
-                .map(|s| (mt5_key.clone(), s))
-                .or_else(|| {
-                    c.get_incremental_start(&primary_key).ok().flatten()
-                        .map(|s| (primary_key.clone(), s))
-                })
-                .or_else(|| {
-                    if primary_key != fallback_key {
-                        c.get_incremental_start(&fallback_key).ok().flatten()
-                            .map(|s| (fallback_key.clone(), s))
-                    } else { None }
-                })
+            match c.get_incremental_start(&mt5_key) {
+                Ok(Some(s)) => {
+                    tracing::info!("{} @ {}: MT5 key found ({} bars)", symbol, timeframe, s.1);
+                    Some((mt5_key.clone(), s))
+                }
+                Ok(None) => {
+                    tracing::info!("{} @ {}: MT5 key '{}' not in cache", symbol, timeframe, mt5_key);
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("{} @ {}: MT5 key '{}' error: {}", symbol, timeframe, mt5_key, e);
+                    None
+                }
+            }
+            .or_else(|| {
+                c.get_incremental_start(&primary_key).ok().flatten()
+                    .map(|s| (primary_key.clone(), s))
+            })
+            .or_else(|| {
+                if primary_key != fallback_key {
+                    c.get_incremental_start(&fallback_key).ok().flatten()
+                        .map(|s| (fallback_key.clone(), s))
+                } else { None }
+            })
         });
 
         let (key, start) = match start {
@@ -412,6 +426,7 @@ async fn get_bars_incremental(
     }; // state lock dropped here — UI stays responsive
 
     let is_mt5 = cache_key.starts_with("mt5:");
+    tracing::info!("{} @ {}: resolved cache_key={}, is_mt5={}", symbol, timeframe, cache_key, is_mt5);
 
     if let Some((after_ts, cached_count)) = &incremental_start {
         // MT5 fast path: MT5 data is authoritative — always return it, never hit Alpaca.
@@ -420,7 +435,7 @@ async fn get_bars_incremental(
             if let Some(c) = &cache {
                 if let Ok(Some((json, _))) = c.get_bars(&cache_key) {
                     if json.len() > 10 && json.contains("\"timestamp\"") {
-                        tracing::debug!("{} @ {}: MT5 cache hit ({} bars), skipping Alpaca", symbol, timeframe, cached_count);
+                        tracing::info!("{} @ {}: MT5 cache hit ({} bars), returning MT5 data", symbol, timeframe, cached_count);
                         { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
                         return Ok(json);
                     }
@@ -512,6 +527,36 @@ async fn get_bars_incremental(
     { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
 
     Ok(json)
+}
+
+/// Get bars for a symbol, checking MT5 cache first, then falling back to the broker.
+/// Use this instead of `broker.get_bars()` to avoid unnecessary Alpaca API calls.
+async fn get_bars_mt5_first(
+    cache: &Option<Arc<SqliteCache>>,
+    broker: &AlpacaBroker,
+    symbol: &str,
+    timeframe: &str,
+    limit: u32,
+) -> Result<Vec<broker::alpaca::Bar>, String> {
+    // MT5 fast path
+    let mt5_key = format!("mt5:{}:{}", symbol, timeframe);
+    if let Some(c) = cache {
+        if let Ok(Some((json, _))) = c.get_bars(&mt5_key) {
+            if json.len() > 10 && json.contains("\"timestamp\"") {
+                let bars: Vec<broker::alpaca::Bar> = serde_json::from_str(&json).unwrap_or_default();
+                if !bars.is_empty() {
+                    tracing::debug!("{} @ {}: MT5-first cache hit ({} bars)", symbol, timeframe, bars.len());
+                    // If limit is set and smaller than total, return only the most recent
+                    if limit > 0 && bars.len() > limit as usize {
+                        return Ok(bars[bars.len() - limit as usize..].to_vec());
+                    }
+                    return Ok(bars);
+                }
+            }
+        }
+    }
+    // Alpaca fallback
+    broker.get_bars(symbol, timeframe, limit).await
 }
 
 /// Fetch bars from multiple timeframes for a symbol (for MultiKAMA, ATR_Projection, PreviousCandleLevels).
@@ -863,12 +908,13 @@ async fn calculate_lots(
         return Err("Prices must be positive".into());
     }
     // Clone broker + config and drop lock before API calls to avoid blocking other commands
-    let (broker, risk_config, sl_level) = {
+    let (broker, cache, risk_config, sl_level) = {
         let s = state.lock().await;
         let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        let cache = s.db_cache.clone();
         let config = s.risk_config.clone();
         let sl = s.sl_levels.get(&symbol).copied();
-        (broker, config, sl)
+        (broker, cache, config, sl)
     };
 
     let account = broker.get_account().await?;
@@ -902,7 +948,7 @@ async fn calculate_lots(
 
     // VaR per lot (if VaR mode)
     let var_per_lot = if risk_config.order_mode == OrderMode::VaR {
-        let bars = broker.get_bars(&symbol, &risk_config.var_timeframe, risk_config.var_periods + 1).await?;
+        let bars = get_bars_mt5_first(&cache, &broker, &symbol, &risk_config.var_timeframe, risk_config.var_periods + 1).await?;
         let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
         var::calculate_var(&closes, 1.0, spec.tick_value, spec.tick_size, current_price, risk_config.var_confidence)
             .map(|r| r.var_dollars)
@@ -963,13 +1009,14 @@ async fn calculate_position_var(
         return Err("Invalid price or position size".into());
     }
     // Clone broker + config and drop lock before API calls
-    let (broker, var_tf, var_periods, var_confidence) = {
+    let (broker, cache, var_tf, var_periods, var_confidence) = {
         let s = state.lock().await;
         let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
-        (broker, s.risk_config.var_timeframe.clone(), s.risk_config.var_periods, s.risk_config.var_confidence)
+        let cache = s.db_cache.clone();
+        (broker, cache, s.risk_config.var_timeframe.clone(), s.risk_config.var_periods, s.risk_config.var_confidence)
     };
 
-    let bars = broker.get_bars(&symbol, &var_tf, var_periods + 1).await?;
+    let bars = get_bars_mt5_first(&cache, &broker, &symbol, &var_tf, var_periods + 1).await?;
     let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
 
     let asset = broker.get_asset(&symbol).await?;
@@ -994,11 +1041,12 @@ async fn calculate_portfolio_var_lots(
     if !is_valid_symbol(&symbol) { return Err("Invalid symbol".into()); }
     if !current_price.is_finite() || current_price <= 0.0 { return Err("Invalid price".into()); }
 
-    let (broker, var_tf, var_periods, var_confidence, var_pct) = {
+    let (broker, cache, var_tf, var_periods, var_confidence, var_pct) = {
         let s = state.lock().await;
         let broker = s.broker.as_ref().ok_or("Not connected")?.clone();
+        let cache = s.db_cache.clone();
         let rc = &s.risk_config;
-        (broker, rc.var_timeframe.clone(), rc.var_periods, rc.var_confidence, rc.var_risk_pct)
+        (broker, cache, rc.var_timeframe.clone(), rc.var_periods, rc.var_confidence, rc.var_risk_pct)
     };
 
     // Fetch live equity from account
@@ -1009,7 +1057,7 @@ async fn calculate_portfolio_var_lots(
     let positions = broker.get_positions().await.unwrap_or_default();
 
     // Fetch close prices for the new symbol
-    let new_bars = broker.get_bars(&symbol, &var_tf, var_periods + 1).await?;
+    let new_bars = get_bars_mt5_first(&cache, &broker, &symbol, &var_tf, var_periods + 1).await?;
     let new_closes: Vec<f64> = new_bars.iter().map(|b| b.close).collect();
 
     // Fetch close prices for each existing position (parallel)
@@ -1019,7 +1067,7 @@ async fn calculate_portfolio_var_lots(
         let qty = p.qty.abs();
         let mv = p.market_value.abs();
         let price = if qty > 0.0 { mv / qty } else { p.avg_entry_price };
-        match broker.get_bars(sym, &var_tf, var_periods + 1).await {
+        match get_bars_mt5_first(&cache, &broker, sym, &var_tf, var_periods + 1).await {
             Ok(bars) => {
                 let closes: Vec<f64> = bars.iter().map(|b| b.close).collect();
                 existing_data.push((closes, qty, price));
@@ -2642,6 +2690,20 @@ async fn db_cache_evict(state: State<'_, SharedState>, max_age_days: Option<i64>
 }
 
 #[tauri::command]
+async fn export_backup(state: State<'_, SharedState>, path: String) -> Result<String, String> {
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    cache.export_backup(&path)
+}
+
+#[tauri::command]
+async fn import_backup(state: State<'_, SharedState>, path: String) -> Result<String, String> {
+    let s = state.lock().await;
+    let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+    cache.import_backup(&path)
+}
+
+#[tauri::command]
 async fn db_cache_detailed_stats(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.lock().await;
     let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
@@ -3081,8 +3143,8 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
             dbs_read += 1;
 
             for (key, ts, bar_count) in &meta {
-                // __SYMBOLS__ / __SPECS__: text metadata — handle immediately
-                if key.contains("__SYMBOLS__") || key.contains("__SPECS__") {
+                // __SYMBOLS__ / __SPECS__ / __SERVER__: text metadata — handle immediately
+                if key.contains("__SYMBOLS__") || key.contains("__SPECS__") || key.contains("__SERVER__") {
                     if let Some(&(cache_age, _)) = cache_meta.get(key.as_str()) {
                         let mt5_age = now_ts - ts;
                         if cache_age < mt5_age {
@@ -4443,13 +4505,303 @@ async fn fetch_sector_peers(symbol: String) -> Result<String, String> {
     resp.text().await.map_err(|e| format!("Sector peers read failed: {e}"))
 }
 
+// ── DARWIN Import Commands ──────────────────────────────────────────
+
+/// Open a dedicated SQLite connection for DARWIN imports.
+/// Uses a separate connection to avoid locking the shared cache connection
+/// during long-running XLSX parsing + bulk inserts.
+fn open_darwin_connection() -> Result<rusqlite::Connection, String> {
+    let db_path = get_cache_dir().join("typhoon_cache.db");
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("SQLite open failed: {e}"))?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| format!("Pragma failed: {e}"))?;
+    darwin::create_darwin_tables(&conn)?;
+    Ok(conn)
+}
+
+#[tauri::command]
+async fn import_darwin_xlsx(
+    _state: State<'_, SharedState>,
+    path: String,
+    darwin_ticker: String,
+) -> Result<String, String> {
+    if darwin_ticker.is_empty() || darwin_ticker.len() > 10 {
+        return Err("Invalid DARWIN ticker".into());
+    }
+    let conn = open_darwin_connection()?;
+    let (ticker, deals, positions) = darwin::import_darwin_xlsx(&conn, &path, &darwin_ticker)?;
+    tracing::info!("DARWIN import {}: {} deals, {} positions", ticker, deals, positions);
+    Ok(serde_json::json!({
+        "darwin_ticker": ticker,
+        "deals": deals,
+        "positions": positions,
+    }).to_string())
+}
+
+#[tauri::command]
+async fn import_darwin_batch(
+    _state: State<'_, SharedState>,
+    dir: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let mut results = Vec::new();
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Read dir failed: {e}"))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Dir entry failed: {e}"))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("xlsx") { continue; }
+        let ticker = path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string();
+        if ticker.is_empty() { continue; }
+        match darwin::import_darwin_xlsx(&conn, path.to_str().unwrap_or(""), &ticker) {
+            Ok((t, deals, positions)) => {
+                tracing::info!("DARWIN import {}: {} deals, {} positions", t, deals, positions);
+                results.push(serde_json::json!({"ticker": t, "deals": deals, "positions": positions, "status": "ok"}));
+            }
+            Err(e) => {
+                tracing::warn!("DARWIN import {} failed: {}", ticker, e);
+                results.push(serde_json::json!({"ticker": ticker, "error": e, "status": "error"}));
+            }
+        }
+    }
+    Ok(serde_json::to_string(&results).unwrap_or("[]".into()))
+}
+
+#[tauri::command]
+async fn list_darwin_accounts(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let accounts = darwin::list_darwin_accounts(&conn)?;
+    serde_json::to_string(&accounts).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_summary(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let summary = darwin::get_darwin_summary(&conn, &darwin_ticker)?;
+    serde_json::to_string(&summary).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_deals(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+    symbol: Option<String>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let deals = darwin::get_darwin_deals(&conn, &darwin_ticker, symbol.as_deref(), limit)?;
+    serde_json::to_string(&deals).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_positions(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+    symbol: Option<String>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let positions = darwin::get_darwin_positions(&conn, &darwin_ticker, symbol.as_deref(), limit)?;
+    serde_json::to_string(&positions).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_equity_curve(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let curve = darwin::get_darwin_equity_curve(&conn, &darwin_ticker)?;
+    serde_json::to_string(&curve).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_pnl_by_symbol(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let pnl = darwin::get_darwin_pnl_by_symbol(&conn, &darwin_ticker)?;
+    serde_json::to_string(&pnl).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_open_positions(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let positions = darwin::get_darwin_open_positions(&conn, &darwin_ticker)?;
+    serde_json::to_string(&positions).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_var(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = darwin::get_daily_returns(&conn, &darwin_ticker)?;
+    let var = darwin::compute_var(&returns);
+    serde_json::to_string(&var).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_daily_returns(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = darwin::get_daily_returns(&conn, &darwin_ticker)?;
+    serde_json::to_string(&returns).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_monthly_returns(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = darwin::get_daily_returns(&conn, &darwin_ticker)?;
+    let monthly = darwin::get_monthly_returns(&returns);
+    serde_json::to_string(&monthly).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_rolling_var(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+    window: Option<u32>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = darwin::get_daily_returns(&conn, &darwin_ticker)?;
+    let rolling = darwin::get_rolling_var(&returns, window.unwrap_or(60) as usize);
+    serde_json::to_string(&rolling).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_correlations(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let corr = darwin::get_darwin_correlations(&conn)?;
+    serde_json::to_string(&corr).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_portfolio_var(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = darwin::get_portfolio_daily_returns(&conn)?;
+    let var = darwin::compute_var(&returns);
+    serde_json::to_string(&var).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_portfolio_daily_returns(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = darwin::get_portfolio_daily_returns(&conn)?;
+    serde_json::to_string(&returns).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_portfolio_rolling_var(
+    _state: State<'_, SharedState>,
+    window: Option<u32>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = darwin::get_portfolio_daily_returns(&conn)?;
+    let rolling = darwin::get_rolling_var(&returns, window.unwrap_or(60) as usize);
+    serde_json::to_string(&rolling).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_portfolio_monthly_returns(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = darwin::get_portfolio_daily_returns(&conn)?;
+    let monthly = darwin::get_monthly_returns(&returns);
+    serde_json::to_string(&monthly).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_portfolio_summary(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let summary = darwin::get_portfolio_summary(&conn)?;
+    serde_json::to_string(&summary).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_portfolio_open_positions(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let positions = darwin::get_portfolio_open_positions(&conn)?;
+    serde_json::to_string(&positions).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_portfolio_exposure(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let exposure = darwin::get_portfolio_exposure(&conn)?;
+    serde_json::to_string(&exposure).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_portfolio_equity_curve(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let curve = darwin::get_portfolio_equity_curve(&conn)?;
+    serde_json::to_string(&curve).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn delete_darwin_account(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    darwin::delete_darwin_account(&conn, &darwin_ticker)?;
+    tracing::info!("DARWIN account {} deleted", darwin_ticker);
+    Ok(format!("{{\"deleted\":\"{}\"}}", darwin_ticker))
+}
+
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "typhoon_terminal=info".into()),
-        )
-        .init();
+    // Log to both stderr and file (~/.config/typhoon-terminal/typhoon.log)
+    let log_dir = std::env::var("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".config").join("typhoon-terminal"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join("typhoon.log");
+
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "typhoon_terminal=info".into());
+
+    // File layer — append mode, same format as stderr
+    if let Ok(log_file) = std::fs::OpenOptions::new()
+        .create(true).append(true).open(&log_path)
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(std::sync::Mutex::new(log_file))
+            .with_ansi(false);
+        let stderr_layer = tracing_subscriber::fmt::layer();
+
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(file_layer)
+            .with(stderr_layer)
+            .init();
+
+        tracing::info!("Logging to {}", log_path.display());
+    } else {
+        // Fallback: stderr only
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .init();
+    }
 
     // ── Headless CLI Backtest Mode ──
     // Usage: typhoon-terminal --backtest --symbol SMCI --timeframe 1Day --strategy nnfx
@@ -4474,6 +4826,12 @@ fn main() {
             let db_path = cache_dir.join("typhoon_cache.db");
             match SqliteCache::open(&db_path) {
                 Ok(cache) => {
+                    // Initialize DARWIN import tables
+                    if let Ok(conn) = cache.connection() {
+                        if let Err(e) = darwin::create_darwin_tables(&conn) {
+                            tracing::warn!("Failed to create darwin tables: {e}");
+                        }
+                    }
                     tracing::info!("SQLite cache opened: {:?}", db_path);
                     Some(Arc::new(cache))
                 }
@@ -4589,6 +4947,8 @@ fn main() {
             list_mt5_symbols,
             get_mt5_bars,
             db_cache_evict,
+            export_backup,
+            import_backup,
             // Cold cache (zstd files — legacy)
             save_cold_cache,
             load_cold_cache,
@@ -4642,6 +5002,30 @@ fn main() {
             fetch_ipo_calendar,
             fetch_economic_calendar,
             fetch_sector_peers,
+            // DARWIN Import
+            import_darwin_xlsx,
+            import_darwin_batch,
+            list_darwin_accounts,
+            get_darwin_summary,
+            get_darwin_deals,
+            get_darwin_positions,
+            get_darwin_equity_curve,
+            get_darwin_pnl_by_symbol,
+            get_darwin_open_positions,
+            get_darwin_var,
+            get_darwin_daily_returns,
+            get_darwin_monthly_returns,
+            get_darwin_rolling_var,
+            get_darwin_correlations,
+            get_portfolio_var,
+            get_portfolio_daily_returns,
+            get_portfolio_rolling_var,
+            get_portfolio_monthly_returns,
+            get_portfolio_summary,
+            get_portfolio_open_positions,
+            get_portfolio_exposure,
+            get_portfolio_equity_curve,
+            delete_darwin_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TyphooN Terminal");

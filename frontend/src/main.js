@@ -667,19 +667,12 @@ const _realInvoke = invoke;
 // Instead: create a dedup wrapper that callers can use
 async function cachedGetBars(symbol, timeframe, limit) {
   const cacheKey = getCacheKey(symbol, timeframe);
-  const cached = barCache[cacheKey];
-  // Short-circuit only for very rapid re-requests (< 5s) — e.g. indicator recalcs, MTF grid
-  // All other requests go through backend which has MT5-first enrichment logic
-  const RAPID_DEDUP_MS = 5000;
-  if (cached && cached.data && cached.data.length > 0 && (Date.now() - (cached.timestamp || 0)) < RAPID_DEDUP_MS) {
-    return JSON.stringify(cached.data);
-  }
-  // Dedup: if same symbol:TF is in-flight (any limit), wait for it
+  // No in-memory dedup — every request goes to the backend.
+  // Backend is fast (<100ms for MT5 cache hits) and has MT5-first data source logic.
+  // In-flight dedup only: prevents duplicate concurrent API calls for the same symbol:TF.
   const key = `${symbol}:${timeframe}`;
   if (_barInflight.has(key)) return _barInflight.get(key);
   const promise = invoke("get_bars_incremental", { symbol, timeframe, limit, brokerId: activeBrokerId || null }).then(json => {
-    // Update hot cache only — SQLite persistence is handled by get_bars_incremental backend
-    // (no saveBarCacheToDisk needed, avoids double-write and duplicate API calls)
     try {
       const bars = JSON.parse(json);
       if (bars.length > 0) {
@@ -989,6 +982,7 @@ function switchTab(id) {
     }
     lastPrice = tab.chartData[tab.chartData.length - 1].close;
     setText("connect-status-bar", `${tab.symbol} — ${tab.chartData.length} bars (cached)`);
+    updateDataSourceBadge(tab.symbol);
     // Apply indicators from cached data (instant, no API calls)
     applyIndicators(tab.chartData);
     updateTabLabel();
@@ -3649,8 +3643,9 @@ async function loadBarCacheFromDisk() {
             let migrated = 0;
             for (const entry of req.result || []) {
               if (entry.key && entry.data) {
-                barCache[entry.key] = { data: entry.data, timestamp: entry.timestamp || 0, lastAccess: Date.now() };
-                // Migrate to SQLite
+                // Don't warm barCache from IndexedDB — let loadChart hit the backend
+                // which has MT5-first logic. IndexedDB may have stale Alpaca data.
+                // Migrate to SQLite only:
                 try {
                   await invokeQuiet("db_cache_put", {
                     key: `${activeBrokerId}:${entry.key}`,
@@ -3701,7 +3696,8 @@ async function migrateLocalStorageCache() {
         const stored = JSON.parse(localStorage.getItem(key));
         if (stored && stored.data) {
           const cacheKey = key.substring(BAR_CACHE_PREFIX.length);
-          barCache[cacheKey] = { data: stored.data, timestamp: stored.timestamp || 0 };
+          // Don't warm barCache from localStorage — let loadChart hit the backend
+          // which has MT5-first logic. localStorage may have stale Alpaca data.
           // Migrate directly to SQLite (skip IndexedDB)
           await invokeQuiet("db_cache_put", {
             key: `${activeBrokerId}:${cacheKey}`,
@@ -4053,6 +4049,7 @@ async function loadChart(symbol, timeframe) {
 
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
     setText("connect-status-bar", `${symbol} — ${chartData.length} bars`);
+    updateDataSourceBadge(symbol);
     setLoadingStatus(symbol, null);
     updateTabLabel();
     if (typeof updateNotesIndicator === "function") updateNotesIndicator();
@@ -5479,6 +5476,7 @@ async function openArticleInline(url, title) {
     type: "article",
     width: 550,
     height: 500,
+    onClose: () => { window._lastArticleUrl = null; window._lastArticleTitle = null; saveSession(); },
   });
   win.setContent("Loading...");
 
@@ -10182,7 +10180,7 @@ function cmdAlgoMonitor() {
       const msg = document.createElement("div");
       msg.style.cssText = "color:#888;padding:30px;text-align:center;line-height:2;";
       msg.appendChild(div("No Active Strategies", "font-size:14px;color:#ff8;margin-bottom:8px;"));
-      msg.appendChild(div("No active strategies. Use Ctrl+K \u2192 AUTOTRADE to start one."));
+      msg.appendChild(div("No active strategies. Use ` \u2192 AUTOTRADE to start one."));
       algoContainer.appendChild(msg);
       return;
     }
@@ -10606,6 +10604,579 @@ function cmdImportTrades() {
     resultsDiv.appendChild(symTable);
   }
   win.appendElement(importRoot); renderImportResults([]);
+}
+
+// ── DARWIN Account Viewer ────────────────────────────────────────
+function cmdDarwin() {
+  const win = createWindow({ title: "DARWIN Accounts", width: 900, height: 650 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;";
+
+  // Top bar: import + account selector
+  const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
+  const importBtn = document.createElement("button"); importBtn.textContent = "Import from /home/typhoon/mt5xml/"; importBtn.style.cssText = "padding:4px 10px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+  const accountSel = document.createElement("select"); accountSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:140px;";
+  const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+  const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
+  ["Summary", "Open Positions", "Equity Curve", "P/L by Symbol", "Positions", "Deals"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
+  topBar.appendChild(importBtn); topBar.appendChild(accountSel); topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
+  root.appendChild(topBar);
+
+  const contentDiv = document.createElement("div"); contentDiv.style.cssText = "flex:1;overflow-y:auto;padding:8px;";
+  root.appendChild(contentDiv);
+
+  async function loadAccounts() {
+    try {
+      const json = await window.__TAURI__.core.invoke("list_darwin_accounts");
+      const accounts = JSON.parse(json);
+      accountSel.textContent = "";
+      if (accounts.length === 0) { const o = document.createElement("option"); o.textContent = "No accounts imported"; accountSel.appendChild(o); return; }
+      for (const a of accounts) { const o = document.createElement("option"); o.value = a.darwin_ticker; o.textContent = `${a.name} (${a.darwin_ticker})`; accountSel.appendChild(o); }
+      renderView();
+    } catch (e) { contentDiv.textContent = "Failed to load accounts: " + e; }
+  }
+
+  importBtn.addEventListener("click", async () => {
+    importBtn.disabled = true; importBtn.textContent = "Importing...";
+    try {
+      const json = await window.__TAURI__.core.invoke("import_darwin_batch", { dir: "/home/typhoon/mt5xml" });
+      const results = JSON.parse(json);
+      let msg = "";
+      for (const r of results) {
+        if (r.status === "ok") msg += `${r.ticker}: ${r.deals} deals, ${r.positions} positions\n`;
+        else msg += `${r.ticker}: ERROR - ${r.error}\n`;
+      }
+      log("DARWIN import complete:\n" + msg, "ok");
+      await loadAccounts();
+    } catch (e) { log("DARWIN import failed: " + e, "warn"); }
+    importBtn.disabled = false; importBtn.textContent = "Import from /home/typhoon/mt5xml/";
+  });
+
+  accountSel.addEventListener("change", renderView);
+  viewSel.addEventListener("change", renderView);
+  refreshBtn.addEventListener("click", renderView);
+
+  async function renderView() {
+    const ticker = accountSel.value;
+    if (!ticker || ticker === "No accounts imported") { contentDiv.textContent = "Import DARWIN accounts first."; return; }
+    const view = viewSel.value;
+    contentDiv.textContent = "Loading...";
+    try {
+      if (view === "summary") await renderSummary(ticker);
+      else if (view === "open_positions") await renderOpenPositions(ticker);
+      else if (view === "equity_curve") await renderEquityCurve(ticker);
+      else if (view === "pl_by_symbol") await renderPnLBySymbol(ticker);
+      else if (view === "positions") await renderPositions(ticker);
+      else if (view === "deals") await renderDeals(ticker);
+    } catch (e) { contentDiv.textContent = "Error: " + e; }
+  }
+
+  async function renderSummary(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_darwin_summary", { darwinTicker: ticker });
+    const s = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `${s.account.name} — ${s.account.darwin_ticker}`;
+    contentDiv.appendChild(title);
+    const sub = document.createElement("div"); sub.style.cssText = "color:#888;font-size:10px;padding-bottom:12px;";
+    sub.textContent = `Account: ${s.account.mt5_account} | Imported: ${new Date(s.account.created_at * 1000).toLocaleDateString()}`;
+    contentDiv.appendChild(sub);
+
+    const rows = [
+      ["Initial Balance", "$" + s.account.initial_balance.toLocaleString(undefined, {minimumFractionDigits: 2})],
+      ["Final Balance", "$" + s.final_balance.toLocaleString(undefined, {minimumFractionDigits: 2})],
+      ["Net P/L", "$" + s.total_profit.toLocaleString(undefined, {minimumFractionDigits: 2}), s.total_profit],
+      ["Total Commission", "$" + s.total_commission.toLocaleString(undefined, {minimumFractionDigits: 2})],
+      ["Total Swap", "$" + s.total_swap.toLocaleString(undefined, {minimumFractionDigits: 2})],
+      ["", ""],
+      ["Closed Positions", s.account.position_count],
+      ["Total Deals", s.account.deal_count],
+      ["Wins", s.win_count],
+      ["Losses", s.loss_count],
+      ["Win Rate", s.win_rate.toFixed(1) + "%", s.win_rate >= 50 ? 1 : -1],
+      ["Profit Factor", s.profit_factor === Infinity ? "∞" : s.profit_factor.toFixed(2), s.profit_factor >= 1 ? 1 : -1],
+      ["Max Drawdown", s.max_drawdown_pct.toFixed(2) + "%"],
+      ["", ""],
+      ["Symbols Traded", s.symbols_traded.length],
+    ];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;width:100%;max-width:500px;";
+    for (const [label, val, colorVal] of rows) {
+      if (label === "" && val === "") { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 2; td.style.cssText = "height:8px;"; tr.appendChild(td); table.appendChild(tr); continue; }
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = label;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;";
+      td2.textContent = String(val);
+      if (colorVal !== undefined) td2.style.color = (typeof colorVal === "number" ? colorVal : parseFloat(String(colorVal))) >= 0 ? "#4caf50" : "#f44336";
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+
+    // Symbol list
+    if (s.symbols_traded.length > 0) {
+      const symDiv = document.createElement("div"); symDiv.style.cssText = "margin-top:12px;color:#666;font-size:10px;";
+      symDiv.textContent = "Symbols: " + s.symbols_traded.join(", ");
+      contentDiv.appendChild(symDiv);
+    }
+  }
+
+  async function renderOpenPositions(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_darwin_open_positions", { darwinTicker: ticker });
+    const positions = JSON.parse(json);
+    contentDiv.textContent = "";
+
+    const title = document.createElement("div"); title.style.cssText = "font-weight:bold;color:#fff;padding:4px 0 8px;font-size:13px;";
+    const totalPositions = positions.reduce((s, p) => s + p.position_count, 0);
+    title.textContent = `Open Positions (${totalPositions} tickets, ${positions.length} symbols) — ${ticker}`;
+    contentDiv.appendChild(title);
+
+    if (positions.length === 0) { const msg = document.createElement("div"); msg.style.color = "#888"; msg.textContent = "No open positions detected."; contentDiv.appendChild(msg); return; }
+
+    // Summary bar
+    const totalLong = positions.filter(p => p.side === "buy").reduce((s, p) => s + p.notional, 0);
+    const totalShort = positions.filter(p => p.side === "sell").reduce((s, p) => s + p.notional, 0);
+    const summaryBar = document.createElement("div"); summaryBar.style.cssText = "display:flex;gap:20px;padding:6px 0 12px;font-size:12px;";
+    summaryBar.innerHTML = `<span style="color:#4caf50">LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#f44336">SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#888">NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`;
+    contentDiv.appendChild(summaryBar);
+
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Symbol", "Side", "Tickets", "Total Volume", "Avg Price", "Notional", "Opened"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+
+    for (const p of positions) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      const vals = [
+        p.symbol,
+        p.side.toUpperCase(),
+        p.position_count,
+        p.total_volume.toLocaleString(undefined, {maximumFractionDigits: 0}),
+        "$" + p.avg_price.toFixed(2),
+        "$" + p.notional.toLocaleString(undefined, {maximumFractionDigits: 0}),
+        p.earliest_open.substring(0, 10),
+      ];
+      for (let i = 0; i < vals.length; i++) {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;";
+        td.textContent = String(vals[i]);
+        if (i === 0) td.style.color = "#8af";
+        else if (i === 1) td.style.color = p.side === "buy" ? "#4caf50" : "#f44336";
+        else if (i === 5) td.style.color = "#ccc";
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderEquityCurve(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_darwin_equity_curve", { darwinTicker: ticker });
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    if (data.length === 0) { contentDiv.textContent = "No equity data."; return; }
+
+    const canvas = document.createElement("canvas"); canvas.width = 860; canvas.height = 400; canvas.style.cssText = "width:100%;max-height:400px;";
+    contentDiv.appendChild(canvas);
+    const ctx = canvas.getContext("2d");
+
+    const balances = data.map(d => d[1]);
+    const minB = Math.min(...balances); const maxB = Math.max(...balances);
+    const range = maxB - minB || 1;
+    const padTop = 30; const padBottom = 40; const padLeft = 80; const padRight = 20;
+    const w = canvas.width - padLeft - padRight; const h = canvas.height - padTop - padBottom;
+
+    // Background
+    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Grid lines
+    ctx.strokeStyle = "#222"; ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 5; i++) {
+      const y = padTop + (h * i / 5);
+      ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(padLeft + w, y); ctx.stroke();
+      ctx.fillStyle = "#666"; ctx.font = "10px Consolas";
+      const val = maxB - (range * i / 5);
+      ctx.fillText("$" + val.toLocaleString(undefined, {maximumFractionDigits: 0}), 4, y + 4);
+    }
+
+    // Equity line
+    ctx.strokeStyle = "#4caf50"; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = padLeft + (i / (data.length - 1)) * w;
+      const y = padTop + h - ((balances[i] - minB) / range) * h;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Start/end labels
+    ctx.fillStyle = "#888"; ctx.font = "10px Consolas";
+    ctx.fillText(data[0][0].substring(0, 10), padLeft, canvas.height - 8);
+    ctx.fillText(data[data.length - 1][0].substring(0, 10), padLeft + w - 70, canvas.height - 8);
+
+    // Title
+    ctx.fillStyle = "#fff"; ctx.font = "bold 13px Consolas";
+    ctx.fillText("Equity Curve — " + ticker, padLeft, 18);
+    const finalBal = balances[balances.length - 1]; const startBal = balances[0];
+    const pct = ((finalBal - startBal) / startBal * 100).toFixed(2);
+    ctx.fillStyle = finalBal >= startBal ? "#4caf50" : "#f44336"; ctx.font = "11px Consolas";
+    ctx.fillText(`$${startBal.toLocaleString()} → $${finalBal.toLocaleString()} (${pct}%)`, padLeft + 250, 18);
+  }
+
+  async function renderPnLBySymbol(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_darwin_pnl_by_symbol", { darwinTicker: ticker });
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    if (data.length === 0) { contentDiv.textContent = "No position data."; return; }
+
+    const title = document.createElement("div"); title.style.cssText = "font-weight:bold;color:#fff;padding:4px 0 8px;font-size:13px;";
+    title.textContent = "P/L by Symbol — " + ticker;
+    contentDiv.appendChild(title);
+
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Symbol", "Positions", "Gross P/L", "Commission", "Swap", "Net P/L"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+
+    for (const [sym, profit, comm, swap, count] of data) {
+      const net = profit + comm + swap;
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      const vals = [sym, count, "$" + profit.toFixed(2), "$" + comm.toFixed(2), "$" + swap.toFixed(2), "$" + net.toFixed(2)];
+      for (let i = 0; i < vals.length; i++) {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;";
+        td.textContent = vals[i];
+        if (i === 0) td.style.color = "#8af";
+        else if (i === 5) td.style.color = net >= 0 ? "#4caf50" : "#f44336";
+        else if (i === 2) td.style.color = profit >= 0 ? "#4caf50" : "#f44336";
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderPositions(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_darwin_positions", { darwinTicker: ticker, limit: 500 });
+    const positions = JSON.parse(json);
+    contentDiv.textContent = "";
+
+    const title = document.createElement("div"); title.style.cssText = "font-weight:bold;color:#fff;padding:4px 0 8px;font-size:13px;";
+    title.textContent = `Positions (${positions.length}) — ${ticker}`;
+    contentDiv.appendChild(title);
+
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    const thead = document.createElement("tr");
+    ["Open Time", "Symbol", "Type", "Volume", "Open", "Close", "S/L", "T/P", "Commission", "Swap", "Profit"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:3px 4px;border-bottom:1px solid #333;white-space:nowrap;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+
+    for (const p of positions) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #111;";
+      const vals = [
+        p.open_time.substring(0, 16), p.symbol, p.pos_type, p.volume.toFixed(0),
+        p.open_price.toFixed(4), p.close_price.toFixed(4),
+        p.sl ? p.sl.toFixed(4) : "—", p.tp ? p.tp.toFixed(4) : "—",
+        "$" + p.commission.toFixed(2), "$" + p.swap.toFixed(2), "$" + p.profit.toFixed(2)
+      ];
+      for (let i = 0; i < vals.length; i++) {
+        const td = document.createElement("td"); td.style.cssText = "padding:2px 4px;font-family:Consolas,monospace;white-space:nowrap;";
+        td.textContent = vals[i];
+        if (i === 1) td.style.color = "#8af";
+        else if (i === 2) td.style.color = p.pos_type === "buy" ? "#4caf50" : "#f44336";
+        else if (i === 10) td.style.color = p.profit >= 0 ? "#4caf50" : "#f44336";
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderDeals(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_darwin_deals", { darwinTicker: ticker, limit: 500 });
+    const deals = JSON.parse(json);
+    contentDiv.textContent = "";
+
+    const title = document.createElement("div"); title.style.cssText = "font-weight:bold;color:#fff;padding:4px 0 8px;font-size:13px;";
+    title.textContent = `Deals (${deals.length}) — ${ticker}`;
+    contentDiv.appendChild(title);
+
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    const thead = document.createElement("tr");
+    ["Time", "Deal", "Symbol", "Type", "Dir", "Volume", "Price", "Commission", "Swap", "Profit", "Balance"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:3px 4px;border-bottom:1px solid #333;white-space:nowrap;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+
+    for (const d of deals) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #111;";
+      const vals = [
+        d.time.substring(0, 16), d.deal_ticket, d.symbol, d.deal_type, d.direction,
+        d.volume > 0 ? d.volume.toFixed(0) : "—", d.price > 0 ? d.price.toFixed(4) : "—",
+        "$" + d.commission.toFixed(2), "$" + d.swap.toFixed(2), "$" + d.profit.toFixed(2),
+        "$" + d.balance.toLocaleString(undefined, {minimumFractionDigits: 2})
+      ];
+      for (let i = 0; i < vals.length; i++) {
+        const td = document.createElement("td"); td.style.cssText = "padding:2px 4px;font-family:Consolas,monospace;white-space:nowrap;";
+        td.textContent = vals[i];
+        if (i === 2) td.style.color = "#8af";
+        else if (i === 3) td.style.color = d.deal_type === "buy" ? "#4caf50" : d.deal_type === "sell" ? "#f44336" : "#888";
+        else if (i === 9) td.style.color = d.profit >= 0 ? "#4caf50" : "#f44336";
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  win.appendElement(root);
+  loadAccounts();
+}
+
+// ── DARWIN Portfolio Dashboard ────────────────────────────────
+function cmdDarwinPortfolio() {
+  const win = createWindow({ title: "DARWIN Portfolio", width: 1000, height: 700 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;";
+
+  const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:6px;align-items:center;";
+  const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:160px;";
+  ["Portfolio Summary", "Combined Open Positions", "Symbol Exposure", "Combined Equity Curve"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_"); o.textContent = v; viewSel.appendChild(o); });
+  const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+  topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
+  root.appendChild(topBar);
+
+  const contentDiv = document.createElement("div"); contentDiv.style.cssText = "flex:1;overflow-y:auto;padding:8px;";
+  root.appendChild(contentDiv);
+
+  viewSel.addEventListener("change", renderView);
+  refreshBtn.addEventListener("click", renderView);
+
+  async function renderView() {
+    const view = viewSel.value;
+    contentDiv.textContent = "Loading...";
+    try {
+      if (view === "portfolio_summary") await renderPortfolioSummary();
+      else if (view === "combined_open_positions") await renderCombinedPositions();
+      else if (view === "symbol_exposure") await renderExposure();
+      else if (view === "combined_equity_curve") await renderCombinedEquity();
+    } catch (e) { contentDiv.textContent = "Error: " + e; }
+  }
+
+  async function renderPortfolioSummary() {
+    const json = await window.__TAURI__.core.invoke("get_portfolio_summary");
+    const s = JSON.parse(json);
+    contentDiv.textContent = "";
+
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = `DARWIN Portfolio — ${s.accounts.length} Accounts`;
+    contentDiv.appendChild(title);
+
+    // Aggregate stats
+    const statsRows = [
+      ["Total Initial Capital", "$" + s.total_initial_balance.toLocaleString(undefined, {minimumFractionDigits: 2})],
+      ["Total Final Balance", "$" + s.total_final_balance.toLocaleString(undefined, {minimumFractionDigits: 2})],
+      ["Net P/L (all accounts)", "$" + s.total_net_pnl.toLocaleString(undefined, {minimumFractionDigits: 2}), s.total_net_pnl],
+      ["Total Commission", "$" + s.total_commission.toLocaleString(undefined, {minimumFractionDigits: 2})],
+      ["Total Deals", s.total_deals.toLocaleString()],
+      ["Total Positions", s.total_positions.toLocaleString()],
+      ["Combined Max Drawdown", s.combined_max_drawdown_pct.toFixed(2) + "%"],
+    ];
+    const statsTable = document.createElement("table"); statsTable.style.cssText = "border-collapse:collapse;font-size:12px;width:100%;max-width:500px;margin-bottom:16px;";
+    for (const [label, val, colorVal] of statsRows) {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = label;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = String(val);
+      if (colorVal !== undefined) td2.style.color = colorVal >= 0 ? "#4caf50" : "#f44336";
+      tr.appendChild(td1); tr.appendChild(td2); statsTable.appendChild(tr);
+    }
+    contentDiv.appendChild(statsTable);
+
+    // Per-account breakdown
+    const breakTitle = document.createElement("div"); breakTitle.style.cssText = "font-weight:bold;color:#fff;padding:8px 0 6px;font-size:13px;";
+    breakTitle.textContent = "Per-Account Breakdown";
+    contentDiv.appendChild(breakTitle);
+
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["DARWIN", "MT5 Name", "Final Balance", "Net P/L", "Win Rate", "PF", "Max DD", "Positions"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+
+    for (const a of s.accounts) {
+      const netPnl = a.total_profit + a.total_commission + a.total_swap;
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      const vals = [
+        a.account.darwin_ticker, a.account.name,
+        "$" + a.final_balance.toLocaleString(undefined, {maximumFractionDigits: 0}),
+        "$" + netPnl.toLocaleString(undefined, {maximumFractionDigits: 0}),
+        a.win_rate.toFixed(1) + "%", a.profit_factor === Infinity ? "∞" : a.profit_factor.toFixed(2),
+        a.max_drawdown_pct.toFixed(1) + "%", a.account.position_count,
+      ];
+      for (let i = 0; i < vals.length; i++) {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;";
+        td.textContent = String(vals[i]);
+        if (i === 0) td.style.color = "#8af";
+        else if (i === 3) td.style.color = netPnl >= 0 ? "#4caf50" : "#f44336";
+        else if (i === 4) td.style.color = a.win_rate >= 50 ? "#4caf50" : "#f44336";
+        else if (i === 5) td.style.color = a.profit_factor >= 1 ? "#4caf50" : "#f44336";
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderCombinedPositions() {
+    const json = await window.__TAURI__.core.invoke("get_portfolio_open_positions");
+    const positions = JSON.parse(json);
+    contentDiv.textContent = "";
+
+    const totalLong = positions.filter(p => p.side === "buy").reduce((s, p) => s + p.notional, 0);
+    const totalShort = positions.filter(p => p.side === "sell").reduce((s, p) => s + p.notional, 0);
+
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Combined Open Positions — ${positions.length} entries`;
+    contentDiv.appendChild(title);
+
+    const summaryBar = document.createElement("div"); summaryBar.style.cssText = "display:flex;gap:24px;padding:6px 0 12px;font-size:13px;font-family:Consolas,monospace;";
+    summaryBar.innerHTML = `<span style="color:#4caf50">LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#f44336">SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#888">NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`;
+    contentDiv.appendChild(summaryBar);
+
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Symbol", "Side", "Total Volume", "Avg Price", "Notional", "DARWINs"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+
+    for (const p of positions) {
+      const darwinList = p.darwin_breakdown.map(d => `${d[0]}(${d[1].toLocaleString(undefined, {maximumFractionDigits: 0})})`).join(", ");
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      const vals = [
+        p.symbol, p.side.toUpperCase(),
+        p.total_volume.toLocaleString(undefined, {maximumFractionDigits: 0}),
+        "$" + p.avg_price.toFixed(2),
+        "$" + p.notional.toLocaleString(undefined, {maximumFractionDigits: 0}),
+        darwinList,
+      ];
+      for (let i = 0; i < vals.length; i++) {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;";
+        td.textContent = vals[i];
+        if (i === 0) td.style.color = "#8af";
+        else if (i === 1) td.style.color = p.side === "buy" ? "#4caf50" : "#f44336";
+        else if (i === 5) { td.style.color = "#888"; td.style.fontSize = "9px"; }
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderExposure() {
+    const json = await window.__TAURI__.core.invoke("get_portfolio_exposure");
+    const exposure = JSON.parse(json);
+    contentDiv.textContent = "";
+
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Symbol Exposure — ${exposure.length} symbols across all DARWINs`;
+    contentDiv.appendChild(title);
+
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Symbol", "Long $", "Short $", "Net $", "DARWINs"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+
+    for (const e of exposure) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      const vals = [
+        e.symbol,
+        e.long_notional > 0 ? "$" + e.long_notional.toLocaleString(undefined, {maximumFractionDigits: 0}) : "—",
+        e.short_notional > 0 ? "$" + e.short_notional.toLocaleString(undefined, {maximumFractionDigits: 0}) : "—",
+        "$" + e.net_notional.toLocaleString(undefined, {maximumFractionDigits: 0}),
+        e.darwins.join(", "),
+      ];
+      for (let i = 0; i < vals.length; i++) {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;";
+        td.textContent = vals[i];
+        if (i === 0) td.style.color = "#8af";
+        else if (i === 1) td.style.color = "#4caf50";
+        else if (i === 2) td.style.color = "#f44336";
+        else if (i === 3) td.style.color = e.net_notional >= 0 ? "#4caf50" : "#f44336";
+        else if (i === 4) { td.style.color = "#888"; td.style.fontSize = "9px"; }
+        tr.appendChild(td);
+      }
+
+      // Add exposure bar
+      const maxNotional = Math.max(...exposure.map(x => Math.max(x.long_notional, x.short_notional)));
+      if (maxNotional > 0) {
+        const barTd = document.createElement("td"); barTd.style.cssText = "padding:3px 4px;width:120px;";
+        const barContainer = document.createElement("div"); barContainer.style.cssText = "display:flex;height:10px;background:#111;border-radius:2px;overflow:hidden;";
+        const longBar = document.createElement("div"); longBar.style.cssText = `width:${(e.long_notional / maxNotional * 100).toFixed(1)}%;background:#2e7d32;`;
+        const shortBar = document.createElement("div"); shortBar.style.cssText = `width:${(e.short_notional / maxNotional * 100).toFixed(1)}%;background:#c62828;`;
+        barContainer.appendChild(longBar); barContainer.appendChild(shortBar);
+        barTd.appendChild(barContainer); tr.appendChild(barTd);
+      }
+
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderCombinedEquity() {
+    const json = await window.__TAURI__.core.invoke("get_portfolio_equity_curve");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    if (data.length === 0) { contentDiv.textContent = "No equity data."; return; }
+
+    const canvas = document.createElement("canvas"); canvas.width = 960; canvas.height = 450; canvas.style.cssText = "width:100%;max-height:450px;";
+    contentDiv.appendChild(canvas);
+    const ctx = canvas.getContext("2d");
+
+    const balances = data.map(d => d[1]);
+    const minB = Math.min(...balances); const maxB = Math.max(...balances);
+    const range = maxB - minB || 1;
+    const padTop = 30; const padBottom = 40; const padLeft = 100; const padRight = 20;
+    const w = canvas.width - padLeft - padRight; const h = canvas.height - padTop - padBottom;
+
+    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Grid
+    ctx.strokeStyle = "#222"; ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 5; i++) {
+      const y = padTop + (h * i / 5);
+      ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(padLeft + w, y); ctx.stroke();
+      ctx.fillStyle = "#666"; ctx.font = "10px Consolas";
+      ctx.fillText("$" + (maxB - (range * i / 5)).toLocaleString(undefined, {maximumFractionDigits: 0}), 4, y + 4);
+    }
+
+    // Line
+    ctx.strokeStyle = "#42a5f5"; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+      const x = padLeft + (i / (data.length - 1)) * w;
+      const y = padTop + h - ((balances[i] - minB) / range) * h;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Labels
+    ctx.fillStyle = "#888"; ctx.font = "10px Consolas";
+    ctx.fillText(data[0][0], padLeft, canvas.height - 8);
+    ctx.fillText(data[data.length - 1][0], padLeft + w - 70, canvas.height - 8);
+
+    ctx.fillStyle = "#fff"; ctx.font = "bold 13px Consolas";
+    ctx.fillText("Combined Equity — All DARWINs", padLeft, 18);
+    const start = balances[0]; const end = balances[balances.length - 1];
+    const pct = ((end - start) / start * 100).toFixed(2);
+    ctx.fillStyle = end >= start ? "#4caf50" : "#f44336"; ctx.font = "11px Consolas";
+    ctx.fillText(`$${start.toLocaleString()} → $${end.toLocaleString()} (${pct}%)`, padLeft + 320, 18);
+  }
+
+  win.appendElement(root);
+  renderView();
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -11346,7 +11917,7 @@ function cmdCheat() {
       ["F8", "Close Partial Position"],
     ]},
     { title: "Ctrl+ Combinations", keys: [
-      ["Ctrl+K", "Command Palette"],
+      ["`", "Command Palette"],
       ["Ctrl+T", "New Tab"],
       ["Ctrl+W", "Close Tab"],
       ["Ctrl+Shift+S", "Screenshot / Export"],
@@ -11366,7 +11937,7 @@ function cmdCheat() {
       ["Alt+W", "Close all windows"],
       ["Alt+G", "Tile all windows"],
     ]},
-    { title: "Trading Commands (Ctrl+K)", keys: [
+    { title: "Trading Commands (`)", keys: [
       ["UNDO", "Panic button — cancel/close last trade"],
       ["COPY", "Copy trade setup to clipboard"],
       ["BRACKET", "Conditional bracket/OCO order"],
@@ -11478,6 +12049,8 @@ function cmdCheat() {
       ["PROFILE", "Trading profile analytics"],
       ["TRADESTATS", "Trade statistics dashboard"],
       ["IMPORTTRADES", "Import external trade history"],
+      ["DARWIN", "DARWIN account viewer (MT5 history)"],
+      ["DARWINS", "Combined DARWIN portfolio dashboard"],
       ["ACTIVITIES", "Account activities"],
       ["INSIDER", "Insider trading (SEC Form 4)"],
       ["SEC", "SEC Filings (10-K, 10-Q, 8-K, S-1, etc.)"],
@@ -11533,7 +12106,7 @@ function cmdCheat() {
 
   const footer = document.createElement("div");
   footer.style.cssText = "margin-top:16px;text-align:center;color:#444;font-size:10px;";
-  footer.textContent = `${CMD_PALETTE_COMMANDS.length + 7} commands available | Ctrl+K to search`;
+  footer.textContent = (CMD_PALETTE_COMMANDS.length + 7) + " commands available | \` to search";
   panel.appendChild(footer);
 
   overlay.appendChild(panel);
@@ -11942,7 +12515,7 @@ async function cmdMatrix() {
 
   try {
     const symbols = getWatchlist();
-    if (symbols.length === 0) { win.contentElement.textContent = ""; win.setContent("Add symbols to watchlist first (Ctrl+K \u2192 QM)."); return; }
+    if (symbols.length === 0) { win.contentElement.textContent = ""; win.setContent("Add symbols to watchlist first (` \u2192 QM)."); return; }
 
     const results = [];
     for (const sym of symbols) {
@@ -13279,9 +13852,9 @@ function cmdTeach() {
     { title: "Reading Fisher Transform", content: "The Fisher Transform oscillator shows momentum:\n\n- GREEN bars = bullish momentum\n- RED bars = bearish momentum\n- Watch for CROSSES of the zero line as potential signals\n- Divergence between price and Fisher = strong signal", highlight: "#fisher-pane", action: null },
     { title: "Setting SL/TP Lines", content: "Press F2 (or click the Buy Lines button) to place Stop Loss and Take Profit lines:\n\n- RED line = Stop Loss (drag to adjust)\n- GREEN line = Take Profit (drag to adjust)\n\nThe position size calculator uses these levels to determine lot size based on your risk tolerance.", highlight: "#btn-buy-lines", action: null },
     { title: "Placing a Trade", content: "Press F4 or click 'Open Trade' to submit a bracket order.\n\nThe order includes:\n- Entry at current market price\n- Stop Loss at your red line\n- Take Profit at your green line\n- Position size based on risk management rules", highlight: "#btn-open-trade", action: null },
-    { title: "Risk Management", content: "The dashboard shows critical risk data:\n\n- P&L per position and total\n- Margin level and buying power\n- VaR (Value at Risk) per position\n\nUse Ctrl+K then RISKMAP for a portfolio risk heatmap, or RISKSIM for stress testing.", highlight: "#positions-panel", action: null },
-    { title: "Command Palette", content: "Press Ctrl+K to open the command palette with 100+ commands:\n\n- SIGNAL: composite trading signal\n- CORR: correlation matrix\n- SCAN: stock screener\n- NEWS: headlines\n- AI: AI trading assistant\n- REPLAY: practice on historical data\n\nType any command name or description to search.", highlight: "#command-palette", action: null },
-    { title: "Practice Mode", content: "Use Ctrl+K then type REPLAY to enter practice mode.\n\nThis replays historical bars one at a time so you can practice trading decisions without risking capital.\n\nCombine with JOURNAL to log your practice trades and track improvement.\n\nYou are now ready to explore TyphooN-Terminal!", highlight: null, action: null },
+    { title: "Risk Management", content: "The dashboard shows critical risk data:\n\n- P&L per position and total\n- Margin level and buying power\n- VaR (Value at Risk) per position\n\nUse ` then RISKMAP for a portfolio risk heatmap, or RISKSIM for stress testing.", highlight: "#positions-panel", action: null },
+    { title: "Command Palette", content: "Press ` to open the command palette with 100+ commands:\n\n- SIGNAL: composite trading signal\n- CORR: correlation matrix\n- SCAN: stock screener\n- NEWS: headlines\n- AI: AI trading assistant\n- REPLAY: practice on historical data\n\nType any command name or description to search.", highlight: "#command-palette", action: null },
+    { title: "Practice Mode", content: "Use ` then type REPLAY to enter practice mode.\n\nThis replays historical bars one at a time so you can practice trading decisions without risking capital.\n\nCombine with JOURNAL to log your practice trades and track improvement.\n\nYou are now ready to explore TyphooN-Terminal!", highlight: null, action: null },
   ];
   let currentStepIdx = 0; let highlightOverlay = null;
   function clearHighlight() { if (highlightOverlay) { highlightOverlay.remove(); highlightOverlay = null; } document.querySelectorAll(".tutorial-highlight").forEach(el => el.classList.remove("tutorial-highlight")); }
@@ -15062,10 +15635,36 @@ function cmdBackup() {
   log("Backup/Restore window opened", "ok");
 }
 
+// ── Cache Backup / Restore (SQLite portable export) ─────────
+async function cmdCacheBackup() {
+  try {
+    const defaultName = `typhoon-backup-${new Date().toISOString().slice(0,10)}.typhoon-backup`;
+    const path = prompt("Export path for cache backup:", defaultName);
+    if (!path) return;
+    log("Exporting cache backup...", "info");
+    const result = JSON.parse(await invoke("export_backup", { path }));
+    log(`Cache backup exported: ${result.size_mb.toFixed(1)} MB → ${path}`, "ok");
+  } catch (e) {
+    log(`Cache backup failed: ${e}`, "error");
+  }
+}
+
+async function cmdCacheRestore() {
+  try {
+    const path = prompt("Path to .typhoon-backup file to import:");
+    if (!path) return;
+    log("Importing cache backup...", "info");
+    const result = JSON.parse(await invoke("import_backup", { path }));
+    log(`Cache backup imported: ${result.bars_imported} bar entries, ${result.kv_imported} KV entries merged`, "ok");
+  } catch (e) {
+    log(`Cache restore failed: ${e}`, "error");
+  }
+}
+
 // ── ANR — Analyst Recommendations (FMP) ─────────────────────
 async function cmdANR() {
   const s = loadSettings();
-  if (!s.fmpKey) { alert("FMP API key required.\nCtrl+K → SETTINGS → Financial Modeling Prep Key\nFree: financialmodelingprep.com/register"); return; }
+  if (!s.fmpKey) { alert("FMP API key required.\n` → SETTINGS → Financial Modeling Prep Key\nFree: financialmodelingprep.com/register"); return; }
   const win = createWindow({ title: `Analyst Ratings — ${currentSymbol}`, width: 500, height: 400 });
   win.setContent("Loading analyst ratings...");
   try {
@@ -15136,7 +15735,7 @@ async function cmdANR() {
 // ── EARNINGS+ — EPS Estimates vs Actual (Alpha Vantage) ─────
 async function cmdEarningsPlus() {
   const s = loadSettings();
-  if (!s.alphaVantageKey) { alert("Alpha Vantage API key required.\nCtrl+K → SETTINGS → Alpha Vantage API Key\nFree: alphavantage.co/support"); return; }
+  if (!s.alphaVantageKey) { alert("Alpha Vantage API key required.\n` → SETTINGS → Alpha Vantage API Key\nFree: alphavantage.co/support"); return; }
   const win = createWindow({ title: `Earnings — ${currentSymbol}`, width: 480, height: 400 });
   win.setContent("Loading earnings data...");
   try {
@@ -15985,7 +16584,7 @@ async function cmdReport() {
 // ══════════════════════════════════════════════════════════════
 async function cmdEconomic() {
   const s = loadSettings();
-  if (!s.fredApiKey) { alert("Set FRED API key in Settings (Ctrl+K \u2192 SETTINGS) to use this feature.\nFree: https://fred.stlouisfed.org/docs/api/api_key.html"); return; }
+  if (!s.fredApiKey) { alert("Set FRED API key in Settings (` \u2192 SETTINGS) to use this feature.\nFree: https://fred.stlouisfed.org/docs/api/api_key.html"); return; }
   const win = createWindow({ title: "Economic Surprise Index", width: 620, height: 520 });
   win.contentElement.textContent = "";
   const ld = document.createElement("div"); ld.textContent = "Fetching economic indicators from FRED..."; ld.style.cssText = "color:#888;padding:12px;"; win.appendElement(ld);
@@ -16761,7 +17360,7 @@ Based on NNFX methodology, provide:
       btn.addEventListener("click", analyze);
       frag.appendChild(btn);
       win.contentElement.replaceChildren(frag);
-    } catch (e) { win.setContent("AI chat failed: " + e + "\n\nMake sure AI is configured via Ctrl+K → AI or Settings."); }
+    } catch (e) { win.setContent("AI chat failed: " + e + "\n\nMake sure AI is configured via ` → AI or Settings."); }
   };
   analyze();
 }
@@ -20395,7 +20994,7 @@ if (localStorage.getItem("typhoon_smart_autocomplete") === "true") { setTimeout(
 async function cmdAnalystRatings() {
   if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
   const s = loadSettings();
-  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  if (!s.finnhubKey) { alert("Finnhub API key required. ` → SETTINGS.\nFree: https://finnhub.io/register"); return; }
   const win = createWindow({ title: `${currentSymbol} — Analyst Ratings`, type: "custom", width: 600, height: 500 });
   win.contentElement.textContent = "";
   const loading = document.createElement("div");
@@ -21000,7 +21599,7 @@ async function cmdCorporateActions() {
 async function cmdInsiderSentiment() {
   if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
   const s = loadSettings();
-  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  if (!s.finnhubKey) { alert("Finnhub API key required. ` → SETTINGS.\nFree: https://finnhub.io/register"); return; }
   const win = createWindow({ title: `${currentSymbol} — Insider Sentiment`, type: "custom", width: 600, height: 480 });
   win.contentElement.textContent = "";
   const loading = document.createElement("div");
@@ -21604,7 +22203,7 @@ async function cmdRedditSentiment() {
 async function cmdShortInterest() {
   if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
   const s = loadSettings();
-  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  if (!s.finnhubKey) { alert("Finnhub API key required. ` → SETTINGS.\nFree: https://finnhub.io/register"); return; }
   const win = createWindow({ title: `${currentSymbol} — Short Interest`, type: "custom", width: 650, height: 520 });
   win.contentElement.textContent = "";
   const loading = document.createElement("div");
@@ -21940,7 +22539,7 @@ async function cmdWorldIndices() {
 async function cmdEarningsSurprise() {
   if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
   const s = loadSettings();
-  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  if (!s.finnhubKey) { alert("Finnhub API key required. ` → SETTINGS.\nFree: https://finnhub.io/register"); return; }
   const win = createWindow({ title: `${currentSymbol} — Earnings Surprise`, width: 580, height: 480 });
   win.contentElement.textContent = "";
   win.appendElement(div("Loading earnings surprise data...", "color:#888;padding:20px;"));
@@ -22159,7 +22758,7 @@ async function cmdWhaleAlert() {
 // ══════════════════════════════════════════════════════════════
 async function cmdIPOCalendar() {
   const s = loadSettings();
-  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  if (!s.finnhubKey) { alert("Finnhub API key required. ` → SETTINGS.\nFree: https://finnhub.io/register"); return; }
   const win = createWindow({ title: "IPO Calendar — Upcoming 90 Days", width: 700, height: 450 });
   win.contentElement.textContent = "";
   win.appendElement(div("Loading IPO calendar...", "color:#888;padding:20px;"));
@@ -22199,7 +22798,7 @@ async function cmdIPOCalendar() {
 // ══════════════════════════════════════════════════════════════
 async function cmdEconCalendarPlus() {
   const s = loadSettings();
-  if (!s.finnhubKey) { alert("Finnhub API key required. Ctrl+K → SETTINGS.\nFree: https://finnhub.io/register"); return; }
+  if (!s.finnhubKey) { alert("Finnhub API key required. ` → SETTINGS.\nFree: https://finnhub.io/register"); return; }
   const win = createWindow({ title: "Economic Calendar — Events & Impact", width: 750, height: 500 });
   win.contentElement.textContent = "";
   win.appendElement(div("Loading economic calendar...", "color:#888;padding:20px;"));
@@ -22791,7 +23390,7 @@ async function cmdDarwinex() {
       addLog("To import Darwinex data:", "#ff9800");
       addLog("1. Run BarExporterFull.mq5 on MT5 (Darwinex) — downloads full history");
       addLog("2. Run BarExporter.mq5 for ongoing updates (10s timer)");
-      addLog("3. Use Ctrl+K → MT5IMPORT to import CSVs into TyphooN-Terminal");
+      addLog("3. Use ` → MT5IMPORT to import CSVs into TyphooN-Terminal");
       addLog("4. Re-run this command to see full analysis");
       return;
     }
@@ -23186,24 +23785,131 @@ async function cmdMt5DbSync() {
 // ── Background MT5 Sync (headless, controlled by MT5_SYNC setting) ──
 let mt5BgSyncInterval = null;
 let mt5BgSyncCount = 0;
+let lastMt5SyncSuccess = 0;     // epoch ms of last successful MT5 sync (databases_read > 0)
+let mt5SymbolSet = new Set();   // symbols known to exist in MT5 cache
+const MT5_DISCONNECT_MS = 15 * 60 * 1000; // 15 minutes
+
+// Check if a symbol's data comes from MT5 (true) or Alpaca fallback (false)
+function isSymbolMt5(symbol) {
+  if (!mt5BgSyncInterval) return false; // MT5 sync not running
+  if (mt5SymbolSet.size === 0) return false;
+  if (Date.now() - lastMt5SyncSuccess > MT5_DISCONNECT_MS) return false; // disconnected
+  return mt5SymbolSet.has(symbol);
+}
+
+// MT5 data source label — users configure their MT5 broker via BarCacheWriter
+let mt5ServerLabel = "MT5";
+
+// Get data source label for display
+function getDataSourceLabel(symbol) {
+  if (!mt5BgSyncInterval) return { label: "Alpaca", color: "#ff9800", icon: "A" };
+  if (Date.now() - lastMt5SyncSuccess > MT5_DISCONNECT_MS) {
+    return { label: mt5ServerLabel + " Disconnected \u2014 Alpaca", color: "#f44336", icon: "!" };
+  }
+  if (mt5SymbolSet.has(symbol)) {
+    return { label: mt5ServerLabel, color: "#4caf50", icon: "M" };
+  }
+  return { label: "Alpaca", color: "#ff9800", icon: "A" };
+}
+
+// Update the data source badge in the status bar
+function updateDataSourceBadge(symbol) {
+  const sym = symbol || currentSymbol;
+  if (!sym) return;
+  const statusBar = document.getElementById("connect-status-bar");
+  if (!statusBar) return;
+
+  // Remove existing badge
+  const existing = statusBar.querySelector(".data-source-badge");
+  if (existing) existing.remove();
+
+  const src = getDataSourceLabel(sym);
+  const badge = document.createElement("span");
+  badge.className = "data-source-badge";
+  badge.textContent = src.label;
+  badge.style.cssText = `
+    margin-left:8px;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:bold;
+    color:#000;background:${src.color};opacity:0.85;vertical-align:middle;letter-spacing:0.3px;
+  `;
+  badge.title = src.icon === "!" ? "MT5 sync has not succeeded in 15+ minutes" : `Data source: ${src.label}`;
+  statusBar.appendChild(badge);
+}
+
+async function refreshMt5SymbolList() {
+  try {
+    const list = JSON.parse(await invoke("list_mt5_symbols"));
+    if (Array.isArray(list) && list.length > 0) {
+      const symbols = new Set();
+      for (const entry of list) {
+        if (!entry.symbol) continue;
+        if (entry.symbol === "__SERVER__") {
+          // __SERVER__ key stores broker identity as JSON in the cache data
+          // The key is stored by list_mt5_symbols; actual data needs a cache read
+          continue;
+        }
+        if (!entry.symbol.startsWith("__")) symbols.add(entry.symbol);
+      }
+      if (symbols.size > 0) mt5SymbolSet = symbols;
+    }
+  } catch (_) {}
+
+  // Read broker name from __SERVER__ metadata in cache
+  try {
+    const statsJson = await invoke("db_cache_detailed_stats");
+    const stats = JSON.parse(statsJson);
+    if (Array.isArray(stats)) {
+      for (const entry of stats) {
+        const key = Array.isArray(entry) ? entry[0] : entry.key;
+        if (key && key.includes("__SERVER__")) {
+          const json = await invoke("db_cache_get", { key });
+          if (json) {
+            try {
+              const meta = JSON.parse(json);
+              if (meta && meta.company) {
+                mt5ServerLabel = "MT5 (" + meta.company + ")";
+                break;
+              } else if (meta && meta.server) {
+                mt5ServerLabel = "MT5 (" + meta.server + ")";
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+async function handleMt5SyncResult(r) {
+  // Mark MT5 as healthy if we read any databases OR have any bars cached
+  if (r.databases_read > 0 || r.total_bars > 0 || (r.skipped || 0) > 0) lastMt5SyncSuccess = Date.now();
+  if (r.imported > 0) {
+    // Refresh symbol list when new data arrives
+    await refreshMt5SymbolList();
+    // Invalidate in-memory cache for current symbol and reload chart
+    if (currentSymbol) {
+      for (const key of Object.keys(barCache)) {
+        if (key.startsWith(currentSymbol + ":")) {
+          delete barCache[key];
+        }
+      }
+      loadChart(currentSymbol, currentTimeframe);
+    }
+  }
+  updateDataSourceBadge();
+}
 
 async function startMt5BackgroundSync() {
   if (mt5BgSyncInterval) return; // already running
+  // Load MT5 symbol list on startup
+  await refreshMt5SymbolList();
   try {
     const r = JSON.parse(await invoke("sync_mt5_sqlite"));
     mt5BgSyncCount++;
     if (r.imported > 0) {
       console.log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.skipped} unchanged, ${r.deduped || 0} deduped, ${r.total_bars} bars from ${r.databases_read}/${r.databases_found} DBs`);
-      // Invalidate in-memory cache for current symbol and reload chart with enriched MT5 data
-      if (currentSymbol) {
-        for (const key of Object.keys(barCache)) {
-          if (key.startsWith(currentSymbol + ":")) {
-            delete barCache[key];
-          }
-        }
-        loadChart(currentSymbol, currentTimeframe);
-      }
     }
+    await handleMt5SyncResult(r);
   } catch (e) {
     console.warn("[MT5 Sync] initial:", e);
   }
@@ -23213,18 +23919,8 @@ async function startMt5BackgroundSync() {
       mt5BgSyncCount++;
       if (r.imported > 0) {
         console.log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.total_bars} bars`);
-        // Invalidate in-memory cache for current symbol — forces next load to hit backend
-        // which will find deeper MT5 history via enrich_with_deepest_history
-        if (currentSymbol) {
-          for (const key of Object.keys(barCache)) {
-            if (key.startsWith(currentSymbol + ":")) {
-              delete barCache[key];
-            }
-          }
-          // Reload current chart with enriched data
-          loadChart(currentSymbol, currentTimeframe);
-        }
       }
+      await handleMt5SyncResult(r);
     } catch (_) {}
   }, 30000);
   console.log("[MT5 Sync] Background sync started (30s interval)");
@@ -23356,6 +24052,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "JOURNAL+", desc: "Enhanced Trade Journal (tags, ratings, calendar, stats)", action: cmdJournalPlus },
   { name: "CORRELATION3D", desc: "Correlation Network Graph (force-directed)", action: cmdCorrelation3D },
   { name: "IMPORTTRADES", desc: "Import external trade history (CSV: MT5, IB, generic)", action: cmdImportTrades },
+  { name: "DARWIN", desc: "DARWIN account viewer — import MT5 history, equity curves, P/L analytics", action: cmdDarwin },
+  { name: "DARWINS", desc: "Combined DARWIN portfolio — exposure, open positions, equity curves across all accounts", action: cmdDarwinPortfolio },
   { name: "SIGNAL", desc: "Composite trading signal generator (Fisher, RSI, KAMA, SMA200, volume, ATR)", action: cmdSignal },
   { name: "PROFILE", desc: "Trading profile analytics (P&L by symbol, day of week, hold time)", action: cmdProfile },
   { name: "FIBO+", desc: "Fibonacci time zones (markers at Fib intervals from swing low)", action: cmdFiboTime },
@@ -23479,6 +24177,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "DARWINEX", desc: "Darwinex Full Analysis — VaR + ATR + crypto risk across ALL imported MT5 symbols", action: cmdDarwinex },
   { name: "MT5IMPORT", desc: "Import MT5 bar data — load BarExporter CSVs into TyphooN-Terminal cache", action: cmdMt5Import },
   { name: "MT5DB", desc: "MT5 SQLite Direct Sync — read bars from BarCacheWriter's shared database (zero CSV)", action: cmdMt5DbSync },
+  { name: "CACHE-BACKUP", desc: "Export SQLite cache to portable .typhoon-backup file", action: cmdCacheBackup },
+  { name: "CACHE-RESTORE", desc: "Import .typhoon-backup file (merge, newer wins)", action: cmdCacheRestore },
 ];
 
 function fuzzyMatch(query, target) {
@@ -23502,7 +24202,7 @@ function setupCommandPalette() {
   if (!overlay || !input || !results) return;
 
   function openPalette() {
-    overlay.classList.remove("hidden");
+    overlay.classList.remove("hidden", "instant-hide");
     input.value = "";
     input.focus();
     cmdPaletteIndex = -1;
@@ -23512,6 +24212,10 @@ function setupCommandPalette() {
   function closePalette() {
     overlay.classList.add("hidden");
     input.value = "";
+    // After slide-up animation completes, fully hide to prevent click interception
+    setTimeout(() => {
+      if (overlay.classList.contains("hidden")) overlay.classList.add("instant-hide");
+    }, 150);
   }
 
   function renderCmdResults(query) {
@@ -23611,12 +24315,19 @@ function setupCommandPalette() {
     if (e.target === overlay) closePalette();
   });
 
-  // Global shortcut: Ctrl+K or / to open
+  // Global shortcut: ` (backtick) — Quake-style drop-down console
   document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey && e.key === "k") || (e.key === "/" && e.target.tagName !== "INPUT" && e.target.tagName !== "SELECT")) {
+    if (e.key === "`" && e.target.tagName !== "INPUT" && e.target.tagName !== "SELECT" && e.target.tagName !== "TEXTAREA") {
       e.preventDefault();
-      if (overlay.classList.contains("hidden")) openPalette();
-      else closePalette();
+      if (overlay.classList.contains("hidden") || overlay.classList.contains("instant-hide")) {
+        overlay.classList.remove("hidden", "instant-hide");
+        input.value = "";
+        input.focus();
+        cmdPaletteIndex = -1;
+        renderCmdResults("");
+      } else {
+        closePalette();
+      }
     }
   });
 }
@@ -27731,14 +28442,15 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    const limit = aggFactor > 1 ? 1000 * aggFactor : 1000;
+    const limit = aggFactor > 1 ? 500 * aggFactor : 500;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
 
     // Prefer cache — background pre-fetch should have all TFs cached
+    // Limit to last 500 bars for grid cells (small panes don't need 50K bars)
     const cached = barCache[cacheKey];
     if (cached && cached.data && cached.data.length > 0) {
-      bars = cached.data;
+      bars = cached.data.length > 500 ? cached.data.slice(-500) : cached.data;
       log(`MTF grid ${cellInfo.tf}: ${bars.length} bars from cache`, "info");
     } else {
       // Show loading status on the cell label and status bar
@@ -28784,7 +29496,7 @@ function cmdSettings() {
   mt5Check.id = "mt5SyncToggle";
   const mt5Label = document.createElement("label");
   mt5Label.htmlFor = "mt5SyncToggle";
-  mt5Label.textContent = "MT5 Sync — Auto-sync Darwinex bar data on startup";
+  mt5Label.textContent = "MT5 Sync — Auto-sync MT5 bar data on startup";
   mt5Label.style.cssText = "color:#ccc;font-size:11px;cursor:pointer;";
   const mt5Status = document.createElement("span");
   mt5Status.style.cssText = "font-size:10px;margin-left:auto;";
@@ -28849,7 +29561,7 @@ function cmdSettings() {
 
 function cmdFRED() {
   const s = loadSettings();
-  if (!s.fredApiKey) { alert("FRED API key required. Ctrl+K → SETTINGS.\nFree: https://fred.stlouisfed.org/docs/api/api_key.html"); return; }
+  if (!s.fredApiKey) { alert("FRED API key required. ` → SETTINGS.\nFree: https://fred.stlouisfed.org/docs/api/api_key.html"); return; }
   const win = createWindow({ title: "FRED Economic Data", width: 500, height: 400 });
   const presets = [
     ["DFF","Fed Funds"],["CPIAUCSL","CPI"],["UNRATE","Unemployment"],["GDP","GDP"],
@@ -28883,7 +29595,7 @@ function cmdFRED() {
 
 function cmdAIChat() {
   const s = loadSettings();
-  if (!s.aiApiKey) { alert("AI API key required. Ctrl+K → SETTINGS.\nAnthropic: https://console.anthropic.com/"); return; }
+  if (!s.aiApiKey) { alert("AI API key required. ` → SETTINGS.\nAnthropic: https://console.anthropic.com/"); return; }
   const win = createWindow({ title: "AI Trading Assistant", width: 500, height: 420 });
   const c = document.createElement("div"); c.style.cssText = "display:flex;flex-direction:column;height:100%;";
   const msgs = document.createElement("div"); msgs.style.cssText = "flex:1;overflow-y:auto;padding:4px;font-size:11px;line-height:1.5;";
@@ -29027,7 +29739,7 @@ const _originalCmdAIChat = cmdAIChat;
 // We redefine cmdAIChat below; the original is captured above
 function cmdAIChatWithReview() {
   const s = loadSettings();
-  if (!s.aiApiKey) { alert("AI API key required. Ctrl+K -> SETTINGS.\nAnthropic: https://console.anthropic.com/"); return; }
+  if (!s.aiApiKey) { alert("AI API key required. ` -> SETTINGS.\nAnthropic: https://console.anthropic.com/"); return; }
   const win = createWindow({ title: "AI Trading Assistant", width: 500, height: 460 });
   const c = document.createElement("div"); c.style.cssText = "display:flex;flex-direction:column;height:100%;";
   const msgs = document.createElement("div"); msgs.style.cssText = "flex:1;overflow-y:auto;padding:4px;font-size:11px;line-height:1.5;";
@@ -30574,7 +31286,7 @@ function cmdRelStrength() {
   (async () => {
     try {
       const symbols = getWatchlist();
-      if (symbols.length === 0) { win.setContent("Add symbols to watchlist first (Ctrl+K → QM)."); return; }
+      if (symbols.length === 0) { win.setContent("Add symbols to watchlist first (` → QM)."); return; }
 
       const results = [];
       for (const sym of symbols) {
@@ -32423,7 +33135,7 @@ function showHelpOverlay() {
       ["Delete", "Remove Last Drawing"],
     ]},
     { title: "Navigation", keys: [
-      ["Ctrl+K", "Command Palette (search all commands)"],
+      ["`", "Command Palette (search all commands)"],
       ["Ctrl+T", "New Tab"],
       ["Ctrl+W", "Close Tab"],
       ["Esc", "Clear SL/TP Lines"],
@@ -32437,7 +33149,7 @@ function showHelpOverlay() {
       ["GPU Renko", "ATR-based brick chart on GPU"],
       ["CPU variants", "lightweight-charts fallback (bottom of dropdown)"],
     ]},
-    { title: "Command Palette (Ctrl+K)", keys: [
+    { title: "Command Palette (`)", keys: [
       ["DES", "Company fundamentals (SEC EDGAR)"],
       ["NEWS", "News headlines"],
       ["FA", "Financial analysis (income/balance/cash flow)"],
