@@ -10618,7 +10618,7 @@ function cmdDarwin() {
   const accountSel = document.createElement("select"); accountSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:140px;";
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
-  ["Summary", "Open Positions", "Equity Curve", "P/L by Symbol", "Streaks", "Hourly P/L", "Day of Week", "Hold Time", "Symbol Rotation", "Sizing", "Kelly Criterion", "Autocorrelation", "MAE/MFE", "Bursts", "Pyramiding", "Costs", "Positions", "Deals"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
+  ["Summary", "Open Positions", "Equity Curve", "P/L by Symbol", "Streaks", "Hourly P/L", "Day of Week", "Hold Time", "Symbol Rotation", "Sizing", "Kelly Criterion", "Autocorrelation", "MAE/MFE", "Slippage", "Bursts", "Pyramiding", "Costs", "Positions", "Deals"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
   topBar.appendChild(importBtn); topBar.appendChild(accountSel); topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
   root.appendChild(topBar);
 
@@ -10675,6 +10675,7 @@ function cmdDarwin() {
       else if (view === "kelly_criterion") await renderKelly(ticker);
       else if (view === "autocorrelation") await renderAutocorrelation(ticker);
       else if (view === "maemfe") await renderMAEMFE(ticker);
+      else if (view === "slippage") await renderSlippage(ticker);
       else if (view === "bursts") await renderBursts(ticker);
       else if (view === "pyramiding") await renderPyramiding(ticker);
       else if (view === "costs") await renderCosts(ticker);
@@ -11151,6 +11152,30 @@ function cmdDarwin() {
     }
   }
 
+  async function renderSlippage(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_slippage_analysis", { darwinTicker: ticker });
+    const s = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Slippage Analysis — ${ticker}`;
+    contentDiv.appendChild(title);
+    const rows = [["Avg Slippage", s.avg_slippage_pct.toFixed(4) + "%"], ["Total Slippage Cost", "$" + s.total_slippage_cost.toFixed(2), -1], ["Worst Slippage", s.worst_slippage.toFixed(4) + "%", -1]];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:400px;margin-bottom:16px;";
+    for (const [l, v, cv] of rows) { const tr = document.createElement("tr"); const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = l; const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = v; if (cv) td2.style.color = "#f44336"; tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr); }
+    contentDiv.appendChild(table);
+    if (s.by_symbol && s.by_symbol.length > 0) {
+      const symTitle = document.createElement("div"); symTitle.style.cssText = "font-weight:bold;color:#ccc;padding:8px 0 4px;font-size:12px;"; symTitle.textContent = "Slippage by Symbol";
+      contentDiv.appendChild(symTitle);
+      const sTable = document.createElement("table"); sTable.style.cssText = "width:100%;max-width:500px;border-collapse:collapse;font-size:11px;";
+      for (const [sym, slip, count] of s.by_symbol) {
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #111;";
+        [sym, count + " trades", slip.toFixed(4) + "%"].forEach((v, i) => { const td = document.createElement("td"); td.style.cssText = "padding:2px 6px;font-family:Consolas,monospace;"; td.textContent = v; if (i === 0) td.style.color = "#8af"; tr.appendChild(td); });
+        sTable.appendChild(tr);
+      }
+      contentDiv.appendChild(sTable);
+    }
+  }
+
   async function renderBursts(ticker) {
     const json = await window.__TAURI__.core.invoke("get_trading_bursts", { darwinTicker: ticker });
     const data = JSON.parse(json);
@@ -11316,7 +11341,7 @@ function cmdDarwinPortfolio() {
 
   const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:6px;align-items:center;";
   const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:160px;";
-  ["Portfolio Summary", "Portfolio VaR", "Monte Carlo", "Stress Test", "VaR Forecast", "Tail Risk", "Seasonals", "Sector Exposure", "Liquidity Risk", "Alerts", "Combined Open Positions", "Symbol Exposure", "Trade Overlaps", "Combined Equity Curve", "Drawdown Chart", "Rolling VaR", "Monthly Heatmap", "P/L Distribution", "Correlation Matrix"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
+  ["Portfolio Summary", "Portfolio VaR", "Monte Carlo", "Stress Test", "VaR Forecast", "Conditional VaR", "Market Regime", "Tail Risk", "Seasonals", "Sector Exposure", "Exposure Treemap", "Liquidity Risk", "Margin Call Sim", "Optimal Allocation", "What-If", "Alerts", "Combined Open Positions", "Symbol Exposure", "Trade Overlaps", "Combined Equity Curve", "Drawdown Chart", "Rolling VaR", "Monthly Heatmap", "P/L Distribution", "Correlation Matrix"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, "").replace(/-/g, "_"); o.textContent = v; viewSel.appendChild(o); });
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
   root.appendChild(topBar);
@@ -11336,10 +11361,16 @@ function cmdDarwinPortfolio() {
       else if (view === "monte_carlo") await renderMonteCarlo();
       else if (view === "stress_test") await renderStressTest();
       else if (view === "var_forecast") await renderVaRForecast();
+      else if (view === "conditional_var") await renderConditionalVaR();
+      else if (view === "market_regime") await renderMarketRegime();
       else if (view === "tail_risk") await renderTailRisk();
       else if (view === "seasonals") await renderSeasonals();
       else if (view === "sector_exposure") await renderSectorExposure();
+      else if (view === "exposure_treemap") await renderExposureTreemap();
       else if (view === "liquidity_risk") await renderLiquidityRisk();
+      else if (view === "margin_call_sim") await renderMarginCallSim();
+      else if (view === "optimal_allocation") await renderOptimalAllocation();
+      else if (view === "what_if") await renderWhatIf();
       else if (view === "alerts") await renderAlerts();
       else if (view === "combined_open_positions") await renderCombinedPositions();
       else if (view === "symbol_exposure") await renderExposure();
@@ -11769,6 +11800,184 @@ function cmdDarwinPortfolio() {
       table.appendChild(tr);
     }
     contentDiv.appendChild(table);
+  }
+
+  async function renderConditionalVaR() {
+    const json = await window.__TAURI__.core.invoke("get_conditional_var");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Conditional VaR by Volatility Regime";
+    contentDiv.appendChild(title);
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding:0 0 12px;";
+    desc.textContent = "Returns split into LOW/MEDIUM/HIGH regimes based on 20-day rolling volatility terciles. VaR computed separately for each regime.";
+    contentDiv.appendChild(desc);
+    if (data.length === 0) { contentDiv.appendChild(document.createTextNode("Insufficient data.")); return; }
+    const regimeColors = { LOW_VOL: "#4caf50", MEDIUM_VOL: "#ff9800", HIGH_VOL: "#f44336" };
+    const table = document.createElement("table"); table.style.cssText = "width:100%;max-width:700px;border-collapse:collapse;font-size:12px;";
+    const thead = document.createElement("tr");
+    ["Regime", "Days", "Avg P/L", "VaR 95%", "VaR 99%", "Sharpe"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 10px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+    table.appendChild(thead);
+    for (const d of data) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      [d.regime.replace("_", " "), d.days_in_regime, "$" + d.avg_daily_pnl.toFixed(0), "$" + d.var_95.toFixed(0), "$" + d.var_99.toFixed(0), d.sharpe.toFixed(2)].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:4px 10px;font-family:Consolas,monospace;"; td.textContent = String(v);
+        if (i === 0) td.style.color = regimeColors[d.regime] || "#ccc";
+        if (i === 2) td.style.color = d.avg_daily_pnl >= 0 ? "#4caf50" : "#f44336";
+        if (i === 5) td.style.color = d.sharpe >= 0 ? "#4caf50" : "#f44336";
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderMarketRegime() {
+    const json = await window.__TAURI__.core.invoke("get_market_regime");
+    const r = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Market Regime Detection";
+    contentDiv.appendChild(title);
+    const regimeColors = { LOW_VOL: "#4caf50", MEDIUM_VOL: "#ff9800", HIGH_VOL: "#f44336" };
+    const currentBox = document.createElement("div"); currentBox.style.cssText = `padding:16px 20px;background:#111;border-left:4px solid ${regimeColors[r.current_regime] || "#888"};margin-bottom:16px;border-radius:2px;`;
+    currentBox.innerHTML = `<div style="font-size:18px;font-weight:bold;color:${regimeColors[r.current_regime] || "#ccc"}">${r.current_regime.replace("_", " ")}</div><div style="color:#888;font-size:11px;margin-top:4px;">Since ${r.regime_start} (${r.regime_duration_days} days) | Rolling Vol: ${r.rolling_vol.toFixed(3)}% | Percentile: ${r.vol_percentile.toFixed(0)}%</div>`;
+    contentDiv.appendChild(currentBox);
+    if (r.regime_history && r.regime_history.length > 0) {
+      const histTitle = document.createElement("div"); histTitle.style.cssText = "font-weight:bold;color:#ccc;padding:8px 0 6px;font-size:12px;"; histTitle.textContent = "Regime History";
+      contentDiv.appendChild(histTitle);
+      const table = document.createElement("table"); table.style.cssText = "width:100%;max-width:500px;border-collapse:collapse;font-size:11px;";
+      for (const [regime, start, dur] of r.regime_history.slice(-20)) {
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #111;";
+        [regime.replace("_", " "), start, dur + " days"].forEach((v, i) => {
+          const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;"; td.textContent = String(v);
+          if (i === 0) td.style.color = regimeColors[regime] || "#ccc";
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      }
+      contentDiv.appendChild(table);
+    }
+  }
+
+  async function renderExposureTreemap() {
+    const json = await window.__TAURI__.core.invoke("get_exposure_treemap");
+    const root = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "Exposure Treemap";
+    contentDiv.appendChild(title);
+    if (!root.children || root.children.length === 0) { contentDiv.appendChild(document.createTextNode("No open positions.")); return; }
+    const totalVal = root.children.reduce((s, c) => s + c.value, 0) || 1;
+    const container = document.createElement("div"); container.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;";
+    const sectorColors = ["#1a237e", "#0d47a1", "#004d40", "#1b5e20", "#33691e", "#827717", "#e65100", "#bf360c", "#4a148c", "#880e4f", "#263238", "#37474f"];
+    root.children.forEach((sector, si) => {
+      if (sector.value <= 0) return;
+      const pct = (sector.value / totalVal * 100).toFixed(1);
+      const sDiv = document.createElement("div"); sDiv.style.cssText = `background:${sectorColors[si % sectorColors.length]};padding:8px;border-radius:4px;flex:${Math.max(sector.value / totalVal * 10, 1).toFixed(1)};min-width:120px;`;
+      const sTitle = document.createElement("div"); sTitle.style.cssText = "font-size:11px;font-weight:bold;color:#fff;margin-bottom:4px;"; sTitle.textContent = `${sector.name} (${pct}%)`;
+      sDiv.appendChild(sTitle);
+      if (sector.children) {
+        for (const sym of sector.children.slice(0, 8)) {
+          const symDiv = document.createElement("div"); symDiv.style.cssText = "font-size:9px;color:rgba(255,255,255,0.7);padding:1px 0;display:flex;justify-content:space-between;";
+          symDiv.innerHTML = `<span>${sym.name}</span><span style="color:${sym.color_value > 0 ? '#81c784' : '#e57373'}">$${Math.abs(sym.value).toLocaleString(undefined,{maximumFractionDigits:0})}</span>`;
+          sDiv.appendChild(symDiv);
+        }
+        if (sector.children.length > 8) {
+          const more = document.createElement("div"); more.style.cssText = "font-size:8px;color:rgba(255,255,255,0.4);"; more.textContent = `+${sector.children.length - 8} more`;
+          sDiv.appendChild(more);
+        }
+      }
+      container.appendChild(sDiv);
+    });
+    contentDiv.appendChild(container);
+  }
+
+  async function renderMarginCallSim() {
+    contentDiv.textContent = "Simulating margin scenarios...";
+    const json = await window.__TAURI__.core.invoke("simulate_margin_call");
+    const m = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Margin Call Simulator";
+    contentDiv.appendChild(title);
+    const rows = [
+      ["Current Equity", "$" + m.current_equity.toLocaleString(undefined, {maximumFractionDigits: 0})],
+      ["Estimated Margin Used", "$" + m.current_margin_used.toLocaleString(undefined, {maximumFractionDigits: 0})],
+      ["Margin Level", m.margin_level_pct.toFixed(1) + "%", m.margin_level_pct > 200 ? 1 : m.margin_level_pct > 100 ? 0 : -1],
+      ["", ""],
+      ["Days to 100% Margin", m.days_to_margin_call_100 !== null ? m.days_to_margin_call_100 + " days" : "Safe", m.days_to_margin_call_100 ? -1 : 1],
+      ["Days to 50% Margin", m.days_to_margin_call_50 !== null ? m.days_to_margin_call_50 + " days" : "Safe", m.days_to_margin_call_50 ? -1 : 1],
+      ["", ""],
+      ["30-day Margin Call Prob", (m.probability_30d * 100).toFixed(2) + "%", m.probability_30d > 0.05 ? -1 : 1],
+      ["90-day Margin Call Prob", (m.probability_90d * 100).toFixed(2) + "%", m.probability_90d > 0.1 ? -1 : 1],
+      ["Worst Case Equity (30d)", "$" + m.worst_case_equity_30d.toLocaleString(undefined, {maximumFractionDigits: 0}), m.worst_case_equity_30d > 0 ? 1 : -1],
+    ];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:500px;";
+    for (const [l, v, cv] of rows) {
+      if (l === "") { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 2; td.style.height = "8px"; tr.appendChild(td); table.appendChild(tr); continue; }
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = l;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = String(v);
+      if (cv !== undefined) td2.style.color = cv > 0 ? "#4caf50" : cv < 0 ? "#f44336" : "#ff9800";
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderOptimalAllocation() {
+    const json = await window.__TAURI__.core.invoke("get_optimal_allocation");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Optimal DARWIN Allocation (Inverse-Volatility)";
+    contentDiv.appendChild(title);
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding:0 0 12px;";
+    desc.textContent = "Inverse-volatility weighting allocates more capital to lower-volatility DARWINs. Compare to equal weight baseline.";
+    contentDiv.appendChild(desc);
+    const table = document.createElement("table"); table.style.cssText = "width:100%;max-width:600px;border-collapse:collapse;font-size:12px;";
+    const thead = document.createElement("tr");
+    ["DARWIN", "Equal Weight", "Optimal Weight", "Change", "Sharpe Contribution"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+    table.appendChild(thead);
+    for (const d of data) {
+      const change = d.optimal_weight - d.current_weight;
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      [d.darwin_ticker, (d.current_weight * 100).toFixed(1) + "%", (d.optimal_weight * 100).toFixed(1) + "%", (change > 0 ? "+" : "") + (change * 100).toFixed(1) + "%", d.sharpe_contribution.toFixed(3)].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:4px 8px;font-family:Consolas,monospace;"; td.textContent = v;
+        if (i === 0) td.style.color = "#8af";
+        if (i === 3) td.style.color = change > 0 ? "#4caf50" : "#f44336";
+        if (i === 4) td.style.color = d.sharpe_contribution > 0 ? "#4caf50" : "#f44336";
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderWhatIf() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "What-If Simulator";
+    contentDiv.appendChild(title);
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:11px;padding:0 0 12px;";
+    desc.textContent = "Simulate closing a symbol across all DARWINs and see the VaR impact.";
+    contentDiv.appendChild(desc);
+    const inputRow = document.createElement("div"); inputRow.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:16px;";
+    const symInput = document.createElement("input"); symInput.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:6px 10px;font-size:12px;font-family:inherit;width:120px;"; symInput.placeholder = "Symbol (e.g. CC)";
+    const runBtn = document.createElement("button"); runBtn.textContent = "Simulate Close"; runBtn.style.cssText = "padding:6px 14px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:11px;font-family:inherit;";
+    const resultDiv = document.createElement("div"); resultDiv.style.cssText = "font-family:Consolas,monospace;font-size:12px;";
+    inputRow.appendChild(symInput); inputRow.appendChild(runBtn);
+    contentDiv.appendChild(inputRow); contentDiv.appendChild(resultDiv);
+    runBtn.addEventListener("click", async () => {
+      const sym = symInput.value.trim().toUpperCase();
+      if (!sym) return;
+      resultDiv.textContent = "Simulating...";
+      try {
+        const json = await window.__TAURI__.core.invoke("what_if_close_symbol", { symbol: sym });
+        const r = JSON.parse(json);
+        resultDiv.innerHTML = `<div style="padding:4px 0"><span style="color:#888">Action:</span> ${r.action}</div><div style="padding:4px 0"><span style="color:#888">Current VaR:</span> $${r.current_portfolio_var.toFixed(0)}</div><div style="padding:4px 0"><span style="color:#888">New VaR:</span> $${r.new_portfolio_var.toFixed(0)}</div><div style="padding:4px 0"><span style="color:#888">VaR Change:</span> <span style="color:${r.var_change_pct < 0 ? '#4caf50' : '#f44336'}">${r.var_change_pct.toFixed(2)}%</span></div><div style="padding:4px 0"><span style="color:#888">Notional Removed:</span> $${(r.current_notional - r.new_notional).toLocaleString(undefined,{maximumFractionDigits:0})}</div>`;
+      } catch (e) { resultDiv.textContent = "Error: " + e; }
+    });
   }
 
   async function renderAlerts() {

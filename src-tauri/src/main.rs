@@ -4909,6 +4909,66 @@ async fn get_darwin_price_series(
     serde_json::to_string(&bars).map_err(|e| format!("Serialize failed: {e}"))
 }
 
+// ── Risk Simulation & Regime Commands ──────────────────────────────
+
+#[tauri::command]
+async fn simulate_margin_call(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::simulate_margin_call(&conn)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_slippage_analysis(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::analyze_slippage(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_optimal_allocation(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::compute_optimal_allocation(&conn)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_conditional_var(
+    _state: State<'_, SharedState>, darwin_ticker: Option<String>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = if let Some(t) = darwin_ticker {
+        darwin::get_daily_returns(&conn, &t)?
+    } else {
+        darwin::get_portfolio_daily_returns(&conn)?
+    };
+    let result = darwin::compute_conditional_var(&returns);
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_market_regime(
+    _state: State<'_, SharedState>, darwin_ticker: Option<String>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = if let Some(t) = darwin_ticker {
+        darwin::get_daily_returns(&conn, &t)?
+    } else {
+        darwin::get_portfolio_daily_returns(&conn)?
+    };
+    let result = darwin::detect_market_regime(&returns);
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_exposure_treemap(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_exposure_treemap(&conn)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
 // ── Trade Pattern Analytics (Batch 2) ──────────────────────────────
 
 #[tauri::command]
@@ -5342,6 +5402,13 @@ fn main() {
             get_darwin_kelly,
             get_darwin_autocorrelation,
             get_darwin_price_series,
+            // Risk Simulation & Regime
+            simulate_margin_call,
+            get_slippage_analysis,
+            get_optimal_allocation,
+            get_conditional_var,
+            get_market_regime,
+            get_exposure_treemap,
             // Trade Pattern Analytics (Batch 2)
             get_darwin_seasonals,
             get_darwin_mae_mfe,

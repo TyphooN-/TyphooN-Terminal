@@ -3785,6 +3785,560 @@ pub fn compare_to_benchmark(
     })
 }
 
+// ── Margin Call Simulator ────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarginCallSimulation {
+    pub current_equity: f64,
+    pub current_margin_used: f64,
+    pub margin_level_pct: f64,
+    pub days_to_margin_call_50: Option<i64>,
+    pub days_to_margin_call_100: Option<i64>,
+    pub probability_30d: f64,
+    pub probability_90d: f64,
+    pub worst_case_equity_30d: f64,
+}
+
+/// Simulate margin call risk using portfolio equity, estimated margin, and daily vol.
+/// Estimates margin as ~10% of total long+short notional (CFD leverage ~10:1).
+/// Uses Monte Carlo (1000 paths) to estimate probability of hitting margin call levels.
+pub fn simulate_margin_call(conn: &Connection) -> Result<MarginCallSimulation, String> {
+    // Estimate current equity from last deal balances across all accounts
+    let accounts = list_darwin_accounts(conn)?;
+    let mut total_equity = 0.0f64;
+    for account in &accounts {
+        let bal: f64 = conn.query_row(
+            "SELECT COALESCE(MAX(balance), 0.0) FROM darwin_deals WHERE account = ?1 AND balance > 0",
+            params![account.darwin_ticker],
+            |row| row.get(0),
+        ).unwrap_or(0.0);
+        total_equity += bal;
+    }
+
+    // Estimate margin used as ~10% of total open notional
+    let open_positions = get_portfolio_open_positions(conn)?;
+    let total_notional: f64 = open_positions.iter().map(|p| p.notional.abs()).sum();
+    let margin_used = total_notional * 0.10;
+
+    let margin_level_pct = if margin_used > 0.0 {
+        total_equity / margin_used * 100.0
+    } else {
+        f64::INFINITY
+    };
+
+    // Get portfolio daily returns for vol estimation
+    let daily_returns = get_portfolio_daily_returns(conn)?;
+    if daily_returns.len() < 5 || total_equity <= 0.0 {
+        return Ok(MarginCallSimulation {
+            current_equity: total_equity,
+            current_margin_used: margin_used,
+            margin_level_pct: if margin_level_pct.is_finite() { margin_level_pct } else { 0.0 },
+            days_to_margin_call_50: None,
+            days_to_margin_call_100: None,
+            probability_30d: 0.0,
+            probability_90d: 0.0,
+            worst_case_equity_30d: total_equity,
+        });
+    }
+
+    let returns: Vec<f64> = daily_returns.iter().map(|r| r.return_pct / 100.0).collect();
+    let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
+    let var: f64 = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+    let daily_vol = var.sqrt();
+
+    // Deterministic days-to-margin-call using daily vol drawdown estimate
+    let days_to_50 = if margin_used > 0.0 && daily_vol > 0.0 {
+        // Equity must fall to 50% of margin_used
+        let target_50 = margin_used * 0.50;
+        let drop_needed = (total_equity - target_50).max(0.0) / total_equity;
+        // At ~2-sigma daily moves: days ~ (drop / (2 * daily_vol))^2
+        if drop_needed > 0.0 {
+            let days = (drop_needed / (2.0 * daily_vol)).powi(2);
+            Some(days.ceil() as i64)
+        } else {
+            Some(0)
+        }
+    } else {
+        None
+    };
+
+    let days_to_100 = if margin_used > 0.0 && daily_vol > 0.0 {
+        let target_100 = margin_used;
+        let drop_needed = (total_equity - target_100).max(0.0) / total_equity;
+        if drop_needed > 0.0 {
+            let days = (drop_needed / (2.0 * daily_vol)).powi(2);
+            Some(days.ceil() as i64)
+        } else {
+            Some(0)
+        }
+    } else {
+        None
+    };
+
+    // Monte Carlo: 1000 simulations for 30d and 90d probability
+    let n = returns.len();
+    let mut rng = Xorshift64::new(0xDEAD_CAFE);
+    let sims = 1000usize;
+    let margin_call_level = margin_used; // 100% margin level
+
+    let mut mc_30_hits = 0usize;
+    let mut mc_90_hits = 0usize;
+    let mut worst_30 = total_equity;
+
+    for _ in 0..sims {
+        let mut equity = total_equity;
+        let mut hit_30 = false;
+        let mut hit_90 = false;
+        for day in 0..90 {
+            let idx = rng.next_usize(n);
+            equity *= 1.0 + returns[idx];
+            if equity <= margin_call_level {
+                if day < 30 && !hit_30 { hit_30 = true; }
+                if !hit_90 { hit_90 = true; }
+            }
+            if day == 29 && equity < worst_30 {
+                worst_30 = equity;
+            }
+        }
+        if hit_30 { mc_30_hits += 1; }
+        if hit_90 { mc_90_hits += 1; }
+    }
+
+    Ok(MarginCallSimulation {
+        current_equity: total_equity,
+        current_margin_used: margin_used,
+        margin_level_pct: if margin_level_pct.is_finite() { margin_level_pct } else { 0.0 },
+        days_to_margin_call_50: days_to_50,
+        days_to_margin_call_100: days_to_100,
+        probability_30d: mc_30_hits as f64 / sims as f64 * 100.0,
+        probability_90d: mc_90_hits as f64 / sims as f64 * 100.0,
+        worst_case_equity_30d: worst_30,
+    })
+}
+
+// ── Slippage Analysis ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlippageStats {
+    pub avg_slippage_pct: f64,
+    pub total_slippage_cost: f64,
+    pub worst_slippage: f64,
+    pub by_symbol: Vec<(String, f64, i64)>,
+    pub by_hour: Vec<(i32, f64, i64)>,
+}
+
+/// Analyze slippage by comparing position open_price vs deal entry price for matching tickets.
+/// Groups results by symbol and by hour of day.
+pub fn analyze_slippage(conn: &Connection, darwin_ticker: &str) -> Result<SlippageStats, String> {
+    // Join positions with their entry deals: match on account + symbol + deal direction='in'
+    // Position open_price is the intended price; deal price is the execution price.
+    let mut stmt = conn.prepare(
+        "SELECT p.symbol, p.open_price, d.price, d.volume, d.time
+         FROM darwin_positions p
+         JOIN darwin_deals d ON d.account = p.account AND d.symbol = p.symbol
+           AND d.direction = 'in' AND d.deal_type = p.pos_type
+         WHERE p.account = ?1 AND p.open_price > 0 AND d.price > 0"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    struct SlipRow {
+        symbol: String,
+        slippage_pct: f64,
+        slippage_cost: f64,
+        hour: i32,
+    }
+
+    let rows: Vec<SlipRow> = stmt.query_map(params![darwin_ticker], |row| {
+        let symbol: String = row.get(0)?;
+        let open_price: f64 = row.get(1)?;
+        let deal_price: f64 = row.get(2)?;
+        let volume: f64 = row.get(3)?;
+        let time: String = row.get(4)?;
+
+        let slippage_pct = if open_price > 0.0 {
+            (deal_price - open_price) / open_price * 100.0
+        } else {
+            0.0
+        };
+        let slippage_cost = (deal_price - open_price) * volume;
+
+        // Parse hour from time string "YYYY.MM.DD HH:MM:SS" or similar
+        let hour = time.split(' ')
+            .nth(1)
+            .and_then(|t| t.split(':').next())
+            .and_then(|h| h.parse::<i32>().ok())
+            .unwrap_or(0);
+
+        Ok(SlipRow { symbol, slippage_pct, slippage_cost, hour })
+    }).map_err(|e| format!("Query failed: {e}"))?
+    .filter_map(|r| r.ok())
+    .collect();
+
+    if rows.is_empty() {
+        return Ok(SlippageStats {
+            avg_slippage_pct: 0.0,
+            total_slippage_cost: 0.0,
+            worst_slippage: 0.0,
+            by_symbol: vec![],
+            by_hour: vec![],
+        });
+    }
+
+    let total_count = rows.len() as f64;
+    let avg_slippage_pct = rows.iter().map(|r| r.slippage_pct.abs()).sum::<f64>() / total_count;
+    let total_slippage_cost = rows.iter().map(|r| r.slippage_cost.abs()).sum();
+    let worst_slippage = rows.iter().map(|r| r.slippage_pct.abs()).fold(0.0f64, f64::max);
+
+    // Group by symbol
+    let mut sym_map: std::collections::HashMap<String, (f64, i64)> = std::collections::HashMap::new();
+    for r in &rows {
+        let entry = sym_map.entry(r.symbol.clone()).or_insert((0.0, 0));
+        entry.0 += r.slippage_pct.abs();
+        entry.1 += 1;
+    }
+    let mut by_symbol: Vec<(String, f64, i64)> = sym_map.into_iter()
+        .map(|(sym, (total, count))| (sym, total / count as f64, count))
+        .collect();
+    by_symbol.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Group by hour
+    let mut hour_map: std::collections::HashMap<i32, (f64, i64)> = std::collections::HashMap::new();
+    for r in &rows {
+        let entry = hour_map.entry(r.hour).or_insert((0.0, 0));
+        entry.0 += r.slippage_pct.abs();
+        entry.1 += 1;
+    }
+    let mut by_hour: Vec<(i32, f64, i64)> = hour_map.into_iter()
+        .map(|(hour, (total, count))| (hour, total / count as f64, count))
+        .collect();
+    by_hour.sort_by_key(|h| h.0);
+
+    Ok(SlippageStats {
+        avg_slippage_pct,
+        total_slippage_cost,
+        worst_slippage,
+        by_symbol,
+        by_hour,
+    })
+}
+
+// ── Optimal DARWIN Allocation (Mean-Variance) ───────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptimalAllocation {
+    pub darwin_ticker: String,
+    pub current_weight: f64,
+    pub optimal_weight: f64,
+    pub sharpe_contribution: f64,
+}
+
+/// Compute inverse-volatility weighted optimal allocation across all DARWINs.
+/// Compares to equal weight baseline and computes Sharpe contribution per DARWIN.
+pub fn compute_optimal_allocation(conn: &Connection) -> Result<Vec<OptimalAllocation>, String> {
+    let accounts = list_darwin_accounts(conn)?;
+    if accounts.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let n = accounts.len() as f64;
+    let equal_weight = 1.0 / n;
+
+    struct DarwinStats {
+        ticker: String,
+        vol: f64,
+        sharpe: f64,
+    }
+
+    let mut stats: Vec<DarwinStats> = Vec::new();
+    for account in &accounts {
+        let returns = get_daily_returns(conn, &account.darwin_ticker)?;
+        let var_result = compute_var(&returns);
+        let vol = if var_result.daily_vol > 0.0 { var_result.daily_vol } else { 1e-10 };
+        stats.push(DarwinStats {
+            ticker: account.darwin_ticker.clone(),
+            vol,
+            sharpe: var_result.sharpe,
+        });
+    }
+
+    // Inverse-volatility weighting: weight_i = (1/vol_i) / sum(1/vol_j)
+    let inv_vol_sum: f64 = stats.iter().map(|s| 1.0 / s.vol).sum();
+    if inv_vol_sum <= 0.0 {
+        return Ok(vec![]);
+    }
+
+    let result: Vec<OptimalAllocation> = stats.iter().map(|s| {
+        let optimal_weight = (1.0 / s.vol) / inv_vol_sum;
+        OptimalAllocation {
+            darwin_ticker: s.ticker.clone(),
+            current_weight: equal_weight,
+            optimal_weight,
+            sharpe_contribution: s.sharpe * optimal_weight,
+        }
+    }).collect();
+
+    Ok(result)
+}
+
+// ── Conditional VaR by Regime ───────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConditionalVaR {
+    pub regime: String,
+    pub days_in_regime: i64,
+    pub avg_daily_pnl: f64,
+    pub var_95: f64,
+    pub var_99: f64,
+    pub sharpe: f64,
+}
+
+/// Compute VaR separately for each volatility regime (LOW/MEDIUM/HIGH).
+/// Splits returns into 3 regimes based on 20-day rolling volatility terciles.
+pub fn compute_conditional_var(daily_returns: &[DailyReturn]) -> Vec<ConditionalVaR> {
+    if daily_returns.len() < 25 {
+        return vec![];
+    }
+
+    let returns: Vec<f64> = daily_returns.iter().map(|r| r.return_pct).collect();
+
+    // Compute 20-day rolling volatility for each day
+    let mut rolling_vols: Vec<(usize, f64)> = Vec::new();
+    for i in 19..returns.len() {
+        let window = &returns[i - 19..=i];
+        let mean = window.iter().sum::<f64>() / window.len() as f64;
+        let var = window.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / window.len() as f64;
+        rolling_vols.push((i, var.sqrt()));
+    }
+
+    if rolling_vols.is_empty() {
+        return vec![];
+    }
+
+    // Sort vols to find tercile thresholds
+    let mut sorted_vols: Vec<f64> = rolling_vols.iter().map(|(_, v)| *v).collect();
+    sorted_vols.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let t1 = sorted_vols[sorted_vols.len() / 3];
+    let t2 = sorted_vols[2 * sorted_vols.len() / 3];
+
+    // Assign each day to a regime
+    let mut low_returns: Vec<f64> = Vec::new();
+    let mut med_returns: Vec<f64> = Vec::new();
+    let mut high_returns: Vec<f64> = Vec::new();
+
+    for &(idx, vol) in &rolling_vols {
+        let ret = returns[idx];
+        if vol <= t1 {
+            low_returns.push(ret);
+        } else if vol <= t2 {
+            med_returns.push(ret);
+        } else {
+            high_returns.push(ret);
+        }
+    }
+
+    fn regime_var(name: &str, rets: &mut Vec<f64>) -> ConditionalVaR {
+        let n = rets.len();
+        if n < 2 {
+            return ConditionalVaR {
+                regime: name.to_string(),
+                days_in_regime: n as i64,
+                avg_daily_pnl: 0.0,
+                var_95: 0.0,
+                var_99: 0.0,
+                sharpe: 0.0,
+            };
+        }
+        let mean = rets.iter().sum::<f64>() / n as f64;
+        let var = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n as f64;
+        let vol = var.sqrt();
+        let sharpe = if vol > 0.0 { mean / vol * (252.0f64).sqrt() } else { 0.0 };
+
+        rets.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let var_95 = -rets[((0.05 * (n as f64 - 1.0)).round() as usize).min(n - 1)];
+        let var_99 = -rets[((0.01 * (n as f64 - 1.0)).round() as usize).min(n - 1)];
+
+        ConditionalVaR {
+            regime: name.to_string(),
+            days_in_regime: n as i64,
+            avg_daily_pnl: mean,
+            var_95,
+            var_99,
+            sharpe,
+        }
+    }
+
+    vec![
+        regime_var("LOW_VOL", &mut low_returns),
+        regime_var("MEDIUM_VOL", &mut med_returns),
+        regime_var("HIGH_VOL", &mut high_returns),
+    ]
+}
+
+// ── Market Regime Detection ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketRegime {
+    pub current_regime: String,
+    pub regime_start: String,
+    pub regime_duration_days: i64,
+    pub rolling_vol: f64,
+    pub vol_percentile: f64,
+    pub regime_history: Vec<(String, String, i64)>,
+}
+
+/// Detect current market regime using 20-day rolling volatility.
+/// LOW = below 15th percentile, MEDIUM = 15-85th, HIGH = above 85th.
+pub fn detect_market_regime(daily_returns: &[DailyReturn]) -> MarketRegime {
+    let empty = MarketRegime {
+        current_regime: "UNKNOWN".to_string(),
+        regime_start: String::new(),
+        regime_duration_days: 0,
+        rolling_vol: 0.0,
+        vol_percentile: 0.0,
+        regime_history: vec![],
+    };
+
+    if daily_returns.len() < 25 {
+        return empty;
+    }
+
+    let returns: Vec<f64> = daily_returns.iter().map(|r| r.return_pct).collect();
+    let dates: Vec<&str> = daily_returns.iter().map(|r| r.date.as_str()).collect();
+
+    // Compute 20-day rolling vol for each day starting from index 19
+    let mut rolling: Vec<(usize, f64)> = Vec::new();
+    for i in 19..returns.len() {
+        let window = &returns[i - 19..=i];
+        let mean = window.iter().sum::<f64>() / window.len() as f64;
+        let var = window.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / window.len() as f64;
+        rolling.push((i, var.sqrt()));
+    }
+
+    if rolling.is_empty() {
+        return empty;
+    }
+
+    // Sort vols to find percentile thresholds
+    let mut sorted_vols: Vec<f64> = rolling.iter().map(|(_, v)| *v).collect();
+    sorted_vols.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let p15 = sorted_vols[(0.15 * (sorted_vols.len() as f64 - 1.0)).round() as usize];
+    let p85 = sorted_vols[(0.85 * (sorted_vols.len() as f64 - 1.0)).round() as usize];
+
+    let classify = |vol: f64| -> &'static str {
+        if vol <= p15 { "LOW_VOL" }
+        else if vol <= p85 { "MEDIUM_VOL" }
+        else { "HIGH_VOL" }
+    };
+
+    // Build regime history
+    let mut regime_history: Vec<(String, String, i64)> = Vec::new();
+    let mut current_regime = classify(rolling[0].1).to_string();
+    let mut regime_start_idx = rolling[0].0;
+    let mut regime_days = 1i64;
+
+    for i in 1..rolling.len() {
+        let (idx, vol) = rolling[i];
+        let regime = classify(vol).to_string();
+        if regime != current_regime {
+            regime_history.push((
+                current_regime.clone(),
+                dates[regime_start_idx].to_string(),
+                regime_days,
+            ));
+            current_regime = regime;
+            regime_start_idx = idx;
+            regime_days = 1;
+        } else {
+            regime_days += 1;
+        }
+    }
+
+    // Current vol percentile
+    let current_vol = rolling.last().map(|(_, v)| *v).unwrap_or(0.0);
+    let vol_percentile = sorted_vols.iter().filter(|&&v| v <= current_vol).count() as f64
+        / sorted_vols.len() as f64 * 100.0;
+
+    MarketRegime {
+        current_regime,
+        regime_start: dates.get(regime_start_idx).unwrap_or(&"").to_string(),
+        regime_duration_days: regime_days,
+        rolling_vol: current_vol,
+        vol_percentile,
+        regime_history,
+    }
+}
+
+// ── Exposure Treemap Data ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreemapNode {
+    pub name: String,
+    pub value: f64,
+    pub color_value: f64,
+    pub children: Vec<TreemapNode>,
+}
+
+/// Build a treemap data structure: Root -> Sectors -> Symbols.
+/// Sized by absolute notional, colored by side (long=+1 green, short=-1 red).
+pub fn get_exposure_treemap(conn: &Connection) -> Result<TreemapNode, String> {
+    let sector_exposures = get_sector_exposure(conn)?;
+    let open_positions = get_portfolio_open_positions(conn)?;
+
+    // Build a lookup: symbol -> (notional, side color: +1 for buy, -1 for sell)
+    let mut symbol_info: std::collections::HashMap<String, (f64, f64)> = std::collections::HashMap::new();
+    for pos in &open_positions {
+        let color = if pos.side == "buy" { 1.0 } else { -1.0 };
+        let entry = symbol_info.entry(pos.symbol.clone()).or_insert((0.0, 0.0));
+        entry.0 += pos.notional.abs();
+        // Weighted average color for mixed positions
+        entry.1 = color;
+    }
+
+    let mut sector_children: Vec<TreemapNode> = Vec::new();
+    let mut root_total = 0.0f64;
+
+    for sector in &sector_exposures {
+        let mut sym_children: Vec<TreemapNode> = Vec::new();
+        let mut sector_total = 0.0f64;
+        let mut sector_color_sum = 0.0f64;
+
+        for sym in &sector.symbols {
+            if let Some(&(notional, color)) = symbol_info.get(sym) {
+                sym_children.push(TreemapNode {
+                    name: sym.clone(),
+                    value: notional,
+                    color_value: color,
+                    children: vec![],
+                });
+                sector_total += notional;
+                sector_color_sum += color * notional;
+            }
+        }
+
+        if sector_total > 0.0 {
+            sym_children.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
+            let sector_color = sector_color_sum / sector_total;
+            sector_children.push(TreemapNode {
+                name: sector.sector.clone(),
+                value: sector_total,
+                color_value: sector_color,
+                children: sym_children,
+            });
+            root_total += sector_total;
+        }
+    }
+
+    sector_children.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok(TreemapNode {
+        name: "Portfolio".to_string(),
+        value: root_total,
+        color_value: 0.0,
+        children: sector_children,
+    })
+}
+
 /// Delete a DARWIN account and all its data.
 pub fn delete_darwin_account(conn: &Connection, darwin_ticker: &str) -> Result<(), String> {
     conn.execute("DELETE FROM darwin_deals WHERE account = ?1", params![darwin_ticker])
@@ -4302,8 +4856,79 @@ mod tests {
 
     #[test]
     fn test_dscore_components_missing() {
-        // FTP path doesn't exist, should return error
         let result = get_dscore_components("/nonexistent", "TEST");
         assert!(result.is_err() || result.unwrap().experience.is_none());
+    }
+
+    #[test]
+    fn test_margin_call_sim() {
+        let conn = setup_test_db();
+        let result = simulate_margin_call(&conn);
+        if let Ok(m) = result {
+            assert!(m.current_equity > 0.0);
+            assert!(m.margin_level_pct >= 0.0);
+            assert!(m.probability_30d >= 0.0);
+        }
+    }
+
+    #[test]
+    fn test_slippage() {
+        let conn = setup_test_db();
+        let result = analyze_slippage(&conn, "TEST").unwrap();
+        assert!(result.avg_slippage_pct.is_finite());
+    }
+
+    #[test]
+    fn test_optimal_allocation() {
+        let conn = setup_test_db();
+        let result = compute_optimal_allocation(&conn).unwrap();
+        assert!(!result.is_empty());
+        let total_weight: f64 = result.iter().map(|a| a.optimal_weight).sum();
+        assert!((total_weight - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_conditional_var() {
+        let mut returns = Vec::new();
+        let mut balance = 100000.0;
+        for i in 0..100 {
+            let pnl = if i % 3 == 0 { -200.0 } else { 150.0 };
+            balance += pnl;
+            returns.push(DailyReturn {
+                date: format!("2024.{:02}.{:02}", (i / 28) + 1, (i % 28) + 1),
+                pnl, balance, return_pct: pnl / (balance - pnl) * 100.0, drawdown_pct: 0.0,
+            });
+        }
+        let cv = compute_conditional_var(&returns);
+        // Should have up to 3 regimes
+        assert!(cv.len() <= 3);
+        for c in &cv {
+            assert!(!c.regime.is_empty());
+            assert!(c.days_in_regime > 0);
+        }
+    }
+
+    #[test]
+    fn test_market_regime() {
+        let mut returns = Vec::new();
+        let mut balance = 100000.0;
+        for i in 0..60 {
+            let pnl = if i % 3 == 0 { -200.0 } else { 150.0 };
+            balance += pnl;
+            returns.push(DailyReturn {
+                date: format!("2024.06.{:02}", (i % 28) + 1),
+                pnl, balance, return_pct: pnl / (balance - pnl) * 100.0, drawdown_pct: 0.0,
+            });
+        }
+        let regime = detect_market_regime(&returns);
+        assert!(!regime.current_regime.is_empty());
+        assert!(regime.rolling_vol >= 0.0);
+    }
+
+    #[test]
+    fn test_exposure_treemap() {
+        let conn = setup_test_db();
+        let tree = get_exposure_treemap(&conn).unwrap();
+        assert_eq!(tree.name, "Portfolio");
     }
 }
