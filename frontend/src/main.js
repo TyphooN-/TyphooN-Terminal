@@ -712,14 +712,27 @@ function sanitizeBars(bars) {
     // Fix OHLC inconsistency: high/low must envelope open/close
     const trueHigh = Math.max(b.open, b.high, b.low, b.close);
     const trueLow = Math.min(b.open, b.high, b.low, b.close);
-    clean.push({
+    const bar = {
       time: b.time,
       open: b.open,
       high: trueHigh,
       low: trueLow,
       close: b.close,
       volume: (b.volume && isFinite(b.volume) && b.volume >= 0) ? b.volume : 0,
-    });
+    };
+    // Tint weekend bars blue for crypto symbols (Kraken-sourced data)
+    if (_markWeekendBars) {
+      const d = new Date(b.time * 1000);
+      const day = d.getUTCDay(); // 0=Sun, 6=Sat
+      if (day === 0 || day === 6) {
+        const isUp = bar.close >= bar.open;
+        bar.color = isUp ? "#1565c0" : "#0d47a1";           // blue body
+        bar.borderColor = isUp ? "#42a5f5" : "#1565c0";     // blue border
+        bar.wickUpColor = isUp ? "#42a5f5" : "#1565c0";     // blue wick
+        bar.wickDownColor = isUp ? "#42a5f5" : "#1565c0";
+      }
+    }
+    clean.push(bar);
   }
 
   // Reverse back to chronological order (we iterated backwards for dedup)
@@ -861,6 +874,7 @@ let _bidAskLineInterval = null;
 let currentSymbol = "";
 let currentTimeframe = "1Hour";
 let lastPrice = 0;
+let _markWeekendBars = false; // true for crypto symbols — tints weekend bars blue
 let mtfData = {};
 let currentChartData = []; // full chartData with volume — candleSeries.data() drops volume
 let chartLoadGeneration = 0; // increments on each loadChart call — stale intervals check this
@@ -948,6 +962,7 @@ function switchTab(id) {
   currentSymbol = tab.symbol;
   currentTimeframe = tab.timeframe;
   lastPrice = tab.lastPrice;
+  _markWeekendBars = !!(tab.symbol && (tab.symbol.includes("/USD") || ["BTC","ETH","SOL","DOGE","ADA","XRP","BNB","AVAX","DOT","LINK"].some(c => tab.symbol.toUpperCase().startsWith(c + "USD"))));
   _lastOrderLineHash = ""; // force order line redraw on tab switch
 
   renderTabs();
@@ -3965,6 +3980,7 @@ async function loadChart(symbol, timeframe) {
   // Set symbol immediately so tab identity is correct
   currentSymbol = symbol;
   currentTimeframe = timeframe;
+  _markWeekendBars = !!(symbol && (symbol.includes("/USD") || ["BTC","ETH","SOL","DOGE","ADA","XRP","BNB","AVAX","DOT","LINK"].some(c => symbol.toUpperCase().startsWith(c + "USD"))));
   _lastOrderLineHash = ""; // force order line redraw on tab/symbol switch
   const loadTabId = activeTabId; // capture which tab initiated this load
 
