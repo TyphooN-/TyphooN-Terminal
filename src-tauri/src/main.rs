@@ -23,6 +23,7 @@ use core::var;
 use core::margin;
 use core::backtest::{self as backtest_engine, SMACrossStrategy, NNFXStrategy, BacktestResult, BarByBarResult};
 use core::cache::SqliteCache;
+use core::binance;
 use core::darwin;
 use core::screener::{self as screener_engine, ScreenerFilter, ScreenerSymbol};
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
@@ -4966,6 +4967,237 @@ async fn get_darwin_price_series(
     serde_json::to_string(&bars).map_err(|e| format!("Serialize failed: {e}"))
 }
 
+// ── Binance Crypto Gap-Fill Commands ───────────────────────────────
+
+/// Backfill crypto bars from Binance — fills weekend gaps + extends history beyond MT5.
+/// Fetches ALL available Binance data from 2017 and merges with existing cache.
+#[tauri::command]
+async fn backfill_crypto_binance(
+    state: State<'_, SharedState>,
+    app: tauri::AppHandle,
+    symbol: Option<String>,
+    timeframe: Option<String>,
+) -> Result<String, String> {
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.as_ref().ok_or("No database")?.clone()
+    };
+
+    let client = shared_client().clone();
+    let timeframes = if let Some(ref tf) = timeframe {
+        vec![tf.clone()]
+    } else {
+        vec!["1Day".to_string(), "4Hour".to_string(), "1Hour".to_string(), "1Week".to_string(), "1Month".to_string()]
+    };
+
+    // If no symbol specified, do all crypto symbols in cache
+    let symbols: Vec<String> = if let Some(ref sym) = symbol {
+        vec![sym.clone()]
+    } else {
+        // Find all crypto symbols in MT5 cache
+        let meta = cache.get_all_cache_meta().unwrap_or_default();
+        let mut crypto_syms = std::collections::HashSet::new();
+        for key in meta.keys() {
+            if key.starts_with("mt5:") {
+                let parts: Vec<&str> = key.splitn(3, ':').collect();
+                if parts.len() >= 2 {
+                    let sym = parts[1];
+                    if binance::is_binance_supported(sym) {
+                        crypto_syms.insert(sym.to_string());
+                    }
+                }
+            }
+        }
+        crypto_syms.into_iter().collect()
+    };
+
+    let mut total_filled = 0usize;
+    let mut results = Vec::new();
+
+    // Binance start: August 2017 for most major pairs
+    let binance_start_ms: i64 = 1502928000000; // 2017-08-17 00:00:00 UTC
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    for sym in &symbols {
+        for tf in &timeframes {
+            let cache_key = format!("mt5:{}:{}", sym, tf);
+
+            // Get existing bar count and date range
+            let existing = cache.get_bars(&cache_key).ok().flatten();
+            let existing_bars: Vec<serde_json::Value> = existing
+                .as_ref()
+                .and_then(|(json, _)| serde_json::from_str(json).ok())
+                .unwrap_or_default();
+
+            // Find earliest and latest existing timestamps
+            let earliest_existing = existing_bars.first()
+                .and_then(|b| b["timestamp"].as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.timestamp_millis())
+                .unwrap_or(now_ms);
+
+            // Fetch from Binance: start from 2017 (or before earliest existing bar)
+            let fetch_start = binance_start_ms.min(earliest_existing);
+            let fetch_end = now_ms;
+
+            let _ = app.emit("binance_backfill_progress", serde_json::json!({
+                "symbol": sym, "timeframe": tf, "status": "fetching"
+            }));
+
+            match binance::fetch_binance_klines(&client, sym, tf, fetch_start, fetch_end).await {
+                Ok(binance_bars) => {
+                    if binance_bars.is_empty() { continue; }
+
+                    // Merge: combine existing + Binance, deduplicate by timestamp, sort
+                    let mut all_bars = existing_bars.clone();
+                    let existing_timestamps: std::collections::HashSet<String> = all_bars.iter()
+                        .filter_map(|b| b["timestamp"].as_str().map(|s| s.to_string()))
+                        .collect();
+
+                    let mut new_count = 0usize;
+                    for bar in &binance_bars {
+                        if let Some(ts) = bar["timestamp"].as_str() {
+                            if !existing_timestamps.contains(ts) {
+                                all_bars.push(bar.clone());
+                                new_count += 1;
+                            }
+                        }
+                    }
+
+                    if new_count > 0 {
+                        // Sort by timestamp
+                        all_bars.sort_by(|a, b| {
+                            let ta = a["timestamp"].as_str().unwrap_or("");
+                            let tb = b["timestamp"].as_str().unwrap_or("");
+                            ta.cmp(tb)
+                        });
+
+                        // Store merged result
+                        let json = serde_json::to_string(&all_bars)
+                            .map_err(|e| format!("Serialize failed: {e}"))?;
+                        cache.put_bars(&cache_key, &json)?;
+
+                        tracing::info!(
+                            "Binance backfill {sym} @ {tf}: +{new_count} bars (total {}), range {}-{}",
+                            all_bars.len(),
+                            all_bars.first().and_then(|b| b["timestamp"].as_str()).unwrap_or("?"),
+                            all_bars.last().and_then(|b| b["timestamp"].as_str()).unwrap_or("?")
+                        );
+
+                        total_filled += new_count;
+                        results.push(serde_json::json!({
+                            "symbol": sym, "timeframe": tf,
+                            "new_bars": new_count, "total_bars": all_bars.len(),
+                            "status": "ok"
+                        }));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Binance backfill {sym} @ {tf} failed: {e}");
+                    results.push(serde_json::json!({
+                        "symbol": sym, "timeframe": tf,
+                        "error": e, "status": "error"
+                    }));
+                }
+            }
+
+            // Rate limit between requests
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+
+    tracing::info!("Binance backfill complete: {} new bars across {} symbol/TF combos", total_filled, results.len());
+
+    Ok(serde_json::json!({
+        "total_new_bars": total_filled,
+        "results": results,
+    }).to_string())
+}
+
+/// Fetch bars for ANY Binance symbol (not just MT5 ones) and store in cache.
+/// Enables charting Binance-only crypto that doesn't exist at Darwinex/Alpaca.
+#[tauri::command]
+async fn fetch_binance_bars(
+    state: State<'_, SharedState>,
+    symbol: String,
+    timeframe: String,
+    start_date: Option<String>, // "2017-08-17" format
+) -> Result<String, String> {
+    if !is_valid_timeframe(&timeframe) { return Err(format!("Invalid timeframe: {}", timeframe)); }
+
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.as_ref().ok_or("No database")?.clone()
+    };
+
+    let client = shared_client().clone();
+
+    let start_ms = start_date
+        .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
+        .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis())
+        .unwrap_or(1502928000000); // 2017-08-17
+
+    let end_ms = chrono::Utc::now().timestamp_millis();
+
+    let bars = binance::fetch_binance_klines(&client, &symbol, &timeframe, start_ms, end_ms).await?;
+
+    if bars.is_empty() {
+        return Err(format!("No data from Binance for {} @ {}", symbol, timeframe));
+    }
+
+    // Store under binance: prefix so it doesn't conflict with MT5 keys
+    let cache_key = format!("binance:{}:{}", symbol.replace("/", ""), timeframe);
+    let json = serde_json::to_string(&bars).map_err(|e| format!("Serialize failed: {e}"))?;
+
+    // Also merge into mt5: key if it exists (for unified charting)
+    let mt5_key = format!("mt5:{}:{}", symbol, timeframe);
+    let has_mt5 = cache.get_bar_count(&mt5_key).ok().flatten().unwrap_or(0) > 0;
+
+    if has_mt5 {
+        // Merge into existing MT5 key (gap-fill)
+        let _ = cache.merge_bars(&mt5_key, &json, 100_000);
+        tracing::info!("Binance {} @ {}: merged {} bars into MT5 cache", symbol, timeframe, bars.len());
+    } else {
+        // No MT5 data — store under binance: key AND mt5: key for chart access
+        cache.put_bars(&cache_key, &json)?;
+        cache.put_bars(&mt5_key, &json)?;
+        tracing::info!("Binance {} @ {}: stored {} bars (new symbol)", symbol, timeframe, bars.len());
+    }
+
+    Ok(serde_json::json!({
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "bars": bars.len(),
+        "first": bars.first().and_then(|b| b["timestamp"].as_str()),
+        "last": bars.last().and_then(|b| b["timestamp"].as_str()),
+    }).to_string())
+}
+
+/// Get list of crypto symbols that can be backfilled from Binance.
+#[tauri::command]
+async fn list_binance_symbols(state: State<'_, SharedState>) -> Result<String, String> {
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.as_ref().ok_or("No database")?.clone()
+    };
+    let meta = cache.get_all_cache_meta().unwrap_or_default();
+    let mut crypto_syms: Vec<(String, i64)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (key, (_, bar_count)) in &meta {
+        if key.starts_with("mt5:") && key.ends_with(":1Day") {
+            let parts: Vec<&str> = key.splitn(3, ':').collect();
+            if parts.len() >= 2 {
+                let sym = parts[1];
+                if binance::is_binance_supported(sym) && seen.insert(sym.to_string()) {
+                    crypto_syms.push((sym.to_string(), *bar_count));
+                }
+            }
+        }
+    }
+    crypto_syms.sort();
+    serde_json::to_string(&crypto_syms).map_err(|e| format!("Serialize failed: {e}"))
+}
+
 // ── Risk Simulation & Regime Commands ──────────────────────────────
 
 #[tauri::command]
@@ -5460,6 +5692,10 @@ fn main() {
             get_darwin_kelly,
             get_darwin_autocorrelation,
             get_darwin_price_series,
+            // Binance Crypto Backfill
+            backfill_crypto_binance,
+            fetch_binance_bars,
+            list_binance_symbols,
             // Risk Simulation & Regime
             simulate_margin_call,
             get_slippage_analysis,

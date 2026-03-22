@@ -12516,6 +12516,86 @@ function cmdDarwinPortfolio() {
   renderView();
 }
 
+// ── BINANCE — Crypto Weekend Backfill ────────────────────────
+function cmdBinanceBackfill() {
+  const win = createWindow({ title: "Binance Crypto Backfill", width: 700, height: 500 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;";
+
+  const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
+  const backfillAllBtn = document.createElement("button"); backfillAllBtn.textContent = "Backfill ALL Crypto (2017→Now)"; backfillAllBtn.style.cssText = "padding:6px 14px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:11px;font-family:inherit;";
+  const symInput = document.createElement("input"); symInput.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px 8px;font-size:10px;font-family:inherit;width:100px;"; symInput.placeholder = "BTC/USD";
+  const singleBtn = document.createElement("button"); singleBtn.textContent = "Backfill Single"; singleBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+  topBar.appendChild(backfillAllBtn); topBar.appendChild(symInput); topBar.appendChild(singleBtn);
+  root.appendChild(topBar);
+
+  const contentDiv = document.createElement("div"); contentDiv.style.cssText = "flex:1;overflow-y:auto;padding:8px;";
+  root.appendChild(contentDiv);
+
+  // List available crypto symbols on load
+  (async () => {
+    try {
+      const json = await window.__TAURI__.core.invoke("list_binance_symbols");
+      const symbols = JSON.parse(json);
+      contentDiv.textContent = "";
+      const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+      title.textContent = `Binance-Eligible Crypto in Cache (${symbols.length})`;
+      contentDiv.appendChild(title);
+      const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding:0 0 12px;";
+      desc.textContent = "Click 'Backfill ALL' to fetch weekend gaps + extend history from Binance (2017→now) for all timeframes. Free, no API key needed.";
+      contentDiv.appendChild(desc);
+      const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      const thead = document.createElement("tr");
+      ["Symbol", "MT5 Daily Bars"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+      table.appendChild(thead);
+      for (const [sym, count] of symbols) {
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+        [sym, count].forEach((v, i) => { const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;"; td.textContent = String(v); if (i === 0) td.style.color = "#8af"; tr.appendChild(td); });
+        table.appendChild(tr);
+      }
+      contentDiv.appendChild(table);
+    } catch (e) { contentDiv.textContent = "Error: " + e; }
+  })();
+
+  async function runBackfill(symbol) {
+    const btn = symbol ? singleBtn : backfillAllBtn;
+    btn.disabled = true; btn.textContent = "Backfilling...";
+    contentDiv.textContent = "Fetching from Binance... this may take a few minutes for full history.";
+    try {
+      const params = symbol ? { symbol } : {};
+      const json = await window.__TAURI__.core.invoke("backfill_crypto_binance", params);
+      const result = JSON.parse(json);
+      contentDiv.textContent = "";
+      const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#4caf50;padding:4px 0 8px;";
+      title.textContent = `Backfill Complete — ${result.total_new_bars.toLocaleString()} new bars`;
+      contentDiv.appendChild(title);
+      if (result.results && result.results.length > 0) {
+        const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+        const thead = document.createElement("tr");
+        ["Symbol", "Timeframe", "New Bars", "Total Bars", "Status"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+        table.appendChild(thead);
+        for (const r of result.results) {
+          const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+          [r.symbol, r.timeframe, r.new_bars || 0, r.total_bars || "—", r.status].forEach((v, i) => {
+            const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;"; td.textContent = String(v);
+            if (i === 0) td.style.color = "#8af";
+            if (i === 4) td.style.color = r.status === "ok" ? "#4caf50" : "#f44336";
+            tr.appendChild(td);
+          });
+          table.appendChild(tr);
+        }
+        contentDiv.appendChild(table);
+      }
+    } catch (e) { contentDiv.textContent = "Backfill failed: " + e; }
+    btn.disabled = false; btn.textContent = symbol ? "Backfill Single" : "Backfill ALL Crypto (2017→Now)";
+  }
+
+  backfillAllBtn.addEventListener("click", () => runBackfill(null));
+  singleBtn.addEventListener("click", () => { const sym = symInput.value.trim(); if (sym) runBackfill(sym); });
+
+  win.appendElement(root);
+}
+
 // ── DARWIN RADAR — FTP Screener ──────────────────────────────
 function cmdDarwinRadar() {
   const win = createWindow({ title: "DARWIN RADAR — FTP Screener", width: 950, height: 600 });
@@ -13480,7 +13560,8 @@ function cmdCheat() {
       ["IMPORTTRADES", "Import external trade history"],
       ["DARWIN", "DARWIN account viewer (MT5 history)"],
       ["DARWINS", "Combined DARWIN portfolio dashboard"],
-      ["RADAR", "DARWIN RADAR — FTP screener"],
+      ["DARWIN-RADAR", "DARWIN RADAR — FTP screener"],
+      ["BINANCE", "Crypto backfill from Binance (2017)"],
       ["ACTIVITIES", "Account activities"],
       ["INSIDER", "Insider trading (SEC Form 4)"],
       ["SEC", "SEC Filings (10-K, 10-Q, 8-K, S-1, etc.)"],
@@ -25484,7 +25565,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "IMPORTTRADES", desc: "Import external trade history (CSV: MT5, IB, generic)", action: cmdImportTrades },
   { name: "DARWIN", desc: "DARWIN account viewer — import MT5 history, equity curves, P/L analytics", action: cmdDarwin },
   { name: "DARWINS", desc: "Combined DARWIN portfolio — exposure, open positions, equity curves across all accounts", action: cmdDarwinPortfolio },
-  { name: "RADAR", desc: "DARWIN RADAR — scan 50K+ DARWINs from FTP by Sharpe, return, drawdown", action: cmdDarwinRadar },
+  { name: "DARWIN-RADAR", desc: "DARWIN RADAR — scan 50K+ DARWINs from FTP by Sharpe, return, drawdown", action: cmdDarwinRadar },
+  { name: "BINANCE", desc: "Binance crypto backfill — fill weekend gaps + extend history from 2017", action: cmdBinanceBackfill },
   { name: "SIGNAL", desc: "Composite trading signal generator (Fisher, RSI, KAMA, SMA200, volume, ATR)", action: cmdSignal },
   { name: "PROFILE", desc: "Trading profile analytics (P&L by symbol, day of week, hold time)", action: cmdProfile },
   { name: "FIBO+", desc: "Fibonacci time zones (markers at Fib intervals from swing low)", action: cmdFiboTime },
