@@ -4553,30 +4553,59 @@ async function updateDashboard() {
         }
       });
     }
-    // Market clock — non-blocking, update status bar
-    invoke("get_market_clock").then(json => {
-      const clock = typeof json === "string" ? JSON.parse(json) : json;
+    // Market clock — use MT5 crypto hours for crypto symbols, Alpaca for equities
+    const isCryptoSym = currentSymbol && (currentSymbol.includes("/USD") || ["BTC","ETH","SOL","DOGE","ADA","XRP","BNB","AVAX","DOT","LINK"].some(c => currentSymbol.toUpperCase().startsWith(c)));
+    if (isCryptoSym) {
+      // MT5 Darwinex crypto hours: Sunday 23:05 UTC → Friday 23:00 UTC
+      const now = new Date();
+      const utcDay = now.getUTCDay(); // 0=Sun..6=Sat
+      const utcHour = now.getUTCHours();
+      const utcMin = now.getUTCMinutes();
+      const utcTotalMin = utcHour * 60 + utcMin;
+      // Closed: Friday 23:00 UTC → Sunday 23:05 UTC
+      const isCryptoOpen = !((utcDay === 5 && utcTotalMin >= 1380) || (utcDay === 6) || (utcDay === 0 && utcTotalMin < 1385));
       const el = document.getElementById("market-clock-status");
-      if (!el) return;
-      if (clock.is_open) {
-        el.textContent = "Market: OPEN";
-        el.style.color = "#4caf50";
-      } else {
-        let countdown = "";
-        if (clock.next_open) {
-          const nextOpen = new Date(clock.next_open);
-          const now = new Date();
-          const diffMs = nextOpen - now;
-          if (diffMs > 0) {
-            const hours = Math.floor(diffMs / 3600000);
-            const mins = Math.floor((diffMs % 3600000) / 60000);
-            countdown = ` (opens in ${hours}h ${mins}m)`;
-          }
+      if (el) {
+        if (isCryptoOpen) {
+          el.textContent = "Market: OPEN (MT5 Crypto)";
+          el.style.color = "#4caf50";
+        } else {
+          // Calculate time until Sunday 23:05 UTC
+          let minsUntilOpen = 0;
+          if (utcDay === 5 && utcTotalMin >= 1380) minsUntilOpen = (2 * 1440) + (1385 - utcTotalMin);
+          else if (utcDay === 6) minsUntilOpen = (1 * 1440) + 1385 - utcTotalMin;
+          else if (utcDay === 0 && utcTotalMin < 1385) minsUntilOpen = 1385 - utcTotalMin;
+          const hours = Math.floor(minsUntilOpen / 60);
+          const mins = minsUntilOpen % 60;
+          el.textContent = `Market: CLOSED (opens in ${hours}h ${mins}m)`;
+          el.style.color = "#ff9800";
         }
-        el.textContent = `Market: CLOSED${countdown}`;
-        el.style.color = "#ff9800";
       }
-    }).catch(() => {});
+    } else {
+      invoke("get_market_clock").then(json => {
+        const clock = typeof json === "string" ? JSON.parse(json) : json;
+        const el = document.getElementById("market-clock-status");
+        if (!el) return;
+        if (clock.is_open) {
+          el.textContent = "Market: OPEN";
+          el.style.color = "#4caf50";
+        } else {
+          let countdown = "";
+          if (clock.next_open) {
+            const nextOpen = new Date(clock.next_open);
+            const now = new Date();
+            const diffMs = nextOpen - now;
+            if (diffMs > 0) {
+              const hours = Math.floor(diffMs / 3600000);
+              const mins = Math.floor((diffMs % 3600000) / 60000);
+              countdown = ` (opens in ${hours}h ${mins}m)`;
+            }
+          }
+          el.textContent = `Market: CLOSED${countdown}`;
+          el.style.color = "#ff9800";
+        }
+      }).catch(() => {});
+    }
   } catch (_) {
   } finally {
     window._dashboardInFlight = false;
