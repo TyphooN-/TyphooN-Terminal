@@ -13319,14 +13319,21 @@ function cmdBinanceBackfill() {
   }
 
   // Listen for real-time progress events from backend
-  if (window.__TAURI__ && window.__TAURI__.event) {
-    window.__TAURI__.event.listen("binance_backfill_progress", (event) => {
-      const d = event.payload;
-      if (d && d.symbol && d.timeframe) {
-        updateCell(d.symbol, d.timeframe, d.status, d.new_bars, d.total_bars);
-      }
-    });
-  }
+  try {
+    if (window.__TAURI__?.event?.listen) {
+      window.__TAURI__.event.listen("binance_backfill_progress", (event) => {
+        const d = event.payload;
+        if (d && d.symbol && d.timeframe) {
+          updateCell(d.symbol, d.timeframe, d.status, d.new_bars, d.total_bars);
+          // Update header with live count
+          const header = document.getElementById("bf-header");
+          if (header && d.status === "ok") header.textContent = `Backfilling... ${d.symbol} @ ${d.timeframe}: +${d.new_bars} bars`;
+          else if (header && d.status === "synced") header.textContent = `Backfilling... ${d.symbol} @ ${d.timeframe}: synced`;
+          else if (header && d.status === "fetching") header.textContent = `Backfilling... ${d.symbol} @ ${d.timeframe}: fetching...`;
+        }
+      });
+    }
+  } catch (_) {}
 
   async function runBackfill(symbol) {
     if (backfillRunning) return;
