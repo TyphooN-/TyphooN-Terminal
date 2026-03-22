@@ -10618,7 +10618,7 @@ function cmdDarwin() {
   const accountSel = document.createElement("select"); accountSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:140px;";
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
-  ["Summary", "Open Positions", "Equity Curve", "P/L by Symbol", "Streaks", "Hourly P/L", "Day of Week", "Hold Time", "Symbol Rotation", "Sizing", "Costs", "Positions", "Deals"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
+  ["Summary", "Open Positions", "Equity Curve", "P/L by Symbol", "Streaks", "Hourly P/L", "Day of Week", "Hold Time", "Symbol Rotation", "Sizing", "Kelly Criterion", "Autocorrelation", "Costs", "Positions", "Deals"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
   topBar.appendChild(importBtn); topBar.appendChild(accountSel); topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
   root.appendChild(topBar);
 
@@ -10672,6 +10672,8 @@ function cmdDarwin() {
       else if (view === "hold_time") await renderHoldTime(ticker);
       else if (view === "symbol_rotation") await renderSymbolRotation(ticker);
       else if (view === "sizing") await renderSizing(ticker);
+      else if (view === "kelly_criterion") await renderKelly(ticker);
+      else if (view === "autocorrelation") await renderAutocorrelation(ticker);
       else if (view === "costs") await renderCosts(ticker);
       else if (view === "positions") await renderPositions(ticker);
       else if (view === "deals") await renderDeals(ticker);
@@ -11052,6 +11054,68 @@ function cmdDarwin() {
     contentDiv.appendChild(table);
   }
 
+  async function renderKelly(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_darwin_kelly", { darwinTicker: ticker });
+    const k = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = `Kelly Criterion — ${ticker}`;
+    contentDiv.appendChild(title);
+    const rows = [
+      ["Win Rate", (k.win_rate * 100).toFixed(1) + "%", k.win_rate >= 0.5 ? 1 : -1],
+      ["Average Win", "$" + k.avg_win.toFixed(2), 1],
+      ["Average Loss", "$" + k.avg_loss.toFixed(2), -1],
+      ["", ""],
+      ["Full Kelly Fraction", (k.kelly_fraction * 100).toFixed(2) + "%", k.kelly_fraction > 0 ? 1 : -1],
+      ["Half Kelly (recommended)", (k.half_kelly * 100).toFixed(2) + "%", k.half_kelly > 0 ? 1 : -1],
+      ["Optimal Risk per Trade", (k.optimal_risk_pct).toFixed(2) + "%"],
+    ];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:500px;";
+    for (const [label, val, cv] of rows) {
+      if (label === "") { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 2; td.style.height = "8px"; tr.appendChild(td); table.appendChild(tr); continue; }
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = label;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = val;
+      if (cv !== undefined) td2.style.color = cv >= 0 ? "#4caf50" : "#f44336";
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+    const note = document.createElement("div"); note.style.cssText = "color:#666;font-size:10px;padding:12px 0;max-width:500px;";
+    note.textContent = "Kelly Criterion determines optimal position sizing. Full Kelly maximizes geometric growth but is volatile. Half Kelly is the practical recommendation — smoother equity curve with ~75% of full Kelly's growth rate.";
+    contentDiv.appendChild(note);
+  }
+
+  async function renderAutocorrelation(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_darwin_autocorrelation", { darwinTicker: ticker });
+    const a = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = `Trade Autocorrelation — ${ticker}`;
+    contentDiv.appendChild(title);
+    const verdict = document.createElement("div"); verdict.style.cssText = "font-size:13px;padding:4px 0 12px;";
+    verdict.innerHTML = `<span style="color:${a.is_random ? '#4caf50' : '#ff9800'};font-weight:bold;">${a.is_random ? 'INDEPENDENT' : 'DEPENDENT'}</span> — <span style="color:#888">${a.interpretation}</span>`;
+    contentDiv.appendChild(verdict);
+    const rows = [["Lag 1", a.lag1.toFixed(4)], ["Lag 2", a.lag2.toFixed(4)], ["Lag 3", a.lag3.toFixed(4)], ["Lag 5", a.lag5.toFixed(4)]];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:400px;";
+    for (const [label, val] of rows) {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = label;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;"; td2.textContent = val;
+      const absVal = Math.abs(parseFloat(val));
+      td2.style.color = absVal > 0.1 ? "#ff9800" : absVal > 0.05 ? "#ccc" : "#4caf50";
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+
+      // Visual bar
+      const td3 = document.createElement("td"); td3.style.cssText = "padding:4px 8px;";
+      const bar = document.createElement("div"); bar.style.cssText = `height:12px;width:${(absVal * 200).toFixed(0)}px;min-width:2px;background:${absVal > 0.1 ? '#ff9800' : '#4caf50'};border-radius:2px;`;
+      td3.appendChild(bar); tr.appendChild(td3);
+    }
+    contentDiv.appendChild(table);
+    const note = document.createElement("div"); note.style.cssText = "color:#666;font-size:10px;padding:12px 0;max-width:500px;";
+    note.textContent = "Autocorrelation measures whether trade outcomes predict future outcomes. Values near 0 = independent (good). Positive = momentum (wins follow wins). Negative = mean-reversion (wins follow losses). |corr| > 0.05 may be significant.";
+    contentDiv.appendChild(note);
+  }
+
   async function renderCosts(ticker) {
     const json = await window.__TAURI__.core.invoke("get_darwin_costs", { darwinTicker: ticker });
     const s = JSON.parse(json);
@@ -11166,7 +11230,7 @@ function cmdDarwinPortfolio() {
 
   const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:6px;align-items:center;";
   const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:160px;";
-  ["Portfolio Summary", "Portfolio VaR", "Combined Open Positions", "Symbol Exposure", "Trade Overlaps", "Combined Equity Curve", "Drawdown Chart", "Rolling VaR", "Monthly Heatmap", "P/L Distribution", "Correlation Matrix"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
+  ["Portfolio Summary", "Portfolio VaR", "Monte Carlo", "Stress Test", "VaR Forecast", "Sector Exposure", "Combined Open Positions", "Symbol Exposure", "Trade Overlaps", "Combined Equity Curve", "Drawdown Chart", "Rolling VaR", "Monthly Heatmap", "P/L Distribution", "Correlation Matrix"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
   root.appendChild(topBar);
@@ -11183,6 +11247,10 @@ function cmdDarwinPortfolio() {
     try {
       if (view === "portfolio_summary") await renderPortfolioSummary();
       else if (view === "portfolio_var") await renderPortfolioVaR();
+      else if (view === "monte_carlo") await renderMonteCarlo();
+      else if (view === "stress_test") await renderStressTest();
+      else if (view === "var_forecast") await renderVaRForecast();
+      else if (view === "sector_exposure") await renderSectorExposure();
       else if (view === "combined_open_positions") await renderCombinedPositions();
       else if (view === "symbol_exposure") await renderExposure();
       else if (view === "trade_overlaps") await renderTradeOverlaps();
@@ -11405,6 +11473,136 @@ function cmdDarwinPortfolio() {
     const pct = ((end - start) / start * 100).toFixed(2);
     ctx.fillStyle = end >= start ? "#4caf50" : "#f44336"; ctx.font = "11px Consolas";
     ctx.fillText(`$${start.toLocaleString()} → $${end.toLocaleString()} (${pct}%)`, padLeft + 320, 18);
+  }
+
+  async function renderMonteCarlo() {
+    contentDiv.textContent = "Running 10,000 Monte Carlo simulations...";
+    const json = await window.__TAURI__.core.invoke("get_monte_carlo_var", { daysForward: 30, simulations: 10000 });
+    const mc = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Monte Carlo VaR Simulation (30-day, 10K paths)";
+    contentDiv.appendChild(title);
+    const rows = [
+      ["VaR 95%", "$" + mc.var_95.toLocaleString(undefined, {maximumFractionDigits: 0}), -1],
+      ["VaR 99%", "$" + mc.var_99.toLocaleString(undefined, {maximumFractionDigits: 0}), -1],
+      ["Median Outcome", "$" + mc.median_outcome.toLocaleString(undefined, {maximumFractionDigits: 0}), mc.median_outcome],
+      ["Best Case", "$" + mc.best_case.toLocaleString(undefined, {maximumFractionDigits: 0}), 1],
+      ["Worst Case", "$" + mc.worst_case.toLocaleString(undefined, {maximumFractionDigits: 0}), -1],
+      ["Probability of Loss", (mc.probability_of_loss * 100).toFixed(1) + "%", mc.probability_of_loss > 0.5 ? -1 : 1],
+      ["", ""],
+    ];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:500px;margin-bottom:16px;";
+    for (const [label, val, cv] of rows) {
+      if (label === "") { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 2; td.style.height = "8px"; tr.appendChild(td); table.appendChild(tr); continue; }
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = label;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = val;
+      if (cv !== undefined) td2.style.color = cv >= 0 ? "#4caf50" : "#f44336";
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+    // Percentile table
+    if (mc.percentiles && mc.percentiles.length > 0) {
+      const pTitle = document.createElement("div"); pTitle.style.cssText = "font-weight:bold;color:#ccc;padding:8px 0 4px;font-size:12px;"; pTitle.textContent = "Outcome Percentiles (30-day P/L)";
+      contentDiv.appendChild(pTitle);
+      const pTable = document.createElement("table"); pTable.style.cssText = "border-collapse:collapse;font-size:11px;max-width:400px;";
+      for (const [pct, val] of mc.percentiles) {
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+        const td1 = document.createElement("td"); td1.style.cssText = "padding:3px 12px;color:#888;"; td1.textContent = pct + "th percentile";
+        const td2 = document.createElement("td"); td2.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;text-align:right;"; td2.textContent = "$" + val.toLocaleString(undefined, {maximumFractionDigits: 0}); td2.style.color = val >= 0 ? "#4caf50" : "#f44336";
+        tr.appendChild(td1); tr.appendChild(td2); pTable.appendChild(tr);
+      }
+      contentDiv.appendChild(pTable);
+    }
+  }
+
+  async function renderStressTest() {
+    contentDiv.textContent = "Running stress tests...";
+    const json = await window.__TAURI__.core.invoke("run_stress_tests");
+    const tests = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Stress Test — Historical Crash Scenarios";
+    contentDiv.appendChild(title);
+    const table = document.createElement("table"); table.style.cssText = "width:100%;max-width:800px;border-collapse:collapse;font-size:12px;";
+    const thead = document.createElement("tr");
+    ["Scenario", "Description", "Market Drop", "Est. Portfolio Impact", "Impact %"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+    for (const t of tests) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      [t.scenario, t.description, t.market_drop_pct.toFixed(0) + "%", "$" + t.estimated_portfolio_impact.toLocaleString(undefined, {maximumFractionDigits: 0}), t.estimated_portfolio_impact_pct.toFixed(1) + "%"].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:4px 8px;font-family:Consolas,monospace;";
+        td.textContent = v;
+        if (i === 0) td.style.color = "#ff9800";
+        if (i === 3 || i === 4) td.style.color = "#f44336";
+        if (i === 1) { td.style.color = "#888"; td.style.fontFamily = "inherit"; }
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderVaRForecast() {
+    contentDiv.textContent = "Computing VaR forecast...";
+    const json = await window.__TAURI__.core.invoke("get_var_forecast", { threshold: 10.0 });
+    const f = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Forward-Looking VaR Projection";
+    contentDiv.appendChild(title);
+    const trendColor = f.var_trend === "increasing" ? "#f44336" : f.var_trend === "decreasing" ? "#4caf50" : "#ff9800";
+    const rows = [
+      ["Current VaR (95%)", "$" + f.current_var_95.toFixed(0)],
+      ["Projected 30-day", "$" + f.projected_30d.toFixed(0), f.projected_30d > f.current_var_95 ? -1 : 1],
+      ["Projected 60-day", "$" + f.projected_60d.toFixed(0), f.projected_60d > f.current_var_95 ? -1 : 1],
+      ["Projected 90-day", "$" + f.projected_90d.toFixed(0), f.projected_90d > f.current_var_95 ? -1 : 1],
+      ["VaR Trend", f.var_trend.toUpperCase(), f.var_trend === "decreasing" ? 1 : -1],
+    ];
+    if (f.days_until_threshold) rows.push(["Days Until Threshold", f.days_until_threshold + " days", -1]);
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:500px;";
+    for (const [label, val, cv] of rows) {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = label;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = String(val);
+      if (cv !== undefined) td2.style.color = cv >= 0 ? "#4caf50" : "#f44336";
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderSectorExposure() {
+    const json = await window.__TAURI__.core.invoke("get_sector_exposure");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Sector Exposure — ${data.length} sectors`;
+    contentDiv.appendChild(title);
+    const totalNet = data.reduce((s, d) => s + Math.abs(d.net_notional), 0);
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Sector", "Long $", "Short $", "Net $", "% of Portfolio", "Symbols"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+    for (const d of data) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      [d.sector, d.long_notional > 0 ? "$" + d.long_notional.toLocaleString(undefined, {maximumFractionDigits: 0}) : "—", d.short_notional > 0 ? "$" + d.short_notional.toLocaleString(undefined, {maximumFractionDigits: 0}) : "—", "$" + d.net_notional.toLocaleString(undefined, {maximumFractionDigits: 0}), d.pct_of_portfolio.toFixed(1) + "%", d.symbols.join(", ")].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;";
+        td.textContent = v;
+        if (i === 0) td.style.color = "#8af";
+        if (i === 1) td.style.color = "#4caf50";
+        if (i === 2) td.style.color = "#f44336";
+        if (i === 3) td.style.color = d.net_notional >= 0 ? "#4caf50" : "#f44336";
+        if (i === 5) { td.style.color = "#888"; td.style.fontSize = "9px"; }
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
   }
 
   async function renderTradeOverlaps() {

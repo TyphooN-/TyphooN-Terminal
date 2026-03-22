@@ -4829,6 +4829,86 @@ async fn get_portfolio_equity_curve(_state: State<'_, SharedState>) -> Result<St
     serde_json::to_string(&curve).map_err(|e| format!("Serialize failed: {e}"))
 }
 
+// ── Advanced Risk Analytics Commands ────────────────────────────────
+
+#[tauri::command]
+async fn get_monte_carlo_var(
+    _state: State<'_, SharedState>,
+    darwin_ticker: Option<String>,
+    days_forward: Option<i64>,
+    simulations: Option<i64>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = if let Some(ticker) = darwin_ticker {
+        darwin::get_daily_returns(&conn, &ticker)?
+    } else {
+        darwin::get_portfolio_daily_returns(&conn)?
+    };
+    let result = darwin::monte_carlo_var(&returns, days_forward.unwrap_or(30), simulations.unwrap_or(10000));
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn run_stress_tests(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let results = darwin::run_stress_tests(&conn)?;
+    serde_json::to_string(&results).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_sector_exposure(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let exposure = darwin::get_sector_exposure(&conn)?;
+    serde_json::to_string(&exposure).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_var_forecast(
+    _state: State<'_, SharedState>,
+    darwin_ticker: Option<String>,
+    threshold: Option<f64>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let returns = if let Some(ticker) = darwin_ticker {
+        darwin::get_daily_returns(&conn, &ticker)?
+    } else {
+        darwin::get_portfolio_daily_returns(&conn)?
+    };
+    let forecast = darwin::forecast_var(&returns, threshold.unwrap_or(10.0));
+    serde_json::to_string(&forecast).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_kelly(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::compute_kelly(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_autocorrelation(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::compute_trade_autocorrelation(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_darwin_price_series(
+    _state: State<'_, SharedState>,
+    darwin_ticker: String,
+    ftp_path: Option<String>,
+    timeframe: Option<String>,
+) -> Result<String, String> {
+    let path = ftp_path.unwrap_or_else(|| "/mnt/bigraidz2/Darwinex_FTP".to_string());
+    let tf = timeframe.unwrap_or_else(|| "1Day".to_string());
+    let bars = darwin::get_darwin_price_series(&path, &darwin_ticker, &tf)?;
+    serde_json::to_string(&bars).map_err(|e| format!("Serialize failed: {e}"))
+}
+
 // ── DARWIN FTP Screener & Radar ─────────────────────────────────────
 
 #[tauri::command]
@@ -5146,6 +5226,15 @@ fn main() {
             get_portfolio_open_positions,
             get_portfolio_exposure,
             get_portfolio_equity_curve,
+            // Advanced Risk Analytics
+            get_monte_carlo_var,
+            run_stress_tests,
+            get_sector_exposure,
+            get_var_forecast,
+            get_darwin_kelly,
+            get_darwin_autocorrelation,
+            get_darwin_price_series,
+            // FTP Screener & Radar
             scan_darwin_ftp,
             export_radar_snapshot,
             delete_darwin_account,
