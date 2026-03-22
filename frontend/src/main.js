@@ -5209,6 +5209,22 @@ function setupButtons() {
 // ── Keyboard Shortcuts ──────────────────────────────────────
 
 function setupKeyboard() {
+  // Quake-style console toggle: backtick/tilde toggles command bar focus
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "`" || e.key === "~") {
+      e.preventDefault();
+      const symbolInput = document.getElementById("symbol-input");
+      if (!symbolInput) return;
+      if (document.activeElement === symbolInput) {
+        symbolInput.blur();
+      } else {
+        symbolInput.focus();
+        symbolInput.select();
+      }
+      return;
+    }
+  }, true); // capture phase — before input handlers
+
   document.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
     switch (e.key) {
@@ -13211,7 +13227,9 @@ function cmdBinanceBackfill() {
   const singleBtn = document.createElement("button"); singleBtn.textContent = "Backfill Single"; singleBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   const resetBtn = document.createElement("button"); resetBtn.textContent = "Reset Tracking"; resetBtn.style.cssText = "padding:4px 10px;background:#5f0a0a;color:#f88;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;margin-left:auto;";
   resetBtn.addEventListener("click", async () => { try { const r = JSON.parse(await window.__TAURI__.core.invoke("reset_kraken_backfill")); log("Reset Kraken tracking: cleared " + r.cleared + " keys. Next backfill will do full 2013→now.", "ok"); } catch (e) { log("Reset failed: " + e, "warn"); } });
-  topBar.appendChild(backfillAllBtn); topBar.appendChild(symInput); topBar.appendChild(singleBtn); topBar.appendChild(resetBtn);
+  const stopBtn = document.createElement("button"); stopBtn.textContent = "Stop"; stopBtn.style.cssText = "padding:4px 10px;background:#5f0a0a;color:#f88;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+  stopBtn.addEventListener("click", () => { backfillRunning = false; log("Backfill stopped by user", "info"); });
+  topBar.appendChild(backfillAllBtn); topBar.appendChild(symInput); topBar.appendChild(singleBtn); topBar.appendChild(stopBtn); topBar.appendChild(resetBtn);
   root.appendChild(topBar);
 
   const contentDiv = document.createElement("div"); contentDiv.style.cssText = "flex:1;overflow-y:auto;padding:8px;";
@@ -13242,37 +13260,124 @@ function cmdBinanceBackfill() {
     } catch (e) { contentDiv.textContent = "Error: " + e; }
   })();
 
-  async function runBackfill(symbol) {
-    const btn = symbol ? singleBtn : backfillAllBtn;
-    btn.disabled = true; btn.textContent = "Backfilling...";
-    contentDiv.textContent = "Fetching from Kraken... this may take a few minutes for full history.";
-    try {
-      const params = symbol ? { symbol } : {};
-      const json = await window.__TAURI__.core.invoke("backfill_crypto_binance", params);
-      const result = JSON.parse(json);
-      contentDiv.textContent = "";
-      const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#4caf50;padding:4px 0 8px;";
-      title.textContent = `Backfill Complete — ${result.total_new_bars.toLocaleString()} new bars`;
-      contentDiv.appendChild(title);
-      if (result.results && result.results.length > 0) {
-        const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
-        const thead = document.createElement("tr");
-        ["Symbol", "Timeframe", "New Bars", "Total Bars", "Status"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
-        table.appendChild(thead);
-        for (const r of result.results) {
-          const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
-          [r.symbol, r.timeframe, r.new_bars || 0, r.total_bars || "—", r.status].forEach((v, i) => {
-            const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;"; td.textContent = String(v);
-            if (i === 0) td.style.color = "#8af";
-            if (i === 4) td.style.color = r.status === "ok" ? "#4caf50" : r.status === "synced" ? "#42a5f5" : r.status === "pending" ? "#ff9800" : "#f44336";
-            tr.appendChild(td);
-          });
-          table.appendChild(tr);
-        }
-        contentDiv.appendChild(table);
+  let backfillRunning = false;
+  const TFS = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month"];
+  const statusColors = { synced: "#4caf50", ok: "#4caf50", pending: "#ff9800", fetching: "#42a5f5", error: "#f44336", "": "#333" };
+
+  // Build live status grid
+  function buildStatusGrid(symbols) {
+    contentDiv.textContent = "";
+    const header = document.createElement("div"); header.id = "bf-header"; header.style.cssText = "font-size:14px;font-weight:bold;color:#ff9800;padding:4px 0 8px;";
+    header.textContent = "Backfilling...";
+    contentDiv.appendChild(header);
+    const grid = document.createElement("table"); grid.id = "bf-grid"; grid.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+    // Header row
+    const thead = document.createElement("tr");
+    const thSym = document.createElement("td"); thSym.style.cssText = "color:#666;font-weight:bold;padding:3px 6px;border-bottom:1px solid #333;"; thSym.textContent = "Symbol"; thead.appendChild(thSym);
+    for (const tf of TFS) { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:3px 4px;border-bottom:1px solid #333;text-align:center;font-size:9px;"; th.textContent = tf.replace("Min","m").replace("Hour","h").replace("Day","D").replace("Week","W").replace("Month","M"); thead.appendChild(th); }
+    grid.appendChild(thead);
+    // Symbol rows
+    for (const sym of symbols) {
+      const tr = document.createElement("tr"); tr.id = "bf-row-" + sym.replace("/", "");
+      const tdSym = document.createElement("td"); tdSym.style.cssText = "padding:3px 6px;color:#8af;font-family:Consolas,monospace;"; tdSym.textContent = sym; tr.appendChild(tdSym);
+      for (const tf of TFS) {
+        const td = document.createElement("td"); td.id = "bf-" + sym.replace("/", "") + "-" + tf;
+        td.style.cssText = "padding:3px 4px;text-align:center;font-family:Consolas,monospace;font-size:9px;";
+        td.textContent = "..."; td.style.color = "#333";
+        tr.appendChild(td);
       }
-    } catch (e) { contentDiv.textContent = "Backfill failed: " + e; }
+      grid.appendChild(tr);
+    }
+    contentDiv.appendChild(grid);
+  }
+
+  function updateCell(sym, tf, status, newBars, totalBars) {
+    const cell = document.getElementById("bf-" + sym.replace("/", "") + "-" + tf);
+    if (!cell) return;
+    cell.style.color = statusColors[status] || "#888";
+    if (status === "synced") cell.textContent = "✓";
+    else if (status === "ok") cell.textContent = "+" + (newBars || 0);
+    else if (status === "fetching") cell.textContent = "⟳";
+    else if (status === "pending") cell.textContent = "⏳";
+    else if (status === "error") cell.textContent = "✗";
+    else cell.textContent = "...";
+    if (totalBars > 0) cell.title = totalBars.toLocaleString() + " bars";
+  }
+
+  async function runBackfill(symbol) {
+    if (backfillRunning) return;
+    backfillRunning = true;
+    const btn = symbol ? singleBtn : backfillAllBtn;
+    btn.disabled = true;
+
+    // Get symbol list for grid
+    let symbols = symbol ? [symbol] : [];
+    if (!symbol) {
+      try {
+        const json = await window.__TAURI__.core.invoke("list_binance_symbols");
+        symbols = JSON.parse(json).map(s => s[0]);
+      } catch (_) {}
+    }
+    buildStatusGrid(symbols);
+
+    let pass = 0;
+    let totalNewBars = 0;
+
+    while (backfillRunning) {
+      pass++;
+      btn.textContent = `Pass ${pass}...`;
+      const headerEl = document.getElementById("bf-header");
+
+      try {
+        const params = symbol ? { symbol } : {};
+        const json = await window.__TAURI__.core.invoke("backfill_crypto_binance", params);
+        const result = JSON.parse(json);
+        totalNewBars += result.total_new_bars;
+
+        // Update grid cells
+        let pending = 0, synced = 0, ok = 0;
+        if (result.results) {
+          for (const r of result.results) {
+            updateCell(r.symbol, r.timeframe, r.status, r.new_bars, r.total_bars);
+            if (r.status === "pending" || r.status === "error") pending++;
+            else if (r.status === "synced") synced++;
+            else if (r.status === "ok") ok++;
+          }
+        }
+
+        if (headerEl) {
+          if (pending === 0 && ok === 0) {
+            headerEl.style.color = "#4caf50";
+            headerEl.textContent = `All Synced — ${totalNewBars.toLocaleString()} new bars (${pass} passes)`;
+            backfillRunning = false;
+          } else {
+            headerEl.style.color = "#ff9800";
+            headerEl.textContent = `Pass ${pass}: ${synced} synced, ${ok} updated, ${pending} pending — ${totalNewBars.toLocaleString()} total new bars`;
+          }
+        }
+
+        if (!backfillRunning) break;
+
+        if (pending > 0) {
+          if (headerEl) headerEl.textContent += " (rate limited — retrying in 15s...)";
+          await new Promise(r => setTimeout(r, 15000));
+        } else if (ok > 0) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
+
+        if (pass >= 10) {
+          if (headerEl) { headerEl.textContent += " — max passes reached"; headerEl.style.color = "#ff9800"; }
+          backfillRunning = false;
+        }
+
+      } catch (e) {
+        if (headerEl) { headerEl.textContent = "Backfill failed: " + e; headerEl.style.color = "#f44336"; }
+        backfillRunning = false;
+      }
+    }
+
     btn.disabled = false; btn.textContent = symbol ? "Backfill Single" : "Backfill ALL Crypto (2013→Now)";
+    backfillRunning = false;
   }
 
   backfillAllBtn.addEventListener("click", () => runBackfill(null));
