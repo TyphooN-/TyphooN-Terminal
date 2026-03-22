@@ -12596,6 +12596,227 @@ function cmdBinanceBackfill() {
   win.appendElement(root);
 }
 
+// ── SOURCES — Data Provider Manager ──────────────────────────
+function cmdSources() {
+  const win = createWindow({ title: "Data Sources", width: 950, height: 650 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;";
+
+  const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:8px;align-items:center;";
+  const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:140px;";
+  ["Overview", "MT5 (Darwinex)", "Alpaca", "Kraken Crypto", "Add from Kraken"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/[()]/g, ""); o.textContent = v; viewSel.appendChild(o); });
+  const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+  topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
+  root.appendChild(topBar);
+
+  const contentDiv = document.createElement("div"); contentDiv.style.cssText = "flex:1;overflow-y:auto;padding:8px;";
+  root.appendChild(contentDiv);
+
+  viewSel.addEventListener("change", renderView);
+  refreshBtn.addEventListener("click", renderView);
+
+  async function renderView() {
+    const view = viewSel.value;
+    contentDiv.textContent = "Loading...";
+    try {
+      if (view === "overview") await renderOverview();
+      else if (view === "mt5_darwinex") await renderMT5();
+      else if (view === "alpaca") await renderAlpaca();
+      else if (view === "kraken_crypto") await renderKraken();
+      else if (view === "add_from_kraken") await renderAddKraken();
+    } catch (e) { contentDiv.textContent = "Error: " + e; }
+  }
+
+  async function renderOverview() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Data Source Overview";
+    contentDiv.appendChild(title);
+
+    // MT5 stats
+    let mt5Count = 0, mt5Bars = 0;
+    try {
+      const json = await window.__TAURI__.core.invoke("db_cache_stats");
+      const stats = JSON.parse(json);
+      mt5Count = stats.bar_entries || stats[0] || 0;
+      mt5Bars = stats.total_size || stats[2] || 0;
+    } catch (_) {}
+
+    // Kraken-eligible
+    let krakenCount = 0;
+    try {
+      const json = await window.__TAURI__.core.invoke("list_binance_symbols");
+      krakenCount = JSON.parse(json).length;
+    } catch (_) {}
+
+    const sources = [
+      { name: "MT5 (Darwinex)", status: "ACTIVE", color: "#4caf50", symbols: "895 symbols × 9 TFs", detail: "Primary. Weekday bars via BarCacheWriter + SQLite sync." },
+      { name: "Alpaca Markets", status: "ACTIVE", color: "#42a5f5", symbols: "US equities + crypto", detail: "Live trading + order execution. Bar data for non-MT5 symbols." },
+      { name: "Kraken Exchange", status: "ACTIVE", color: "#ff9800", symbols: krakenCount + " crypto pairs", detail: "24/7 crypto. Weekend gap-fill + history from 2013. No API key." },
+      { name: "Darwinex FTP", status: "SYNCING", color: "#ff9800", symbols: "50,060 DARWINs", detail: "DARWIN quotes, VaR, scores, positions. lftp mirror on NAS." },
+    ];
+
+    for (const src of sources) {
+      const card = document.createElement("div"); card.style.cssText = "padding:12px 16px;margin-bottom:8px;border-left:3px solid " + src.color + ";background:#111;border-radius:2px;";
+      card.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;font-weight:bold;color:#fff;">${src.name}</span><span style="color:${src.color};font-size:10px;font-weight:bold;">${src.status}</span></div><div style="color:#888;font-size:11px;margin-top:4px;">${src.symbols}</div><div style="color:#666;font-size:10px;margin-top:2px;">${src.detail}</div>`;
+      contentDiv.appendChild(card);
+    }
+  }
+
+  async function renderMT5() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "MT5 (Darwinex) — Cached Symbols";
+    contentDiv.appendChild(title);
+    try {
+      const json = await window.__TAURI__.core.invoke("db_cache_detailed_stats");
+      const stats = JSON.parse(json);
+      // Group by symbol
+      const bySymbol = {};
+      for (const [key, size, ts] of stats) {
+        if (key.startsWith("__") || !key.includes(":")) continue;
+        const parts = key.split(":");
+        const sym = parts.length >= 2 ? (parts[0] === "mt5" ? parts[1] : parts[0]) : key;
+        if (!bySymbol[sym]) bySymbol[sym] = { tfs: 0, totalSize: 0, lastSync: 0 };
+        bySymbol[sym].tfs++;
+        bySymbol[sym].totalSize += size;
+        if (ts > bySymbol[sym].lastSync) bySymbol[sym].lastSync = ts;
+      }
+      const symbols = Object.entries(bySymbol).sort((a, b) => a[0].localeCompare(b[0]));
+      const countEl = document.createElement("div"); countEl.style.cssText = "color:#888;font-size:10px;padding:0 0 8px;";
+      countEl.textContent = `${symbols.length} symbols in cache`;
+      contentDiv.appendChild(countEl);
+      const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+      const thead = document.createElement("tr");
+      ["Symbol", "Timeframes", "Cache Size", "Last Sync"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:3px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+      table.appendChild(thead);
+      for (const [sym, d] of symbols.slice(0, 200)) {
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #111;";
+        const age = Math.floor((Date.now() / 1000 - d.lastSync) / 60);
+        [sym, d.tfs + "/9", (d.totalSize / 1024).toFixed(0) + " KB", age < 60 ? age + "m ago" : Math.floor(age / 60) + "h ago"].forEach((v, i) => {
+          const td = document.createElement("td"); td.style.cssText = "padding:2px 6px;font-family:Consolas,monospace;"; td.textContent = v;
+          if (i === 0) td.style.color = "#8af";
+          if (i === 1) td.style.color = d.tfs >= 9 ? "#4caf50" : "#ff9800";
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      }
+      contentDiv.appendChild(table);
+    } catch (e) { contentDiv.textContent = "Error loading MT5 stats: " + e; }
+  }
+
+  async function renderAlpaca() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "Alpaca Markets";
+    contentDiv.appendChild(title);
+    try {
+      const acct = JSON.parse(await window.__TAURI__.core.invoke("get_account"));
+      const rows = [["Status", acct.status], ["Equity", "$" + parseFloat(acct.equity).toLocaleString()], ["Buying Power", "$" + parseFloat(acct.buying_power).toLocaleString()], ["Portfolio Value", "$" + parseFloat(acct.portfolio_value).toLocaleString()]];
+      const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:400px;";
+      for (const [l, v] of rows) { const tr = document.createElement("tr"); const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = l; const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = v; tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr); }
+      contentDiv.appendChild(table);
+    } catch (e) {
+      const msg = document.createElement("div"); msg.style.cssText = "color:#ff9800;padding:8px;";
+      msg.textContent = "Not connected to Alpaca. Connect via account panel to see stats.";
+      contentDiv.appendChild(msg);
+    }
+  }
+
+  async function renderKraken() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "Kraken — Crypto Symbols in Cache";
+    contentDiv.appendChild(title);
+    try {
+      const json = await window.__TAURI__.core.invoke("list_binance_symbols");
+      const symbols = JSON.parse(json);
+      const backfillBtn = document.createElement("button"); backfillBtn.textContent = "Backfill ALL (2013→Now)"; backfillBtn.style.cssText = "padding:4px 12px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;margin-bottom:12px;";
+      backfillBtn.addEventListener("click", async () => {
+        backfillBtn.disabled = true; backfillBtn.textContent = "Backfilling...";
+        try {
+          const r = JSON.parse(await window.__TAURI__.core.invoke("backfill_crypto_binance"));
+          log("Kraken backfill: " + r.total_new_bars + " new bars", "ok");
+          backfillBtn.textContent = r.total_new_bars + " bars added!";
+        } catch (e) { log("Backfill failed: " + e, "warn"); backfillBtn.textContent = "Failed"; }
+        setTimeout(() => { backfillBtn.disabled = false; backfillBtn.textContent = "Backfill ALL (2013→Now)"; }, 3000);
+      });
+      contentDiv.appendChild(backfillBtn);
+      const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      const thead = document.createElement("tr");
+      ["Symbol", "MT5 Daily Bars", "Status"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+      table.appendChild(thead);
+      for (const [sym, count] of symbols) {
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+        [sym, count, count > 0 ? "Cached" : "Not synced"].forEach((v, i) => {
+          const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;"; td.textContent = String(v);
+          if (i === 0) td.style.color = "#8af";
+          if (i === 2) td.style.color = count > 0 ? "#4caf50" : "#f44336";
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      }
+      contentDiv.appendChild(table);
+    } catch (e) { contentDiv.textContent = "Error: " + e; }
+  }
+
+  async function renderAddKraken() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "Add Symbols from Kraken";
+    contentDiv.appendChild(title);
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding:0 0 12px;";
+    desc.textContent = "Fetch all available USD trading pairs from Kraken. Click any symbol to import its full history.";
+    contentDiv.appendChild(desc);
+
+    const loadBtn = document.createElement("button"); loadBtn.textContent = "Load Kraken Pairs"; loadBtn.style.cssText = "padding:4px 12px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;margin-bottom:12px;";
+    const listDiv = document.createElement("div");
+    contentDiv.appendChild(loadBtn); contentDiv.appendChild(listDiv);
+
+    loadBtn.addEventListener("click", async () => {
+      loadBtn.disabled = true; loadBtn.textContent = "Loading...";
+      try {
+        const json = await window.__TAURI__.core.invoke("list_kraken_pairs");
+        const pairs = JSON.parse(json);
+        listDiv.textContent = "";
+        const countEl = document.createElement("div"); countEl.style.cssText = "color:#888;font-size:10px;padding:0 0 8px;";
+        countEl.textContent = `${pairs.length} USD pairs available on Kraken`;
+        listDiv.appendChild(countEl);
+
+        const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+        const thead = document.createElement("tr");
+        ["Symbol", "Kraken Pair", "Action"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+        table.appendChild(thead);
+
+        for (const p of pairs) {
+          const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+          const td1 = document.createElement("td"); td1.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;color:#8af;"; td1.textContent = p.symbol;
+          const td2 = document.createElement("td"); td2.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;color:#888;"; td2.textContent = p.kraken_pair;
+          const td3 = document.createElement("td"); td3.style.cssText = "padding:3px 8px;";
+          const fetchBtn = document.createElement("button"); fetchBtn.textContent = "Fetch"; fetchBtn.style.cssText = "padding:2px 8px;background:#222;color:#8af;border:1px solid #555;cursor:pointer;font-size:9px;font-family:inherit;";
+          fetchBtn.addEventListener("click", async () => {
+            fetchBtn.disabled = true; fetchBtn.textContent = "...";
+            try {
+              const r = JSON.parse(await window.__TAURI__.core.invoke("fetch_binance_bars", { symbol: p.symbol, timeframe: "1Day" }));
+              fetchBtn.textContent = r.bars + " bars";
+              fetchBtn.style.color = "#4caf50";
+              log(`Kraken: ${p.symbol} imported ${r.bars} bars (${r.first} → ${r.last})`, "ok");
+            } catch (e) { fetchBtn.textContent = "Error"; fetchBtn.style.color = "#f44336"; }
+          });
+          td3.appendChild(fetchBtn);
+          tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+          table.appendChild(tr);
+        }
+        listDiv.appendChild(table);
+      } catch (e) { listDiv.textContent = "Error: " + e; }
+      loadBtn.disabled = false; loadBtn.textContent = "Load Kraken Pairs";
+    });
+  }
+
+  win.appendElement(root);
+  renderView();
+}
+
 // ── DARWIN RADAR — FTP Screener ──────────────────────────────
 function cmdDarwinRadar() {
   const win = createWindow({ title: "DARWIN RADAR — FTP Screener", width: 950, height: 600 });
@@ -25567,6 +25788,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "DARWINS", desc: "Combined DARWIN portfolio — exposure, open positions, equity curves across all accounts", action: cmdDarwinPortfolio },
   { name: "DARWIN-RADAR", desc: "DARWIN RADAR — scan 50K+ DARWINs from FTP by Sharpe, return, drawdown", action: cmdDarwinRadar },
   { name: "CRYPTO-BACKFILL", desc: "Kraken crypto backfill — fill weekend gaps + extend history from 2013", action: cmdBinanceBackfill },
+  { name: "SOURCES", desc: "Data source manager — MT5, Alpaca, Kraken overview + add new symbols", action: cmdSources },
   { name: "SIGNAL", desc: "Composite trading signal generator (Fisher, RSI, KAMA, SMA200, volume, ATR)", action: cmdSignal },
   { name: "PROFILE", desc: "Trading profile analytics (P&L by symbol, day of week, hold time)", action: cmdProfile },
   { name: "FIBO+", desc: "Fibonacci time zones (markers at Fib intervals from swing low)", action: cmdFiboTime },

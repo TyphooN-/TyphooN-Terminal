@@ -4967,9 +4967,62 @@ async fn get_darwin_price_series(
     serde_json::to_string(&bars).map_err(|e| format!("Serialize failed: {e}"))
 }
 
-// ── Binance Crypto Gap-Fill Commands ───────────────────────────────
+// ── Kraken Pair Discovery ─────────────────────────────────────────
 
-/// Backfill crypto bars from Binance — fills weekend gaps + extends history beyond MT5.
+/// Fetch all available crypto trading pairs from Kraken.
+/// Returns pairs with USD quote currency.
+#[tauri::command]
+async fn list_kraken_pairs(_state: State<'_, SharedState>) -> Result<String, String> {
+    let client = shared_client().clone();
+    let resp = client.get("https://api.kraken.com/0/public/AssetPairs")
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("Kraken request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Kraken API error: {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp.json().await
+        .map_err(|e| format!("JSON parse failed: {e}"))?;
+
+    let mut pairs: Vec<serde_json::Value> = Vec::new();
+    if let Some(result) = body["result"].as_object() {
+        for (key, val) in result {
+            // Only USD pairs (filter out EUR, GBP, etc.)
+            let quote = val["quote"].as_str().unwrap_or("");
+            if quote != "ZUSD" && quote != "USD" { continue; }
+            let base = val["base"].as_str().unwrap_or("");
+            let wsname = val["wsname"].as_str().unwrap_or(key);
+            // Convert Kraken naming to TyphooN format
+            let typhoon_sym = wsname.replace("/", "")
+                .replace("XBT", "BTC")
+                .replace("XDG", "DOGE");
+            let typhoon_sym = if typhoon_sym.ends_with("USD") {
+                format!("{}/{}", &typhoon_sym[..typhoon_sym.len()-3], "USD")
+            } else { typhoon_sym };
+
+            pairs.push(serde_json::json!({
+                "kraken_pair": key,
+                "symbol": typhoon_sym,
+                "base": base,
+                "quote": quote,
+                "wsname": wsname,
+            }));
+        }
+    }
+
+    pairs.sort_by(|a, b| {
+        a["symbol"].as_str().unwrap_or("").cmp(b["symbol"].as_str().unwrap_or(""))
+    });
+
+    serde_json::to_string(&pairs).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+// ── Kraken Crypto Gap-Fill Commands ────────────────────────────────
+
+/// Backfill crypto bars from Kraken — fills weekend gaps + extends history beyond MT5.
 /// Fetches ALL available Kraken data from 2013 and merges with existing cache.
 #[tauri::command]
 async fn backfill_crypto_binance(
@@ -5015,7 +5068,7 @@ async fn backfill_crypto_binance(
     let mut results = Vec::new();
 
     // Kraken start: 2013 for BTC, earlier pairs may not have data (Kraken returns empty)
-    let binance_start_ms: i64 = 1357027200000; // 2013-01-01 00:00:00 UTC
+    let kraken_start_ms: i64 = 1357027200000; // 2013-01-01 00:00:00 UTC
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     for sym in &symbols {
@@ -5037,7 +5090,7 @@ async fn backfill_crypto_binance(
                 .unwrap_or(now_ms);
 
             // Fetch from Kraken: start from 2013 (or before earliest existing bar)
-            let fetch_start = binance_start_ms.min(earliest_existing);
+            let fetch_start = kraken_start_ms.min(earliest_existing);
             let fetch_end = now_ms;
 
             let _ = app.emit("binance_backfill_progress", serde_json::json!({
@@ -5048,7 +5101,7 @@ async fn backfill_crypto_binance(
                 Ok(binance_bars) => {
                     if binance_bars.is_empty() { continue; }
 
-                    // Merge: combine existing + Binance, deduplicate by timestamp, sort
+                    // Merge: combine existing + Kraken, deduplicate by timestamp, sort
                     let mut all_bars = existing_bars.clone();
                     let existing_timestamps: std::collections::HashSet<String> = all_bars.iter()
                         .filter_map(|b| b["timestamp"].as_str().map(|s| s.to_string()))
@@ -5078,7 +5131,7 @@ async fn backfill_crypto_binance(
                         cache.put_bars(&cache_key, &json)?;
 
                         tracing::info!(
-                            "Binance backfill {sym} @ {tf}: +{new_count} bars (total {}), range {}-{}",
+                            "Kraken backfill {sym} @ {tf}: +{new_count} bars (total {}), range {}-{}",
                             all_bars.len(),
                             all_bars.first().and_then(|b| b["timestamp"].as_str()).unwrap_or("?"),
                             all_bars.last().and_then(|b| b["timestamp"].as_str()).unwrap_or("?")
@@ -5093,7 +5146,7 @@ async fn backfill_crypto_binance(
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Binance backfill {sym} @ {tf} failed: {e}");
+                    tracing::warn!("Kraken backfill {sym} @ {tf} failed: {e}");
                     results.push(serde_json::json!({
                         "symbol": sym, "timeframe": tf,
                         "error": e, "status": "error"
@@ -5106,7 +5159,7 @@ async fn backfill_crypto_binance(
         }
     }
 
-    tracing::info!("Binance backfill complete: {} new bars across {} symbol/TF combos", total_filled, results.len());
+    tracing::info!("Kraken backfill complete: {} new bars across {} symbol/TF combos", total_filled, results.len());
 
     Ok(serde_json::json!({
         "total_new_bars": total_filled,
@@ -5114,8 +5167,8 @@ async fn backfill_crypto_binance(
     }).to_string())
 }
 
-/// Fetch bars for ANY Binance symbol (not just MT5 ones) and store in cache.
-/// Enables charting Binance-only crypto that doesn't exist at Darwinex/Alpaca.
+/// Fetch bars for ANY Kraken symbol (not just MT5 ones) and store in cache.
+/// Enables charting Kraken-only crypto that doesn't exist at Darwinex/Alpaca.
 #[tauri::command]
 async fn fetch_binance_bars(
     state: State<'_, SharedState>,
@@ -5142,7 +5195,7 @@ async fn fetch_binance_bars(
     let bars = binance::fetch_binance_klines(&client, &symbol, &timeframe, start_ms, end_ms).await?;
 
     if bars.is_empty() {
-        return Err(format!("No data from Binance for {} @ {}", symbol, timeframe));
+        return Err(format!("No data from Kraken for {} @ {}", symbol, timeframe));
     }
 
     // Store under binance: prefix so it doesn't conflict with MT5 keys
@@ -5156,12 +5209,12 @@ async fn fetch_binance_bars(
     if has_mt5 {
         // Merge into existing MT5 key (gap-fill)
         let _ = cache.merge_bars(&mt5_key, &json, 100_000);
-        tracing::info!("Binance {} @ {}: merged {} bars into MT5 cache", symbol, timeframe, bars.len());
+        tracing::info!("Kraken {} @ {}: merged {} bars into MT5 cache", symbol, timeframe, bars.len());
     } else {
         // No MT5 data — store under binance: key AND mt5: key for chart access
         cache.put_bars(&cache_key, &json)?;
         cache.put_bars(&mt5_key, &json)?;
-        tracing::info!("Binance {} @ {}: stored {} bars (new symbol)", symbol, timeframe, bars.len());
+        tracing::info!("Kraken {} @ {}: stored {} bars (new symbol)", symbol, timeframe, bars.len());
     }
 
     Ok(serde_json::json!({
@@ -5692,6 +5745,8 @@ fn main() {
             get_darwin_kelly,
             get_darwin_autocorrelation,
             get_darwin_price_series,
+            // Kraken Pair Discovery
+            list_kraken_pairs,
             // Binance Crypto Backfill
             backfill_crypto_binance,
             fetch_binance_bars,
