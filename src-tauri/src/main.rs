@@ -995,7 +995,7 @@ async fn calculate_lots(
         "risk_money": if risk_config.order_mode == OrderMode::Standard {
             balance * (risk_config.risk_pct / 100.0)
         } else { 0.0 },
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -1096,7 +1096,7 @@ async fn calculate_portfolio_var_lots(
                 "equity": equity,
                 "var_pct_target": var_pct,
                 "positions_count": positions.len(),
-            })).unwrap())
+            })).unwrap_or_default())
         }
         None => Err("Portfolio VaR calculation failed — insufficient data".into()),
     }
@@ -1206,7 +1206,7 @@ async fn get_sl_tp_pl(
         "rr": rr,
         "sl_price": sl,
         "tp_price": tp,
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 // ── Martingale Commands ─────────────────────────────────────────────
@@ -1223,7 +1223,7 @@ async fn get_martingale_state(state: State<'_, SharedState>) -> Result<String, S
         "hedge_closes": s.martingale.hedge_closes,
         "bias_closes": s.martingale.bias_closes,
         "protect_fires": s.martingale.protect_fire_count,
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -1248,7 +1248,7 @@ async fn toggle_martingale(state: State<'_, SharedState>) -> Result<String, Stri
     Ok(serde_json::to_string(&serde_json::json!({
         "mode": format!("{:?}", s.martingale.mode),
         "label": s.martingale.mode.label(),
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -1281,7 +1281,7 @@ async fn calc_open_mg_size(state: State<'_, SharedState>) -> Result<String, Stri
         "safe_gross": safe_gross,
         "equity": account.equity,
         "spread_tolerance": mg_state.config.spread_tolerance,
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -1321,7 +1321,7 @@ async fn open_martingale_hedge(
         "per_side": per_side,
         "safe_gross": safe_gross,
         "direction": direction,
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 // ── Margin Calculation Command ──────────────────────────────────────
@@ -1368,7 +1368,7 @@ async fn get_margin_info(state: State<'_, SharedState>) -> Result<String, String
         "equity": account.equity,
         "balance": account.balance,
         "margin_used": account.initial_margin,
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 // ── Account Protection (Equity TP/SL — port of MQL5 EnableEquityTP/SL) ──
@@ -1420,7 +1420,7 @@ async fn check_equity_protection(state: State<'_, SharedState>) -> Result<String
         "equity_tp": equity_tp,
         "equity_sl": equity_sl,
         "triggered": if triggered.is_empty() { None } else { Some(&triggered) },
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 // ── News & Events ───────────────────────────────────────────────
@@ -2163,7 +2163,7 @@ async fn start_streaming(
         "status": "streaming",
         "trades": trade_symbols,
         "quotes": quote_symbols,
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -2385,7 +2385,7 @@ async fn matrix_login(homeserver: String, username: String, password: String) ->
         "access_token": json["access_token"],
         "user_id": json["user_id"],
         "device_id": json["device_id"],
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 /// Send a message to a Matrix room.
@@ -2514,7 +2514,7 @@ async fn matrix_poll(homeserver: String, access_token: String, since: Option<Str
     Ok(serde_json::to_string(&serde_json::json!({
         "next_batch": next_batch,
         "messages": messages,
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 // ── Push Notification Commands ──────────────────────────────────────
@@ -2682,7 +2682,7 @@ async fn db_cache_stats(state: State<'_, SharedState>) -> Result<String, String>
         "kv_entries": kvs,
         "total_compressed_bytes": size,
         "total_compressed_mb": (size as f64) / (1024.0 * 1024.0),
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 #[tauri::command]
@@ -4197,7 +4197,7 @@ async fn load_custom_indicator(source: String) -> Result<String, String> {
     Ok(serde_json::to_string(&serde_json::json!({
         "source": source,
         "loaded": true,
-    })).unwrap())
+    })).unwrap_or_default())
 }
 
 #[tauri::command]

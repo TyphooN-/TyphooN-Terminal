@@ -1,6 +1,6 @@
 # ADR-021: MT5 + Godel Terminal Feature Parity Roadmap
 
-**Status:** In Progress
+**Status:** Mostly Complete
 **Date:** 2026-03-16
 
 ## Context

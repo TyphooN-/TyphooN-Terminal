@@ -1862,7 +1862,10 @@ pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir:
         return Err("No MT5 specs data found in cache. Run MT5 sync first.".into());
     }
 
-    let specs = specs_json.unwrap();
+    let specs = match specs_json {
+        Some(s) => s,
+        None => return Err("No MT5 specs data found in cache".into()),
+    };
     let dir = std::path::Path::new(output_dir);
     std::fs::create_dir_all(dir).map_err(|e| format!("Create dir failed: {e}"))?;
 
@@ -1951,7 +1954,7 @@ pub fn get_darwin_price_series(
         let prices: Vec<f64> = values.iter().map(|v| v * base_price).collect();
 
         let open = prev_close;
-        let close = *prices.last().unwrap();
+        let close = *prices.last().unwrap_or(&100.0);
         let mut high = open.max(close);
         let mut low = open.min(close);
         for &p in &prices {
@@ -2392,7 +2395,7 @@ pub fn forecast_var(daily_returns: &[DailyReturn], threshold_pct: f64) -> VaRFor
         return empty;
     }
 
-    let current_var_95 = *rolling_vars.last().unwrap();
+    let current_var_95 = *rolling_vars.last().unwrap_or(&0.0);
 
     // Linear regression: y = a + b*x where x is day index
     let m = rolling_vars.len() as f64;
@@ -4412,8 +4415,14 @@ pub fn get_timing_divergences(conn: &Connection) -> Result<Vec<TimingDivergence>
             continue;
         }
 
-        let earliest = parsed_times.iter().min_by_key(|(_, t, _)| *t).unwrap();
-        let latest = parsed_times.iter().max_by_key(|(_, t, _)| *t).unwrap();
+        let earliest = match parsed_times.iter().min_by_key(|(_, t, _)| *t) {
+            Some(e) => e,
+            None => continue,
+        };
+        let latest = match parsed_times.iter().max_by_key(|(_, t, _)| *t) {
+            Some(l) => l,
+            None => continue,
+        };
 
         let time_spread_hours = (latest.1 - earliest.1).num_seconds() as f64 / 3600.0;
 
