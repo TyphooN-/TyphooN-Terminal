@@ -5071,91 +5071,176 @@ async fn backfill_crypto_binance(
     let kraken_start_ms: i64 = 1357027200000; // 2013-01-01 00:00:00 UTC
     let now_ms = chrono::Utc::now().timestamp_millis();
 
+    // Track backfill state in KV cache: "kraken_backfill:{sym}:{tf}" -> last_synced_ms
     for sym in &symbols {
         for tf in &timeframes {
             let cache_key = format!("mt5:{}:{}", sym, tf);
+            let tracking_key = format!("kraken_sync:{}:{}", sym, tf);
 
-            // Get existing bar count and date range
+            // Check if already synced recently (within 1 hour for backfill, skip)
+            let last_synced_ms: i64 = cache.get_kv(&tracking_key).ok().flatten()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            let hours_since_sync = (now_ms - last_synced_ms) / 3600000;
+
+            // Get existing bar range
             let existing = cache.get_bars(&cache_key).ok().flatten();
             let existing_bars: Vec<serde_json::Value> = existing
                 .as_ref()
                 .and_then(|(json, _)| serde_json::from_str(json).ok())
                 .unwrap_or_default();
 
-            // Find earliest and latest existing timestamps
+            let existing_count = existing_bars.len();
+
+            // Find latest existing timestamp — only fetch AFTER this point
+            let latest_existing = existing_bars.last()
+                .and_then(|b| b["timestamp"].as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.timestamp_millis())
+                .unwrap_or(0);
+
             let earliest_existing = existing_bars.first()
                 .and_then(|b| b["timestamp"].as_str())
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.timestamp_millis())
                 .unwrap_or(now_ms);
 
-            // Fetch from Kraken: start from 2013 (or before earliest existing bar)
-            let fetch_start = kraken_start_ms.min(earliest_existing);
-            let fetch_end = now_ms;
+            // Smart fetch: two passes
+            // 1) Forward fill: from latest existing bar to now (get new bars)
+            // 2) Backward fill: from 2013 to earliest existing (extend history) — only if never done
+            let needs_backward = last_synced_ms == 0 && earliest_existing > kraken_start_ms;
+            let needs_forward = latest_existing > 0 && (now_ms - latest_existing) > 86400000; // >1 day gap
+
+            if !needs_backward && !needs_forward && last_synced_ms > 0 {
+                // Already fully synced and up to date
+                results.push(serde_json::json!({
+                    "symbol": sym, "timeframe": tf,
+                    "new_bars": 0, "total_bars": existing_count,
+                    "status": "synced",
+                    "last_synced": last_synced_ms,
+                }));
+                continue;
+            }
 
             let _ = app.emit("binance_backfill_progress", serde_json::json!({
                 "symbol": sym, "timeframe": tf, "status": "fetching"
             }));
 
-            match binance::fetch_binance_klines(&client, sym, tf, fetch_start, fetch_end).await {
-                Ok(binance_bars) => {
-                    if binance_bars.is_empty() { continue; }
+            let mut new_count = 0usize;
+            let mut all_bars = existing_bars.clone();
+            let existing_timestamps: std::collections::HashSet<String> = all_bars.iter()
+                .filter_map(|b| b["timestamp"].as_str().map(|s| s.to_string()))
+                .collect();
 
-                    // Merge: combine existing + Kraken, deduplicate by timestamp, sort
-                    let mut all_bars = existing_bars.clone();
-                    let existing_timestamps: std::collections::HashSet<String> = all_bars.iter()
-                        .filter_map(|b| b["timestamp"].as_str().map(|s| s.to_string()))
-                        .collect();
-
-                    let mut new_count = 0usize;
-                    for bar in &binance_bars {
-                        if let Some(ts) = bar["timestamp"].as_str() {
-                            if !existing_timestamps.contains(ts) {
-                                all_bars.push(bar.clone());
-                                new_count += 1;
+            // Backward fill (history extension) — only first time
+            if needs_backward {
+                let fetch_end = earliest_existing;
+                match binance::fetch_binance_klines(&client, sym, tf, kraken_start_ms, fetch_end).await {
+                    Ok(bars) => {
+                        for bar in &bars {
+                            if let Some(ts) = bar["timestamp"].as_str() {
+                                if !existing_timestamps.contains(ts) {
+                                    all_bars.push(bar.clone());
+                                    new_count += 1;
+                                }
                             }
                         }
                     }
-
-                    if new_count > 0 {
-                        // Sort by timestamp
-                        all_bars.sort_by(|a, b| {
-                            let ta = a["timestamp"].as_str().unwrap_or("");
-                            let tb = b["timestamp"].as_str().unwrap_or("");
-                            ta.cmp(tb)
-                        });
-
-                        // Store merged result
-                        let json = serde_json::to_string(&all_bars)
-                            .map_err(|e| format!("Serialize failed: {e}"))?;
-                        cache.put_bars(&cache_key, &json)?;
-
-                        tracing::info!(
-                            "Kraken backfill {sym} @ {tf}: +{new_count} bars (total {}), range {}-{}",
-                            all_bars.len(),
-                            all_bars.first().and_then(|b| b["timestamp"].as_str()).unwrap_or("?"),
-                            all_bars.last().and_then(|b| b["timestamp"].as_str()).unwrap_or("?")
-                        );
-
-                        total_filled += new_count;
-                        results.push(serde_json::json!({
-                            "symbol": sym, "timeframe": tf,
-                            "new_bars": new_count, "total_bars": all_bars.len(),
-                            "status": "ok"
-                        }));
+                    Err(e) => {
+                        tracing::warn!("Kraken backward fill {sym} @ {tf}: {e}");
+                        // Rate limited — wait longer and retry once
+                        if e.contains("Too many requests") {
+                            tracing::info!("Kraken rate limited, waiting 10s...");
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                            if let Ok(bars) = binance::fetch_binance_klines(&client, sym, tf, kraken_start_ms, fetch_end).await {
+                                for bar in &bars {
+                                    if let Some(ts) = bar["timestamp"].as_str() {
+                                        if !existing_timestamps.contains(ts) {
+                                            all_bars.push(bar.clone());
+                                            new_count += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("Kraken backfill {sym} @ {tf} failed: {e}");
-                    results.push(serde_json::json!({
-                        "symbol": sym, "timeframe": tf,
-                        "error": e, "status": "error"
-                    }));
-                }
+                // Kraken rate limit: ~1 call per 2-3 seconds for public
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
 
-            // Rate limit between requests
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            // Forward fill (new bars since last sync)
+            if needs_forward || latest_existing == 0 {
+                let fetch_start = if latest_existing > 0 { latest_existing } else { kraken_start_ms };
+                match binance::fetch_binance_klines(&client, sym, tf, fetch_start, now_ms).await {
+                    Ok(bars) => {
+                        let updated_timestamps: std::collections::HashSet<String> = all_bars.iter()
+                            .filter_map(|b| b["timestamp"].as_str().map(|s| s.to_string()))
+                            .collect();
+                        for bar in &bars {
+                            if let Some(ts) = bar["timestamp"].as_str() {
+                                if !updated_timestamps.contains(ts) {
+                                    all_bars.push(bar.clone());
+                                    new_count += 1;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Kraken forward fill {sym} @ {tf}: {e}");
+                        if e.contains("Too many requests") {
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                            if let Ok(bars) = binance::fetch_binance_klines(&client, sym, tf, fetch_start, now_ms).await {
+                                let updated_timestamps: std::collections::HashSet<String> = all_bars.iter()
+                                    .filter_map(|b| b["timestamp"].as_str().map(|s| s.to_string()))
+                                    .collect();
+                                for bar in &bars {
+                                    if let Some(ts) = bar["timestamp"].as_str() {
+                                        if !updated_timestamps.contains(ts) {
+                                            all_bars.push(bar.clone());
+                                            new_count += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+
+            if new_count > 0 {
+                all_bars.sort_by(|a, b| {
+                    let ta = a["timestamp"].as_str().unwrap_or("");
+                    let tb = b["timestamp"].as_str().unwrap_or("");
+                    ta.cmp(tb)
+                });
+                all_bars.dedup_by(|a, b| a["timestamp"] == b["timestamp"]);
+
+                let json = serde_json::to_string(&all_bars)
+                    .map_err(|e| format!("Serialize failed: {e}"))?;
+                cache.put_bars(&cache_key, &json)?;
+
+                tracing::info!(
+                    "Kraken backfill {sym} @ {tf}: +{new_count} bars (total {}), range {}-{}",
+                    all_bars.len(),
+                    all_bars.first().and_then(|b| b["timestamp"].as_str()).unwrap_or("?"),
+                    all_bars.last().and_then(|b| b["timestamp"].as_str()).unwrap_or("?")
+                );
+            }
+
+            // Only mark as synced if we actually processed data (not rate limited)
+            if new_count > 0 || (all_bars.len() == existing_count && existing_count > 0) {
+                let _ = cache.put_kv(&tracking_key, &now_ms.to_string());
+            }
+
+            total_filled += new_count;
+            results.push(serde_json::json!({
+                "symbol": sym, "timeframe": tf,
+                "new_bars": new_count, "total_bars": all_bars.len(),
+                "status": if new_count > 0 { "ok" } else if existing_count > 0 { "synced" } else { "pending" },
+                "last_synced": if new_count > 0 || existing_count > 0 { now_ms } else { last_synced_ms },
+            }));
         }
     }
 

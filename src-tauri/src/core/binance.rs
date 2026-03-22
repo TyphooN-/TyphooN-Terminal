@@ -171,7 +171,8 @@ pub async fn fetch_binance_klines(
         since = last;
 
         // Rate limit: Kraken allows ~15 calls per minute for public endpoints
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Use 4s between paginated calls to stay well under limit
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
     }
 
     // Sort by timestamp and deduplicate

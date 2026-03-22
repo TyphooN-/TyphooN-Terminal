@@ -12579,7 +12579,7 @@ function cmdBinanceBackfill() {
           [r.symbol, r.timeframe, r.new_bars || 0, r.total_bars || "—", r.status].forEach((v, i) => {
             const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;"; td.textContent = String(v);
             if (i === 0) td.style.color = "#8af";
-            if (i === 4) td.style.color = r.status === "ok" ? "#4caf50" : "#f44336";
+            if (i === 4) td.style.color = r.status === "ok" ? "#4caf50" : r.status === "synced" ? "#42a5f5" : r.status === "pending" ? "#ff9800" : "#f44336";
             tr.appendChild(td);
           });
           table.appendChild(tr);
