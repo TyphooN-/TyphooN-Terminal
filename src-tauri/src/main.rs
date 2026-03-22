@@ -23,7 +23,7 @@ use core::var;
 use core::margin;
 use core::backtest::{self as backtest_engine, SMACrossStrategy, NNFXStrategy, BacktestResult, BarByBarResult};
 use core::cache::SqliteCache;
-use core::binance;
+use core::kraken as binance;
 use core::darwin;
 use core::screener::{self as screener_engine, ScreenerFilter, ScreenerSymbol};
 use strategies::martingale::{MartingaleConfig, MartingaleMode, MartingaleState};
@@ -1934,6 +1934,10 @@ async fn fetch_article(url: String) -> Result<String, String> {
     if !url.starts_with("https://") {
         return Err("Only HTTPS URLs allowed".to_string());
     }
+    // Block private/internal URLs (SSRF prevention)
+    if url.contains("127.0.0.1") || url.contains("localhost") || url.contains("169.254") || url.contains("10.") || url.contains("192.168.") || url.contains("[::1]") {
+        return Err("Internal URLs not allowed".into());
+    }
     let client = shared_client();
     let resp = client
         .get(&url)
@@ -2721,7 +2725,7 @@ async fn db_cache_detailed_stats(state: State<'_, SharedState>) -> Result<String
             "timestamp": ts,
         })
     }).collect();
-    Ok(serde_json::to_string(&json_entries).unwrap())
+    Ok(serde_json::to_string(&json_entries).unwrap_or_default())
 }
 
 #[tauri::command]

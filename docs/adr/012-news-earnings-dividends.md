@@ -1,6 +1,6 @@
 # ADR-012: News, Earnings, and Dividend Data
 
-**Status:** Implementing
+**Status:** Implemented
 **Date:** 2026-03-15
 **Context:** Traders need to know upcoming earnings dates, dividend dates, and recent news for symbols they're watching. This data should be cached with the same three-tier strategy as bar data.
 

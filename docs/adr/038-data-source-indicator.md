@@ -1,6 +1,6 @@
 # ADR-038: Data Source Indicator & Pluggable Broker Hierarchy
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-03-21
 
 > **Note:** Extends [ADR-037](037-data-source-hierarchy.md) (Data Source Hierarchy) and [ADR-010](010-multi-account.md) (Multi-Account).

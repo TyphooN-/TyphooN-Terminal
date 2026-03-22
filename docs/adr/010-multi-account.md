@@ -17,10 +17,9 @@ Store named accounts in Tauri webview's localStorage with save/load/delete capab
 - **Delete button**: Remove saved accounts
 - **Auto-fill**: If only one saved account, pre-fills on startup
 
-## Security Notes (see ADR-006)
+## Security Notes (see ADR-006 Pass 19)
 
-- Credentials stored in Tauri webview localStorage (sandboxed per application)
+- Credentials stored in AES-256-GCM encrypted SQLite (sandboxed per application)
 - Not accessible by browsers or other apps
 - CSP prevents external script access
 - Users can uncheck "Save credentials" to avoid persistence
-- Future: OS keychain integration for stronger protection

@@ -48,6 +48,9 @@ Priority 3: Alpaca         — live trading execution (NOT 24/7 for crypto)
 | ETH/USD | ETHUSD | Direct mapping |
 | SOL/USD | SOLUSD | Direct mapping |
 
+### Weekend Auto-Sync
+The frontend automatically polls Kraken every 30 seconds when markets are closed (Friday 22:00 UTC - Sunday 22:00 UTC) for the currently viewed crypto symbol. This provides near-real-time weekend price updates without manual intervention.
+
 ## Consequences
 
 - **Pro**: Weekend gaps filled for all crypto symbols

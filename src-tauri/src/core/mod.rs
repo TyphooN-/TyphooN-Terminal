@@ -1,6 +1,6 @@
 pub mod backtest;
 pub mod bar_builder;
-pub mod binance;
+pub mod kraken;
 pub mod cache;
 pub mod darwin;
 pub mod margin;
