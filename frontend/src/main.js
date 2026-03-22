@@ -26359,6 +26359,17 @@ function getDataSourceLabel(symbol) {
   if (Date.now() - lastMt5SyncSuccess > MT5_DISCONNECT_MS) {
     return { label: mt5ServerLabel + " Disconnected \u2014 Alpaca", color: "#f44336", icon: "!" };
   }
+  // Weekend crypto → Kraken is primary source
+  const isCrypto = symbol && (symbol.includes("/USD") || symbol.match(/^(BTC|ETH|SOL|DOGE|ADA|XRP|BNB|AVAX|DOT|LINK)(USD)?$/i));
+  if (isCrypto) {
+    const now = new Date();
+    const utcDay = now.getUTCDay(); // 0=Sun, 6=Sat
+    const utcHour = now.getUTCHours();
+    const isWeekend = (utcDay === 6) || (utcDay === 0) || (utcDay === 5 && utcHour >= 22) || (utcDay === 0 && utcHour < 22);
+    if (isWeekend) {
+      return { label: "Kraken (weekend)", color: "#42a5f5", icon: "K" };
+    }
+  }
   if (mt5SymbolSet.has(symbol)) {
     return { label: mt5ServerLabel, color: "#4caf50", icon: "M" };
   }
