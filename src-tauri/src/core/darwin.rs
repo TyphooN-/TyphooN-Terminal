@@ -1697,6 +1697,187 @@ pub fn get_trade_overlaps(conn: &Connection) -> Result<Vec<TradeOverlap>, String
     Ok(result)
 }
 
+// ── DARWIN FTP Screener ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DarwinScreenResult {
+    pub ticker: String,
+    pub return_pct: f64,
+    pub max_drawdown: f64,
+    pub sharpe: f64,
+    pub trading_days: i64,
+    pub avg_trades_per_day: f64,
+    pub symbols_traded: Vec<String>,
+    pub score: f64,  // composite ranking score
+}
+
+/// Scan Darwinex FTP RETURN files to find DARWINs matching criteria.
+/// Reads from /mnt/bigraidz2/Darwinex_FTP/<ticker>/RETURN
+pub fn scan_darwin_ftp(
+    ftp_path: &str,
+    min_days: i64,
+    min_return: f64,
+    max_drawdown: f64,
+    limit: usize,
+) -> Result<Vec<DarwinScreenResult>, String> {
+    let ftp_dir = std::path::Path::new(ftp_path);
+    if !ftp_dir.exists() {
+        return Err(format!("FTP path not found: {}", ftp_path));
+    }
+
+    let mut results: Vec<DarwinScreenResult> = Vec::new();
+    let entries = std::fs::read_dir(ftp_dir)
+        .map_err(|e| format!("Read dir failed: {e}"))?;
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let ticker = entry.file_name().to_str().unwrap_or("").to_string();
+        if ticker.is_empty() || ticker.starts_with('.') { continue; }
+
+        let return_path = entry.path().join("RETURN");
+        if !return_path.exists() { continue; }
+
+        // Parse RETURN file: timestamp,experience_score,[return_values...]
+        let content = match std::fs::read_to_string(&return_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+        if lines.len() < min_days as usize { continue; }
+
+        // Extract return values from last line
+        let last_line = lines.last().unwrap_or(&"");
+        let parts: Vec<&str> = last_line.splitn(3, ',').collect();
+        if parts.len() < 3 { continue; }
+
+        // Parse the return array from the last line
+        let return_str = parts[2].trim_start_matches('[').trim_end_matches(']');
+        let last_return: f64 = return_str.split(',')
+            .last()
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .unwrap_or(1.0);
+
+        let total_return = (last_return - 1.0) * 100.0;
+        if total_return < min_return { continue; }
+
+        // Compute max drawdown from all return values across all lines
+        let mut peak = 0.0f64;
+        let mut max_dd = 0.0f64;
+        let mut daily_returns: Vec<f64> = Vec::new();
+        let mut prev_val = 1.0f64;
+
+        for line in &lines {
+            let lp: Vec<&str> = line.splitn(3, ',').collect();
+            if lp.len() < 3 { continue; }
+            let vals_str = lp[2].trim_start_matches('[').trim_end_matches(']');
+            for val_str in vals_str.split(',') {
+                if let Ok(val) = val_str.trim().parse::<f64>() {
+                    if val > peak { peak = val; }
+                    if peak > 0.0 {
+                        let dd = (peak - val) / peak * 100.0;
+                        if dd > max_dd { max_dd = dd; }
+                    }
+                    let ret = (val - prev_val) / prev_val;
+                    daily_returns.push(ret);
+                    prev_val = val;
+                }
+            }
+        }
+
+        if max_dd > max_drawdown { continue; }
+
+        // Compute Sharpe
+        let n = daily_returns.len() as f64;
+        let avg = if n > 0.0 { daily_returns.iter().sum::<f64>() / n } else { 0.0 };
+        let vol = if n > 1.0 {
+            (daily_returns.iter().map(|r| (r - avg).powi(2)).sum::<f64>() / (n - 1.0)).sqrt()
+        } else { 1.0 };
+        let sharpe = if vol > 0.0 { avg / vol * (252.0f64).sqrt() } else { 0.0 };
+
+        // Read POSITIONS for symbols traded
+        let positions_path = entry.path().join("POSITIONS");
+        let mut symbols = Vec::new();
+        if positions_path.exists() {
+            if let Ok(pos_content) = std::fs::read_to_string(&positions_path) {
+                let mut sym_set = std::collections::HashSet::new();
+                for line in pos_content.lines() {
+                    // Find symbol names in ['SYMBOL', ...] patterns
+                    for part in line.split("'") {
+                        if part.len() >= 2 && part.len() <= 10 && part.chars().all(|c| c.is_ascii_uppercase() || c == '/') {
+                            sym_set.insert(part.to_string());
+                        }
+                    }
+                }
+                symbols = sym_set.into_iter().collect();
+                symbols.sort();
+            }
+        }
+
+        let score = sharpe * 0.4 + total_return * 0.3 - max_dd * 0.3;
+
+        results.push(DarwinScreenResult {
+            ticker,
+            return_pct: total_return,
+            max_drawdown: max_dd,
+            sharpe,
+            trading_days: lines.len() as i64,
+            avg_trades_per_day: 0.0, // would need TRADES file
+            symbols_traded: symbols,
+            score,
+        });
+    }
+
+    // Sort by score descending
+    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit);
+    Ok(results)
+}
+
+/// Export symbol radar data in MarketWizardry format.
+/// Reads MT5 specs from SQLite and generates the .txt report.
+pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir: &str) -> Result<String, String> {
+    // This reads the __SPECS__ key from kv_cache to get current symbol data
+    // and compares with previous snapshots if available
+    let specs_json: Option<String> = {
+        let mut stmt = cache_conn.prepare(
+            "SELECT value FROM kv_cache WHERE key LIKE '%__SPECS__%' LIMIT 1"
+        ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+        match stmt.query_row([], |row| {
+            let data: Vec<u8> = row.get(0)?;
+            Ok(data)
+        }) {
+            Ok(compressed) => {
+                let decompressed = zstd::decode_all(compressed.as_slice())
+                    .map_err(|e| format!("Decompress failed: {e}"))?;
+                Some(String::from_utf8(decompressed)
+                    .map_err(|e| format!("UTF-8 failed: {e}"))?)
+            }
+            Err(_) => None,
+        }
+    };
+
+    if specs_json.is_none() {
+        return Err("No MT5 specs data found in cache. Run MT5 sync first.".into());
+    }
+
+    let specs = specs_json.unwrap();
+    let dir = std::path::Path::new(output_dir);
+    std::fs::create_dir_all(dir).map_err(|e| format!("Create dir failed: {e}"))?;
+
+    // Write specs snapshot for radar tracking
+    let timestamp = chrono::Utc::now().format("%Y.%m.%d").to_string();
+    let output_path = dir.join(format!("SymbolsExport-Darwinex-Live-All-{}.json", timestamp));
+    std::fs::write(&output_path, &specs)
+        .map_err(|e| format!("Write failed: {e}"))?;
+
+    Ok(format!("{{\"exported\":\"{}\",\"size\":{}}}", output_path.display(), specs.len()))
+}
+
 /// Delete a DARWIN account and all its data.
 pub fn delete_darwin_account(conn: &Connection, darwin_ticker: &str) -> Result<(), String> {
     conn.execute("DELETE FROM darwin_deals WHERE account = ?1", params![darwin_ticker])

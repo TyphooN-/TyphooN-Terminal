@@ -11861,6 +11861,97 @@ function cmdDarwinPortfolio() {
   renderView();
 }
 
+// ── DARWIN RADAR — FTP Screener ──────────────────────────────
+function cmdDarwinRadar() {
+  const win = createWindow({ title: "DARWIN RADAR — FTP Screener", width: 950, height: 600 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;";
+
+  const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
+  const inputStyle = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;width:80px;";
+
+  const mkLabel = (text) => { const l = document.createElement("span"); l.style.cssText = "color:#888;font-size:10px;"; l.textContent = text; return l; };
+  const mkInput = (placeholder, val) => { const i = document.createElement("input"); i.style.cssText = inputStyle; i.placeholder = placeholder; i.value = val; return i; };
+
+  const minDaysInput = mkInput("Min Days", "252");
+  const minReturnInput = mkInput("Min Return%", "0");
+  const maxDDInput = mkInput("Max DD%", "50");
+  const limitInput = mkInput("Limit", "100");
+  const scanBtn = document.createElement("button"); scanBtn.textContent = "Scan FTP"; scanBtn.style.cssText = "padding:4px 12px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+  const exportBtn = document.createElement("button"); exportBtn.textContent = "Export Radar Snapshot"; exportBtn.style.cssText = "padding:4px 12px;background:#1b5e20;color:#8f8;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;margin-left:auto;";
+
+  topBar.appendChild(mkLabel("Min Days:")); topBar.appendChild(minDaysInput);
+  topBar.appendChild(mkLabel("Min Return%:")); topBar.appendChild(minReturnInput);
+  topBar.appendChild(mkLabel("Max DD%:")); topBar.appendChild(maxDDInput);
+  topBar.appendChild(mkLabel("Limit:")); topBar.appendChild(limitInput);
+  topBar.appendChild(scanBtn); topBar.appendChild(exportBtn);
+  root.appendChild(topBar);
+
+  const contentDiv = document.createElement("div"); contentDiv.style.cssText = "flex:1;overflow-y:auto;padding:8px;";
+  contentDiv.textContent = "Click 'Scan FTP' to search 50,000+ DARWINs by performance criteria.";
+  root.appendChild(contentDiv);
+
+  scanBtn.addEventListener("click", async () => {
+    scanBtn.disabled = true; scanBtn.textContent = "Scanning...";
+    contentDiv.textContent = "Scanning Darwinex FTP... this may take a moment for 50K+ DARWINs.";
+    try {
+      const json = await window.__TAURI__.core.invoke("scan_darwin_ftp", {
+        minDays: parseInt(minDaysInput.value) || 252,
+        minReturn: parseFloat(minReturnInput.value) || 0,
+        maxDrawdown: parseFloat(maxDDInput.value) || 50,
+        limit: parseInt(limitInput.value) || 100,
+      });
+      const results = JSON.parse(json);
+      contentDiv.textContent = "";
+
+      const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+      title.textContent = `DARWIN Radar — ${results.length} results`;
+      contentDiv.appendChild(title);
+
+      if (results.length === 0) { contentDiv.appendChild(document.createTextNode("No DARWINs matched criteria.")); return; }
+
+      const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+      const thead = document.createElement("tr");
+      ["Rank", "DARWIN", "Return%", "Max DD%", "Sharpe", "Days", "Score", "Symbols"].forEach(h => {
+        const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+      });
+      table.appendChild(thead);
+
+      results.forEach((r, idx) => {
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+        const vals = [
+          idx + 1, r.ticker,
+          r.return_pct.toFixed(1) + "%", r.max_drawdown.toFixed(1) + "%",
+          r.sharpe.toFixed(2), r.trading_days,
+          r.score.toFixed(1), r.symbols_traded.slice(0, 5).join(", ") + (r.symbols_traded.length > 5 ? "..." : ""),
+        ];
+        for (let i = 0; i < vals.length; i++) {
+          const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;";
+          td.textContent = String(vals[i]);
+          if (i === 1) td.style.color = "#8af";
+          else if (i === 2) td.style.color = r.return_pct >= 0 ? "#4caf50" : "#f44336";
+          else if (i === 4) td.style.color = r.sharpe >= 1 ? "#4caf50" : r.sharpe >= 0 ? "#ff9800" : "#f44336";
+          else if (i === 7) { td.style.color = "#888"; td.style.fontSize = "9px"; }
+          tr.appendChild(td);
+        }
+        table.appendChild(tr);
+      });
+      contentDiv.appendChild(table);
+    } catch (e) { contentDiv.textContent = "Scan failed: " + e; }
+    scanBtn.disabled = false; scanBtn.textContent = "Scan FTP";
+  });
+
+  exportBtn.addEventListener("click", async () => {
+    try {
+      const json = await window.__TAURI__.core.invoke("export_radar_snapshot");
+      const result = JSON.parse(json);
+      log("Radar snapshot exported: " + result.exported, "ok");
+    } catch (e) { log("Export failed: " + e, "warn"); }
+  });
+
+  win.appendElement(root);
+}
+
 // ══════════════════════════════════════════════════════════════
 // UNDO — Undo Last Trade (panic button)
 // ══════════════════════════════════════════════════════════════
@@ -12734,6 +12825,7 @@ function cmdCheat() {
       ["IMPORTTRADES", "Import external trade history"],
       ["DARWIN", "DARWIN account viewer (MT5 history)"],
       ["DARWINS", "Combined DARWIN portfolio dashboard"],
+      ["RADAR", "DARWIN RADAR — FTP screener"],
       ["ACTIVITIES", "Account activities"],
       ["INSIDER", "Insider trading (SEC Form 4)"],
       ["SEC", "SEC Filings (10-K, 10-Q, 8-K, S-1, etc.)"],
@@ -24737,6 +24829,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "IMPORTTRADES", desc: "Import external trade history (CSV: MT5, IB, generic)", action: cmdImportTrades },
   { name: "DARWIN", desc: "DARWIN account viewer — import MT5 history, equity curves, P/L analytics", action: cmdDarwin },
   { name: "DARWINS", desc: "Combined DARWIN portfolio — exposure, open positions, equity curves across all accounts", action: cmdDarwinPortfolio },
+  { name: "RADAR", desc: "DARWIN RADAR — scan 50K+ DARWINs from FTP by Sharpe, return, drawdown", action: cmdDarwinRadar },
   { name: "SIGNAL", desc: "Composite trading signal generator (Fisher, RSI, KAMA, SMA200, volume, ATR)", action: cmdSignal },
   { name: "PROFILE", desc: "Trading profile analytics (P&L by symbol, day of week, hold time)", action: cmdProfile },
   { name: "FIBO+", desc: "Fibonacci time zones (markers at Fib intervals from swing low)", action: cmdFiboTime },

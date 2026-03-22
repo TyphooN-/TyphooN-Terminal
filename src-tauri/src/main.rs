@@ -4829,6 +4829,43 @@ async fn get_portfolio_equity_curve(_state: State<'_, SharedState>) -> Result<St
     serde_json::to_string(&curve).map_err(|e| format!("Serialize failed: {e}"))
 }
 
+// ── DARWIN FTP Screener & Radar ─────────────────────────────────────
+
+#[tauri::command]
+async fn scan_darwin_ftp(
+    _state: State<'_, SharedState>,
+    ftp_path: Option<String>,
+    min_days: Option<i64>,
+    min_return: Option<f64>,
+    max_drawdown: Option<f64>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let path = ftp_path.unwrap_or_else(|| "/mnt/bigraidz2/Darwinex_FTP".to_string());
+    let results = darwin::scan_darwin_ftp(
+        &path,
+        min_days.unwrap_or(252),
+        min_return.unwrap_or(0.0),
+        max_drawdown.unwrap_or(50.0),
+        limit.unwrap_or(100) as usize,
+    )?;
+    serde_json::to_string(&results).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn export_radar_snapshot(
+    state: State<'_, SharedState>,
+) -> Result<String, String> {
+    let db = {
+        let s = state.lock().await;
+        s.db_cache.as_ref().ok_or("No database")?.clone()
+    };
+    let darwin_conn = open_darwin_connection()?;
+    let cache_conn = db.connection()?;
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let output_dir = format!("{}/mt5xml/radar", home);
+    darwin::export_radar_txt(&darwin_conn, &cache_conn, &output_dir)
+}
+
 #[tauri::command]
 async fn delete_darwin_account(
     _state: State<'_, SharedState>,
@@ -5109,6 +5146,8 @@ fn main() {
             get_portfolio_open_positions,
             get_portfolio_exposure,
             get_portfolio_equity_curve,
+            scan_darwin_ftp,
+            export_radar_snapshot,
             delete_darwin_account,
         ])
         .run(tauri::generate_context!())
