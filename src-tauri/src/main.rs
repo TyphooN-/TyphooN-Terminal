@@ -5071,48 +5071,40 @@ async fn backfill_crypto_binance(
     let kraken_start_ms: i64 = 1357027200000; // 2013-01-01 00:00:00 UTC
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    // Track backfill state in KV cache: "kraken_backfill:{sym}:{tf}" -> last_synced_ms
+    // Two tracking keys per symbol:TF:
+    // "kraken_full:{sym}:{tf}" = "1" when full 2013→now backfill is done (fills ALL gaps)
+    // "kraken_sync:{sym}:{tf}" = last_synced_ms for incremental forward fill
     for sym in &symbols {
         for tf in &timeframes {
             let cache_key = format!("mt5:{}:{}", sym, tf);
-            let tracking_key = format!("kraken_sync:{}:{}", sym, tf);
+            let full_key = format!("kraken_full:{}:{}", sym, tf);
+            let sync_key = format!("kraken_sync:{}:{}", sym, tf);
 
-            // Check if already synced recently (within 1 hour for backfill, skip)
-            let last_synced_ms: i64 = cache.get_kv(&tracking_key).ok().flatten()
+            let full_done = cache.get_kv(&full_key).ok().flatten()
+                .map(|s| s == "1")
+                .unwrap_or(false);
+            let last_synced_ms: i64 = cache.get_kv(&sync_key).ok().flatten()
                 .and_then(|s| s.parse::<i64>().ok())
                 .unwrap_or(0);
-            let hours_since_sync = (now_ms - last_synced_ms) / 3600000;
 
-            // Get existing bar range
+            // Get existing bars
             let existing = cache.get_bars(&cache_key).ok().flatten();
             let existing_bars: Vec<serde_json::Value> = existing
                 .as_ref()
                 .and_then(|(json, _)| serde_json::from_str(json).ok())
                 .unwrap_or_default();
-
             let existing_count = existing_bars.len();
 
-            // Find latest existing timestamp — only fetch AFTER this point
             let latest_existing = existing_bars.last()
                 .and_then(|b| b["timestamp"].as_str())
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.timestamp_millis())
                 .unwrap_or(0);
 
-            let earliest_existing = existing_bars.first()
-                .and_then(|b| b["timestamp"].as_str())
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                .map(|dt| dt.timestamp_millis())
-                .unwrap_or(now_ms);
+            let needs_forward = latest_existing > 0 && (now_ms - latest_existing) > 86400000;
 
-            // Smart fetch: two passes
-            // 1) Forward fill: from latest existing bar to now (get new bars)
-            // 2) Backward fill: from 2013 to earliest existing (extend history) — only if never done
-            let needs_backward = last_synced_ms == 0 && earliest_existing > kraken_start_ms;
-            let needs_forward = latest_existing > 0 && (now_ms - latest_existing) > 86400000; // >1 day gap
-
-            if !needs_backward && !needs_forward && last_synced_ms > 0 {
-                // Already fully synced and up to date
+            // If full backfill done AND no forward gap → skip entirely
+            if full_done && !needs_forward {
                 results.push(serde_json::json!({
                     "symbol": sym, "timeframe": tf,
                     "new_bars": 0, "total_bars": existing_count,
@@ -5132,10 +5124,46 @@ async fn backfill_crypto_binance(
                 .filter_map(|b| b["timestamp"].as_str().map(|s| s.to_string()))
                 .collect();
 
-            // Backward fill (history extension) — only first time
-            if needs_backward {
-                let fetch_end = earliest_existing;
-                match binance::fetch_binance_klines(&client, sym, tf, kraken_start_ms, fetch_end).await {
+            if !full_done {
+                // FULL BACKFILL: fetch 2013→now in one pass — fills ALL gaps (weekends, history, everything)
+                tracing::info!("Kraken full backfill {sym} @ {tf}: fetching 2013→now...");
+                match binance::fetch_binance_klines(&client, sym, tf, kraken_start_ms, now_ms).await {
+                    Ok(bars) => {
+                        for bar in &bars {
+                            if let Some(ts) = bar["timestamp"].as_str() {
+                                if !existing_timestamps.contains(ts) {
+                                    all_bars.push(bar.clone());
+                                    new_count += 1;
+                                }
+                            }
+                        }
+                        // Mark full backfill as done
+                        let _ = cache.put_kv(&full_key, "1");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Kraken full backfill {sym} @ {tf}: {e}");
+                        if e.contains("Too many requests") {
+                            tracing::info!("Kraken rate limited, waiting 15s...");
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                            if let Ok(bars) = binance::fetch_binance_klines(&client, sym, tf, kraken_start_ms, now_ms).await {
+                                for bar in &bars {
+                                    if let Some(ts) = bar["timestamp"].as_str() {
+                                        if !existing_timestamps.contains(ts) {
+                                            all_bars.push(bar.clone());
+                                            new_count += 1;
+                                        }
+                                    }
+                                }
+                                let _ = cache.put_kv(&full_key, "1");
+                            }
+                        }
+                        // Don't mark as done on failure — will retry next time
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+            } else if needs_forward {
+                // INCREMENTAL: only fetch from latest bar forward
+                match binance::fetch_binance_klines(&client, sym, tf, latest_existing, now_ms).await {
                     Ok(bars) => {
                         for bar in &bars {
                             if let Some(ts) = bar["timestamp"].as_str() {
@@ -5147,66 +5175,13 @@ async fn backfill_crypto_binance(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("Kraken backward fill {sym} @ {tf}: {e}");
-                        // Rate limited — wait longer and retry once
-                        if e.contains("Too many requests") {
-                            tracing::info!("Kraken rate limited, waiting 10s...");
-                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                            if let Ok(bars) = binance::fetch_binance_klines(&client, sym, tf, kraken_start_ms, fetch_end).await {
-                                for bar in &bars {
-                                    if let Some(ts) = bar["timestamp"].as_str() {
-                                        if !existing_timestamps.contains(ts) {
-                                            all_bars.push(bar.clone());
-                                            new_count += 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Kraken rate limit: ~1 call per 2-3 seconds for public
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            }
-
-            // Forward fill (new bars since last sync)
-            if needs_forward || latest_existing == 0 {
-                let fetch_start = if latest_existing > 0 { latest_existing } else { kraken_start_ms };
-                match binance::fetch_binance_klines(&client, sym, tf, fetch_start, now_ms).await {
-                    Ok(bars) => {
-                        let updated_timestamps: std::collections::HashSet<String> = all_bars.iter()
-                            .filter_map(|b| b["timestamp"].as_str().map(|s| s.to_string()))
-                            .collect();
-                        for bar in &bars {
-                            if let Some(ts) = bar["timestamp"].as_str() {
-                                if !updated_timestamps.contains(ts) {
-                                    all_bars.push(bar.clone());
-                                    new_count += 1;
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
                         tracing::warn!("Kraken forward fill {sym} @ {tf}: {e}");
                         if e.contains("Too many requests") {
-                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                            if let Ok(bars) = binance::fetch_binance_klines(&client, sym, tf, fetch_start, now_ms).await {
-                                let updated_timestamps: std::collections::HashSet<String> = all_bars.iter()
-                                    .filter_map(|b| b["timestamp"].as_str().map(|s| s.to_string()))
-                                    .collect();
-                                for bar in &bars {
-                                    if let Some(ts) = bar["timestamp"].as_str() {
-                                        if !updated_timestamps.contains(ts) {
-                                            all_bars.push(bar.clone());
-                                            new_count += 1;
-                                        }
-                                    }
-                                }
-                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                         }
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
             }
 
             if new_count > 0 {
@@ -5231,7 +5206,7 @@ async fn backfill_crypto_binance(
 
             // Only mark as synced if we actually processed data (not rate limited)
             if new_count > 0 || (all_bars.len() == existing_count && existing_count > 0) {
-                let _ = cache.put_kv(&tracking_key, &now_ms.to_string());
+                let _ = cache.put_kv(&sync_key, &now_ms.to_string());
             }
 
             total_filled += new_count;
@@ -5311,7 +5286,23 @@ async fn fetch_binance_bars(
     }).to_string())
 }
 
-/// Get list of crypto symbols that can be backfilled from Binance.
+/// Reset Kraken backfill tracking — forces full re-sync on next backfill.
+#[tauri::command]
+async fn reset_kraken_backfill(state: State<'_, SharedState>) -> Result<String, String> {
+    let cache = {
+        let s = state.lock().await;
+        s.db_cache.as_ref().ok_or("No database")?.clone()
+    };
+    let conn = cache.connection()?;
+    let deleted = conn.execute(
+        "DELETE FROM kv_cache WHERE key LIKE 'kraken_full:%' OR key LIKE 'kraken_sync:%'",
+        [],
+    ).map_err(|e| format!("Delete failed: {e}"))?;
+    tracing::info!("Reset Kraken backfill: cleared {} tracking keys", deleted);
+    Ok(format!("{{\"cleared\":{}}}", deleted))
+}
+
+/// Get list of crypto symbols that can be backfilled from Kraken.
 #[tauri::command]
 async fn list_binance_symbols(state: State<'_, SharedState>) -> Result<String, String> {
     let cache = {
@@ -5832,8 +5823,9 @@ fn main() {
             get_darwin_price_series,
             // Kraken Pair Discovery
             list_kraken_pairs,
-            // Binance Crypto Backfill
+            // Kraken Crypto Backfill
             backfill_crypto_binance,
+            reset_kraken_backfill,
             fetch_binance_bars,
             list_binance_symbols,
             // Risk Simulation & Regime

@@ -12526,7 +12526,9 @@ function cmdBinanceBackfill() {
   const backfillAllBtn = document.createElement("button"); backfillAllBtn.textContent = "Backfill ALL Crypto (2013→Now)"; backfillAllBtn.style.cssText = "padding:6px 14px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:11px;font-family:inherit;";
   const symInput = document.createElement("input"); symInput.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px 8px;font-size:10px;font-family:inherit;width:100px;"; symInput.placeholder = "BTC/USD";
   const singleBtn = document.createElement("button"); singleBtn.textContent = "Backfill Single"; singleBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
-  topBar.appendChild(backfillAllBtn); topBar.appendChild(symInput); topBar.appendChild(singleBtn);
+  const resetBtn = document.createElement("button"); resetBtn.textContent = "Reset Tracking"; resetBtn.style.cssText = "padding:4px 10px;background:#5f0a0a;color:#f88;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;margin-left:auto;";
+  resetBtn.addEventListener("click", async () => { try { const r = JSON.parse(await window.__TAURI__.core.invoke("reset_kraken_backfill")); log("Reset Kraken tracking: cleared " + r.cleared + " keys. Next backfill will do full 2013→now.", "ok"); } catch (e) { log("Reset failed: " + e, "warn"); } });
+  topBar.appendChild(backfillAllBtn); topBar.appendChild(symInput); topBar.appendChild(singleBtn); topBar.appendChild(resetBtn);
   root.appendChild(topBar);
 
   const contentDiv = document.createElement("div"); contentDiv.style.cssText = "flex:1;overflow-y:auto;padding:8px;";
