@@ -5209,22 +5209,6 @@ function setupButtons() {
 // ── Keyboard Shortcuts ──────────────────────────────────────
 
 function setupKeyboard() {
-  // Quake-style console toggle: backtick/tilde toggles command bar focus
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "`" || e.key === "~") {
-      e.preventDefault();
-      const symbolInput = document.getElementById("symbol-input");
-      if (!symbolInput) return;
-      if (document.activeElement === symbolInput) {
-        symbolInput.blur();
-      } else {
-        symbolInput.focus();
-        symbolInput.select();
-      }
-      return;
-    }
-  }, true); // capture phase — before input handlers
-
   document.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
     switch (e.key) {
@@ -26844,10 +26828,7 @@ function setupCommandPalette() {
   function closePalette() {
     overlay.classList.add("hidden");
     input.value = "";
-    // After slide-up animation completes, fully hide to prevent click interception
-    setTimeout(() => {
-      if (overlay.classList.contains("hidden")) overlay.classList.add("instant-hide");
-    }, 150);
+    input.blur();
   }
 
   function renderCmdResults(query) {
@@ -26947,10 +26928,11 @@ function setupCommandPalette() {
     if (e.target === overlay) closePalette();
   });
 
-  // Global shortcut: ` (backtick) — Quake-style drop-down console
+  // Global shortcut: ` or ~ — Quake-style instant console toggle (works from ANY context)
   document.addEventListener("keydown", (e) => {
-    if (e.key === "`" && e.target.tagName !== "INPUT" && e.target.tagName !== "SELECT" && e.target.tagName !== "TEXTAREA") {
+    if (e.key === "`" || e.key === "~") {
       e.preventDefault();
+      e.stopImmediatePropagation();
       if (overlay.classList.contains("hidden") || overlay.classList.contains("instant-hide")) {
         overlay.classList.remove("hidden", "instant-hide");
         input.value = "";

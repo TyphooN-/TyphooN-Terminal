@@ -962,11 +962,10 @@ select option {
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 2000;
-  animation: console-slide-down 150ms ease-out forwards;
 }
 
 #command-palette.hidden {
-  animation: console-slide-up 120ms ease-in forwards;
+  display: none;
   pointer-events: none;
 }
 
