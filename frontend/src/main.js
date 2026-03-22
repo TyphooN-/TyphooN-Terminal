@@ -12518,7 +12518,7 @@ function cmdDarwinPortfolio() {
 
 // ── BINANCE — Crypto Weekend Backfill ────────────────────────
 function cmdBinanceBackfill() {
-  const win = createWindow({ title: "Binance Crypto Backfill", width: 700, height: 500 });
+  const win = createWindow({ title: "Crypto Backfill (Kraken)", width: 700, height: 500 });
   win.contentElement.textContent = "";
   const root = document.createElement("div"); root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;";
 
@@ -12539,7 +12539,7 @@ function cmdBinanceBackfill() {
       const symbols = JSON.parse(json);
       contentDiv.textContent = "";
       const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
-      title.textContent = `Binance-Eligible Crypto in Cache (${symbols.length})`;
+      title.textContent = `Kraken-Eligible Crypto in Cache (${symbols.length})`;
       contentDiv.appendChild(title);
       const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding:0 0 12px;";
       desc.textContent = "Click 'Backfill ALL' to fetch weekend gaps + extend history from Binance (2017→now) for all timeframes. Free, no API key needed.";
@@ -12560,7 +12560,7 @@ function cmdBinanceBackfill() {
   async function runBackfill(symbol) {
     const btn = symbol ? singleBtn : backfillAllBtn;
     btn.disabled = true; btn.textContent = "Backfilling...";
-    contentDiv.textContent = "Fetching from Binance... this may take a few minutes for full history.";
+    contentDiv.textContent = "Fetching from Kraken... this may take a few minutes for full history.";
     try {
       const params = symbol ? { symbol } : {};
       const json = await window.__TAURI__.core.invoke("backfill_crypto_binance", params);
@@ -13561,7 +13561,7 @@ function cmdCheat() {
       ["DARWIN", "DARWIN account viewer (MT5 history)"],
       ["DARWINS", "Combined DARWIN portfolio dashboard"],
       ["DARWIN-RADAR", "DARWIN RADAR — FTP screener"],
-      ["BINANCE", "Crypto backfill from Binance (2017)"],
+      ["CRYPTO-BACKFILL", "Crypto backfill from Kraken (2013)"],
       ["ACTIVITIES", "Account activities"],
       ["INSIDER", "Insider trading (SEC Form 4)"],
       ["SEC", "SEC Filings (10-K, 10-Q, 8-K, S-1, etc.)"],
@@ -25566,7 +25566,7 @@ const CMD_PALETTE_COMMANDS = [
   { name: "DARWIN", desc: "DARWIN account viewer — import MT5 history, equity curves, P/L analytics", action: cmdDarwin },
   { name: "DARWINS", desc: "Combined DARWIN portfolio — exposure, open positions, equity curves across all accounts", action: cmdDarwinPortfolio },
   { name: "DARWIN-RADAR", desc: "DARWIN RADAR — scan 50K+ DARWINs from FTP by Sharpe, return, drawdown", action: cmdDarwinRadar },
-  { name: "BINANCE", desc: "Binance crypto backfill — fill weekend gaps + extend history from 2017", action: cmdBinanceBackfill },
+  { name: "CRYPTO-BACKFILL", desc: "Kraken crypto backfill — fill weekend gaps + extend history from 2013", action: cmdBinanceBackfill },
   { name: "SIGNAL", desc: "Composite trading signal generator (Fisher, RSI, KAMA, SMA200, volume, ATR)", action: cmdSignal },
   { name: "PROFILE", desc: "Trading profile analytics (P&L by symbol, day of week, hold time)", action: cmdProfile },
   { name: "FIBO+", desc: "Fibonacci time zones (markers at Fib intervals from swing low)", action: cmdFiboTime },
