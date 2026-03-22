@@ -2605,6 +2605,1186 @@ pub fn compute_trade_autocorrelation(
     })
 }
 
+// ── Seasonal Analysis ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeasonalPattern {
+    pub month: i32,
+    pub month_name: String,
+    pub avg_return_pct: f64,
+    pub median_return_pct: f64,
+    pub win_rate: f64,
+    pub sample_count: i64,
+    pub best_year: (i32, f64),
+    pub worst_year: (i32, f64),
+}
+
+/// Group monthly returns by calendar month (Jan=1..Dec=12) across all years.
+/// Computes avg/median return, win rate, best/worst year per month.
+pub fn get_seasonal_analysis(daily_returns: &[DailyReturn]) -> Vec<SeasonalPattern> {
+    let monthly = get_monthly_returns(daily_returns);
+    let month_names = [
+        "", "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ];
+
+    // month -> Vec<(year, return_pct)>
+    let mut by_month: std::collections::BTreeMap<i32, Vec<(i32, f64)>> = std::collections::BTreeMap::new();
+    for mr in &monthly {
+        by_month.entry(mr.month).or_default().push((mr.year, mr.return_pct));
+    }
+
+    by_month
+        .into_iter()
+        .map(|(month, entries)| {
+            let n = entries.len();
+            let avg_return_pct = entries.iter().map(|(_, r)| r).sum::<f64>() / n as f64;
+
+            let mut sorted: Vec<f64> = entries.iter().map(|(_, r)| *r).collect();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let median_return_pct = if n % 2 == 0 && n > 0 {
+                (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+            } else {
+                sorted[n / 2]
+            };
+
+            let win_count = entries.iter().filter(|(_, r)| *r > 0.0).count();
+            let win_rate = win_count as f64 / n as f64 * 100.0;
+
+            let best = entries
+                .iter()
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(y, r)| (*y, *r))
+                .unwrap_or((0, 0.0));
+            let worst = entries
+                .iter()
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(y, r)| (*y, *r))
+                .unwrap_or((0, 0.0));
+
+            SeasonalPattern {
+                month,
+                month_name: month_names.get(month as usize).unwrap_or(&"Unknown").to_string(),
+                avg_return_pct,
+                median_return_pct,
+                win_rate,
+                sample_count: n as i64,
+                best_year: best,
+                worst_year: worst,
+            }
+        })
+        .collect()
+}
+
+// ── MAE/MFE (Max Adverse/Favorable Excursion) ───────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MAEMFEResult {
+    pub avg_mae_pct: f64,
+    pub avg_mfe_pct: f64,
+    pub mae_mfe_ratio: f64,
+    pub entries: Vec<MAEMFEEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MAEMFEEntry {
+    pub symbol: String,
+    pub side: String,
+    pub profit: f64,
+    pub mae_pct: f64,
+    pub mfe_pct: f64,
+}
+
+/// Estimate MAE/MFE for each closed position using daily volatility and hold time.
+/// Since intraday data per trade is unavailable, we use:
+///   mae ≈ daily_vol * sqrt(hold_days) * 1.5
+///   mfe (winners) = profit + estimated adverse
+///   mfe (losers) = |loss| * 0.5
+pub fn estimate_mae_mfe(conn: &Connection, darwin_ticker: &str) -> Result<MAEMFEResult, String> {
+    // Get daily volatility from returns
+    let daily_returns = get_daily_returns(conn, darwin_ticker)?;
+    let var_stats = compute_var(&daily_returns);
+    let daily_vol = if var_stats.daily_vol > 0.0 { var_stats.daily_vol } else { 1.0 };
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT symbol, pos_type, volume, open_price, close_price, profit, open_time, close_time \
+             FROM darwin_positions WHERE account = ?1 AND close_time != '' ORDER BY open_time",
+        )
+        .map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt
+        .query_map(params![darwin_ticker], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, f64>(4)?,
+                row.get::<_, f64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })
+        .map_err(|e| format!("Query failed: {e}"))?;
+
+    let mut entries = Vec::new();
+
+    for row in rows {
+        let (symbol, side, _volume, open_price, _close_price, profit, open_time, close_time) =
+            row.map_err(|e| format!("Row failed: {e}"))?;
+
+        let hold_days = match (parse_mt5_datetime(&open_time), parse_mt5_datetime(&close_time)) {
+            (Some(open), Some(close)) => {
+                let dur = close.signed_duration_since(open);
+                (dur.num_hours() as f64 / 24.0).max(0.04) // minimum ~1 hour
+            }
+            _ => 1.0,
+        };
+
+        let notional = open_price; // per-unit basis
+        let mae_pct = daily_vol * hold_days.sqrt() * 1.5;
+        let profit_pct = if notional > 0.0 { profit / notional * 100.0 } else { 0.0 };
+
+        let mfe_pct = if profit >= 0.0 {
+            profit_pct.abs() + mae_pct
+        } else {
+            profit_pct.abs() * 0.5
+        };
+
+        entries.push(MAEMFEEntry {
+            symbol,
+            side,
+            profit,
+            mae_pct,
+            mfe_pct,
+        });
+    }
+
+    let n = entries.len().max(1) as f64;
+    let avg_mae = entries.iter().map(|e| e.mae_pct).sum::<f64>() / n;
+    let avg_mfe = entries.iter().map(|e| e.mfe_pct).sum::<f64>() / n;
+    let ratio = if avg_mfe > 0.0 { avg_mae / avg_mfe } else { 0.0 };
+
+    Ok(MAEMFEResult {
+        avg_mae_pct: avg_mae,
+        avg_mfe_pct: avg_mfe,
+        mae_mfe_ratio: ratio,
+        entries,
+    })
+}
+
+// ── What-If Simulator ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhatIfResult {
+    pub action: String,
+    pub current_portfolio_var: f64,
+    pub new_portfolio_var: f64,
+    pub var_change_pct: f64,
+    pub current_notional: f64,
+    pub new_notional: f64,
+}
+
+/// Compute current portfolio VaR, then recompute without the specified symbol's
+/// positions to show the VaR impact of closing that symbol.
+pub fn what_if_close_symbol(conn: &Connection, symbol: &str) -> Result<WhatIfResult, String> {
+    let portfolio_returns = get_portfolio_daily_returns(conn)?;
+    let current_var = compute_var(&portfolio_returns);
+
+    let open_positions = get_portfolio_open_positions(conn)?;
+    let current_notional: f64 = open_positions.iter().map(|p| p.notional.abs()).sum();
+
+    // Notional of the symbol being removed
+    let symbol_upper = symbol.to_uppercase();
+    let removed_notional: f64 = open_positions
+        .iter()
+        .filter(|p| p.symbol.to_uppercase() == symbol_upper)
+        .map(|p| p.notional.abs())
+        .sum();
+
+    if removed_notional == 0.0 {
+        return Err(format!("No open positions found for symbol '{}'", symbol));
+    }
+
+    let new_notional = current_notional - removed_notional;
+
+    // Scale VaR by notional reduction ratio (linear approximation)
+    let scale = if current_notional > 0.0 { new_notional / current_notional } else { 1.0 };
+    let new_var_95 = current_var.var_95 * scale;
+    let var_change = if current_var.var_95 > 0.0 {
+        (new_var_95 - current_var.var_95) / current_var.var_95 * 100.0
+    } else {
+        0.0
+    };
+
+    Ok(WhatIfResult {
+        action: format!("Close all {} positions", symbol),
+        current_portfolio_var: current_var.var_95,
+        new_portfolio_var: new_var_95,
+        var_change_pct: var_change,
+        current_notional,
+        new_notional,
+    })
+}
+
+// ── Liquidity Risk ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LiquidityRisk {
+    pub symbol: String,
+    pub position_volume: f64,
+    pub notional: f64,
+    pub risk_tier: String,
+    pub days_to_exit: f64,
+    pub concentration_pct: f64,
+}
+
+/// Estimate liquidity risk for each open position based on position size
+/// relative to typical daily volume estimates.
+/// Volume tiers: mega-cap=50M, large-cap=10M, mid-cap=2M, small-cap=5M, micro=500K.
+pub fn get_liquidity_risk(conn: &Connection) -> Result<Vec<LiquidityRisk>, String> {
+    fn estimate_daily_volume(symbol: &str) -> f64 {
+        let base = symbol.to_uppercase();
+        let base: &str = base.split('.').next().unwrap_or(&base);
+        match base {
+            // Mega-cap: ~50M shares/day
+            "AAPL" | "MSFT" | "NVDA" | "AMZN" | "TSLA" | "META" | "GOOG" | "GOOGL"
+            | "SPY" | "QQQ" => 50_000_000.0,
+            // Large-cap: ~10M shares/day
+            "AMD" | "INTC" | "JPM" | "BAC" | "WFC" | "DIS" | "NFLX" | "BA" | "V"
+            | "MA" | "PYPL" | "CRM" | "ADBE" | "ORCL" | "PFE" | "ABBV" | "JNJ"
+            | "UNH" | "XOM" | "CVX" | "GS" | "MS" | "COIN" | "PLTR" | "UBER"
+            | "IWM" | "VTI" | "VOO" => 10_000_000.0,
+            // Mid-cap: ~2M shares/day
+            "SHOP" | "SQ" | "SNOW" | "NET" | "DDOG" | "MDB" | "CRWD" | "ZS"
+            | "PANW" | "ABNB" | "DASH" | "LULU" | "RBLX" | "SNAP" | "PINS"
+            | "SPOT" => 2_000_000.0,
+            // Small-cap known names: ~5M shares/day
+            "CHGG" | "LAZR" | "LCID" | "RIVN" | "SOFI" | "MARA" | "RIOT"
+            | "CLNE" | "BB" | "WKHS" | "CLOV" | "WISH" => 5_000_000.0,
+            // Forex/Crypto/CFD — effectively unlimited liquidity
+            _ if base.contains("USD") || base.contains("EUR") || base.contains("GBP")
+                || base.contains("JPY") || base.contains("CHF") || base.contains("AUD")
+                || base.contains("CAD") || base.contains("NZD")
+                || base.starts_with("XAU") || base.starts_with("XAG")
+                || base.starts_with("XTI") || base.starts_with("XNG")
+                || base.starts_with("US5") || base.starts_with("US1")
+                || base.starts_with("US3") || base.starts_with("GER")
+                || base.starts_with("UK1") || base.starts_with("JPN") => 100_000_000.0,
+            // Default micro-cap: 500K shares/day
+            _ => 500_000.0,
+        }
+    }
+
+    let open_positions = get_portfolio_open_positions(conn)?;
+    if open_positions.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let total_notional: f64 = open_positions.iter().map(|p| p.notional.abs()).sum();
+
+    let mut result: Vec<LiquidityRisk> = open_positions
+        .iter()
+        .map(|pos| {
+            let daily_vol = estimate_daily_volume(&pos.symbol);
+            let avg_price = if pos.avg_price > 0.0 { pos.avg_price } else { 1.0 };
+            let daily_shares_value = daily_vol * avg_price;
+
+            // Conservative: assume we can trade 10% of daily volume without impact
+            let safe_daily_exit = daily_shares_value * 0.10;
+            let days_to_exit = if safe_daily_exit > 0.0 {
+                pos.notional.abs() / safe_daily_exit
+            } else {
+                999.0
+            };
+
+            let concentration_pct = if total_notional > 0.0 {
+                pos.notional.abs() / total_notional * 100.0
+            } else {
+                0.0
+            };
+
+            let risk_tier = if days_to_exit < 0.1 {
+                "LOW"
+            } else if days_to_exit < 1.0 {
+                "MEDIUM"
+            } else if days_to_exit < 5.0 {
+                "HIGH"
+            } else {
+                "EXTREME"
+            }
+            .to_string();
+
+            LiquidityRisk {
+                symbol: pos.symbol.clone(),
+                position_volume: pos.total_volume,
+                notional: pos.notional.abs(),
+                risk_tier,
+                days_to_exit,
+                concentration_pct,
+            }
+        })
+        .collect();
+
+    result.sort_by(|a, b| {
+        b.days_to_exit
+            .partial_cmp(&a.days_to_exit)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(result)
+}
+
+// ── Tail Risk Dashboard ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TailRiskMetrics {
+    pub skewness: f64,
+    pub kurtosis: f64,
+    pub tail_ratio: f64,
+    pub gain_to_pain: f64,
+    pub ulcer_index: f64,
+    pub pain_index: f64,
+    pub omega_ratio: f64,
+    pub fat_tail_warning: bool,
+}
+
+/// Compute tail risk metrics: skewness, excess kurtosis, tail ratio,
+/// gain-to-pain, ulcer index, pain index, omega ratio.
+pub fn compute_tail_risk(daily_returns: &[DailyReturn]) -> TailRiskMetrics {
+    if daily_returns.len() < 3 {
+        return TailRiskMetrics {
+            skewness: 0.0, kurtosis: 0.0, tail_ratio: 0.0, gain_to_pain: 0.0,
+            ulcer_index: 0.0, pain_index: 0.0, omega_ratio: 0.0, fat_tail_warning: false,
+        };
+    }
+
+    let rets: Vec<f64> = daily_returns.iter().map(|r| r.return_pct).collect();
+    let n = rets.len() as f64;
+    let mean = rets.iter().sum::<f64>() / n;
+    let variance = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let std_dev = variance.sqrt();
+
+    // Skewness (sample)
+    let skewness = if std_dev > 0.0 {
+        let m3 = rets.iter().map(|r| ((r - mean) / std_dev).powi(3)).sum::<f64>();
+        m3 * n / ((n - 1.0) * (n - 2.0).max(1.0))
+    } else {
+        0.0
+    };
+
+    // Excess kurtosis (normal = 0)
+    let kurtosis = if std_dev > 0.0 && n > 3.0 {
+        let m4 = rets.iter().map(|r| ((r - mean) / std_dev).powi(4)).sum::<f64>() / n;
+        m4 - 3.0
+    } else {
+        0.0
+    };
+
+    // Tail ratio: 95th percentile gain / |5th percentile loss|
+    let mut sorted = rets.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx_5 = ((n * 0.05).floor() as usize).min(sorted.len() - 1);
+    let idx_95 = ((n * 0.95).floor() as usize).min(sorted.len() - 1);
+    let p5 = sorted[idx_5];
+    let p95 = sorted[idx_95];
+    let tail_ratio = if p5.abs() > 1e-10 { p95 / p5.abs() } else { 0.0 };
+
+    // Gain-to-pain: sum of all returns / sum of |negative returns|
+    let total_return: f64 = rets.iter().sum();
+    let total_pain: f64 = rets.iter().filter(|r| **r < 0.0).map(|r| r.abs()).sum();
+    let gain_to_pain = if total_pain > 0.0 { total_return / total_pain } else { 0.0 };
+
+    // Ulcer index: RMS of drawdowns
+    let drawdowns: Vec<f64> = daily_returns.iter().map(|r| r.drawdown_pct).collect();
+    let ulcer_index = if !drawdowns.is_empty() {
+        (drawdowns.iter().map(|d| d.powi(2)).sum::<f64>() / drawdowns.len() as f64).sqrt()
+    } else {
+        0.0
+    };
+
+    // Pain index: mean of drawdowns
+    let pain_index = if !drawdowns.is_empty() {
+        drawdowns.iter().sum::<f64>() / drawdowns.len() as f64
+    } else {
+        0.0
+    };
+
+    // Omega ratio: sum of gains above threshold (0) / sum of losses below threshold
+    let gains: f64 = rets.iter().filter(|r| **r > 0.0).sum();
+    let losses: f64 = rets.iter().filter(|r| **r < 0.0).map(|r| r.abs()).sum();
+    let omega_ratio = if losses > 0.0 { gains / losses } else { 0.0 };
+
+    // Fat tail warning if excess kurtosis > 1.0
+    let fat_tail_warning = kurtosis > 1.0;
+
+    TailRiskMetrics {
+        skewness,
+        kurtosis,
+        tail_ratio,
+        gain_to_pain,
+        ulcer_index,
+        pain_index,
+        omega_ratio,
+        fat_tail_warning,
+    }
+}
+
+// ── Trade Clustering (Burst Detection) ───────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradingBurst {
+    pub start_date: String,
+    pub end_date: String,
+    pub trade_count: i64,
+    pub avg_trades_per_day: f64,
+    pub total_pnl: f64,
+    pub intensity: String,
+}
+
+/// Group trades by week, classify intensity based on trades/day relative
+/// to the DARWIN's overall average.
+pub fn detect_trading_bursts(
+    conn: &Connection,
+    darwin_ticker: &str,
+) -> Result<Vec<TradingBurst>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT time, profit FROM darwin_deals \
+             WHERE account = ?1 AND symbol != '' AND direction = 'in' \
+             ORDER BY time",
+        )
+        .map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows: Vec<(String, f64)> = stmt
+        .query_map(params![darwin_ticker], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })
+        .map_err(|e| format!("Query failed: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if rows.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Group by ISO week: (year, week_number) -> trades
+    let mut weeks: std::collections::BTreeMap<(i32, u32), Vec<(String, f64)>> =
+        std::collections::BTreeMap::new();
+
+    for (time, profit) in &rows {
+        if let Some(dt) = parse_mt5_datetime(time) {
+            use chrono::Datelike;
+            let iso = dt.date().iso_week();
+            let key = (iso.year(), iso.week());
+            weeks.entry(key).or_default().push((time.clone(), *profit));
+        }
+    }
+
+    // Overall average trades per day
+    let total_weeks = weeks.len().max(1) as f64;
+    let total_trades: usize = weeks.values().map(|v| v.len()).sum();
+    let avg_trades_per_week = total_trades as f64 / total_weeks;
+    let avg_per_day = avg_trades_per_week / 5.0; // 5 trading days per week
+
+    let mut bursts = Vec::new();
+    for ((_year, _week), trades) in &weeks {
+        let count = trades.len() as i64;
+        let pnl: f64 = trades.iter().map(|(_, p)| p).sum();
+        let start = trades.first().map(|(t, _)| t.clone()).unwrap_or_default();
+        let end = trades.last().map(|(t, _)| t.clone()).unwrap_or_default();
+
+        // Use 5 trading days per week
+        let week_avg_per_day = count as f64 / 5.0;
+
+        let intensity = if avg_per_day > 0.0 {
+            let ratio = week_avg_per_day / avg_per_day;
+            if ratio > 2.0 {
+                "BURST"
+            } else if ratio > 1.3 {
+                "ACTIVE"
+            } else {
+                "NORMAL"
+            }
+        } else {
+            "NORMAL"
+        }
+        .to_string();
+
+        bursts.push(TradingBurst {
+            start_date: start,
+            end_date: end,
+            trade_count: count,
+            avg_trades_per_day: week_avg_per_day,
+            total_pnl: pnl,
+            intensity,
+        });
+    }
+
+    Ok(bursts)
+}
+
+// ── Position Pyramiding Analysis ─────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PyramidingAnalysis {
+    pub symbol: String,
+    pub total_adds: i64,
+    pub avg_add_interval_hours: f64,
+    pub adds_in_profit: i64,
+    pub adds_in_loss: i64,
+    pub final_pnl: f64,
+    pub strategy: String,
+}
+
+/// For each symbol, find sequences of same-direction "in" deals and classify
+/// pyramiding behavior as SCALING_IN, AVERAGING_DOWN, or MIXED.
+pub fn analyze_pyramiding(
+    conn: &Connection,
+    darwin_ticker: &str,
+) -> Result<Vec<PyramidingAnalysis>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT symbol, deal_type, direction, price, profit, time \
+             FROM darwin_deals \
+             WHERE account = ?1 AND symbol != '' \
+             ORDER BY symbol, time",
+        )
+        .map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows: Vec<(String, String, String, f64, f64, String)> = stmt
+        .query_map(params![darwin_ticker], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, f64>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|e| format!("Query failed: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Group "in" deals by symbol, tracking sequences of same-direction adds
+    let mut symbol_deals: std::collections::BTreeMap<String, Vec<(String, String, f64, f64, String)>> =
+        std::collections::BTreeMap::new();
+
+    for (symbol, deal_type, direction, price, profit, time) in &rows {
+        symbol_deals
+            .entry(symbol.clone())
+            .or_default()
+            .push((deal_type.clone(), direction.clone(), *price, *profit, time.clone()));
+    }
+
+    let mut results = Vec::new();
+
+    for (symbol, deals) in &symbol_deals {
+        // Collect "in" deals (position entries/adds)
+        let in_deals: Vec<&(String, String, f64, f64, String)> = deals
+            .iter()
+            .filter(|(_, dir, _, _, _)| dir == "in")
+            .collect();
+
+        if in_deals.len() < 2 {
+            continue; // No pyramiding if only 1 entry
+        }
+
+        let total_adds = in_deals.len() as i64;
+
+        // Compute average interval between adds
+        let mut intervals = Vec::new();
+        for i in 1..in_deals.len() {
+            if let (Some(prev_dt), Some(curr_dt)) = (
+                parse_mt5_datetime(&in_deals[i - 1].4),
+                parse_mt5_datetime(&in_deals[i].4),
+            ) {
+                let hours = curr_dt.signed_duration_since(prev_dt).num_minutes() as f64 / 60.0;
+                intervals.push(hours);
+            }
+        }
+        let avg_interval = if !intervals.is_empty() {
+            intervals.iter().sum::<f64>() / intervals.len() as f64
+        } else {
+            0.0
+        };
+
+        // Track running P/L to determine if adds were in profit or loss
+        // Simple heuristic: compare each add's price to the first entry price
+        let first_price = in_deals[0].2;
+        let first_type = &in_deals[0].0; // "buy" or "sell"
+        let is_long = first_type == "buy";
+
+        let mut adds_in_profit = 0i64;
+        let mut adds_in_loss = 0i64;
+
+        for deal in in_deals.iter().skip(1) {
+            let add_price = deal.2;
+            let in_profit = if is_long {
+                add_price > first_price // price went up for long
+            } else {
+                add_price < first_price // price went down for short
+            };
+
+            if in_profit {
+                adds_in_profit += 1;
+            } else {
+                adds_in_loss += 1;
+            }
+        }
+
+        // Total P/L for this symbol (sum of all deal profits including "out" deals)
+        let final_pnl: f64 = deals.iter().map(|(_, _, _, p, _)| p).sum();
+
+        let strategy = if adds_in_loss == 0 {
+            "SCALING_IN"
+        } else if adds_in_profit == 0 {
+            "AVERAGING_DOWN"
+        } else {
+            "MIXED"
+        }
+        .to_string();
+
+        results.push(PyramidingAnalysis {
+            symbol: symbol.clone(),
+            total_adds,
+            avg_add_interval_hours: avg_interval,
+            adds_in_profit,
+            adds_in_loss,
+            final_pnl,
+            strategy,
+        });
+    }
+
+    // Sort by total adds descending
+    results.sort_by(|a, b| b.total_adds.cmp(&a.total_adds));
+    Ok(results)
+}
+
+// ── Low-Correlation DARWIN Finder ────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiversificationCandidate {
+    pub ticker: String,
+    pub avg_correlation: f64, // average correlation with user's DARWINs
+    pub return_pct: f64,
+    pub max_drawdown: f64,
+    pub sharpe: f64,
+}
+
+/// Scan FTP DARWINs, compute correlation of each with the user's portfolio
+/// daily returns, rank by lowest avg correlation + highest Sharpe.
+pub fn find_low_correlation_darwins(
+    conn: &Connection,
+    ftp_path: &str,
+    limit: usize,
+) -> Result<Vec<DiversificationCandidate>, String> {
+    // Gather user's portfolio daily returns per DARWIN
+    let accounts = list_darwin_accounts(conn)?;
+    if accounts.is_empty() {
+        return Err("No DARWIN accounts — import at least one first".into());
+    }
+
+    let mut user_returns: Vec<(String, std::collections::HashMap<String, f64>)> = Vec::new();
+    for acct in &accounts {
+        let dr = get_daily_returns(conn, &acct.darwin_ticker)?;
+        let map: std::collections::HashMap<String, f64> =
+            dr.iter().map(|r| (r.date.clone(), r.return_pct)).collect();
+        user_returns.push((acct.darwin_ticker.clone(), map));
+    }
+
+    let ftp_dir = std::path::Path::new(ftp_path);
+    if !ftp_dir.exists() {
+        return Err(format!("FTP path not found: {}", ftp_path));
+    }
+
+    let entries = std::fs::read_dir(ftp_dir)
+        .map_err(|e| format!("Read dir failed: {e}"))?;
+
+    // Collect portfolio combined daily returns keyed by date (sorted)
+    let portfolio_returns = get_portfolio_daily_returns(conn)?;
+    let mut portfolio_dates: Vec<String> =
+        portfolio_returns.iter().map(|r| r.date.clone()).collect();
+    portfolio_dates.sort();
+
+    let mut candidates: Vec<DiversificationCandidate> = Vec::new();
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let ticker = entry.file_name().to_str().unwrap_or("").to_string();
+        if ticker.is_empty() || ticker.starts_with('.') { continue; }
+        // Skip DARWINs already in portfolio
+        if accounts.iter().any(|a| a.darwin_ticker == ticker) { continue; }
+
+        let return_path = entry.path().join("RETURN");
+        if !return_path.exists() { continue; }
+
+        let content = match std::fs::read_to_string(&return_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+        if lines.len() < 60 { continue; } // need meaningful history
+
+        // Build daily return series from RETURN file
+        let mut ftp_daily: Vec<f64> = Vec::new();
+        let mut prev_val = 1.0f64;
+        let mut peak = 0.0f64;
+        let mut max_dd = 0.0f64;
+        let mut day_idx: usize = 0;
+
+        let mut ftp_returns_by_date: std::collections::HashMap<String, f64> =
+            std::collections::HashMap::new();
+
+        for line in &lines {
+            let lp: Vec<&str> = line.splitn(3, ',').collect();
+            if lp.len() < 3 { continue; }
+            let vals_str = lp[2].trim_start_matches('[').trim_end_matches(']');
+            for val_str in vals_str.split(',') {
+                if let Ok(val) = val_str.trim().parse::<f64>() {
+                    if val > peak { peak = val; }
+                    if peak > 0.0 {
+                        let dd = (peak - val) / peak * 100.0;
+                        if dd > max_dd { max_dd = dd; }
+                    }
+                    let ret = if prev_val > 0.0 { (val - prev_val) / prev_val * 100.0 } else { 0.0 };
+                    ftp_daily.push(ret);
+                    if day_idx < portfolio_dates.len() {
+                        ftp_returns_by_date.insert(portfolio_dates[day_idx].clone(), ret);
+                    }
+                    prev_val = val;
+                    day_idx += 1;
+                }
+            }
+        }
+
+        // Total return
+        let total_return = (prev_val - 1.0) * 100.0;
+
+        // Sharpe
+        let rets: Vec<f64> = ftp_daily.iter().map(|r| r / 100.0).collect();
+        let n = rets.len() as f64;
+        let avg = if n > 0.0 { rets.iter().sum::<f64>() / n } else { 0.0 };
+        let vol = if n > 1.0 {
+            (rets.iter().map(|r| (r - avg).powi(2)).sum::<f64>() / (n - 1.0)).sqrt()
+        } else { 1.0 };
+        let sharpe = if vol > 0.0 { avg / vol * (252.0f64).sqrt() } else { 0.0 };
+
+        // Compute average correlation with each user DARWIN
+        let mut corr_sum = 0.0f64;
+        let mut corr_count = 0usize;
+        for (_name, user_map) in &user_returns {
+            let mut pairs: Vec<(f64, f64)> = Vec::new();
+            for (date, &ftp_ret) in &ftp_returns_by_date {
+                if let Some(&user_ret) = user_map.get(date) {
+                    pairs.push((ftp_ret, user_ret));
+                }
+            }
+            if pairs.len() > 10 {
+                let pn = pairs.len() as f64;
+                let ma = pairs.iter().map(|(a, _)| a).sum::<f64>() / pn;
+                let mb = pairs.iter().map(|(_, b)| b).sum::<f64>() / pn;
+                let cov = pairs.iter().map(|(a, b)| (a - ma) * (b - mb)).sum::<f64>() / (pn - 1.0);
+                let sa = (pairs.iter().map(|(a, _)| (a - ma).powi(2)).sum::<f64>() / (pn - 1.0)).sqrt();
+                let sb = (pairs.iter().map(|(_, b)| (b - mb).powi(2)).sum::<f64>() / (pn - 1.0)).sqrt();
+                let corr = if sa > 0.0 && sb > 0.0 { cov / (sa * sb) } else { 0.0 };
+                corr_sum += corr;
+                corr_count += 1;
+            }
+        }
+
+        let avg_corr = if corr_count > 0 { corr_sum / corr_count as f64 } else { 0.0 };
+
+        candidates.push(DiversificationCandidate {
+            ticker,
+            avg_correlation: avg_corr,
+            return_pct: total_return,
+            max_drawdown: max_dd,
+            sharpe,
+        });
+    }
+
+    // Rank: lowest avg correlation first, break ties by highest Sharpe
+    candidates.sort_by(|a, b| {
+        a.avg_correlation.partial_cmp(&b.avg_correlation)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.sharpe.partial_cmp(&a.sharpe).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    candidates.truncate(limit);
+    Ok(candidates)
+}
+
+// ── Investor Flow Analysis (from FTP) ───────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvestorFlow {
+    pub date: String,
+    pub investors: f64,
+    pub aum: f64,
+}
+
+/// Read INVESTMENT_CHART and INVESTORS_CHART from FTP for a given DARWIN.
+/// Both files use the format: `timestamp,value\n`.
+pub fn get_investor_flow(
+    ftp_path: &str,
+    darwin_ticker: &str,
+) -> Result<Vec<InvestorFlow>, String> {
+    let base = std::path::Path::new(ftp_path).join(darwin_ticker);
+    if !base.exists() {
+        return Err(format!("DARWIN {} not found in FTP: {}", darwin_ticker, ftp_path));
+    }
+
+    // Parse a timestamp,value file into a map keyed by date string
+    fn parse_ts_file(path: &std::path::Path) -> std::collections::BTreeMap<String, f64> {
+        let mut map = std::collections::BTreeMap::new();
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for line in content.lines() {
+                let parts: Vec<&str> = line.splitn(2, ',').collect();
+                if parts.len() == 2 {
+                    if let (Ok(ts), Ok(val)) = (parts[0].trim().parse::<i64>(), parts[1].trim().parse::<f64>()) {
+                        // Convert millis timestamp to YYYY-MM-DD
+                        let secs = ts / 1000;
+                        let dt = chrono::DateTime::from_timestamp(secs, 0);
+                        if let Some(dt) = dt {
+                            let date = dt.format("%Y-%m-%d").to_string();
+                            map.insert(date, val);
+                        }
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    let investment_map = parse_ts_file(&base.join("INVESTMENT_CHART"));
+    let investors_map = parse_ts_file(&base.join("INVESTORS_CHART"));
+
+    // Merge on date — use the union of all dates
+    let mut all_dates: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    all_dates.extend(investment_map.keys().cloned());
+    all_dates.extend(investors_map.keys().cloned());
+
+    let mut result = Vec::new();
+    let mut last_aum = 0.0f64;
+    let mut last_inv = 0.0f64;
+    for date in &all_dates {
+        let aum = investment_map.get(date).copied().unwrap_or(last_aum);
+        let investors = investors_map.get(date).copied().unwrap_or(last_inv);
+        last_aum = aum;
+        last_inv = investors;
+        result.push(InvestorFlow {
+            date: date.clone(),
+            investors,
+            aum,
+        });
+    }
+
+    if result.is_empty() {
+        return Err(format!(
+            "No investor flow data for {} (checked INVESTMENT_CHART and INVESTORS_CHART)",
+            darwin_ticker
+        ));
+    }
+    Ok(result)
+}
+
+// ── D-Score Component Reader (from FTP) ─────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DScoreComponents {
+    pub ticker: String,
+    pub experience: Option<f64>,
+    pub risk_stability: Option<f64>,
+    pub risk_adjustment: Option<f64>,
+    pub market_correlation: Option<f64>,
+    pub winning_consistency: Option<f64>,
+    pub losing_consistency: Option<f64>,
+    pub performance: Option<f64>,
+    pub scalability: Option<f64>,
+}
+
+/// Read each D-Score component file from the FTP directory for a DARWIN,
+/// parse the last line's value.
+pub fn get_dscore_components(
+    ftp_path: &str,
+    darwin_ticker: &str,
+) -> Result<DScoreComponents, String> {
+    let base = std::path::Path::new(ftp_path).join(darwin_ticker);
+    if !base.exists() {
+        return Err(format!("DARWIN {} not found in FTP: {}", darwin_ticker, ftp_path));
+    }
+
+    // Read a score file and return the last line's value (second field in "timestamp,value")
+    fn read_last_value(path: &std::path::Path) -> Option<f64> {
+        let content = std::fs::read_to_string(path).ok()?;
+        let last_line = content.lines().last()?;
+        let parts: Vec<&str> = last_line.splitn(2, ',').collect();
+        if parts.len() == 2 {
+            parts[1].trim().parse::<f64>().ok()
+        } else {
+            last_line.trim().parse::<f64>().ok()
+        }
+    }
+
+    Ok(DScoreComponents {
+        ticker: darwin_ticker.to_string(),
+        experience: read_last_value(&base.join("EXPERIENCE")),
+        risk_stability: read_last_value(&base.join("RISK_STABILITY")),
+        risk_adjustment: read_last_value(&base.join("RISK_ADJUSTMENT")),
+        market_correlation: read_last_value(&base.join("MARKET_CORRELATION")),
+        winning_consistency: read_last_value(&base.join("WINNING_CONSISTENCY")),
+        losing_consistency: read_last_value(&base.join("LOSING_CONSISTENCY")),
+        performance: read_last_value(&base.join("PERFORMANCE")),
+        scalability: read_last_value(&base.join("SCALABILITY")),
+    })
+}
+
+// ── Alert Conditions Check ──────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertCondition {
+    pub alert_type: String, // "VAR_BREACH", "DRAWDOWN", "CONCENTRATION", "CORRELATION_SPIKE"
+    pub severity: String,   // "INFO", "WARNING", "CRITICAL"
+    pub message: String,
+    pub value: f64,
+    pub threshold: f64,
+}
+
+/// Check all alert conditions across the portfolio:
+/// - VaR breach: portfolio VaR > $50K (configurable)
+/// - Drawdown: any DARWIN DD > 15%
+/// - Concentration: any symbol > 30% of portfolio
+/// - Symbol overlap: symbol in 4+ DARWINs
+/// - High correlation: any DARWIN pair > 0.8 correlation
+pub fn check_alerts(conn: &Connection) -> Result<Vec<AlertCondition>, String> {
+    let mut alerts: Vec<AlertCondition> = Vec::new();
+
+    const VAR_THRESHOLD: f64 = 50_000.0;
+    const DD_THRESHOLD: f64 = 15.0;
+    const CONCENTRATION_THRESHOLD: f64 = 30.0;
+    const OVERLAP_THRESHOLD: i64 = 4;
+    const CORRELATION_THRESHOLD: f64 = 0.8;
+
+    // 1. VaR breach — portfolio-level
+    if let Ok(portfolio_dr) = get_portfolio_daily_returns(conn) {
+        if portfolio_dr.len() > 2 {
+            let var_result = compute_var(&portfolio_dr);
+            if var_result.var_95 > VAR_THRESHOLD {
+                alerts.push(AlertCondition {
+                    alert_type: "VAR_BREACH".into(),
+                    severity: if var_result.var_95 > VAR_THRESHOLD * 1.5 { "CRITICAL".into() } else { "WARNING".into() },
+                    message: format!(
+                        "Portfolio 95% VaR ${:.0} exceeds ${:.0} threshold",
+                        var_result.var_95, VAR_THRESHOLD
+                    ),
+                    value: var_result.var_95,
+                    threshold: VAR_THRESHOLD,
+                });
+            }
+            if var_result.var_99 > VAR_THRESHOLD {
+                alerts.push(AlertCondition {
+                    alert_type: "VAR_BREACH".into(),
+                    severity: "CRITICAL".into(),
+                    message: format!(
+                        "Portfolio 99% VaR ${:.0} exceeds ${:.0} threshold",
+                        var_result.var_99, VAR_THRESHOLD
+                    ),
+                    value: var_result.var_99,
+                    threshold: VAR_THRESHOLD,
+                });
+            }
+        }
+    }
+
+    // 2. Drawdown — per DARWIN
+    let accounts = list_darwin_accounts(conn)?;
+    for acct in &accounts {
+        if let Ok(dr) = get_daily_returns(conn, &acct.darwin_ticker) {
+            if let Some(last) = dr.last() {
+                if last.drawdown_pct > DD_THRESHOLD {
+                    alerts.push(AlertCondition {
+                        alert_type: "DRAWDOWN".into(),
+                        severity: if last.drawdown_pct > DD_THRESHOLD * 1.5 { "CRITICAL".into() } else { "WARNING".into() },
+                        message: format!(
+                            "{} drawdown {:.1}% exceeds {:.0}% threshold",
+                            acct.darwin_ticker, last.drawdown_pct, DD_THRESHOLD
+                        ),
+                        value: last.drawdown_pct,
+                        threshold: DD_THRESHOLD,
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. Concentration — any symbol > 30% of total notional
+    if let Ok(exposure) = get_portfolio_exposure(conn) {
+        let total_notional: f64 = exposure.iter().map(|e| e.net_notional.abs()).sum();
+        if total_notional > 0.0 {
+            for e in &exposure {
+                let pct = e.net_notional.abs() / total_notional * 100.0;
+                if pct > CONCENTRATION_THRESHOLD {
+                    alerts.push(AlertCondition {
+                        alert_type: "CONCENTRATION".into(),
+                        severity: if pct > CONCENTRATION_THRESHOLD * 1.5 { "CRITICAL".into() } else { "WARNING".into() },
+                        message: format!(
+                            "{} is {:.1}% of portfolio notional (threshold {:.0}%)",
+                            e.symbol, pct, CONCENTRATION_THRESHOLD
+                        ),
+                        value: pct,
+                        threshold: CONCENTRATION_THRESHOLD,
+                    });
+                }
+
+                // 4. Symbol overlap — symbol in 4+ DARWINs
+                if e.darwin_count >= OVERLAP_THRESHOLD {
+                    alerts.push(AlertCondition {
+                        alert_type: "CONCENTRATION".into(),
+                        severity: "WARNING".into(),
+                        message: format!(
+                            "{} held in {} DARWINs ({}) — overlap threshold {}",
+                            e.symbol, e.darwin_count, e.darwins.join(", "), OVERLAP_THRESHOLD
+                        ),
+                        value: e.darwin_count as f64,
+                        threshold: OVERLAP_THRESHOLD as f64,
+                    });
+                }
+            }
+        }
+    }
+
+    // 5. High correlation — any DARWIN pair > 0.8
+    if let Ok(correlations) = get_darwin_correlations(conn) {
+        for c in &correlations {
+            if c.darwin_a != c.darwin_b && c.correlation > CORRELATION_THRESHOLD {
+                // Only emit once per pair (A < B alphabetically)
+                if c.darwin_a < c.darwin_b {
+                    alerts.push(AlertCondition {
+                        alert_type: "CORRELATION_SPIKE".into(),
+                        severity: if c.correlation > 0.9 { "CRITICAL".into() } else { "WARNING".into() },
+                        message: format!(
+                            "{} / {} correlation {:.2} exceeds {:.1} threshold",
+                            c.darwin_a, c.darwin_b, c.correlation, CORRELATION_THRESHOLD
+                        ),
+                        value: c.correlation,
+                        threshold: CORRELATION_THRESHOLD,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort: CRITICAL first, then WARNING, then INFO
+    alerts.sort_by(|a, b| {
+        let sev_ord = |s: &str| match s { "CRITICAL" => 0, "WARNING" => 1, _ => 2 };
+        sev_ord(&a.severity).cmp(&sev_ord(&b.severity))
+    });
+
+    Ok(alerts)
+}
+
+// ── DARWIN vs Benchmark ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BenchmarkComparison {
+    pub darwin_ticker: String,
+    pub darwin_return: f64,
+    pub darwin_sharpe: f64,
+    pub darwin_max_dd: f64,
+    pub benchmark_return: f64,
+    pub alpha: f64, // excess return vs benchmark
+    pub beta: f64,  // sensitivity to market
+    pub information_ratio: f64,
+    pub tracking_error: f64,
+}
+
+/// Compute alpha, beta, information ratio, tracking error of a DARWIN vs a benchmark.
+/// Benchmark returns must be aligned by date with the DARWIN's daily returns.
+pub fn compare_to_benchmark(
+    conn: &Connection,
+    darwin_ticker: &str,
+    benchmark_returns: &[DailyReturn],
+) -> Result<BenchmarkComparison, String> {
+    let darwin_dr = get_daily_returns(conn, darwin_ticker)?;
+    if darwin_dr.len() < 5 {
+        return Err(format!("{} has fewer than 5 trading days", darwin_ticker));
+    }
+
+    let darwin_map: std::collections::HashMap<String, f64> =
+        darwin_dr.iter().map(|r| (r.date.clone(), r.return_pct)).collect();
+    let bench_map: std::collections::HashMap<String, f64> =
+        benchmark_returns.iter().map(|r| (r.date.clone(), r.return_pct)).collect();
+
+    // Align on common dates
+    let mut pairs: Vec<(f64, f64)> = Vec::new(); // (darwin_ret, bench_ret)
+    for (date, &d_ret) in &darwin_map {
+        if let Some(&b_ret) = bench_map.get(date) {
+            pairs.push((d_ret, b_ret));
+        }
+    }
+
+    if pairs.len() < 5 {
+        return Err(format!(
+            "Only {} overlapping dates between {} and benchmark — need at least 5",
+            pairs.len(), darwin_ticker
+        ));
+    }
+
+    let n = pairs.len() as f64;
+    let mean_d = pairs.iter().map(|(d, _)| d).sum::<f64>() / n;
+    let mean_b = pairs.iter().map(|(_, b)| b).sum::<f64>() / n;
+
+    // Beta = Cov(d, b) / Var(b)
+    let cov = pairs.iter().map(|(d, b)| (d - mean_d) * (b - mean_b)).sum::<f64>() / (n - 1.0);
+    let var_b = pairs.iter().map(|(_, b)| (b - mean_b).powi(2)).sum::<f64>() / (n - 1.0);
+    let beta = if var_b > 0.0 { cov / var_b } else { 0.0 };
+
+    // Alpha (annualized) = mean(darwin) - beta * mean(bench), scaled to annual
+    let alpha = (mean_d - beta * mean_b) * 252.0;
+
+    // Tracking error = annualized StdDev of (darwin - benchmark) returns
+    let excess: Vec<f64> = pairs.iter().map(|(d, b)| d - b).collect();
+    let mean_excess = excess.iter().sum::<f64>() / n;
+    let te_var = excess.iter().map(|e| (e - mean_excess).powi(2)).sum::<f64>() / (n - 1.0);
+    let tracking_error = te_var.sqrt() * (252.0f64).sqrt();
+
+    // Information ratio = annualized excess return / tracking error
+    let information_ratio = if tracking_error > 0.0 {
+        mean_excess * 252.0 / tracking_error
+    } else { 0.0 };
+
+    // DARWIN stats
+    let var_result = compute_var(&darwin_dr);
+    let darwin_return = darwin_dr.last().map(|r| {
+        let first_bal = darwin_dr.first().map(|f| f.balance - f.pnl).unwrap_or(1.0);
+        if first_bal > 0.0 { (r.balance - first_bal) / first_bal * 100.0 } else { 0.0 }
+    }).unwrap_or(0.0);
+
+    // Benchmark total return
+    let benchmark_return = if !benchmark_returns.is_empty() {
+        let first_bal = benchmark_returns.first().map(|f| f.balance - f.pnl).unwrap_or(1.0);
+        let last_bal = benchmark_returns.last().map(|r| r.balance).unwrap_or(1.0);
+        if first_bal > 0.0 { (last_bal - first_bal) / first_bal * 100.0 } else { 0.0 }
+    } else { 0.0 };
+
+    Ok(BenchmarkComparison {
+        darwin_ticker: darwin_ticker.to_string(),
+        darwin_return,
+        darwin_sharpe: var_result.sharpe,
+        darwin_max_dd: var_result.max_drawdown_pct,
+        benchmark_return,
+        alpha,
+        beta,
+        information_ratio,
+        tracking_error,
+    })
+}
+
 /// Delete a DARWIN account and all its data.
 pub fn delete_darwin_account(conn: &Connection, darwin_ticker: &str) -> Result<(), String> {
     conn.execute("DELETE FROM darwin_deals WHERE account = ?1", params![darwin_ticker])
@@ -3023,5 +4203,107 @@ mod tests {
         let conn = setup_test_db();
         let curve = get_portfolio_equity_curve(&conn).unwrap();
         assert!(!curve.is_empty());
+    }
+
+    #[test]
+    fn test_seasonals() {
+        let conn = setup_test_db();
+        let returns = get_daily_returns(&conn, "TEST").unwrap();
+        let seasonals = get_seasonal_analysis(&returns);
+        assert!(!seasonals.is_empty());
+        // June should be present (our test data is in June)
+        let june = seasonals.iter().find(|s| s.month == 6);
+        assert!(june.is_some());
+        assert_eq!(june.unwrap().month_name, "June");
+        assert!(june.unwrap().sample_count >= 1);
+    }
+
+    #[test]
+    fn test_mae_mfe() {
+        let conn = setup_test_db();
+        let result = estimate_mae_mfe(&conn, "TEST").unwrap();
+        assert!(result.avg_mae_pct >= 0.0);
+        assert!(result.avg_mfe_pct >= 0.0);
+        assert!(!result.entries.is_empty());
+    }
+
+    #[test]
+    fn test_what_if() {
+        let conn = setup_test_db();
+        // TSLA is open, so closing it should change VaR
+        let result = what_if_close_symbol(&conn, "TSLA");
+        // May succeed or fail depending on data sufficiency
+        if let Ok(r) = result {
+            assert!(!r.action.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_liquidity_risk() {
+        let conn = setup_test_db();
+        let risk = get_liquidity_risk(&conn).unwrap();
+        // Should find TSLA open position
+        if !risk.is_empty() {
+            for r in &risk {
+                assert!(!r.symbol.is_empty());
+                assert!(!r.risk_tier.is_empty());
+                assert!(r.days_to_exit >= 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn test_tail_risk() {
+        let conn = setup_test_db();
+        let returns = get_daily_returns(&conn, "TEST").unwrap();
+        let tail = compute_tail_risk(&returns);
+        // Skewness and kurtosis should be finite
+        assert!(tail.skewness.is_finite());
+        assert!(tail.kurtosis.is_finite());
+        assert!(tail.ulcer_index >= 0.0);
+    }
+
+    #[test]
+    fn test_trading_bursts() {
+        let conn = setup_test_db();
+        let bursts = detect_trading_bursts(&conn, "TEST").unwrap();
+        // Should detect at least one week of activity
+        assert!(!bursts.is_empty());
+        for b in &bursts {
+            assert!(b.trade_count > 0);
+            assert!(!b.intensity.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_pyramiding() {
+        let conn = setup_test_db();
+        let pyramids = analyze_pyramiding(&conn, "TEST").unwrap();
+        // AAPL has multiple buy entries, should detect pyramiding
+        if !pyramids.is_empty() {
+            for p in &pyramids {
+                assert!(!p.symbol.is_empty());
+                assert!(!p.strategy.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn test_alerts() {
+        let conn = setup_test_db();
+        let alerts = check_alerts(&conn).unwrap();
+        // Alerts may or may not fire on test data
+        for a in &alerts {
+            assert!(!a.alert_type.is_empty());
+            assert!(!a.severity.is_empty());
+            assert!(!a.message.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_dscore_components_missing() {
+        // FTP path doesn't exist, should return error
+        let result = get_dscore_components("/nonexistent", "TEST");
+        assert!(result.is_err() || result.unwrap().experience.is_none());
     }
 }

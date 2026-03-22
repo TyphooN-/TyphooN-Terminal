@@ -10618,7 +10618,7 @@ function cmdDarwin() {
   const accountSel = document.createElement("select"); accountSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:140px;";
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
-  ["Summary", "Open Positions", "Equity Curve", "P/L by Symbol", "Streaks", "Hourly P/L", "Day of Week", "Hold Time", "Symbol Rotation", "Sizing", "Kelly Criterion", "Autocorrelation", "Costs", "Positions", "Deals"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
+  ["Summary", "Open Positions", "Equity Curve", "P/L by Symbol", "Streaks", "Hourly P/L", "Day of Week", "Hold Time", "Symbol Rotation", "Sizing", "Kelly Criterion", "Autocorrelation", "MAE/MFE", "Bursts", "Pyramiding", "Costs", "Positions", "Deals"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
   topBar.appendChild(importBtn); topBar.appendChild(accountSel); topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
   root.appendChild(topBar);
 
@@ -10674,6 +10674,9 @@ function cmdDarwin() {
       else if (view === "sizing") await renderSizing(ticker);
       else if (view === "kelly_criterion") await renderKelly(ticker);
       else if (view === "autocorrelation") await renderAutocorrelation(ticker);
+      else if (view === "maemfe") await renderMAEMFE(ticker);
+      else if (view === "bursts") await renderBursts(ticker);
+      else if (view === "pyramiding") await renderPyramiding(ticker);
       else if (view === "costs") await renderCosts(ticker);
       else if (view === "positions") await renderPositions(ticker);
       else if (view === "deals") await renderDeals(ticker);
@@ -11116,6 +11119,89 @@ function cmdDarwin() {
     contentDiv.appendChild(note);
   }
 
+  async function renderMAEMFE(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_darwin_mae_mfe", { darwinTicker: ticker });
+    const r = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `MAE/MFE Analysis — ${ticker}`;
+    contentDiv.appendChild(title);
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding:0 0 12px;";
+    desc.textContent = "MAE = Max Adverse Excursion (worst drawdown during trade). MFE = Max Favorable Excursion (best run-up). Estimated from daily volatility × hold time.";
+    contentDiv.appendChild(desc);
+    const rows = [["Avg MAE", r.avg_mae_pct.toFixed(2) + "%", -1], ["Avg MFE", r.avg_mfe_pct.toFixed(2) + "%", 1], ["MAE/MFE Ratio", r.mae_mfe_ratio.toFixed(3), r.mae_mfe_ratio < 1 ? 1 : -1]];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:400px;margin-bottom:16px;";
+    for (const [l, v, cv] of rows) { const tr = document.createElement("tr"); const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = l; const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;"; td2.textContent = v; td2.style.color = cv >= 0 ? "#4caf50" : "#f44336"; tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr); }
+    contentDiv.appendChild(table);
+    if (r.entries && r.entries.length > 0) {
+      const eTable = document.createElement("table"); eTable.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+      const thead = document.createElement("tr");
+      ["Symbol", "Side", "Profit", "MAE%", "MFE%"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:3px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+      eTable.appendChild(thead);
+      for (const e of r.entries.slice(0, 50)) {
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #111;";
+        [e.symbol, e.side, "$" + e.profit.toFixed(0), e.mae_pct.toFixed(2) + "%", e.mfe_pct.toFixed(2) + "%"].forEach((v, i) => {
+          const td = document.createElement("td"); td.style.cssText = "padding:2px 6px;font-family:Consolas,monospace;"; td.textContent = v;
+          if (i === 0) td.style.color = "#8af"; if (i === 2) td.style.color = e.profit >= 0 ? "#4caf50" : "#f44336";
+          tr.appendChild(td);
+        });
+        eTable.appendChild(tr);
+      }
+      contentDiv.appendChild(eTable);
+    }
+  }
+
+  async function renderBursts(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_trading_bursts", { darwinTicker: ticker });
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Trading Bursts — ${ticker}`;
+    contentDiv.appendChild(title);
+    if (data.length === 0) { contentDiv.appendChild(document.createTextNode("No trading bursts detected.")); return; }
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Period", "Trades", "Trades/Day", "P/L", "Intensity"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+    table.appendChild(thead);
+    for (const b of data) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      [b.start_date.substring(0, 10) + " → " + b.end_date.substring(0, 10), b.trade_count, b.avg_trades_per_day.toFixed(1), "$" + b.total_pnl.toFixed(0), b.intensity].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;"; td.textContent = String(v);
+        if (i === 3) td.style.color = b.total_pnl >= 0 ? "#4caf50" : "#f44336";
+        if (i === 4) td.style.color = b.intensity === "BURST" ? "#f44336" : b.intensity === "ACTIVE" ? "#ff9800" : "#4caf50";
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderPyramiding(ticker) {
+    const json = await window.__TAURI__.core.invoke("get_pyramiding_analysis", { darwinTicker: ticker });
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Position Pyramiding — ${ticker}`;
+    contentDiv.appendChild(title);
+    if (data.length === 0) { contentDiv.appendChild(document.createTextNode("No pyramiding detected.")); return; }
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Symbol", "Adds", "Avg Interval", "In Profit", "In Loss", "P/L", "Strategy"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+    table.appendChild(thead);
+    for (const p of data) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      [p.symbol, p.total_adds, p.avg_add_interval_hours.toFixed(1) + "h", p.adds_in_profit, p.adds_in_loss, "$" + p.final_pnl.toFixed(0), p.strategy].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;"; td.textContent = String(v);
+        if (i === 0) td.style.color = "#8af";
+        if (i === 5) td.style.color = p.final_pnl >= 0 ? "#4caf50" : "#f44336";
+        if (i === 6) td.style.color = p.strategy === "SCALING_IN" ? "#4caf50" : p.strategy === "AVERAGING_DOWN" ? "#f44336" : "#ff9800";
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
   async function renderCosts(ticker) {
     const json = await window.__TAURI__.core.invoke("get_darwin_costs", { darwinTicker: ticker });
     const s = JSON.parse(json);
@@ -11230,7 +11316,7 @@ function cmdDarwinPortfolio() {
 
   const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:6px;align-items:center;";
   const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:160px;";
-  ["Portfolio Summary", "Portfolio VaR", "Monte Carlo", "Stress Test", "VaR Forecast", "Sector Exposure", "Combined Open Positions", "Symbol Exposure", "Trade Overlaps", "Combined Equity Curve", "Drawdown Chart", "Rolling VaR", "Monthly Heatmap", "P/L Distribution", "Correlation Matrix"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
+  ["Portfolio Summary", "Portfolio VaR", "Monte Carlo", "Stress Test", "VaR Forecast", "Tail Risk", "Seasonals", "Sector Exposure", "Liquidity Risk", "Alerts", "Combined Open Positions", "Symbol Exposure", "Trade Overlaps", "Combined Equity Curve", "Drawdown Chart", "Rolling VaR", "Monthly Heatmap", "P/L Distribution", "Correlation Matrix"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
   root.appendChild(topBar);
@@ -11250,7 +11336,11 @@ function cmdDarwinPortfolio() {
       else if (view === "monte_carlo") await renderMonteCarlo();
       else if (view === "stress_test") await renderStressTest();
       else if (view === "var_forecast") await renderVaRForecast();
+      else if (view === "tail_risk") await renderTailRisk();
+      else if (view === "seasonals") await renderSeasonals();
       else if (view === "sector_exposure") await renderSectorExposure();
+      else if (view === "liquidity_risk") await renderLiquidityRisk();
+      else if (view === "alerts") await renderAlerts();
       else if (view === "combined_open_positions") await renderCombinedPositions();
       else if (view === "symbol_exposure") await renderExposure();
       else if (view === "trade_overlaps") await renderTradeOverlaps();
@@ -11572,6 +11662,142 @@ function cmdDarwinPortfolio() {
       tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
     }
     contentDiv.appendChild(table);
+  }
+
+  async function renderTailRisk() {
+    const json = await window.__TAURI__.core.invoke("get_tail_risk");
+    const t = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Tail Risk Dashboard";
+    contentDiv.appendChild(title);
+    if (t.fat_tail_warning) {
+      const warn = document.createElement("div"); warn.style.cssText = "background:#5f0a0a;color:#f88;padding:8px 12px;border-radius:4px;margin-bottom:12px;font-size:12px;";
+      warn.textContent = "FAT TAIL WARNING — Excess kurtosis > 1.0. Returns have heavier tails than normal distribution. VaR may underestimate risk.";
+      contentDiv.appendChild(warn);
+    }
+    const rows = [
+      ["Skewness", t.skewness.toFixed(4), t.skewness < 0 ? -1 : 1],
+      ["Excess Kurtosis", t.kurtosis.toFixed(4), t.kurtosis > 1 ? -1 : 1],
+      ["Tail Ratio (95th/5th)", t.tail_ratio.toFixed(3), t.tail_ratio > 1 ? 1 : -1],
+      ["", ""],
+      ["Gain-to-Pain Ratio", t.gain_to_pain.toFixed(3), t.gain_to_pain > 1 ? 1 : -1],
+      ["Ulcer Index", t.ulcer_index.toFixed(4)],
+      ["Pain Index", t.pain_index.toFixed(4)],
+      ["Omega Ratio", t.omega_ratio.toFixed(3), t.omega_ratio > 1 ? 1 : -1],
+    ];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:500px;";
+    for (const [l, v, cv] of rows) {
+      if (l === "") { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 2; td.style.height = "8px"; tr.appendChild(td); table.appendChild(tr); continue; }
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = l;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = v;
+      if (cv !== undefined) td2.style.color = cv >= 0 ? "#4caf50" : "#f44336";
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+    const note = document.createElement("div"); note.style.cssText = "color:#666;font-size:10px;padding:12px 0;max-width:600px;";
+    note.textContent = "Skewness < 0 = left tail (more extreme losses). Kurtosis > 0 = fat tails (extreme events more likely than normal). Tail Ratio > 1 = upside tails larger than downside. Omega > 1 = gains outweigh losses at threshold. Ulcer Index = RMS of drawdowns (lower = smoother equity curve).";
+    contentDiv.appendChild(note);
+  }
+
+  async function renderSeasonals() {
+    const json = await window.__TAURI__.core.invoke("get_darwin_seasonals");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Seasonal Analysis — Portfolio Monthly Patterns";
+    contentDiv.appendChild(title);
+    if (data.length === 0) { contentDiv.appendChild(document.createTextNode("Insufficient data.")); return; }
+    // Bar chart
+    const maxAvg = Math.max(...data.map(d => Math.abs(d.avg_return_pct)), 0.01);
+    const canvas = document.createElement("canvas"); canvas.width = 900; canvas.height = 250; canvas.style.cssText = "width:100%;margin-bottom:16px;";
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, 900, 250);
+    const barW = 65; const padL = 50; const midY = 130;
+    for (let i = 0; i < data.length; i++) {
+      const d = data[i]; const barH = Math.abs(d.avg_return_pct) / maxAvg * 100;
+      const x = padL + i * barW; const y = d.avg_return_pct >= 0 ? midY - barH : midY;
+      ctx.fillStyle = d.avg_return_pct >= 0 ? "rgba(76,175,80,0.7)" : "rgba(244,67,54,0.7)";
+      ctx.fillRect(x, y, barW - 4, barH);
+      ctx.fillStyle = "#888"; ctx.font = "10px Consolas"; ctx.fillText(d.month_name.substring(0, 3), x + 15, 245);
+      ctx.fillStyle = d.avg_return_pct >= 0 ? "#4caf50" : "#f44336"; ctx.font = "9px Consolas";
+      ctx.fillText(d.avg_return_pct.toFixed(2) + "%", x + 5, d.avg_return_pct >= 0 ? midY - barH - 4 : midY + barH + 12);
+    }
+    ctx.strokeStyle = "#444"; ctx.beginPath(); ctx.moveTo(padL, midY); ctx.lineTo(padL + 12 * barW, midY); ctx.stroke();
+    ctx.fillStyle = "#fff"; ctx.font = "bold 12px Consolas"; ctx.fillText("Average Monthly Return by Calendar Month", padL, 16);
+    contentDiv.appendChild(canvas);
+    // Table
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Month", "Avg Return", "Median", "Win Rate", "Samples", "Best Year", "Worst Year"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+    table.appendChild(thead);
+    for (const d of data) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      [d.month_name, d.avg_return_pct.toFixed(2) + "%", d.median_return_pct.toFixed(2) + "%", d.win_rate.toFixed(0) + "%", d.sample_count, d.best_year[0] + " (" + d.best_year[1].toFixed(1) + "%)", d.worst_year[0] + " (" + d.worst_year[1].toFixed(1) + "%)"].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;"; td.textContent = String(v);
+        if (i === 1 || i === 2) td.style.color = parseFloat(v) >= 0 ? "#4caf50" : "#f44336";
+        if (i === 3) td.style.color = parseFloat(v) >= 50 ? "#4caf50" : "#f44336";
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderLiquidityRisk() {
+    const json = await window.__TAURI__.core.invoke("get_liquidity_risk");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Liquidity Risk — ${data.length} positions`;
+    contentDiv.appendChild(title);
+    const tierColors = { LOW: "#4caf50", MEDIUM: "#ff9800", HIGH: "#f44336", EXTREME: "#d50000" };
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Symbol", "Volume", "Notional", "Days to Exit", "Concentration", "Risk"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+    table.appendChild(thead);
+    for (const d of data) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      [d.symbol, d.position_volume.toLocaleString(undefined, {maximumFractionDigits: 0}), "$" + d.notional.toLocaleString(undefined, {maximumFractionDigits: 0}), d.days_to_exit.toFixed(1), d.concentration_pct.toFixed(1) + "%", d.risk_tier].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;"; td.textContent = String(v);
+        if (i === 0) td.style.color = "#8af";
+        if (i === 5) td.style.color = tierColors[d.risk_tier] || "#ccc";
+        if (i === 4) td.style.color = d.concentration_pct > 20 ? "#f44336" : "#ccc";
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderAlerts() {
+    const json = await window.__TAURI__.core.invoke("check_alerts");
+    const alerts = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = `Risk Alerts — ${alerts.length} active`;
+    contentDiv.appendChild(title);
+    if (alerts.length === 0) {
+      const ok = document.createElement("div"); ok.style.cssText = "color:#4caf50;font-size:14px;padding:20px;text-align:center;";
+      ok.textContent = "All clear — no risk alerts triggered.";
+      contentDiv.appendChild(ok); return;
+    }
+    const sevColors = { CRITICAL: "#d50000", WARNING: "#ff9800", INFO: "#42a5f5" };
+    const sevBg = { CRITICAL: "rgba(213,0,0,0.15)", WARNING: "rgba(255,152,0,0.1)", INFO: "rgba(66,165,245,0.05)" };
+    for (const a of alerts) {
+      const card = document.createElement("div"); card.style.cssText = `padding:10px 14px;margin-bottom:8px;border-left:3px solid ${sevColors[a.severity] || "#888"};background:${sevBg[a.severity] || "transparent"};border-radius:2px;`;
+      const header = document.createElement("div"); header.style.cssText = "display:flex;gap:12px;align-items:center;margin-bottom:4px;";
+      const badge = document.createElement("span"); badge.style.cssText = `color:${sevColors[a.severity]};font-weight:bold;font-size:11px;`; badge.textContent = a.severity;
+      const type_ = document.createElement("span"); type_.style.cssText = "color:#ccc;font-size:12px;font-weight:bold;"; type_.textContent = a.alert_type.replace(/_/g, " ");
+      header.appendChild(badge); header.appendChild(type_); card.appendChild(header);
+      const msg = document.createElement("div"); msg.style.cssText = "color:#aaa;font-size:11px;"; msg.textContent = a.message;
+      card.appendChild(msg);
+      const vals = document.createElement("div"); vals.style.cssText = "color:#666;font-size:10px;margin-top:4px;font-family:Consolas,monospace;";
+      vals.textContent = `Value: ${a.value.toFixed(2)} | Threshold: ${a.threshold.toFixed(2)}`;
+      card.appendChild(vals);
+      contentDiv.appendChild(card);
+    }
   }
 
   async function renderSectorExposure() {
