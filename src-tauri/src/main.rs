@@ -5543,6 +5543,71 @@ async fn delete_darwin_account(
     Ok(format!("{{\"deleted\":\"{}\"}}", darwin_ticker))
 }
 
+/// Static map tracking last-seen modification times for DARWIN XLSX files.
+/// Used by `watch_darwin_imports` to detect changed files without OS-level watchers.
+static DARWIN_MTIME_MAP: OnceLock<Mutex<std::collections::HashMap<String, u64>>> = OnceLock::new();
+
+fn darwin_mtime_map() -> &'static Mutex<std::collections::HashMap<String, u64>> {
+    DARWIN_MTIME_MAP.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+#[tauri::command]
+async fn watch_darwin_imports(
+    _state: State<'_, SharedState>,
+    dir: String,
+) -> Result<String, String> {
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("Read dir failed: {e}"))?;
+    let mut reimported = Vec::new();
+    let mut mtime_map = darwin_mtime_map().lock().await;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Dir entry failed: {e}"))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("xlsx") { continue; }
+        let path_str = path.to_str().unwrap_or("").to_string();
+        if path_str.is_empty() { continue; }
+
+        let meta = std::fs::metadata(&path)
+            .map_err(|e| format!("Metadata failed for {}: {e}", path_str))?;
+        let mtime = meta.modified()
+            .map_err(|e| format!("mtime failed: {e}"))?
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let last_mtime = mtime_map.get(&path_str).copied().unwrap_or(0);
+        if mtime > last_mtime {
+            // File is new or changed — reimport
+            let ticker = path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            if ticker.is_empty() { continue; }
+
+            let conn = open_darwin_connection()?;
+            match darwin::import_darwin_xlsx(&conn, &path_str, &ticker) {
+                Ok((t, deals, positions)) => {
+                    tracing::info!("DARWIN auto-reimport {}: {} deals, {} positions", t, deals, positions);
+                    reimported.push(serde_json::json!({
+                        "ticker": t, "deals": deals, "positions": positions,
+                        "path": path_str, "status": "ok"
+                    }));
+                }
+                Err(e) => {
+                    tracing::warn!("DARWIN auto-reimport {} failed: {}", ticker, e);
+                    reimported.push(serde_json::json!({
+                        "ticker": ticker, "error": e, "path": path_str, "status": "error"
+                    }));
+                }
+            }
+            mtime_map.insert(path_str, mtime);
+        }
+    }
+
+    Ok(serde_json::to_string(&reimported).unwrap_or("[]".into()))
+}
+
 fn main() {
     // Log to both stderr and file (~/.config/typhoon-terminal/typhoon.log)
     let log_dir = std::env::var("HOME")
@@ -5851,6 +5916,8 @@ fn main() {
             scan_darwin_ftp,
             export_radar_snapshot,
             delete_darwin_account,
+            // DARWIN File Watcher
+            watch_darwin_imports,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TyphooN Terminal");

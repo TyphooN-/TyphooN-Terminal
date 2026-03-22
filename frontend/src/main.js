@@ -855,6 +855,9 @@ let fisherSeries = {};
 let volumeSeries = {};
 let slLine = null;
 let tpLine = null;
+let bidPriceLine = null;
+let askPriceLine = null;
+let _bidAskLineInterval = null;
 let currentSymbol = "";
 let currentTimeframe = "1Hour";
 let lastPrice = 0;
@@ -1579,6 +1582,65 @@ function removeTPLine() {
 }
 function getSLPrice() { return slLine ? slLine.options().price : null; }
 function getTPPrice() { return tpLine ? tpLine.options().price : null; }
+
+// ── Bid/Ask Price Lines ─────────────────────────────────────
+function removeBidAskLines() {
+  const series = getActiveCandleSeries();
+  if (bidPriceLine) { try { series.removePriceLine(bidPriceLine); } catch (_) { try { candleSeries.removePriceLine(bidPriceLine); } catch (_) {} } bidPriceLine = null; }
+  if (askPriceLine) { try { series.removePriceLine(askPriceLine); } catch (_) { try { candleSeries.removePriceLine(askPriceLine); } catch (_) {} } askPriceLine = null; }
+}
+
+async function updateBidAskLines() {
+  if (!currentSymbol || !candleSeries) return;
+  try {
+    // Try Alpaca quote first
+    let bidPrice = 0, askPrice = 0;
+    try {
+      const json = await invoke("get_latest_quote", { symbol: currentSymbol });
+      const q = JSON.parse(json);
+      if (q.bid > 0) { bidPrice = q.bid; askPrice = q.ask; }
+    } catch (_) {}
+    // Fallback to MT5 quotes
+    if (bidPrice === 0) {
+      try {
+        const qJson = await invoke("get_mt5_quotes");
+        const quotes = JSON.parse(qJson);
+        const mt5q = quotes.find(q => q.s === currentSymbol || q.s === currentSymbol.replace("/", ""));
+        if (mt5q && mt5q.b > 0) { bidPrice = mt5q.b; askPrice = mt5q.a; }
+      } catch (_) {}
+    }
+    if (bidPrice === 0) return;
+    removeBidAskLines();
+    const series = getActiveCandleSeries();
+    bidPriceLine = series.createPriceLine({
+      price: bidPrice,
+      color: '#4caf50',
+      lineWidth: 1,
+      lineStyle: 2,
+      axisLabelVisible: true,
+      title: 'Bid',
+    });
+    askPriceLine = series.createPriceLine({
+      price: askPrice,
+      color: '#f44336',
+      lineWidth: 1,
+      lineStyle: 2,
+      axisLabelVisible: true,
+      title: 'Ask',
+    });
+  } catch (_) {}
+}
+
+function startBidAskLinePolling() {
+  stopBidAskLinePolling();
+  updateBidAskLines(); // immediate first update
+  _bidAskLineInterval = setInterval(updateBidAskLines, 10000);
+}
+
+function stopBidAskLinePolling() {
+  if (_bidAskLineInterval) { clearInterval(_bidAskLineInterval); _bidAskLineInterval = null; }
+  removeBidAskLines();
+}
 
 /// Place a protective stop or limit order on an existing position.
 /// Called when "Set SL" / "Set TP" is clicked or from the warning banner.
@@ -4064,6 +4126,9 @@ async function loadChart(symbol, timeframe) {
       if (st.tp_price && st.tp_price > 0 && !getTPPrice()) createTPLine(st.tp_price);
     } catch (_) {}
 
+    // Start bid/ask price line polling (green bid, red ask — dashed lines)
+    startBidAskLinePolling();
+
     // Start live bar polling (update latest bar every 10s)
     // Generation counter prevents stale intervals from updating wrong charts
     if (liveBarInterval) clearInterval(liveBarInterval);
@@ -4671,7 +4736,102 @@ function triggerLoad() {
   document.getElementById("symbol-autocomplete").classList.add("hidden");
   // Macro recording hook: capture symbol loads
   if (window._macroRecording) window._macroSteps.push({ action: "load_symbol", params: { symbol, timeframe: tf } });
-  loadChart(symbol, tf);
+  // DARWIN ticker detection: intercept 3-5 letter uppercase symbols that match a known DARWIN
+  if (/^[A-Z]{3,5}$/.test(symbol) && !CRYPTO_MAP[symbol]) {
+    loadDarwinChartIfExists(symbol, tf).then(isDarwin => {
+      if (!isDarwin) loadChart(symbol, tf);
+    });
+  } else {
+    loadChart(symbol, tf);
+  }
+}
+
+// ── DARWIN Quote Charting ────────────────────────────────────────────
+
+let _darwinAccountsCache = null;
+let _darwinAccountsCacheTime = 0;
+const DARWIN_ACCOUNTS_CACHE_TTL = 60000; // 1 minute
+
+async function getDarwinAccounts() {
+  if (_darwinAccountsCache && (Date.now() - _darwinAccountsCacheTime) < DARWIN_ACCOUNTS_CACHE_TTL) {
+    return _darwinAccountsCache;
+  }
+  try {
+    const json = await invoke("list_darwin_accounts");
+    _darwinAccountsCache = JSON.parse(json);
+    _darwinAccountsCacheTime = Date.now();
+    return _darwinAccountsCache;
+  } catch (e) {
+    console.warn("[DARWIN] Failed to list accounts:", e);
+    return [];
+  }
+}
+
+async function loadDarwinChartIfExists(symbol, timeframe) {
+  const accounts = await getDarwinAccounts();
+  const match = accounts.find(a => a.darwin_ticker === symbol);
+  if (!match) return false;
+
+  // Map terminal timeframes to DARWIN-supported timeframes
+  let darwinTf = "1Day";
+  if (timeframe === "1Week" || timeframe === "1W") darwinTf = "1Week";
+  else if (timeframe === "1Month" || timeframe === "1M" || timeframe === "1MN") darwinTf = "1Month";
+
+  setLoadingStatus(symbol, "loading DARWIN...");
+  try {
+    const json = await invoke("get_darwin_price_series", { darwinTicker: symbol, timeframe: darwinTf });
+    const bars = JSON.parse(json);
+    if (!bars || bars.length === 0) {
+      log(`No DARWIN price data for ${symbol}`, "warn");
+      setLoadingStatus(symbol, null);
+      return false;
+    }
+
+    currentSymbol = symbol;
+    currentTimeframe = timeframe;
+
+    let chartData = bars.map(b => ({
+      time: Math.floor(new Date(b.date).getTime() / 1000),
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+      volume: 0,
+    }));
+    chartData = sanitizeBars(chartData);
+
+    if (chartData.length === 0) {
+      log(`No valid bars for DARWIN ${symbol}`, "warn");
+      setLoadingStatus(symbol, null);
+      return false;
+    }
+
+    currentChartData = chartData;
+    const activeTab = tabs.find(t => t.id === activeTabId);
+    if (activeTab) { activeTab.symbol = symbol; activeTab.timeframe = timeframe; activeTab.chartData = chartData; renderTabBar(); }
+
+    if (currentChartType === "line") {
+      candleSeries.setData(chartData.map(d => ({ time: d.time, value: d.close })));
+    } else if (currentChartType === "heikin-ashi") {
+      candleSeries.setData(calcHeikinAshi(chartData));
+    } else {
+      candleSeries.setData(chartData);
+    }
+    if (volumeSeries) volumeSeries.setData([]);
+
+    lastPrice = chartData[chartData.length - 1].close;
+    const first = bars[0].date;
+    const last = bars[bars.length - 1].date;
+    log(`DARWIN ${symbol} (${match.name}): ${chartData.length} bars [${darwinTf}] ${first} -> ${last}`, "ok");
+    setLoadingStatus(symbol, `DARWIN ${match.name} | ${first} -> ${last} | ${chartData.length} bars`);
+
+    chart.timeScale().fitContent();
+    return true;
+  } catch (e) {
+    console.warn("[DARWIN Chart]", e);
+    setLoadingStatus(symbol, null);
+    return false;
+  }
 }
 
 // ── Button Handlers ─────────────────────────────────────────
@@ -5216,6 +5376,33 @@ async function fillFormFromAccount(name) {
   }
 }
 
+// ── DARWIN XLSX File Watcher ─────────────────────────────────
+let _darwinWatcherInterval = null;
+const DARWIN_IMPORT_DIR = "/home/typhoon/mt5xml";
+
+function startDarwinFileWatcher() {
+  stopDarwinFileWatcher();
+  _darwinWatcherInterval = setInterval(async () => {
+    try {
+      const json = await invoke("watch_darwin_imports", { dir: DARWIN_IMPORT_DIR });
+      const reimported = JSON.parse(json);
+      if (reimported.length > 0) {
+        for (const r of reimported) {
+          if (r.status === "ok") {
+            log(`DARWIN auto-reimport: ${r.ticker} (${r.deals} deals, ${r.positions} positions)`, "ok");
+          } else {
+            log(`DARWIN auto-reimport failed: ${r.ticker} — ${r.error}`, "warn");
+          }
+        }
+      }
+    } catch (_) {}
+  }, 60000);
+}
+
+function stopDarwinFileWatcher() {
+  if (_darwinWatcherInterval) { clearInterval(_darwinWatcherInterval); _darwinWatcherInterval = null; }
+}
+
 // ── Connection ──────────────────────────────────────────────
 
 let dashboardInterval = null;
@@ -5323,6 +5510,9 @@ function setupConnect() {
 
       // Start WebSocket bar builder polling (real-time candle updates)
       startWsBarPolling();
+
+      // Start DARWIN XLSX file watcher (auto-reimport on file change every 60s)
+      startDarwinFileWatcher();
     } catch (e) {
       status.textContent = `Failed: ${e}`;
       status.style.color = "#f88";
@@ -25668,6 +25858,73 @@ function stopMt5BackgroundSync() {
   }
 }
 
+// ── Kraken Weekend Crypto Sync ──────────────────────────────────────
+let krakenWeekendSyncInterval = null;
+
+function isCryptoSymbol(sym) {
+  if (!sym) return false;
+  // "BTC/USD", "ETH/USD" style or CRYPTO_MAP values
+  if (sym.includes("/") && sym.endsWith("USD")) return true;
+  // Check CRYPTO_MAP keys (bare tickers like "BTC")
+  if (CRYPTO_MAP[sym]) return true;
+  // Common crypto pairs without slash: BTCUSD, ETHUSD, etc.
+  const cryptoBases = ["BTC", "ETH", "SOL", "DOGE", "ADA", "XRP", "DOT", "AVAX", "LINK", "MATIC", "UNI", "SHIB", "LTC", "BCH", "AAVE", "SUSHI", "ATOM"];
+  for (const base of cryptoBases) {
+    if (sym === base + "/USD" || sym === base + "USD") return true;
+  }
+  return false;
+}
+
+function isMarketWeekend() {
+  const now = new Date();
+  const utcDay = now.getUTCDay(); // 0=Sun, 6=Sat
+  const utcHour = now.getUTCHours();
+  // Forex/stock markets closed: Friday 22:00 UTC to Sunday 22:00 UTC
+  if (utcDay === 6) return true; // all Saturday
+  if (utcDay === 0 && utcHour < 22) return true; // Sunday before 22:00 UTC
+  if (utcDay === 5 && utcHour >= 22) return true; // Friday after 22:00 UTC
+  return false;
+}
+
+async function krakenWeekendSyncTick() {
+  const sym = currentSymbol;
+  if (!sym || !isCryptoSymbol(sym)) return;
+  if (!isMarketWeekend()) return;
+  const tf = currentTimeframe || "1Day";
+  const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  try {
+    const r = JSON.parse(await invoke("fetch_binance_bars", { symbol: sym, timeframe: tf, startDate: oneWeekAgo }));
+    if (r.bars > 0) {
+      console.log(`[Kraken Weekend Sync] ${sym} @ ${tf}: ${r.bars} bars (${r.first} -> ${r.last})`);
+      // Invalidate hot cache so next render picks up new data
+      const cacheKey = getCacheKey(sym, tf);
+      delete barCache[cacheKey];
+      // Refresh chart if still on same symbol
+      if (currentSymbol === sym && currentTimeframe === tf) {
+        loadChart(sym, tf);
+      }
+    }
+  } catch (e) {
+    console.warn("[Kraken Weekend Sync]", e);
+  }
+}
+
+function startKrakenWeekendSync() {
+  if (krakenWeekendSyncInterval) return;
+  // Do an immediate tick, then every 30s
+  krakenWeekendSyncTick();
+  krakenWeekendSyncInterval = setInterval(krakenWeekendSyncTick, 30000);
+  console.log("[Kraken Weekend Sync] Started (30s interval)");
+}
+
+function stopKrakenWeekendSync() {
+  if (krakenWeekendSyncInterval) {
+    clearInterval(krakenWeekendSyncInterval);
+    krakenWeekendSyncInterval = null;
+    console.log("[Kraken Weekend Sync] Stopped");
+  }
+}
+
 const CMD_PALETTE_COMMANDS = [
   { name: "PATTERN-ML", desc: "Historical pattern matching (Euclidean distance, top 5 matches)", action: cmdPatternML },
   { name: "RADAR", desc: "Multi-indicator radar chart (Fisher, RSI, KAMA, SMA200, ADX, ATR, ROC)", action: cmdRadar },
@@ -29865,6 +30122,9 @@ document.addEventListener("DOMContentLoaded", () => {
     startMt5BackgroundSync();
   }
 
+  // Auto-start Kraken weekend crypto sync
+  startKrakenWeekendSync();
+
   // Auto-save session periodically and on shutdown
   const _saveInterval = setInterval(saveSession, 30000); // every 30s
   const _alertInterval = setInterval(checkWatchlistSMA200Alerts, 300000); // every 5min
@@ -29872,6 +30132,7 @@ document.addEventListener("DOMContentLoaded", () => {
     clearInterval(_saveInterval);
     clearInterval(_alertInterval);
     if (dashboardInterval) clearInterval(dashboardInterval);
+    stopKrakenWeekendSync();
     saveSession();
   });
   document.addEventListener("visibilitychange", () => {
