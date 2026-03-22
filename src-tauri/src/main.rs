@@ -4970,7 +4970,7 @@ async fn get_darwin_price_series(
 // ── Binance Crypto Gap-Fill Commands ───────────────────────────────
 
 /// Backfill crypto bars from Binance — fills weekend gaps + extends history beyond MT5.
-/// Fetches ALL available Binance data from 2017 and merges with existing cache.
+/// Fetches ALL available Kraken data from 2013 and merges with existing cache.
 #[tauri::command]
 async fn backfill_crypto_binance(
     state: State<'_, SharedState>,
@@ -5014,8 +5014,8 @@ async fn backfill_crypto_binance(
     let mut total_filled = 0usize;
     let mut results = Vec::new();
 
-    // Binance start: August 2017 for most major pairs
-    let binance_start_ms: i64 = 1502928000000; // 2017-08-17 00:00:00 UTC
+    // Kraken start: 2013 for BTC, earlier pairs may not have data (Kraken returns empty)
+    let binance_start_ms: i64 = 1357027200000; // 2013-01-01 00:00:00 UTC
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     for sym in &symbols {
@@ -5036,7 +5036,7 @@ async fn backfill_crypto_binance(
                 .map(|dt| dt.timestamp_millis())
                 .unwrap_or(now_ms);
 
-            // Fetch from Binance: start from 2017 (or before earliest existing bar)
+            // Fetch from Kraken: start from 2013 (or before earliest existing bar)
             let fetch_start = binance_start_ms.min(earliest_existing);
             let fetch_end = now_ms;
 
@@ -5121,7 +5121,7 @@ async fn fetch_binance_bars(
     state: State<'_, SharedState>,
     symbol: String,
     timeframe: String,
-    start_date: Option<String>, // "2017-08-17" format
+    start_date: Option<String>, // "2013-01-01" format
 ) -> Result<String, String> {
     if !is_valid_timeframe(&timeframe) { return Err(format!("Invalid timeframe: {}", timeframe)); }
 
@@ -5135,7 +5135,7 @@ async fn fetch_binance_bars(
     let start_ms = start_date
         .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
         .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis())
-        .unwrap_or(1502928000000); // 2017-08-17
+        .unwrap_or(1357027200000); // 2013-01-01
 
     let end_ms = chrono::Utc::now().timestamp_millis();
 

@@ -12523,7 +12523,7 @@ function cmdBinanceBackfill() {
   const root = document.createElement("div"); root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;";
 
   const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:8px;align-items:center;flex-wrap:wrap;";
-  const backfillAllBtn = document.createElement("button"); backfillAllBtn.textContent = "Backfill ALL Crypto (2017→Now)"; backfillAllBtn.style.cssText = "padding:6px 14px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:11px;font-family:inherit;";
+  const backfillAllBtn = document.createElement("button"); backfillAllBtn.textContent = "Backfill ALL Crypto (2013→Now)"; backfillAllBtn.style.cssText = "padding:6px 14px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:11px;font-family:inherit;";
   const symInput = document.createElement("input"); symInput.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px 8px;font-size:10px;font-family:inherit;width:100px;"; symInput.placeholder = "BTC/USD";
   const singleBtn = document.createElement("button"); singleBtn.textContent = "Backfill Single"; singleBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   topBar.appendChild(backfillAllBtn); topBar.appendChild(symInput); topBar.appendChild(singleBtn);
@@ -12542,7 +12542,7 @@ function cmdBinanceBackfill() {
       title.textContent = `Kraken-Eligible Crypto in Cache (${symbols.length})`;
       contentDiv.appendChild(title);
       const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding:0 0 12px;";
-      desc.textContent = "Click 'Backfill ALL' to fetch weekend gaps + extend history from Binance (2017→now) for all timeframes. Free, no API key needed.";
+      desc.textContent = "Click 'Backfill ALL' to fetch weekend gaps + extend history from Kraken (2013→now) for all timeframes. Free, no API key needed.";
       contentDiv.appendChild(desc);
       const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
       const thead = document.createElement("tr");
@@ -12587,7 +12587,7 @@ function cmdBinanceBackfill() {
         contentDiv.appendChild(table);
       }
     } catch (e) { contentDiv.textContent = "Backfill failed: " + e; }
-    btn.disabled = false; btn.textContent = symbol ? "Backfill Single" : "Backfill ALL Crypto (2017→Now)";
+    btn.disabled = false; btn.textContent = symbol ? "Backfill Single" : "Backfill ALL Crypto (2013→Now)";
   }
 
   backfillAllBtn.addEventListener("click", () => runBackfill(null));
