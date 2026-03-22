@@ -10941,7 +10941,7 @@ function cmdDarwinPortfolio() {
 
   const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:6px;align-items:center;";
   const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:160px;";
-  ["Portfolio Summary", "Combined Open Positions", "Symbol Exposure", "Combined Equity Curve"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_"); o.textContent = v; viewSel.appendChild(o); });
+  ["Portfolio Summary", "Portfolio VaR", "Combined Open Positions", "Symbol Exposure", "Combined Equity Curve", "Drawdown Chart", "Rolling VaR", "Monthly Heatmap", "P/L Distribution", "Correlation Matrix"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
   root.appendChild(topBar);
@@ -10957,9 +10957,15 @@ function cmdDarwinPortfolio() {
     contentDiv.textContent = "Loading...";
     try {
       if (view === "portfolio_summary") await renderPortfolioSummary();
+      else if (view === "portfolio_var") await renderPortfolioVaR();
       else if (view === "combined_open_positions") await renderCombinedPositions();
       else if (view === "symbol_exposure") await renderExposure();
       else if (view === "combined_equity_curve") await renderCombinedEquity();
+      else if (view === "drawdown_chart") await renderDrawdown();
+      else if (view === "rolling_var") await renderRollingVaR();
+      else if (view === "monthly_heatmap") await renderMonthlyHeatmap();
+      else if (view === "pl_distribution") await renderPLDistribution();
+      else if (view === "correlation_matrix") await renderCorrelationMatrix();
     } catch (e) { contentDiv.textContent = "Error: " + e; }
   }
 
@@ -11175,12 +11181,432 @@ function cmdDarwinPortfolio() {
     ctx.fillText(`$${start.toLocaleString()} → $${end.toLocaleString()} (${pct}%)`, padLeft + 320, 18);
   }
 
+  // ── Canvas helper ──
+  function drawChart(titleText, dataPoints, opts = {}) {
+    const canvas = document.createElement("canvas"); canvas.width = opts.width || 960; canvas.height = opts.height || 420; canvas.style.cssText = "width:100%;";
+    const ctx = canvas.getContext("2d");
+    const padTop = 30, padBottom = 40, padLeft = opts.padLeft || 90, padRight = 20;
+    const w = canvas.width - padLeft - padRight, h = canvas.height - padTop - padBottom;
+    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Grid
+    const vals = dataPoints.map(d => d[1]);
+    let minV = opts.minV !== undefined ? opts.minV : Math.min(...vals);
+    let maxV = opts.maxV !== undefined ? opts.maxV : Math.max(...vals);
+    if (minV === maxV) { minV -= 1; maxV += 1; }
+    const range = maxV - minV;
+    ctx.strokeStyle = "#222"; ctx.lineWidth = 0.5;
+    for (let i = 0; i <= 5; i++) {
+      const y = padTop + (h * i / 5);
+      ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(padLeft + w, y); ctx.stroke();
+      ctx.fillStyle = "#666"; ctx.font = "10px Consolas";
+      const v = maxV - (range * i / 5);
+      ctx.fillText((opts.fmtY || (x => x.toFixed(2)))(v), 4, y + 4);
+    }
+    // Line
+    ctx.strokeStyle = opts.color || "#42a5f5"; ctx.lineWidth = 1.5; ctx.beginPath();
+    for (let i = 0; i < dataPoints.length; i++) {
+      const x = padLeft + (i / Math.max(dataPoints.length - 1, 1)) * w;
+      const y = padTop + h - ((dataPoints[i][1] - minV) / range) * h;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // Second line
+    if (opts.line2) {
+      ctx.strokeStyle = opts.line2Color || "#ff9800"; ctx.lineWidth = 1; ctx.setLineDash([4,2]); ctx.beginPath();
+      for (let i = 0; i < opts.line2.length; i++) {
+        const x = padLeft + (i / Math.max(opts.line2.length - 1, 1)) * w;
+        const y = padTop + h - ((opts.line2[i] - minV) / range) * h;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke(); ctx.setLineDash([]);
+    }
+    // Fill area
+    if (opts.fill) {
+      const baseline = padTop + h - ((0 - minV) / range) * h;
+      ctx.fillStyle = opts.fillColor || "rgba(66,165,245,0.15)";
+      ctx.beginPath();
+      for (let i = 0; i < dataPoints.length; i++) {
+        const x = padLeft + (i / Math.max(dataPoints.length - 1, 1)) * w;
+        const y = padTop + h - ((dataPoints[i][1] - minV) / range) * h;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.lineTo(padLeft + w, baseline); ctx.lineTo(padLeft, baseline); ctx.closePath(); ctx.fill();
+    }
+    // Labels
+    if (dataPoints.length > 0) {
+      ctx.fillStyle = "#888"; ctx.font = "10px Consolas";
+      ctx.fillText(String(dataPoints[0][0]).substring(0, 10), padLeft, canvas.height - 8);
+      ctx.fillText(String(dataPoints[dataPoints.length - 1][0]).substring(0, 10), padLeft + w - 70, canvas.height - 8);
+    }
+    ctx.fillStyle = "#fff"; ctx.font = "bold 13px Consolas"; ctx.fillText(titleText, padLeft, 18);
+    if (opts.subtitle) { ctx.fillStyle = opts.subtitleColor || "#888"; ctx.font = "11px Consolas"; ctx.fillText(opts.subtitle, padLeft + 350, 18); }
+    if (opts.legend) {
+      let lx = padLeft + w - 200;
+      for (const [label, color] of opts.legend) {
+        ctx.fillStyle = color; ctx.fillRect(lx, 6, 12, 12); ctx.fillStyle = "#ccc"; ctx.font = "10px Consolas"; ctx.fillText(label, lx + 16, 16); lx += 80;
+      }
+    }
+    return canvas;
+  }
+
+  async function renderPortfolioVaR() {
+    const [varJson, perDarwinJson] = await Promise.all([
+      window.__TAURI__.core.invoke("get_portfolio_var"),
+      window.__TAURI__.core.invoke("list_darwin_accounts"),
+    ]);
+    const v = JSON.parse(varJson);
+    const accounts = JSON.parse(perDarwinJson);
+    contentDiv.textContent = "";
+
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Portfolio Value at Risk";
+    contentDiv.appendChild(title);
+
+    const rows = [
+      ["", ""],
+      ["VaR (95%)", "$" + v.var_95.toLocaleString(undefined, {maximumFractionDigits: 0}), -1],
+      ["VaR (99%)", "$" + v.var_99.toLocaleString(undefined, {maximumFractionDigits: 0}), -1],
+      ["CVaR / Expected Shortfall (95%)", "$" + v.cvar_95.toLocaleString(undefined, {maximumFractionDigits: 0}), -1],
+      ["CVaR / Expected Shortfall (99%)", "$" + v.cvar_99.toLocaleString(undefined, {maximumFractionDigits: 0}), -1],
+      ["", ""],
+      ["Daily Volatility", v.daily_vol.toFixed(3) + "%"],
+      ["Annualized Volatility", v.annualized_vol.toFixed(2) + "%"],
+      ["", ""],
+      ["Sharpe Ratio", v.sharpe.toFixed(3), v.sharpe],
+      ["Sortino Ratio", v.sortino.toFixed(3), v.sortino],
+      ["Calmar Ratio", v.calmar.toFixed(3), v.calmar],
+      ["", ""],
+      ["Avg Daily P/L", "$" + v.avg_daily_pnl.toLocaleString(undefined, {maximumFractionDigits: 0}), v.avg_daily_pnl],
+      ["Best Day", "$" + v.best_day.toLocaleString(undefined, {maximumFractionDigits: 0}), 1],
+      ["Worst Day", "$" + v.worst_day.toLocaleString(undefined, {maximumFractionDigits: 0}), -1],
+      ["Max Drawdown", v.max_drawdown_pct.toFixed(2) + "%"],
+      ["Trading Days", v.trading_days],
+    ];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;width:100%;max-width:550px;margin-bottom:16px;";
+    for (const [label, val, colorVal] of rows) {
+      if (label === "" && val === "") { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 2; td.style.height = "8px"; tr.appendChild(td); table.appendChild(tr); continue; }
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = label;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = String(val);
+      if (colorVal !== undefined) td2.style.color = colorVal >= 0 ? "#4caf50" : "#f44336";
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+
+    // Per-DARWIN VaR comparison
+    const compTitle = document.createElement("div"); compTitle.style.cssText = "font-weight:bold;color:#fff;padding:8px 0 6px;font-size:13px;";
+    compTitle.textContent = "Per-DARWIN Risk Comparison";
+    contentDiv.appendChild(compTitle);
+
+    const compTable = document.createElement("table"); compTable.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["DARWIN", "VaR 95%", "VaR 99%", "Sharpe", "Sortino", "Vol (ann)", "Max DD", "Days"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+    });
+    compTable.appendChild(thead);
+
+    for (const a of accounts) {
+      try {
+        const dv = JSON.parse(await window.__TAURI__.core.invoke("get_darwin_var", { darwinTicker: a.darwin_ticker }));
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+        const vals = [a.darwin_ticker, "$" + dv.var_95.toFixed(0), "$" + dv.var_99.toFixed(0), dv.sharpe.toFixed(2), dv.sortino.toFixed(2), dv.annualized_vol.toFixed(1) + "%", dv.max_drawdown_pct.toFixed(1) + "%", dv.trading_days];
+        for (let i = 0; i < vals.length; i++) {
+          const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;";
+          td.textContent = String(vals[i]);
+          if (i === 0) td.style.color = "#8af";
+          else if (i === 3) td.style.color = dv.sharpe >= 0 ? "#4caf50" : "#f44336";
+          else if (i === 4) td.style.color = dv.sortino >= 0 ? "#4caf50" : "#f44336";
+          tr.appendChild(td);
+        }
+        compTable.appendChild(tr);
+      } catch (e) { /* skip */ }
+    }
+    contentDiv.appendChild(compTable);
+  }
+
+  async function renderDrawdown() {
+    const json = await window.__TAURI__.core.invoke("get_portfolio_daily_returns");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    if (data.length === 0) { contentDiv.textContent = "No data."; return; }
+
+    const points = data.map(d => [d.date, -d.drawdown_pct]);
+    const maxDD = Math.max(...data.map(d => d.drawdown_pct));
+    contentDiv.appendChild(drawChart("Portfolio Drawdown", points, {
+      color: "#f44336", fill: true, fillColor: "rgba(244,67,54,0.2)",
+      minV: -maxDD * 1.1, maxV: 0.5,
+      fmtY: v => v.toFixed(1) + "%",
+      subtitle: `Max: -${maxDD.toFixed(2)}%`,
+      subtitleColor: "#f44336",
+    }));
+
+    // Per-DARWIN drawdown overlay info
+    const accounts = JSON.parse(await window.__TAURI__.core.invoke("list_darwin_accounts"));
+    const ddTable = document.createElement("table"); ddTable.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;margin-top:12px;";
+    const thead = document.createElement("tr");
+    ["DARWIN", "Current DD", "Max DD", "Time in DD", "Recovery Factor"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
+    });
+    ddTable.appendChild(thead);
+    for (const a of accounts) {
+      try {
+        const dr = JSON.parse(await window.__TAURI__.core.invoke("get_darwin_daily_returns", { darwinTicker: a.darwin_ticker }));
+        if (dr.length === 0) continue;
+        const currentDD = dr[dr.length - 1].drawdown_pct;
+        const maxDDa = Math.max(...dr.map(d => d.drawdown_pct));
+        const daysInDD = dr.filter(d => d.drawdown_pct > 0.1).length;
+        const totalPnl = dr.reduce((s, d) => s + d.pnl, 0);
+        const worstDD = maxDDa > 0 ? (dr[0].balance * maxDDa / 100) : 1;
+        const recoveryFactor = totalPnl / worstDD;
+        const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+        [a.darwin_ticker, currentDD.toFixed(2) + "%", maxDDa.toFixed(2) + "%", daysInDD + " days", recoveryFactor.toFixed(2)].forEach((v, i) => {
+          const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;";
+          td.textContent = v;
+          if (i === 0) td.style.color = "#8af";
+          else if (i === 1) td.style.color = currentDD > 5 ? "#f44336" : "#4caf50";
+          tr.appendChild(td);
+        });
+        ddTable.appendChild(tr);
+      } catch (e) { /* skip */ }
+    }
+    contentDiv.appendChild(ddTable);
+  }
+
+  async function renderRollingVaR() {
+    const json = await window.__TAURI__.core.invoke("get_portfolio_rolling_var", { window: 60 });
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    if (data.length === 0) { contentDiv.textContent = "Need 60+ trading days for rolling VaR."; return; }
+
+    const var95 = data.map(d => [d.date, d.var_95]);
+    const var99vals = data.map(d => d.var_99);
+
+    contentDiv.appendChild(drawChart("Rolling VaR (60-day)", var95, {
+      color: "#ff9800", line2: var99vals, line2Color: "#f44336",
+      fmtY: v => "$" + v.toFixed(0),
+      legend: [["VaR 95%", "#ff9800"], ["VaR 99%", "#f44336"]],
+    }));
+
+    // Rolling Sharpe chart
+    const sharpePoints = data.map(d => [d.date, d.rolling_sharpe]);
+    contentDiv.appendChild(drawChart("Rolling Sharpe Ratio (60-day)", sharpePoints, {
+      color: "#4caf50",
+      fmtY: v => v.toFixed(2),
+      subtitle: `Current: ${data[data.length - 1].rolling_sharpe.toFixed(3)}`,
+      subtitleColor: data[data.length - 1].rolling_sharpe >= 0 ? "#4caf50" : "#f44336",
+    }));
+  }
+
+  async function renderMonthlyHeatmap() {
+    const json = await window.__TAURI__.core.invoke("get_portfolio_monthly_returns");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    if (data.length === 0) { contentDiv.textContent = "No monthly data."; return; }
+
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Monthly Returns Heatmap — All DARWINs Combined";
+    contentDiv.appendChild(title);
+
+    const years = [...new Set(data.map(d => d.year))].sort();
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:11px;";
+    // Header
+    const thead = document.createElement("tr");
+    const thYear = document.createElement("td"); thYear.style.cssText = "padding:4px 8px;color:#666;font-weight:bold;"; thYear.textContent = "Year"; thead.appendChild(thYear);
+    months.forEach(m => { const th = document.createElement("td"); th.style.cssText = "padding:4px 8px;color:#666;font-weight:bold;text-align:center;min-width:60px;"; th.textContent = m; thead.appendChild(th); });
+    const thTotal = document.createElement("td"); thTotal.style.cssText = "padding:4px 8px;color:#666;font-weight:bold;text-align:center;"; thTotal.textContent = "Total"; thead.appendChild(thTotal);
+    table.appendChild(thead);
+
+    const maxAbs = Math.max(...data.map(d => Math.abs(d.return_pct)), 1);
+
+    for (const year of years) {
+      const tr = document.createElement("tr");
+      const tdY = document.createElement("td"); tdY.style.cssText = "padding:4px 8px;color:#ccc;font-weight:bold;"; tdY.textContent = year; tr.appendChild(tdY);
+      let yearTotal = 0;
+      for (let m = 1; m <= 12; m++) {
+        const entry = data.find(d => d.year === year && d.month === m);
+        const td = document.createElement("td"); td.style.cssText = "padding:4px 8px;text-align:center;font-family:Consolas,monospace;";
+        if (entry) {
+          const intensity = Math.min(Math.abs(entry.return_pct) / maxAbs, 1);
+          const r = entry.return_pct >= 0 ? 0 : Math.floor(200 * intensity);
+          const g = entry.return_pct >= 0 ? Math.floor(200 * intensity) : 0;
+          td.style.backgroundColor = `rgba(${r}, ${g}, 0, 0.4)`;
+          td.style.color = entry.return_pct >= 0 ? "#4caf50" : "#f44336";
+          td.textContent = entry.return_pct.toFixed(1) + "%";
+          yearTotal += entry.return_pct;
+        } else {
+          td.style.color = "#333"; td.textContent = "—";
+        }
+        tr.appendChild(td);
+      }
+      const tdTotal = document.createElement("td"); tdTotal.style.cssText = "padding:4px 8px;text-align:center;font-family:Consolas,monospace;font-weight:bold;";
+      tdTotal.style.color = yearTotal >= 0 ? "#4caf50" : "#f44336";
+      tdTotal.textContent = yearTotal.toFixed(1) + "%";
+      tr.appendChild(tdTotal);
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+
+    // Per-DARWIN monthly breakdown
+    const accounts = JSON.parse(await window.__TAURI__.core.invoke("list_darwin_accounts"));
+    for (const a of accounts) {
+      try {
+        const dJson = await window.__TAURI__.core.invoke("get_darwin_monthly_returns", { darwinTicker: a.darwin_ticker });
+        const dData = JSON.parse(dJson);
+        if (dData.length === 0) continue;
+        const dTitle = document.createElement("div"); dTitle.style.cssText = "font-weight:bold;color:#8af;padding:16px 0 6px;font-size:12px;";
+        dTitle.textContent = `${a.darwin_ticker} — ${a.name}`;
+        contentDiv.appendChild(dTitle);
+        const dTable = document.createElement("table"); dTable.style.cssText = "border-collapse:collapse;font-size:10px;";
+        const dThead = document.createElement("tr");
+        const dThY = document.createElement("td"); dThY.style.cssText = "padding:3px 6px;color:#666;font-weight:bold;"; dThY.textContent = "Year"; dThead.appendChild(dThY);
+        months.forEach(m => { const th = document.createElement("td"); th.style.cssText = "padding:3px 6px;color:#666;font-weight:bold;text-align:center;min-width:50px;"; th.textContent = m; dThead.appendChild(th); });
+        dTable.appendChild(dThead);
+        const dYears = [...new Set(dData.map(d => d.year))].sort();
+        for (const year of dYears) {
+          const tr = document.createElement("tr");
+          const tdY = document.createElement("td"); tdY.style.cssText = "padding:3px 6px;color:#aaa;"; tdY.textContent = year; tr.appendChild(tdY);
+          for (let m = 1; m <= 12; m++) {
+            const entry = dData.find(d => d.year === year && d.month === m);
+            const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;text-align:center;font-family:Consolas,monospace;";
+            if (entry) { td.style.color = entry.return_pct >= 0 ? "#4caf50" : "#f44336"; td.textContent = entry.return_pct.toFixed(1) + "%"; }
+            else { td.style.color = "#333"; td.textContent = "—"; }
+            tr.appendChild(td);
+          }
+          dTable.appendChild(tr);
+        }
+        contentDiv.appendChild(dTable);
+      } catch (e) { /* skip */ }
+    }
+  }
+
+  async function renderPLDistribution() {
+    const json = await window.__TAURI__.core.invoke("get_portfolio_daily_returns");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    if (data.length < 10) { contentDiv.textContent = "Need more data for distribution."; return; }
+
+    const pnls = data.map(d => d.pnl).filter(p => p !== 0);
+    const minP = Math.min(...pnls); const maxP = Math.max(...pnls);
+    const bucketCount = 50;
+    const bucketSize = (maxP - minP) / bucketCount;
+    const buckets = new Array(bucketCount).fill(0);
+    for (const p of pnls) { const idx = Math.min(Math.floor((p - minP) / bucketSize), bucketCount - 1); buckets[idx]++; }
+    const maxCount = Math.max(...buckets);
+
+    const canvas = document.createElement("canvas"); canvas.width = 960; canvas.height = 350; canvas.style.cssText = "width:100%;";
+    const ctx = canvas.getContext("2d");
+    const padLeft = 60, padRight = 20, padTop = 30, padBottom = 40;
+    const w = canvas.width - padLeft - padRight, h = canvas.height - padTop - padBottom;
+    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw bars
+    const barW = w / bucketCount;
+    for (let i = 0; i < bucketCount; i++) {
+      const barH = (buckets[i] / maxCount) * h;
+      const x = padLeft + i * barW;
+      const y = padTop + h - barH;
+      const bucketVal = minP + i * bucketSize;
+      ctx.fillStyle = bucketVal >= 0 ? "rgba(76,175,80,0.7)" : "rgba(244,67,54,0.7)";
+      ctx.fillRect(x, y, barW - 1, barH);
+    }
+
+    // Zero line
+    const zeroX = padLeft + ((0 - minP) / (maxP - minP)) * w;
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(zeroX, padTop); ctx.lineTo(zeroX, padTop + h); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // VaR lines
+    const sortedPnls = [...pnls].sort((a, b) => a - b);
+    const var95 = sortedPnls[Math.floor(pnls.length * 0.05)];
+    const var99 = sortedPnls[Math.floor(pnls.length * 0.01)];
+    for (const [varVal, color, label] of [[var95, "#ff9800", "VaR 95%"], [var99, "#f44336", "VaR 99%"]]) {
+      const vx = padLeft + ((varVal - minP) / (maxP - minP)) * w;
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash([5, 3]);
+      ctx.beginPath(); ctx.moveTo(vx, padTop); ctx.lineTo(vx, padTop + h); ctx.stroke();
+      ctx.setLineDash([]); ctx.fillStyle = color; ctx.font = "10px Consolas";
+      ctx.fillText(`${label}: $${Math.abs(varVal).toFixed(0)}`, vx + 4, padTop + 14);
+    }
+
+    // Labels
+    ctx.fillStyle = "#888"; ctx.font = "10px Consolas";
+    ctx.fillText("$" + minP.toFixed(0), padLeft, canvas.height - 8);
+    ctx.fillText("$" + maxP.toFixed(0), padLeft + w - 50, canvas.height - 8);
+    ctx.fillText("$0", zeroX - 10, canvas.height - 8);
+
+    ctx.fillStyle = "#fff"; ctx.font = "bold 13px Consolas";
+    ctx.fillText("Daily P/L Distribution — All DARWINs", padLeft, 18);
+
+    const mean = pnls.reduce((s, p) => s + p, 0) / pnls.length;
+    const skew = pnls.reduce((s, p) => s + Math.pow((p - mean) / Math.sqrt(pnls.reduce((s2, p2) => s2 + (p2 - mean) ** 2, 0) / pnls.length), 3), 0) / pnls.length;
+    const kurt = pnls.reduce((s, p) => s + Math.pow((p - mean) / Math.sqrt(pnls.reduce((s2, p2) => s2 + (p2 - mean) ** 2, 0) / pnls.length), 4), 0) / pnls.length - 3;
+    ctx.fillStyle = "#888"; ctx.font = "11px Consolas";
+    ctx.fillText(`Mean: $${mean.toFixed(0)} | Skew: ${skew.toFixed(2)} | Kurtosis: ${kurt.toFixed(2)} | N=${pnls.length}`, padLeft + 380, 18);
+
+    contentDiv.appendChild(canvas);
+
+    // Stats table below
+    const statsDiv = document.createElement("div"); statsDiv.style.cssText = "display:flex;gap:24px;padding:12px 0;font-size:12px;font-family:Consolas,monospace;";
+    const winDays = pnls.filter(p => p > 0).length; const lossDays = pnls.filter(p => p < 0).length;
+    const avgWin = pnls.filter(p => p > 0).reduce((s, p) => s + p, 0) / (winDays || 1);
+    const avgLoss = pnls.filter(p => p < 0).reduce((s, p) => s + p, 0) / (lossDays || 1);
+    statsDiv.innerHTML = `<span style="color:#4caf50">Win days: ${winDays} (${(winDays/pnls.length*100).toFixed(0)}%) avg: $${avgWin.toFixed(0)}</span><span style="color:#f44336">Loss days: ${lossDays} (${(lossDays/pnls.length*100).toFixed(0)}%) avg: $${avgLoss.toFixed(0)}</span><span style="color:#ccc">Payoff: ${(avgWin/Math.abs(avgLoss)).toFixed(2)}x</span>`;
+    contentDiv.appendChild(statsDiv);
+  }
+
+  async function renderCorrelationMatrix() {
+    const json = await window.__TAURI__.core.invoke("get_darwin_correlations");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = "Cross-DARWIN Correlation Matrix";
+    contentDiv.appendChild(title);
+
+    const tickers = [...new Set(data.map(d => d.darwin_a))].sort();
+    const corrMap = {};
+    for (const d of data) { corrMap[d.darwin_a + ":" + d.darwin_b] = d.correlation; }
+
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;";
+    // Header
+    const thead = document.createElement("tr");
+    const thEmpty = document.createElement("td"); thEmpty.style.cssText = "padding:6px 10px;"; thead.appendChild(thEmpty);
+    for (const t of tickers) { const th = document.createElement("td"); th.style.cssText = "padding:6px 10px;color:#8af;font-weight:bold;text-align:center;"; th.textContent = t; thead.appendChild(th); }
+    table.appendChild(thead);
+
+    for (const a of tickers) {
+      const tr = document.createElement("tr");
+      const tdLabel = document.createElement("td"); tdLabel.style.cssText = "padding:6px 10px;color:#8af;font-weight:bold;"; tdLabel.textContent = a; tr.appendChild(tdLabel);
+      for (const b of tickers) {
+        const corr = corrMap[a + ":" + b] || 0;
+        const td = document.createElement("td"); td.style.cssText = "padding:6px 10px;text-align:center;font-family:Consolas,monospace;min-width:60px;";
+        td.textContent = corr.toFixed(3);
+        // Color: green for low correlation (good diversification), red for high
+        const absCorr = Math.abs(corr);
+        if (a === b) { td.style.backgroundColor = "#1a237e"; td.style.color = "#8af"; }
+        else if (absCorr > 0.7) { td.style.backgroundColor = "rgba(244,67,54,0.3)"; td.style.color = "#f44336"; }
+        else if (absCorr > 0.4) { td.style.backgroundColor = "rgba(255,152,0,0.2)"; td.style.color = "#ff9800"; }
+        else { td.style.backgroundColor = "rgba(76,175,80,0.15)"; td.style.color = "#4caf50"; }
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+
+    const legend = document.createElement("div"); legend.style.cssText = "padding:12px 0;font-size:11px;color:#888;";
+    legend.innerHTML = '<span style="color:#4caf50">Green: low correlation (diversified)</span> · <span style="color:#ff9800">Amber: moderate</span> · <span style="color:#f44336">Red: high correlation (redundant)</span>';
+    contentDiv.appendChild(legend);
+  }
+
   win.appendElement(root);
   renderView();
 }
 
 // ══════════════════════════════════════════════════════════════
 // UNDO — Undo Last Trade (panic button)
+// ══════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════
 async function cmdUndo() {
   const win = createWindow({ title: "UNDO — Panic Button", width: 420, height: 340 });
