@@ -10830,7 +10830,7 @@ function cmdDarwin() {
   const accountSel = document.createElement("select"); accountSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:140px;";
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
-  ["Summary", "Open Positions", "Equity Curve", "P/L by Symbol", "Streaks", "Hourly P/L", "Day of Week", "Hold Time", "Symbol Rotation", "Sizing", "Kelly Criterion", "Autocorrelation", "MAE/MFE", "Slippage", "Bursts", "Pyramiding", "Costs", "Positions", "Deals"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
+  ["Summary", "Open Positions", "Equity Curve", "P/L by Symbol", "Streaks", "Hourly P/L", "Day of Week", "Hold Time", "Symbol Rotation", "Sizing", "Kelly Criterion", "Autocorrelation", "MAE/MFE", "Slippage", "Bursts", "Pyramiding", "Investor Flow", "D-Score", "Costs", "Positions", "Deals"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, ""); o.textContent = v; viewSel.appendChild(o); });
   topBar.appendChild(importBtn); topBar.appendChild(accountSel); topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
   root.appendChild(topBar);
 
@@ -10890,6 +10890,8 @@ function cmdDarwin() {
       else if (view === "slippage") await renderSlippage(ticker);
       else if (view === "bursts") await renderBursts(ticker);
       else if (view === "pyramiding") await renderPyramiding(ticker);
+      else if (view === "investor_flow") await renderPerAccountInvestorFlow(ticker);
+      else if (view === "d-score") await renderPerAccountDScore(ticker);
       else if (view === "costs") await renderCosts(ticker);
       else if (view === "positions") await renderPositions(ticker);
       else if (view === "deals") await renderDeals(ticker);
@@ -11439,6 +11441,108 @@ function cmdDarwin() {
     contentDiv.appendChild(table);
   }
 
+  async function renderPerAccountInvestorFlow(ticker) {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Investor Flow — ${ticker}`;
+    contentDiv.appendChild(title);
+    let data;
+    try {
+      const json = await window.__TAURI__.core.invoke("get_investor_flow", { darwinTicker: ticker });
+      data = JSON.parse(json);
+    } catch (e) {
+      const msg = document.createElement("div"); msg.style.cssText = "color:#f0ad4e;font-size:12px;padding:12px;";
+      msg.textContent = "FTP data not synced for this DARWIN. Ensure FTP files (INVESTMENT_CHART, INVESTORS_CHART) exist.";
+      contentDiv.appendChild(msg); return;
+    }
+    if (!data || data.length === 0) {
+      const msg = document.createElement("div"); msg.style.cssText = "color:#f0ad4e;font-size:12px;padding:12px;";
+      msg.textContent = "No investor flow data available for this DARWIN.";
+      contentDiv.appendChild(msg); return;
+    }
+    // AuM chart
+    const aumTitle = document.createElement("div"); aumTitle.style.cssText = "font-size:12px;font-weight:bold;color:#aaa;padding:8px 0 4px;";
+    aumTitle.textContent = "Assets under Management (AuM)";
+    contentDiv.appendChild(aumTitle);
+    const aumCanvas = document.createElement("canvas"); aumCanvas.width = 900; aumCanvas.height = 200;
+    contentDiv.appendChild(aumCanvas);
+    const aumCtx = aumCanvas.getContext("2d");
+    const maxAum = Math.max(...data.map(d => d.aum), 1);
+    const aumW = aumCanvas.width; const aumH = aumCanvas.height;
+    aumCtx.fillStyle = "#111"; aumCtx.fillRect(0, 0, aumW, aumH);
+    aumCtx.strokeStyle = "#333"; aumCtx.beginPath();
+    for (let y = 0; y < aumH; y += aumH / 4) { aumCtx.moveTo(0, y); aumCtx.lineTo(aumW, y); }
+    aumCtx.stroke();
+    aumCtx.beginPath(); aumCtx.strokeStyle = "#2196f3"; aumCtx.lineWidth = 1.5;
+    data.forEach((d, i) => {
+      const x = (i / (data.length - 1 || 1)) * aumW;
+      const y = aumH - (d.aum / maxAum) * (aumH - 10) - 5;
+      i === 0 ? aumCtx.moveTo(x, y) : aumCtx.lineTo(x, y);
+    });
+    aumCtx.stroke();
+    const aumLabel = document.createElement("div"); aumLabel.style.cssText = "color:#888;font-size:9px;padding:2px 0 12px;";
+    aumLabel.textContent = `Latest AuM: $${data[data.length - 1].aum.toLocaleString(undefined, {minimumFractionDigits: 2})} | Range: ${data[0].date} to ${data[data.length - 1].date}`;
+    contentDiv.appendChild(aumLabel);
+    // Investor count chart
+    const invTitle = document.createElement("div"); invTitle.style.cssText = "font-size:12px;font-weight:bold;color:#aaa;padding:8px 0 4px;";
+    invTitle.textContent = "Investor Count";
+    contentDiv.appendChild(invTitle);
+    const invCanvas = document.createElement("canvas"); invCanvas.width = 900; invCanvas.height = 200;
+    contentDiv.appendChild(invCanvas);
+    const invCtx = invCanvas.getContext("2d");
+    const maxInv = Math.max(...data.map(d => d.investors), 1);
+    const invW = invCanvas.width; const invH = invCanvas.height;
+    invCtx.fillStyle = "#111"; invCtx.fillRect(0, 0, invW, invH);
+    invCtx.strokeStyle = "#333"; invCtx.beginPath();
+    for (let y = 0; y < invH; y += invH / 4) { invCtx.moveTo(0, y); invCtx.lineTo(invW, y); }
+    invCtx.stroke();
+    invCtx.beginPath(); invCtx.strokeStyle = "#4caf50"; invCtx.lineWidth = 1.5;
+    data.forEach((d, i) => {
+      const x = (i / (data.length - 1 || 1)) * invW;
+      const y = invH - (d.investors / maxInv) * (invH - 10) - 5;
+      i === 0 ? invCtx.moveTo(x, y) : invCtx.lineTo(x, y);
+    });
+    invCtx.stroke();
+    const invLabel = document.createElement("div"); invLabel.style.cssText = "color:#888;font-size:9px;padding:2px 0;";
+    invLabel.textContent = `Latest Investors: ${Math.round(data[data.length - 1].investors)} | Range: ${data[0].date} to ${data[data.length - 1].date}`;
+    contentDiv.appendChild(invLabel);
+  }
+
+  async function renderPerAccountDScore(ticker) {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `D-Score Components — ${ticker}`;
+    contentDiv.appendChild(title);
+    let ds;
+    try {
+      const json = await window.__TAURI__.core.invoke("get_dscore_components", { darwinTicker: ticker });
+      ds = JSON.parse(json);
+    } catch (e) {
+      const msg = document.createElement("div"); msg.style.cssText = "color:#f0ad4e;font-size:12px;padding:12px;";
+      msg.textContent = "FTP data not synced for this DARWIN. Ensure D-Score component files exist in FTP directory.";
+      contentDiv.appendChild(msg); return;
+    }
+    const components = [
+      ["Experience", ds.experience], ["Risk Stability", ds.risk_stability],
+      ["Risk Adjustment", ds.risk_adjustment], ["Market Correlation", ds.market_correlation],
+      ["Winning Consistency", ds.winning_consistency], ["Losing Consistency", ds.losing_consistency],
+      ["Performance", ds.performance], ["Scalability", ds.scalability],
+    ];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;width:100%;max-width:500px;";
+    const hdr = document.createElement("tr");
+    ["Component", "Score"].forEach(h => { const th = document.createElement("th"); th.textContent = h; th.style.cssText = "text-align:left;padding:6px 12px;border-bottom:1px solid #444;color:#aaa;font-size:10px;"; hdr.appendChild(th); });
+    table.appendChild(hdr);
+    components.forEach(([name, val]) => {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;";
+      const tdN = document.createElement("td"); tdN.textContent = name; tdN.style.cssText = "padding:6px 12px;color:#ccc;";
+      const tdV = document.createElement("td"); tdV.style.cssText = "padding:6px 12px;font-weight:bold;";
+      if (val == null) { tdV.textContent = "N/A"; tdV.style.color = "#666"; }
+      else { tdV.textContent = val.toFixed(2); tdV.style.color = val >= 7 ? "#4caf50" : val >= 4 ? "#ff9800" : "#f44336"; }
+      tr.appendChild(tdN); tr.appendChild(tdV); table.appendChild(tr);
+    });
+    contentDiv.appendChild(table);
+  }
+
   async function renderCosts(ticker) {
     const json = await window.__TAURI__.core.invoke("get_darwin_costs", { darwinTicker: ticker });
     const s = JSON.parse(json);
@@ -11553,7 +11657,7 @@ function cmdDarwinPortfolio() {
 
   const topBar = document.createElement("div"); topBar.style.cssText = "padding:6px;border-bottom:1px solid #333;display:flex;gap:6px;align-items:center;";
   const viewSel = document.createElement("select"); viewSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;min-width:160px;";
-  ["Portfolio Summary", "Portfolio VaR", "Monte Carlo", "Stress Test", "VaR Forecast", "Conditional VaR", "Market Regime", "Tail Risk", "Seasonals", "Sector Exposure", "Exposure Treemap", "Liquidity Risk", "Margin Call Sim", "Optimal Allocation", "What-If", "Alerts", "Combined Open Positions", "Symbol Exposure", "Trade Overlaps", "Combined Equity Curve", "Drawdown Chart", "Rolling VaR", "Monthly Heatmap", "P/L Distribution", "Correlation Matrix"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, "").replace(/-/g, "_"); o.textContent = v; viewSel.appendChild(o); });
+  ["Portfolio Summary", "Daily Report", "Portfolio VaR", "Monte Carlo", "Stress Test", "VaR Forecast", "Conditional VaR", "Market Regime", "Regime Performance", "Tail Risk", "Seasonals", "Sector Exposure", "Exposure Treemap", "Liquidity Risk", "Margin Call Sim", "Optimal Allocation", "What-If", "Tax Lots", "Timing Divergence", "Alerts", "Combined Open Positions", "Symbol Exposure", "Investor Flow", "D-Score", "Low-Corr Finder", "Benchmark", "Trade Overlaps", "Combined Equity Curve", "Drawdown Chart", "Rolling VaR", "Monthly Heatmap", "P/L Distribution", "Correlation Matrix"].forEach(v => { const o = document.createElement("option"); o.value = v.toLowerCase().replace(/ /g, "_").replace(/\//g, "").replace(/-/g, "_"); o.textContent = v; viewSel.appendChild(o); });
   const refreshBtn = document.createElement("button"); refreshBtn.textContent = "Refresh"; refreshBtn.style.cssText = "padding:4px 10px;background:#222;color:#aaa;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
   topBar.appendChild(viewSel); topBar.appendChild(refreshBtn);
   root.appendChild(topBar);
@@ -11569,12 +11673,14 @@ function cmdDarwinPortfolio() {
     contentDiv.textContent = "Loading...";
     try {
       if (view === "portfolio_summary") await renderPortfolioSummary();
+      else if (view === "daily_report") await renderDailyReport();
       else if (view === "portfolio_var") await renderPortfolioVaR();
       else if (view === "monte_carlo") await renderMonteCarlo();
       else if (view === "stress_test") await renderStressTest();
       else if (view === "var_forecast") await renderVaRForecast();
       else if (view === "conditional_var") await renderConditionalVaR();
       else if (view === "market_regime") await renderMarketRegime();
+      else if (view === "regime_performance") await renderRegimePerformance();
       else if (view === "tail_risk") await renderTailRisk();
       else if (view === "seasonals") await renderSeasonals();
       else if (view === "sector_exposure") await renderSectorExposure();
@@ -11583,9 +11689,15 @@ function cmdDarwinPortfolio() {
       else if (view === "margin_call_sim") await renderMarginCallSim();
       else if (view === "optimal_allocation") await renderOptimalAllocation();
       else if (view === "what_if") await renderWhatIf();
+      else if (view === "tax_lots") await renderTaxLots();
+      else if (view === "timing_divergence") await renderTimingDivergence();
       else if (view === "alerts") await renderAlerts();
       else if (view === "combined_open_positions") await renderCombinedPositions();
       else if (view === "symbol_exposure") await renderExposure();
+      else if (view === "investor_flow") await renderInvestorFlow();
+      else if (view === "d_score") await renderDScore();
+      else if (view === "low_corr_finder") await renderLowCorrFinder();
+      else if (view === "benchmark") await renderBenchmark();
       else if (view === "trade_overlaps") await renderTradeOverlaps();
       else if (view === "combined_equity_curve") await renderCombinedEquity();
       else if (view === "drawdown_chart") await renderDrawdown();
@@ -12192,6 +12304,144 @@ function cmdDarwinPortfolio() {
     });
   }
 
+  async function renderDailyReport() {
+    const json = await window.__TAURI__.core.invoke("get_daily_report");
+    const r = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    title.textContent = `Daily Risk Report — ${r.date}`;
+    contentDiv.appendChild(title);
+    const regimeColors = { LOW_VOL: "#4caf50", MEDIUM_VOL: "#ff9800", HIGH_VOL: "#f44336" };
+    const badge = document.createElement("span"); badge.style.cssText = `display:inline-block;padding:3px 10px;border-radius:3px;font-size:11px;font-weight:bold;color:#fff;background:${regimeColors[r.regime] || "#444"};margin-bottom:12px;`;
+    badge.textContent = `Regime: ${(r.regime || "UNKNOWN").replace("_", " ")}`;
+    contentDiv.appendChild(badge);
+    const rows = [
+      ["Portfolio Equity", "$" + r.portfolio_equity.toLocaleString(undefined, {maximumFractionDigits: 0})],
+      ["Daily P/L", "$" + r.daily_pnl.toLocaleString(undefined, {maximumFractionDigits: 0}), r.daily_pnl],
+      ["Daily Return", r.daily_return_pct.toFixed(3) + "%", r.daily_return_pct],
+      ["VaR (95%)", "$" + r.current_var_95.toFixed(0), -1],
+      ["Current Drawdown", r.current_drawdown_pct.toFixed(2) + "%", -r.current_drawdown_pct],
+      ["Open Positions", r.open_position_count],
+      ["Total Notional", "$" + r.total_notional.toLocaleString(undefined, {maximumFractionDigits: 0})],
+    ];
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:500px;margin-bottom:16px;";
+    for (const [l, v, cv] of rows) {
+      const tr = document.createElement("tr"); const td1 = document.createElement("td"); td1.style.cssText = "padding:4px 12px 4px 0;color:#888;"; td1.textContent = l;
+      const td2 = document.createElement("td"); td2.style.cssText = "padding:4px 0;text-align:right;font-family:Consolas,monospace;color:#ccc;"; td2.textContent = String(v);
+      if (cv !== undefined) td2.style.color = (typeof cv === "number" ? cv : parseFloat(String(cv))) >= 0 ? "#4caf50" : "#f44336";
+      tr.appendChild(td1); tr.appendChild(td2); table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+    // Gainers/Losers
+    if (r.top_gainers && r.top_gainers.length > 0) {
+      const gTitle = document.createElement("div"); gTitle.style.cssText = "font-weight:bold;color:#4caf50;padding:8px 0 4px;font-size:12px;"; gTitle.textContent = "Top Gainers"; contentDiv.appendChild(gTitle);
+      for (const [sym, pnl] of r.top_gainers) { const d = document.createElement("div"); d.style.cssText = "color:#4caf50;font-family:Consolas,monospace;font-size:11px;padding:1px 0;"; d.textContent = `${sym}: +$${pnl.toFixed(0)}`; contentDiv.appendChild(d); }
+    }
+    if (r.top_losers && r.top_losers.length > 0) {
+      const lTitle = document.createElement("div"); lTitle.style.cssText = "font-weight:bold;color:#f44336;padding:8px 0 4px;font-size:12px;"; lTitle.textContent = "Top Losers"; contentDiv.appendChild(lTitle);
+      for (const [sym, pnl] of r.top_losers) { const d = document.createElement("div"); d.style.cssText = "color:#f44336;font-family:Consolas,monospace;font-size:11px;padding:1px 0;"; d.textContent = `${sym}: $${pnl.toFixed(0)}`; contentDiv.appendChild(d); }
+    }
+    if (r.alerts && r.alerts.length > 0) {
+      const aTitle = document.createElement("div"); aTitle.style.cssText = "font-weight:bold;color:#ff9800;padding:12px 0 4px;font-size:12px;"; aTitle.textContent = `Active Alerts (${r.alerts.length})`; contentDiv.appendChild(aTitle);
+      for (const a of r.alerts) { const d = document.createElement("div"); d.style.cssText = "color:#ff9800;font-size:11px;padding:1px 0;"; d.textContent = a; contentDiv.appendChild(d); }
+    }
+  }
+
+  async function renderRegimePerformance() {
+    const json = await window.__TAURI__.core.invoke("get_regime_performance");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "DARWIN Performance by Volatility Regime";
+    contentDiv.appendChild(title);
+    if (data.length === 0) { contentDiv.appendChild(document.createTextNode("Insufficient data.")); return; }
+    const table = document.createElement("table"); table.style.cssText = "width:100%;max-width:800px;border-collapse:collapse;font-size:12px;";
+    const thead = document.createElement("tr");
+    ["DARWIN", "Low Vol Sharpe", "Med Vol Sharpe", "High Vol Sharpe", "Best Regime", "Worst Regime"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+    table.appendChild(thead);
+    for (const d of data) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      [d.darwin_ticker, d.low_vol_sharpe.toFixed(2), d.medium_vol_sharpe.toFixed(2), d.high_vol_sharpe.toFixed(2), d.best_regime.replace("_"," "), d.worst_regime.replace("_"," ")].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:4px 8px;font-family:Consolas,monospace;"; td.textContent = v;
+        if (i === 0) td.style.color = "#8af";
+        if (i >= 1 && i <= 3) td.style.color = parseFloat(v) >= 0 ? "#4caf50" : "#f44336";
+        if (i === 4) td.style.color = "#4caf50"; if (i === 5) td.style.color = "#f44336";
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderTaxLots() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "Tax Lot Tracking (FIFO)";
+    contentDiv.appendChild(title);
+    const inputRow = document.createElement("div"); inputRow.style.cssText = "display:flex;gap:8px;align-items:center;margin-bottom:12px;";
+    const acctSel = document.createElement("select"); acctSel.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;";
+    const yearInput = document.createElement("input"); yearInput.style.cssText = "background:#111;color:#fff;border:1px solid #555;padding:4px;font-size:10px;font-family:inherit;width:60px;"; yearInput.value = new Date().getFullYear();
+    const goBtn = document.createElement("button"); goBtn.textContent = "Calculate"; goBtn.style.cssText = "padding:4px 12px;background:#1a237e;color:#8af;border:1px solid #555;cursor:pointer;font-size:10px;font-family:inherit;";
+    inputRow.appendChild(acctSel); inputRow.appendChild(yearInput); inputRow.appendChild(goBtn);
+    contentDiv.appendChild(inputRow);
+    const resultDiv = document.createElement("div"); contentDiv.appendChild(resultDiv);
+    // Load accounts
+    try {
+      const accounts = JSON.parse(await window.__TAURI__.core.invoke("list_darwin_accounts"));
+      for (const a of accounts) { const o = document.createElement("option"); o.value = a.darwin_ticker; o.textContent = `${a.name} (${a.darwin_ticker})`; acctSel.appendChild(o); }
+    } catch (e) { resultDiv.textContent = "Load accounts failed: " + e; return; }
+    goBtn.addEventListener("click", async () => {
+      resultDiv.textContent = "Calculating...";
+      try {
+        const json = await window.__TAURI__.core.invoke("get_tax_lots", { darwinTicker: acctSel.value, year: parseInt(yearInput.value) });
+        const t = JSON.parse(json);
+        resultDiv.textContent = "";
+        const rows = [["Short-Term Gains", "$" + t.short_term_gains.toFixed(2), 1], ["Short-Term Losses", "$" + t.short_term_losses.toFixed(2), -1], ["Net Short-Term", "$" + t.net_short_term.toFixed(2), t.net_short_term], ["", ""], ["Long-Term Gains", "$" + t.long_term_gains.toFixed(2), 1], ["Long-Term Losses", "$" + t.long_term_losses.toFixed(2), -1], ["Net Long-Term", "$" + t.net_long_term.toFixed(2), t.net_long_term], ["", ""], ["Total Net", "$" + t.total_net.toFixed(2), t.total_net]];
+        const sumTable = document.createElement("table"); sumTable.style.cssText = "border-collapse:collapse;font-size:12px;max-width:400px;margin-bottom:16px;";
+        for (const [l, v, cv] of rows) {
+          if (l === "") { const tr = document.createElement("tr"); const td = document.createElement("td"); td.colSpan = 2; td.style.height = "8px"; tr.appendChild(td); sumTable.appendChild(tr); continue; }
+          const tr = document.createElement("tr"); const td1 = document.createElement("td"); td1.style.cssText = "padding:3px 12px 3px 0;color:#888;"; td1.textContent = l;
+          const td2 = document.createElement("td"); td2.style.cssText = "padding:3px 0;text-align:right;font-family:Consolas,monospace;"; td2.textContent = v;
+          if (cv !== undefined) td2.style.color = cv >= 0 ? "#4caf50" : "#f44336";
+          tr.appendChild(td1); tr.appendChild(td2); sumTable.appendChild(tr);
+        }
+        resultDiv.appendChild(sumTable);
+        if (t.lots && t.lots.length > 0) {
+          const lotsTitle = document.createElement("div"); lotsTitle.style.cssText = "font-weight:bold;color:#ccc;padding:8px 0 4px;font-size:11px;"; lotsTitle.textContent = `${t.lots.length} tax lots in ${yearInput.value}`;
+          resultDiv.appendChild(lotsTitle);
+        }
+      } catch (e) { resultDiv.textContent = "Error: " + e; }
+    });
+  }
+
+  async function renderTimingDivergence() {
+    contentDiv.textContent = "Analyzing cross-DARWIN entry timing...";
+    const json = await window.__TAURI__.core.invoke("get_timing_divergences");
+    const data = JSON.parse(json);
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Timing Divergence — ${data.length} symbols with multi-DARWIN entries`;
+    contentDiv.appendChild(title);
+    if (data.length === 0) { contentDiv.appendChild(document.createTextNode("No timing divergences found.")); return; }
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["Symbol", "Time Spread", "Price Spread", "DARWINs"].forEach(h => { const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 8px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th); });
+    table.appendChild(thead);
+    for (const d of data) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      const darwinList = d.entries.map(e => `${e[0]} @ ${e[1].substring(0,16)}`).join(", ");
+      [d.symbol, d.time_spread_hours.toFixed(1) + "h", d.price_spread_pct.toFixed(2) + "%", darwinList].forEach((v, i) => {
+        const td = document.createElement("td"); td.style.cssText = "padding:3px 8px;font-family:Consolas,monospace;"; td.textContent = v;
+        if (i === 0) td.style.color = "#8af";
+        if (i === 1) td.style.color = d.time_spread_hours > 24 ? "#f44336" : d.time_spread_hours > 4 ? "#ff9800" : "#4caf50";
+        if (i === 3) { td.style.color = "#888"; td.style.fontSize = "9px"; }
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
   async function renderAlerts() {
     const json = await window.__TAURI__.core.invoke("check_alerts");
     const alerts = JSON.parse(json);
@@ -12249,6 +12499,249 @@ function cmdDarwinPortfolio() {
       });
       table.appendChild(tr);
     }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderInvestorFlow() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "Investor Flow — All DARWINs";
+    contentDiv.appendChild(title);
+    const acctJson = await window.__TAURI__.core.invoke("list_darwin_accounts");
+    const accounts = JSON.parse(acctJson);
+    if (!accounts || accounts.length === 0) { contentDiv.textContent = "No DARWIN accounts imported."; return; }
+    for (const acct of accounts) {
+      const section = document.createElement("div"); section.style.cssText = "margin-bottom:20px;";
+      const hdr = document.createElement("div"); hdr.style.cssText = "font-size:12px;font-weight:bold;color:#2196f3;padding:4px 0;";
+      hdr.textContent = `${acct.darwin_ticker} (${acct.name})`;
+      section.appendChild(hdr);
+      let data;
+      try {
+        const json = await window.__TAURI__.core.invoke("get_investor_flow", { darwinTicker: acct.darwin_ticker });
+        data = JSON.parse(json);
+      } catch (e) {
+        const msg = document.createElement("div"); msg.style.cssText = "color:#f0ad4e;font-size:11px;padding:4px 0;";
+        msg.textContent = "FTP data not synced for this DARWIN.";
+        section.appendChild(msg); contentDiv.appendChild(section); continue;
+      }
+      if (!data || data.length === 0) {
+        const msg = document.createElement("div"); msg.style.cssText = "color:#f0ad4e;font-size:11px;padding:4px 0;";
+        msg.textContent = "No investor flow data available.";
+        section.appendChild(msg); contentDiv.appendChild(section); continue;
+      }
+      // AuM mini-chart
+      const aumLabel = document.createElement("div"); aumLabel.style.cssText = "color:#888;font-size:9px;padding:2px 0;";
+      aumLabel.textContent = `AuM: $${data[data.length - 1].aum.toLocaleString(undefined, {minimumFractionDigits: 2})} | Investors: ${Math.round(data[data.length - 1].investors)}`;
+      section.appendChild(aumLabel);
+      const canvas = document.createElement("canvas"); canvas.width = 860; canvas.height = 120;
+      section.appendChild(canvas);
+      const ctx = canvas.getContext("2d");
+      const maxAum = Math.max(...data.map(d => d.aum), 1);
+      const maxInv = Math.max(...data.map(d => d.investors), 1);
+      const w = canvas.width; const h = canvas.height;
+      ctx.fillStyle = "#111"; ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = "#222"; ctx.beginPath();
+      for (let y = 0; y < h; y += h / 4) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+      ctx.stroke();
+      // AuM line (blue)
+      ctx.beginPath(); ctx.strokeStyle = "#2196f3"; ctx.lineWidth = 1.2;
+      data.forEach((d, i) => {
+        const x = (i / (data.length - 1 || 1)) * w;
+        const y = h - (d.aum / maxAum) * (h - 8) - 4;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      // Investor count line (green)
+      ctx.beginPath(); ctx.strokeStyle = "#4caf50"; ctx.lineWidth = 1.2;
+      data.forEach((d, i) => {
+        const x = (i / (data.length - 1 || 1)) * w;
+        const y = h - (d.investors / maxInv) * (h - 8) - 4;
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      // Legend
+      const legend = document.createElement("div"); legend.style.cssText = "color:#666;font-size:9px;padding:2px 0;";
+      legend.innerHTML = '<span style="color:#2196f3;">&#9632;</span> AuM &nbsp; <span style="color:#4caf50;">&#9632;</span> Investors &nbsp; | ' + data[0].date + ' to ' + data[data.length - 1].date;
+      section.appendChild(legend);
+      contentDiv.appendChild(section);
+    }
+  }
+
+  async function renderDScore() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "D-Score Components — All DARWINs";
+    contentDiv.appendChild(title);
+    const acctJson = await window.__TAURI__.core.invoke("list_darwin_accounts");
+    const accounts = JSON.parse(acctJson);
+    if (!accounts || accounts.length === 0) { contentDiv.textContent = "No DARWIN accounts imported."; return; }
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:11px;width:100%;";
+    const hdr = document.createElement("tr");
+    ["DARWIN", "Experience", "Risk Stability", "Risk Adjustment", "Market Correlation", "Winning Consistency", "Losing Consistency", "Performance", "Scalability"].forEach(h => {
+      const th = document.createElement("th"); th.textContent = h; th.style.cssText = "text-align:left;padding:6px 8px;border-bottom:1px solid #444;color:#aaa;font-size:10px;white-space:nowrap;"; hdr.appendChild(th);
+    });
+    table.appendChild(hdr);
+    for (const acct of accounts) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;";
+      const tdTicker = document.createElement("td"); tdTicker.textContent = acct.darwin_ticker; tdTicker.style.cssText = "padding:6px 8px;color:#2196f3;font-weight:bold;"; tr.appendChild(tdTicker);
+      let ds;
+      try {
+        const json = await window.__TAURI__.core.invoke("get_dscore_components", { darwinTicker: acct.darwin_ticker });
+        ds = JSON.parse(json);
+      } catch (e) {
+        for (let i = 0; i < 8; i++) { const td = document.createElement("td"); td.textContent = "N/A"; td.style.cssText = "padding:6px 8px;color:#666;"; tr.appendChild(td); }
+        table.appendChild(tr); continue;
+      }
+      const comps = [ds.experience, ds.risk_stability, ds.risk_adjustment, ds.market_correlation, ds.winning_consistency, ds.losing_consistency, ds.performance, ds.scalability];
+      comps.forEach(val => {
+        const td = document.createElement("td"); td.style.cssText = "padding:6px 8px;font-weight:bold;";
+        if (val == null) { td.textContent = "N/A"; td.style.color = "#666"; }
+        else { td.textContent = val.toFixed(2); td.style.color = val >= 7 ? "#4caf50" : val >= 4 ? "#ff9800" : "#f44336"; }
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    }
+    contentDiv.appendChild(table);
+  }
+
+  async function renderLowCorrFinder() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "Low-Correlation DARWIN Finder";
+    contentDiv.appendChild(title);
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding:0 0 8px;";
+    desc.textContent = "Scans FTP DARWINs for candidates with lowest correlation to your portfolio and highest Sharpe. This may take a while.";
+    contentDiv.appendChild(desc);
+    const scanBtn = document.createElement("button"); scanBtn.textContent = "Scan FTP"; scanBtn.style.cssText = "padding:6px 16px;background:#1a237e;color:#fff;border:1px solid #555;cursor:pointer;font-size:11px;font-family:inherit;margin-bottom:12px;";
+    contentDiv.appendChild(scanBtn);
+    const resultDiv = document.createElement("div");
+    contentDiv.appendChild(resultDiv);
+    scanBtn.addEventListener("click", async () => {
+      scanBtn.disabled = true; scanBtn.textContent = "Scanning..."; scanBtn.style.opacity = "0.5";
+      resultDiv.textContent = "Scanning FTP directory — this may take several minutes...";
+      try {
+        const json = await window.__TAURI__.core.invoke("find_low_correlation_darwins", { limit: 50 });
+        const candidates = JSON.parse(json);
+        resultDiv.textContent = "";
+        if (!candidates || candidates.length === 0) { resultDiv.textContent = "No candidates found."; return; }
+        const info = document.createElement("div"); info.style.cssText = "color:#888;font-size:10px;padding:0 0 8px;";
+        info.textContent = `Found ${candidates.length} candidates, ranked by lowest avg correlation + highest Sharpe.`;
+        resultDiv.appendChild(info);
+        const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:11px;width:100%;";
+        const hdr = document.createElement("tr");
+        ["Rank", "DARWIN", "Avg Correlation", "Sharpe", "Return %", "Max DD %"].forEach(h => {
+          const th = document.createElement("th"); th.textContent = h; th.style.cssText = "text-align:left;padding:6px 8px;border-bottom:1px solid #444;color:#aaa;font-size:10px;"; hdr.appendChild(th);
+        });
+        table.appendChild(hdr);
+        candidates.forEach((c, idx) => {
+          const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;";
+          const vals = [
+            { text: (idx + 1).toString(), color: "#888" },
+            { text: c.ticker, color: "#2196f3", bold: true },
+            { text: c.avg_correlation.toFixed(4), color: c.avg_correlation < 0.2 ? "#4caf50" : c.avg_correlation < 0.5 ? "#ff9800" : "#f44336" },
+            { text: c.sharpe.toFixed(3), color: c.sharpe > 1 ? "#4caf50" : c.sharpe > 0.5 ? "#ff9800" : "#f44336" },
+            { text: c.return_pct.toFixed(2) + "%", color: c.return_pct >= 0 ? "#4caf50" : "#f44336" },
+            { text: c.max_drawdown.toFixed(2) + "%", color: "#f44336" },
+          ];
+          vals.forEach(v => {
+            const td = document.createElement("td"); td.textContent = v.text; td.style.cssText = `padding:6px 8px;color:${v.color};${v.bold ? "font-weight:bold;" : ""}`;
+            tr.appendChild(td);
+          });
+          table.appendChild(tr);
+        });
+        resultDiv.appendChild(table);
+      } catch (e) { resultDiv.textContent = "Error: " + e; }
+      finally { scanBtn.disabled = false; scanBtn.textContent = "Scan FTP"; scanBtn.style.opacity = "1"; }
+    });
+  }
+
+  async function renderBenchmark() {
+    contentDiv.textContent = "";
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "DARWIN Benchmark Comparison";
+    contentDiv.appendChild(title);
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding:0 0 12px;";
+    desc.textContent = "Alpha, Beta, and Tracking Error vs portfolio daily returns (used as proxy benchmark). Positive alpha = outperformance.";
+    contentDiv.appendChild(desc);
+    const acctJson = await window.__TAURI__.core.invoke("list_darwin_accounts");
+    const accounts = JSON.parse(acctJson);
+    if (!accounts || accounts.length === 0) { contentDiv.textContent = "No DARWIN accounts imported."; return; }
+    // Get VaR (which includes returns stats) for each DARWIN
+    const results = [];
+    for (const acct of accounts) {
+      try {
+        const varJson = await window.__TAURI__.core.invoke("get_darwin_var", { darwinTicker: acct.darwin_ticker });
+        const varData = JSON.parse(varJson);
+        const retJson = await window.__TAURI__.core.invoke("get_darwin_daily_returns", { darwinTicker: acct.darwin_ticker });
+        const retData = JSON.parse(retJson);
+        results.push({ ticker: acct.darwin_ticker, name: acct.name, var: varData, returns: retData });
+      } catch (e) { results.push({ ticker: acct.darwin_ticker, name: acct.name, error: String(e) }); }
+    }
+    // Compute portfolio aggregate daily returns as benchmark
+    const dateMap = {};
+    results.forEach(r => {
+      if (r.returns) r.returns.forEach(d => {
+        if (!dateMap[d.date]) dateMap[d.date] = { sum: 0, count: 0 };
+        dateMap[d.date].sum += d.return_pct; dateMap[d.date].count++;
+      });
+    });
+    const benchDates = Object.keys(dateMap).sort();
+    const benchReturns = {};
+    benchDates.forEach(d => { benchReturns[d] = dateMap[d].sum / dateMap[d].count; });
+    // For each DARWIN compute alpha, beta, tracking error
+    function computeBenchmarkStats(darwinReturns) {
+      const dates = darwinReturns.filter(d => benchReturns[d.date] !== undefined);
+      if (dates.length < 10) return null;
+      const dr = dates.map(d => d.return_pct);
+      const br = dates.map(d => benchReturns[d.date]);
+      const n = dr.length;
+      const meanD = dr.reduce((a, b) => a + b, 0) / n;
+      const meanB = br.reduce((a, b) => a + b, 0) / n;
+      let covDB = 0; let varB = 0;
+      for (let i = 0; i < n; i++) { covDB += (dr[i] - meanD) * (br[i] - meanB); varB += (br[i] - meanB) ** 2; }
+      covDB /= n; varB /= n;
+      const beta = varB > 0 ? covDB / varB : 0;
+      const alpha = (meanD - beta * meanB) * 252; // annualized
+      const te = [];
+      for (let i = 0; i < n; i++) te.push(dr[i] - br[i]);
+      const meanTE = te.reduce((a, b) => a + b, 0) / n;
+      const varTE = te.reduce((a, b) => a + (b - meanTE) ** 2, 0) / n;
+      const trackingError = Math.sqrt(varTE) * Math.sqrt(252); // annualized
+      return { alpha, beta, trackingError, days: n };
+    }
+    const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:11px;width:100%;";
+    const hdr = document.createElement("tr");
+    ["DARWIN", "Ann. Alpha %", "Beta", "Tracking Error %", "Sharpe", "Sortino", "Max DD %", "Days"].forEach(h => {
+      const th = document.createElement("th"); th.textContent = h; th.style.cssText = "text-align:left;padding:6px 8px;border-bottom:1px solid #444;color:#aaa;font-size:10px;white-space:nowrap;"; hdr.appendChild(th);
+    });
+    table.appendChild(hdr);
+    results.forEach(r => {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #222;";
+      const tdTicker = document.createElement("td"); tdTicker.textContent = r.ticker; tdTicker.style.cssText = "padding:6px 8px;color:#2196f3;font-weight:bold;"; tr.appendChild(tdTicker);
+      if (r.error) {
+        const td = document.createElement("td"); td.colSpan = 7; td.textContent = "Error: " + r.error; td.style.cssText = "padding:6px 8px;color:#f44336;"; tr.appendChild(td);
+        table.appendChild(tr); return;
+      }
+      const stats = r.returns ? computeBenchmarkStats(r.returns) : null;
+      if (!stats) {
+        const td = document.createElement("td"); td.colSpan = 7; td.textContent = "Insufficient data"; td.style.cssText = "padding:6px 8px;color:#666;"; tr.appendChild(td);
+        table.appendChild(tr); return;
+      }
+      const vals = [
+        { text: (stats.alpha * 100).toFixed(2), color: stats.alpha >= 0 ? "#4caf50" : "#f44336" },
+        { text: stats.beta.toFixed(3), color: "#ccc" },
+        { text: (stats.trackingError * 100).toFixed(2), color: "#ccc" },
+        { text: r.var.sharpe.toFixed(3), color: r.var.sharpe > 1 ? "#4caf50" : r.var.sharpe > 0 ? "#ff9800" : "#f44336" },
+        { text: r.var.sortino.toFixed(3), color: r.var.sortino > 1 ? "#4caf50" : r.var.sortino > 0 ? "#ff9800" : "#f44336" },
+        { text: r.var.max_drawdown_pct.toFixed(2), color: "#f44336" },
+        { text: stats.days.toString(), color: "#888" },
+      ];
+      vals.forEach(v => {
+        const td = document.createElement("td"); td.textContent = v.text; td.style.cssText = `padding:6px 8px;color:${v.color};`;
+        tr.appendChild(td);
+      });
+      table.appendChild(tr);
+    });
     contentDiv.appendChild(table);
   }
 

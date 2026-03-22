@@ -5020,6 +5020,38 @@ async fn list_kraken_pairs(_state: State<'_, SharedState>) -> Result<String, Str
     serde_json::to_string(&pairs).map_err(|e| format!("Serialize failed: {e}"))
 }
 
+// ── Additional Analytics Commands ─────────────────────────────────
+
+#[tauri::command]
+async fn get_timing_divergences(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_timing_divergences(&conn)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_regime_performance(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::get_regime_performance(&conn)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_tax_lots(
+    _state: State<'_, SharedState>, darwin_ticker: String, year: i32,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::compute_tax_lots(&conn, &darwin_ticker, year)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_daily_report(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::generate_daily_report(&conn)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
 // ── Kraken Crypto Gap-Fill Commands ────────────────────────────────
 
 /// Backfill crypto bars from Kraken — fills weekend gaps + extends history beyond MT5.
@@ -5894,6 +5926,11 @@ fn main() {
             get_darwin_kelly,
             get_darwin_autocorrelation,
             get_darwin_price_series,
+            // Additional Analytics
+            get_timing_divergences,
+            get_regime_performance,
+            get_tax_lots,
+            get_daily_report,
             // Kraken Pair Discovery
             list_kraken_pairs,
             // Kraken Crypto Backfill

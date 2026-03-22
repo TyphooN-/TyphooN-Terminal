@@ -4336,6 +4336,420 @@ pub fn get_exposure_treemap(conn: &Connection) -> Result<TreemapNode, String> {
     })
 }
 
+// ── Cross-Account Timing Divergence ─────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimingDivergence {
+    pub symbol: String,
+    pub entries: Vec<(String, String, f64)>, // (darwin_ticker, entry_time, entry_price)
+    pub time_spread_hours: f64, // max time difference between first and last entry
+    pub price_spread_pct: f64,  // price difference as %
+}
+
+/// For symbols traded by multiple DARWINs, compare entry times.
+/// Find cases where DARWINs entered the same symbol at different times.
+pub fn get_timing_divergences(conn: &Connection) -> Result<Vec<TimingDivergence>, String> {
+    let accounts = list_darwin_accounts(conn)?;
+
+    // Collect all open "in" deals per (symbol, side) across DARWINs
+    // Key: (symbol, side) -> Vec<(darwin_ticker, time, price)>
+    let mut symbol_entries: std::collections::HashMap<(String, String), Vec<(String, String, f64)>> =
+        std::collections::HashMap::new();
+
+    for account in &accounts {
+        let mut stmt = conn.prepare(
+            "SELECT symbol, deal_type, time, price FROM darwin_deals \
+             WHERE account = ?1 AND direction = 'in' AND symbol != '' \
+             ORDER BY time"
+        ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+        let rows = stmt.query_map(params![&account.darwin_ticker], |row| {
+            Ok((
+                row.get::<_, String>(0)?, // symbol
+                row.get::<_, String>(1)?, // deal_type (buy/sell = side)
+                row.get::<_, String>(2)?, // time
+                row.get::<_, f64>(3)?,    // price
+            ))
+        }).map_err(|e| format!("Query failed: {e}"))?;
+
+        for row in rows {
+            if let Ok((symbol, side, time, price)) = row {
+                let key = (symbol, side);
+                symbol_entries.entry(key).or_default().push((
+                    account.darwin_ticker.clone(),
+                    time,
+                    price,
+                ));
+            }
+        }
+    }
+
+    let mut divergences: Vec<TimingDivergence> = Vec::new();
+
+    for ((symbol, _side), entries) in &symbol_entries {
+        // Only care about symbols traded by multiple DARWINs
+        let unique_darwins: std::collections::HashSet<&str> =
+            entries.iter().map(|(dt, _, _)| dt.as_str()).collect();
+        if unique_darwins.len() < 2 {
+            continue;
+        }
+
+        // Parse times, find earliest and latest entry per DARWIN (first entry only)
+        let mut per_darwin: std::collections::HashMap<&str, (&str, f64)> =
+            std::collections::HashMap::new();
+        for (dt, time, price) in entries {
+            per_darwin.entry(dt.as_str()).or_insert((time.as_str(), *price));
+        }
+
+        let parsed_times: Vec<(&str, chrono::NaiveDateTime, f64)> = per_darwin
+            .iter()
+            .filter_map(|(&dt, &(time, price))| {
+                parse_mt5_datetime(time).map(|ndt| (dt, ndt, price))
+            })
+            .collect();
+
+        if parsed_times.len() < 2 {
+            continue;
+        }
+
+        let earliest = parsed_times.iter().min_by_key(|(_, t, _)| *t).unwrap();
+        let latest = parsed_times.iter().max_by_key(|(_, t, _)| *t).unwrap();
+
+        let time_spread_hours = (latest.1 - earliest.1).num_seconds() as f64 / 3600.0;
+
+        // Price spread: difference between min and max entry prices as % of average
+        let prices: Vec<f64> = parsed_times.iter().map(|(_, _, p)| *p).collect();
+        let min_price = prices.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_price = prices.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let avg_price = prices.iter().sum::<f64>() / prices.len() as f64;
+        let price_spread_pct = if avg_price > 0.0 {
+            (max_price - min_price) / avg_price * 100.0
+        } else {
+            0.0
+        };
+
+        let mut entry_list: Vec<(String, String, f64)> = per_darwin
+            .iter()
+            .map(|(&dt, &(time, price))| (dt.to_string(), time.to_string(), price))
+            .collect();
+        entry_list.sort_by(|a, b| a.1.cmp(&b.1));
+
+        divergences.push(TimingDivergence {
+            symbol: symbol.clone(),
+            entries: entry_list,
+            time_spread_hours,
+            price_spread_pct,
+        });
+    }
+
+    // Sort by time spread descending (biggest divergences first)
+    divergences.sort_by(|a, b| b.time_spread_hours.partial_cmp(&a.time_spread_hours).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(divergences)
+}
+
+// ── Best/Worst DARWIN by Market Regime ──────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimePerformance {
+    pub darwin_ticker: String,
+    pub low_vol_sharpe: f64,
+    pub medium_vol_sharpe: f64,
+    pub high_vol_sharpe: f64,
+    pub best_regime: String,
+    pub worst_regime: String,
+}
+
+/// For each DARWIN, compute Sharpe in each vol regime (reuses compute_conditional_var logic).
+pub fn get_regime_performance(conn: &Connection) -> Result<Vec<RegimePerformance>, String> {
+    let accounts = list_darwin_accounts(conn)?;
+    let mut results: Vec<RegimePerformance> = Vec::new();
+
+    for account in &accounts {
+        let daily_returns = get_daily_returns(conn, &account.darwin_ticker)?;
+        let cvar = compute_conditional_var(&daily_returns);
+
+        if cvar.is_empty() {
+            continue;
+        }
+
+        let mut low_sharpe = 0.0f64;
+        let mut med_sharpe = 0.0f64;
+        let mut high_sharpe = 0.0f64;
+
+        for cv in &cvar {
+            match cv.regime.as_str() {
+                "LOW_VOL" => low_sharpe = cv.sharpe,
+                "MEDIUM_VOL" => med_sharpe = cv.sharpe,
+                "HIGH_VOL" => high_sharpe = cv.sharpe,
+                _ => {}
+            }
+        }
+
+        let regimes = [
+            ("LOW_VOL", low_sharpe),
+            ("MEDIUM_VOL", med_sharpe),
+            ("HIGH_VOL", high_sharpe),
+        ];
+
+        let best = regimes.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)).unwrap();
+        let worst = regimes.iter().min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)).unwrap();
+
+        results.push(RegimePerformance {
+            darwin_ticker: account.darwin_ticker.clone(),
+            low_vol_sharpe: low_sharpe,
+            medium_vol_sharpe: med_sharpe,
+            high_vol_sharpe: high_sharpe,
+            best_regime: best.0.to_string(),
+            worst_regime: worst.0.to_string(),
+        });
+    }
+
+    Ok(results)
+}
+
+// ── Tax Lot Tracking (FIFO) ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaxLot {
+    pub symbol: String,
+    pub open_date: String,
+    pub close_date: String,
+    pub volume: f64,
+    pub cost_basis: f64,
+    pub proceeds: f64,
+    pub realized_pnl: f64,
+    pub holding_period: String, // "SHORT" (<1yr) or "LONG" (>=1yr)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaxSummary {
+    pub year: i32,
+    pub short_term_gains: f64,
+    pub short_term_losses: f64,
+    pub long_term_gains: f64,
+    pub long_term_losses: f64,
+    pub net_short_term: f64,
+    pub net_long_term: f64,
+    pub total_net: f64,
+    pub lots: Vec<TaxLot>,
+}
+
+/// FIFO matching of closed positions. Parse open_time and close_time,
+/// compute holding period, classify as short/long term.
+pub fn compute_tax_lots(conn: &Connection, darwin_ticker: &str, year: i32) -> Result<TaxSummary, String> {
+    // Get all closed positions for this DARWIN, ordered by close_time
+    let mut stmt = conn.prepare(
+        "SELECT symbol, open_time, close_time, volume, open_price, close_price, pos_type, profit, commission, swap \
+         FROM darwin_positions WHERE account = ?1 AND close_time != '' \
+         ORDER BY symbol, open_time"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt.query_map(params![darwin_ticker], |row| {
+        Ok((
+            row.get::<_, String>(0)?,  // symbol
+            row.get::<_, String>(1)?,  // open_time
+            row.get::<_, String>(2)?,  // close_time
+            row.get::<_, f64>(3)?,     // volume
+            row.get::<_, f64>(4)?,     // open_price
+            row.get::<_, f64>(5)?,     // close_price
+            row.get::<_, String>(6)?,  // pos_type
+            row.get::<_, f64>(7)?,     // profit
+            row.get::<_, f64>(8)?,     // commission
+            row.get::<_, f64>(9)?,     // swap
+        ))
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    // FIFO queue per symbol: collect all positions, then match
+    let mut positions: Vec<(String, String, String, f64, f64, f64, String, f64, f64, f64)> = Vec::new();
+    for row in rows {
+        if let Ok(p) = row {
+            positions.push(p);
+        }
+    }
+
+    let mut lots: Vec<TaxLot> = Vec::new();
+    let year_start = format!("{}.01.01", year);
+    let year_end = format!("{}.01.01", year + 1);
+
+    for (symbol, open_time, close_time, volume, open_price, close_price, _pos_type, profit, commission, swap) in &positions {
+        // Filter to positions closed in the target year
+        let close_date_str = if close_time.len() >= 10 { &close_time[..10] } else { close_time.as_str() };
+        let open_date_str = if open_time.len() >= 10 { &open_time[..10] } else { open_time.as_str() };
+
+        // Check close_time falls within the year
+        if *close_time < year_start || *close_time >= year_end {
+            continue;
+        }
+
+        // Compute cost basis and proceeds
+        let cost_basis = volume * open_price;
+        let proceeds = volume * close_price;
+
+        // Net P/L including costs
+        let realized_pnl = profit + commission + swap;
+
+        // Holding period: parse dates and check if >= 365 days
+        let holding_period = match (parse_mt5_datetime(open_time), parse_mt5_datetime(close_time)) {
+            (Some(open_dt), Some(close_dt)) => {
+                let days = (close_dt - open_dt).num_days();
+                if days >= 365 { "LONG".to_string() } else { "SHORT".to_string() }
+            }
+            _ => "SHORT".to_string(), // default to short-term if can't parse
+        };
+
+        lots.push(TaxLot {
+            symbol: symbol.clone(),
+            open_date: open_date_str.to_string(),
+            close_date: close_date_str.to_string(),
+            volume: *volume,
+            cost_basis,
+            proceeds,
+            realized_pnl,
+            holding_period,
+        });
+    }
+
+    // Aggregate
+    let mut short_term_gains = 0.0f64;
+    let mut short_term_losses = 0.0f64;
+    let mut long_term_gains = 0.0f64;
+    let mut long_term_losses = 0.0f64;
+
+    for lot in &lots {
+        match lot.holding_period.as_str() {
+            "SHORT" => {
+                if lot.realized_pnl >= 0.0 {
+                    short_term_gains += lot.realized_pnl;
+                } else {
+                    short_term_losses += lot.realized_pnl;
+                }
+            }
+            "LONG" => {
+                if lot.realized_pnl >= 0.0 {
+                    long_term_gains += lot.realized_pnl;
+                } else {
+                    long_term_losses += lot.realized_pnl;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let net_short_term = short_term_gains + short_term_losses;
+    let net_long_term = long_term_gains + long_term_losses;
+
+    Ok(TaxSummary {
+        year,
+        short_term_gains,
+        short_term_losses,
+        long_term_gains,
+        long_term_losses,
+        net_short_term,
+        net_long_term,
+        total_net: net_short_term + net_long_term,
+        lots,
+    })
+}
+
+// ── Daily Risk Report ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyRiskReport {
+    pub date: String,
+    pub portfolio_equity: f64,
+    pub daily_pnl: f64,
+    pub daily_return_pct: f64,
+    pub current_var_95: f64,
+    pub current_drawdown_pct: f64,
+    pub open_position_count: i64,
+    pub total_notional: f64,
+    pub top_gainers: Vec<(String, f64)>,
+    pub top_losers: Vec<(String, f64)>,
+    pub alerts: Vec<String>,
+    pub regime: String,
+}
+
+/// Aggregates current state across all DARWINs into a daily risk report.
+pub fn generate_daily_report(conn: &Connection) -> Result<DailyRiskReport, String> {
+    // Portfolio daily returns for VaR and regime
+    let portfolio_returns = get_portfolio_daily_returns(conn)?;
+
+    let (date, portfolio_equity, daily_pnl, daily_return_pct, current_drawdown_pct) =
+        if let Some(last) = portfolio_returns.last() {
+            (
+                last.date.clone(),
+                last.balance,
+                last.pnl,
+                last.return_pct,
+                last.drawdown_pct,
+            )
+        } else {
+            (String::new(), 0.0, 0.0, 0.0, 0.0)
+        };
+
+    // VaR
+    let var_result = compute_var(&portfolio_returns);
+    let current_var_95 = var_result.var_95;
+
+    // Market regime
+    let regime_info = detect_market_regime(&portfolio_returns);
+    let regime = regime_info.current_regime;
+
+    // Open positions count and total notional
+    let open_positions = get_portfolio_open_positions(conn)?;
+    let open_position_count = open_positions.len() as i64;
+    let total_notional: f64 = open_positions.iter().map(|p| p.notional).sum();
+
+    // Top gainers/losers by symbol P/L across all DARWINs
+    let accounts = list_darwin_accounts(conn)?;
+    let mut symbol_pnl: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for account in &accounts {
+        if let Ok(pnl_by_sym) = get_darwin_pnl_by_symbol(conn, &account.darwin_ticker) {
+            for (sym, profit, commission, swap, _count) in pnl_by_sym {
+                let net = profit + commission + swap;
+                *symbol_pnl.entry(sym).or_insert(0.0) += net;
+            }
+        }
+    }
+
+    let mut sorted_pnl: Vec<(String, f64)> = symbol_pnl.into_iter().collect();
+    sorted_pnl.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let top_gainers: Vec<(String, f64)> = sorted_pnl.iter()
+        .filter(|(_, pnl)| *pnl > 0.0)
+        .take(5)
+        .cloned()
+        .collect();
+
+    let top_losers: Vec<(String, f64)> = sorted_pnl.iter()
+        .rev()
+        .filter(|(_, pnl)| *pnl < 0.0)
+        .take(5)
+        .cloned()
+        .collect();
+
+    // Alerts
+    let alert_conditions = check_alerts(conn).unwrap_or_default();
+    let alerts: Vec<String> = alert_conditions.iter().map(|a| {
+        format!("[{}] {}: {}", a.severity, a.alert_type, a.message)
+    }).collect();
+
+    Ok(DailyRiskReport {
+        date,
+        portfolio_equity,
+        daily_pnl,
+        daily_return_pct,
+        current_var_95,
+        current_drawdown_pct,
+        open_position_count,
+        total_notional,
+        top_gainers,
+        top_losers,
+        alerts,
+        regime,
+    })
+}
+
 /// Delete a DARWIN account and all its data.
 pub fn delete_darwin_account(conn: &Connection, darwin_ticker: &str) -> Result<(), String> {
     conn.execute("DELETE FROM darwin_deals WHERE account = ?1", params![darwin_ticker])
