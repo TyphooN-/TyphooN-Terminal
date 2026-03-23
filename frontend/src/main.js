@@ -7876,7 +7876,7 @@ function cmdReplay() {
       const unrealized = replayOpenTrade.side === "buy"
         ? bar.close - replayOpenTrade.entryPrice
         : replayOpenTrade.entryPrice - bar.close;
-      unrealizedLabel.textContent = `Unrealized: ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(dp)}`;
+      unrealizedLabel.textContent = `Floating P/L: ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(dp)}`;
       unrealizedLabel.style.color = unrealized >= 0 ? "#4caf50" : "#f44336";
     } else {
       unrealizedLabel.textContent = "";
@@ -11928,7 +11928,7 @@ async function cmdFloatingEquity() {
     hdr.appendChild(hdrLine1);
     const hdrLine2 = document.createElement("div");
     hdrLine2.style.cssText = `font-size:12px;color:${eqColor};margin-top:2px;`;
-    hdrLine2.textContent = `Unrealized P/L: ${data.combined_unrealized_pnl >= 0 ? "+" : ""}$${data.combined_unrealized_pnl.toFixed(2)}`;
+    hdrLine2.textContent = `Floating P/L: ${data.combined_unrealized_pnl >= 0 ? "+" : ""}$${data.combined_unrealized_pnl.toFixed(2)}`;
     hdr.appendChild(hdrLine2);
     frag.appendChild(hdr);
 
@@ -11952,7 +11952,7 @@ async function cmdFloatingEquity() {
       const multText = mult ? ` | Multiplier: ${mult.multiplier.toFixed(2)}x | VaR: ${mult.monthly_var.toFixed(1)}%` : "";
       const dwEq = document.createElement("span");
       dwEq.style.cssText = `font-size:12px;font-family:Consolas,monospace;color:${dwColor};`;
-      dwEq.textContent = `Equity: $${dw.floating_equity.toFixed(2)}${multText} | Unrealized: ${dw.unrealized_pnl >= 0 ? "+" : ""}$${dw.unrealized_pnl.toFixed(2)}`;
+      dwEq.textContent = `Equity: $${dw.floating_equity.toFixed(2)}${multText} | Floating P/L: ${dw.unrealized_pnl >= 0 ? "+" : ""}$${dw.unrealized_pnl.toFixed(2)}`;
       dwHdr.appendChild(dwTitle);
       dwHdr.appendChild(dwEq);
       frag.appendChild(dwHdr);
@@ -11961,7 +11961,7 @@ async function cmdFloatingEquity() {
       if (dw.open_positions.length > 0) {
         const tbl = document.createElement("table");
         tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin:2px 12px;";
-        tbl.appendChild(theadRow(["Symbol", "Side", "Volume", "Avg Price", "Current", "Unrealized P/L", "P/L %"], "padding:2px 6px;color:#666;border-bottom:1px solid #222;text-align:right;font-size:9px;"));
+        tbl.appendChild(theadRow(["Symbol", "Side", "Volume", "Avg Price", "Current", "Floating P/L", "P/L %"], "padding:2px 6px;color:#666;border-bottom:1px solid #222;text-align:right;font-size:9px;"));
         for (const p of dw.open_positions) {
           const tr = document.createElement("tr");
           const pColor = p.unrealized_pnl >= 0 ? "#4caf50" : "#f44336";
@@ -12187,7 +12187,7 @@ function cmdDarwinPortfolio() {
     // The floating equity endpoint may show closed_balance=0 if XLSX ends with withdrawal,
     // so always use the portfolio summary's total_final_balance as the authoritative balance.
     const balance = s.total_final_balance;
-    // Equity = Balance + Unrealized P/L (MT5 definition)
+    // Equity = Balance + Floating P/L (MT5 definition)
     const equity = balance + unrealizedPnl;
 
     // MT5-style margin bar: Balance | Equity | Margin | Free Margin | Margin Level %
@@ -12229,7 +12229,7 @@ function cmdDarwinPortfolio() {
     const statsRows = [
       ["Total Initial Capital", "$" + s.total_initial_balance.toLocaleString(undefined, {minimumFractionDigits: 2})],
       ["Balance (closed P/L)", "$" + balance.toLocaleString(undefined, {minimumFractionDigits: 2})],
-      ["Unrealized P/L", (unrealizedPnl >= 0 ? "+" : "") + "$" + unrealizedPnl.toLocaleString(undefined, {minimumFractionDigits: 2}), unrealizedPnl],
+      ["Floating P/L", (unrealizedPnl >= 0 ? "+" : "") + "$" + unrealizedPnl.toLocaleString(undefined, {minimumFractionDigits: 2}), unrealizedPnl],
       ["Equity (Balance + Unrealized)", "$" + equity.toLocaleString(undefined, {minimumFractionDigits: 2}), equity - s.total_initial_balance],
       ["Net P/L (closed deals)", "$" + s.total_net_pnl.toLocaleString(undefined, {minimumFractionDigits: 2}), s.total_net_pnl],
       ["Total Commission", "$" + s.total_commission.toLocaleString(undefined, {minimumFractionDigits: 2})],
@@ -16812,7 +16812,7 @@ function cmdReplayPlus() {
 
     if (rpOpenTrade) {
       const unrealized = rpOpenTrade.side === "buy" ? bar.close - rpOpenTrade.entryPrice : rpOpenTrade.entryPrice - bar.close;
-      rpUnrealizedLabel.textContent = `Unrealized: ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(rpDp)}`;
+      rpUnrealizedLabel.textContent = `Floating P/L: ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(rpDp)}`;
       rpUnrealizedLabel.style.color = unrealized >= 0 ? "#4caf50" : "#f44336";
     } else { rpUnrealizedLabel.textContent = ""; }
 
