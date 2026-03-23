@@ -16,8 +16,31 @@ const USER_AGENT: &str = "TyphooN-Terminal/0.1 (support@marketwizardry.org)";
 /// Rate limit sleep between SEC requests (200ms = 5 req/sec, well under 10/sec limit).
 const RATE_LIMIT_MS: u64 = 200;
 
-/// Filing types we care about.
-const RELEVANT_FORMS: &[&str] = &["10-K", "10-Q", "8-K", "4", "DEF 14A", "S-1", "NT 10-K", "NT 10-Q"];
+/// All SEC filing types we track — comprehensive coverage for trading signals.
+const RELEVANT_FORMS: &[&str] = &[
+    // Core financials
+    "10-K", "10-Q", "20-F", "8-K",
+    // Amended (restated = red flag)
+    "10-K/A", "10-Q/A", "8-K/A",
+    // Late filing (distress signal)
+    "NT 10-K", "NT 10-Q",
+    // Insider trades
+    "4", "3", "5",
+    // Proxy/governance
+    "DEF 14A", "DEFA14A", "PREM14A",
+    // Shareholder disclosures (activist/institutional)
+    "SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A", "13F-HR",
+    // Offerings/dilution
+    "S-1", "S-3", "S-4", "424B5", "424B2", "424B4",
+    // M&A
+    "SC TO-T", "SC TO-I", "SC 14D9",
+    // Deregistration (delisting risk)
+    "15-12B", "15-12G",
+    // SEC scrutiny
+    "CORRESP",
+    // Employee plans
+    "11-K",
+];
 
 // ── Data Types ──────────────────────────────────────────────────────
 
@@ -164,33 +187,42 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
 
 // ── Importance Scoring ──────────────────────────────────────────────
 
-pub fn compute_importance(form_type: &str, is_insider_sell: bool, is_late: bool) -> i32 {
-    let base = match form_type {
-        "10-K" => 40,
-        "10-Q" => 30,
-        "8-K" => 35,
-        "4" => 25,
-        "DEF 14A" => 20,
-        "S-1" => 30,
-        "NT 10-K" | "NT 10-Q" => 40,
-        _ => 10,
-    };
+pub fn compute_importance(form_type: &str, is_insider_sell: bool, _is_late: bool) -> i32 {
+    let (base, _cat) = importance_and_category(form_type);
     let mut score = base;
     if is_insider_sell { score += 15; }
-    if is_late { score += 30; }
-    score
+    score.min(100)
+}
+
+/// Returns (importance_score, category) for a form type.
+fn importance_and_category(form_type: &str) -> (i32, &'static str) {
+    match form_type {
+        "15-12B" | "15-12G" => (85, "DELISTING"),
+        "SC TO-T" | "SC TO-I" | "SC 14D9" => (80, "ACQUISITION"),
+        "10-K/A" | "10-Q/A" | "8-K/A" => (75, "AMENDED"),
+        "NT 10-K" | "NT 10-Q" => (75, "LATE_FILING"),
+        "SC 13D" | "SC 13D/A" => (70, "ACTIVIST"),
+        "PREM14A" => (70, "ACQUISITION"),
+        "424B5" | "424B2" | "424B4" => (65, "DILUTION"),
+        "S-3" => (60, "DILUTION"),
+        "CORRESP" => (45, "SEC_SCRUTINY"),
+        "10-K" | "20-F" => (40, "EARNINGS"),
+        "S-1" | "S-4" => (40, "OFFERING"),
+        "8-K" => (35, "MATERIAL_EVENT"),
+        "SC 13G" | "SC 13G/A" => (35, "INSTITUTIONAL"),
+        "DEFA14A" => (35, "GOVERNANCE"),
+        "10-Q" => (30, "EARNINGS"),
+        "13F-HR" => (30, "INSTITUTIONAL"),
+        "4" => (25, "INSIDER_ACTIVITY"),
+        "3" | "5" => (20, "INSIDER_ACTIVITY"),
+        "DEF 14A" => (20, "GOVERNANCE"),
+        "11-K" => (15, "GOVERNANCE"),
+        _ => (10, "OTHER"),
+    }
 }
 
 fn categorize_form(form_type: &str) -> &'static str {
-    match form_type {
-        "10-K" | "10-Q" => "FINANCIAL",
-        "8-K" => "MATERIAL_EVENT",
-        "4" => "INSIDER",
-        "DEF 14A" => "PROXY",
-        "S-1" => "OFFERING",
-        "NT 10-K" | "NT 10-Q" => "LATE_FILING",
-        _ => "OTHER",
-    }
+    importance_and_category(form_type).1
 }
 
 // ── CIK Lookup ──────────────────────────────────────────────────────
@@ -377,18 +409,25 @@ pub async fn scrape_filings_for_ticker(
                 ],
             ).map_err(|e| format!("Insert filing failed: {e}"))?;
 
-            // Create alert for late filings
-            if f.is_late {
+            // Create alerts for critical filing types
+            let alert_info: Option<(&str, String)> = match f.form_type.as_str() {
+                "NT 10-K" | "NT 10-Q" => Some(("LATE_FILING", format!("{}: Late filing — possible internal issues", f.ticker))),
+                "SC 13D" | "SC 13D/A" => Some(("ACTIVIST", format!("{}: Activist investor took >5% position", f.ticker))),
+                "10-K/A" | "10-Q/A" => Some(("RESTATEMENT", format!("{}: Restated financials — review immediately", f.ticker))),
+                "8-K/A" => Some(("AMENDED_EVENT", format!("{}: Amended material event — updated disclosure", f.ticker))),
+                "S-3" => Some(("DILUTION_RISK", format!("{}: Shelf registration filed — potential dilution", f.ticker))),
+                "424B5" | "424B2" | "424B4" => Some(("ACTIVE_DILUTION", format!("{}: Prospectus filed — offering in progress", f.ticker))),
+                "15-12B" | "15-12G" => Some(("DELISTING_RISK", format!("{}: Deregistration filed — delisting risk", f.ticker))),
+                "SC TO-T" | "SC TO-I" => Some(("TENDER_OFFER", format!("{}: Tender offer filed — acquisition bid", f.ticker))),
+                "CORRESP" => Some(("SEC_INQUIRY", format!("{}: SEC correspondence — regulatory scrutiny", f.ticker))),
+                "PREM14A" => Some(("MERGER_PROXY", format!("{}: Preliminary merger proxy filed", f.ticker))),
+                _ => None,
+            };
+            if let Some((alert_type, message)) = alert_info {
                 conn.execute(
                     "INSERT INTO sec_filing_alerts (ticker, alert_type, message, filing_accession, importance, created_at, dismissed)
-                     VALUES (?1, 'LATE_FILING', ?2, ?3, ?4, ?5, FALSE)",
-                    params![
-                        f.ticker,
-                        format!("{} filed {} — late filing notification", f.ticker, f.form_type),
-                        f.accession_number,
-                        f.importance_score,
-                        now,
-                    ],
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, FALSE)",
+                    params![f.ticker, alert_type, message, f.accession_number, f.importance_score, now],
                 ).ok();
             }
 
