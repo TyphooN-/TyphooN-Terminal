@@ -27259,6 +27259,203 @@ async function cmdDarwinex() {
         `<span>${o.z_score.toFixed(1)}σ</span><span style="color:#888">${o.sector}</span></div>`);
     }
 
+    // ── SEC Fundamentals Scan (stocks only) ──────────────────────────
+    const stockSymbols = filteredSymbols.filter(s => {
+      const spec = specs[s] || Object.values(specs).find(sp => sp.normalized === s);
+      const sector = spec?.sector || "";
+      return sector && !["Forex", "Crypto-Currency", "Indices", "Metals", "Energies"].includes(sector);
+    });
+
+    const secResults = [];
+    if (stockSymbols.length > 0) {
+      addLog("");
+      addLog("<b>SEC FUNDAMENTALS SCAN</b>", "#ff9800");
+      addLog(`Scanning ${Math.min(stockSymbols.length, 50)} stock symbols (SEC EDGAR)...`, "#888");
+      let secCompleted = 0;
+      for (const sym of stockSymbols.slice(0, 50)) {
+        try {
+          const fJson = await invoke("get_company_fundamentals", { symbol: sym });
+          const f = JSON.parse(fJson);
+          const epsBasic = f.eps?.value ?? null;
+          const epsDiluted = f.eps_diluted?.value ?? null;
+          const eps = epsDiluted ?? epsBasic;
+          const revenue = f.revenue?.value ?? null;
+          const netIncome = f.net_income?.value ?? null;
+          const totalLiabilities = f.total_liabilities?.value ?? null;
+          const equity = f.stockholders_equity?.value ?? null;
+          const debtToEquity = (totalLiabilities != null && equity != null && equity > 0) ? totalLiabilities / equity : null;
+          secResults.push({ symbol: sym, eps, revenue, netIncome, debtToEquity, entity: f.entity || sym });
+          secCompleted++;
+          if (secCompleted % 10 === 0) addLog(`  SEC: ${secCompleted}/${Math.min(stockSymbols.length, 50)} scanned...`, "#888");
+        } catch (_) { secCompleted++; }
+        await new Promise(r => setTimeout(r, 200)); // SEC EDGAR rate limit: 10 req/sec
+      }
+
+      // Flag outliers: negative EPS, negative net income, high D/E
+      const secOutliers = secResults.filter(r =>
+        (r.eps !== null && r.eps < 0) ||
+        (r.netIncome !== null && r.netIncome < 0) ||
+        (r.debtToEquity !== null && r.debtToEquity > 3)
+      );
+      addLog(`  SEC: ${secResults.length} fundamentals loaded, ${secOutliers.length} flagged`, "#4caf50");
+
+      if (secOutliers.length > 0) {
+        addLog("");
+        addLog(`<div style="display:grid;grid-template-columns:90px 80px 90px 90px 70px 90px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding:4px 0">` +
+          `<span>Symbol</span><span>EPS</span><span>Revenue</span><span>Net Inc</span><span>D/E</span><span>Flags</span></div>`);
+        for (const r of secOutliers) {
+          const flags = [];
+          if (r.eps !== null && r.eps < 0) flags.push("NEG EPS");
+          if (r.netIncome !== null && r.netIncome < 0) flags.push("NEG NI");
+          if (r.debtToEquity !== null && r.debtToEquity > 3) flags.push("HIGH D/E");
+          const epsStr = r.eps !== null ? `$${parseFloat(r.eps).toFixed(2)}` : "N/A";
+          const revStr = r.revenue !== null ? `$${(parseFloat(r.revenue)/1e6).toFixed(0)}M` : "N/A";
+          const niStr = r.netIncome !== null ? `$${(parseFloat(r.netIncome)/1e6).toFixed(0)}M` : "N/A";
+          const deStr = r.debtToEquity !== null ? r.debtToEquity.toFixed(2) : "N/A";
+          const epsColor = (r.eps !== null && r.eps < 0) ? "#f44336" : "#ccc";
+          const niColor = (r.netIncome !== null && r.netIncome < 0) ? "#f44336" : "#ccc";
+          const deColor = (r.debtToEquity !== null && r.debtToEquity > 3) ? "#ff9800" : "#ccc";
+          addLog(`<div style="display:grid;grid-template-columns:90px 80px 90px 90px 70px 90px;gap:4px">` +
+            `<span style="color:#2196f3">${r.symbol}</span>` +
+            `<span style="color:${epsColor}">${epsStr}</span>` +
+            `<span style="color:#ccc">${revStr}</span>` +
+            `<span style="color:${niColor}">${niStr}</span>` +
+            `<span style="color:${deColor}">${deStr}</span>` +
+            `<span style="color:#f44336;font-size:10px">${flags.join(", ")}</span></div>`);
+        }
+      }
+
+      // Show healthy symbols summary
+      const healthyCount = secResults.filter(r =>
+        (r.eps === null || r.eps > 0) &&
+        (r.netIncome === null || r.netIncome > 0) &&
+        (r.debtToEquity === null || r.debtToEquity <= 3)
+      ).length;
+      if (healthyCount > 0) {
+        addLog(`  <span style="color:#4caf50">${healthyCount} symbols with healthy fundamentals (positive EPS, positive NI, D/E &le; 3)</span>`);
+      }
+    }
+
+    // ── Insider Sentiment Scan (Finnhub MSPR, stocks only) ────────
+    const settings = loadSettings();
+    const insiderResults = [];
+    if (settings.finnhubKey && stockSymbols.length > 0) {
+      addLog("");
+      addLog("<b>INSIDER SENTIMENT SCAN</b> (Finnhub MSPR)", "#ff9800");
+      const insiderSyms = stockSymbols.slice(0, 30); // Finnhub rate limit: 60/min free tier
+      addLog(`Scanning ${insiderSyms.length} stock symbols for insider activity...`, "#888");
+      let insCompleted = 0;
+      for (const sym of insiderSyms) {
+        try {
+          const json = await invoke("get_finnhub_insider_sentiment", { symbol: sym, finnhubKey: settings.finnhubKey });
+          const result = typeof json === "string" ? JSON.parse(json) : json;
+          const sentimentData = result.data || result || [];
+          if (Array.isArray(sentimentData) && sentimentData.length > 0) {
+            // Use last 3 months of MSPR data
+            const sorted = [...sentimentData].sort((a, b) => {
+              if (a.year !== b.year) return b.year - a.year;
+              return b.month - a.month;
+            });
+            const recent = sorted.slice(0, 3);
+            const avgMspr = recent.reduce((sum, d) => sum + (d.mspr || 0), 0) / recent.length;
+            const totalChange = recent.reduce((sum, d) => sum + (d.change || 0), 0);
+            insiderResults.push({ symbol: sym, avgMspr, totalChange, months: recent.length });
+          }
+          insCompleted++;
+          if (insCompleted % 10 === 0) addLog(`  Insider: ${insCompleted}/${insiderSyms.length} scanned...`, "#888");
+        } catch (_) { insCompleted++; }
+        await new Promise(r => setTimeout(r, 500)); // Finnhub free tier: ~60/min
+      }
+
+      addLog(`  Insider: ${insiderResults.length} symbols with sentiment data`, "#4caf50");
+
+      // Flag heavy selling (negative MSPR = net selling)
+      const bearishInsiders = insiderResults.filter(r => r.avgMspr < -10);
+      const bullishInsiders = insiderResults.filter(r => r.avgMspr > 10);
+
+      if (bearishInsiders.length > 0 || bullishInsiders.length > 0) {
+        addLog("");
+        addLog(`<div style="display:grid;grid-template-columns:90px 100px 100px 100px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding:4px 0">` +
+          `<span>Symbol</span><span>Avg MSPR</span><span>Net Change</span><span>Signal</span></div>`);
+        const flagged = [...bearishInsiders, ...bullishInsiders].sort((a, b) => a.avgMspr - b.avgMspr);
+        for (const r of flagged) {
+          const isBearish = r.avgMspr < -10;
+          const signal = isBearish ? "INSIDER SELLING" : "INSIDER BUYING";
+          const sigColor = isBearish ? "#f44336" : "#4caf50";
+          const msprColor = r.avgMspr < 0 ? "#f44336" : "#4caf50";
+          const changeColor = r.totalChange < 0 ? "#f44336" : "#4caf50";
+          addLog(`<div style="display:grid;grid-template-columns:90px 100px 100px 100px;gap:4px">` +
+            `<span style="color:#2196f3">${r.symbol}</span>` +
+            `<span style="color:${msprColor}">${r.avgMspr.toFixed(1)}%</span>` +
+            `<span style="color:${changeColor}">${r.totalChange > 0 ? "+" : ""}${r.totalChange.toFixed(0)} shares</span>` +
+            `<span style="color:${sigColor};font-weight:bold">${signal}</span></div>`);
+        }
+      }
+    } else if (stockSymbols.length > 0 && !settings.finnhubKey) {
+      addLog("");
+      addLog("Insider sentiment scan skipped — Finnhub API key not set. Use ` → SETTINGS to add one.", "#888");
+    }
+
+    // ── Combined Risk Score ───────────────────────────────────────
+    if (secResults.length > 0) {
+      addLog("");
+      addLog("<b>COMBINED RISK SCORE</b>", "#ff9800");
+      addLog(`<div style="display:grid;grid-template-columns:90px 60px 60px 60px 70px 50px 80px;gap:4px;font-weight:bold;border-bottom:1px solid #444;padding:4px 0">` +
+        `<span>Symbol</span><span>VaR</span><span>ATR</span><span>SEC</span><span>Insider</span><span>Score</span><span>Rating</span></div>`);
+
+      const scoreResults = [];
+      for (const sec of secResults) {
+        let score = 0;
+        const sym = sec.symbol;
+
+        // VaR outlier: +1 risk
+        const isVarOutlier = varSyms.has(sym);
+        if (isVarOutlier) score += 1;
+
+        // ATR outlier: +1 risk
+        const isAtrOutlier = atrSyms.has(sym);
+        if (isAtrOutlier) score += 1;
+
+        // SEC fundamental health: negative EPS or negative NI = +1 risk, high D/E = +0.5
+        const negEarnings = (sec.eps !== null && sec.eps < 0) || (sec.netIncome !== null && sec.netIncome < 0);
+        if (negEarnings) score += 1;
+        if (sec.debtToEquity !== null && sec.debtToEquity > 3) score += 0.5;
+
+        // Insider sentiment: net selling = +1 risk, net buying = -0.5
+        const insider = insiderResults.find(r => r.symbol === sym);
+        if (insider) {
+          if (insider.avgMspr < -10) score += 1;
+          else if (insider.avgMspr > 10) score -= 0.5;
+        }
+
+        scoreResults.push({ symbol: sym, score, isVarOutlier, isAtrOutlier, negEarnings, highDebt: sec.debtToEquity !== null && sec.debtToEquity > 3, insider });
+      }
+
+      // Sort by score descending (highest risk first), show top 30
+      scoreResults.sort((a, b) => b.score - a.score);
+      const showScores = scoreResults.filter(r => r.score > 0).slice(0, 30);
+
+      for (const r of showScores) {
+        const rating = r.score >= 3 ? "DANGER" : r.score >= 2 ? "CAUTION" : "WATCH";
+        const ratingColor = r.score >= 3 ? "#f44336" : r.score >= 2 ? "#ff9800" : "#ffeb3b";
+        const varStr = r.isVarOutlier ? '<span style="color:#f44336">FLAG</span>' : '<span style="color:#4caf50">OK</span>';
+        const atrStr = r.isAtrOutlier ? '<span style="color:#f44336">FLAG</span>' : '<span style="color:#4caf50">OK</span>';
+        const secStr = r.negEarnings ? '<span style="color:#f44336">FLAG</span>' : r.highDebt ? '<span style="color:#ff9800">D/E</span>' : '<span style="color:#4caf50">OK</span>';
+        const insStr = r.insider ? (r.insider.avgMspr < -10 ? '<span style="color:#f44336">SELL</span>' : r.insider.avgMspr > 10 ? '<span style="color:#4caf50">BUY</span>' : '<span style="color:#888">FLAT</span>') : '<span style="color:#555">N/A</span>';
+        addLog(`<div style="display:grid;grid-template-columns:90px 60px 60px 60px 70px 50px 80px;gap:4px">` +
+          `<span style="color:#2196f3">${r.symbol}</span>` +
+          `${varStr}${atrStr}${secStr}${insStr}` +
+          `<span style="color:${ratingColor};font-weight:bold">${r.score.toFixed(1)}</span>` +
+          `<span style="color:${ratingColor};font-weight:bold">${rating}</span></div>`);
+      }
+
+      const dangerCount = scoreResults.filter(r => r.score >= 3).length;
+      const cautionCount = scoreResults.filter(r => r.score >= 2 && r.score < 3).length;
+      const cleanCount = scoreResults.filter(r => r.score === 0).length;
+      addLog("");
+      addLog(`  Risk summary: <span style="color:#f44336">${dangerCount} DANGER</span> | <span style="color:#ff9800">${cautionCount} CAUTION</span> | <span style="color:#4caf50">${cleanCount} CLEAN</span>`);
+    }
+
     addLog("");
     addLog(`<b style="color:#4caf50">Analysis complete.</b> ${filteredSymbols.length} symbols scanned (${allSymbols.length} total), ${allOutliers.length} outliers detected.`);
   } catch (e) { addLog(`Error: ${e}`, "#f44336"); }

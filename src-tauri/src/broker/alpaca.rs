@@ -991,6 +991,7 @@ impl AlpacaBroker {
             "shares_outstanding": extract_latest_fact(us_gaap, "CommonStockSharesOutstanding"),
             "stockholders_equity": extract_latest_fact(us_gaap, "StockholdersEquity"),
             "eps": extract_latest_fact(us_gaap, "EarningsPerShareBasic"),
+            "eps_diluted": extract_latest_fact(us_gaap, "EarningsPerShareDiluted"),
         });
 
         Ok(result)
