@@ -7717,7 +7717,7 @@ async function cmdSecScanner() {
         const a = document.createElement("a");
         a.textContent = "View";
         a.style.cssText = "color:#2196f3;cursor:pointer;text-decoration:underline;font-size:9px;";
-        a.addEventListener("click", () => invoke("open_url", { url: f.url }));
+        a.addEventListener("click", () => openSecFilingInline(f.url, `${f.form_type} — ${f.filing_date} — ${f.ticker}`));
         view.appendChild(a);
 
         row.appendChild(date); row.appendChild(tick); row.appendChild(form);
