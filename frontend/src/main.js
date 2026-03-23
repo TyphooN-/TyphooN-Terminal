@@ -6113,11 +6113,16 @@ function saveSession() {
       if (el) panelStates[id] = el.classList.contains("collapsed");
     }
 
-    // MTF grid state
+    // MTF grid TF checkboxes (persist which TFs are checked even when grid is closed)
+    const mtfGridTfChecks = {};
+    document.querySelectorAll(".mtf-grid-cb").forEach(cb => { mtfGridTfChecks[cb.value] = cb.checked; });
+
+    // MTF grid state — save per-cell (symbol, tf) for multi-symbol grid restore
     const mtfGridState = (typeof mtfGridActive !== "undefined" && mtfGridActive) ? {
       active: true,
       symbol: (typeof mtfGridSymbol !== "undefined" ? mtfGridSymbol : currentSymbol),
       timeframes: (typeof mtfGridCells !== "undefined" ? mtfGridCells.map(c => c.tf) : []),
+      cells: (typeof mtfGridCells !== "undefined" ? mtfGridCells.map(c => ({ symbol: c.symbol, tf: c.tf })) : []),
     } : { active: false };
 
     // Visible chart range
@@ -6139,12 +6144,14 @@ function saveSession() {
       volumePaneHeight: volumeH,
       panelStates,
       mtfGridState,
+      mtfGridTfChecks,
       visibleRange,
       lastArticle,
       lastArticleTitle,
-      openWindows: [...new Set(openCommandWindows.map(w => w.command))]
-        .filter(cmd => Object.keys(getActiveWindows()).length > 0) // only save if windows exist
-        .map(cmd => ({ command: cmd })),
+      // Only save commands whose windows are still open (active in DOM)
+      openWindows: Object.keys(getActiveWindows()).length > 0
+        ? [...new Set(openCommandWindows.map(w => w.command))].map(cmd => ({ command: cmd }))
+        : [],
       timestamp: Date.now(),
     };
 
@@ -6227,13 +6234,29 @@ function restoreSession() {
       setTimeout(restoreRange, 2000);
     }
 
+    // Restore MTF grid TF checkboxes
+    if (session.mtfGridTfChecks) {
+      document.querySelectorAll(".mtf-grid-cb").forEach(cb => {
+        if (cb.value in session.mtfGridTfChecks) cb.checked = session.mtfGridTfChecks[cb.value];
+      });
+    }
+
     // Restore MTF grid state (must happen after tabs are loaded)
-    if (session.mtfGridState && session.mtfGridState.active && session.mtfGridState.timeframes) {
-      const sym = session.mtfGridState.symbol || currentSymbol;
-      const tfs = session.mtfGridState.timeframes;
-      // Defer MTF grid open to let chart settle first
+    if (session.mtfGridState && session.mtfGridState.active) {
       setTimeout(() => {
-        try { openMTFGrid(sym, tfs); } catch (_) {}
+        try {
+          if (session.mtfGridState.cells && session.mtfGridState.cells.length > 0) {
+            // Multi-symbol grid: restore per-cell (symbol, tf) pairs
+            const pairs = session.mtfGridState.cells;
+            const symbols = [...new Set(pairs.map(p => p.symbol))];
+            const tfs = [...new Set(pairs.map(p => p.tf))];
+            openMTFGridMulti(symbols, tfs);
+          } else if (session.mtfGridState.timeframes) {
+            // Legacy: single-symbol grid
+            const sym = session.mtfGridState.symbol || currentSymbol;
+            openMTFGridMulti([sym], session.mtfGridState.timeframes);
+          }
+        } catch (_) {}
       }, 3000);
     }
 
@@ -28010,8 +28033,21 @@ function setupCommandPalette() {
         c.action();
         // If a new window was opened, track the command name for session persistence
         requestAnimationFrame(() => {
-          const newCount = Object.keys(getActiveWindows()).length;
+          const wins = getActiveWindows();
+          const newCount = Object.keys(wins).length;
           if (newCount > prevWindowCount) {
+            // Find the newest window and tag it with the command name
+            const winIds = Object.keys(wins);
+            const newestId = winIds[winIds.length - 1];
+            if (newestId && wins[newestId]) {
+              wins[newestId]._commandName = c.name;
+              // Hook into close to remove from tracking
+              const origOnClose = wins[newestId].onClose;
+              wins[newestId].onClose = () => {
+                openCommandWindows = openCommandWindows.filter(w => w.command !== c.name);
+                if (origOnClose) origOnClose();
+              };
+            }
             openCommandWindows.push({ command: c.name });
           }
         });
