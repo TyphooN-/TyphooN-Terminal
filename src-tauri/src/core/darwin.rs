@@ -2331,71 +2331,58 @@ pub struct SectorExposure {
 }
 
 /// Aggregate open position notional by GICS sector.
-/// Uses a hardcoded sector map for common symbols.
-pub fn get_sector_exposure(conn: &Connection) -> Result<Vec<SectorExposure>, String> {
-    fn classify_sector(symbol: &str) -> &'static str {
-        let s = symbol.to_uppercase();
-        // Strip trailing suffixes (.US, .NAS, etc.)
-        let base: &str = s.split('.').next().unwrap_or(&s);
-        match base {
-            // Technology
-            "AAPL" | "MSFT" | "GOOG" | "GOOGL" | "META" | "NVDA" | "AMD" | "INTC" | "TSM"
-            | "AVGO" | "ADBE" | "CRM" | "ORCL" | "CSCO" | "QCOM" | "TXN" | "SHOP" | "SQ"
-            | "SNOW" | "PLTR" | "NET" | "DDOG" | "MDB" | "CRWD" | "ZS" | "PANW" | "FTNT"
-            | "NOW" | "UBER" | "ABNB" | "DASH" | "COIN" => "Technology",
-            // Healthcare
-            "JNJ" | "UNH" | "PFE" | "ABBV" | "MRK" | "LLY" | "TMO" | "ABT" | "BMY"
-            | "AMGN" | "GILD" | "ISRG" | "MDT" | "SYK" | "REGN" | "VRTX" | "MRNA"
-            | "BIIB" => "Healthcare",
-            // Consumer
-            "AMZN" | "TSLA" | "WMT" | "COST" | "HD" | "NKE" | "SBUX" | "MCD" | "PG"
-            | "KO" | "PEP" | "PM" | "EL" | "CL" | "TGT" | "LOW" | "LULU" | "ROST"
-            | "DG" | "DLTR" => "Consumer",
-            // Financial
-            "JPM" | "BAC" | "WFC" | "GS" | "MS" | "C" | "BLK" | "SCHW" | "AXP" | "V"
-            | "MA" | "PYPL" | "BRK" | "BRKB" | "BRK.B" | "CB" | "MET" | "AIG" | "PRU"
-            | "ICE" | "CME" => "Financial",
-            // Industrial
-            "BA" | "CAT" | "HON" | "UNP" | "UPS" | "RTX" | "LMT" | "GD" | "NOC" | "GE"
-            | "MMM" | "DE" | "FDX" | "WM" | "EMR" | "ITW" => "Industrial",
-            // Energy
-            "XOM" | "CVX" | "COP" | "SLB" | "EOG" | "MPC" | "PSX" | "VLO" | "OXY"
-            | "HAL" | "DVN" | "FANG" | "WTI" | "XTIUSD" | "XNGUSD" | "USO" | "XLE"
-            | "UKOIL" | "USOIL" => "Energy",
-            // Materials
-            "LIN" | "APD" | "SHW" | "ECL" | "NEM" | "FCX" | "NUE" | "DOW" | "DD"
-            | "XAUUSD" | "XAGUSD" | "GOLD" | "SILVER" | "COPPER" | "XCUUSD" | "XPTUSD"
-            | "XPDUSD" => "Materials",
-            // Real Estate
-            "AMT" | "PLD" | "CCI" | "EQIX" | "SPG" | "O" | "DLR" | "PSA" | "WELL"
-            | "AVB" => "Real Estate",
-            // Utilities
-            "NEE" | "DUK" | "SO" | "D" | "AEP" | "EXC" | "SRE" | "XEL" | "ED"
-            | "WEC" => "Utilities",
-            // Communication
-            "DIS" | "CMCSA" | "NFLX" | "T" | "VZ" | "TMUS" | "ATVI" | "EA" | "TTWO"
-            | "RBLX" | "SNAP" | "PINS" | "SPOT" => "Communication",
-            // Crypto
-            "BTCUSD" | "ETHUSD" | "SOLUSD" | "DOGEUSD" | "XRPUSD" | "ADAUSD" | "DOTUSD"
-            | "AVAXUSD" | "MATICUSD" | "LINKUSD" | "UNIUSD" | "AAVEUSD" | "LTCUSD"
-            | "BCHUSD" | "ATOMUSD" | "NEARUSD" | "OPUSD" | "ARBUSD" | "FILUSD"
-            | "APTUSD" => "Crypto",
-            // ETF/Index
-            "SPY" | "QQQ" | "IWM" | "DIA" | "VTI" | "VOO" | "SPX" | "NDX" | "US500"
-            | "US100" | "US30" | "US2000" | "USTEC" | "GER40" | "UK100" | "JPN225"
-            | "FRA40" | "ESP35" | "AUS200" | "HK50" | "VIX" => "ETF/Index",
-            // Forex (common pairs)
-            _ if base.len() == 6
-                && ["USD", "EUR", "GBP", "JPY", "CHF", "AUD", "NZD", "CAD"]
-                    .iter()
-                    .any(|c| base.starts_with(c) || base.ends_with(c)) =>
-            {
-                "Forex"
-            }
-            _ => "Other",
+/// Classify a symbol into a sector. Public so other modules can reuse.
+pub fn classify_sector(symbol: &str) -> &'static str {
+    let s = symbol.to_uppercase();
+    let base: &str = s.split('.').next().unwrap_or(&s);
+    match base {
+        "AAPL" | "MSFT" | "GOOG" | "GOOGL" | "META" | "NVDA" | "AMD" | "INTC" | "TSM"
+        | "AVGO" | "ADBE" | "CRM" | "ORCL" | "CSCO" | "QCOM" | "TXN" | "SHOP" | "SQ"
+        | "SNOW" | "PLTR" | "NET" | "DDOG" | "MDB" | "CRWD" | "ZS" | "PANW" | "FTNT"
+        | "NOW" | "UBER" | "ABNB" | "DASH" | "COIN" => "Technology",
+        "JNJ" | "UNH" | "PFE" | "ABBV" | "MRK" | "LLY" | "TMO" | "ABT" | "BMY"
+        | "AMGN" | "GILD" | "ISRG" | "MDT" | "SYK" | "REGN" | "VRTX" | "MRNA"
+        | "BIIB" => "Healthcare",
+        "AMZN" | "TSLA" | "WMT" | "COST" | "HD" | "NKE" | "SBUX" | "MCD" | "PG"
+        | "KO" | "PEP" | "PM" | "EL" | "CL" | "TGT" | "LOW" | "LULU" | "ROST"
+        | "DG" | "DLTR" => "Consumer",
+        "JPM" | "BAC" | "WFC" | "GS" | "MS" | "C" | "BLK" | "SCHW" | "AXP" | "V"
+        | "MA" | "PYPL" | "BRK" | "BRKB" | "BRK.B" | "CB" | "MET" | "AIG" | "PRU"
+        | "ICE" | "CME" => "Financial",
+        "BA" | "CAT" | "HON" | "UNP" | "UPS" | "RTX" | "LMT" | "GD" | "NOC" | "GE"
+        | "MMM" | "DE" | "FDX" | "WM" | "EMR" | "ITW" => "Industrial",
+        "XOM" | "CVX" | "COP" | "SLB" | "EOG" | "MPC" | "PSX" | "VLO" | "OXY"
+        | "HAL" | "DVN" | "FANG" | "WTI" | "XTIUSD" | "XNGUSD" | "USO" | "XLE"
+        | "UKOIL" | "USOIL" => "Energy",
+        "LIN" | "APD" | "SHW" | "ECL" | "NEM" | "FCX" | "NUE" | "DOW" | "DD"
+        | "XAUUSD" | "XAGUSD" | "GOLD" | "SILVER" | "COPPER" | "XCUUSD" | "XPTUSD"
+        | "XPDUSD" => "Materials",
+        "AMT" | "PLD" | "CCI" | "EQIX" | "SPG" | "O" | "DLR" | "PSA" | "WELL"
+        | "AVB" => "Real Estate",
+        "NEE" | "DUK" | "SO" | "D" | "AEP" | "EXC" | "SRE" | "XEL" | "ED"
+        | "WEC" => "Utilities",
+        "DIS" | "CMCSA" | "NFLX" | "T" | "VZ" | "TMUS" | "ATVI" | "EA" | "TTWO"
+        | "RBLX" | "SNAP" | "PINS" | "SPOT" => "Communication",
+        "BTCUSD" | "ETHUSD" | "SOLUSD" | "DOGEUSD" | "XRPUSD" | "ADAUSD" | "DOTUSD"
+        | "AVAXUSD" | "MATICUSD" | "LINKUSD" | "UNIUSD" | "AAVEUSD" | "LTCUSD"
+        | "BCHUSD" | "ATOMUSD" | "NEARUSD" | "OPUSD" | "ARBUSD" | "FILUSD"
+        | "APTUSD" => "Crypto",
+        "SPY" | "QQQ" | "IWM" | "DIA" | "VTI" | "VOO" | "SPX" | "NDX" | "US500"
+        | "US100" | "US30" | "US2000" | "USTEC" | "GER40" | "UK100" | "JPN225"
+        | "FRA40" | "ESP35" | "AUS200" | "HK50" | "VIX" => "ETF/Index",
+        _ if base.len() == 6
+            && ["USD", "EUR", "GBP", "JPY", "CHF", "AUD", "NZD", "CAD"]
+                .iter()
+                .any(|c| base.starts_with(c) || base.ends_with(c)) =>
+        {
+            "Forex"
         }
+        _ => "Other",
     }
+}
 
+/// Get sector exposure across all DARWIN open positions.
+pub fn get_sector_exposure(conn: &Connection) -> Result<Vec<SectorExposure>, String> {
     // Get all open positions across all accounts
     let open_positions = get_portfolio_open_positions(conn)?;
     if open_positions.is_empty() {

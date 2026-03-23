@@ -27031,36 +27031,80 @@ async function cmdDarwinex() {
   const logDiv = out.querySelector("#dwx-log");
   const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: all msgs are internal strings, no external data */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
-  // Symbol type filter — persisted in localStorage
-  const DWX_FILTER_KEY = "typhoon_dwx_symbol_filters";
-  // Default: Forex/Crypto/Indices disabled (user trades Stocks/Commodities CFDs at Darwinex)
-  const savedFilters = JSON.parse(localStorage.getItem(DWX_FILTER_KEY) || '{"Forex":false,"Crypto":false,"Indices":false,"Commodities":true,"Stocks/CFDs":true}');
+  // Sector/Industry filter — driven by MT5 specs data, persisted in localStorage
+  const DWX_FILTER_KEY = "typhoon_dwx_sector_filters";
+  const savedFilters = JSON.parse(localStorage.getItem(DWX_FILTER_KEY) || "{}");
+  const filterState = { ...savedFilters };
+
   const filterBar = document.createElement("div");
-  filterBar.style.cssText = "padding:6px 8px;border-bottom:1px solid #333;display:flex;gap:12px;align-items:center;font-size:10px;";
+  filterBar.style.cssText = "padding:6px 8px;border-bottom:1px solid #333;font-size:10px;max-height:120px;overflow-y:auto;";
+  const filterHeader = document.createElement("div");
+  filterHeader.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:4px;";
   const filterLabel = document.createElement("span");
   filterLabel.style.color = "#888";
-  filterLabel.textContent = "Symbol types:";
-  filterBar.appendChild(filterLabel);
-  const filterState = { ...savedFilters };
-  for (const type of ["Forex", "Crypto", "Indices", "Commodities", "Stocks/CFDs"]) {
-    const lbl = document.createElement("label");
-    lbl.style.cssText = "display:flex;align-items:center;gap:3px;cursor:pointer;color:#ccc;";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = filterState[type] !== false; // default enabled unless explicitly false
-    cb.addEventListener("change", () => {
-      filterState[type] = cb.checked;
-      localStorage.setItem(DWX_FILTER_KEY, JSON.stringify(filterState));
-    });
-    lbl.appendChild(cb);
-    lbl.appendChild(document.createTextNode(type));
-    filterBar.appendChild(lbl);
-  }
+  filterLabel.textContent = "Sectors (from MT5):";
+  filterHeader.appendChild(filterLabel);
+  const selAllBtn = document.createElement("button");
+  selAllBtn.textContent = "All";
+  selAllBtn.style.cssText = "padding:1px 6px;background:#222;color:#4caf50;border:1px solid #333;cursor:pointer;font-size:9px;";
+  const selNoneBtn = document.createElement("button");
+  selNoneBtn.textContent = "None";
+  selNoneBtn.style.cssText = "padding:1px 6px;background:#222;color:#f44336;border:1px solid #333;cursor:pointer;font-size:9px;";
   const runBtn = document.createElement("button");
   runBtn.textContent = "Run Analysis";
-  runBtn.style.cssText = "padding:3px 12px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;font-size:10px;margin-left:auto;";
-  filterBar.appendChild(runBtn);
+  runBtn.style.cssText = "padding:2px 12px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;font-size:10px;margin-left:auto;";
+  filterHeader.appendChild(selAllBtn);
+  filterHeader.appendChild(selNoneBtn);
+  filterHeader.appendChild(runBtn);
+  filterBar.appendChild(filterHeader);
+
+  const sectorGrid = document.createElement("div");
+  sectorGrid.style.cssText = "display:flex;flex-wrap:wrap;gap:4px 12px;";
+  filterBar.appendChild(sectorGrid);
   logDiv.parentElement.insertBefore(filterBar, logDiv);
+
+  // Populate sectors from MT5 specs
+  let sectorCheckboxes = {};
+  try {
+    const specsJson = await invoke("get_mt5_specs");
+    const specs = JSON.parse(specsJson);
+    const sectorCounts = {};
+    for (const [, spec] of Object.entries(specs.specs || specs)) {
+      const sector = spec.sector || "Unknown";
+      sectorCounts[sector] = (sectorCounts[sector] || 0) + 1;
+    }
+    // Sort sectors by count descending
+    const sortedSectors = Object.entries(sectorCounts).sort((a, b) => b[1] - a[1]);
+    for (const [sector, count] of sortedSectors) {
+      if (!sector || sector === "Unknown" || sector === "") continue;
+      const lbl = document.createElement("label");
+      lbl.style.cssText = "display:flex;align-items:center;gap:2px;cursor:pointer;color:#ccc;white-space:nowrap;";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      // Default: enable all sectors, but user can disable (persisted)
+      cb.checked = filterState[sector] !== false;
+      cb.addEventListener("change", () => {
+        filterState[sector] = cb.checked;
+        localStorage.setItem(DWX_FILTER_KEY, JSON.stringify(filterState));
+      });
+      sectorCheckboxes[sector] = cb;
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(`${sector} (${count})`));
+      sectorGrid.appendChild(lbl);
+    }
+    selAllBtn.addEventListener("click", () => {
+      for (const [sector, cb] of Object.entries(sectorCheckboxes)) { cb.checked = true; filterState[sector] = true; }
+      localStorage.setItem(DWX_FILTER_KEY, JSON.stringify(filterState));
+    });
+    selNoneBtn.addEventListener("click", () => {
+      for (const [sector, cb] of Object.entries(sectorCheckboxes)) { cb.checked = false; filterState[sector] = false; }
+      localStorage.setItem(DWX_FILTER_KEY, JSON.stringify(filterState));
+    });
+    // Store specs globally for use in runAnalysis
+    window._dwxSpecs = specs.specs || specs;
+  } catch (e) {
+    sectorGrid.textContent = "MT5 specs not available — using basic classification";
+  }
 
   // Run analysis on button click (and auto-run on first open)
   async function runAnalysis() {
@@ -27093,18 +27137,31 @@ async function cmdDarwinex() {
     const commodities = allSymbols.filter(s => /^(XAUUSD|XAGUSD|USOIL|UKOIL|NATGAS)/i.test(s));
     const stocks = allSymbols.filter(s => !forex.includes(s) && !crypto.includes(s) && !indices.includes(s) && !commodities.includes(s));
 
-    // Apply user filters
-    const enabledTypes = Object.entries(filterState).filter(([, v]) => v).map(([k]) => k);
+    // Apply sector filter using MT5 specs data
+    const specs = window._dwxSpecs || {};
     const filteredSymbols = allSymbols.filter(s => {
-      if (forex.includes(s)) return filterState["Forex"] !== false;
-      if (crypto.includes(s)) return filterState["Crypto"] !== false;
-      if (indices.includes(s)) return filterState["Indices"] !== false;
-      if (commodities.includes(s)) return filterState["Commodities"] !== false;
-      return filterState["Stocks/CFDs"] !== false;
+      // Find this symbol's sector from MT5 specs
+      const spec = specs[s] || Object.values(specs).find(sp => sp.normalized === s);
+      const sector = spec?.sector || "Unknown";
+      return filterState[sector] !== false; // enabled unless explicitly disabled
     });
 
+    // Count by sector
+    const sectorCounts = {};
+    for (const s of allSymbols) {
+      const spec = specs[s] || Object.values(specs).find(sp => sp.normalized === s);
+      const sector = spec?.sector || "Unknown";
+      if (!sectorCounts[sector]) sectorCounts[sector] = { total: 0, enabled: 0 };
+      sectorCounts[sector].total++;
+      if (filterState[sector] !== false) sectorCounts[sector].enabled++;
+    }
     addLog(`<b>${allSymbols.length} Darwinex symbols imported (${filteredSymbols.length} enabled):</b>`, "#2196f3");
-    addLog(`  Forex: ${forex.length}${filterState["Forex"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""} | Crypto: ${crypto.length}${filterState["Crypto"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""} | Indices: ${indices.length}${filterState["Indices"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""} | Commodities: ${commodities.length}${filterState["Commodities"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""} | Stocks/CFDs: ${stocks.length}${filterState["Stocks/CFDs"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""}`);
+    const sectorSummary = Object.entries(sectorCounts)
+      .filter(([k]) => k && k !== "Unknown")
+      .sort((a, b) => b[1].total - a[1].total)
+      .map(([k, v]) => `${k}: ${v.enabled}/${v.total}${v.enabled === 0 ? " <span style='color:#f44336'>(off)</span>" : ""}`)
+      .join(" | ");
+    addLog(`  ${sectorSummary}`);
     addLog("");
 
     // Group for sector-based analysis — use filtered symbols
