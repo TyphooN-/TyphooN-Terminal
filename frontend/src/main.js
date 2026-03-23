@@ -7441,7 +7441,7 @@ async function cmdSecFilings() {
 
         const link = document.createElement("span");
         link.style.flex = "0.5";
-        const fileUrl = src.file_url || src.url || (src.file_num ? `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&filenum=${src.file_num}&type=${filingType}&dateb=&owner=include&count=10` : null);
+        const fileUrl = hit._id || src.file_url || src.url || (src.file_num ? `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&filenum=${src.file_num}&type=${filingType}&dateb=&owner=include&count=10` : null);
         if (fileUrl) {
           const a = document.createElement("a");
           a.textContent = "View";
