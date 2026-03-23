@@ -5814,6 +5814,137 @@ async function loadNewsAndFundamentals(symbol) {
   }
 }
 
+// SEC Filing renderer — preserves tables, headers, financial structure (Godel Terminal style)
+async function openSecFilingInline(url, title) {
+  const win = createWindow({ title: title.substring(0, 80), type: "custom", width: 800, height: 650 });
+  win.setContent("Loading SEC filing...");
+
+  // Cache in kv_cache via coldLoad/coldSave
+  const cacheKey = `sec:${url}`;
+  let html = await coldLoad(cacheKey);
+
+  if (!html) {
+    try {
+      html = await invoke("fetch_article", { url });
+      if (html) coldSave(cacheKey, html);
+    } catch (e) {
+      win.setContent(`Failed to load: ${e}`);
+      return;
+    }
+  }
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+  // Remove scripts, styles, navigation, but keep tables and structure
+  doc.querySelectorAll("script, style, link, meta, iframe, .ad, .ads").forEach(el => el.remove());
+
+  win.contentElement.textContent = "";
+  const container = document.createElement("div");
+  container.style.cssText = "padding:8px 12px;font-family:'Iosevka Fixed',Consolas,monospace;font-size:11px;color:#ccc;line-height:1.5;overflow-y:auto;height:100%;";
+
+  // Process the document structure — keep headers, paragraphs, tables, lists
+  const body = doc.body;
+  if (!body) { win.setContent("Empty filing"); return; }
+
+  const walk = (source) => {
+    for (const node of source.childNodes) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        const text = node.textContent.trim();
+        if (text.length > 0) {
+          const span = document.createElement("span");
+          span.textContent = text + " ";
+          container.appendChild(span);
+        }
+        continue;
+      }
+      if (node.nodeType !== Node.ELEMENT_NODE) continue;
+      const tag = node.tagName.toUpperCase();
+
+      // Headers — styled prominently
+      if (["H1", "H2", "H3", "H4"].includes(tag)) {
+        const h = document.createElement("div");
+        h.textContent = node.textContent.trim();
+        const sizes = { H1: "16px", H2: "14px", H3: "13px", H4: "12px" };
+        h.style.cssText = `font-size:${sizes[tag]};font-weight:bold;color:#FFD700;margin:12px 0 6px;border-bottom:1px solid #333;padding-bottom:3px;`;
+        container.appendChild(h);
+      }
+      // Paragraphs
+      else if (tag === "P") {
+        const text = node.textContent.trim();
+        if (text.length > 10) {
+          const p = document.createElement("div");
+          p.textContent = text;
+          p.style.cssText = "margin:4px 0;color:#ccc;";
+          container.appendChild(p);
+        }
+      }
+      // Tables — key for financial statements
+      else if (tag === "TABLE") {
+        const tbl = document.createElement("table");
+        tbl.style.cssText = "width:100%;border-collapse:collapse;margin:8px 0;font-size:10px;";
+        for (const row of node.querySelectorAll("tr")) {
+          const tr = document.createElement("tr");
+          tr.style.borderBottom = "1px solid #222";
+          for (const cell of row.querySelectorAll("td, th")) {
+            const td = document.createElement(cell.tagName === "TH" ? "th" : "td");
+            td.textContent = cell.textContent.trim().substring(0, 200);
+            const isNum = /^[\$\-\(\)0-9,.\s%]+$/.test(td.textContent) && td.textContent.length < 30;
+            const isHeader = cell.tagName === "TH";
+            td.style.cssText = `padding:2px 6px;${isHeader ? "color:#888;font-weight:bold;border-bottom:1px solid #444;" : ""}${isNum ? "text-align:right;font-family:Consolas,monospace;color:#4caf50;" : "color:#ccc;"}`;
+            // Negative numbers in red
+            if (isNum && (td.textContent.includes("(") || (td.textContent.includes("-") && !td.textContent.startsWith("$")))) {
+              td.style.color = "#f44336";
+            }
+            tr.appendChild(td);
+          }
+          tbl.appendChild(tr);
+        }
+        container.appendChild(tbl);
+      }
+      // Lists
+      else if (tag === "UL" || tag === "OL") {
+        for (const li of node.querySelectorAll("li")) {
+          const text = li.textContent.trim();
+          if (text.length > 5) {
+            const d = document.createElement("div");
+            d.textContent = "  • " + text.substring(0, 500);
+            d.style.cssText = "margin:2px 0;color:#aaa;padding-left:12px;";
+            container.appendChild(d);
+          }
+        }
+      }
+      // Bold/strong text inline
+      else if (["B", "STRONG"].includes(tag)) {
+        const b = document.createElement("span");
+        b.textContent = node.textContent.trim();
+        b.style.cssText = "font-weight:bold;color:#fff;";
+        container.appendChild(b);
+      }
+      // Divs and spans — recurse
+      else if (["DIV", "SPAN", "SECTION", "ARTICLE", "MAIN", "BODY", "FONT", "CENTER"].includes(tag)) {
+        walk(node);
+      }
+      // Line breaks
+      else if (tag === "BR" || tag === "HR") {
+        container.appendChild(document.createElement("br"));
+      }
+    }
+  };
+
+  walk(body);
+
+  if (container.childNodes.length === 0) {
+    container.textContent = "Filing content could not be parsed. Try opening in browser.";
+    const openBtn = document.createElement("button");
+    openBtn.textContent = "Open in Browser";
+    openBtn.style.cssText = "margin-top:8px;padding:4px 12px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;";
+    openBtn.addEventListener("click", () => invoke("open_url", { url }).catch(() => {}));
+    container.appendChild(openBtn);
+  }
+
+  win.contentElement.appendChild(container);
+}
+
 async function openArticleInline(url, title) {
   // Track last article for session restore
   window._lastArticleUrl = url;
@@ -7448,7 +7579,7 @@ async function cmdSecFilings() {
           a.style.cssText = "color:#2196f3;cursor:pointer;text-decoration:underline;font-size:10px;";
           a.addEventListener("click", () => {
             const title = `${src.form_type || filingType} — ${src.file_date || ""} — ${currentSymbol}`;
-            openArticleInline(fileUrl, title);
+            openSecFilingInline(fileUrl, title);
           });
           link.appendChild(a);
         }
