@@ -98,6 +98,21 @@ fn is_valid_timeframe(tf: &str) -> bool {
 
 // ── Broker Commands ─────────────────────────────────────────────────
 
+/// Open a URL in the system default browser.
+#[tauri::command]
+async fn open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("Only HTTP(S) URLs allowed".into());
+    }
+    #[cfg(target_os = "linux")]
+    { let _ = std::process::Command::new("xdg-open").arg(&url).spawn(); }
+    #[cfg(target_os = "macos")]
+    { let _ = std::process::Command::new("open").arg(&url).spawn(); }
+    #[cfg(target_os = "windows")]
+    { let _ = std::process::Command::new("cmd").args(["/c", "start", &url]).spawn(); }
+    Ok(())
+}
+
 #[tauri::command]
 async fn connect(
     state: State<'_, SharedState>,
@@ -6428,6 +6443,8 @@ fn main() {
             keychain_delete,
             export_credentials_backup,
             import_credentials_backup,
+            // Utility
+            open_url,
             // Broker
             connect,
             get_account,
