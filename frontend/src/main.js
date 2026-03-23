@@ -7447,8 +7447,8 @@ async function cmdSecFilings() {
           a.textContent = "View";
           a.style.cssText = "color:#2196f3;cursor:pointer;text-decoration:underline;font-size:10px;";
           a.addEventListener("click", () => {
-            // SEC EDGAR blocks non-browser requests (403). Open in system browser.
-            invoke("open_url", { url: fileUrl }).catch(() => {});
+            const title = `${src.form_type || filingType} — ${src.file_date || ""} — ${currentSymbol}`;
+            openArticleInline(fileUrl, title);
           });
           link.appendChild(a);
         }

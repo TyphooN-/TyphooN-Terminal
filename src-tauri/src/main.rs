@@ -2199,13 +2199,19 @@ async fn fetch_article(url: String) -> Result<String, String> {
         return Err("Internal URLs not allowed".into());
     }
     let client = shared_client();
+    // SEC EDGAR requires specific User-Agent with contact info
+    let ua = if url.contains("sec.gov") {
+        "TyphooN-Terminal/0.1 (support@marketwizardry.org)"
+    } else {
+        "Mozilla/5.0 (compatible; TyphooN-Terminal/0.1)"
+    };
     let resp = client
         .get(&url)
-        .timeout(std::time::Duration::from_secs(10))
-        .header("User-Agent", "Mozilla/5.0 (compatible)")
+        .timeout(std::time::Duration::from_secs(15))
+        .header("User-Agent", ua)
         .send()
         .await
-        .map_err(|_| "Article fetch failed".to_string())?;
+        .map_err(|e| format!("Fetch failed: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
