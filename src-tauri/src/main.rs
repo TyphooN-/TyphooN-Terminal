@@ -2981,6 +2981,13 @@ const FULL_BACKUP_VERSION: u8 = 1;
 
 #[tauri::command]
 async fn export_full_backup(_state: State<'_, SharedState>, path: String) -> Result<String, String> {
+    // Expand ~ in path
+    let path = if path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{}/{}", home, &path[2..])
+    } else {
+        path
+    };
     let db_path = get_cache_dir().join("typhoon_cache.db");
     let tmp_path = format!("{}.vacuum.tmp", path);
 
@@ -3043,11 +3050,19 @@ async fn export_full_backup(_state: State<'_, SharedState>, path: String) -> Res
         "darwin_positions": darwin_positions,
         "compressed_size": compressed_size,
         "size_mb": format!("{:.1}", size_mb),
+        "path": path,
     }).to_string())
 }
 
 #[tauri::command]
 async fn import_full_backup(_state: State<'_, SharedState>, path: String) -> Result<String, String> {
+    // Expand ~ in path
+    let path = if path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{}/{}", home, &path[2..])
+    } else {
+        path
+    };
     // Read and validate header
     let data = std::fs::read(&path)
         .map_err(|e| format!("Read backup failed: {e}"))?;
@@ -5037,6 +5052,98 @@ async fn fetch_sector_peers(symbol: String) -> Result<String, String> {
     resp.text().await.map_err(|e| format!("Sector peers read failed: {e}"))
 }
 
+// ── SEC Filing Scraper Commands ─────────────────────────────────────
+
+fn sec_db_path() -> std::path::PathBuf {
+    get_cache_dir().join("typhoon_cache.db")
+}
+
+/// Open a dedicated SQLite connection for SEC filing read operations.
+fn open_sec_connection() -> Result<rusqlite::Connection, String> {
+    let db_path = sec_db_path();
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("SQLite open failed: {e}"))?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| format!("Pragma failed: {e}"))?;
+    core::sec_filing::create_sec_tables(&conn)?;
+    Ok(conn)
+}
+
+#[tauri::command]
+async fn scrape_sec_filings(_state: State<'_, SharedState>) -> Result<String, String> {
+    let db_path = sec_db_path();
+    // Ensure tables exist before scraping
+    {
+        let db = db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = rusqlite::Connection::open(&db)
+                .map_err(|e| format!("SQLite open failed: {e}"))?;
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+                .map_err(|e| format!("Pragma failed: {e}"))?;
+            core::sec_filing::create_sec_tables(&conn)
+        }).await.map_err(|e| format!("spawn_blocking: {e}"))??;
+    }
+    let stats = core::sec_filing::scrape_all_portfolio_symbols(db_path).await?;
+    serde_json::to_string(&stats).map_err(|e| format!("JSON error: {e}"))
+}
+
+#[tauri::command]
+async fn get_sec_filing_list(
+    _state: State<'_, SharedState>,
+    ticker: Option<String>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let limit_val = limit.unwrap_or(200) as usize;
+    tokio::task::spawn_blocking(move || {
+        let conn = open_sec_connection()?;
+        let filings = core::sec_filing::get_recent_filings(
+            &conn,
+            ticker.as_deref(),
+            limit_val,
+        )?;
+        serde_json::to_string(&filings).map_err(|e| format!("JSON error: {e}"))
+    }).await.map_err(|e| format!("spawn_blocking: {e}"))?
+}
+
+#[tauri::command]
+async fn get_sec_insider_trades(
+    _state: State<'_, SharedState>,
+    ticker: Option<String>,
+    days: Option<i32>,
+) -> Result<String, String> {
+    let days_val = days.unwrap_or(90);
+    tokio::task::spawn_blocking(move || {
+        let conn = open_sec_connection()?;
+        let trades = core::sec_filing::get_insider_trades(
+            &conn,
+            ticker.as_deref(),
+            days_val,
+        )?;
+        serde_json::to_string(&trades).map_err(|e| format!("JSON error: {e}"))
+    }).await.map_err(|e| format!("spawn_blocking: {e}"))?
+}
+
+#[tauri::command]
+async fn get_sec_alerts(_state: State<'_, SharedState>) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_sec_connection()?;
+        let alerts = core::sec_filing::get_filing_alerts(&conn, false)?;
+        serde_json::to_string(&alerts).map_err(|e| format!("JSON error: {e}"))
+    }).await.map_err(|e| format!("spawn_blocking: {e}"))?
+}
+
+#[tauri::command]
+async fn dismiss_sec_alert(
+    _state: State<'_, SharedState>,
+    alert_id: i64,
+    reason: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_sec_connection()?;
+        core::sec_filing::dismiss_alert(&conn, alert_id, &reason)
+    }).await.map_err(|e| format!("spawn_blocking: {e}"))?
+}
+
 // ── DARWIN Import Commands ──────────────────────────────────────────
 
 /// Open a dedicated SQLite connection for DARWIN imports.
@@ -6418,10 +6525,13 @@ fn main() {
             let db_path = cache_dir.join("typhoon_cache.db");
             match SqliteCache::open(&db_path) {
                 Ok(cache) => {
-                    // Initialize DARWIN import tables
+                    // Initialize DARWIN import tables + SEC filing tables
                     if let Ok(conn) = cache.connection() {
                         if let Err(e) = darwin::create_darwin_tables(&conn) {
                             tracing::warn!("Failed to create darwin tables: {e}");
+                        }
+                        if let Err(e) = core::sec_filing::create_sec_tables(&conn) {
+                            tracing::warn!("Failed to create SEC filing tables: {e}");
                         }
                     }
                     tracing::info!("SQLite cache opened: {:?}", db_path);
@@ -6601,6 +6711,12 @@ fn main() {
             fetch_ipo_calendar,
             fetch_economic_calendar,
             fetch_sector_peers,
+            // SEC Filing Scraper
+            scrape_sec_filings,
+            get_sec_filing_list,
+            get_sec_insider_trades,
+            get_sec_alerts,
+            dismiss_sec_alert,
             // DARWIN Import
             import_darwin_xlsx,
             import_darwin_batch,

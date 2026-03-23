@@ -8,4 +8,5 @@ pub mod margin;
 pub mod position;
 pub mod risk;
 pub mod screener;
+pub mod sec_filing;
 pub mod var;

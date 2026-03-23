@@ -5662,14 +5662,13 @@ function setupConnect() {
   });
 
   // Auto-connect if saved account exists (load keys from encrypted storage)
+  // Skip the modal dialog — auto-connect silently, hide modal immediately
   const accounts = loadSavedAccounts();
   if (accounts.length >= 1) {
+    modal.classList.add("hidden"); // Hide dialog immediately — don't show old login box
     const acctMeta = accounts[0];
     fillFormFromAccount(acctMeta.name);
     document.getElementById("saved-accounts").value = acctMeta.name;
-
-    status.textContent = "Auto-connecting...";
-    status.style.color = "#ff8";
 
     loadCredentials(acctMeta.name).then(async (creds) => {
       if (!creds || !creds.apiKey || !creds.secretKey) {
@@ -7601,6 +7600,355 @@ async function cmdSecFilings() {
 
   // Auto-fetch default type
   fetchFilings(selectedType);
+}
+
+// ══════════════════════════════════════════════════════════════
+// SEC-SCANNER — SEC Filing Scanner (local DB, scrape + browse)
+// ══════════════════════════════════════════════════════════════
+async function cmdSecScanner() {
+  const win = createWindow({ title: "SEC Filing Scanner — Portfolio Filings Database", type: "custom", width: 850, height: 550 });
+  win.contentElement.textContent = "";
+
+  // Toolbar
+  const toolbar = document.createElement("div");
+  toolbar.style.cssText = "display:flex;gap:6px;padding:6px 0;border-bottom:1px solid #333;margin-bottom:4px;align-items:center;flex-wrap:wrap;";
+
+  // Ticker filter
+  const tickerInput = document.createElement("input");
+  tickerInput.placeholder = "Ticker filter";
+  tickerInput.style.cssText = "width:80px;padding:3px 6px;font-size:10px;font-family:Consolas,monospace;background:#111;color:#ccc;border:1px solid #444;";
+
+  // Form type checkboxes
+  const formTypes = ["10-K", "10-Q", "8-K", "4", "DEF 14A", "S-1", "NT 10-K", "NT 10-Q"];
+  const formChecks = {};
+  const formBar = document.createElement("div");
+  formBar.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;";
+  for (const ft of formTypes) {
+    const label = document.createElement("label");
+    label.style.cssText = "font-size:9px;color:#aaa;cursor:pointer;display:flex;align-items:center;gap:2px;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = true;
+    cb.style.cssText = "width:12px;height:12px;";
+    cb.addEventListener("change", () => fetchList());
+    formChecks[ft] = cb;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(ft));
+    formBar.appendChild(label);
+  }
+
+  // Scrape button
+  const scrapeBtn = document.createElement("button");
+  scrapeBtn.textContent = "Scrape Now";
+  scrapeBtn.style.cssText = "padding:3px 10px;font-size:10px;font-family:Consolas,monospace;cursor:pointer;border:1px solid #4caf50;background:#1b5e20;color:#fff;margin-left:auto;";
+  scrapeBtn.addEventListener("click", async () => {
+    scrapeBtn.disabled = true;
+    scrapeBtn.textContent = "Scraping...";
+    try {
+      const json = await invoke("scrape_sec_filings");
+      const stats = JSON.parse(json);
+      scrapeBtn.textContent = `Done: ${stats.new_filings} new filings, ${stats.new_insider_trades} insider trades`;
+      if (stats.errors.length > 0) log(`SEC scrape errors: ${stats.errors.join(", ")}`, "warn");
+      fetchList();
+    } catch (e) {
+      scrapeBtn.textContent = "Scrape Failed";
+      log(`SEC scrape error: ${e}`, "error");
+    }
+    setTimeout(() => { scrapeBtn.textContent = "Scrape Now"; scrapeBtn.disabled = false; }, 3000);
+  });
+
+  toolbar.appendChild(tickerInput);
+  toolbar.appendChild(formBar);
+  toolbar.appendChild(scrapeBtn);
+  win.appendElement(toolbar);
+
+  // Table
+  const listEl = document.createElement("div");
+  listEl.style.cssText = "overflow-y:auto;max-height:calc(100% - 80px);";
+  win.appendElement(listEl);
+
+  async function fetchList() {
+    listEl.textContent = "";
+    const loading = document.createElement("div");
+    loading.textContent = "Loading filings...";
+    loading.style.cssText = "color:#888;padding:12px;font-size:11px;";
+    listEl.appendChild(loading);
+
+    try {
+      const ticker = tickerInput.value.trim().toUpperCase() || undefined;
+      const json = await invoke("get_sec_filing_list", { ticker, limit: 500 });
+      const filings = JSON.parse(json);
+      listEl.textContent = "";
+
+      // Filter by checked form types
+      const activeTypes = Object.entries(formChecks).filter(([,cb]) => cb.checked).map(([ft]) => ft);
+      const filtered = filings.filter(f => activeTypes.includes(f.form_type));
+
+      if (filtered.length === 0) {
+        listEl.innerHTML = '<div style="color:#888;padding:12px;font-size:11px;">No filings found. Click "Scrape Now" to fetch from SEC EDGAR.</div>';
+        return;
+      }
+
+      // Header
+      const header = document.createElement("div");
+      header.style.cssText = "display:flex;gap:6px;padding:4px 0;border-bottom:1px solid #333;color:#888;font-size:9px;font-family:Consolas,monospace;";
+      for (const [label, flex] of [["Date","1"],["Ticker","0.6"],["Form","0.5"],["Imp","0.4"],["Category","0.7"],["Company","1.5"],["View","0.4"]]) {
+        const s = document.createElement("span");
+        s.textContent = label;
+        s.style.flex = flex;
+        header.appendChild(s);
+      }
+      listEl.appendChild(header);
+
+      for (const f of filtered) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:6px;padding:3px 0;border-bottom:1px solid #111;font-size:10px;color:#ccc;align-items:center;";
+
+        const date = document.createElement("span"); date.style.flex = "1"; date.textContent = f.filing_date;
+        const tick = document.createElement("span"); tick.style.cssText = "flex:0.6;color:#ff9800;font-weight:bold;"; tick.textContent = f.ticker;
+        const form = document.createElement("span"); form.style.cssText = "flex:0.5;color:" + (f.form_type === "4" ? "#e91e63" : f.form_type.startsWith("NT") ? "#f44336" : "#2196f3") + ";"; form.textContent = f.form_type;
+        const imp = document.createElement("span"); imp.style.flex = "0.4";
+        const impBar = document.createElement("div");
+        impBar.style.cssText = `width:${Math.min(f.importance_score, 100)}%;height:8px;background:${f.importance_score >= 50 ? "#f44336" : f.importance_score >= 30 ? "#ff9800" : "#4caf50"};border-radius:2px;`;
+        imp.appendChild(impBar);
+        const cat = document.createElement("span"); cat.style.cssText = "flex:0.7;color:#888;font-size:9px;"; cat.textContent = f.category;
+        const comp = document.createElement("span"); comp.style.cssText = "flex:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#888;font-size:9px;"; comp.textContent = f.company_name;
+        const view = document.createElement("span"); view.style.flex = "0.4";
+        const a = document.createElement("a");
+        a.textContent = "View";
+        a.style.cssText = "color:#2196f3;cursor:pointer;text-decoration:underline;font-size:9px;";
+        a.addEventListener("click", () => invoke("open_url", { url: f.url }));
+        view.appendChild(a);
+
+        row.appendChild(date); row.appendChild(tick); row.appendChild(form);
+        row.appendChild(imp); row.appendChild(cat); row.appendChild(comp); row.appendChild(view);
+        listEl.appendChild(row);
+      }
+    } catch (e) {
+      listEl.textContent = "";
+      listEl.innerHTML = `<div style="color:#f44336;padding:12px;font-size:11px;">Failed: ${e}</div>`;
+    }
+  }
+
+  tickerInput.addEventListener("input", () => fetchList());
+  fetchList();
+}
+
+// ══════════════════════════════════════════════════════════════
+// INSIDER-TRACKER — Insider Trade Aggregation (local SEC DB)
+// ══════════════════════════════════════════════════════════════
+async function cmdInsiderTracker() {
+  const win = createWindow({ title: "Insider Trade Tracker — Last 90 Days", type: "custom", width: 850, height: 500 });
+  win.contentElement.textContent = "";
+
+  const toolbar = document.createElement("div");
+  toolbar.style.cssText = "display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #333;margin-bottom:4px;align-items:center;";
+
+  const tickerInput = document.createElement("input");
+  tickerInput.placeholder = "Ticker filter";
+  tickerInput.style.cssText = "width:80px;padding:3px 6px;font-size:10px;font-family:Consolas,monospace;background:#111;color:#ccc;border:1px solid #444;";
+
+  const daysSelect = document.createElement("select");
+  daysSelect.style.cssText = "padding:3px 6px;font-size:10px;font-family:Consolas,monospace;background:#111;color:#ccc;border:1px solid #444;";
+  for (const d of [30, 60, 90, 180, 365]) {
+    const opt = document.createElement("option");
+    opt.value = d;
+    opt.textContent = `${d} days`;
+    if (d === 90) opt.selected = true;
+    daysSelect.appendChild(opt);
+  }
+
+  const summaryDiv = document.createElement("div");
+  summaryDiv.style.cssText = "margin-left:auto;font-size:10px;color:#888;font-family:Consolas,monospace;";
+
+  toolbar.appendChild(tickerInput);
+  toolbar.appendChild(daysSelect);
+  toolbar.appendChild(summaryDiv);
+  win.appendElement(toolbar);
+
+  const listEl = document.createElement("div");
+  listEl.style.cssText = "overflow-y:auto;max-height:calc(100% - 80px);";
+  win.appendElement(listEl);
+
+  async function fetchTrades() {
+    listEl.textContent = "";
+    const loading = document.createElement("div");
+    loading.textContent = "Loading insider trades...";
+    loading.style.cssText = "color:#888;padding:12px;font-size:11px;";
+    listEl.appendChild(loading);
+
+    try {
+      const ticker = tickerInput.value.trim().toUpperCase() || undefined;
+      const days = parseInt(daysSelect.value);
+      const json = await invoke("get_sec_insider_trades", { ticker, days });
+      const trades = JSON.parse(json);
+      listEl.textContent = "";
+
+      if (trades.length === 0) {
+        listEl.innerHTML = '<div style="color:#888;padding:12px;font-size:11px;">No insider trades found. Run SEC-SCANNER "Scrape Now" first.</div>';
+        summaryDiv.textContent = "";
+        return;
+      }
+
+      // Summary: net buying vs selling per ticker
+      const netByTicker = {};
+      for (const t of trades) {
+        if (!netByTicker[t.ticker]) netByTicker[t.ticker] = { buys: 0, sells: 0 };
+        if (t.transaction_type === "P" || t.transaction_type === "A") netByTicker[t.ticker].buys += t.aggregate_value;
+        else if (t.transaction_type === "S" || t.transaction_type === "D") netByTicker[t.ticker].sells += t.aggregate_value;
+      }
+      const totalBuys = Object.values(netByTicker).reduce((s, v) => s + v.buys, 0);
+      const totalSells = Object.values(netByTicker).reduce((s, v) => s + v.sells, 0);
+      summaryDiv.innerHTML = `<span style="color:#4caf50;">BUY $${(totalBuys/1000).toFixed(0)}K</span> | <span style="color:#f44336;">SELL $${(totalSells/1000).toFixed(0)}K</span> | Net: <span style="color:${totalBuys > totalSells ? "#4caf50" : "#f44336"};">$${((totalBuys - totalSells)/1000).toFixed(0)}K</span>`;
+
+      // Header
+      const header = document.createElement("div");
+      header.style.cssText = "display:flex;gap:6px;padding:4px 0;border-bottom:1px solid #333;color:#888;font-size:9px;font-family:Consolas,monospace;";
+      for (const [label, flex] of [["Date","0.8"],["Ticker","0.5"],["Insider","1.5"],["Title","0.8"],["Type","0.4"],["Shares","0.7"],["Price","0.6"],["Value","0.8"]]) {
+        const s = document.createElement("span");
+        s.textContent = label;
+        s.style.flex = flex;
+        header.appendChild(s);
+      }
+      listEl.appendChild(header);
+
+      for (const t of trades) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:6px;padding:3px 0;border-bottom:1px solid #111;font-size:10px;color:#ccc;align-items:center;";
+
+        const typeColors = { P: "#4caf50", S: "#f44336", A: "#4caf50", D: "#f44336", M: "#2196f3", G: "#888", F: "#ff9800" };
+        const typeLabels = { P: "BUY", S: "SELL", A: "AWARD", D: "DISPOSE", M: "EXERCISE", G: "GIFT", F: "TAX" };
+
+        const date = document.createElement("span"); date.style.flex = "0.8"; date.textContent = t.transaction_date;
+        const tick = document.createElement("span"); tick.style.cssText = "flex:0.5;color:#ff9800;font-weight:bold;"; tick.textContent = t.ticker;
+        const name = document.createElement("span"); name.style.cssText = "flex:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"; name.textContent = t.insider_name;
+        const title = document.createElement("span"); title.style.cssText = "flex:0.8;color:#888;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"; title.textContent = t.insider_title || (t.is_director ? "Director" : t.is_officer ? "Officer" : "");
+        const type = document.createElement("span"); type.style.cssText = `flex:0.4;color:${typeColors[t.transaction_type] || "#888"};font-weight:bold;`; type.textContent = typeLabels[t.transaction_type] || t.transaction_type;
+        const shares = document.createElement("span"); shares.style.flex = "0.7"; shares.textContent = t.shares ? t.shares.toLocaleString(undefined, { maximumFractionDigits: 0 }) : "—";
+        const price = document.createElement("span"); price.style.flex = "0.6"; price.textContent = t.price ? `$${t.price.toFixed(2)}` : "—";
+        const value = document.createElement("span"); value.style.cssText = `flex:0.8;color:${typeColors[t.transaction_type] || "#888"};`; value.textContent = t.aggregate_value ? `$${(t.aggregate_value/1000).toFixed(1)}K` : "—";
+
+        row.appendChild(date); row.appendChild(tick); row.appendChild(name); row.appendChild(title);
+        row.appendChild(type); row.appendChild(shares); row.appendChild(price); row.appendChild(value);
+        listEl.appendChild(row);
+      }
+    } catch (e) {
+      listEl.textContent = "";
+      listEl.innerHTML = `<div style="color:#f44336;padding:12px;font-size:11px;">Failed: ${e}</div>`;
+    }
+  }
+
+  tickerInput.addEventListener("input", () => fetchTrades());
+  daysSelect.addEventListener("change", () => fetchTrades());
+  fetchTrades();
+}
+
+// ══════════════════════════════════════════════════════════════
+// SEC-ALERTS — Active Filing Alerts Panel
+// ══════════════════════════════════════════════════════════════
+async function cmdSecAlerts() {
+  const win = createWindow({ title: "SEC Filing Alerts", type: "custom", width: 700, height: 420 });
+  win.contentElement.textContent = "";
+
+  const listEl = document.createElement("div");
+  listEl.style.cssText = "overflow-y:auto;max-height:calc(100% - 20px);";
+  win.appendElement(listEl);
+
+  async function fetchAlerts() {
+    listEl.textContent = "";
+    const loading = document.createElement("div");
+    loading.textContent = "Loading alerts...";
+    loading.style.cssText = "color:#888;padding:12px;font-size:11px;";
+    listEl.appendChild(loading);
+
+    try {
+      const json = await invoke("get_sec_alerts");
+      const alerts = JSON.parse(json);
+      listEl.textContent = "";
+
+      if (alerts.length === 0) {
+        listEl.innerHTML = '<div style="color:#888;padding:12px;font-size:11px;">No active alerts. Alerts are created when significant insider sells or late filings are detected.</div>';
+        return;
+      }
+
+      for (const a of alerts) {
+        const card = document.createElement("div");
+        card.style.cssText = "padding:8px;margin:4px 0;border:1px solid #333;border-left:3px solid " + (a.importance >= 50 ? "#f44336" : a.importance >= 30 ? "#ff9800" : "#4caf50") + ";background:#111;";
+
+        const top = document.createElement("div");
+        top.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;";
+
+        const tickerBadge = document.createElement("span");
+        tickerBadge.textContent = a.ticker;
+        tickerBadge.style.cssText = "color:#ff9800;font-weight:bold;font-size:11px;font-family:Consolas,monospace;";
+
+        const typeBadge = document.createElement("span");
+        typeBadge.textContent = a.alert_type;
+        typeBadge.style.cssText = "font-size:9px;padding:1px 6px;border-radius:3px;background:" + (a.alert_type === "INSIDER_SELL" ? "#b71c1c" : "#e65100") + ";color:#fff;";
+
+        const impBar = document.createElement("div");
+        impBar.style.cssText = `width:60px;height:6px;background:#222;border-radius:3px;overflow:hidden;`;
+        const impFill = document.createElement("div");
+        impFill.style.cssText = `width:${Math.min(a.importance, 100)}%;height:100%;background:${a.importance >= 50 ? "#f44336" : a.importance >= 30 ? "#ff9800" : "#4caf50"};`;
+        impBar.appendChild(impFill);
+
+        top.appendChild(tickerBadge);
+        top.appendChild(typeBadge);
+        top.appendChild(impBar);
+
+        const msg = document.createElement("div");
+        msg.textContent = a.message;
+        msg.style.cssText = "font-size:10px;color:#ccc;margin-bottom:6px;";
+
+        const ts = document.createElement("div");
+        ts.textContent = new Date(a.created_at * 1000).toLocaleString();
+        ts.style.cssText = "font-size:9px;color:#666;margin-bottom:4px;";
+
+        const dismissRow = document.createElement("div");
+        dismissRow.style.cssText = "display:flex;gap:4px;align-items:center;";
+
+        const dismissSelect = document.createElement("select");
+        dismissSelect.style.cssText = "padding:2px 4px;font-size:9px;background:#222;color:#ccc;border:1px solid #444;";
+        for (const reason of ["Routine vesting", "Tax event", "Reviewed - no action", "Pre-planned 10b5-1", "Custom"]) {
+          const opt = document.createElement("option");
+          opt.value = reason;
+          opt.textContent = reason;
+          dismissSelect.appendChild(opt);
+        }
+
+        const dismissBtn = document.createElement("button");
+        dismissBtn.textContent = "Dismiss";
+        dismissBtn.style.cssText = "padding:2px 8px;font-size:9px;cursor:pointer;border:1px solid #555;background:#333;color:#ccc;";
+        dismissBtn.addEventListener("click", async () => {
+          let reason = dismissSelect.value;
+          if (reason === "Custom") {
+            reason = prompt("Dismiss reason:") || "Dismissed";
+          }
+          try {
+            await invoke("dismiss_sec_alert", { alertId: a.id, reason });
+            card.remove();
+            log(`Alert dismissed: ${a.ticker} ${a.alert_type}`, "ok");
+          } catch (e) {
+            log(`Dismiss failed: ${e}`, "error");
+          }
+        });
+
+        dismissRow.appendChild(dismissSelect);
+        dismissRow.appendChild(dismissBtn);
+
+        card.appendChild(top);
+        card.appendChild(msg);
+        card.appendChild(ts);
+        card.appendChild(dismissRow);
+        listEl.appendChild(card);
+      }
+    } catch (e) {
+      listEl.textContent = "";
+      listEl.innerHTML = `<div style="color:#f44336;padding:12px;font-size:11px;">Failed: ${e}</div>`;
+    }
+  }
+
+  fetchAlerts();
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -19260,30 +19608,165 @@ async function cmdBackupCredentials() {
   win.contentElement.appendChild(form);
 }
 
-async function cmdRestoreCredentials() {
-  const path = window.prompt("Path to .ttbackup file:");
-  if (!path) return;
-  const passphrase = window.prompt("Enter backup passphrase:");
-  if (!passphrase) return;
-  if (passphrase.length < 8) { log("Passphrase must be at least 8 characters", "error"); return; }
-  try {
-    log("Importing encrypted credential backup...", "info");
-    const settingsStr = await invoke("import_credentials_backup", { path, passphrase });
-    const settings = JSON.parse(settingsStr);
-    let restored = 0;
-    for (const [key, value] of Object.entries(settings)) {
-      if (key.startsWith("typhoon_")) {
-        localStorage.setItem(key, value);
-        restored++;
-      }
-    }
-    log(`Credential backup restored. ${restored} settings keys written to localStorage. Reload recommended.`, "ok");
-    if (restored > 0 && window.confirm("Settings restored. Reload now?")) {
-      location.reload();
-    }
-  } catch (e) {
-    log(`Credential restore failed: ${e}`, "error");
+async function cmdSecOverlay() {
+  // Toggle SEC filing markers on the price chart
+  if (window._secOverlayEnabled) {
+    window._secOverlayEnabled = false;
+    window._secMarkers = null;
+    try { candleSeries.setMarkers([]); } catch (_) {}
+    log("SEC-OVERLAY: Disabled, markers cleared", "info");
+    return;
   }
+
+  if (currentChartType.startsWith("gpu")) {
+    log("SEC-OVERLAY: Markers require CPU chart mode (switch with CHART-TYPE first)", "warn");
+    return;
+  }
+
+  if (!candleSeries) { log("SEC-OVERLAY: No chart series available", "error"); return; }
+  if (!currentSymbol) { log("SEC-OVERLAY: No symbol loaded", "error"); return; }
+
+  log(`SEC-OVERLAY: Fetching filings for ${currentSymbol}...`, "info");
+
+  const filingTypes = ["4", "8-K", "10-K", "10-Q"];
+  const markers = [];
+
+  for (const ft of filingTypes) {
+    try {
+      const json = await invoke("get_sec_filings", { symbol: currentSymbol, filingType: ft });
+      const data = JSON.parse(json);
+      const hits = data.hits?.hits || data.hits || [];
+      const filings = Array.isArray(hits) ? hits : [];
+
+      for (const hit of filings) {
+        const src = hit._source || hit;
+        const dateStr = src.file_date || src.period_of_report || src.filed || src.date;
+        if (!dateStr) continue;
+
+        // Convert date string (YYYY-MM-DD) to Unix timestamp
+        const parts = dateStr.split("-");
+        if (parts.length < 3) continue;
+        const ts = Math.floor(new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])).getTime() / 1000);
+        if (isNaN(ts)) continue;
+
+        const formType = (src.form_type || src.form || ft).toUpperCase();
+        let shape, color, text;
+        if (formType.includes("10-K") || formType === "10K") {
+          shape = "square"; color = "#4caf50"; text = "10K";
+        } else if (formType.includes("10-Q") || formType === "10Q") {
+          shape = "square"; color = "#ffeb3b"; text = "10Q";
+        } else if (formType.includes("8-K") || formType === "8K") {
+          shape = "arrowDown"; color = "#f44336"; text = "8K";
+        } else if (formType === "4" || formType.startsWith("4")) {
+          shape = "circle"; color = "#2196f3"; text = "4";
+        } else {
+          shape = "circle"; color = "#888"; text = formType.slice(0, 4);
+        }
+
+        markers.push({ time: ts, position: "aboveBar", shape, color, text });
+      }
+    } catch (e) {
+      log(`SEC-OVERLAY: Failed to fetch ${ft}: ${e}`, "warn");
+    }
+  }
+
+  if (markers.length === 0) {
+    log(`SEC-OVERLAY: No filings found for ${currentSymbol}`, "info");
+    return;
+  }
+
+  // Sort by time (required by lightweight-charts)
+  markers.sort((a, b) => a.time - b.time);
+
+  // Deduplicate markers at the same time — combine text
+  const unique = [];
+  for (const m of markers) {
+    const last = unique[unique.length - 1];
+    if (last && last.time === m.time && last.text === m.text) continue;
+    unique.push(m);
+  }
+
+  window._secMarkers = unique;
+  window._secOverlayEnabled = true;
+
+  try { candleSeries.setMarkers(unique); } catch (_) {}
+  log(`SEC-OVERLAY: ${unique.length} filing markers placed on ${currentSymbol}`, "ok");
+}
+
+async function cmdRestoreCredentials() {
+  const win = createWindow({ title: "Restore Credentials & Settings", width: 500, height: 320 });
+  win.setContent("Import an encrypted .ttbackup file to restore API keys and settings.");
+
+  const form = document.createElement("div");
+  form.style.cssText = "padding:12px;";
+
+  const pathLabel = document.createElement("div");
+  pathLabel.textContent = "Path to .ttbackup file:";
+  pathLabel.style.cssText = "color:#888;font-size:11px;margin-bottom:4px;";
+  form.appendChild(pathLabel);
+
+  const pathInput = document.createElement("input");
+  pathInput.type = "text";
+  pathInput.placeholder = "~/typhoon_cred_backup_20260323.ttbackup";
+  pathInput.style.cssText = "width:100%;padding:6px;background:#111;color:#ccc;border:1px solid #444;font-family:Consolas,monospace;margin-bottom:12px;";
+  form.appendChild(pathInput);
+
+  const passLabel = document.createElement("div");
+  passLabel.textContent = "Passphrase (min 8 characters):";
+  passLabel.style.cssText = "color:#888;font-size:11px;margin-bottom:4px;";
+  form.appendChild(passLabel);
+
+  const passInput = document.createElement("input");
+  passInput.type = "password";
+  passInput.style.cssText = "width:100%;padding:6px;background:#111;color:#fff;border:1px solid #444;font-family:Consolas,monospace;margin-bottom:12px;";
+  form.appendChild(passInput);
+
+  const btn = document.createElement("button");
+  btn.textContent = "Import";
+  btn.style.cssText = "padding:8px 20px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;font-size:12px;";
+  form.appendChild(btn);
+
+  const status = document.createElement("div");
+  status.style.cssText = "margin-top:12px;font-size:11px;color:#888;";
+  form.appendChild(status);
+
+  btn.addEventListener("click", async () => {
+    const path = pathInput.value.trim();
+    if (!path) { status.textContent = "Please enter a file path"; status.style.color = "#f44336"; return; }
+    const passphrase = passInput.value;
+    if (!passphrase || passphrase.length < 8) { status.textContent = "Passphrase must be at least 8 characters"; status.style.color = "#f44336"; return; }
+    btn.disabled = true;
+    status.textContent = "Decrypting and importing...";
+    status.style.color = "#ff9800";
+    try {
+      const settingsStr = await invoke("import_credentials_backup", { path, passphrase });
+      const settings = JSON.parse(settingsStr);
+      let restored = 0;
+      for (const [key, value] of Object.entries(settings)) {
+        if (key.startsWith("typhoon_")) {
+          localStorage.setItem(key, value);
+          restored++;
+        }
+      }
+      status.style.color = "#4caf50";
+      status.textContent = `Restored ${restored} credential/settings keys.`;
+      log(`Credential backup restored: ${restored} keys from ${path}`, "ok");
+      if (restored > 0) {
+        const reloadBtn = document.createElement("button");
+        reloadBtn.textContent = "Reload";
+        reloadBtn.style.cssText = "margin-left:12px;padding:4px 14px;background:#2e7d32;color:#fff;border:1px solid #4caf50;cursor:pointer;font-size:11px;";
+        reloadBtn.addEventListener("click", () => location.reload());
+        status.appendChild(reloadBtn);
+      }
+    } catch (e) {
+      status.textContent = `Failed: ${e}`;
+      status.style.color = "#f44336";
+      btn.disabled = false;
+    }
+  });
+
+  win.contentElement.textContent = "";
+  win.contentElement.appendChild(form);
 }
 
 // ── LAN Sync (WebSocket server/client for cache replication) ──
@@ -19363,60 +19846,134 @@ async function cmdCacheRestore() {
 
 // ── Full Data Backup / Restore (bar_cache + kv_cache + DARWIN tables) ──
 async function cmdBackupData() {
-  try {
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const home = await invoke("keychain_load", { service: "typhoon-terminal", account: "home_dir" }).catch(() => "");
-    const defaultPath = (home || "~") + `/typhoon_data_${dateStr}.ttfull`;
-    const path = prompt("Export path for full data backup:", defaultPath);
-    if (!path) return;
-    log("Exporting full data backup (bars + KV + DARWIN)...", "info");
-    const result = JSON.parse(await invoke("export_full_backup", { path }));
-    const win = createWindow({ title: "Full Data Backup — Export Complete", width: 420, height: 300 });
-    win.contentElement.textContent = "";
-    const pre = document.createElement("pre");
-    pre.style.cssText = "padding:12px;font-size:13px;color:#4caf50;line-height:1.8;";
-    pre.textContent = [
-      `Bar entries:        ${result.bar_entries.toLocaleString()}`,
-      `KV entries:         ${result.kv_entries.toLocaleString()}`,
-      `DARWIN accounts:    ${result.darwin_accounts}`,
-      `DARWIN deals:       ${result.darwin_deals.toLocaleString()}`,
-      `DARWIN positions:   ${result.darwin_positions.toLocaleString()}`,
-      `Compressed size:    ${result.size_mb} MB`,
-      ``,
-      `Saved to: ${path}`,
-    ].join("\n");
-    win.contentElement.appendChild(pre);
-    log(`Full data backup exported: ${result.size_mb} MB -> ${path}`, "ok");
-  } catch (e) {
-    log(`Full data backup failed: ${e}`, "error");
-  }
+  const win = createWindow({ title: "Full Data Backup — Export", width: 500, height: 340 });
+  win.setContent("Export bars, KV cache, and DARWIN tables to a compressed .ttfull file.");
+
+  const form = document.createElement("div");
+  form.style.cssText = "padding:12px;";
+
+  const pathLabel = document.createElement("div");
+  pathLabel.textContent = "Save to:";
+  pathLabel.style.cssText = "color:#888;font-size:11px;margin-bottom:4px;";
+  form.appendChild(pathLabel);
+
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const pathInput = document.createElement("input");
+  pathInput.type = "text";
+  pathInput.value = `~/typhoon_data_${dateStr}.ttfull`;
+  pathInput.style.cssText = "width:100%;padding:6px;background:#111;color:#ccc;border:1px solid #444;font-family:Consolas,monospace;margin-bottom:12px;";
+  form.appendChild(pathInput);
+
+  const btn = document.createElement("button");
+  btn.textContent = "Export Full Backup";
+  btn.style.cssText = "padding:8px 20px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;font-size:12px;";
+  form.appendChild(btn);
+
+  const status = document.createElement("div");
+  status.style.cssText = "margin-top:12px;font-size:11px;color:#888;";
+  form.appendChild(status);
+
+  btn.addEventListener("click", async () => {
+    const path = pathInput.value.trim();
+    if (!path) { status.textContent = "Path is required"; status.style.color = "#f44336"; return; }
+    btn.disabled = true;
+    btn.textContent = "Exporting...";
+    status.textContent = "Compressing database (VACUUM INTO + zstd)...";
+    status.style.color = "#ff9800";
+    try {
+      const result = JSON.parse(await invoke("export_full_backup", { path }));
+      status.style.color = "#4caf50";
+      status.innerHTML = "";
+      const pre = document.createElement("pre");
+      pre.style.cssText = "font-size:12px;color:#4caf50;line-height:1.7;margin:0;";
+      pre.textContent = [
+        `Bar entries:        ${result.bar_entries.toLocaleString()}`,
+        `KV entries:         ${result.kv_entries.toLocaleString()}`,
+        `DARWIN accounts:    ${result.darwin_accounts}`,
+        `DARWIN deals:       ${result.darwin_deals.toLocaleString()}`,
+        `DARWIN positions:   ${result.darwin_positions.toLocaleString()}`,
+        `Compressed size:    ${result.size_mb} MB`,
+      ].join("\n");
+      status.appendChild(pre);
+      const pathInfo = document.createElement("div");
+      pathInfo.style.cssText = "margin-top:6px;font-family:Consolas,monospace;color:#FFD700;font-size:10px;word-break:break-all;";
+      pathInfo.textContent = result.path;
+      status.appendChild(pathInfo);
+      log(`Full data backup exported: ${result.size_mb} MB -> ${result.path}`, "ok");
+    } catch (e) {
+      status.textContent = `Failed: ${e}`;
+      status.style.color = "#f44336";
+      btn.disabled = false;
+      btn.textContent = "Export Full Backup";
+    }
+  });
+
+  win.contentElement.textContent = "";
+  win.contentElement.appendChild(form);
 }
 
 async function cmdRestoreData() {
-  try {
-    const path = prompt("Path to .ttfull file to import:");
-    if (!path) return;
-    log("Importing full data backup...", "info");
-    const result = JSON.parse(await invoke("import_full_backup", { path }));
-    const win = createWindow({ title: "Full Data Backup — Import Complete", width: 420, height: 320 });
-    win.contentElement.textContent = "";
-    const pre = document.createElement("pre");
-    pre.style.cssText = "padding:12px;font-size:13px;color:#4caf50;line-height:1.8;";
-    pre.textContent = [
-      `Bars imported:              ${result.bars_imported.toLocaleString()}`,
-      `KV entries imported:        ${result.kv_imported.toLocaleString()}`,
-      `DARWIN accounts imported:   ${result.darwin_accounts_imported}`,
-      `DARWIN deals imported:      ${result.darwin_deals_imported.toLocaleString()}`,
-      `DARWIN positions imported:  ${result.darwin_positions_imported.toLocaleString()}`,
-      `DARWIN snapshots imported:  ${result.darwin_snapshots_imported.toLocaleString()}`,
-      ``,
-      `Reload the terminal to pick up new data.`,
-    ].join("\n");
-    win.contentElement.appendChild(pre);
-    log(`Full data imported: ${result.bars_imported} bars, ${result.darwin_deals_imported} DARWIN deals`, "ok");
-  } catch (e) {
-    log(`Full data restore failed: ${e}`, "error");
-  }
+  const win = createWindow({ title: "Full Data Backup — Import", width: 500, height: 380 });
+  win.setContent("Import a .ttfull backup. Bars merge newer-wins, DARWIN tables merge INSERT OR IGNORE.");
+
+  const form = document.createElement("div");
+  form.style.cssText = "padding:12px;";
+
+  const pathLabel = document.createElement("div");
+  pathLabel.textContent = "Path to .ttfull file:";
+  pathLabel.style.cssText = "color:#888;font-size:11px;margin-bottom:4px;";
+  form.appendChild(pathLabel);
+
+  const pathInput = document.createElement("input");
+  pathInput.type = "text";
+  pathInput.value = "~/";
+  pathInput.style.cssText = "width:100%;padding:6px;background:#111;color:#ccc;border:1px solid #444;font-family:Consolas,monospace;margin-bottom:12px;";
+  form.appendChild(pathInput);
+
+  const btn = document.createElement("button");
+  btn.textContent = "Import Backup";
+  btn.style.cssText = "padding:8px 20px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;font-size:12px;";
+  form.appendChild(btn);
+
+  const status = document.createElement("div");
+  status.style.cssText = "margin-top:12px;font-size:11px;color:#888;";
+  form.appendChild(status);
+
+  btn.addEventListener("click", async () => {
+    const path = pathInput.value.trim();
+    if (!path) { status.textContent = "Path is required"; status.style.color = "#f44336"; return; }
+    btn.disabled = true;
+    btn.textContent = "Importing...";
+    status.textContent = "Decompressing and merging tables...";
+    status.style.color = "#ff9800";
+    try {
+      const result = JSON.parse(await invoke("import_full_backup", { path }));
+      status.style.color = "#4caf50";
+      status.innerHTML = "";
+      const pre = document.createElement("pre");
+      pre.style.cssText = "font-size:12px;color:#4caf50;line-height:1.7;margin:0;";
+      pre.textContent = [
+        `Bars imported:              ${result.bars_imported.toLocaleString()}`,
+        `KV entries imported:        ${result.kv_imported.toLocaleString()}`,
+        `DARWIN accounts imported:   ${result.darwin_accounts_imported}`,
+        `DARWIN deals imported:      ${result.darwin_deals_imported.toLocaleString()}`,
+        `DARWIN positions imported:  ${result.darwin_positions_imported.toLocaleString()}`,
+        `DARWIN snapshots imported:  ${result.darwin_snapshots_imported.toLocaleString()}`,
+        ``,
+        `Reload the terminal to pick up new data.`,
+      ].join("\n");
+      status.appendChild(pre);
+      log(`Full data imported: ${result.bars_imported} bars, ${result.darwin_deals_imported} DARWIN deals`, "ok");
+    } catch (e) {
+      status.textContent = `Failed: ${e}`;
+      status.style.color = "#f44336";
+      btn.disabled = false;
+      btn.textContent = "Import Backup";
+    }
+  });
+
+  win.contentElement.textContent = "";
+  win.contentElement.appendChild(form);
 }
 
 // ── ANR — Analyst Recommendations (FMP) ─────────────────────
@@ -27072,6 +27629,277 @@ async function cmdEvOutliers() {
   } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
 }
 
+// ── EV-OUTLIER: MCap/EV IQR Outlier Scanner (port of ev_outlier.py) ──────────
+async function cmdEvOutlier() {
+  const MINIMUM_GROUP_SIZE = 5;
+  const TOP_N = 30;
+
+  const w = createWindow({ title: "EV-OUTLIER: MCap/EV IQR Outlier Scanner", width: 960, height: 650 });
+  const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
+  out.innerHTML = `<div id="ev-outlier-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  const logDiv = out.querySelector("#ev-outlier-log");
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
+
+  addLog("Gathering stock symbols from MT5/Darwinex...", "#2196f3");
+
+  try {
+    // Get MT5 specs for sector/industry classification
+    let specs = {};
+    try {
+      const specsJson = await invoke("get_mt5_specs");
+      const parsed = JSON.parse(specsJson);
+      specs = parsed.specs || parsed;
+    } catch (_) {}
+
+    // Get filtered symbols: stocks only (exclude forex, crypto, indices, commodities)
+    const mt5Json = await invoke("list_mt5_symbols");
+    const mt5Entries = JSON.parse(mt5Json);
+    const symbolSet = new Set();
+    for (const e of mt5Entries) { if (e.symbol) symbolSet.add(e.symbol); }
+
+    // Apply Darwinex sector filters from localStorage
+    const DWX_FILTER_KEY = "typhoon_dwx_sector_filters";
+    const filterState = JSON.parse(localStorage.getItem(DWX_FILTER_KEY) || "{}");
+    const NON_STOCK_SECTORS = ["Forex", "Crypto-Currency", "Indices", "Metals", "Energies", "Agricultural"];
+
+    const stockSymbols = [...symbolSet].filter(s => {
+      const spec = specs[s] || Object.values(specs).find(sp => sp.normalized === s);
+      const sector = spec?.sector || "";
+      if (!sector || NON_STOCK_SECTORS.includes(sector)) return false;
+      return filterState[sector] !== false;
+    });
+
+    if (stockSymbols.length === 0) {
+      addLog("No stock symbols found in MT5 data. Import Darwinex data first.", "#f44336");
+      return;
+    }
+
+    addLog(`Scanning ${stockSymbols.length} stock symbols via SEC EDGAR (200ms rate limit)...`, "#ff9800");
+
+    // Fetch fundamentals for each symbol
+    const results = [];
+    let completed = 0;
+    for (const sym of stockSymbols) {
+      try {
+        const fJson = await invoke("get_company_fundamentals", { symbol: sym });
+        const f = JSON.parse(fJson);
+
+        const sharesOut = f.shares_outstanding?.value ?? null;
+        const totalAssets = f.total_assets?.value ?? null;
+        const totalLiabilities = f.total_liabilities?.value ?? null;
+        const equity = f.stockholders_equity?.value ?? null;
+        const revenue = f.revenue?.value ?? null;
+
+        // Derive MCap: shares_outstanding * latest price (from bar cache)
+        let price = 0;
+        const cacheKey = Object.keys(barCache).find(k => k.startsWith(sym + ":"));
+        if (cacheKey && barCache[cacheKey]?.length > 0) {
+          price = barCache[cacheKey][barCache[cacheKey].length - 1].close;
+        }
+
+        if (sharesOut && sharesOut > 0 && price > 0) {
+          const mcap = sharesOut * price;
+          // EV = MCap + Total Liabilities - Stockholders Equity (approximation)
+          // More precisely: EV = MCap + Total Debt - Cash, but SEC doesn't separate cleanly
+          // Using: EV = MCap + Total Liabilities - Total Assets + Total Assets = MCap + TotalLiab
+          // Standard: EV approx = MCap + TotalLiabilities - Cash (we use TotalAssets - Equity as proxy for debt)
+          let ev = mcap;
+          if (totalLiabilities != null) ev += totalLiabilities;
+          if (totalAssets != null && totalLiabilities != null) {
+            // Cash proxy: Total Assets - Total Liabilities - Equity gives rough non-operating assets
+            // Simpler: EV = MCap + Total Debt - Cash. Approximate Total Debt = Total Liabilities.
+            // For IQR outlier detection, exact EV formula matters less than relative comparison.
+            ev = mcap + totalLiabilities;
+          }
+
+          if (ev !== 0) {
+            const ratio = (mcap / ev) * 100;
+            const spec = specs[sym] || Object.values(specs).find(sp => sp.normalized === sym);
+            const sector = spec?.sector || "Unknown";
+            const industry = spec?.industry || "Unknown";
+
+            results.push({
+              symbol: sym, mcap, ev, ratio, sector, industry, price,
+              revenue: revenue ?? 0, entity: f.entity || sym
+            });
+          }
+        }
+      } catch (_) {}
+      completed++;
+      if (completed % 10 === 0) addLog(`  Progress: ${completed}/${stockSymbols.length} scanned...`, "#888");
+      await new Promise(r => setTimeout(r, 200)); // SEC EDGAR rate limit
+    }
+
+    logDiv.innerHTML = "";
+
+    if (results.length === 0) {
+      addLog("No MCap/EV data available. Ensure SEC EDGAR can resolve these tickers and bar cache has prices.", "#f44336");
+      return;
+    }
+
+    addLog(`<b>EV-OUTLIER Scanner</b> -- ${results.length} symbols analyzed (port of ev_outlier.py)`, "#4caf50");
+    addLog(`<span style="color:#666">MCap/EV %: &gt;100% = more equity than debt, &lt;50% = heavy leverage. IQR method per industry group.</span>`);
+    addLog("");
+
+    // ── IQR Outlier Detection per Industry Group ──
+    // Group by industry
+    const industryGroups = {};
+    for (const r of results) {
+      const key = r.industry || "Unknown";
+      if (!industryGroups[key]) industryGroups[key] = [];
+      industryGroups[key].push(r);
+    }
+
+    const boundsDict = {};
+    const smallIndustries = [];
+    const allOutliers = [];
+
+    // Identify large vs small industries
+    for (const [industry, group] of Object.entries(industryGroups)) {
+      if (group.length < MINIMUM_GROUP_SIZE) smallIndustries.push(industry);
+    }
+
+    // Analyze large industries
+    for (const [industry, group] of Object.entries(industryGroups)) {
+      if (group.length < MINIMUM_GROUP_SIZE) continue;
+      const ratios = group.map(r => r.ratio).sort((a, b) => a - b);
+      const q1 = ratios[Math.floor(ratios.length * 0.25)];
+      const q3 = ratios[Math.floor(ratios.length * 0.75)];
+      const iqr = q3 - q1;
+      if (iqr <= 0) continue;
+      const lower = q1 - 1.5 * iqr;
+      const upper = q3 + 1.5 * iqr;
+      boundsDict[industry] = { lower, upper, q1, q3, iqr, count: group.length };
+      for (const r of group) {
+        if (r.ratio < lower || r.ratio > upper) {
+          allOutliers.push({ ...r, groupName: industry, lower, upper, direction: r.ratio > upper ? "HIGH" : "LOW" });
+        }
+      }
+    }
+
+    // Aggregate small industries by sector
+    if (smallIndustries.length > 0) {
+      const smallResults = results.filter(r => smallIndustries.includes(r.industry));
+      const sectorAgg = {};
+      for (const r of smallResults) {
+        const key = r.sector || "Miscellaneous";
+        if (!sectorAgg[key]) sectorAgg[key] = [];
+        sectorAgg[key].push(r);
+      }
+      const miscBucket = [];
+      for (const [sector, group] of Object.entries(sectorAgg)) {
+        if (group.length >= MINIMUM_GROUP_SIZE) {
+          const groupName = `AGGREGATED ${sector.toUpperCase()}`;
+          const ratios = group.map(r => r.ratio).sort((a, b) => a - b);
+          const q1 = ratios[Math.floor(ratios.length * 0.25)];
+          const q3 = ratios[Math.floor(ratios.length * 0.75)];
+          const iqr = q3 - q1;
+          if (iqr > 0) {
+            const lower = q1 - 1.5 * iqr;
+            const upper = q3 + 1.5 * iqr;
+            boundsDict[groupName] = { lower, upper, q1, q3, iqr, count: group.length };
+            for (const r of group) {
+              if (r.ratio < lower || r.ratio > upper) {
+                allOutliers.push({ ...r, groupName, lower, upper, direction: r.ratio > upper ? "HIGH" : "LOW" });
+              }
+            }
+          }
+        } else {
+          miscBucket.push(...group);
+        }
+      }
+      if (miscBucket.length >= MINIMUM_GROUP_SIZE) {
+        const groupName = "AGGREGATED MISCELLANEOUS";
+        const ratios = miscBucket.map(r => r.ratio).sort((a, b) => a - b);
+        const q1 = ratios[Math.floor(ratios.length * 0.25)];
+        const q3 = ratios[Math.floor(ratios.length * 0.75)];
+        const iqr = q3 - q1;
+        if (iqr > 0) {
+          const lower = q1 - 1.5 * iqr;
+          const upper = q3 + 1.5 * iqr;
+          boundsDict[groupName] = { lower, upper, q1, q3, iqr, count: miscBucket.length };
+          for (const r of miscBucket) {
+            if (r.ratio < lower || r.ratio > upper) {
+              allOutliers.push({ ...r, groupName, lower, upper, direction: r.ratio > upper ? "HIGH" : "LOW" });
+            }
+          }
+        }
+      }
+    }
+
+    // ── Per-group outlier reports ──
+    const groupsWithOutliers = [...new Set(allOutliers.map(o => o.groupName))].sort();
+    for (const groupName of groupsWithOutliers) {
+      const bounds = boundsDict[groupName];
+      if (!bounds) continue;
+      const groupOutliers = allOutliers.filter(o => o.groupName === groupName);
+      addLog(`<div style="margin-top:8px;font-weight:bold;color:#ff9800;border-bottom:1px solid #444;padding-bottom:2px">${groupName} (${bounds.count} instruments) | Q1=${bounds.q1.toFixed(2)} Q3=${bounds.q3.toFixed(2)} IQR=${bounds.iqr.toFixed(2)} | Bounds: [${bounds.lower.toFixed(2)}, ${bounds.upper.toFixed(2)}]</div>`);
+      addLog(`<div style="display:grid;grid-template-columns:80px 120px 80px 80px 80px 80px;gap:4px;font-weight:bold;color:#888;border-bottom:1px solid #333;padding:2px 0">` +
+        `<span>Symbol</span><span>Sector</span><span>MCap</span><span>EV</span><span>MCap/EV%</span><span>Status</span></div>`);
+      for (const o of groupOutliers) {
+        const statusColor = o.direction === "HIGH" ? "#f44336" : "#ff9800";
+        const mcapStr = o.mcap >= 1e12 ? `$${(o.mcap/1e12).toFixed(1)}T` : o.mcap >= 1e9 ? `$${(o.mcap/1e9).toFixed(1)}B` : `$${(o.mcap/1e6).toFixed(0)}M`;
+        const evStr = o.ev >= 1e12 ? `$${(o.ev/1e12).toFixed(1)}T` : o.ev >= 1e9 ? `$${(o.ev/1e9).toFixed(1)}B` : `$${(o.ev/1e6).toFixed(0)}M`;
+        addLog(`<div style="display:grid;grid-template-columns:80px 120px 80px 80px 80px 80px;gap:4px">` +
+          `<span style="color:#2196f3;cursor:pointer" onclick="document.getElementById('symbol-input').value='${o.symbol}';document.getElementById('symbol-input').dispatchEvent(new Event('change'))">${o.symbol}</span>` +
+          `<span style="color:#888">${o.sector}</span>` +
+          `<span>${mcapStr}</span>` +
+          `<span>${evStr}</span>` +
+          `<span style="color:${statusColor}">${o.ratio.toFixed(2)}%</span>` +
+          `<span style="color:${statusColor};font-weight:bold">OUTLIER ${o.direction}</span></div>`);
+      }
+    }
+
+    if (allOutliers.length === 0) {
+      addLog("No IQR outliers detected across any industry group.", "#888");
+    } else {
+      addLog(`<div style="margin-top:8px;color:#4caf50;font-weight:bold">${allOutliers.length} total outliers across ${groupsWithOutliers.length} groups</div>`);
+    }
+
+    // ── Global Top/Bottom N ──
+    results.sort((a, b) => b.ratio - a.ratio);
+    addLog(`<div style="margin-top:12px;font-weight:bold;color:#2196f3;border-bottom:1px solid #444;padding-bottom:2px">Top ${TOP_N} Highest MCap/EV %</div>`);
+    addLog(`<div style="display:grid;grid-template-columns:80px 120px 80px 80px 80px 80px;gap:4px;font-weight:bold;color:#888;border-bottom:1px solid #333;padding:2px 0">` +
+      `<span>Symbol</span><span>Sector</span><span>MCap</span><span>EV</span><span>MCap/EV%</span><span>Status</span></div>`);
+    for (const r of results.slice(0, TOP_N)) {
+      const isOutlier = allOutliers.some(o => o.symbol === r.symbol);
+      const statusColor = isOutlier ? "#f44336" : "#4caf50";
+      const statusText = isOutlier ? "OUTLIER" : "NORMAL";
+      const mcapStr = r.mcap >= 1e12 ? `$${(r.mcap/1e12).toFixed(1)}T` : r.mcap >= 1e9 ? `$${(r.mcap/1e9).toFixed(1)}B` : `$${(r.mcap/1e6).toFixed(0)}M`;
+      const evStr = r.ev >= 1e12 ? `$${(r.ev/1e12).toFixed(1)}T` : r.ev >= 1e9 ? `$${(r.ev/1e9).toFixed(1)}B` : `$${(r.ev/1e6).toFixed(0)}M`;
+      addLog(`<div style="display:grid;grid-template-columns:80px 120px 80px 80px 80px 80px;gap:4px">` +
+        `<span style="color:#2196f3">${r.symbol}</span><span style="color:#888">${r.sector}</span>` +
+        `<span>${mcapStr}</span><span>${evStr}</span>` +
+        `<span style="color:${statusColor}">${r.ratio.toFixed(2)}%</span>` +
+        `<span style="color:${statusColor}">${statusText}</span></div>`);
+    }
+
+    results.sort((a, b) => a.ratio - b.ratio);
+    addLog(`<div style="margin-top:12px;font-weight:bold;color:#ff9800;border-bottom:1px solid #444;padding-bottom:2px">Bottom ${TOP_N} Lowest MCap/EV %</div>`);
+    addLog(`<div style="display:grid;grid-template-columns:80px 120px 80px 80px 80px 80px;gap:4px;font-weight:bold;color:#888;border-bottom:1px solid #333;padding:2px 0">` +
+      `<span>Symbol</span><span>Sector</span><span>MCap</span><span>EV</span><span>MCap/EV%</span><span>Status</span></div>`);
+    for (const r of results.slice(0, TOP_N)) {
+      const isOutlier = allOutliers.some(o => o.symbol === r.symbol);
+      const statusColor = isOutlier ? "#f44336" : "#4caf50";
+      const statusText = isOutlier ? "OUTLIER" : "NORMAL";
+      const mcapStr = r.mcap >= 1e12 ? `$${(r.mcap/1e12).toFixed(1)}T` : r.mcap >= 1e9 ? `$${(r.mcap/1e9).toFixed(1)}B` : `$${(r.mcap/1e6).toFixed(0)}M`;
+      const evStr = r.ev >= 1e12 ? `$${(r.ev/1e12).toFixed(1)}T` : r.ev >= 1e9 ? `$${(r.ev/1e9).toFixed(1)}B` : `$${(r.ev/1e6).toFixed(0)}M`;
+      addLog(`<div style="display:grid;grid-template-columns:80px 120px 80px 80px 80px 80px;gap:4px">` +
+        `<span style="color:#2196f3">${r.symbol}</span><span style="color:#888">${r.sector}</span>` +
+        `<span>${mcapStr}</span><span>${evStr}</span>` +
+        `<span style="color:${statusColor}">${r.ratio.toFixed(2)}%</span>` +
+        `<span style="color:${statusColor}">${statusText}</span></div>`);
+    }
+
+    // Bounds summary
+    addLog(`<div style="margin-top:12px;font-weight:bold;color:#888;border-bottom:1px solid #444;padding-bottom:2px">Industry Group Bounds Summary</div>`);
+    for (const [name, b] of Object.entries(boundsDict).sort((a, b) => b[1].count - a[1].count)) {
+      addLog(`<span style="color:#888">${name}: [${b.lower.toFixed(2)}, ${b.upper.toFixed(2)}] (n=${b.count}, IQR=${b.iqr.toFixed(2)})</span>`);
+    }
+
+  } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+}
+
 async function cmdCryptoRisk() {
   const w = createWindow({ title: "Crypto Risk Analysis", width: 860, height: 600 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
@@ -28236,6 +29064,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "CALC", desc: "Position Sizing Calculator", action: cmdPositionCalc },
   { name: "ANNOTATE", desc: "Add chart annotation", action: addChartAnnotation },
   { name: "SETTINGS", desc: "API Keys & Configuration", action: cmdSettings },
+  { name: "DISCONNECT", desc: "Disconnect from broker (stop live data, clear session)", action: cmdDisconnect },
+  { name: "RECONNECT", desc: "Show broker connection dialog", action: () => { const m = document.getElementById("connect-modal"); if (m) m.classList.remove("hidden"); } },
   { name: "FRED", desc: "FRED Economic Data (rates, CPI, GDP)", action: cmdFRED },
   { name: "AI", desc: "AI Trading Assistant (Claude/GPT) + Trade Review", action: cmdAIChatWithReview },
   { name: "ALERTBOARD", desc: "Multi-symbol alert dashboard (watchlist)", action: cmdAlertBoard },
@@ -28437,9 +29267,14 @@ const CMD_PALETTE_COMMANDS = [
   { name: "RESTORE-DATA", desc: "Import full data backup (.ttfull) — merge bars, KV, DARWIN", action: cmdRestoreData },
   { name: "BACKUP-CREDS", desc: "Export encrypted credential + settings backup (.ttbackup)", action: cmdBackupCredentials },
   { name: "RESTORE-CREDS", desc: "Import encrypted credential + settings backup (.ttbackup)", action: cmdRestoreCredentials },
+  { name: "SEC-OVERLAY", desc: "Toggle SEC filing markers on chart (4, 8-K, 10-K, 10-Q)", action: cmdSecOverlay },
   { name: "LAN-SERVER", desc: "Start LAN sync server (serve cache to other machines)", action: cmdLanServer },
   { name: "LAN-CLIENT", desc: "Connect to LAN sync server (pull cache from server)", action: cmdLanClient },
   { name: "LAN-STATUS", desc: "Show LAN sync connection status", action: cmdLanStatus },
+  { name: "EV-OUTLIER", desc: "MCap/EV IQR outlier scanner -- SEC EDGAR fundamentals, per-industry IQR (port of ev_outlier.py)", action: cmdEvOutlier },
+  { name: "SEC-SCANNER", desc: "SEC Filing Scanner — local DB of 10-K, 10-Q, 8-K, Form 4 across portfolio", action: cmdSecScanner },
+  { name: "INSIDER-TRACKER", desc: "Insider Trade Tracker — Form 4 buy/sell aggregation with net flow", action: cmdInsiderTracker },
+  { name: "SEC-ALERTS", desc: "SEC Filing Alerts — insider sells, late filings, material events", action: cmdSecAlerts },
 ];
 
 function fuzzyMatch(query, target) {
@@ -32412,6 +33247,28 @@ document.addEventListener("DOMContentLoaded", () => {
   // Auto-start Kraken weekend crypto sync
   startKrakenWeekendSync();
 
+  // Daily SEC filing auto-scrape (fire and forget, non-blocking)
+  (async () => {
+    try {
+      const SEC_SCRAPE_KEY = "typhoon_sec_last_scrape";
+      const lastScrape = parseInt(localStorage.getItem(SEC_SCRAPE_KEY) || "0", 10);
+      const elapsed = Date.now() - lastScrape;
+      const ONE_DAY = 24 * 60 * 60 * 1000;
+      if (elapsed > ONE_DAY) {
+        console.log("[SEC] Filing scrape started (daily auto-scan)...");
+        log("SEC filing scrape started (daily auto-scan)...", "info");
+        localStorage.setItem(SEC_SCRAPE_KEY, String(Date.now()));
+        const result = JSON.parse(await invoke("scrape_sec_filings"));
+        const newFilings = result.new_filings ?? result.filings ?? 0;
+        const insiderTrades = result.insider_trades ?? 0;
+        console.log(`[SEC] ${newFilings} new filings, ${insiderTrades} insider trades found`);
+        log(`SEC: ${newFilings} new filings, ${insiderTrades} insider trades found`, "ok");
+      }
+    } catch (e) {
+      console.warn("[SEC] Daily auto-scrape failed:", e);
+    }
+  })();
+
   // Auto-save session periodically and on shutdown
   const _saveInterval = setInterval(saveSession, 30000); // every 30s
   const _alertInterval = setInterval(checkWatchlistSMA200Alerts, 300000); // every 5min
@@ -33623,6 +34480,13 @@ async function cmdCacheManager() {
 const SETTINGS_KEY = "typhoon_settings";
 function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"); } catch { return {}; } }
 function saveSettings(s) { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }
+
+function cmdDisconnect() {
+  if (dashboardInterval) { clearInterval(dashboardInterval); dashboardInterval = null; }
+  activeBrokerId = null;
+  setText("connect-status-bar", "Disconnected");
+  log("Disconnected from broker. Use RECONNECT to connect again.", "warn");
+}
 
 function cmdSettings() {
   const win = createWindow({ title: "Settings — API Keys", width: 450, height: 380 });
