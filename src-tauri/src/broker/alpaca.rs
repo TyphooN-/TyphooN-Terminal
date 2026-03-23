@@ -906,52 +906,97 @@ impl AlpacaBroker {
     /// CIK lookup by ticker, then fetch filings.
     /// Hardened: uses .query() to prevent URL parameter injection.
     pub async fn get_sec_filings(ticker: &str, filing_type: &str, _limit: u32) -> Result<serde_json::Value, String> {
-        // Validate ticker format (alphanumeric only, no injection)
-        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if ticker.is_empty() || ticker.len() > 10 || !ticker.chars().all(|c| c.is_ascii_alphanumeric() || c == '/') {
             return Err("Invalid ticker for SEC lookup".to_string());
         }
-        // Validate filing type
         if !matches!(filing_type, "10-K" | "10-Q" | "8-K" | "S-1" | "DEF 14A" | "13F" | "4" | "SC 13D" | "SC 13G") {
             return Err("Invalid filing type".to_string());
         }
         let client = sec_client();
+        let ua = "TyphooN-Terminal/0.1 (support@marketwizardry.org)";
 
-        let quoted_ticker = format!("\"{}\"", ticker);
-        let cik_resp = client
-            .get("https://efts.sec.gov/LATEST/search-index")
-            .query(&[
-                ("q", quoted_ticker.as_str()),
-                ("dateRange", "custom"),
-                ("startdt", "2020-01-01"),
-                ("forms", filing_type),
-            ])
-            .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
+        // Step 1: Resolve ticker → CIK via SEC company tickers JSON
+        let tickers_resp = client
+            .get("https://www.sec.gov/files/company_tickers.json")
+            .header("User-Agent", ua)
             .send()
             .await
-            .map_err(|_| "SEC EDGAR request failed".to_string())?;
+            .map_err(|e| format!("SEC tickers lookup failed: {e}"))?;
 
-        if !cik_resp.status().is_success() {
-            let search_resp = client
-                .get("https://efts.sec.gov/LATEST/search-index")
-                .query(&[
-                    ("q", ticker),
-                    ("forms", filing_type),
-                    ("dateRange", "custom"),
-                    ("startdt", "2020-01-01"),
-                ])
-                .header("User-Agent", "TyphooN-Terminal/0.1 (support@marketwizardry.org)")
-                .send()
-                .await
-                .map_err(|_| "SEC EDGAR search failed".to_string())?;
+        let tickers_json: serde_json::Value = tickers_resp.json().await
+            .map_err(|e| format!("SEC tickers parse failed: {e}"))?;
 
-            let json: serde_json::Value = search_resp.json().await
-                .map_err(|_| "SEC EDGAR parse failed".to_string())?;
-            return Ok(json);
+        // Find CIK for this ticker (case-insensitive)
+        let upper_ticker = ticker.to_uppercase();
+        let mut cik: Option<u64> = None;
+        let mut company_name = String::new();
+        if let Some(obj) = tickers_json.as_object() {
+            for (_, entry) in obj {
+                if let Some(t) = entry["ticker"].as_str() {
+                    if t.to_uppercase() == upper_ticker {
+                        cik = entry["cik_str"].as_u64().or_else(|| entry["cik_str"].as_str().and_then(|s| s.parse().ok()));
+                        company_name = entry["title"].as_str().unwrap_or("").to_string();
+                        break;
+                    }
+                }
+            }
         }
 
-        let json: serde_json::Value = cik_resp.json().await
-            .map_err(|_| "SEC EDGAR parse failed".to_string())?;
-        Ok(json)
+        let cik_num = match cik {
+            Some(c) => c,
+            None => return Ok(serde_json::json!({ "hits": { "hits": [] }, "error": format!("Ticker '{}' not found in SEC EDGAR", ticker) })),
+        };
+
+        // Step 2: Fetch filings by CIK from submissions endpoint
+        let cik_padded = format!("{:010}", cik_num);
+        let submissions_resp = client
+            .get(&format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded))
+            .header("User-Agent", ua)
+            .send()
+            .await
+            .map_err(|e| format!("SEC submissions failed: {e}"))?;
+
+        if !submissions_resp.status().is_success() {
+            return Err(format!("SEC submissions: HTTP {}", submissions_resp.status()));
+        }
+
+        let submissions: serde_json::Value = submissions_resp.json().await
+            .map_err(|e| format!("SEC submissions parse failed: {e}"))?;
+
+        // Step 3: Filter recent filings by type
+        let recent = &submissions["filings"]["recent"];
+        let forms = recent["form"].as_array();
+        let dates = recent["filingDate"].as_array();
+        let accessions = recent["accessionNumber"].as_array();
+        let primary_docs = recent["primaryDocument"].as_array();
+        let descriptions = recent["primaryDocDescription"].as_array();
+
+        let mut hits = Vec::new();
+        if let (Some(forms), Some(dates), Some(accessions)) = (forms, dates, accessions) {
+            for i in 0..forms.len().min(200) {
+                let form = forms[i].as_str().unwrap_or("");
+                if form != filing_type { continue; }
+                let date = dates.get(i).and_then(|d| d.as_str()).unwrap_or("");
+                let acc = accessions.get(i).and_then(|a| a.as_str()).unwrap_or("");
+                let doc = primary_docs.and_then(|d| d.get(i)).and_then(|d| d.as_str()).unwrap_or("");
+                let desc = descriptions.and_then(|d| d.get(i)).and_then(|d| d.as_str()).unwrap_or("");
+                let acc_clean = acc.replace('-', "");
+                let url = format!("https://www.sec.gov/Archives/edgar/data/{}/{}/{}", cik_num, acc_clean, doc);
+
+                hits.push(serde_json::json!({
+                    "_source": {
+                        "file_date": date,
+                        "form_type": form,
+                        "display_names": [format!("{} (CIK {})", company_name, cik_padded)],
+                        "file_description": desc,
+                    },
+                    "_id": url,
+                }));
+                if hits.len() >= 20 { break; }
+            }
+        }
+
+        Ok(serde_json::json!({ "hits": { "hits": hits } }))
     }
 
     /// Fetch company facts from SEC EDGAR (financials, shares outstanding, etc.)
