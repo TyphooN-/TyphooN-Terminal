@@ -11928,7 +11928,7 @@ async function cmdFloatingEquity() {
     hdr.appendChild(hdrLine1);
     const hdrLine2 = document.createElement("div");
     hdrLine2.style.cssText = `font-size:12px;color:${eqColor};margin-top:2px;`;
-    hdrLine2.textContent = `Closed Balance: $${data.combined_closed_balance.toFixed(2)} | Unrealized P/L: ${data.combined_unrealized_pnl >= 0 ? "+" : ""}$${data.combined_unrealized_pnl.toFixed(2)}`;
+    hdrLine2.textContent = `Unrealized P/L: ${data.combined_unrealized_pnl >= 0 ? "+" : ""}$${data.combined_unrealized_pnl.toFixed(2)}`;
     hdr.appendChild(hdrLine2);
     frag.appendChild(hdr);
 
@@ -11952,7 +11952,7 @@ async function cmdFloatingEquity() {
       const multText = mult ? ` | Multiplier: ${mult.multiplier.toFixed(2)}x | VaR: ${mult.monthly_var.toFixed(1)}%` : "";
       const dwEq = document.createElement("span");
       dwEq.style.cssText = `font-size:12px;font-family:Consolas,monospace;color:${dwColor};`;
-      dwEq.textContent = `Equity: $${dw.floating_equity.toFixed(2)}${multText} (Closed: $${dw.closed_balance.toFixed(2)} + Unrealized: ${dw.unrealized_pnl >= 0 ? "+" : ""}$${dw.unrealized_pnl.toFixed(2)})`;
+      dwEq.textContent = `Equity: $${dw.floating_equity.toFixed(2)}${multText} | Unrealized: ${dw.unrealized_pnl >= 0 ? "+" : ""}$${dw.unrealized_pnl.toFixed(2)}`;
       dwHdr.appendChild(dwTitle);
       dwHdr.appendChild(dwEq);
       frag.appendChild(dwHdr);
