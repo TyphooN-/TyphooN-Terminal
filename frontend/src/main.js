@@ -6059,6 +6059,25 @@ function setupPanelSplitter() {
 
 const SESSION_KEY = "typhoon_session";
 
+// Track which command windows are open for session restore after dev reload.
+// Each entry: { command: "FLOATING" }
+let openCommandWindows = [];
+
+// Register a command window for session persistence. Call after createWindow in any command.
+function trackCommandWindow(commandName, winHandle) {
+  if (!commandName || !winHandle) return;
+  winHandle._commandName = commandName;
+  openCommandWindows.push({ command: commandName });
+  // Remove from tracking when window closes
+  const origClose = winHandle.close;
+  winHandle.close = function() {
+    openCommandWindows = openCommandWindows.filter(w => w.command !== commandName);
+    if (origClose) origClose.call(this);
+  };
+  // Also track on the active window object for save filtering
+  if (winHandle.element) winHandle.element._commandName = commandName;
+}
+
 function saveSession() {
   try {
     // Save current tab state first
@@ -6123,6 +6142,9 @@ function saveSession() {
       visibleRange,
       lastArticle,
       lastArticleTitle,
+      openWindows: [...new Set(openCommandWindows.map(w => w.command))]
+        .filter(cmd => Object.keys(getActiveWindows()).length > 0) // only save if windows exist
+        .map(cmd => ({ command: cmd })),
       timestamp: Date.now(),
     };
 
@@ -6223,7 +6245,23 @@ function restoreSession() {
       }, 4000); // defer to let chart load first
     }
 
-    log(`Session restored: ${session.tabs.length} tabs, chart type: ${session.chartType || "candles"}${session.mtfGridState?.active ? ", MTF grid active" : ""}`, "ok");
+    // Restore command windows (delayed to let chart load first)
+    if (session.openWindows && session.openWindows.length > 0) {
+      setTimeout(() => {
+        for (const w of session.openWindows) {
+          try {
+            // Find the command in the registry and invoke its action
+            const cmd = CMD_PALETTE_COMMANDS.find(c => c.name === w.command);
+            if (cmd && cmd.action) {
+              log(`Restoring window: ${w.command}`, "info");
+              cmd.action();
+            }
+          } catch (_) {}
+        }
+      }, 2000); // 2s delay — let chart + indicators load first
+    }
+
+    log(`Session restored: ${session.tabs.length} tabs, chart type: ${session.chartType || "candles"}${session.mtfGridState?.active ? ", MTF grid active" : ""}${session.openWindows?.length ? `, ${session.openWindows.length} windows` : ""}`, "ok");
     return true;
   } catch (e) {
     log(`Session restore failed: ${e}`, "warn");
@@ -27967,7 +28005,16 @@ function setupCommandPalette() {
         if (!window._commandHistory) window._commandHistory = [];
         window._commandHistory.push({ command: c.name, symbol: currentSymbol || "", time: new Date().toLocaleTimeString("en-GB", { hour12: false }) });
         if (window._commandHistory.length > 500) window._commandHistory.shift();
+        // Track command for session restore (window state caching)
+        const prevWindowCount = Object.keys(getActiveWindows()).length;
         c.action();
+        // If a new window was opened, track the command name for session persistence
+        requestAnimationFrame(() => {
+          const newCount = Object.keys(getActiveWindows()).length;
+          if (newCount > prevWindowCount) {
+            openCommandWindows.push({ command: c.name });
+          }
+        });
       });
       results.appendChild(div);
     }
