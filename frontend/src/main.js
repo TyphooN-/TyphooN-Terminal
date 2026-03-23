@@ -19192,25 +19192,72 @@ function cmdBackup() {
 
 // ── Credential & Settings Backup (AES-256-GCM encrypted) ────
 async function cmdBackupCredentials() {
-  const passphrase = window.prompt("Enter backup passphrase (min 8 characters):");
-  if (!passphrase) return;
-  if (passphrase.length < 8) { log("Passphrase must be at least 8 characters", "error"); return; }
-  try {
-    // Collect all typhoon_ localStorage keys
-    const settings = {};
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith("typhoon_")) settings[k] = localStorage.getItem(k);
+  const win = createWindow({ title: "Backup Credentials & Settings", width: 500, height: 300 });
+  win.setContent("Enter a passphrase to encrypt your backup (API keys, settings, salt).");
+
+  const form = document.createElement("div");
+  form.style.cssText = "padding:12px;";
+
+  const passLabel = document.createElement("div");
+  passLabel.textContent = "Passphrase (min 8 characters):";
+  passLabel.style.cssText = "color:#888;font-size:11px;margin-bottom:4px;";
+  form.appendChild(passLabel);
+
+  const passInput = document.createElement("input");
+  passInput.type = "password";
+  passInput.style.cssText = "width:100%;padding:6px;background:#111;color:#fff;border:1px solid #444;font-family:Consolas,monospace;margin-bottom:8px;";
+  form.appendChild(passInput);
+
+  const pathLabel = document.createElement("div");
+  pathLabel.textContent = "Save to:";
+  pathLabel.style.cssText = "color:#888;font-size:11px;margin-bottom:4px;";
+  form.appendChild(pathLabel);
+
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const pathInput = document.createElement("input");
+  pathInput.type = "text";
+  pathInput.value = `~/typhoon_cred_backup_${dateStr}.ttbackup`;
+  pathInput.style.cssText = "width:100%;padding:6px;background:#111;color:#ccc;border:1px solid #444;font-family:Consolas,monospace;margin-bottom:12px;";
+  form.appendChild(pathInput);
+
+  const btn = document.createElement("button");
+  btn.textContent = "Export Encrypted Backup";
+  btn.style.cssText = "padding:8px 20px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;font-size:12px;";
+  form.appendChild(btn);
+
+  const status = document.createElement("div");
+  status.style.cssText = "margin-top:12px;font-size:11px;color:#888;";
+  form.appendChild(status);
+
+  btn.addEventListener("click", async () => {
+    const passphrase = passInput.value;
+    if (!passphrase || passphrase.length < 8) { status.textContent = "Passphrase must be at least 8 characters"; status.style.color = "#f44336"; return; }
+    btn.disabled = true;
+    status.textContent = "Encrypting and saving...";
+    status.style.color = "#ff9800";
+    try {
+      const settings = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith("typhoon_")) settings[k] = localStorage.getItem(k);
+      }
+      const result = JSON.parse(await invoke("export_credentials_backup", { path: pathInput.value, passphrase, settingsJson: JSON.stringify(settings) }));
+      status.style.color = "#4caf50";
+      status.textContent = `✓ Backup saved: ${result.credentials} credentials, ${(result.size_bytes / 1024).toFixed(1)} KB`;
+      const pathInfo = document.createElement("div");
+      pathInfo.style.cssText = "margin-top:4px;font-family:Consolas,monospace;color:#FFD700;font-size:10px;word-break:break-all;";
+      pathInfo.textContent = result.path;
+      status.appendChild(pathInfo);
+      log(`Credential backup → ${result.path}`, "ok");
+    } catch (e) {
+      status.textContent = `Failed: ${e}`;
+      status.style.color = "#f44336";
+      btn.disabled = false;
     }
-    const settingsJson = JSON.stringify(settings);
-    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-    const path = `~/typhoon_cred_backup_${dateStr}.ttbackup`;
-    log("Exporting encrypted credential backup...", "info");
-    const result = JSON.parse(await invoke("export_credentials_backup", { path, passphrase, settingsJson }));
-    log(`Credential backup exported: ${result.credentials} credentials, ${(result.size_bytes / 1024).toFixed(1)} KB → ${result.path}`, "ok");
-  } catch (e) {
-    log(`Credential backup failed: ${e}`, "error");
-  }
+  });
+
+  win.contentElement.textContent = "";
+  win.contentElement.appendChild(form);
 }
 
 async function cmdRestoreCredentials() {
