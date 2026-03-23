@@ -27031,7 +27031,40 @@ async function cmdDarwinex() {
   const logDiv = out.querySelector("#dwx-log");
   const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: all msgs are internal strings, no external data */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
-  addLog("<b>Darwinex Full Analysis</b> — Scanning all imported MT5 symbols", "#4caf50");
+  // Symbol type filter — persisted in localStorage
+  const DWX_FILTER_KEY = "typhoon_dwx_symbol_filters";
+  // Default: Forex/Crypto/Indices disabled (user trades Stocks/Commodities CFDs at Darwinex)
+  const savedFilters = JSON.parse(localStorage.getItem(DWX_FILTER_KEY) || '{"Forex":false,"Crypto":false,"Indices":false,"Commodities":true,"Stocks/CFDs":true}');
+  const filterBar = document.createElement("div");
+  filterBar.style.cssText = "padding:6px 8px;border-bottom:1px solid #333;display:flex;gap:12px;align-items:center;font-size:10px;";
+  const filterLabel = document.createElement("span");
+  filterLabel.style.color = "#888";
+  filterLabel.textContent = "Symbol types:";
+  filterBar.appendChild(filterLabel);
+  const filterState = { ...savedFilters };
+  for (const type of ["Forex", "Crypto", "Indices", "Commodities", "Stocks/CFDs"]) {
+    const lbl = document.createElement("label");
+    lbl.style.cssText = "display:flex;align-items:center;gap:3px;cursor:pointer;color:#ccc;";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = filterState[type] !== false; // default enabled unless explicitly false
+    cb.addEventListener("change", () => {
+      filterState[type] = cb.checked;
+      localStorage.setItem(DWX_FILTER_KEY, JSON.stringify(filterState));
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(type));
+    filterBar.appendChild(lbl);
+  }
+  const runBtn = document.createElement("button");
+  runBtn.textContent = "Run Analysis";
+  runBtn.style.cssText = "padding:3px 12px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;font-size:10px;margin-left:auto;";
+  filterBar.appendChild(runBtn);
+  logDiv.parentElement.insertBefore(filterBar, logDiv);
+
+  // Run analysis on button click (and auto-run on first open)
+  async function runAnalysis() {
+  addLog("<b>Darwinex Full Analysis</b> — Scanning imported MT5 symbols", "#4caf50");
   addLog("", "");
 
   try {
@@ -27060,12 +27093,22 @@ async function cmdDarwinex() {
     const commodities = allSymbols.filter(s => /^(XAUUSD|XAGUSD|USOIL|UKOIL|NATGAS)/i.test(s));
     const stocks = allSymbols.filter(s => !forex.includes(s) && !crypto.includes(s) && !indices.includes(s) && !commodities.includes(s));
 
-    addLog(`<b>${allSymbols.length} Darwinex symbols imported:</b>`, "#2196f3");
-    addLog(`  Forex: ${forex.length} | Crypto: ${crypto.length} | Indices: ${indices.length} | Commodities: ${commodities.length} | Stocks/CFDs: ${stocks.length}`);
+    // Apply user filters
+    const enabledTypes = Object.entries(filterState).filter(([, v]) => v).map(([k]) => k);
+    const filteredSymbols = allSymbols.filter(s => {
+      if (forex.includes(s)) return filterState["Forex"] !== false;
+      if (crypto.includes(s)) return filterState["Crypto"] !== false;
+      if (indices.includes(s)) return filterState["Indices"] !== false;
+      if (commodities.includes(s)) return filterState["Commodities"] !== false;
+      return filterState["Stocks/CFDs"] !== false;
+    });
+
+    addLog(`<b>${allSymbols.length} Darwinex symbols imported (${filteredSymbols.length} enabled):</b>`, "#2196f3");
+    addLog(`  Forex: ${forex.length}${filterState["Forex"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""} | Crypto: ${crypto.length}${filterState["Crypto"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""} | Indices: ${indices.length}${filterState["Indices"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""} | Commodities: ${commodities.length}${filterState["Commodities"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""} | Stocks/CFDs: ${stocks.length}${filterState["Stocks/CFDs"] === false ? " <span style='color:#f44336'>(disabled)</span>" : ""}`);
     addLog("");
 
-    // Group for sector-based analysis
-    const symbols = allSymbols;
+    // Group for sector-based analysis — use filtered symbols
+    const symbols = filteredSymbols;
     const sectors = allSymbols.map(s => {
       if (forex.includes(s)) return "Forex";
       if (crypto.includes(s)) return "Crypto";
@@ -27160,8 +27203,13 @@ async function cmdDarwinex() {
     }
 
     addLog("");
-    addLog(`<b style="color:#4caf50">Analysis complete.</b> ${allSymbols.length} symbols, ${allOutliers.length} total outliers detected.`);
+    addLog(`<b style="color:#4caf50">Analysis complete.</b> ${filteredSymbols.length} symbols scanned (${allSymbols.length} total), ${allOutliers.length} outliers detected.`);
   } catch (e) { addLog(`Error: ${e}`, "#f44336"); }
+  } // end runAnalysis
+
+  runBtn.addEventListener("click", () => { logDiv.textContent = ""; runAnalysis(); });
+  // Auto-run on first open
+  runAnalysis();
 }
 
 async function cmdMt5Import() {
