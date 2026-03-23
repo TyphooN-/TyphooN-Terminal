@@ -55,9 +55,20 @@ Previously, the system treated the connected broker (Alpaca) as the primary data
 - `get_deepest_key()` — no longer needed; no cross-prefix merging
 - Per-timeframe staleness map in frontend — replaced with 5s rapid dedup
 
-## Future Work: Blended Mode
+### Crypto-Specific Hierarchy (ADR-040)
 
-A future "blended mode" could combine the deepest history from any source with the most recent data from the primary broker. This would be useful for symbols where MT5 has deep history but a different broker has more recent or real-time data. Deferred — current MT5-first approach covers 99% of use cases.
+Crypto symbols have a 3-tier hierarchy due to MT5's weekend closure (Fri 23:00 → Sun 23:05 UTC):
+
+```
+Weekday: MT5 (Darwinex) — authoritative, real-time
+Weekend: Alpaca (if connected) > Kraken (backfill data in cache)
+Backfill: Kraken — fills ALL weekend gaps from 2013, stored in MT5 cache keys
+```
+
+Kraken is **never** a live data source — it only fills historical gaps. On weekends:
+- Alpaca provides live crypto prices (if the Alpaca connection is active)
+- Kraken data in cache provides continuous chart history (no weekend gaps)
+- Weekend bars are tinted blue on charts to visually distinguish from MT5 weekday data
 
 ## Consequences
 

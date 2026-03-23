@@ -26399,22 +26399,35 @@ function isSymbolMt5(symbol) {
 let mt5ServerLabel = "MT5";
 
 // Get data source label for display
+// Hierarchy: MT5 (weekday) > Alpaca (live, when connected) > Kraken (backfill only)
+// MT5 crypto closes Fri 23:00 → Sun 23:05 UTC. During that window:
+//   - Alpaca is primary if connected (live prices)
+//   - Kraken fills historical gaps but is never the live source
 function getDataSourceLabel(symbol) {
-  if (!mt5BgSyncInterval) return { label: "Alpaca", color: "#ff9800", icon: "A" };
+  const isCrypto = symbol && (symbol.includes("/USD") || symbol.match(/^(BTC|ETH|SOL|DOGE|ADA|XRP|BNB|AVAX|DOT|LINK)(USD)?$/i));
+
+  if (!mt5BgSyncInterval) {
+    return { label: "Alpaca", color: "#ff9800", icon: "A" };
+  }
   if (Date.now() - lastMt5SyncSuccess > MT5_DISCONNECT_MS) {
     return { label: mt5ServerLabel + " Disconnected \u2014 Alpaca", color: "#f44336", icon: "!" };
   }
-  // Weekend crypto → Kraken is primary source
-  const isCrypto = symbol && (symbol.includes("/USD") || symbol.match(/^(BTC|ETH|SOL|DOGE|ADA|XRP|BNB|AVAX|DOT|LINK)(USD)?$/i));
+
+  // Check if MT5 crypto market is closed (weekend)
   if (isCrypto) {
     const now = new Date();
-    const utcDay = now.getUTCDay(); // 0=Sun, 6=Sat
+    const utcDay = now.getUTCDay();
     const utcHour = now.getUTCHours();
-    const isWeekend = (utcDay === 6) || (utcDay === 0) || (utcDay === 5 && utcHour >= 22) || (utcDay === 0 && utcHour < 22);
-    if (isWeekend) {
-      return { label: "Kraken (weekend)", color: "#42a5f5", icon: "K" };
+    const utcMin = now.getUTCMinutes();
+    const utcTotalMin = utcHour * 60 + utcMin;
+    const mt5CryptoClosed = (utcDay === 5 && utcTotalMin >= 1380) || (utcDay === 6) || (utcDay === 0 && utcTotalMin < 1385);
+
+    if (mt5CryptoClosed) {
+      // MT5 is closed for crypto — Alpaca is primary if connected, cached MT5+Kraken data otherwise
+      return { label: "Alpaca + Kraken backfill", color: "#42a5f5", icon: "A" };
     }
   }
+
   if (mt5SymbolSet.has(symbol)) {
     return { label: mt5ServerLabel, color: "#4caf50", icon: "M" };
   }
