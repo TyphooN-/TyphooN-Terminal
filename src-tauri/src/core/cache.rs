@@ -86,6 +86,22 @@ fn unpack_bars(data: &[u8]) -> Result<String, String> {
     serde_json::to_string(&bars).map_err(|e| format!("JSON serialize failed: {e}"))
 }
 
+/// Extract last and second-to-last bar timestamps from binary data (for metadata columns).
+/// Returns (second_last_ts_rfc3339, last_ts_rfc3339) or empty strings if not enough bars.
+fn extract_tail_timestamps(binary: &[u8], count: usize) -> (Option<String>, Option<String>) {
+    if count < 2 || binary.len() < 8 + count * BYTES_PER_BAR {
+        return (None, None);
+    }
+    let last_offset = 8 + (count - 1) * BYTES_PER_BAR;
+    let second_offset = 8 + (count - 2) * BYTES_PER_BAR;
+    let last_ts = i64::from_le_bytes(binary[last_offset..last_offset+8].try_into().unwrap_or([0;8]));
+    let second_ts = i64::from_le_bytes(binary[second_offset..second_offset+8].try_into().unwrap_or([0;8]));
+    let fmt = |ms: i64| -> Option<String> {
+        chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
+    };
+    (fmt(second_ts), fmt(last_ts))
+}
+
 /// Unpack only the last `tail` bars from binary format — avoids converting 50K bars when only 500 needed.
 /// Decompression is still required (zstd doesn't support seeking), but JSON construction is O(tail) not O(n).
 fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
@@ -164,6 +180,11 @@ impl SqliteCache {
             CREATE INDEX IF NOT EXISTS idx_kv_cache_ts ON kv_cache(timestamp);
         ").map_err(|e| format!("SQLite create tables failed: {e}"))?;
 
+        // Schema migration: add last_ts column for fast incremental start lookup
+        // (avoids decompressing full binary blob just to read 2 timestamps)
+        let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN last_ts TEXT", []);
+        let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN second_last_ts TEXT", []);
+
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -176,14 +197,16 @@ impl SqliteCache {
         let bar_count = u32::from_le_bytes(
             binary[4..8].try_into().map_err(|_| "bar_count header slice failed")?
         ) as i64;
+        // Extract last and second-to-last timestamps for fast incremental start lookup
+        let (second_last_ts, last_ts) = extract_tail_timestamps(&binary, bar_count as usize);
         let compressed = zstd::encode_all(binary.as_slice(), 3)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
 
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         conn.execute(
-            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
-            params![key, compressed, timestamp, bar_count],
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![key, compressed, timestamp, bar_count, last_ts, second_last_ts],
         ).map_err(|e| format!("SQLite insert failed: {e}"))?;
         Ok(())
     }
@@ -363,39 +386,48 @@ impl SqliteCache {
     /// Returns None if key doesn't exist or has fewer than 2 bars.
     pub fn get_incremental_start(&self, key: &str) -> Result<Option<(String, usize)>, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+
+        // Fast path: read from metadata columns (no decompression needed)
         let mut stmt = conn.prepare_cached(
-            "SELECT data FROM bar_cache WHERE key = ?1"
+            "SELECT bar_count, second_last_ts FROM bar_cache WHERE key = ?1"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
 
         let result = stmt.query_row(rusqlite::params![key], |row| {
-            let data: Vec<u8> = row.get(0)?;
-            Ok(data)
+            let count: i64 = row.get(0)?;
+            let second_last: Option<String> = row.get(1)?;
+            Ok((count, second_last))
         });
 
         match result {
-            Ok(compressed) => {
-                // TODO: Future optimization — add first_ts/last_ts columns to bar_cache
-                // so we can read the incremental start from SQLite metadata without
-                // decompressing the full binary blob. Would eliminate zstd decode here.
-                let decompressed = zstd::decode_all(compressed.as_slice())
+            Ok((count, second_last_ts)) => {
+                if count < 2 { return Ok(None); }
+                // If metadata columns are populated, use them directly (zero decompression)
+                if let Some(ts) = second_last_ts {
+                    if !ts.is_empty() {
+                        return Ok(Some((ts, count as usize)));
+                    }
+                }
+                // Fallback: decompress for legacy entries without metadata columns
+                let mut stmt2 = conn.prepare_cached(
+                    "SELECT data FROM bar_cache WHERE key = ?1"
+                ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+                let data: Vec<u8> = stmt2.query_row(rusqlite::params![key], |row| row.get(0))
+                    .map_err(|e| format!("SQLite query failed: {e}"))?;
+                let decompressed = zstd::decode_all(data.as_slice())
                     .map_err(|e| format!("zstd decompress failed: {e}"))?;
                 if decompressed.len() >= 8 && &decompressed[0..4] == BAR_BINARY_MAGIC {
-                    let count = u32::from_le_bytes(
-                        decompressed[4..8].try_into()
-                            .map_err(|_| "Failed to read bar_count in get_incremental_start")?
+                    let bc = u32::from_le_bytes(
+                        decompressed[4..8].try_into().unwrap_or([0;4])
                     ) as usize;
-                    if count < 2 { return Ok(None); }
-                    // Second-to-last bar — so we re-fetch the live candle
-                    let target_offset = 8 + (count - 2) * BYTES_PER_BAR;
+                    if bc < 2 { return Ok(None); }
+                    let target_offset = 8 + (bc - 2) * BYTES_PER_BAR;
                     if decompressed.len() < target_offset + 8 { return Ok(None); }
                     let ts_ms = i64::from_le_bytes(
-                        decompressed[target_offset..target_offset+8].try_into()
-                            .map_err(|_| "Failed to read timestamp in get_incremental_start")?
+                        decompressed[target_offset..target_offset+8].try_into().unwrap_or([0;8])
                     );
                     let dt = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
-                    Ok(Some((dt.to_rfc3339(), count)))
+                    Ok(Some((dt.to_rfc3339(), bc)))
                 } else {
-                    // Legacy JSON — parse second-to-last element
                     let json_str = String::from_utf8(decompressed)
                         .map_err(|e| format!("UTF-8 decode failed: {e}"))?;
                     let bars: Vec<serde_json::Value> = serde_json::from_str(&json_str)
@@ -464,14 +496,15 @@ impl SqliteCache {
         let bar_count = u32::from_le_bytes(
             binary[4..8].try_into().map_err(|_| "bar_count header slice failed in put_bars_fast")?
         ) as i64;
+        let (second_last_ts, last_ts) = extract_tail_timestamps(&binary, bar_count as usize);
         let compressed = zstd::encode_all(binary.as_slice(), 3)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
 
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         conn.execute(
-            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
-            params![key, compressed, timestamp, bar_count],
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![key, compressed, timestamp, bar_count, last_ts, second_last_ts],
         ).map_err(|e| format!("SQLite insert failed: {e}"))?;
         Ok(())
     }
