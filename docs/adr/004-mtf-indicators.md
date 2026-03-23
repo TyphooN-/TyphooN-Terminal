@@ -1,6 +1,6 @@
 # ADR-004: Multi-Timeframe Indicator Support
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-03-15
 **Context:** The NNFX trading system relies on multi-timeframe indicators (MultiKAMA, ATR Projection, Previous Candle Levels) that display higher-timeframe data on the current chart.
 

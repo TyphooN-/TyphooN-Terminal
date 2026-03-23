@@ -1,6 +1,6 @@
 # ADR-040: Crypto Data Source Hierarchy — Kraken over Binance
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-03-22
 
 ## Context

@@ -38,3 +38,21 @@ See [INDICATOR_PORTING.md](../INDICATOR_PORTING.md) for technical details on eac
 3. **Sub-panes**: Separate chart instances with synced time scales
 4. **All indicator axis labels disabled**: Prevents price axis clutter
 5. **Indicators clip to last candle**: No drawing into future empty space
+
+## Comprehensive Indicator Audit (2026-03-23)
+
+A full audit of all indicator calculations was performed, fixing bootstrap/seed/edge-case issues across JS, WASM, worker, and fallback layers:
+
+- **EMA/SMA bootstrap**: Correct SMA seed for initial EMA value
+- **KAMA seed fix**: Proper initialization of Kaufman Adaptive Moving Average
+- **Fisher median prices**: Use median (HL/2) prices instead of close
+- **MACD signal bootstrap**: Signal line EMA seeded from first MACD value
+- **BetterVolume 2-bar analysis**: Correct lookback for volume color classification
+- **Ichimoku Chikou fix**: Lagging span aligned to correct offset
+- **Alligator duplicate-timestamp fix**: Prevent duplicate data points at shifted positions
+- **Bollinger/StdDev NaN guard**: Handle insufficient data gracefully
+- **ATR initial value**: First ATR uses simple average of true ranges
+- **minBars off-by-one**: Correct minimum bar count for indicator warm-up
+- **ForceIndex EMA bootstrap**: Proper EMA seed for Force Index
+
+All fixes ensure pixel-level parity with MT5 across every indicator in the registry. See also [ADR-042](042-mtf-grid-unified-indicator-pipeline.md) for the unified indicator pipeline that ensures these fixes apply to MTF grid cells as well.

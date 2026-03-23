@@ -48,11 +48,18 @@ Each grid cell contains:
 - `ResizeObserver` on grid container for responsive resize
 - All chart instances properly `.remove()`d on close to prevent memory leaks
 
+## Evolution
+
+- **Original**: Each grid cell had ~170 lines of inline indicator code in `loadMTFCellData()` with a hardcoded subset of indicators
+- **ADR-042**: Unified indicator pipeline — grid cells now reuse the same `applyIndicators()` function as the main chart, with context parameter for per-cell chart instances. All indicators appear in grid cells automatically.
+- **ADR-043**: GPU-first grid rendering — GPU is the primary renderer for grid cells, with lightweight-charts fallback for Fisher/Volume sub-panes only.
+
 ## Consequences
 
 - **Pro**: Exact MT5 workflow — see 4 timeframes simultaneously with indicators
 - **Pro**: Double-click fullscreen matches MT5 behavior
 - **Pro**: Uses pre-cached bar data for instant loading
-- **Pro**: Each cell has Fisher + BetterVolume + KAMA + SMA200
+- **Pro**: Each cell has the full indicator set (whatever is checked in the registry)
+- **Pro**: Single code path — indicator fixes apply to grid cells automatically
 - **Con**: 4 charts × 3 instances each = 12 lightweight-charts instances (memory)
 - **Con**: No crosshair sync between grid cells (independent charts)

@@ -23,6 +23,7 @@ Performance is a first-class design goal. Every optimization traces back to one 
 | **v8 (+prepare_cached)** | SQLite statement caching | Same speed, less CPU per lookup | Instant |
 | **v9 (+zstd level 9)** | Higher compression for persistent storage | Same speed, ~2x smaller on disk | Instant |
 | **v10 (+adaptive fetch)** | page_token, adaptive pacing, crypto lookback caps, early termination | Crypto cold: **30s** (was 2.5h) | Instant |
+| **v11 (+get_bars_tail)** | Tail-only JSON conversion: convert last N bars instead of full cache | MT5 50K→500: **34x faster** (2ms vs 68ms) | Instant |
 
 ### Current Architecture (4-Tier Cache)
 
@@ -42,6 +43,22 @@ Tier 4: zstd files             — legacy fallback, persistent backup
 | 50K  | ~6 MB    | ~900 KB   | ~200 KB     | **30x** |
 
 Binary format: `[4B magic "TTBR"][u32 count][per bar: i64 timestamp_ms, f64 OHLCV]` — 48 bytes/bar. Backward compatible: auto-detects `TTBR` magic, falls back to JSON for legacy entries.
+
+### `get_bars_tail()` Optimization (v11)
+
+For MT5 symbols with deep history (50K bars per timeframe), the old `get_bars()` path decompressed the full TTBR blob and converted all bars to JSON — even when the chart only needs the last 500. `get_bars_tail()` decompresses the same blob but only JSON-serializes the final N bars.
+
+| Cache Size | get_bars() | get_bars_tail(500) | Speedup |
+|-----------|-----------|-------------------|---------|
+| 500 bars  | 2ms       | 2ms (no benefit)  | 1x      |
+| 5K bars   | 8ms       | 3ms               | 2.7x    |
+| 50K bars  | 68ms      | 2ms               | **34x** |
+
+Used in the MT5 fast path of `get_bars_incremental`: when `cached_count > limit`, only the tail is converted. The main bottleneck after zstd decompression is JSON construction, and `get_bars_tail()` eliminates 98% of it for deep caches.
+
+### MT5 Sync No-Reload Fix
+
+When background MT5 sync detects new data, the frontend previously triggered a full chart reload (destroy + recreate all chart instances). Now it only reloads MTF grid data (small, 500 bars each) and updates grid dots — no full chart reload. The main chart continues rendering undisturbed while MTF data refreshes in the background.
 
 ### Status: ✅ Fully Optimized
 
@@ -132,9 +149,11 @@ See [ADR-035](adr/035-bar-fetch-optimization.md) for full benchmark data.
 
 Data format: flat `Float64Array` (5 values/bar) — zero-copy Wasm interop, no serialization overhead.
 
-### Status: ✅ Fully Optimized — Wasm Routed + Worker Thread
+### Status: ✅ Fully Optimized — Wasm Routed + Worker Thread + Bar Cap
 
 Chart rendering now routes SMA, EMA, KAMA, RSI, ATR through Wasm (15 call sites) with automatic JS fallback. Web Worker (`indicator-worker.js`) computes indicators off the main thread. Fisher Transform and BetterVolume remain JS (color segmentation not in Wasm — would need separate output arrays).
+
+**Indicator Bar Cap (1000):** Indicator computation is limited to the last 1000 bars of chart data. Indicators don't need 8K+ bars of history — the visual output only matters for the visible range. This prevents O(N) indicator computation from scaling with deep MT5 history (50K bars), keeping indicator application consistently fast regardless of cache depth.
 
 ### Remaining (Low Impact)
 
@@ -161,14 +180,22 @@ Custom WebGL2 renderer via wgpu compiled to Wasm:
 - Pan, zoom, mouse wheel scroll
 - Falls back to lightweight-charts when GPU unavailable
 
-### Status: ✅ All 5 Phases Complete
+### Status: ✅ GPU Chart Engine Complete (Drawing Tools in ADR-032)
 
 ```
-Phase 1: Wasm indicators           ✅ DONE — computation in Rust/Wasm (32KB)
-Phase 2: Binary storage             ✅ DONE — efficient data pipeline (48 bytes/bar + zstd)
-Phase 3: GPU candlestick renderer   ✅ DONE — WebGL2 candles + grid + pan/zoom
-Phase 4: GPU indicator overlays     ✅ DONE — SMA/EMA/KAMA/Bollinger via LINE_STRIP shader
-Phase 5: Full chart engine          ✅ DONE — price scale, time axis, crosshair + OHLC tooltip (52KB)
+GPU Engine Phases (all complete):
+  E1: Wasm indicators           ✅ DONE — computation in Rust/Wasm (32KB)
+  E2: Binary storage             ✅ DONE — efficient data pipeline (48 bytes/bar + zstd)
+  E3: GPU candlestick renderer   ✅ DONE — WebGL2 candles + grid + pan/zoom
+  E4: GPU indicator overlays     ✅ DONE — SMA/EMA/KAMA/Bollinger via LINE_STRIP shader
+  E5: Full chart engine          ✅ DONE — price scale, time axis, crosshair + OHLC tooltip (52KB)
+
+Drawing Tools Phases (see ADR-032 for roadmap):
+  T1: GPU Drawing Primitives     🔲 TODO — lines, shapes, channels, Fibonacci, Gann
+  T2: GPU SL/TP Lines            🔲 TODO — replace lightweight-charts createPriceLine()
+  T3: 24 New Drawing Tools       🔲 TODO — regression channel, Elliott wave, etc.
+  T4: GPU Sub-Panes              🔲 TODO — Fisher, Volume, RSI natively in GPU
+  T5: Full LWC Replacement       🔲 TODO — remove lightweight-charts dependency
 ```
 
 Architecture: WebGL2 renders geometry (candles, wicks, indicator lines, grid, crosshair). Canvas2D overlay renders text (price labels, time labels, OHLC tooltip). This is the industry standard approach used by Bloomberg and TradingView.
@@ -353,7 +380,7 @@ LRU eviction prevents unbounded growth. SQLite mmap is OS-managed (only maps pag
 | SQLite cache | ✅ Fully optimized | WAL, mmap, prepare_cached, auto-vacuum |
 | Indicator calculation (backtester) | ✅ Wasm, 50-100x faster | Grid optimizer runs in ~100ms |
 | Indicator calculation (chart) | ✅ Wasm routed | SMA/EMA/KAMA/RSI/ATR through Wasm at 15+ call sites, JS fallback for Fisher/BetterVolume |
-| GPU chart rendering | ✅ All 5 phases done | WebGL2 candles + indicators + price scale + crosshair (52KB Wasm) |
+| GPU chart rendering | ✅ Engine complete (drawing tools TODO — ADR-032) | WebGL2 candles + indicators + price scale + crosshair (52KB Wasm) |
 | DOM rendering | ✅ Fully optimized | Delta updates, atomic swaps, no flicker |
 | Network | ✅ Fully optimized | page_token pagination, adaptive pacing, HTTP/2 |
 | Binary size | ✅ 10-15MB | 10-15x smaller than Electron |

@@ -41,12 +41,16 @@ function jsSMA(bars, period) {
 }
 
 function jsEMA(bars, period) {
+  if (bars.length < period) return [];
   const k = 2 / (period + 1);
-  let ema = bars[0].c;
-  const result = [];
-  for (let i = 0; i < bars.length; i++) {
+  // SMA bootstrap for first period bars
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += bars[i].c;
+  let ema = sum / period;
+  const result = [ema];
+  for (let i = period; i < bars.length; i++) {
     ema = bars[i].c * k + ema * (1 - k);
-    if (i >= period - 1) result.push(ema);
+    result.push(ema);
   }
   return result;
 }
@@ -56,7 +60,7 @@ function jsKAMA(bars, period, fastP = 2, slowP = 30) {
   const slowSC = 2 / (slowP + 1);
   const result = [];
   if (bars.length < period + 1) return result;
-  let kama = bars[period].c;
+  let kama = bars[period - 1].c;
   for (let i = period; i < bars.length; i++) {
     const signal = Math.abs(bars[i].c - bars[i - period].c);
     let noise = 0;

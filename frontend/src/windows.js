@@ -92,7 +92,7 @@ export function createWindow(opts) {
   // ── Dragging ──────────────────────────────────────────────
   let isDragging = false, dragOffsetX = 0, dragOffsetY = 0;
 
-  titleBar.addEventListener("mousedown", (e) => {
+  const onTitleBarMouseDown = (e) => {
     if (e.target.classList.contains("fw-btn")) return;
     isDragging = true;
     dragOffsetX = e.clientX - win.offsetLeft;
@@ -100,7 +100,8 @@ export function createWindow(opts) {
     win.style.zIndex = ++windowZIndex;
     win.classList.add("dragging");
     e.preventDefault();
-  });
+  };
+  titleBar.addEventListener("mousedown", onTitleBarMouseDown);
 
   const onDragMove = (e) => {
     if (!isDragging) return;
@@ -143,7 +144,7 @@ export function createWindow(opts) {
   // ── Resizing ──────────────────────────────────────────────
   let isResizing = false, resizeStartX = 0, resizeStartY = 0, startW = 0, startH = 0;
 
-  resizeHandle.addEventListener("mousedown", (e) => {
+  const onResizeHandleMouseDown = (e) => {
     isResizing = true;
     resizeStartX = e.clientX;
     resizeStartY = e.clientY;
@@ -152,7 +153,8 @@ export function createWindow(opts) {
     win.style.zIndex = ++windowZIndex;
     e.preventDefault();
     e.stopPropagation();
-  });
+  };
+  resizeHandle.addEventListener("mousedown", onResizeHandleMouseDown);
 
   const onResizeMove = (e) => {
     if (!isResizing) return;
@@ -222,6 +224,10 @@ export function createWindow(opts) {
     document.removeEventListener("mouseup", onDragUp);
     document.removeEventListener("mousemove", onResizeMove);
     document.removeEventListener("mouseup", onResizeUp);
+    // Clean up element-level listeners
+    titleBar.removeEventListener("mousedown", onTitleBarMouseDown);
+    resizeHandle.removeEventListener("mousedown", onResizeHandleMouseDown);
+    win.removeEventListener("mousedown", onWinMouseDown);
     // Run all registered cleanup callbacks
     for (const cb of _cleanupCallbacks) {
       try { cb(); } catch (_) {}
@@ -237,9 +243,10 @@ export function createWindow(opts) {
   });
 
   // Click to bring to front
-  win.addEventListener("mousedown", () => {
+  const onWinMouseDown = () => {
     win.style.zIndex = ++windowZIndex;
-  });
+  };
+  win.addEventListener("mousedown", onWinMouseDown);
 
   // ── Handle ────────────────────────────────────────────────
   const handle = {

@@ -72,7 +72,7 @@ pub fn wasm_kama(data: &[f64], period: usize, fast_p: usize, slow_p: usize) -> V
     let fast_sc = 2.0 / (fast_p as f64 + 1.0);
     let slow_sc = 2.0 / (slow_p as f64 + 1.0);
     let mut result = Vec::with_capacity(n - period);
-    let mut kama = bar_close(data, period);
+    let mut kama = bar_close(data, period - 1);
     for i in period..n {
         let signal = (bar_close(data, i) - bar_close(data, i.saturating_sub(period))).abs();
         let mut noise = 0.0;
@@ -124,17 +124,17 @@ pub fn wasm_fisher(data: &[f64], period: usize) -> Vec<f64> {
     let mut prev_smoothed = 0.0;
     let mut prev_fisher = 0.0;
     for i in period..n {
-        let mut max_h = f64::NEG_INFINITY;
-        let mut min_l = f64::MAX;
+        // Match MQL5 calc_no mode: find highest/lowest MEDIAN price in window [i-period+1..i]
+        let mut max_m = f64::NEG_INFINITY;
+        let mut min_m = f64::MAX;
         for j in (i + 1 - period)..=i {
-            let h = bar_high(data, j);
-            let l = bar_low(data, j);
-            if h > max_h { max_h = h; }
-            if l < min_l { min_l = l; }
+            let median = (bar_high(data, j) + bar_low(data, j)) / 2.0;
+            if median > max_m { max_m = median; }
+            if median < min_m { min_m = median; }
         }
         let price = (bar_high(data, i) + bar_low(data, i)) / 2.0;
-        let range = max_h - min_l;
-        let normalized = if range > 0.0 { (price - min_l) / range } else { 0.5 };
+        let range = max_m - min_m;
+        let normalized = if range > 0.0 { (price - min_m) / range } else { 0.5 };
         let os = 2.0 * (normalized - 0.5);
         let mut smoothed = 0.5 * os + 0.5 * prev_smoothed;
         smoothed = smoothed.clamp(-0.999, 0.999);
@@ -184,15 +184,16 @@ pub fn wasm_macd(data: &[f64], fast_p: usize, slow_p: usize, signal_p: usize) ->
     }
     if macd_line.len() < signal_p { return vec![]; }
     let k = 2.0 / (signal_p as f64 + 1.0);
-    let mut sig = macd_line[0];
+    // SMA bootstrap for signal line (matches MT5 behavior)
+    let mut sig: f64 = macd_line[..signal_p].iter().sum::<f64>() / signal_p as f64;
     let mut signal: Vec<f64> = Vec::new();
     let mut histogram: Vec<f64> = Vec::new();
-    for (i, &m) in macd_line.iter().enumerate() {
-        sig = m * k + sig * (1.0 - k);
-        if i >= signal_p - 1 {
-            signal.push(sig);
-            histogram.push(m - sig);
-        }
+    signal.push(sig);
+    histogram.push(macd_line[signal_p - 1] - sig);
+    for i in signal_p..macd_line.len() {
+        sig = macd_line[i] * k + sig * (1.0 - k);
+        signal.push(sig);
+        histogram.push(macd_line[i] - sig);
     }
     // Pack as [macd_count, signal_count, hist_count, macd..., signal..., hist...]
     let mut result = Vec::with_capacity(3 + macd_line.len() + signal.len() + histogram.len());
@@ -536,7 +537,7 @@ pub fn wasm_cci(data: &[f64], period: usize) -> Vec<f64> {
         }
         let mean = sum / period as f64;
         let mad: f64 = tps.iter().map(|&t| (t - mean).abs()).sum::<f64>() / period as f64;
-        result.push(if mad > 0.0 { (tps.last().unwrap() - mean) / (0.015 * mad) } else { 0.0 });
+        result.push(if mad > 0.0 { (tps.last().unwrap_or(&0.0) - mean) / (0.015 * mad) } else { 0.0 });
     }
     result
 }

@@ -1,9 +1,9 @@
 # ADR-039: Portable Backup / Export System
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-03-21
 
-> **Note:** Extends [ADR-036](036-mt5-sqlite-direct-sync.md) (MT5 SQLite Direct Sync) and the SQLite cache system.
+> **Note:** Extends [ADR-036](036-mt5-sqlite-direct-sync.md) (MT5 SQLite Direct Sync) and the SQLite cache system. See also [ADR-044](044-backup-lan-sync.md) for the combined Backup + LAN Sync system.
 
 ## Context
 

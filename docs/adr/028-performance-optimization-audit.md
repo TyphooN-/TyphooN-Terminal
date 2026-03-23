@@ -94,21 +94,27 @@ Full-scope codebase audit across security, performance, storage, and rendering. 
 
 ## Remaining Work
 
-### No Blockers (Implementable)
+### All Previously Identified Items — Complete
 
-1. **Route chart indicators through Wasm** — currently chart rendering uses JS fallback while backtester uses Wasm. Estimated 10-20x speedup for chart indicator rendering.
-2. **GPU indicator overlays (Phase 4)** — render SMA/KAMA/ATR lines via GPU shaders instead of lightweight-charts line series. Estimated 2-3 weeks.
-3. **Web Worker for indicators** — move indicator calculation to a Worker thread to prevent main thread blocking on large datasets (50K+ bars).
+1. ✅ **Route chart indicators through Wasm** — 15 call sites, SMA/EMA/KAMA/RSI/ATR (10-20x faster)
+2. ✅ **GPU indicator overlays (Phase 4)** — SMA/EMA/KAMA/Bollinger via WebGL2 LINE_STRIP shaders
+3. ✅ **Web Worker for indicators** — `indicator-worker.js` with Wasm support, off-main-thread
+4. ✅ **Full GPU chart engine (Phase 5)** — price scale, time axis, crosshair + OHLC tooltip (52KB Wasm)
+
+### Post-Audit Optimizations (Implemented Since)
+
+5. ✅ **`get_bars_tail()`** — tail-only JSON conversion for MT5 deep caches (34x faster for 50K→500 bars). See [PERFORMANCE.md](../PERFORMANCE.md).
+6. ✅ **Indicator bar cap (1000)** — indicator computation limited to last 1000 bars, prevents O(N) scaling with deep history
+7. ✅ **MT5 sync no-reload** — background sync updates MTF data without full chart rebuild
 
 ### Blocked by External Dependencies
 
 1. **WebSocket bar aggregation** — Alpaca WS provides raw trades/quotes but not aggregated bars. We'd need to aggregate ourselves, adding complexity.
 2. **Batch symbol API** — Alpaca doesn't support fetching bars for multiple symbols in one request.
 3. **Larger page sizes** — IEX feed caps at ~260 bars/chunk. SIP feed (paid) may allow larger pages.
-4. **Full GPU chart engine (Phase 5)** — requires implementing crosshair, price scale, time axis, tooltips in WebGL2. Significant engineering (4-8 weeks).
 
 ## Consequences
 
 - All free-tier optimizations are now implemented
-- Remaining gains require either paid APIs or significant GPU engineering
+- Remaining gains require paid APIs
 - Performance bottleneck is Alpaca API response time (~300ms/request), not our code

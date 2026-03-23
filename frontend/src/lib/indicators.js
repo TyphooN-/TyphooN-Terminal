@@ -12,12 +12,17 @@ export function calcSMA(data, period) {
 }
 
 export function calcEMA(data, period) {
+  if (data.length < period) return [];
   const k = 2 / (period + 1);
   const result = [];
-  let ema = data[0].close;
-  for (let i = 0; i < data.length; i++) {
+  // SMA bootstrap for first period bars
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += data[i].close;
+  let ema = sum / period;
+  result.push({ time: data[period - 1].time, value: ema });
+  for (let i = period; i < data.length; i++) {
     ema = data[i].close * k + ema * (1 - k);
-    if (i >= period - 1) result.push({ time: data[i].time, value: ema });
+    result.push({ time: data[i].time, value: ema });
   }
   return result;
 }
@@ -27,7 +32,8 @@ export function calcKAMA(data, period = 10, fastP = 2, slowP = 30) {
   const slowSC = 2.0 / (slowP + 1.0);
   const result = [];
   if (data.length < period + 1) return result;
-  let kama = data[period].close;
+  // MT5 seeds KAMA with price[period-1]
+  let kama = data[period - 1].close;
   for (let i = period; i < data.length; i++) {
     const signal = Math.abs(data[i].close - data[i - period].close);
     let noise = 0;
@@ -74,10 +80,13 @@ export function calcATR(data, period) {
       Math.abs(data[i].low - data[i - 1].close)
     ));
   }
+  if (trs.length < period) return result;
   let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  // Push initial ATR at bar[period]
+  result.push({ time: data[period].time, value: atr });
   for (let i = period; i < trs.length; i++) {
     atr = (atr * (period - 1) + trs[i]) / period;
-    result.push({ time: data[i + 1].time, value: atr });
+    if (i + 1 < data.length) result.push({ time: data[i + 1].time, value: atr });
   }
   return result;
 }
@@ -85,7 +94,13 @@ export function calcATR(data, period) {
 export function calcDEMA(data, period) {
   const ema1 = calcEMA(data, period);
   if (ema1.length < period) return [];
-  const ema2 = calcEMA(ema1.map((d, i) => ({ time: d.time, close: d.value, high: d.value, low: d.value, open: d.value })), period);
-  const offset = ema1.length - ema2.length;
-  return ema2.map((d, i) => ({ time: d.time, value: 2 * ema1[i + offset].value - d.value }));
+  const ema2data = ema1.map(e => ({ close: e.value, time: e.time }));
+  const ema2 = calcEMA(ema2data, period);
+  const ema2Map = new Map(ema2.map(e => [e.time, e.value]));
+  const result = [];
+  for (const e1 of ema1) {
+    const e2v = ema2Map.get(e1.time);
+    if (e2v !== undefined) result.push({ time: e1.time, value: 2 * e1.value - e2v });
+  }
+  return result;
 }

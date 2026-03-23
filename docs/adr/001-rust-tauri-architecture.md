@@ -1,6 +1,6 @@
 # ADR-001: Rust + Tauri Architecture
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-03-15
 **Context:** Need a local desktop trading terminal to replace MT5 for Alpaca Markets.
 

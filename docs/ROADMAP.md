@@ -226,6 +226,9 @@ Each broker implements a Rust `BrokerTrait`. Adding a new broker means one new f
 | Import trade history | ✅ Done | Ctrl+K → IMPORTTRADES, CSV from MT5/IB/generic |
 | MT5 SQLite Direct Sync | ✅ Done | Real-time bar data from 3 Darwinex MT5 instances via BarCacheWriter — ~895 symbols, <2s incremental sync |
 
+| Portable backup + LAN sync | ✅ Done | Export/import `.typhoon-backup` + WebSocket LAN sync with HMAC auth |
+| DARWIN analytics expansion | ✅ Done | VaR multipliers, drawdown dashboard, floating equity, rebalancer, symbol overlap |
+
 ### Blocked / Deferred
 
 | Feature | Status | Notes |

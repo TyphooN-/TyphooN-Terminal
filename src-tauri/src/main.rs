@@ -69,6 +69,10 @@ struct AppState {
     /// Contains "symbol:timeframe" keys currently being fetched. Prevents page reloads
     /// from spawning duplicate multi-chunk fetches that hammer the API.
     bar_inflight: std::collections::HashSet<String>,
+    /// LAN sync server (when this instance is serving cache to other machines).
+    lan_server: Option<core::lan_sync::LanSyncServer>,
+    /// LAN sync client (when this instance is syncing from a server).
+    lan_client: Option<core::lan_sync::LanSyncClient>,
 }
 
 type SharedState = Arc<Mutex<AppState>>;
@@ -284,6 +288,242 @@ async fn keychain_delete(state: State<'_, SharedState>, account_name: String) ->
     Ok(())
 }
 
+/// Export encrypted credential + settings backup.
+/// File format: [b"TTBK"][1u8 version][32-byte salt][12-byte nonce][zstd+AES-256-GCM ciphertext]
+#[tauri::command]
+async fn export_credentials_backup(
+    state: State<'_, SharedState>,
+    path: String,
+    passphrase: String,
+    settings_json: String,
+) -> Result<String, String> {
+    use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead, Nonce};
+    use zeroize::Zeroize;
+
+    if passphrase.len() < 8 {
+        return Err("Passphrase must be at least 8 characters".into());
+    }
+
+    // Expand ~ in path
+    let expanded_path = if path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{}/{}", home, &path[2..])
+    } else {
+        path.clone()
+    };
+
+    // List all cred:* keys and decrypt them
+    let cred_keys;
+    let cache_arc;
+    {
+        let s = state.lock().await;
+        let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+        cred_keys = cache.list_kv_keys("cred:")?;
+        cache_arc = Arc::clone(cache);
+    }
+
+    let mut credentials = serde_json::Map::new();
+    for key in &cred_keys {
+        if let Some(encrypted) = cache_arc.get_kv(key)? {
+            match decrypt_credential(&encrypted) {
+                Ok(plaintext) => {
+                    credentials.insert(
+                        key.clone(),
+                        serde_json::Value::String(plaintext),
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!("Skipping undecryptable key: {}", key);
+                }
+            }
+        }
+    }
+
+    // Read .cred_salt file
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let salt_path = std::path::PathBuf::from(&home)
+        .join(".config").join("typhoon-terminal").join(".cred_salt");
+    let cred_salt = std::fs::read(&salt_path)
+        .map_err(|e| format!("Failed to read .cred_salt: {e}"))?;
+    let cred_salt_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        &cred_salt,
+    );
+
+    // Parse settings JSON from frontend
+    let settings: serde_json::Value = serde_json::from_str(&settings_json)
+        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+    // Build payload
+    let payload = serde_json::json!({
+        "version": 1,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "cred_salt": cred_salt_b64,
+        "credentials": credentials,
+        "settings": settings,
+    });
+    let payload_bytes = serde_json::to_vec(&payload)
+        .map_err(|e| format!("JSON serialize failed: {e}"))?;
+
+    // Generate backup salt (32 bytes) and nonce (12 bytes)
+    let mut backup_salt = [0u8; 32];
+    rand::fill(&mut backup_salt);
+    let mut nonce_bytes = [0u8; 12];
+    rand::fill(&mut nonce_bytes);
+
+    // Derive key: PBKDF2(passphrase, backup_salt, 200000)
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(
+        passphrase.as_bytes(),
+        &backup_salt,
+        200_000,
+        &mut key,
+    );
+
+    // Compress with zstd level 3 (fast for user-facing operations)
+    let compressed = zstd::encode_all(payload_bytes.as_slice(), 3)
+        .map_err(|e| format!("zstd compress failed: {e}"))?;
+
+    // Encrypt with AES-256-GCM
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| format!("Cipher init failed: {e}"))?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher.encrypt(nonce, compressed.as_slice())
+        .map_err(|e| format!("Encryption failed: {e}"))?;
+
+    // Zeroize sensitive material
+    key.zeroize();
+    // passphrase is owned String, will be dropped
+
+    // Write file: [b"TTBK"][1u8 version][32-byte salt][12-byte nonce][ciphertext]
+    let mut output = Vec::with_capacity(4 + 1 + 32 + 12 + ciphertext.len());
+    output.extend_from_slice(b"TTBK");
+    output.push(1u8); // version
+    output.extend_from_slice(&backup_salt);
+    output.extend_from_slice(&nonce_bytes);
+    output.extend_from_slice(&ciphertext);
+
+    std::fs::write(&expanded_path, &output)
+        .map_err(|e| format!("Write backup failed: {e}"))?;
+
+    let cred_count = credentials.len();
+    tracing::info!("Exported credential backup: {} credentials, path={}", cred_count, expanded_path);
+    Ok(format!("{{\"credentials\":{},\"size_bytes\":{},\"path\":\"{}\"}}", cred_count, output.len(), expanded_path))
+}
+
+/// Import encrypted credential + settings backup.
+/// Returns settings JSON so frontend can restore localStorage keys.
+#[tauri::command]
+async fn import_credentials_backup(
+    state: State<'_, SharedState>,
+    path: String,
+    passphrase: String,
+) -> Result<String, String> {
+    use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead, Nonce};
+    use zeroize::Zeroize;
+
+    if passphrase.len() < 8 {
+        return Err("Passphrase must be at least 8 characters".into());
+    }
+
+    // Expand ~ in path
+    let expanded_path = if path.starts_with("~/") {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{}/{}", home, &path[2..])
+    } else {
+        path.clone()
+    };
+
+    // Read file
+    let data = std::fs::read(&expanded_path)
+        .map_err(|e| format!("Read backup failed: {e}"))?;
+
+    // Validate magic and version
+    if data.len() < 4 + 1 + 32 + 12 + 1 {
+        return Err("Backup file too small or corrupted".into());
+    }
+    if &data[0..4] != b"TTBK" {
+        return Err("Not a TyphooN Terminal backup file (bad magic)".into());
+    }
+    let version = data[4];
+    if version != 1 {
+        return Err(format!("Unsupported backup version: {version}").into());
+    }
+
+    // Extract salt, nonce, ciphertext
+    let backup_salt = &data[5..37];
+    let nonce_bytes = &data[37..49];
+    let ciphertext = &data[49..];
+
+    // Derive key from passphrase + backup_salt
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(
+        passphrase.as_bytes(),
+        backup_salt,
+        200_000,
+        &mut key,
+    );
+
+    // Decrypt
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| format!("Cipher init failed: {e}"))?;
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let compressed = cipher.decrypt(nonce, ciphertext)
+        .map_err(|_| "Decryption failed — wrong passphrase or corrupted backup".to_string())?;
+
+    // Zeroize key
+    key.zeroize();
+
+    // Decompress
+    let payload_bytes = zstd::decode_all(compressed.as_slice())
+        .map_err(|e| format!("zstd decompress failed: {e}"))?;
+
+    // Parse JSON payload
+    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes)
+        .map_err(|e| format!("JSON parse failed: {e}"))?;
+
+    // Write cred_salt from payload
+    if let Some(cred_salt_b64) = payload["cred_salt"].as_str() {
+        let cred_salt = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            cred_salt_b64,
+        ).map_err(|e| format!("Base64 decode cred_salt failed: {e}"))?;
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let salt_path = std::path::PathBuf::from(&home)
+            .join(".config").join("typhoon-terminal").join(".cred_salt");
+        if let Some(parent) = salt_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&salt_path, &cred_salt)
+            .map_err(|e| format!("Write .cred_salt failed: {e}"))?;
+        tracing::info!("Restored .cred_salt from backup");
+    }
+
+    // Re-encrypt each credential with this machine's key derivation and store
+    let mut cred_count = 0;
+    if let Some(creds) = payload["credentials"].as_object() {
+        let s = state.lock().await;
+        let cache = s.db_cache.as_ref().ok_or("SQLite cache not available")?;
+        for (key, value) in creds {
+            if let Some(plaintext) = value.as_str() {
+                let encrypted = encrypt_credential(plaintext)?;
+                cache.put_kv(key, &encrypted)?;
+                cred_count += 1;
+            }
+        }
+    }
+
+    // Return settings JSON so frontend can restore localStorage
+    let settings = payload.get("settings").cloned()
+        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let settings_str = serde_json::to_string(&settings)
+        .map_err(|e| format!("JSON serialize settings failed: {e}"))?;
+
+    tracing::info!("Imported credential backup: {} credentials restored from {}", cred_count, expanded_path);
+    Ok(settings_str)
+}
+
 #[tauri::command]
 async fn get_account(state: State<'_, SharedState>) -> Result<String, String> {
     let broker = {
@@ -392,31 +632,28 @@ async fn get_bars_incremental(
         // MT5 first (primary source — full history, real-time from broker),
         // then Alpaca keys (supplementary — 15-min delayed, rate-limited)
         let mt5_key = format!("mt5:{}:{}", symbol, timeframe);
+        // Try cache keys in priority order: MT5 → broker-specific → default
+        // Single loop instead of chained .or_else() to avoid redundant SQLite lookups
+        let mut keys_to_try = vec![mt5_key.clone()];
+        keys_to_try.push(primary_key.clone());
+        if primary_key != fallback_key { keys_to_try.push(fallback_key.clone()); }
         let start = cache.as_ref().and_then(|c| {
-            match c.get_incremental_start(&mt5_key) {
-                Ok(Some(s)) => {
-                    tracing::info!("{} @ {}: MT5 key found ({} bars)", symbol, timeframe, s.1);
-                    Some((mt5_key.clone(), s))
-                }
-                Ok(None) => {
-                    tracing::info!("{} @ {}: MT5 key '{}' not in cache", symbol, timeframe, mt5_key);
-                    None
-                }
-                Err(e) => {
-                    tracing::warn!("{} @ {}: MT5 key '{}' error: {}", symbol, timeframe, mt5_key, e);
-                    None
+            for key in &keys_to_try {
+                match c.get_incremental_start(key) {
+                    Ok(Some(s)) => {
+                        let is_mt5 = key.starts_with("mt5:");
+                        tracing::info!("{} @ {}: {} key found ({} bars)", symbol, timeframe,
+                            if is_mt5 { "MT5" } else { "cache" }, s.1);
+                        return Some((key.clone(), s));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!("{} @ {}: key '{}' error: {}", symbol, timeframe, key, e);
+                    }
                 }
             }
-            .or_else(|| {
-                c.get_incremental_start(&primary_key).ok().flatten()
-                    .map(|s| (primary_key.clone(), s))
-            })
-            .or_else(|| {
-                if primary_key != fallback_key {
-                    c.get_incremental_start(&fallback_key).ok().flatten()
-                        .map(|s| (fallback_key.clone(), s))
-                } else { None }
-            })
+            tracing::debug!("{} @ {}: no cached bars found", symbol, timeframe);
+            None
         });
 
         let (key, start) = match start {
@@ -432,11 +669,19 @@ async fn get_bars_incremental(
     if let Some((after_ts, cached_count)) = &incremental_start {
         // MT5 fast path: MT5 data is authoritative — always return it, never hit Alpaca.
         // BarCacheWriter syncs every 30s; the Rust MT5 sync picks it up continuously.
+        // Uses get_bars_tail() to convert only the last `limit` bars to JSON — for 500 from
+        // 50K bars, this is ~100x less JSON construction (the main bottleneck after decompression).
         if is_mt5 {
             if let Some(c) = &cache {
-                if let Ok(Some((json, _))) = c.get_bars(&cache_key) {
+                let tail = if *cached_count > limit as usize { limit as usize } else { 0 };
+                let getter = if tail > 0 { c.get_bars_tail(&cache_key, tail) } else { c.get_bars(&cache_key) };
+                if let Ok(Some((json, _))) = getter {
                     if json.len() > 10 && json.contains("\"timestamp\"") {
-                        tracing::info!("{} @ {}: MT5 cache hit ({} bars), returning MT5 data", symbol, timeframe, cached_count);
+                        if tail > 0 {
+                            tracing::info!("{} @ {}: MT5 cache hit ({} bars), tail {} for frontend", symbol, timeframe, cached_count, tail);
+                        } else {
+                            tracing::info!("{} @ {}: MT5 cache hit ({} bars), returning MT5 data", symbol, timeframe, cached_count);
+                        }
                         { let mut s = state.lock().await; s.bar_inflight.remove(&dedup_key); }
                         return Ok(json);
                     }
@@ -2708,6 +2953,210 @@ async fn import_backup(state: State<'_, SharedState>, path: String) -> Result<St
     cache.import_backup(&path)
 }
 
+/// Full data backup magic bytes: "TTFL" (TyphooN Terminal Full)
+const FULL_BACKUP_MAGIC: &[u8; 4] = b"TTFL";
+/// Full data backup version
+const FULL_BACKUP_VERSION: u8 = 1;
+
+#[tauri::command]
+async fn export_full_backup(_state: State<'_, SharedState>, path: String) -> Result<String, String> {
+    let db_path = get_cache_dir().join("typhoon_cache.db");
+    let tmp_path = format!("{}.vacuum.tmp", path);
+
+    // Open a dedicated connection to avoid locking the shared cache
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("SQLite open failed: {e}"))?;
+
+    // VACUUM INTO creates a clean, consistent snapshot
+    conn.execute("VACUUM INTO ?1", [&tmp_path])
+        .map_err(|e| format!("VACUUM INTO failed: {e}"))?;
+
+    // Gather stats from the snapshot
+    let snap_conn = rusqlite::Connection::open(&tmp_path)
+        .map_err(|e| format!("Open snapshot failed: {e}"))?;
+    let bar_entries: i64 = snap_conn.query_row(
+        "SELECT COUNT(*) FROM bar_cache", [], |r| r.get(0)
+    ).unwrap_or(0);
+    let kv_entries: i64 = snap_conn.query_row(
+        "SELECT COUNT(*) FROM kv_cache", [], |r| r.get(0)
+    ).unwrap_or(0);
+    // DARWIN tables may not exist in old databases
+    let darwin_accounts: i64 = snap_conn.query_row(
+        "SELECT COUNT(*) FROM darwin_accounts", [], |r| r.get(0)
+    ).unwrap_or(0);
+    let darwin_deals: i64 = snap_conn.query_row(
+        "SELECT COUNT(*) FROM darwin_deals", [], |r| r.get(0)
+    ).unwrap_or(0);
+    let darwin_positions: i64 = snap_conn.query_row(
+        "SELECT COUNT(*) FROM darwin_positions", [], |r| r.get(0)
+    ).unwrap_or(0);
+    drop(snap_conn);
+
+    // Read temp file, compress with zstd level 3, wrap in TTFL header
+    let raw = std::fs::read(&tmp_path)
+        .map_err(|e| format!("Read temp file failed: {e}"))?;
+    let compressed = zstd::encode_all(raw.as_slice(), 3)
+        .map_err(|e| format!("Compress failed: {e}"))?;
+
+    // Write: [4-byte magic][1-byte version][compressed_db]
+    let mut out = Vec::with_capacity(5 + compressed.len());
+    out.extend_from_slice(FULL_BACKUP_MAGIC);
+    out.push(FULL_BACKUP_VERSION);
+    out.extend_from_slice(&compressed);
+    std::fs::write(&path, &out)
+        .map_err(|e| format!("Write backup failed: {e}"))?;
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let compressed_size = out.len() as i64;
+    let size_mb = compressed_size as f64 / 1_048_576.0;
+    tracing::info!(
+        "Full backup exported: {} bars, {} kv, {} DARWIN accounts, {} deals, {} positions → {:.1} MB",
+        bar_entries, kv_entries, darwin_accounts, darwin_deals, darwin_positions, size_mb
+    );
+
+    Ok(serde_json::json!({
+        "bar_entries": bar_entries,
+        "kv_entries": kv_entries,
+        "darwin_accounts": darwin_accounts,
+        "darwin_deals": darwin_deals,
+        "darwin_positions": darwin_positions,
+        "compressed_size": compressed_size,
+        "size_mb": format!("{:.1}", size_mb),
+    }).to_string())
+}
+
+#[tauri::command]
+async fn import_full_backup(_state: State<'_, SharedState>, path: String) -> Result<String, String> {
+    // Read and validate header
+    let data = std::fs::read(&path)
+        .map_err(|e| format!("Read backup failed: {e}"))?;
+    if data.len() < 5 {
+        return Err("File too small to be a valid .ttfull backup".into());
+    }
+    if &data[0..4] != FULL_BACKUP_MAGIC {
+        return Err("Invalid backup: missing TTFL magic header".into());
+    }
+    let version = data[4];
+    if version != FULL_BACKUP_VERSION {
+        return Err(format!("Unsupported backup version: {version} (expected {FULL_BACKUP_VERSION})"));
+    }
+
+    // Decompress to temp file
+    let compressed = &data[5..];
+    let raw = zstd::decode_all(compressed)
+        .map_err(|e| format!("Decompress failed: {e}"))?;
+    let tmp_path = format!("{}.import.tmp", path);
+    std::fs::write(&tmp_path, &raw)
+        .map_err(|e| format!("Write temp file failed: {e}"))?;
+
+    // Open the main cache database
+    let db_path = get_cache_dir().join("typhoon_cache.db");
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("SQLite open failed: {e}"))?;
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| format!("Pragma failed: {e}"))?;
+
+    // Ensure DARWIN tables exist in main DB before merge
+    darwin::create_darwin_tables(&conn)?;
+
+    // Attach backup database
+    conn.execute("ATTACH DATABASE ?1 AS backup_db", [&tmp_path])
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Attach failed: {e}")
+        })?;
+
+    let cleanup = |conn: &rusqlite::Connection, tmp: &str, msg: String| -> String {
+        let _ = conn.execute("DETACH DATABASE backup_db", []);
+        let _ = std::fs::remove_file(tmp);
+        msg
+    };
+
+    // Merge bar_cache: newer-wins
+    let bars_imported = conn.execute(
+        "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count)
+         SELECT b.key, b.data, b.timestamp, b.bar_count
+         FROM backup_db.bar_cache b
+         LEFT JOIN main.bar_cache c ON c.key = b.key
+         WHERE c.key IS NULL OR b.timestamp > c.timestamp",
+        [],
+    ).map_err(|e| cleanup(&conn, &tmp_path, format!("Merge bar_cache failed: {e}")))?;
+
+    // Merge kv_cache: newer-wins, exclude cred:* entries (credentials are in .ttbackup)
+    let kv_imported = conn.execute(
+        "INSERT OR REPLACE INTO kv_cache (key, value, timestamp)
+         SELECT b.key, b.value, b.timestamp
+         FROM backup_db.kv_cache b
+         LEFT JOIN main.kv_cache c ON c.key = b.key
+         WHERE b.key NOT LIKE 'cred:%'
+           AND (c.key IS NULL OR b.timestamp > c.timestamp)",
+        [],
+    ).map_err(|e| cleanup(&conn, &tmp_path, format!("Merge kv_cache failed: {e}")))?;
+
+    // Merge darwin_accounts: INSERT OR IGNORE (don't overwrite existing accounts)
+    let darwin_accounts_imported = conn.execute(
+        "INSERT OR IGNORE INTO darwin_accounts (darwin_ticker, name, mt5_account, initial_balance, created_at, deal_count, position_count)
+         SELECT darwin_ticker, name, mt5_account, initial_balance, created_at, deal_count, position_count
+         FROM backup_db.darwin_accounts",
+        [],
+    ).unwrap_or(0);
+
+    // Merge darwin_deals: INSERT where (account, deal_ticket) doesn't already exist
+    let darwin_deals_imported = conn.execute(
+        "INSERT INTO darwin_deals (account, time, deal_ticket, symbol, deal_type, direction, volume, price, order_ticket, commission, fee, swap, profit, balance, comment)
+         SELECT b.account, b.time, b.deal_ticket, b.symbol, b.deal_type, b.direction, b.volume, b.price, b.order_ticket, b.commission, b.fee, b.swap, b.profit, b.balance, b.comment
+         FROM backup_db.darwin_deals b
+         WHERE NOT EXISTS (
+             SELECT 1 FROM main.darwin_deals d
+             WHERE d.account = b.account AND d.deal_ticket = b.deal_ticket
+         )",
+        [],
+    ).unwrap_or(0);
+
+    // Merge darwin_positions: INSERT where (account, position_ticket) doesn't already exist
+    let darwin_positions_imported = conn.execute(
+        "INSERT INTO darwin_positions (account, open_time, position_ticket, symbol, pos_type, volume, open_price, sl, tp, close_time, close_price, commission, swap, profit)
+         SELECT b.account, b.open_time, b.position_ticket, b.symbol, b.pos_type, b.volume, b.open_price, b.sl, b.tp, b.close_time, b.close_price, b.commission, b.swap, b.profit
+         FROM backup_db.darwin_positions b
+         WHERE NOT EXISTS (
+             SELECT 1 FROM main.darwin_positions p
+             WHERE p.account = b.account AND p.position_ticket = b.position_ticket
+         )",
+        [],
+    ).unwrap_or(0);
+
+    // Merge darwin_equity_snapshots: INSERT where (darwin_ticker, timestamp) doesn't already exist
+    let darwin_snapshots_imported = conn.execute(
+        "INSERT INTO darwin_equity_snapshots (timestamp, darwin_ticker, closed_balance, unrealized_pnl, floating_equity, open_position_count)
+         SELECT b.timestamp, b.darwin_ticker, b.closed_balance, b.unrealized_pnl, b.floating_equity, b.open_position_count
+         FROM backup_db.darwin_equity_snapshots b
+         WHERE NOT EXISTS (
+             SELECT 1 FROM main.darwin_equity_snapshots s
+             WHERE s.darwin_ticker = b.darwin_ticker AND s.timestamp = b.timestamp
+         )",
+        [],
+    ).unwrap_or(0);
+
+    conn.execute("DETACH DATABASE backup_db", [])
+        .map_err(|e| format!("Detach failed: {e}"))?;
+    let _ = std::fs::remove_file(&tmp_path);
+
+    tracing::info!(
+        "Full backup imported: {} bars, {} kv, {} DARWIN accounts, {} deals, {} positions, {} snapshots",
+        bars_imported, kv_imported, darwin_accounts_imported, darwin_deals_imported,
+        darwin_positions_imported, darwin_snapshots_imported
+    );
+
+    Ok(serde_json::json!({
+        "bars_imported": bars_imported,
+        "kv_imported": kv_imported,
+        "darwin_accounts_imported": darwin_accounts_imported,
+        "darwin_deals_imported": darwin_deals_imported,
+        "darwin_positions_imported": darwin_positions_imported,
+        "darwin_snapshots_imported": darwin_snapshots_imported,
+    }).to_string())
+}
+
 #[tauri::command]
 async fn db_cache_detailed_stats(state: State<'_, SharedState>) -> Result<String, String> {
     let s = state.lock().await;
@@ -3291,7 +3740,7 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
         // Rayon thread wake-up ~1-2ms per task exceeds benefit for typical ~9 entries/cycle
         let compress_fn = |(data, norm_key, bar_count): (Vec<u8>, String, i64)| -> Option<(String, Vec<u8>, i64)> {
             let bc = if data.len() >= 8 {
-                u32::from_le_bytes(data[4..8].try_into().unwrap()) as i64
+                u32::from_le_bytes(data[4..8].try_into().unwrap_or([0; 4])) as i64
             } else { bar_count };
             let comp = zstd::encode_all(data.as_slice(), 3).ok()?;
             Some((norm_key, comp, bc))
@@ -4663,6 +5112,47 @@ async fn get_darwin_deals(
 }
 
 #[tauri::command]
+async fn get_darwin_trade_markers(
+    _state: State<'_, SharedState>,
+    symbol: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let accounts = darwin::list_darwin_accounts(&conn)?;
+    let mut markers: Vec<serde_json::Value> = Vec::new();
+    for acct in &accounts {
+        let mut stmt = conn.prepare(
+            "SELECT d.time, d.deal_type, d.direction, d.volume, d.price, d.account \
+             FROM darwin_deals d \
+             WHERE d.account = ?1 AND d.symbol = ?2 AND d.direction IN ('in', 'out') AND d.volume > 0 \
+             ORDER BY d.time"
+        ).map_err(|e| format!("Prepare failed: {e}"))?;
+        let rows = stmt.query_map(
+            rusqlite::params![&acct.darwin_ticker, &symbol],
+            |row| {
+                Ok(serde_json::json!({
+                    "time": row.get::<_, String>(0)?,
+                    "side": row.get::<_, String>(1)?,
+                    "direction": row.get::<_, String>(2)?,
+                    "volume": row.get::<_, f64>(3)?,
+                    "price": row.get::<_, f64>(4)?,
+                    "darwin_ticker": row.get::<_, String>(5)?,
+                }))
+            },
+        ).map_err(|e| format!("Query failed: {e}"))?;
+        for row in rows {
+            if let Ok(v) = row { markers.push(v); }
+        }
+    }
+    // Sort by time across all accounts
+    markers.sort_by(|a, b| {
+        let ta = a["time"].as_str().unwrap_or("");
+        let tb = b["time"].as_str().unwrap_or("");
+        ta.cmp(tb)
+    });
+    serde_json::to_string(&markers).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
 async fn get_darwin_positions(
     _state: State<'_, SharedState>,
     darwin_ticker: String,
@@ -4800,6 +5290,91 @@ async fn get_darwin_daily_returns(
 }
 
 #[tauri::command]
+async fn get_combined_drawdown_dashboard(
+    _state: State<'_, SharedState>,
+    top_n: Option<u32>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let dashboard = darwin::get_combined_drawdown_dashboard(&conn, top_n.unwrap_or(10) as usize)?;
+    serde_json::to_string(&dashboard).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_floating_equity(
+    state: State<'_, SharedState>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    // Get live prices from broker for all DARWIN open position symbols
+    let mut prices = std::collections::HashMap::new();
+    {
+        let s = state.lock().await;
+        if let Some(broker) = s.broker.as_ref() {
+            // Get all unique symbols from open positions across all DARWINs
+            let accounts = darwin::list_darwin_accounts(&conn)?;
+            let mut symbols = std::collections::HashSet::new();
+            for acct in &accounts {
+                if let Ok(positions) = darwin::get_darwin_open_positions(&conn, &acct.darwin_ticker) {
+                    for pos in &positions {
+                        symbols.insert(pos.symbol.clone());
+                    }
+                }
+            }
+            // Fetch latest quotes for mark-to-market
+            for sym in &symbols {
+                if let Ok(quote) = broker.get_latest_quote(sym).await {
+                    if quote.bid > 0.0 { prices.insert(sym.clone(), quote.bid); }
+                }
+            }
+        }
+    }
+    let dashboard = darwin::compute_floating_equity(&conn, &prices)?;
+    // Record snapshots for each DARWIN
+    for dw in &dashboard.darwins {
+        let _ = darwin::record_equity_snapshot(
+            &conn, &dw.darwin_ticker, dw.closed_balance, dw.unrealized_pnl,
+            dw.open_positions.len() as i64,
+        );
+    }
+    // Record combined snapshot
+    let _ = darwin::record_equity_snapshot(
+        &conn, "COMBINED", dashboard.combined_closed_balance,
+        dashboard.combined_unrealized_pnl,
+        dashboard.darwins.iter().map(|d| d.open_positions.len() as i64).sum(),
+    );
+    serde_json::to_string(&dashboard).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_rebalance_suggestions(
+    state: State<'_, SharedState>,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    // Get live prices for profit/loss determination — only suggest reducing profitable positions
+    let mut prices = std::collections::HashMap::new();
+    {
+        let s = state.lock().await;
+        if let Some(broker) = s.broker.as_ref() {
+            let accounts = darwin::list_darwin_accounts(&conn)?;
+            let mut symbols = std::collections::HashSet::new();
+            for acct in &accounts {
+                if let Ok(positions) = darwin::get_darwin_open_positions(&conn, &acct.darwin_ticker) {
+                    for pos in &positions {
+                        symbols.insert(pos.symbol.clone());
+                    }
+                }
+            }
+            for sym in &symbols {
+                if let Ok(quote) = broker.get_latest_quote(sym).await {
+                    if quote.bid > 0.0 { prices.insert(sym.clone(), quote.bid); }
+                }
+            }
+        }
+    }
+    let dashboard = darwin::compute_rebalance_suggestions(&conn, &prices)?;
+    serde_json::to_string(&dashboard).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
 async fn get_darwin_monthly_returns(
     _state: State<'_, SharedState>,
     darwin_ticker: String,
@@ -4875,6 +5450,13 @@ async fn get_portfolio_open_positions(_state: State<'_, SharedState>) -> Result<
     let conn = open_darwin_connection()?;
     let positions = darwin::get_portfolio_open_positions(&conn)?;
     serde_json::to_string(&positions).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_symbol_overlap(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let overlaps = darwin::get_symbol_overlap(&conn)?;
+    serde_json::to_string(&overlaps).map_err(|e| format!("Serialize failed: {e}"))
 }
 
 #[tauri::command]
@@ -5301,7 +5883,7 @@ async fn fetch_binance_bars(
 
     let start_ms = start_date
         .and_then(|d| chrono::NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
-        .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis())
+        .and_then(|d| d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc().timestamp_millis()))
         .unwrap_or(1357027200000); // 2013-01-01
 
     let end_ms = chrono::Utc::now().timestamp_millis();
@@ -5587,6 +6169,22 @@ async fn export_radar_snapshot(
 }
 
 #[tauri::command]
+async fn get_var_multipliers(_state: State<'_, SharedState>) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::compute_var_multipliers(&conn)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
+async fn get_dscore_estimate(
+    _state: State<'_, SharedState>, darwin_ticker: String,
+) -> Result<String, String> {
+    let conn = open_darwin_connection()?;
+    let result = darwin::estimate_dscore(&conn, &darwin_ticker)?;
+    serde_json::to_string(&result).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+#[tauri::command]
 async fn delete_darwin_account(
     _state: State<'_, SharedState>,
     darwin_ticker: String,
@@ -5660,6 +6258,83 @@ async fn watch_darwin_imports(
     }
 
     Ok(serde_json::to_string(&reimported).unwrap_or("[]".into()))
+}
+
+// ── LAN Sync Commands ───────────────────────────────────────────────
+
+#[tauri::command]
+async fn lan_sync_start_server(
+    state: State<'_, SharedState>,
+    port: u16,
+    passphrase: String,
+) -> Result<String, String> {
+    let mut s = state.lock().await;
+    if s.lan_server.is_some() {
+        return Err("LAN sync server already running".into());
+    }
+    let cache = s.db_cache.as_ref().ok_or("No cache available")?.clone();
+    let server = core::lan_sync::LanSyncServer::start(cache, port, &passphrase).await?;
+    s.lan_server = Some(server);
+    Ok(format!("LAN sync server started on port {port}"))
+}
+
+#[tauri::command]
+async fn lan_sync_stop_server(state: State<'_, SharedState>) -> Result<String, String> {
+    let mut s = state.lock().await;
+    match s.lan_server.as_mut() {
+        Some(server) => {
+            server.stop();
+            s.lan_server = None;
+            Ok("LAN sync server stopped".into())
+        }
+        None => Err("No LAN sync server running".into()),
+    }
+}
+
+#[tauri::command]
+async fn lan_sync_connect(
+    state: State<'_, SharedState>,
+    host: String,
+    port: u16,
+    passphrase: String,
+) -> Result<String, String> {
+    let s = state.lock().await;
+    if s.lan_client.is_some() {
+        return Err("LAN sync client already connected".into());
+    }
+    let cache = s.db_cache.as_ref().ok_or("No cache available")?.clone();
+    // Drop the state lock before the async connect (which may take time)
+    drop(s);
+    let client = core::lan_sync::LanSyncClient::connect(cache, &host, port, &passphrase).await?;
+    let mut s = state.lock().await;
+    s.lan_client = Some(client);
+    Ok(format!("LAN sync connected to {host}:{port}"))
+}
+
+#[tauri::command]
+async fn lan_sync_disconnect(state: State<'_, SharedState>) -> Result<String, String> {
+    let mut s = state.lock().await;
+    match s.lan_client.as_mut() {
+        Some(client) => {
+            client.disconnect();
+            s.lan_client = None;
+            Ok("LAN sync client disconnected".into())
+        }
+        None => Err("No LAN sync client connected".into()),
+    }
+}
+
+#[tauri::command]
+async fn lan_sync_status(state: State<'_, SharedState>) -> Result<String, String> {
+    let s = state.lock().await;
+    let status = if let Some(ref server) = s.lan_server {
+        server.status().await
+    } else if let Some(ref client) = s.lan_client {
+        client.status().await
+    } else {
+        core::lan_sync::SyncStatus::default()
+    };
+    serde_json::to_string(&status).map_err(|e| format!("Serialize failed: {e}"))
 }
 
 fn main() {
@@ -5739,6 +6414,8 @@ fn main() {
         },
         bar_builder: core::bar_builder::BarBuilder::new(),
         bar_inflight: std::collections::HashSet::new(),
+        lan_server: None,
+        lan_client: None,
     }));
 
     tauri::Builder::default()
@@ -5749,6 +6426,8 @@ fn main() {
             keychain_save,
             keychain_load,
             keychain_delete,
+            export_credentials_backup,
+            import_credentials_backup,
             // Broker
             connect,
             get_account,
@@ -5905,10 +6584,14 @@ fn main() {
             list_darwin_accounts,
             get_darwin_summary,
             get_darwin_deals,
+            get_darwin_trade_markers,
             get_darwin_positions,
             get_darwin_equity_curve,
             get_darwin_pnl_by_symbol,
             get_darwin_open_positions,
+            get_combined_drawdown_dashboard,
+            get_floating_equity,
+            get_rebalance_suggestions,
             // Trade Pattern Analytics
             get_darwin_streaks,
             get_darwin_hourly_pnl,
@@ -5930,6 +6613,7 @@ fn main() {
             get_portfolio_monthly_returns,
             get_portfolio_summary,
             get_portfolio_open_positions,
+            get_symbol_overlap,
             get_portfolio_exposure,
             get_portfolio_equity_curve,
             // Advanced Risk Analytics
@@ -5970,6 +6654,8 @@ fn main() {
             find_low_correlation_darwins,
             get_investor_flow,
             get_dscore_components,
+            get_var_multipliers,
+            get_dscore_estimate,
             check_alerts,
             // FTP Screener & Radar
             scan_darwin_ftp,
@@ -5977,6 +6663,15 @@ fn main() {
             delete_darwin_account,
             // DARWIN File Watcher
             watch_darwin_imports,
+            // Full Data Backup (bar_cache + kv_cache + DARWIN tables)
+            export_full_backup,
+            import_full_backup,
+            // LAN Sync
+            lan_sync_start_server,
+            lan_sync_stop_server,
+            lan_sync_connect,
+            lan_sync_disconnect,
+            lan_sync_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TyphooN Terminal");

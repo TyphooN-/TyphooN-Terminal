@@ -44,7 +44,9 @@ fn unpack_bars(data: &[u8]) -> Result<String, String> {
     if data.len() < 8 || &data[0..4] != BAR_BINARY_MAGIC {
         return Err("Not binary bar format".into());
     }
-    let count = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
+    let count = u32::from_le_bytes(
+        data[4..8].try_into().map_err(|_| "Failed to read bar_count from binary header")?
+    ) as usize;
     let expected = 8 + count * BYTES_PER_BAR;
     if data.len() < expected {
         return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
@@ -53,12 +55,24 @@ fn unpack_bars(data: &[u8]) -> Result<String, String> {
     let mut bars = Vec::with_capacity(count);
     for i in 0..count {
         let offset = 8 + i * BYTES_PER_BAR;
-        let ts_ms = i64::from_le_bytes(data[offset..offset+8].try_into().unwrap());
-        let open = f64::from_le_bytes(data[offset+8..offset+16].try_into().unwrap());
-        let high = f64::from_le_bytes(data[offset+16..offset+24].try_into().unwrap());
-        let low = f64::from_le_bytes(data[offset+24..offset+32].try_into().unwrap());
-        let close = f64::from_le_bytes(data[offset+32..offset+40].try_into().unwrap());
-        let volume = f64::from_le_bytes(data[offset+40..offset+48].try_into().unwrap());
+        let ts_ms = i64::from_le_bytes(
+            data[offset..offset+8].try_into().map_err(|_| format!("Bad timestamp at bar {i}"))?
+        );
+        let open = f64::from_le_bytes(
+            data[offset+8..offset+16].try_into().map_err(|_| format!("Bad open at bar {i}"))?
+        );
+        let high = f64::from_le_bytes(
+            data[offset+16..offset+24].try_into().map_err(|_| format!("Bad high at bar {i}"))?
+        );
+        let low = f64::from_le_bytes(
+            data[offset+24..offset+32].try_into().map_err(|_| format!("Bad low at bar {i}"))?
+        );
+        let close = f64::from_le_bytes(
+            data[offset+32..offset+40].try_into().map_err(|_| format!("Bad close at bar {i}"))?
+        );
+        let volume = f64::from_le_bytes(
+            data[offset+40..offset+48].try_into().map_err(|_| format!("Bad volume at bar {i}"))?
+        );
 
         // Convert epoch ms back to RFC3339 timestamp
         let dt = chrono::DateTime::from_timestamp_millis(ts_ms)
@@ -69,6 +83,44 @@ fn unpack_bars(data: &[u8]) -> Result<String, String> {
         }));
     }
 
+    serde_json::to_string(&bars).map_err(|e| format!("JSON serialize failed: {e}"))
+}
+
+/// Unpack only the last `tail` bars from binary format — avoids converting 50K bars when only 500 needed.
+/// Decompression is still required (zstd doesn't support seeking), but JSON construction is O(tail) not O(n).
+fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
+    if data.len() < 8 || &data[0..4] != BAR_BINARY_MAGIC {
+        return Err("Not binary bar format".into());
+    }
+    let count = u32::from_le_bytes(
+        data[4..8].try_into().map_err(|_| "Failed to read bar_count from binary header")?
+    ) as usize;
+    let expected = 8 + count * BYTES_PER_BAR;
+    if data.len() < expected {
+        return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
+    }
+    if tail == 0 || tail >= count {
+        return unpack_bars(data); // no trimming needed
+    }
+
+    let start_bar = count - tail;
+    let mut bars = Vec::with_capacity(tail);
+    for i in start_bar..count {
+        let offset = 8 + i * BYTES_PER_BAR;
+        let ts_ms = i64::from_le_bytes(
+            data[offset..offset+8].try_into().map_err(|_| format!("Bad timestamp at bar {i}"))?
+        );
+        let open = f64::from_le_bytes(data[offset+8..offset+16].try_into().map_err(|_| format!("Bad open at bar {i}"))?);
+        let high = f64::from_le_bytes(data[offset+16..offset+24].try_into().map_err(|_| format!("Bad high at bar {i}"))?);
+        let low = f64::from_le_bytes(data[offset+24..offset+32].try_into().map_err(|_| format!("Bad low at bar {i}"))?);
+        let close = f64::from_le_bytes(data[offset+32..offset+40].try_into().map_err(|_| format!("Bad close at bar {i}"))?);
+        let volume = f64::from_le_bytes(data[offset+40..offset+48].try_into().map_err(|_| format!("Bad volume at bar {i}"))?);
+        let dt = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
+        bars.push(serde_json::json!({
+            "timestamp": dt.to_rfc3339(),
+            "open": open, "high": high, "low": low, "close": close, "volume": volume,
+        }));
+    }
     serde_json::to_string(&bars).map_err(|e| format!("JSON serialize failed: {e}"))
 }
 
@@ -117,12 +169,14 @@ impl SqliteCache {
 
     /// Store bar data in packed binary format + zstd compression.
     /// Binary format is ~3-5x smaller than JSON before compression.
-    /// Uses zstd level 9 for persistent storage (2-3x better ratio than level 3,
-    /// ~10ms overhead per 10K bars — acceptable for background writes).
+    /// Uses zstd level 3 — same as put_bars_fast. Level 9 was wasteful since
+    /// merge_bars recompresses anyway, and backup export uses level 9 for archival.
     pub fn put_bars(&self, key: &str, json_data: &str) -> Result<(), String> {
         let binary = pack_bars(json_data)?;
-        let bar_count = u32::from_le_bytes(binary[4..8].try_into().unwrap()) as i64;
-        let compressed = zstd::encode_all(binary.as_slice(), 9)
+        let bar_count = u32::from_le_bytes(
+            binary[4..8].try_into().map_err(|_| "bar_count header slice failed")?
+        ) as i64;
+        let compressed = zstd::encode_all(binary.as_slice(), 3)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
 
@@ -158,6 +212,46 @@ impl SqliteCache {
                     // Legacy JSON format — read as-is
                     String::from_utf8(decompressed)
                         .map_err(|e| format!("UTF-8 decode failed: {e}"))?
+                };
+                Ok(Some((json, timestamp)))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("SQLite query failed: {e}")),
+        }
+    }
+
+    /// Get the last `tail` bars from cache — much faster than get_bars() when tail << total.
+    /// For 500 bars from a 50K-bar cache: converts only 500 bars to JSON instead of 50K.
+    /// Decompression overhead is unchanged (zstd doesn't support seeking).
+    pub fn get_bars_tail(&self, key: &str, tail: usize) -> Result<Option<(String, i64)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT data, timestamp FROM bar_cache WHERE key = ?1"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+
+        let result = stmt.query_row(params![key], |row| {
+            let data: Vec<u8> = row.get(0)?;
+            let timestamp: i64 = row.get(1)?;
+            Ok((data, timestamp))
+        });
+
+        match result {
+            Ok((compressed, timestamp)) => {
+                let decompressed = zstd::decode_all(compressed.as_slice())
+                    .map_err(|e| format!("zstd decompress failed: {e}"))?;
+                let json = if decompressed.len() >= 4 && &decompressed[0..4] == BAR_BINARY_MAGIC {
+                    unpack_bars_tail(&decompressed, tail)?
+                } else {
+                    // Legacy JSON: parse, trim, reserialize
+                    let text = String::from_utf8(decompressed)
+                        .map_err(|e| format!("UTF-8 decode failed: {e}"))?;
+                    let all: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
+                    if tail > 0 && all.len() > tail {
+                        serde_json::to_string(&all[all.len() - tail..])
+                            .map_err(|e| format!("JSON error: {e}"))?
+                    } else {
+                        text
+                    }
                 };
                 Ok(Some((json, timestamp)))
             }
@@ -280,15 +374,24 @@ impl SqliteCache {
 
         match result {
             Ok(compressed) => {
+                // TODO: Future optimization — add first_ts/last_ts columns to bar_cache
+                // so we can read the incremental start from SQLite metadata without
+                // decompressing the full binary blob. Would eliminate zstd decode here.
                 let decompressed = zstd::decode_all(compressed.as_slice())
                     .map_err(|e| format!("zstd decompress failed: {e}"))?;
                 if decompressed.len() >= 8 && &decompressed[0..4] == BAR_BINARY_MAGIC {
-                    let count = u32::from_le_bytes(decompressed[4..8].try_into().unwrap()) as usize;
+                    let count = u32::from_le_bytes(
+                        decompressed[4..8].try_into()
+                            .map_err(|_| "Failed to read bar_count in get_incremental_start")?
+                    ) as usize;
                     if count < 2 { return Ok(None); }
                     // Second-to-last bar — so we re-fetch the live candle
                     let target_offset = 8 + (count - 2) * BYTES_PER_BAR;
                     if decompressed.len() < target_offset + 8 { return Ok(None); }
-                    let ts_ms = i64::from_le_bytes(decompressed[target_offset..target_offset+8].try_into().unwrap());
+                    let ts_ms = i64::from_le_bytes(
+                        decompressed[target_offset..target_offset+8].try_into()
+                            .map_err(|_| "Failed to read timestamp in get_incremental_start")?
+                    );
                     let dt = chrono::DateTime::from_timestamp_millis(ts_ms).unwrap_or_default();
                     Ok(Some((dt.to_rfc3339(), count)))
                 } else {
@@ -358,7 +461,9 @@ impl SqliteCache {
     /// Level 3 is ~3× faster than level 9 with only ~15% larger output.
     fn put_bars_fast(&self, key: &str, json_data: &str) -> Result<(), String> {
         let binary = pack_bars(json_data)?;
-        let bar_count = u32::from_le_bytes(binary[4..8].try_into().unwrap()) as i64;
+        let bar_count = u32::from_le_bytes(
+            binary[4..8].try_into().map_err(|_| "bar_count header slice failed in put_bars_fast")?
+        ) as i64;
         let compressed = zstd::encode_all(binary.as_slice(), 3)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
@@ -527,12 +632,62 @@ impl SqliteCache {
         self.conn.lock().map_err(|e| format!("Lock failed: {e}"))
     }
 
+    /// List all kv_cache keys matching a prefix (e.g., "cred:" returns all credential keys).
+    /// LIKE wildcards in the prefix are escaped to prevent overly broad matches.
+    pub fn list_kv_keys(&self, prefix: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let escaped = prefix.replace('%', "\\%").replace('_', "\\_");
+        let pattern = format!("{}%", escaped);
+        let mut stmt = conn.prepare(
+            "SELECT key FROM kv_cache WHERE key LIKE ?1 ESCAPE '\\'"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let rows = stmt.query_map(params![pattern], |row| {
+            row.get::<_, String>(0)
+        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let mut keys = Vec::new();
+        for row in rows {
+            if let Ok(k) = row { keys.push(k); }
+        }
+        Ok(keys)
+    }
+
+    /// Get raw bar cache entry without decompression (for LAN sync transfer).
+    /// Returns the compressed blob and its timestamp as stored in SQLite.
+    pub fn get_raw_bar_entry(&self, key: &str) -> Result<Option<(Vec<u8>, i64)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT data, timestamp FROM bar_cache WHERE key = ?1"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+
+        match stmt.query_row(params![key], |row| {
+            let data: Vec<u8> = row.get(0)?;
+            let timestamp: i64 = row.get(1)?;
+            Ok((data, timestamp))
+        }) {
+            Ok(result) => Ok(Some(result)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("SQLite query failed: {e}")),
+        }
+    }
+
+    /// Write raw bar cache entry (from LAN sync, no compression needed — already compressed).
+    pub fn put_raw_bar_entry(&self, key: &str, data: &[u8], timestamp: i64, bar_count: i64) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
+            params![key, data, timestamp, bar_count],
+        ).map_err(|e| format!("SQLite insert failed: {e}"))?;
+        Ok(())
+    }
+
     /// Delete all cache entries matching a symbol prefix (e.g., "AAPL:" deletes all TFs for AAPL).
     pub fn delete_symbol(&self, symbol_prefix: &str) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        let pattern = format!("{}:%", symbol_prefix);
+        // Escape LIKE wildcards in prefix to prevent overly broad deletion
+        let escaped = symbol_prefix.replace('%', "\\%").replace('_', "\\_");
+        let pattern = format!("{}:%", escaped);
         let deleted = conn.execute(
-            "DELETE FROM bar_cache WHERE key LIKE ?1", params![pattern]
+            "DELETE FROM bar_cache WHERE key LIKE ?1 ESCAPE '\\'", params![pattern]
         ).map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
         Ok(deleted)
     }

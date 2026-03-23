@@ -74,25 +74,22 @@ Main Thread                    Worker Thread
 
 **Alternative:** Use `OffscreenCanvas` in the worker for chart rendering. Not supported by lightweight-charts.
 
-## Wasm Indicator Engine (DEFERRED)
+## Wasm Indicator Engine (IMPLEMENTED)
 
-### Why Deferred
-- JavaScript is already fast enough for the current workload
-- Wasm compilation adds build complexity (wasm-pack, wasm-bindgen)
-- The indicator math would need to be ported from JS to Rust (duplication)
-- Marginal benefit: 2-5x speedup on computation that takes < 50ms
+Implemented as a separate `wasm-indicators` crate (32KB Wasm binary). See [ADR-027](027-binary-storage-wasm-gpu.md) for full details.
 
-### Architecture (if needed later)
+### Architecture
 ```
-Rust (src-tauri/src/indicators/)  →  wasm-pack  →  pkg/indicators_bg.wasm
+wasm-indicators/src/lib.rs  →  wasm-pack  →  pkg/typhoon_indicators_bg.wasm (32KB)
                                                       ↓
-Frontend: import { calcSMA, calcKAMA } from './pkg/indicators.js'
+Frontend: import init, { wasm_sma, ... } from './pkg/typhoon_indicators.js'
 ```
 
 **Key decisions:**
-- Share Rust indicator code between backend (backtester) and frontend (Wasm)
-- Use `wasm-bindgen` for JS interop with typed arrays
-- Bundle Wasm as a Vite asset (< 100KB gzipped for all indicators)
+- Separate `wasm-indicators` crate (not shared with backend backtester — different I/O contracts)
+- `wasm-bindgen` for JS interop with flat `Float64Array` (5 values/bar, zero-copy)
+- 15+ call sites in chart rendering route through Wasm with JS fallback
+- Grid optimizer runs 50K combinations in ~100ms (50-100x faster than JS)
 
 ## Pine Script Compatibility Layer (NOT PLANNED)
 

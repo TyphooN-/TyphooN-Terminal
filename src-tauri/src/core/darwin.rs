@@ -132,6 +132,18 @@ pub fn create_darwin_tables(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_darwin_positions_account ON darwin_positions(account);
         CREATE INDEX IF NOT EXISTS idx_darwin_positions_symbol ON darwin_positions(account, symbol);
         CREATE INDEX IF NOT EXISTS idx_darwin_positions_time ON darwin_positions(account, open_time);
+
+        CREATE TABLE IF NOT EXISTS darwin_equity_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER NOT NULL,
+            darwin_ticker TEXT NOT NULL,
+            closed_balance REAL NOT NULL DEFAULT 0,
+            unrealized_pnl REAL NOT NULL DEFAULT 0,
+            floating_equity REAL NOT NULL DEFAULT 0,
+            open_position_count INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (darwin_ticker) REFERENCES darwin_accounts(darwin_ticker)
+        );
+        CREATE INDEX IF NOT EXISTS idx_equity_snap_ticker ON darwin_equity_snapshots(darwin_ticker, timestamp);
     ").map_err(|e| format!("Create darwin tables failed: {e}"))?;
     Ok(())
 }
@@ -187,6 +199,66 @@ fn cell_str(val: &calamine::Data) -> String {
 
 /// Import a single DARWIN's MT5 XLSX trade history into SQLite.
 /// Returns (darwin_ticker, deal_count, position_count).
+/// MT5 exports XLSX with ALL XML/rels files as UTF-16 LE inside the zip.
+/// calamine/quick-xml only handles UTF-8. This rewrites every UTF-16 BOM entry to UTF-8 in a temp copy.
+fn fix_utf16_xlsx(xlsx_path: &str) -> Result<String, String> {
+    use std::io::{Read, Write, Cursor};
+    let data = std::fs::read(xlsx_path).map_err(|e| format!("Read failed: {e}"))?;
+
+    // Check if ANY zip entry starts with UTF-16 BOM (FF FE)
+    let needs_fix = {
+        let mut r = zip::ZipArchive::new(Cursor::new(&data))
+            .map_err(|e| format!("ZIP open failed: {e}"))?;
+        let mut found = false;
+        for i in 0..r.len() {
+            if let Ok(mut entry) = r.by_index(i) {
+                let mut buf = [0u8; 2];
+                if entry.read_exact(&mut buf).is_ok() && buf == [0xFF, 0xFE] {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        found
+    };
+
+    if !needs_fix {
+        return Ok(xlsx_path.to_string()); // already UTF-8, use original
+    }
+
+    // Rewrite to temp file with all UTF-16 entries converted to UTF-8
+    let tmp_path = format!("{}.utf8.xlsx", xlsx_path);
+    let out_file = std::fs::File::create(&tmp_path).map_err(|e| format!("Create tmp failed: {e}"))?;
+    let mut writer = zip::ZipWriter::new(out_file);
+    let mut archive = zip::ZipArchive::new(Cursor::new(&data))
+        .map_err(|e| format!("ZIP reopen failed: {e}"))?;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| format!("ZIP entry {i} failed: {e}"))?;
+        let name = entry.name().to_string();
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(entry.compression());
+        writer.start_file(&name, opts).map_err(|e| format!("ZIP write failed: {e}"))?;
+
+        let mut raw = Vec::new();
+        entry.read_to_end(&mut raw).map_err(|e| format!("ZIP read failed: {e}"))?;
+
+        // Convert ANY entry with UTF-16 LE BOM (.xml, .rels, [Content_Types].xml, etc.)
+        if raw.len() >= 2 && raw[0] == 0xFF && raw[1] == 0xFE {
+            let utf16: Vec<u16> = raw[2..].chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            let utf8 = String::from_utf16(&utf16)
+                .map_err(|e| format!("UTF-16 decode failed in {name}: {e}"))?;
+            writer.write_all(utf8.as_bytes()).map_err(|e| format!("Write failed: {e}"))?;
+        } else {
+            writer.write_all(&raw).map_err(|e| format!("Write failed: {e}"))?;
+        }
+    }
+    writer.finish().map_err(|e| format!("ZIP finalize failed: {e}"))?;
+    Ok(tmp_path)
+}
+
 pub fn import_darwin_xlsx(
     conn: &Connection,
     xlsx_path: &str,
@@ -194,8 +266,14 @@ pub fn import_darwin_xlsx(
 ) -> Result<(String, usize, usize), String> {
     use calamine::{Reader, open_workbook, Xlsx};
 
-    let mut workbook: Xlsx<_> = open_workbook(xlsx_path)
+    // MT5 exports UTF-16 LE XML inside XLSX — convert to UTF-8 if needed
+    let effective_path = fix_utf16_xlsx(xlsx_path)?;
+    let mut workbook: Xlsx<_> = open_workbook(&effective_path)
         .map_err(|e| format!("Failed to open XLSX: {e}"))?;
+    // Clean up temp file after opening (workbook reads into memory)
+    if effective_path != xlsx_path {
+        let _ = std::fs::remove_file(&effective_path);
+    }
 
     let sheet_name = workbook.sheet_names().first()
         .ok_or("No sheets in workbook")?.clone();
@@ -985,7 +1063,22 @@ pub fn get_daily_returns(conn: &Connection, darwin_ticker: &str) -> Result<Vec<D
 }
 
 /// Compute VaR and risk metrics for a DARWIN or portfolio.
+/// Compute VaR using a minimum 20-day (1 month) window.
+/// For Darwinex-specific VaR, use compute_var_multipliers() which uses 45d+6m blend.
+/// This function uses the last 20+ days if available, full history if less than 20 days.
 pub fn compute_var(daily_returns: &[DailyReturn]) -> VaRResult {
+    // Use at least 20 trading days (1 month) for meaningful VaR
+    let windowed = if daily_returns.len() > 20 {
+        &daily_returns[daily_returns.len() - 20..]
+    } else {
+        daily_returns
+    };
+    compute_var_full(windowed)
+}
+
+/// Compute VaR on the full provided dataset (no windowing).
+/// Used internally and by functions that pre-window their data.
+pub fn compute_var_full(daily_returns: &[DailyReturn]) -> VaRResult {
     if daily_returns.len() < 2 {
         return VaRResult {
             var_95: 0.0, var_99: 0.0, cvar_95: 0.0, cvar_99: 0.0,
@@ -1099,13 +1192,17 @@ pub fn get_rolling_var(daily_returns: &[DailyReturn], window_days: usize) -> Vec
 }
 
 /// Compute cross-DARWIN correlation matrix from daily returns.
+/// Uses a 45-day rolling window to match Darwinex's correlation methodology.
+/// Darwinex calculates DARWIN correlation based on the last 45 trading days of returns.
 pub fn get_darwin_correlations(conn: &Connection) -> Result<Vec<CorrelationEntry>, String> {
     let accounts = list_darwin_accounts(conn)?;
     let mut all_returns: Vec<(String, std::collections::HashMap<String, f64>)> = Vec::new();
 
     for account in &accounts {
         let returns = get_daily_returns(conn, &account.darwin_ticker)?;
-        let map: std::collections::HashMap<String, f64> = returns.iter()
+        // Use only last 45 trading days (Darwinex standard correlation window)
+        let recent = if returns.len() > 45 { &returns[returns.len() - 45..] } else { &returns };
+        let map: std::collections::HashMap<String, f64> = recent.iter()
             .map(|r| (r.date.clone(), r.return_pct))
             .collect();
         all_returns.push((account.darwin_ticker.clone(), map));
@@ -2184,7 +2281,7 @@ pub fn run_stress_tests(conn: &Connection) -> Result<Vec<StressTestResult>, Stri
         return Err("Insufficient daily returns for stress testing (need >= 10 days)".into());
     }
 
-    let var_stats = compute_var(&daily_returns);
+    let var_stats = compute_var_full(&daily_returns);
     let ann_vol = var_stats.annualized_vol;
 
     // Estimate portfolio beta: use vol ratio as proxy (portfolio vol / typical market vol ~16%)
@@ -3765,8 +3862,8 @@ pub fn compare_to_benchmark(
         mean_excess * 252.0 / tracking_error
     } else { 0.0 };
 
-    // DARWIN stats
-    let var_result = compute_var(&darwin_dr);
+    // DARWIN stats (full history for accurate Sharpe / total return)
+    let var_result = compute_var_full(&darwin_dr);
     let darwin_return = darwin_dr.last().map(|r| {
         let first_bal = darwin_dr.first().map(|f| f.balance - f.pnl).unwrap_or(1.0);
         if first_bal > 0.0 { (r.balance - first_bal) / first_bal * 100.0 } else { 0.0 }
@@ -4058,7 +4155,7 @@ pub fn compute_optimal_allocation(conn: &Connection) -> Result<Vec<OptimalAlloca
     let mut stats: Vec<DarwinStats> = Vec::new();
     for account in &accounts {
         let returns = get_daily_returns(conn, &account.darwin_ticker)?;
-        let var_result = compute_var(&returns);
+        let var_result = compute_var_full(&returns);
         let vol = if var_result.daily_vol > 0.0 { var_result.daily_vol } else { 1e-10 };
         stats.push(DarwinStats {
             ticker: account.darwin_ticker.clone(),
@@ -4084,6 +4181,226 @@ pub fn compute_optimal_allocation(conn: &Connection) -> Result<Vec<OptimalAlloca
     }).collect();
 
     Ok(result)
+}
+
+// ── Portfolio Rebalancing Advisor ────────────────────────────────────
+// Identifies correlated positions, suggests partial closes to reduce VaR,
+// and recommends reallocations to uncorrelated symbols.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebalanceSuggestion {
+    pub action: String,          // "REDUCE", "INCREASE", "HOLD"
+    pub darwin_ticker: String,
+    pub symbol: String,
+    pub side: String,
+    pub current_volume: f64,
+    pub suggested_volume: f64,   // new target volume
+    pub reason: String,
+    pub impact_var_pct: f64,     // estimated VaR impact (negative = improvement)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrelationPair {
+    pub symbol_a: String,
+    pub darwin_a: String,
+    pub symbol_b: String,
+    pub darwin_b: String,
+    pub correlation: f64,
+    pub combined_notional: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RebalanceDashboard {
+    pub current_portfolio_var_95: f64,
+    pub current_portfolio_var_99: f64,
+    pub current_sharpe: f64,
+    pub high_correlation_pairs: Vec<CorrelationPair>,
+    pub suggestions: Vec<RebalanceSuggestion>,
+    pub darwin_var: Vec<(String, f64, f64, f64)>, // (ticker, var95, sharpe, weight)
+    pub optimal_allocation: Vec<OptimalAllocation>,
+}
+
+/// Analyze portfolio and suggest rebalancing trades to reduce VaR via decorrelation.
+/// Only suggests REDUCE on positions that are in profit (current_price vs avg_price).
+/// prices: live bid prices per symbol for mark-to-market profit check.
+pub fn compute_rebalance_suggestions(
+    conn: &Connection,
+    prices: &std::collections::HashMap<String, f64>,
+) -> Result<RebalanceDashboard, String> {
+    let accounts = list_darwin_accounts(conn)?;
+    if accounts.is_empty() {
+        return Err("No DARWIN accounts imported".into());
+    }
+
+    // 1. Compute per-DARWIN VaR and portfolio VaR
+    let portfolio_returns = get_portfolio_daily_returns(conn)?;
+    let portfolio_var = compute_var(&portfolio_returns);
+
+    let mut darwin_var_list = Vec::new();
+    let mut darwin_returns_map: std::collections::HashMap<String, Vec<DailyReturn>> = std::collections::HashMap::new();
+    let total_balance: f64 = {
+        let mut sum = 0.0;
+        for acct in &accounts {
+            let returns = get_daily_returns(conn, &acct.darwin_ticker)?;
+            let var = compute_var(&returns);
+            let weight = if !returns.is_empty() { returns.last().unwrap().balance } else { 0.0 };
+            darwin_var_list.push((acct.darwin_ticker.clone(), var.var_95, var.sharpe, weight));
+            darwin_returns_map.insert(acct.darwin_ticker.clone(), returns);
+            sum += weight;
+        }
+        sum
+    };
+    // Normalize weights
+    for entry in &mut darwin_var_list {
+        if total_balance > 0.0 { entry.3 /= total_balance; }
+    }
+
+    // 2. Cross-DARWIN correlation (fetched below with corr_lookup build)
+
+    // 3. Symbol-level correlation across DARWINs (open positions)
+    // Include profit info: (darwin, symbol, side, notional, avg_price, in_profit)
+    let mut all_open: Vec<(String, String, String, f64, f64, bool)> = Vec::new();
+    for acct in &accounts {
+        let positions = get_darwin_open_positions(conn, &acct.darwin_ticker)?;
+        for pos in &positions {
+            let current_price = prices.get(&pos.symbol).copied().unwrap_or(pos.avg_price);
+            let in_profit = if pos.side == "buy" {
+                current_price > pos.avg_price
+            } else {
+                current_price < pos.avg_price
+            };
+            all_open.push((acct.darwin_ticker.clone(), pos.symbol.clone(), pos.side.clone(), pos.notional, pos.avg_price, in_profit));
+        }
+    }
+
+    // Use actual 45-day return correlation between DARWINs (Darwinex methodology).
+    // Build correlation lookup from the 45-day window.
+    let correlations = get_darwin_correlations(conn)?;
+    let corr_lookup: std::collections::HashMap<(String, String), f64> = correlations.iter()
+        .map(|c| ((c.darwin_a.clone(), c.darwin_b.clone()), c.correlation))
+        .collect();
+
+    // Find correlated position pairs using actual DARWIN return correlation + same symbol detection.
+    // Darwinex threshold: 0.95 correlation = highly correlated (silver/gold pool).
+    let mut high_corr_pairs = Vec::new();
+    for i in 0..all_open.len() {
+        for j in (i+1)..all_open.len() {
+            let (ref dw_a, ref sym_a, ref side_a, not_a, _, _) = all_open[i];
+            let (ref dw_b, ref sym_b, ref side_b, not_b, _, _) = all_open[j];
+            if dw_a == dw_b { continue; }
+            if sym_a != sym_b { continue; } // only flag same-symbol pairs
+
+            // Use actual 45-day DARWIN return correlation instead of assuming 1.0
+            let darwin_corr = corr_lookup.get(&(dw_a.clone(), dw_b.clone())).copied().unwrap_or(0.0);
+            let sign = if side_a == side_b { 1.0 } else { -1.0 }; // same side amplifies, opposite hedges
+            let effective_corr = darwin_corr * sign;
+
+            high_corr_pairs.push(CorrelationPair {
+                symbol_a: sym_a.clone(), darwin_a: dw_a.clone(),
+                symbol_b: sym_b.clone(), darwin_b: dw_b.clone(),
+                correlation: effective_corr,
+                combined_notional: if side_a == side_b { not_a + not_b } else { (not_a - not_b).abs() },
+            });
+        }
+    }
+    high_corr_pairs.sort_by(|a, b| b.combined_notional.partial_cmp(&a.combined_notional).unwrap_or(std::cmp::Ordering::Equal));
+
+    // 4. Generate suggestions
+    let mut suggestions = Vec::new();
+
+    // Build deduplicated take-profit suggestions: one per (DARWIN, symbol).
+    // Constraint: user can only act on 2-3 accounts at a time (50% of portfolio).
+    // So we rank by profit magnitude and limit to top 3 actionable trades.
+    // Build protection maps:
+    // 1. How many DARWINs hold each symbol (on same side)? If only 1, never suggest reducing.
+    // 2. How many symbols does each DARWIN trade? If only 1, never suggest reducing (loses all exposure).
+    let mut symbol_darwin_count: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new(); // (symbol, side) -> count of DARWINs
+    let mut darwin_symbol_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new(); // darwin -> count of distinct symbols
+    for (dw, sym, side, _, _, _) in &all_open {
+        *symbol_darwin_count.entry((sym.clone(), side.clone())).or_insert(0) += 1;
+        // Count distinct symbols per DARWIN (use a set approach via HashMap)
+        darwin_symbol_count.entry(dw.clone()).or_insert(0);
+    }
+    // Recount distinct symbols per DARWIN properly
+    {
+        let mut darwin_syms: std::collections::HashMap<String, std::collections::HashSet<String>> = std::collections::HashMap::new();
+        for (dw, sym, _, _, _, _) in &all_open {
+            darwin_syms.entry(dw.clone()).or_default().insert(sym.clone());
+        }
+        for (dw, syms) in &darwin_syms {
+            darwin_symbol_count.insert(dw.clone(), syms.len());
+        }
+    }
+
+    let mut profit_candidates: std::collections::HashMap<(String, String), (f64, String, String, f64)> = std::collections::HashMap::new();
+
+    for pair in &high_corr_pairs {
+        if pair.correlation >= 0.95 { // Darwinex upper correlation threshold
+            let sharpe_a = darwin_var_list.iter().find(|d| d.0 == pair.darwin_a).map(|d| d.2).unwrap_or(0.0);
+            let sharpe_b = darwin_var_list.iter().find(|d| d.0 == pair.darwin_b).map(|d| d.2).unwrap_or(0.0);
+            let (reduce_dw, reduce_sym, other_dw) = if sharpe_a < sharpe_b {
+                (&pair.darwin_a, &pair.symbol_a, &pair.darwin_b)
+            } else {
+                (&pair.darwin_b, &pair.symbol_b, &pair.darwin_a)
+            };
+            if let Some(pos) = all_open.iter().find(|(dw, sym, _, _, _, _)| dw == reduce_dw && sym == reduce_sym) {
+                if !pos.5 { continue; } // skip positions at a loss
+
+                // Protection 1: Don't reduce if this DARWIN only trades 1 symbol (would lose all exposure)
+                if darwin_symbol_count.get(reduce_dw).copied().unwrap_or(0) <= 1 {
+                    continue;
+                }
+
+                // Protection 2: Don't reduce if only 1 DARWIN holds this symbol on this side
+                // (would eliminate the symbol from the portfolio entirely)
+                if symbol_darwin_count.get(&(reduce_sym.to_string(), pos.2.clone())).copied().unwrap_or(0) <= 1 {
+                    continue;
+                }
+
+                let current_price = prices.get(&pos.1).copied().unwrap_or(pos.4);
+                let pnl_per_unit = if pos.2 == "buy" { current_price - pos.4 } else { pos.4 - current_price };
+                let key = (reduce_dw.clone(), reduce_sym.clone());
+                let entry = profit_candidates.entry(key).or_insert((0.0, pos.2.clone(), String::new(), 0.0));
+                if pnl_per_unit.abs() > entry.0.abs() { entry.0 = pnl_per_unit; }
+                if !entry.2.is_empty() { entry.2.push_str(", "); }
+                entry.2.push_str(other_dw);
+                entry.3 += pair.combined_notional;
+            }
+        }
+    }
+
+    // Sort by profit magnitude descending, take top 3
+    let mut ranked: Vec<_> = profit_candidates.into_iter().collect();
+    ranked.sort_by(|a, b| (b.1).0.abs().partial_cmp(&(a.1).0.abs()).unwrap_or(std::cmp::Ordering::Equal));
+
+    for ((darwin, symbol), (pnl, side, corr_with, notional)) in ranked.iter().take(3) {
+        let sym_holders = symbol_darwin_count.get(&(symbol.clone(), side.clone())).copied().unwrap_or(0);
+        suggestions.push(RebalanceSuggestion {
+            action: "TAKE PROFIT".into(),
+            darwin_ticker: darwin.clone(),
+            symbol: symbol.clone(),
+            side: side.clone(),
+            current_volume: *notional,
+            suggested_volume: notional * 0.5,
+            reason: format!("Partial profit on {} {} in {} (${:.2}/lot) — {}/{} DARWINs hold this, correlated with {}",
+                symbol, side, darwin, pnl, sym_holders, accounts.len(), corr_with),
+            impact_var_pct: -notional * 0.001,
+        });
+    }
+
+    // No allocation weight suggestions — all accounts run 100% margin, capital cannot
+    // be reallocated between DARWINs. Only position-level profit-taking is actionable.
+    let optimal = compute_optimal_allocation(conn)?;
+
+    Ok(RebalanceDashboard {
+        current_portfolio_var_95: portfolio_var.var_95,
+        current_portfolio_var_99: portfolio_var.var_99,
+        current_sharpe: portfolio_var.sharpe,
+        high_correlation_pairs: high_corr_pairs,
+        suggestions,
+        darwin_var: darwin_var_list,
+        optimal_allocation: optimal,
+    })
 }
 
 // ── Conditional VaR by Regime ───────────────────────────────────────
@@ -4764,6 +5081,613 @@ pub fn generate_daily_report(conn: &Connection) -> Result<DailyRiskReport, Strin
         alerts,
         regime,
     })
+}
+
+// ── Combined Drawdown & Best/Worst Days Dashboard ──────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrawdownEntry {
+    pub date: String,
+    pub drawdown_pct: f64,
+    pub balance: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BestWorstDay {
+    pub date: String,
+    pub pnl: f64,
+    pub return_pct: f64,
+    pub balance: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DarwinDrawdownSummary {
+    pub darwin_ticker: String,
+    pub max_drawdown_pct: f64,
+    pub max_dd_date: String,
+    pub current_drawdown_pct: f64,
+    pub best_days: Vec<BestWorstDay>,
+    pub worst_days: Vec<BestWorstDay>,
+    pub drawdown_curve: Vec<DrawdownEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CombinedDrawdownDashboard {
+    pub darwins: Vec<DarwinDrawdownSummary>,
+    pub combined: DarwinDrawdownSummary,
+}
+
+/// Combined drawdown view across all DARWINs + portfolio aggregate.
+/// Returns per-DARWIN drawdown curves, best/worst days, and combined portfolio view.
+pub fn get_combined_drawdown_dashboard(conn: &Connection, top_n: usize) -> Result<CombinedDrawdownDashboard, String> {
+    let accounts = list_darwin_accounts(conn)?;
+    let mut darwins = Vec::new();
+
+    for acct in &accounts {
+        let daily = get_daily_returns(conn, &acct.darwin_ticker)?;
+        if daily.is_empty() { continue; }
+
+        let mut max_dd = 0.0f64;
+        let mut max_dd_date = String::new();
+        let current_dd = daily.last().map(|r| r.drawdown_pct).unwrap_or(0.0);
+
+        let mut drawdown_curve = Vec::with_capacity(daily.len());
+        for r in &daily {
+            if r.drawdown_pct > max_dd {
+                max_dd = r.drawdown_pct;
+                max_dd_date = r.date.clone();
+            }
+            drawdown_curve.push(DrawdownEntry {
+                date: r.date.clone(),
+                drawdown_pct: r.drawdown_pct,
+                balance: r.balance,
+            });
+        }
+
+        // Best/worst days sorted by P&L
+        let mut sorted_by_pnl: Vec<&DailyReturn> = daily.iter().collect();
+        sorted_by_pnl.sort_by(|a, b| a.pnl.partial_cmp(&b.pnl).unwrap_or(std::cmp::Ordering::Equal));
+
+        let worst_days: Vec<BestWorstDay> = sorted_by_pnl.iter().take(top_n).map(|r| BestWorstDay {
+            date: r.date.clone(), pnl: r.pnl, return_pct: r.return_pct, balance: r.balance,
+        }).collect();
+
+        let best_days: Vec<BestWorstDay> = sorted_by_pnl.iter().rev().take(top_n).map(|r| BestWorstDay {
+            date: r.date.clone(), pnl: r.pnl, return_pct: r.return_pct, balance: r.balance,
+        }).collect();
+
+        darwins.push(DarwinDrawdownSummary {
+            darwin_ticker: acct.darwin_ticker.clone(),
+            max_drawdown_pct: max_dd,
+            max_dd_date,
+            current_drawdown_pct: current_dd,
+            best_days,
+            worst_days,
+            drawdown_curve,
+        });
+    }
+
+    // Combined portfolio
+    let portfolio_daily = get_portfolio_daily_returns(conn)?;
+    let mut combined_max_dd = 0.0f64;
+    let mut combined_max_dd_date = String::new();
+    let combined_current_dd = portfolio_daily.last().map(|r| r.drawdown_pct).unwrap_or(0.0);
+
+    let mut combined_dd_curve = Vec::with_capacity(portfolio_daily.len());
+    for r in &portfolio_daily {
+        if r.drawdown_pct > combined_max_dd {
+            combined_max_dd = r.drawdown_pct;
+            combined_max_dd_date = r.date.clone();
+        }
+        combined_dd_curve.push(DrawdownEntry {
+            date: r.date.clone(),
+            drawdown_pct: r.drawdown_pct,
+            balance: r.balance,
+        });
+    }
+
+    let mut combined_sorted: Vec<&DailyReturn> = portfolio_daily.iter().collect();
+    combined_sorted.sort_by(|a, b| a.pnl.partial_cmp(&b.pnl).unwrap_or(std::cmp::Ordering::Equal));
+
+    let combined_worst: Vec<BestWorstDay> = combined_sorted.iter().take(top_n).map(|r| BestWorstDay {
+        date: r.date.clone(), pnl: r.pnl, return_pct: r.return_pct, balance: r.balance,
+    }).collect();
+
+    let combined_best: Vec<BestWorstDay> = combined_sorted.iter().rev().take(top_n).map(|r| BestWorstDay {
+        date: r.date.clone(), pnl: r.pnl, return_pct: r.return_pct, balance: r.balance,
+    }).collect();
+
+    let combined = DarwinDrawdownSummary {
+        darwin_ticker: "COMBINED".into(),
+        max_drawdown_pct: combined_max_dd,
+        max_dd_date: combined_max_dd_date,
+        current_drawdown_pct: combined_current_dd,
+        best_days: combined_best,
+        worst_days: combined_worst,
+        drawdown_curve: combined_dd_curve,
+    };
+
+    Ok(CombinedDrawdownDashboard { darwins, combined })
+}
+
+// ── Floating Equity Tracker ────────────────────────────────────────
+// DARWIN quotes are based on floating P&L, not just closed balance.
+// This tracks mark-to-market equity by combining closed balance + unrealized P&L
+// from open positions priced at live quotes.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FloatingEquitySnapshot {
+    pub timestamp: i64,
+    pub darwin_ticker: String,
+    pub closed_balance: f64,
+    pub unrealized_pnl: f64,
+    pub floating_equity: f64,
+    pub open_position_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FloatingEquityDashboard {
+    pub darwins: Vec<DarwinFloatingEquity>,
+    pub combined_closed_balance: f64,
+    pub combined_unrealized_pnl: f64,
+    pub combined_floating_equity: f64,
+    pub combined_history: Vec<FloatingEquitySnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DarwinFloatingEquity {
+    pub darwin_ticker: String,
+    pub closed_balance: f64,
+    pub unrealized_pnl: f64,
+    pub floating_equity: f64,
+    pub open_positions: Vec<OpenPositionMTM>,
+    pub history: Vec<FloatingEquitySnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenPositionMTM {
+    pub symbol: String,
+    pub side: String,
+    pub volume: f64,
+    pub avg_price: f64,
+    pub current_price: f64,
+    pub unrealized_pnl: f64,
+    pub pnl_pct: f64,
+}
+
+/// Record a floating equity snapshot for a DARWIN.
+/// Called periodically by the frontend with live prices for open positions.
+pub fn record_equity_snapshot(
+    conn: &Connection,
+    darwin_ticker: &str,
+    closed_balance: f64,
+    unrealized_pnl: f64,
+    open_count: i64,
+) -> Result<(), String> {
+    let ts = chrono::Utc::now().timestamp();
+    let floating = closed_balance + unrealized_pnl;
+    conn.execute(
+        "INSERT INTO darwin_equity_snapshots (timestamp, darwin_ticker, closed_balance, unrealized_pnl, floating_equity, open_position_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![ts, darwin_ticker, closed_balance, unrealized_pnl, floating, open_count],
+    ).map_err(|e| format!("Insert equity snapshot failed: {e}"))?;
+    Ok(())
+}
+
+/// Get equity snapshot history for a DARWIN (last N days).
+pub fn get_equity_history(conn: &Connection, darwin_ticker: &str, limit: usize) -> Result<Vec<FloatingEquitySnapshot>, String> {
+    let mut stmt = conn.prepare(
+        "SELECT timestamp, darwin_ticker, closed_balance, unrealized_pnl, floating_equity, open_position_count FROM darwin_equity_snapshots WHERE darwin_ticker = ?1 ORDER BY timestamp DESC LIMIT ?2"
+    ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+    let rows = stmt.query_map(params![darwin_ticker, limit as i64], |row| {
+        Ok(FloatingEquitySnapshot {
+            timestamp: row.get(0)?,
+            darwin_ticker: row.get(1)?,
+            closed_balance: row.get(2)?,
+            unrealized_pnl: row.get(3)?,
+            floating_equity: row.get(4)?,
+            open_position_count: row.get(5)?,
+        })
+    }).map_err(|e| format!("Query failed: {e}"))?;
+
+    let mut result: Vec<FloatingEquitySnapshot> = rows.filter_map(|r| r.ok()).collect();
+    result.reverse(); // chronological order
+    Ok(result)
+}
+
+/// Compute floating equity for all DARWINs given a map of current prices.
+/// prices: HashMap<symbol, current_bid_price>
+pub fn compute_floating_equity(
+    conn: &Connection,
+    prices: &std::collections::HashMap<String, f64>,
+) -> Result<FloatingEquityDashboard, String> {
+    let accounts = list_darwin_accounts(conn)?;
+    let mut darwins = Vec::new();
+    let mut combined_closed = 0.0;
+    let mut combined_unrealized = 0.0;
+
+    for acct in &accounts {
+        // Get closed balance (last deal's balance)
+        let closed_balance: f64 = conn.query_row(
+            "SELECT COALESCE(balance, 0) FROM darwin_deals WHERE account = ?1 ORDER BY id DESC LIMIT 1",
+            params![acct.darwin_ticker],
+            |row| row.get(0),
+        ).unwrap_or(acct.initial_balance);
+
+        // Get open positions
+        let open_positions = get_darwin_open_positions(conn, &acct.darwin_ticker)?;
+        let mut total_unrealized = 0.0;
+        let mut mtm_positions = Vec::new();
+
+        for pos in &open_positions {
+            let current_price = prices.get(&pos.symbol).copied().unwrap_or(pos.avg_price);
+            let pnl = if pos.side == "buy" {
+                (current_price - pos.avg_price) * pos.total_volume
+            } else {
+                (pos.avg_price - current_price) * pos.total_volume
+            };
+            let pnl_pct = if pos.avg_price > 0.0 {
+                (current_price - pos.avg_price) / pos.avg_price * 100.0 * if pos.side == "sell" { -1.0 } else { 1.0 }
+            } else { 0.0 };
+
+            total_unrealized += pnl;
+            mtm_positions.push(OpenPositionMTM {
+                symbol: pos.symbol.clone(),
+                side: pos.side.clone(),
+                volume: pos.total_volume,
+                avg_price: pos.avg_price,
+                current_price,
+                unrealized_pnl: pnl,
+                pnl_pct,
+            });
+        }
+
+        let floating = closed_balance + total_unrealized;
+        combined_closed += closed_balance;
+        combined_unrealized += total_unrealized;
+
+        // Get snapshot history
+        let history = get_equity_history(conn, &acct.darwin_ticker, 1000)?;
+
+        darwins.push(DarwinFloatingEquity {
+            darwin_ticker: acct.darwin_ticker.clone(),
+            closed_balance,
+            unrealized_pnl: total_unrealized,
+            floating_equity: floating,
+            open_positions: mtm_positions,
+            history,
+        });
+    }
+
+    // Combined history
+    let combined_history = get_equity_history(conn, "COMBINED", 1000)?;
+
+    Ok(FloatingEquityDashboard {
+        darwins,
+        combined_closed_balance: combined_closed,
+        combined_unrealized_pnl: combined_unrealized,
+        combined_floating_equity: combined_closed + combined_unrealized,
+        combined_history,
+    })
+}
+
+// ── Darwinex VaR Multiplier Prediction ───────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DarwinVaRMultiplier {
+    pub darwin_ticker: String,
+    pub daily_var_95: f64,           // blended daily VaR at 95% confidence (% terms)
+    pub var_45d: f64,                // 45-day rolling VaR component
+    pub var_6m: f64,                 // 6-month average VaR component
+    pub monthly_var: f64,            // blended daily * sqrt(21)
+    pub multiplier: f64,             // 6.5 / monthly_var, capped at [0.0, 2.0]
+    pub in_corridor: bool,           // true if 3.25% <= monthly_var <= 6.5%
+    pub corridor_position: String,   // "below" / "in" / "above"
+    pub investor_return_factor: f64, // multiplier * strategy_return = investor return
+    pub recommendation: String,      // actionable insight
+}
+
+/// Compute Darwinex VaR multiplier predictions for all DARWINs.
+///
+/// Darwinex normalizes all DARWINs to a 6.5% monthly VaR target.
+/// - VaR corridor: 3.25% (lower) to 6.5% (upper)
+/// - If monthly VaR > 6.5%: multiplier < 1.0 (reduces exposure)
+/// - If monthly VaR in 3.25-6.5%: multiplier 1.0-2.0x
+/// - If monthly VaR < 3.25%: multiplier = 2.0 (capped)
+pub fn compute_var_multipliers(conn: &Connection) -> Result<Vec<DarwinVaRMultiplier>, String> {
+    let accounts = list_darwin_accounts(conn)?;
+    let mut results = Vec::new();
+
+    for acct in &accounts {
+        let daily_returns = get_daily_returns(conn, &acct.darwin_ticker)?;
+        if daily_returns.len() < 10 { continue; }
+
+        // Darwinex VaR methodology: blend of 45-day rolling VaR + 6-month average VaR.
+        // This smooths short-term spikes while reflecting recent risk changes.
+        let compute_daily_var_95 = |returns: &[DailyReturn]| -> f64 {
+            if returns.len() < 5 { return 0.0; }
+            let mut sorted: Vec<f64> = returns.iter().map(|r| r.return_pct).collect();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let idx = ((sorted.len() as f64) * 0.05).floor() as usize;
+            sorted.get(idx).copied().unwrap_or(0.0).abs()
+        };
+
+        // 45-day rolling VaR (current window)
+        let window_45: &[DailyReturn] = if daily_returns.len() > 45 {
+            &daily_returns[daily_returns.len() - 45..]
+        } else {
+            &daily_returns
+        };
+        let var_45d = compute_daily_var_95(window_45);
+
+        // 6-month average VaR (~126 trading days)
+        let window_6m: &[DailyReturn] = if daily_returns.len() > 126 {
+            &daily_returns[daily_returns.len() - 126..]
+        } else {
+            &daily_returns
+        };
+        let var_6m = compute_daily_var_95(window_6m);
+
+        // Darwinex blended VaR: average of 45-day and 6-month
+        let daily_var_95 = if daily_returns.len() > 126 {
+            (var_45d + var_6m) / 2.0  // blend both windows
+        } else {
+            var_45d  // not enough history for 6-month, use 45-day only
+        };
+
+        // Scale to monthly: monthly_var = daily_var * sqrt(21)
+        let monthly_var = daily_var_95 * (21.0f64).sqrt();
+
+        // Compute multiplier = min(6.5 / monthly_var, 2.0)
+        let multiplier = if monthly_var > 0.0 {
+            (6.5 / monthly_var).min(2.0)
+        } else {
+            2.0
+        };
+
+        let (corridor_position, in_corridor, recommendation) = if monthly_var > 6.5 {
+            ("above".to_string(), false, format!(
+                "VaR too high ({:.1}%) \u{2014} multiplier {:.2}x reduces investor exposure. Lower position sizes or hedge to increase multiplier.",
+                monthly_var, multiplier
+            ))
+        } else if monthly_var >= 3.25 {
+            ("in".to_string(), true, format!(
+                "In corridor ({:.1}%) \u{2014} multiplier {:.2}x. Optimal range for investor returns.",
+                monthly_var, multiplier
+            ))
+        } else {
+            ("below".to_string(), false, format!(
+                "VaR below corridor ({:.1}%) \u{2014} max multiplier 2.0x. Strategy returns amplified for investors.",
+                monthly_var
+            ))
+        };
+
+        results.push(DarwinVaRMultiplier {
+            darwin_ticker: acct.darwin_ticker.clone(),
+            daily_var_95,
+            var_45d: var_45d * (21.0f64).sqrt(), // monthly-scaled 45d component
+            var_6m: var_6m * (21.0f64).sqrt(),   // monthly-scaled 6m component
+            monthly_var,
+            multiplier,
+            in_corridor,
+            corridor_position,
+            investor_return_factor: multiplier,
+            recommendation,
+        });
+    }
+
+    Ok(results)
+}
+
+// ── D-Score Estimation (from trade history) ─────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DScoreEstimate {
+    pub darwin_ticker: String,
+    pub experience: f64,      // 0-10
+    pub risk_mgmt: f64,       // 0-10
+    pub performance: f64,     // 0-10
+    pub market_timing: f64,   // 0-10
+    pub capacity: f64,        // 0-10
+    pub scalability: f64,     // 0-10
+    pub total_dscore: f64,    // weighted composite
+    pub investable_months: i64, // months of track record
+}
+
+/// Estimate D-Score components from trade history data.
+///
+/// D-Score has 6 components (each 0-10):
+/// - Experience: f(trading_days, trade_count)
+/// - Risk Management: f(var_stability, max_drawdown, leverage_consistency)
+/// - Performance: f(sharpe, sortino)
+/// - Market Timing: f(win_rate on high-vol vs low-vol days)
+/// - Capacity: f(avg_trade_duration, concurrent_positions)
+/// - Scalability: f(symbol_diversity, position_sizing_consistency)
+pub fn estimate_dscore(conn: &Connection, darwin_ticker: &str) -> Result<DScoreEstimate, String> {
+    let daily_returns = get_daily_returns(conn, darwin_ticker)?;
+    if daily_returns.len() < 5 {
+        return Err("Not enough data for D-Score estimation".to_string());
+    }
+
+    let var_result = compute_var_full(&daily_returns);
+
+    // ── Experience (0-10): min(10, trading_days / 100)
+    let trading_days = daily_returns.len() as f64;
+    let experience = (trading_days / 100.0).min(10.0);
+
+    // Investable months
+    let investable_months = (trading_days / 21.0).round() as i64;
+
+    // ── Risk Management (0-10): based on VaR stability and max drawdown
+    // Compute rolling 20-day VaR standard deviation
+    let mut rolling_vars: Vec<f64> = Vec::new();
+    if daily_returns.len() >= 20 {
+        for i in 20..daily_returns.len() {
+            let window = &daily_returns[i - 20..i];
+            let mut sorted: Vec<f64> = window.iter().map(|r| r.return_pct).collect();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let idx = (sorted.len() as f64 * 0.05).floor() as usize;
+            rolling_vars.push(sorted.get(idx).copied().unwrap_or(0.0).abs());
+        }
+    }
+    let var_std = if rolling_vars.len() > 1 {
+        let mean = rolling_vars.iter().sum::<f64>() / rolling_vars.len() as f64;
+        let variance = rolling_vars.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+            / (rolling_vars.len() - 1) as f64;
+        variance.sqrt()
+    } else { 5.0 }; // high uncertainty
+
+    // Low var_std = stable = high score; penalize if max DD > 20%
+    let var_stability_score = (10.0 - var_std * 5.0).max(0.0).min(10.0);
+    let dd_penalty = if var_result.max_drawdown_pct > 20.0 {
+        ((var_result.max_drawdown_pct - 20.0) / 10.0).min(5.0)
+    } else { 0.0 };
+    let risk_mgmt = (var_stability_score - dd_penalty).max(0.0).min(10.0);
+
+    // ── Performance (0-10): min(10, max(0, sharpe * 3 + 2))
+    let performance = (var_result.sharpe * 3.0 + 2.0).max(0.0).min(10.0);
+
+    // ── Market Timing (0-10): compare win rate on high-vol vs low-vol days
+    let market_timing = if daily_returns.len() >= 20 {
+        // Compute daily volatility for each day (absolute return as proxy)
+        let abs_returns: Vec<f64> = daily_returns.iter().map(|r| r.return_pct.abs()).collect();
+        let median_vol = {
+            let mut sorted = abs_returns.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            sorted[sorted.len() / 2]
+        };
+
+        let (mut high_vol_wins, mut high_vol_total) = (0i64, 0i64);
+        let (mut low_vol_wins, mut low_vol_total) = (0i64, 0i64);
+        for (i, r) in daily_returns.iter().enumerate() {
+            if abs_returns[i] > median_vol {
+                high_vol_total += 1;
+                if r.pnl > 0.0 { high_vol_wins += 1; }
+            } else {
+                low_vol_total += 1;
+                if r.pnl > 0.0 { low_vol_wins += 1; }
+            }
+        }
+        let high_wr = if high_vol_total > 0 { high_vol_wins as f64 / high_vol_total as f64 } else { 0.5 };
+        let low_wr = if low_vol_total > 0 { low_vol_wins as f64 / low_vol_total as f64 } else { 0.5 };
+        // Big positive difference = good timing (profits on volatile days)
+        let timing_diff = high_wr - low_wr;
+        (5.0 + timing_diff * 20.0).max(0.0).min(10.0)
+    } else { 5.0 };
+
+    // ── Capacity (0-10): based on avg trade duration and concurrent positions
+    let capacity = if let Ok(hold_stats) = get_hold_time_stats(conn, darwin_ticker) {
+        // Longer avg hold = more capacity (less market impact)
+        let duration_score = (hold_stats.avg_hold_hours / 24.0).min(10.0); // 10 days = 10
+        duration_score.max(0.0).min(10.0)
+    } else { 5.0 };
+
+    // ── Scalability (0-10): symbol diversity + sizing consistency
+    let scalability = if let Ok(sizing) = get_sizing_efficiency(conn, darwin_ticker) {
+        // Count symbols traded
+        let symbols: Result<Vec<SymbolActivity>, _> = get_symbol_rotation(conn, darwin_ticker);
+        let sym_count = symbols.map(|s| s.len()).unwrap_or(1) as f64;
+        let diversity_score = (sym_count / 5.0).min(5.0); // 25 symbols = 5
+
+        // Sizing consistency: compare Q1 vs Q4 win rates
+        let sizing_consistency = if sizing.len() >= 4 {
+            let q1_wr = sizing[0].win_rate;
+            let q4_wr = sizing[3].win_rate;
+            let diff = (q1_wr - q4_wr).abs();
+            // Low difference = consistent = good
+            (5.0 - diff / 10.0).max(0.0).min(5.0)
+        } else { 2.5 };
+
+        (diversity_score + sizing_consistency).min(10.0)
+    } else { 5.0 };
+
+    // ── Total D-Score (weighted composite, 0-100)
+    // Darwinex weights: Ex 15%, Rs 25%, Pf 25%, Mc 15%, Cp 10%, Sc 10%
+    let total_dscore = experience * 1.5
+        + risk_mgmt * 2.5
+        + performance * 2.5
+        + market_timing * 1.5
+        + capacity * 1.0
+        + scalability * 1.0;
+
+    Ok(DScoreEstimate {
+        darwin_ticker: darwin_ticker.to_string(),
+        experience,
+        risk_mgmt,
+        performance,
+        market_timing,
+        capacity,
+        scalability,
+        total_dscore,
+        investable_months,
+    })
+}
+
+// ── Symbol Overlap (cross-DARWIN correlation) ────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolOverlap {
+    pub symbol: String,
+    pub side: String,
+    pub darwin_count: usize,
+    pub darwins: Vec<String>,
+    pub total_volume: f64,
+    pub total_notional: f64,
+    pub correlation_risk: String, // "HIGH" (5-6), "MEDIUM" (3-4), "LOW" (1-2)
+}
+
+/// Find symbols that appear across multiple DARWINs on the same side.
+pub fn get_symbol_overlap(conn: &Connection) -> Result<Vec<SymbolOverlap>, String> {
+    let accounts = list_darwin_accounts(conn)?;
+
+    // (symbol, side) -> Vec<(darwin_ticker, volume, notional)>
+    let mut map: std::collections::HashMap<(String, String), Vec<(String, f64, f64)>> =
+        std::collections::HashMap::new();
+
+    for account in &accounts {
+        let positions = get_darwin_open_positions(conn, &account.darwin_ticker)?;
+        for pos in positions {
+            let key = (pos.symbol.clone(), pos.side.clone());
+            map.entry(key)
+                .or_default()
+                .push((account.darwin_ticker.clone(), pos.total_volume, pos.notional));
+        }
+    }
+
+    let mut result: Vec<SymbolOverlap> = map
+        .into_iter()
+        .map(|((symbol, side), entries)| {
+            let darwin_count = entries.len();
+            let darwins: Vec<String> = entries.iter().map(|(t, _, _)| t.clone()).collect();
+            let total_volume: f64 = entries.iter().map(|(_, v, _)| v).sum();
+            let total_notional: f64 = entries.iter().map(|(_, _, n)| n).sum();
+            let correlation_risk = if darwin_count >= 5 {
+                "HIGH".to_string()
+            } else if darwin_count >= 3 {
+                "MEDIUM".to_string()
+            } else {
+                "LOW".to_string()
+            };
+            SymbolOverlap {
+                symbol,
+                side,
+                darwin_count,
+                darwins,
+                total_volume,
+                total_notional,
+                correlation_risk,
+            }
+        })
+        .collect();
+
+    // Sort by darwin_count desc, then total_notional desc
+    result.sort_by(|a, b| {
+        b.darwin_count
+            .cmp(&a.darwin_count)
+            .then_with(|| b.total_notional.partial_cmp(&a.total_notional).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    Ok(result)
 }
 
 /// Delete a DARWIN account and all its data.

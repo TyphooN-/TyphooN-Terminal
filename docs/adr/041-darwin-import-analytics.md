@@ -1,7 +1,9 @@
 # ADR-041: DARWIN Import Pipeline & Analytics Engine
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-03-22
+
+> **See also:** [ADR-045](045-darwin-analytics-expansion.md) for VaR multipliers, drawdown dashboard, floating equity, rebalancer, and symbol overlap.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # ADR-002: TradingView lightweight-charts for Charting
 
-**Status:** Accepted
+**Status:** Implemented
 **Date:** 2026-03-15
 **Context:** Need candlestick charting with draggable SL/TP lines, multi-pane layout, and real-time updates.
 

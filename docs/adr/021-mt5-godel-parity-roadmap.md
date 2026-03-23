@@ -1,6 +1,6 @@
 # ADR-021: MT5 + Godel Terminal Feature Parity Roadmap
 
-**Status:** Mostly Complete
+**Status:** Complete (1 item remaining: PDF export)
 **Date:** 2026-03-16
 
 ## Context
@@ -19,21 +19,24 @@ TyphooN-Terminal aims to replace both MetaTrader 5 and Godel Terminal. A compreh
 | Right-click context menu | MT5 | Custom context menu on chart: draw, alerts, copy price |
 | Pending order visualization | MT5 | Open orders rendered as colored price lines on chart |
 
-## Remaining Implementable Features (Future Work)
+## Previously Remaining Features — Now Complete
+
+| Feature | Status | Notes |
+|---|---|---|
+| Data Window (all indicator values at cursor) | ✅ Done | Fixed panel: OHLCV + all indicator values at cursor |
+| Drawing object properties panel | ✅ Done | Right-click drawing: color picker, line width, delete |
+| Portfolio breakdown by sector | ✅ Done | Ctrl+K → PORTFOLIO, grouped by asset class |
+| Multi-condition alerts (RSI > 70, KAMA cross) | ✅ Done | Ctrl+K → ALERTS: RSI/KAMA/Fisher conditions |
+| Walk-forward testing | ✅ Done | 70/30 in-sample/out-of-sample split, auto-optimize |
+| Monte Carlo risk of ruin | ✅ Done | Ctrl+K → MONTECARLO, 100K simulations |
+| Earnings calendar with estimates | ✅ Done | Ctrl+K → EARNINGS, corporate actions table |
+| Dividend/corporate action alerts | ✅ Done | Auto-notify 5 days before ex-dividend |
+| Correlation matrix | ✅ Done | Ctrl+K → CORR, pairwise heatmap from cached bars |
+
+## Remaining (Future Work)
 
 | Feature | Effort | Notes |
 |---|---|---|
-| Data Window (all indicator values at cursor) | 4h | Wire crosshairMove to aggregate indicator values |
-| Drawing object properties panel | 8h | Select + edit color/style/text of drawn objects |
-| Portfolio breakdown by sector | 6h | Group positions by sector, pie/bar chart |
-| Multi-condition alerts (RSI > 70, KAMA cross) | 8h | Extend alert system with indicator conditions |
-| Alert history panel | 2h | Log triggered alerts in floating window |
-| Walk-forward testing | 12h | Split backtest into in-sample/out-of-sample |
-| Monte Carlo risk of ruin | 6h | Simulate P&L distribution from backtest |
-| Earnings calendar with estimates | 4h | Yahoo Finance unofficial API or Alpaca |
-| Dividend/corporate action alerts | 3h | Alpaca corporate_action_signals |
-| Congress trading data | 8h | Congress API free tier |
-| Correlation matrix | 6h | Rolling correlation heatmap from cached bars |
 | Account statement export (PDF) | 4h | Build summary, export via Tauri |
 
 ## Blocked Features & Why

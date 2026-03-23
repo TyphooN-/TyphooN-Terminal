@@ -10,7 +10,7 @@ tauri = { version = "2", features = [] }
 # tauri-plugin-shell removed — not used, reduces attack surface
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }
 reqwest = { version = "0.13", features = ["json", "query"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
@@ -29,8 +29,9 @@ hmac = "0.12"
 pbkdf2 = { version = "0.12", features = ["simple"] }
 rand = "0.10"
 base64 = "0.22"
-rayon = "1.10"
-calamine = "0.26"
+rayon = "1.11"
+calamine = "0.34"
+zip = { version = "7", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

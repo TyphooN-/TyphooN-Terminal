@@ -1875,7 +1875,7 @@ let drawCanvas = null;
 function getDrawingsKey() { return `typhoon_drawings_${activeBrokerId}`; }
 
 function loadDrawings() {
-  try { drawings = JSON.parse(localStorage.getItem(getDrawingsKey()) || "[]"); } catch { drawings = []; }
+  try { drawings = JSON.parse(localStorage.getItem(getDrawingsKey()) || "[]"); } catch(e) { console.warn("Drawing parse error:", e); drawings = []; }
 }
 function saveDrawings() { localStorage.setItem(getDrawingsKey(), JSON.stringify(drawings)); }
 
@@ -2000,7 +2000,8 @@ function calcKAMA(data, period = 10, fastP = 2, slowP = 30) {
   const result = [];
   if (data.length < period + 1) return result;
   // Applied to CLOSE price (MQL5 default price[] parameter)
-  let kama = data[period].close;
+  // MT5 seeds KAMA with price[period-1] (the bar before first output)
+  let kama = data[period - 1].close;
   for (let i = period; i < data.length; i++) {
     const signal = Math.abs(data[i].close - data[i - period].close);
     let noise = 0;
@@ -2068,19 +2069,21 @@ function calcEhlersFisher(data, period = 32) {
   if (data.length < period + 1) return { fisher: [], signal: [], colors: [] };
   const fisher = [], signal = [], colors = [];
   let prevSmoothed = 0, prevFisher = 0;
+  // Pre-compute median prices (matches MQL5 PRICE_MEDIAN)
+  const medians = data.map(d => (d.high + d.low) / 2);
 
   for (let i = period; i < data.length; i++) {
-    // Find highest/lowest over period (excluding current bar — calc_no mode)
-    let maxH = -Infinity, minL = Infinity;
-    for (let j = i - period; j < i; j++) {
-      if (data[j].high > maxH) maxH = data[j].high;
-      if (data[j].low < minL) minL = data[j].low;
+    // Find highest/lowest MEDIAN price over [i-period+1 .. i] (matches MQL5 calc_no mode)
+    // MT5 uses prices[] (median) for ArrayMaximum/ArrayMinimum, NOT raw high/low
+    let maxM = -Infinity, minM = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (medians[j] > maxM) maxM = medians[j];
+      if (medians[j] < minM) minM = medians[j];
     }
-    // Median price = (high + low) / 2
-    const price = (data[i].high + data[i].low) / 2;
-    const range = maxH - minL;
+    const price = medians[i];
+    const range = maxM - minM;
     // Normalize to 0-1, then center to -1..+1
-    const normalized = range > 0 ? (price - minL) / range : 0.5;
+    const normalized = range > 0 ? (price - minM) / range : 0.5;
     const os = 2.0 * (normalized - 0.5);
     // Smooth
     let smoothed = 0.5 * os + 0.5 * prevSmoothed;
@@ -2144,12 +2147,17 @@ function calcSMA(data, period) {
 
 // ── EMA ─────────────────────────────────────────────────────
 function calcEMA(data, period) {
+  if (data.length < period) return [];
   const k = 2 / (period + 1);
   const result = [];
-  let ema = data[0].close;
-  for (let i = 0; i < data.length; i++) {
+  // Bootstrap: SMA for first period bars, then exponential smoothing
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += data[i].close;
+  let ema = sum / period;
+  result.push({ time: data[period - 1].time, value: ema });
+  for (let i = period; i < data.length; i++) {
     ema = data[i].close * k + ema * (1 - k);
-    if (i >= period - 1) result.push({ time: data[i].time, value: ema });
+    result.push({ time: data[i].time, value: ema });
   }
   return result;
 }
@@ -2159,12 +2167,13 @@ function calcDEMA(data, period) {
   const ema1 = calcEMA(data, period);
   if (ema1.length < period) return [];
   const ema2data = ema1.map(e => ({ close: e.value, time: e.time }));
-  const k = 2 / (period + 1);
-  let ema2 = ema2data[0].close;
+  const ema2 = calcEMA(ema2data, period);
+  // DEMA = 2 * EMA1 - EMA2; align by timestamp
+  const ema2Map = new Map(ema2.map(e => [e.time, e.value]));
   const result = [];
-  for (let i = 0; i < ema2data.length; i++) {
-    ema2 = ema2data[i].close * k + ema2 * (1 - k);
-    if (i >= period - 1) result.push({ time: ema2data[i].time, value: 2 * ema2data[i].close - ema2 });
+  for (const e1 of ema1) {
+    const e2v = ema2Map.get(e1.time);
+    if (e2v !== undefined) result.push({ time: e1.time, value: 2 * e1.value - e2v });
   }
   return result;
 }
@@ -2202,15 +2211,19 @@ function calcMACD(data, fastP = 12, slowP = 26, signalP = 9) {
   }
   if (macdLine.length < signalP) return { macd: macdLine, signal: [], histogram: [] };
   const k = 2 / (signalP + 1);
-  let sig = macdLine[0].value;
+  // SMA bootstrap for signal line
+  let sig = 0;
+  for (let i = 0; i < signalP; i++) sig += macdLine[i].value;
+  sig /= signalP;
   const signalData = [], histogram = [];
-  for (let i = 0; i < macdLine.length; i++) {
+  const diff0 = macdLine[signalP - 1].value - sig;
+  signalData.push({ time: macdLine[signalP - 1].time, value: sig });
+  histogram.push({ time: macdLine[signalP - 1].time, value: diff0, color: diff0 >= 0 ? "#26a69a" : "#ef5350" });
+  for (let i = signalP; i < macdLine.length; i++) {
     sig = macdLine[i].value * k + sig * (1 - k);
-    if (i >= signalP - 1) {
-      signalData.push({ time: macdLine[i].time, value: sig });
-      const diff = macdLine[i].value - sig;
-      histogram.push({ time: macdLine[i].time, value: diff, color: diff >= 0 ? "#26a69a" : "#ef5350" });
-    }
+    signalData.push({ time: macdLine[i].time, value: sig });
+    const diff = macdLine[i].value - sig;
+    histogram.push({ time: macdLine[i].time, value: diff, color: diff >= 0 ? "#26a69a" : "#ef5350" });
   }
   return { macd: macdLine, signal: signalData, histogram };
 }
@@ -2222,7 +2235,7 @@ function calcBollinger(data, period) {
     let sum = 0, sumSq = 0;
     for (let j = i - period + 1; j <= i; j++) { sum += data[j].close; sumSq += data[j].close ** 2; }
     const mean = sum / period;
-    const std = Math.sqrt(sumSq / period - mean ** 2);
+    const std = Math.sqrt(Math.max(0, sumSq / period - mean ** 2));
     upper.push({ time: data[i].time, value: mean + 2 * std });
     lower.push({ time: data[i].time, value: mean - 2 * std });
   }
@@ -2235,9 +2248,13 @@ function calcATR(data, period) {
   for (let i = 1; i < data.length; i++) {
     trs.push(Math.max(data[i].high - data[i].low, Math.abs(data[i].high - data[i - 1].close), Math.abs(data[i].low - data[i - 1].close)));
   }
+  if (trs.length < period) return result;
   let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  // Push initial ATR at bar[period] (trs[0..period-1] covers data[1..period])
+  result.push({ time: data[period].time, value: atr });
   for (let i = period; i < trs.length; i++) {
     atr = (atr * (period - 1) + trs[i]) / period;
+    // trs[i] = TR of data[i+1], so ATR is current as of data[i+1]
     if (i + 1 < data.length) result.push({ time: data[i + 1].time, value: atr });
   }
   return result;
@@ -2369,7 +2386,8 @@ function calcIchimoku(data, tenkan = 9, kijun = 26, senkou = 52) {
     result.kijunSen.push({ time: data[i].time, value: ks });
     result.senkouA.push({ time: data[i].time, value: (ts + ks) / 2 });
     result.senkouB.push({ time: data[i].time, value: sb });
-    if (i >= kijun) result.chikou.push({ time: data[i].time, value: data[i - kijun].close });
+    // Chikou Span: current close plotted kijun bars back
+    if (i >= kijun) result.chikou.push({ time: data[i - kijun].time, value: data[i].close });
   }
   return result;
 }
@@ -2456,14 +2474,24 @@ function calcHMA(data, period = 20) {
 
 function calcAlligator(data, jawP = 13, teethP = 8, lipsP = 5) {
   // Bill Williams Alligator: 3 smoothed MAs with forward offset
+  // MT5 standard: Jaw(13,8), Teeth(8,5), Lips(5,3) — SMMA on median price
   const smma = (d, p) => { const r = []; let s = d.slice(0,p).reduce((a,b)=>a+b,0)/p; r.push(s); for(let i=p;i<d.length;i++){s=(s*(p-1)+d[i])/p;r.push(s);} return r; };
   const med = data.map(b => (b.high + b.low) / 2);
   const jaw = smma(med, jawP), teeth = smma(med, teethP), lips = smma(med, lipsP);
-  // Offsets: jaw +8, teeth +5, lips +3 (shift forward)
+  // Forward shift: drop values that would exceed data range (can't project future timestamps)
+  const shiftLine = (vals, period, shift) => {
+    const result = [];
+    for (let i = 0; i < vals.length; i++) {
+      const idx = i + period + shift - 1;
+      if (idx >= data.length) break; // stop before duplicate timestamps
+      result.push({ time: data[idx].time, value: vals[i] });
+    }
+    return result;
+  };
   return {
-    jaw: jaw.map((v, i) => ({ time: data[Math.min(i + jawP + 8 - 1, data.length - 1)].time, value: v })).filter(d => d.time),
-    teeth: teeth.map((v, i) => ({ time: data[Math.min(i + teethP + 5 - 1, data.length - 1)].time, value: v })).filter(d => d.time),
-    lips: lips.map((v, i) => ({ time: data[Math.min(i + lipsP + 3 - 1, data.length - 1)].time, value: v })).filter(d => d.time),
+    jaw: shiftLine(jaw, jawP, 8),
+    teeth: shiftLine(teeth, teethP, 5),
+    lips: shiftLine(lips, lipsP, 3),
   };
 }
 
@@ -2502,13 +2530,16 @@ function calcForceIndex(data, period = 13) {
   if (data.length < period + 1) return [];
   const raw = [];
   for (let i = 1; i < data.length; i++) raw.push((data[i].close - data[i-1].close) * (data[i].volume || 1));
-  // EMA of raw force
+  // EMA of raw force (SMA bootstrap)
+  if (raw.length < period) return [];
   const k = 2 / (period + 1);
-  let ema = raw[0];
-  const result = [];
-  for (let i = 0; i < raw.length; i++) {
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += raw[i];
+  let ema = sum / period;
+  const result = [{ time: data[period].time, value: ema }];
+  for (let i = period; i < raw.length; i++) {
     ema = raw[i] * k + ema * (1 - k);
-    if (i >= period - 1) result.push({ time: data[i + 1].time, value: ema });
+    result.push({ time: data[i + 1].time, value: ema });
   }
   return result;
 }
@@ -2527,7 +2558,7 @@ function calcStdDev(data, period = 20) {
     let sum = 0, sumSq = 0;
     for (let j = i - period + 1; j <= i; j++) { sum += data[j].close; sumSq += data[j].close ** 2; }
     const mean = sum / period;
-    result.push({ time: data[i].time, value: Math.sqrt(sumSq / period - mean ** 2) });
+    result.push({ time: data[i].time, value: Math.sqrt(Math.max(0, sumSq / period - mean ** 2)) });
   }
   return result;
 }
@@ -2648,6 +2679,39 @@ function calcBetterVolume(data, lookback = 20) {
       isClimaxDn = true;
     // Churn: highest volume/range ratio
     if (volDivR >= highVolDivR) isChurn = true;
+
+    // 2-bar combined analysis (matches MQL5 Apply2BarConditions with InpUse2Bars=true)
+    if (pos - 1 >= 0) {
+      const { buy: bv2, sell: sv2 } = estimateBuySell(pos - 1);
+      const totalBuy2 = buyVol + bv2, totalSell2 = sellVol + sv2;
+      const totalVol2 = vol + (data[pos - 1].volume || 0);
+      const range2 = Math.max(data[pos].high, data[pos - 1].high) - Math.min(data[pos].low, data[pos - 1].low) || 0.0001;
+      const buyRange2 = totalBuy2 * range2, sellRange2 = totalSell2 * range2;
+      const volDivR2 = totalVol2 / range2, sellDivR2 = totalSell2 / range2, buyDivR2 = totalBuy2 / range2;
+      // 2-bar lookback extremes
+      let highBuyR2 = 0, highSellR2 = 0, highVdR2 = 0;
+      let lowSdR2 = Infinity, lowBdR2 = Infinity, lowVol2 = Infinity;
+      for (let i = 0; i < lookback; i++) {
+        const b1 = pos - 1 - i, b2 = b1 - 1;
+        if (b2 < 0) break;
+        const { buy: bva, sell: sva } = estimateBuySell(b1);
+        const { buy: bvb, sell: svb } = estimateBuySell(b2);
+        const tb = bva + bvb, ts = sva + svb;
+        const tv = (data[b1].volume || 0) + (data[b2].volume || 0);
+        const r2 = Math.max(data[b1].high, data[b2].high) - Math.min(data[b1].low, data[b2].low) || 0.0001;
+        const br2 = tb * r2, sr2 = ts * r2, vr2 = tv / r2;
+        if (br2 > highBuyR2) highBuyR2 = br2;
+        if (sr2 > highSellR2) highSellR2 = sr2;
+        if (vr2 > highVdR2) highVdR2 = vr2;
+        if (ts / r2 < lowSdR2) lowSdR2 = ts / r2;
+        if (tb / r2 < lowBdR2) lowBdR2 = tb / r2;
+        if (tv < lowVol2) lowVol2 = tv;
+      }
+      if (totalVol2 <= lowVol2) isLowVol = true;
+      if (data[pos].close > data[pos].open && (buyRange2 >= highBuyR2 || sellDivR2 <= lowSdR2)) isClimaxUp = true;
+      if (data[pos].close < data[pos].open && (sellRange2 >= highSellR2 || buyDivR2 <= lowBdR2)) isClimaxDn = true;
+      if (volDivR2 >= highVdR2) isChurn = true;
+    }
 
     // Priority: ClimaxChurn > LowVol > ClimaxUp > ClimaxDown > Churn > Normal
     let color;
@@ -3054,26 +3118,45 @@ const INDICATOR_REGISTRY = {
   "force":    { calc: (d, p) => calcForceIndex(d, p),   color: "#00bcd4", pane: "separate", scaleId: "force",    scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "Force", minBars: "p1", doClip: false },
 };
 
-function applyIndicators(chartData) {
-  clearIndicators();
-  for (const [, s] of Object.entries(fisherSeries)) fisherChart.removeSeries(s);
-  for (const [, s] of Object.entries(volumeSeries)) volumeChart.removeSeries(s);
-  fisherSeries = {};
-  volumeSeries = {};
+// ctx: optional override for grid cells — { chart, fisherChart, volumeChart }
+// When omitted, uses global chart instances (single chart mode).
+// This allows MTF Grid cells to reuse the exact same indicator pipeline as the main chart,
+// matching MT5's architecture where each window has its own full indicator set.
+function applyIndicators(chartData, ctx) {
+  const _chart = ctx?.chart || chart;
+  const _fisherChart = ctx?.fisherChart || fisherChart;
+  const _volumeChart = ctx?.volumeChart || volumeChart;
+  const _isGridCell = !!ctx;
+  // Track series for cleanup — grid cells use local tracking, main chart uses globals
+  let _indicatorSeries = _isGridCell ? {} : indicatorSeries;
+  let _fisherSeries = _isGridCell ? {} : fisherSeries;
+  let _volumeSeries = _isGridCell ? {} : volumeSeries;
+  if (!_isGridCell) {
+    clearIndicators();
+    for (const [, s] of Object.entries(fisherSeries)) fisherChart.removeSeries(s);
+    for (const [, s] of Object.entries(volumeSeries)) volumeChart.removeSeries(s);
+    fisherSeries = {};
+    volumeSeries = {};
+  }
   const checkboxes = document.querySelectorAll("#indicator-list input[type=checkbox]:checked");
+  // In grid mode, skip expensive indicators to prevent UI freeze.
+  // Grid cells are small panes — fractal-based indicators (S/D zones, AutoFib) do O(n²)
+  // lookback scans that block the main thread for 200ms+ per cell × 4+ cells.
+  const GRID_SKIP = new Set(["supply-demand", "auto-fib", "fractals"]);
   const lastTime = chartData.length > 0 ? chartData[chartData.length - 1].time : Infinity;
   // Helper: clip any data array to not exceed last candle time
   const clip = (data) => data.filter(d => d.time <= lastTime);
   // Helper: add a simple line series overlay
   const addLine = (color, width, data, seriesKey) => {
     if (!data || data.length < 2) return;
-    const s = chart.addLineSeries({ color, lineWidth: width, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const s = _chart.addLineSeries({ color, lineWidth: width, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     s.setData(data);
-    if (seriesKey) indicatorSeries[seriesKey] = s;
+    if (seriesKey) _indicatorSeries[seriesKey] = s;
   };
 
   for (const cb of checkboxes) {
     const ind = cb.dataset.ind;
+    if (_isGridCell && GRID_SKIP.has(ind)) continue; // skip expensive indicators in grid
     const period = parseInt(cb.dataset.period) || 14;
     const key = `${ind}_${period}`;
 
@@ -3086,7 +3169,7 @@ function applyIndicators(chartData) {
       // Check minimum bar requirement
       const mb = reg.minBars || "p";
       const minBars = mb === "p" ? period : mb === "p1" ? period + 1 : mb === "2p" ? period * 2 : mb;
-      if (minBars > 0 && chartData.length <= minBars) { continue; }
+      if (minBars > 0 && chartData.length < minBars) { continue; }
 
       // Resolve color (may be a per-period map or a plain string)
       const color = (typeof reg.color === "object") ? (reg.color[period] || "#FFFFFF") : reg.color;
@@ -3095,24 +3178,24 @@ function applyIndicators(chartData) {
       const data = (reg.doClip !== false) ? clip(rawData) : rawData;
 
       if (reg.pane === "overlay") {
-        const s = chart.addLineSeries({
+        const s = _chart.addLineSeries({
           color, lineWidth: width, title: reg.title || "",
           lastValueVisible: reg.lastVal || false, priceLineVisible: false, crosshairMarkerVisible: false,
         });
         s.setData(data);
-        indicatorSeries[key] = s;
+        _indicatorSeries[key] = s;
       } else {
         // Separate-pane single-line indicator
         const title = (reg.title || "").replace("$P", String(period));
         const scaleOpts = { scaleMargins: { top: reg.scaleTop || 0.87, bottom: 0 } };
         if (reg.scaleBorder !== undefined) scaleOpts.borderVisible = reg.scaleBorder;
-        const s = chart.addLineSeries({
+        const s = _chart.addLineSeries({
           color, lineWidth: width, title, priceScaleId: reg.scaleId,
           lastValueVisible: reg.lastVal || false, priceLineVisible: false,
         });
-        chart.priceScale(reg.scaleId).applyOptions(scaleOpts);
+        _chart.priceScale(reg.scaleId).applyOptions(scaleOpts);
         s.setData(data);
-        indicatorSeries[key] = s;
+        _indicatorSeries[key] = s;
       }
       continue;
     }
@@ -3126,26 +3209,29 @@ function applyIndicators(chartData) {
       // MultiKAMA.mqh: KAMA from multiple timeframes, all clrWhite, width 2
       // Current chart's own KAMA
       if (chartData.length > period + 1) {
-        const s = chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
+        const s = _chart.addLineSeries({ color: "#FFFFFF", lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
         s.setData(clip(wasmCalcKAMA(chartData, period)));
-        indicatorSeries[key] = s;
+        _indicatorSeries[key] = s;
       }
-      // HTF KAMAs projected onto current chart
-      for (const tf of getRelevantMTFs(ALL_MTF_KAMA_TFS)) {
-        if (tf === currentTimeframe) continue; // skip current TF (already drawn above)
-        const tfBars = mtfData[tf];
-        if (!tfBars || tfBars.length < period + 1) continue;
-        const kamaData = calcKAMA(tfBars, period);
-        const projected = projectHTFToChartTime(kamaData, chartData);
-        if (projected.length === 0) continue;
-        const maColor = MTF_MA_COLORS[tf] || "#FF00FF";
-        const s = chart.addLineSeries({ color: maColor, lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
-        s.setData(clip(projected));
-        indicatorSeries[`${key}_${tf}`] = s;
+      // HTF KAMAs projected onto current chart (skip in grid mode — each cell IS a TF)
+      if (!_isGridCell) {
+        for (const tf of getRelevantMTFs(ALL_MTF_KAMA_TFS)) {
+          if (tf === currentTimeframe) continue;
+          const tfBars = mtfData[tf];
+          if (!tfBars || tfBars.length < period + 1) continue;
+          const kamaData = calcKAMA(tfBars, period);
+          const projected = projectHTFToChartTime(kamaData, chartData);
+          if (projected.length === 0) continue;
+          const maColor = MTF_MA_COLORS[tf] || "#FF00FF";
+          const s = _chart.addLineSeries({ color: maColor, lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
+          s.setData(clip(projected));
+          _indicatorSeries[`${key}_${tf}`] = s;
+        }
       }
 
-    } else if (ind === "prev-levels") {
+    } else if (ind === "prev-levels" && !_isGridCell) {
       // PreviousCandleLevels.mqh: multi-TF previous high/low (horizontal lines only, no current-TF per-bar)
+      // Skipped in grid cells — each cell IS a specific TF, MTF projection doesn't apply
       // TF filtering: show only HTF levels that are meaningfully higher than the chart TF.
       // Uses interpolated ranks so custom TFs (H8, H12, 2Day) work seamlessly.
       // Rule: show levels from TFs whose rank is at least 2 steps above current.
@@ -3168,9 +3254,9 @@ function applyIndicators(chartData) {
         const levelBars = clip(chartData.filter(d => d.time >= prevStart));
         if (levelBars.length < 2) continue;
         const drawLevel = (val, clr, k) => {
-          const s = chart.addLineSeries({ color: clr, lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
+          const s = _chart.addLineSeries({ color: clr, lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
           s.setData(levelBars.map(d => ({ time: d.time, value: val })));
-          indicatorSeries[`pcl_${tf}_${k}`] = s;
+          _indicatorSeries[`pcl_${tf}_${k}`] = s;
         };
         drawLevel(levels.prevHigh, color, "ph");
         drawLevel(levels.prevLow, color, "pl");
@@ -3199,16 +3285,17 @@ function applyIndicators(chartData) {
           const startIdx = Math.max(0, chartData.length - 30);
           const levelBars = clip(chartData.slice(startIdx));
           if (levelBars.length >= 2) {
-            const su = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
-            const sl3 = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+            const su = _chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+            const sl3 = _chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
             su.setData(levelBars.map(d => ({ time: d.time, value: upper })));
             sl3.setData(levelBars.map(d => ({ time: d.time, value: lower })));
-            indicatorSeries[key + "_u"] = su;
-            indicatorSeries[key + "_l"] = sl3;
+            _indicatorSeries[key + "_u"] = su;
+            _indicatorSeries[key + "_l"] = sl3;
           }
         }
       }
-      // HTF ATR projections — dotted yellow lines, span from several HTF bars back (matches MQL5 lookbacks)
+      // HTF ATR projections — dotted yellow lines (skip in grid cells)
+      if (!_isGridCell) {
       const HTF_ATR_LOOKBACK = { "1Hour": 12, "4Hour": 11, "1Day": 7, "1Week": 4 };
       for (const tf of getRelevantMTFs(ALL_MTF_ATR_TFS)) {
         const tfBars = mtfData[tf];
@@ -3220,13 +3307,14 @@ function applyIndicators(chartData) {
         const htfStart = tfBars[startIdx].time;
         const projBars = clip(chartData.filter(d => d.time >= htfStart));
         if (projBars.length < 2) continue;
-        const sU = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
-        const sL = chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+        const sU = _chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+        const sL = _chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
         sU.setData(projBars.map(d => ({ time: d.time, value: proj.upper })));
         sL.setData(projBars.map(d => ({ time: d.time, value: proj.lower })));
-        indicatorSeries[`atr_mtf_${tf}_u`] = sU;
-        indicatorSeries[`atr_mtf_${tf}_l`] = sL;
+        _indicatorSeries[`atr_mtf_${tf}_u`] = sU;
+        _indicatorSeries[`atr_mtf_${tf}_l`] = sL;
       }
+      } // end !_isGridCell guard for HTF ATR
 
     } else if (ind === "fisher" && chartData.length > period) {
       // EhlersFisherTransform.mqh — DRAW_COLOR_LINE in separate pane
@@ -3268,43 +3356,43 @@ function applyIndicators(chartData) {
       for (let si = 0; si < segments.length; si++) {
         const seg = segments[si];
         if (seg.data.length < 2) continue;
-        const s = fisherChart.addLineSeries({
+        const s = _fisherChart.addLineSeries({
           color: seg.color, lineWidth: 2,
           lastValueVisible: si === segments.length - 1, // only last segment shows value
           priceLineVisible: false, crosshairMarkerVisible: false,
         });
         s.setData(seg.data);
-        fisherSeries[`seg_${si}`] = s;
+        _fisherSeries[`seg_${si}`] = s;
       }
 
       // Signal line (gray, thin)
-      const sSignal = fisherChart.addLineSeries({
+      const sSignal = _fisherChart.addLineSeries({
         color: "#A9A9A9", lineWidth: 1, lastValueVisible: false, priceLineVisible: false,
       });
       sSignal.setData(ef.signal);
 
       // Zero line
-      const sZero = fisherChart.addLineSeries({
+      const sZero = _fisherChart.addLineSeries({
         color: "#FFFFFF33", lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false,
       });
       sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
 
-      fisherSeries.signal = sSignal;
-      fisherSeries.zero = sZero;
+      _fisherSeries.signal = sSignal;
+      _fisherSeries.zero = sZero;
       // Sync Fisher time scale — use fitContent then match main chart range
-      fisherChart.timeScale().fitContent();
-      try { fisherChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange()); } catch (_) {}
+      _fisherChart.timeScale().fitContent();
+      try { _fisherChart.timeScale().setVisibleLogicalRange(_chart.timeScale().getVisibleLogicalRange()); } catch (_) {}
 
     } else if (ind === "better-vol" && chartData.length > 2) {
       // BetterVolume — rendered in dedicated volumeChart pane
       const bvData = calcBetterVolume(chartData);
-      const s = volumeChart.addHistogramSeries({
+      const s = _volumeChart.addHistogramSeries({
         priceFormat: { type: "volume" },
       });
       s.setData(bvData);
-      volumeSeries.hist = s;
-      volumeChart.timeScale().fitContent();
-      try { volumeChart.timeScale().setVisibleLogicalRange(chart.timeScale().getVisibleLogicalRange()); } catch (_) {}
+      _volumeSeries.hist = s;
+      _volumeChart.timeScale().fitContent();
+      try { _volumeChart.timeScale().setVisibleLogicalRange(_chart.timeScale().getVisibleLogicalRange()); } catch (_) {}
 
     } else if (ind === "supply-demand" && chartData.length > 10) {
       // SupplyDemand.mqh: fractal-based zones with strength-tier colors
@@ -3328,14 +3416,14 @@ function applyIndicators(chartData) {
         if (zoneBars.length < 2) continue;
 
         // Top line of zone
-        const topLine = chart.addLineSeries({
+        const topLine = _chart.addLineSeries({
           color: lineColor, lineWidth: 1, lastValueVisible: false,
           priceLineVisible: false, crosshairMarkerVisible: false,
         });
         topLine.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
 
         // Bottom line of zone
-        const botLine = chart.addLineSeries({
+        const botLine = _chart.addLineSeries({
           color: lineColor, lineWidth: 1, lastValueVisible: false,
           priceLineVisible: false, crosshairMarkerVisible: false,
         });
@@ -3343,7 +3431,7 @@ function applyIndicators(chartData) {
 
         // Fill: baseline series — fills between line and a fixed price level
         // This creates a proper bounded rectangle between zone top and bottom
-        const fillArea = chart.addBaselineSeries({
+        const fillArea = _chart.addBaselineSeries({
           topFillColor1: fillColor,
           topFillColor2: fillColor,
           bottomFillColor1: fillColor,
@@ -3358,9 +3446,9 @@ function applyIndicators(chartData) {
         });
         fillArea.setData(zoneBars.map(d => ({ time: d.time, value: z.high })));
 
-        indicatorSeries[`sd_${zi}_t`] = topLine;
-        indicatorSeries[`sd_${zi}_b`] = botLine;
-        indicatorSeries[`sd_${zi}_f`] = fillArea;
+        _indicatorSeries[`sd_${zi}_t`] = topLine;
+        _indicatorSeries[`sd_${zi}_b`] = botLine;
+        _indicatorSeries[`sd_${zi}_f`] = fillArea;
       }
 
     } else if (ind === "auto-fib" && chartData.length > 30) {
@@ -3389,21 +3477,21 @@ function applyIndicators(chartData) {
             const lineWidth = level.label === "50%" || level.label === "61.8%" ? 1.5 : 0.8;
             const labelText = `${level.label} (${level.price.toFixed(2)})`;
 
-            const s = chart.addLineSeries({
+            const s = _chart.addLineSeries({
               color,
               lineWidth,
               lineStyle,
-              lastValueVisible: true,
+              lastValueVisible: false,
               priceLineVisible: false,
               crosshairMarkerVisible: false,
               title: labelText,
             });
             s.setData(fibBars.map(d => ({ time: d.time, value: level.price })));
-            indicatorSeries[`afib_${li}`] = s;
+            _indicatorSeries[`afib_${li}`] = s;
           }
 
           // Draw the swing line (connecting swing low to swing high)
-          const swingLine = chart.addLineSeries({
+          const swingLine = _chart.addLineSeries({
             color: fib.isBull ? "#4caf50" : "#f44336",
             lineWidth: 1,
             lineStyle: 2,
@@ -3415,7 +3503,7 @@ function applyIndicators(chartData) {
             { time: Math.min(fib.swingLow.time, fib.swingHigh.time), value: fib.isBull ? fib.swingLow.price : fib.swingHigh.price },
             { time: Math.max(fib.swingLow.time, fib.swingHigh.time), value: fib.isBull ? fib.swingHigh.price : fib.swingLow.price },
           ]);
-          indicatorSeries.afib_swing = swingLine;
+          _indicatorSeries.afib_swing = swingLine;
 
           const direction = fib.isBull ? "BULL" : "BEAR";
           log(`Auto-Fib: ${direction} ${fib.swingLow.price.toFixed(2)} → ${fib.swingHigh.price.toFixed(2)} (${fib.levels.length} levels)`, "ok");
@@ -3425,43 +3513,43 @@ function applyIndicators(chartData) {
     } else if (ind === "rvol" && chartData.length > 11) {
       // RVOL.mqh: DRAW_COLOR_HISTOGRAM
       const rvolData = calcRVOL(chartData, period);
-      const s = chart.addHistogramSeries({
+      const s = _chart.addHistogramSeries({
         priceScaleId: "rvol", lastValueVisible: true,
         priceFormat: { type: "price", precision: 2, minMove: 0.01 },
       });
-      chart.priceScale("rvol").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
+      _chart.priceScale("rvol").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
       s.setData(rvolData);
-      indicatorSeries[key] = s;
+      _indicatorSeries[key] = s;
 
     } else if (ind === "volume") {
       // Standard volume
-      const s = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "volume" });
-      chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+      const s = _chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "volume" });
+      _chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
       s.setData(chartData.map(d => ({
         time: d.time, value: d.volume || 0,
         color: d.close >= d.open ? "#26a69a80" : "#ef535080",
       })));
-      indicatorSeries[key] = s;
+      _indicatorSeries[key] = s;
 
     } else if (ind === "stochastic" && chartData.length > period + 10) {
       const st = calcStochastic(chartData, period, 3, 3);
       if (st.k.length > 0) {
-        const sk = chart.addLineSeries({ color: "#2196f3", lineWidth: 1, priceScaleId: "stoch", lastValueVisible: false, priceLineVisible: false });
-        const sd = chart.addLineSeries({ color: "#ff9800", lineWidth: 1, priceScaleId: "stoch", lastValueVisible: false, priceLineVisible: false });
-        chart.priceScale("stoch").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+        const sk = _chart.addLineSeries({ color: "#2196f3", lineWidth: 1, priceScaleId: "stoch", lastValueVisible: false, priceLineVisible: false });
+        const sd = _chart.addLineSeries({ color: "#ff9800", lineWidth: 1, priceScaleId: "stoch", lastValueVisible: false, priceLineVisible: false });
+        _chart.priceScale("stoch").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
         sk.setData(clip(st.k)); sd.setData(clip(st.d));
-        indicatorSeries[key + "_k"] = sk; indicatorSeries[key + "_d"] = sd;
+        _indicatorSeries[key + "_k"] = sk; _indicatorSeries[key + "_d"] = sd;
       }
 
     } else if (ind === "adx" && chartData.length > period * 3) {
       const adx = calcADX(chartData, period);
       if (adx.adx.length > 0) {
-        const sa = chart.addLineSeries({ color: "#ff9800", lineWidth: 1.5, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
-        const sp = chart.addLineSeries({ color: "#4caf50", lineWidth: 1, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
-        const sm = chart.addLineSeries({ color: "#f44336", lineWidth: 1, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
-        chart.priceScale("adx").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+        const sa = _chart.addLineSeries({ color: "#ff9800", lineWidth: 1.5, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
+        const sp = _chart.addLineSeries({ color: "#4caf50", lineWidth: 1, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
+        const sm = _chart.addLineSeries({ color: "#f44336", lineWidth: 1, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
+        _chart.priceScale("adx").applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
         sa.setData(clip(adx.adx)); sp.setData(clip(adx.diPlus)); sm.setData(clip(adx.diMinus));
-        indicatorSeries[key + "_adx"] = sa; indicatorSeries[key + "_dip"] = sp; indicatorSeries[key + "_dim"] = sm;
+        _indicatorSeries[key + "_adx"] = sa; _indicatorSeries[key + "_dip"] = sp; _indicatorSeries[key + "_dim"] = sm;
       }
 
     } else if (ind === "ichimoku" && chartData.length > 52) {
@@ -3473,7 +3561,7 @@ function applyIndicators(chartData) {
       if (ich.chikou.length > 0) addLine("#9c27b0", 1, clip(ich.chikou), "ich_chikou");
       // Cloud fill
       if (ich.senkouA.length > 1 && ich.senkouB.length > 1) {
-        const fill = chart.addBaselineSeries({
+        const fill = _chart.addBaselineSeries({
           topFillColor1: "#4caf5020", topFillColor2: "#4caf5020",
           bottomFillColor1: "#ff980020", bottomFillColor2: "#ff980020",
           topLineColor: "transparent", bottomLineColor: "transparent",
@@ -3482,13 +3570,13 @@ function applyIndicators(chartData) {
         });
         // Use senkouB as baseline, senkouA as value
         fill.setData(clip(ich.senkouA));
-        indicatorSeries.ich_cloud = fill;
+        _indicatorSeries.ich_cloud = fill;
       }
 
     } else if (ind === "psar" && chartData.length > 2) {
       const psar = calcParabolicSAR(chartData);
-      const s = chart.addLineSeries({ color: "#ffeb3b", lineWidth: 0, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 1.5 });
-      s.setData(clip(psar)); indicatorSeries[key] = s;
+      const s = _chart.addLineSeries({ color: "#ffeb3b", lineWidth: 0, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, pointMarkersVisible: true, pointMarkersRadius: 1.5 });
+      s.setData(clip(psar)); _indicatorSeries[key] = s;
 
     } else if (ind === "alligator" && chartData.length > 14) {
       const a = calcAlligator(chartData);
@@ -3498,9 +3586,9 @@ function applyIndicators(chartData) {
 
     } else if (ind === "ao" && chartData.length > 35) {
       const ao = calcAwesomeOscillator(chartData);
-      const s = chart.addHistogramSeries({ priceScaleId: "ao", lastValueVisible: true });
-      chart.priceScale("ao").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
-      s.setData(ao); indicatorSeries[key] = s;
+      const s = _chart.addHistogramSeries({ priceScaleId: "ao", lastValueVisible: true });
+      _chart.priceScale("ao").applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, borderVisible: false });
+      s.setData(ao); _indicatorSeries[key] = s;
 
     } else if (ind === "envelopes" && chartData.length > period) {
       const env = calcEnvelopes(chartData, period);
@@ -3511,14 +3599,14 @@ function applyIndicators(chartData) {
       const markers = calcFractals(chartData);
       try { candleSeries.setMarkers(markers); } catch (_) {}
 
-    } else if (ind === "mtf-ma") {
-      // MTF_MA: SMA from current chart + higher timeframes
+    } else if (ind === "mtf-ma" && !_isGridCell) {
+      // MTF_MA: SMA from current chart + higher timeframes (skip in grid — each cell IS a TF)
       // MQL5 defaults: H1 200SMA=Tomato, H4/D1/W1 200SMA=Magenta, W1/MN1 100SMA=Magenta
       if (chartData.length > period) {
         const currentColor = period === 200 ? "#FFFF00" : "#FF00FF"; // 200=yellow on current, 100=magenta
-        const s = chart.addLineSeries({ color: currentColor, lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
+        const s = _chart.addLineSeries({ color: currentColor, lineWidth: 1, title: "", lastValueVisible: false, priceLineVisible: false });
         s.setData(clip(wasmCalcSMA(chartData, period)));
-        indicatorSeries[key] = s;
+        _indicatorSeries[key] = s;
       }
       // HTF SMA projected onto current chart
       for (const tf of getRelevantMTFs(ALL_MTF_KAMA_TFS)) {
@@ -3529,39 +3617,39 @@ function applyIndicators(chartData) {
         if (projected.length === 0) continue;
         // MQL5 color: H1=Tomato, H4/D1/W1=Magenta (from MTF_MA indicator)
         const maColor = tf === "1Hour" ? "#FF6347" : "#FF00FF";
-        const s = chart.addLineSeries({ color: maColor, lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
+        const s = _chart.addLineSeries({ color: maColor, lineWidth: 2, title: "", lastValueVisible: false, priceLineVisible: false });
         s.setData(clip(projected));
-        indicatorSeries[`${key}_${tf}`] = s;
+        _indicatorSeries[`${key}_${tf}`] = s;
       }
 
     // ── Remaining standard indicators (multi-line / special) ──
 
     } else if (ind === "bollinger" && chartData.length > period) {
       const bb = calcBollinger(chartData, period);
-      const su = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB+", priceLineVisible: false });
-      const sl = chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB-", priceLineVisible: false });
+      const su = _chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB+", priceLineVisible: false });
+      const sl = _chart.addLineSeries({ color: "#9c27b0", lineWidth: 1, lineStyle: 2, title: "BB-", priceLineVisible: false });
       su.setData(bb.upper); sl.setData(bb.lower);
-      indicatorSeries[key + "_u"] = su;
-      indicatorSeries[key + "_l"] = sl;
+      _indicatorSeries[key + "_u"] = su;
+      _indicatorSeries[key + "_l"] = sl;
 
     } else if (ind === "rsi" && chartData.length > period + 1) {
       const rsiData = wasmCalcRSI(chartData, period);
-      const s = chart.addLineSeries({ color: "#ab47bc", lineWidth: 1, title: `RSI${period}`, priceScaleId: "rsi", lastValueVisible: true });
-      chart.priceScale("rsi").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
+      const s = _chart.addLineSeries({ color: "#ab47bc", lineWidth: 1, title: `RSI${period}`, priceScaleId: "rsi", lastValueVisible: true });
+      _chart.priceScale("rsi").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 }, borderVisible: false });
       s.setData(rsiData);
-      const ob = chart.addLineSeries({ color: "#f4433644", lineWidth: 1, lineStyle: 2, priceScaleId: "rsi", lastValueVisible: false, priceLineVisible: false });
-      const os = chart.addLineSeries({ color: "#4caf5044", lineWidth: 1, lineStyle: 2, priceScaleId: "rsi", lastValueVisible: false, priceLineVisible: false });
+      const ob = _chart.addLineSeries({ color: "#f4433644", lineWidth: 1, lineStyle: 2, priceScaleId: "rsi", lastValueVisible: false, priceLineVisible: false });
+      const os = _chart.addLineSeries({ color: "#4caf5044", lineWidth: 1, lineStyle: 2, priceScaleId: "rsi", lastValueVisible: false, priceLineVisible: false });
       ob.setData(rsiData.map(d => ({ time: d.time, value: 70 }))); os.setData(rsiData.map(d => ({ time: d.time, value: 30 })));
-      indicatorSeries[key] = s; indicatorSeries[key + "_ob"] = ob; indicatorSeries[key + "_os"] = os;
+      _indicatorSeries[key] = s; _indicatorSeries[key + "_ob"] = ob; _indicatorSeries[key + "_os"] = os;
 
     } else if (ind === "macd" && chartData.length > 26) {
       const m = calcMACD(chartData);
-      const sLine = chart.addLineSeries({ color: "#2196f3", lineWidth: 1, title: "MACD", priceScaleId: "macd", lastValueVisible: true });
-      const sSig = chart.addLineSeries({ color: "#ff9800", lineWidth: 1, title: "Signal", priceScaleId: "macd", lastValueVisible: false });
-      const sHist = chart.addHistogramSeries({ priceScaleId: "macd", lastValueVisible: false });
-      chart.priceScale("macd").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
+      const sLine = _chart.addLineSeries({ color: "#2196f3", lineWidth: 1, title: "MACD", priceScaleId: "macd", lastValueVisible: true });
+      const sSig = _chart.addLineSeries({ color: "#ff9800", lineWidth: 1, title: "Signal", priceScaleId: "macd", lastValueVisible: false });
+      const sHist = _chart.addHistogramSeries({ priceScaleId: "macd", lastValueVisible: false });
+      _chart.priceScale("macd").applyOptions({ scaleMargins: { top: 0.87, bottom: 0 }, borderVisible: false });
       sLine.setData(m.macd); sSig.setData(m.signal); sHist.setData(m.histogram);
-      indicatorSeries[key + "_l"] = sLine; indicatorSeries[key + "_s"] = sSig; indicatorSeries[key + "_h"] = sHist;
+      _indicatorSeries[key + "_l"] = sLine; _indicatorSeries[key + "_s"] = sSig; _indicatorSeries[key + "_h"] = sHist;
 
     }
 
@@ -4117,12 +4205,16 @@ async function loadChart(symbol, timeframe) {
     // Guard: discard stale MTF data if user switched symbols during fetch
     loadMTFData(symbol).then(() => {
       if (currentSymbol !== symbol) return;
-      applyIndicators(chartData);
+      // Limit indicator computation to last 1000 bars — indicators don't need 8K+ bars
+      // (longest lookback is SMA200 which needs 200 bars). Full chartData remains for candle scrolling.
+      const indicatorData = chartData.length > 1000 ? chartData.slice(-1000) : chartData;
+      applyIndicators(indicatorData);
       renderAnnotations();
       updateMTFGrid();
     }).catch(() => {
       if (currentSymbol !== symbol) return;
-      applyIndicators(chartData);
+      const indicatorData = chartData.length > 1000 ? chartData.slice(-1000) : chartData;
+      applyIndicators(indicatorData);
     });
 
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
@@ -6748,7 +6840,7 @@ function listChartTemplates() {
 
 function listChartTemplatesRaw() {
   try { return JSON.parse(localStorage.getItem(TEMPLATES_KEY) || "{}"); }
-  catch { return {}; }
+  catch(e) { console.warn("Template parse error:", e); return {}; }
 }
 
 function deleteChartTemplate(name) {
@@ -11007,7 +11099,7 @@ function cmdDarwin() {
     const totalLong = positions.filter(p => p.side === "buy").reduce((s, p) => s + p.notional, 0);
     const totalShort = positions.filter(p => p.side === "sell").reduce((s, p) => s + p.notional, 0);
     const summaryBar = document.createElement("div"); summaryBar.style.cssText = "display:flex;gap:20px;padding:6px 0 12px;font-size:12px;";
-    summaryBar.innerHTML = `<span style="color:#4caf50">LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#f44336">SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#888">NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`;
+    summaryBar.innerHTML = `<span style="color:#4caf50">LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#f44336">SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#888">NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`; // safe: numeric only
     contentDiv.appendChild(summaryBar);
 
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
@@ -11356,7 +11448,13 @@ function cmdDarwin() {
     title.textContent = `Trade Autocorrelation — ${ticker}`;
     contentDiv.appendChild(title);
     const verdict = document.createElement("div"); verdict.style.cssText = "font-size:13px;padding:4px 0 12px;";
-    verdict.innerHTML = `<span style="color:${a.is_random ? '#4caf50' : '#ff9800'};font-weight:bold;">${a.is_random ? 'INDEPENDENT' : 'DEPENDENT'}</span> — <span style="color:#888">${a.interpretation}</span>`;
+    const verdictStatus = document.createElement("span");
+    verdictStatus.style.cssText = `color:${a.is_random ? '#4caf50' : '#ff9800'};font-weight:bold;`;
+    verdictStatus.textContent = a.is_random ? 'INDEPENDENT' : 'DEPENDENT';
+    const verdictInterp = document.createElement("span");
+    verdictInterp.style.color = "#888";
+    verdictInterp.textContent = a.interpretation;
+    verdict.replaceChildren(verdictStatus, document.createTextNode(" \u2014 "), verdictInterp);
     contentDiv.appendChild(verdict);
     const rows = [["Lag 1", a.lag1.toFixed(4)], ["Lag 2", a.lag2.toFixed(4)], ["Lag 3", a.lag3.toFixed(4)], ["Lag 5", a.lag5.toFixed(4)]];
     const table = document.createElement("table"); table.style.cssText = "border-collapse:collapse;font-size:12px;max-width:400px;";
@@ -11694,6 +11792,321 @@ function cmdDarwin() {
   loadAccounts();
 }
 
+// ── Combined Drawdown & Best/Worst Days Dashboard ────────────
+async function cmdDrawdownDashboard() {
+  const win = createWindow({ title: "Drawdown Dashboard — All DARWINs + Combined", width: 900, height: 650 });
+  win.setContent("Loading drawdown data...");
+  try {
+    const json = await invoke("get_combined_drawdown_dashboard", { topN: 10 });
+    const data = JSON.parse(json);
+    win.contentElement.textContent = "";
+    const frag = document.createDocumentFragment();
+
+    // Combined section first
+    const combined = data.combined;
+    const combHdr = document.createElement("div");
+    combHdr.style.cssText = "padding:8px 12px;font-size:14px;font-weight:bold;color:#FFD700;border-bottom:1px solid #333;";
+    combHdr.textContent = `COMBINED PORTFOLIO — Max DD: ${combined.max_drawdown_pct.toFixed(2)}% (${combined.max_dd_date.substring(0,10)}) | Current DD: ${combined.current_drawdown_pct.toFixed(2)}%`;
+    frag.appendChild(combHdr);
+
+    // Best/Worst days side by side
+    const bwRow = document.createElement("div");
+    bwRow.style.cssText = "display:flex;gap:8px;padding:8px 12px;";
+
+    // SVG bar chart for best/worst day P&L values
+    const makeBars = (days, isBest) => {
+      const items = days.slice(0, 5);
+      if (items.length === 0) return document.createDocumentFragment();
+      const svgW = 380, barH = 14, gap = 3, padL = 70, padR = 60;
+      const svgH = items.length * (barH + gap) + 4;
+      const maxAbs = Math.max(...items.map(d => Math.abs(d.pnl)), 1);
+      const plotW = svgW - padL - padR;
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(ns, "svg");
+      svg.setAttribute("width", svgW); svg.setAttribute("height", svgH);
+      svg.style.cssText = "display:block;margin:2px 0;";
+      for (let i = 0; i < items.length; i++) {
+        const d = items[i];
+        const y = i * (barH + gap) + 2;
+        const w = Math.abs(d.pnl) / maxAbs * plotW;
+        const clr = d.pnl >= 0 ? "#4caf50" : "#f44336";
+        // Date label
+        const lbl = document.createElementNS(ns, "text");
+        lbl.setAttribute("x", padL - 4); lbl.setAttribute("y", y + barH - 2);
+        lbl.setAttribute("text-anchor", "end"); lbl.setAttribute("fill", "#888");
+        lbl.setAttribute("font-size", "9"); lbl.setAttribute("font-family", "Consolas,monospace");
+        lbl.textContent = d.date.substring(0, 10);
+        svg.appendChild(lbl);
+        // Bar
+        const rect = document.createElementNS(ns, "rect");
+        rect.setAttribute("x", padL); rect.setAttribute("y", y);
+        rect.setAttribute("width", Math.max(w, 2)); rect.setAttribute("height", barH);
+        rect.setAttribute("fill", clr); rect.setAttribute("rx", "2");
+        svg.appendChild(rect);
+        // Value label
+        const val = document.createElementNS(ns, "text");
+        val.setAttribute("x", padL + w + 4); val.setAttribute("y", y + barH - 2);
+        val.setAttribute("fill", clr); val.setAttribute("font-size", "9");
+        val.setAttribute("font-family", "Consolas,monospace");
+        val.textContent = `${d.pnl >= 0 ? "+" : ""}$${d.pnl.toFixed(0)}`;
+        svg.appendChild(val);
+      }
+      return svg;
+    };
+
+    const makeTable = (title, days, isBest) => {
+      const wrap = document.createElement("div");
+      wrap.style.cssText = "flex:1;";
+      const hdr = document.createElement("div");
+      hdr.style.cssText = `font-size:11px;font-weight:bold;color:${isBest ? "#4caf50" : "#f44336"};margin-bottom:4px;`;
+      hdr.textContent = title;
+      wrap.appendChild(hdr);
+      // Bar chart first
+      wrap.appendChild(makeBars(days, isBest));
+      // Then table
+      const tbl = document.createElement("table");
+      tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-top:4px;";
+      tbl.appendChild(theadRow(["Date", "P/L", "Return%", "Balance"], "padding:2px 4px;color:#666;border-bottom:1px solid #333;text-align:right;font-size:9px;"));
+      for (const d of days.slice(0, 5)) {
+        const tr = document.createElement("tr");
+        const clr = d.pnl >= 0 ? "#4caf50" : "#f44336";
+        tr.appendChild(td(d.date.substring(0,10), "padding:2px 4px;color:#888;text-align:left;font-size:9px;"));
+        tr.appendChild(td(`${d.pnl >= 0 ? "+" : ""}$${d.pnl.toFixed(2)}`, `padding:2px 4px;color:${clr};text-align:right;font-family:Consolas,monospace;font-size:9px;`));
+        tr.appendChild(td(`${d.return_pct >= 0 ? "+" : ""}${d.return_pct.toFixed(2)}%`, `padding:2px 4px;color:${clr};text-align:right;font-family:Consolas,monospace;font-size:9px;`));
+        tr.appendChild(td(`$${d.balance.toFixed(2)}`, "padding:2px 4px;color:#ccc;text-align:right;font-family:Consolas,monospace;font-size:9px;"));
+        tbl.appendChild(tr);
+      }
+      wrap.appendChild(tbl);
+      return wrap;
+    };
+
+    bwRow.appendChild(makeTable("BEST DAYS (Combined)", combined.best_days, true));
+    bwRow.appendChild(makeTable("WORST DAYS (Combined)", combined.worst_days, false));
+    frag.appendChild(bwRow);
+
+    // Per-DARWIN sections
+    for (const dw of data.darwins) {
+      const dwHdr = document.createElement("div");
+      dwHdr.style.cssText = "padding:6px 12px;font-size:12px;font-weight:bold;color:#2196f3;border-top:1px solid #222;margin-top:6px;";
+      dwHdr.textContent = `${dw.darwin_ticker} — Max DD: ${dw.max_drawdown_pct.toFixed(2)}% (${dw.max_dd_date.substring(0,10)}) | Current DD: ${dw.current_drawdown_pct.toFixed(2)}%`;
+      frag.appendChild(dwHdr);
+
+      const dwRow = document.createElement("div");
+      dwRow.style.cssText = "display:flex;gap:8px;padding:4px 12px;";
+      dwRow.appendChild(makeTable(`Best Days (${dw.darwin_ticker})`, dw.best_days, true));
+      dwRow.appendChild(makeTable(`Worst Days (${dw.darwin_ticker})`, dw.worst_days, false));
+      frag.appendChild(dwRow);
+    }
+
+    // Legend
+    const legend = document.createElement("div");
+    legend.style.cssText = "padding:8px 12px;font-size:9px;color:#666;border-top:1px solid #333;";
+    legend.textContent = `${data.darwins.length} DARWINs analyzed | Top 5 best/worst days shown per account`;
+    frag.appendChild(legend);
+
+    win.contentElement.replaceChildren(frag);
+  } catch (e) { win.setContent(`Failed: ${e}`); }
+}
+
+// ── Floating Equity Dashboard ─────────────────────────────────
+async function cmdFloatingEquity() {
+  const win = createWindow({ title: "Floating Equity — Mark-to-Market", width: 850, height: 600 });
+  win.setContent("Fetching live quotes for open DARWIN positions...");
+  try {
+    const json = await invoke("get_floating_equity", {});
+    const data = JSON.parse(json);
+    win.contentElement.textContent = "";
+    const frag = document.createDocumentFragment();
+
+    // Combined header
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "padding:10px 12px;border-bottom:1px solid #333;";
+    const eqColor = data.combined_unrealized_pnl >= 0 ? "#4caf50" : "#f44336";
+    const hdrLine1 = document.createElement("div");
+    hdrLine1.style.cssText = "font-size:16px;font-weight:bold;color:#FFD700;";
+    hdrLine1.textContent = `Combined Floating Equity: $${data.combined_floating_equity.toFixed(2)}`;
+    hdr.appendChild(hdrLine1);
+    const hdrLine2 = document.createElement("div");
+    hdrLine2.style.cssText = `font-size:12px;color:${eqColor};margin-top:2px;`;
+    hdrLine2.textContent = `Closed Balance: $${data.combined_closed_balance.toFixed(2)} | Unrealized P/L: ${data.combined_unrealized_pnl >= 0 ? "+" : ""}$${data.combined_unrealized_pnl.toFixed(2)}`;
+    hdr.appendChild(hdrLine2);
+    frag.appendChild(hdr);
+
+    // Fetch VaR multipliers for enrichment
+    let varMultLookup = {};
+    try {
+      const mJson = await window.__TAURI__.core.invoke("get_var_multipliers");
+      const mults = JSON.parse(mJson);
+      for (const m of mults) varMultLookup[m.darwin_ticker] = m;
+    } catch (_) {}
+
+    // Per-DARWIN sections
+    for (const dw of data.darwins) {
+      const dwHdr = document.createElement("div");
+      const dwColor = dw.unrealized_pnl >= 0 ? "#4caf50" : "#f44336";
+      dwHdr.style.cssText = "padding:6px 12px;border-top:1px solid #222;margin-top:4px;display:flex;justify-content:space-between;align-items:center;";
+      const dwTitle = document.createElement("span");
+      dwTitle.style.cssText = "font-size:13px;font-weight:bold;color:#2196f3;";
+      dwTitle.textContent = dw.darwin_ticker;
+      const mult = varMultLookup[dw.darwin_ticker];
+      const multText = mult ? ` | Multiplier: ${mult.multiplier.toFixed(2)}x | VaR: ${mult.monthly_var.toFixed(1)}%` : "";
+      const dwEq = document.createElement("span");
+      dwEq.style.cssText = `font-size:12px;font-family:Consolas,monospace;color:${dwColor};`;
+      dwEq.textContent = `Equity: $${dw.floating_equity.toFixed(2)}${multText} (Closed: $${dw.closed_balance.toFixed(2)} + Unrealized: ${dw.unrealized_pnl >= 0 ? "+" : ""}$${dw.unrealized_pnl.toFixed(2)})`;
+      dwHdr.appendChild(dwTitle);
+      dwHdr.appendChild(dwEq);
+      frag.appendChild(dwHdr);
+
+      // Open positions table
+      if (dw.open_positions.length > 0) {
+        const tbl = document.createElement("table");
+        tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin:2px 12px;";
+        tbl.appendChild(theadRow(["Symbol", "Side", "Volume", "Avg Price", "Current", "Unrealized P/L", "P/L %"], "padding:2px 6px;color:#666;border-bottom:1px solid #222;text-align:right;font-size:9px;"));
+        for (const p of dw.open_positions) {
+          const tr = document.createElement("tr");
+          const pColor = p.unrealized_pnl >= 0 ? "#4caf50" : "#f44336";
+          const sideColor = p.side === "buy" ? "#4caf50" : "#f44336";
+          tr.appendChild(td(p.symbol, "padding:2px 6px;color:#ccc;text-align:left;"));
+          tr.appendChild(td(p.side.toUpperCase(), `padding:2px 6px;color:${sideColor};text-align:center;font-weight:bold;`));
+          tr.appendChild(td(p.volume.toFixed(2), "padding:2px 6px;color:#ccc;text-align:right;font-family:Consolas,monospace;"));
+          tr.appendChild(td(p.avg_price.toFixed(5), "padding:2px 6px;color:#888;text-align:right;font-family:Consolas,monospace;"));
+          tr.appendChild(td(p.current_price.toFixed(5), "padding:2px 6px;color:#ccc;text-align:right;font-family:Consolas,monospace;"));
+          tr.appendChild(td(`${p.unrealized_pnl >= 0 ? "+" : ""}$${p.unrealized_pnl.toFixed(2)}`, `padding:2px 6px;color:${pColor};text-align:right;font-family:Consolas,monospace;font-weight:bold;`));
+          tr.appendChild(td(`${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct.toFixed(2)}%`, `padding:2px 6px;color:${pColor};text-align:right;font-family:Consolas,monospace;`));
+          tbl.appendChild(tr);
+        }
+        frag.appendChild(tbl);
+      } else {
+        const noPos = document.createElement("div");
+        noPos.style.cssText = "padding:2px 12px;font-size:10px;color:#666;";
+        noPos.textContent = "No open positions";
+        frag.appendChild(noPos);
+      }
+    }
+
+    // Footer
+    const footer = document.createElement("div");
+    footer.style.cssText = "padding:8px 12px;font-size:9px;color:#666;border-top:1px solid #333;margin-top:8px;";
+    footer.textContent = `${data.darwins.length} DARWINs | Snapshot recorded at ${new Date().toLocaleTimeString()} | Prices from live Alpaca quotes`;
+    frag.appendChild(footer);
+
+    win.contentElement.replaceChildren(frag);
+  } catch (e) { win.setContent(`Failed: ${e}`); }
+}
+
+// ── Portfolio Rebalance Advisor ───────────────────────────────
+async function cmdRebalance() {
+  const win = createWindow({ title: "Portfolio Rebalancer — VaR Optimization", width: 950, height: 700 });
+  win.setContent("Analyzing correlations, VaR, and allocation...");
+  try {
+    const json = await invoke("get_rebalance_suggestions", {});
+    const data = JSON.parse(json);
+    win.contentElement.textContent = "";
+    const frag = document.createDocumentFragment();
+
+    // Portfolio VaR header
+    const hdr = document.createElement("div");
+    hdr.style.cssText = "padding:10px 12px;border-bottom:1px solid #333;";
+    const h1 = document.createElement("div");
+    h1.style.cssText = "font-size:14px;font-weight:bold;color:#FFD700;";
+    h1.textContent = `Portfolio VaR(95): ${data.current_portfolio_var_95.toFixed(2)}% | VaR(99): ${data.current_portfolio_var_99.toFixed(2)}% | Sharpe: ${data.current_sharpe.toFixed(2)}`;
+    hdr.appendChild(h1);
+    frag.appendChild(hdr);
+
+    // Fetch VaR multipliers for the Multiplier column
+    let rebalMultLookup = {};
+    try {
+      const mJson = await invoke("get_var_multipliers", {});
+      const mults = JSON.parse(mJson);
+      for (const m of mults) rebalMultLookup[m.darwin_ticker] = m;
+    } catch (_) {}
+
+    // DARWIN weights table
+    if (data.darwin_var.length > 0) {
+      const secHdr = document.createElement("div");
+      secHdr.style.cssText = "padding:6px 12px;font-size:11px;font-weight:bold;color:#2196f3;border-bottom:1px solid #222;";
+      secHdr.textContent = "Per-DARWIN Risk Metrics";
+      frag.appendChild(secHdr);
+      const tbl = document.createElement("table");
+      tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+      tbl.appendChild(theadRow(["DARWIN", "VaR(95)", "Sharpe", "Multiplier", "Portfolio Wt%", "45d Corr Avg"], "padding:3px 6px;color:#666;border-bottom:1px solid #333;text-align:right;"));
+      for (const [ticker, var95, sharpe, weight] of data.darwin_var) {
+        // Average 45-day correlation with all other DARWINs
+        const corrPairs = (data.high_correlation_pairs || []).filter(p => p.darwin_a === ticker || p.darwin_b === ticker);
+        const avgCorr = corrPairs.length > 0 ? corrPairs.reduce((s, p) => s + Math.abs(p.correlation), 0) / corrPairs.length : 0;
+        const corrColor = avgCorr > 0.7 ? "#f44336" : avgCorr > 0.4 ? "#ff9800" : "#4caf50";
+        const mult = rebalMultLookup[ticker];
+        const multText = mult ? mult.multiplier.toFixed(2) + "x" : "—";
+        const multColor = mult ? (mult.multiplier >= 1.5 ? "#4caf50" : mult.multiplier >= 1.0 ? "#ff9800" : "#f44336") : "#666";
+        const tr = document.createElement("tr");
+        tr.appendChild(td(ticker, "padding:3px 6px;color:#ccc;text-align:left;font-weight:bold;"));
+        tr.appendChild(td(`${var95.toFixed(2)}%`, "padding:3px 6px;color:#ff9800;text-align:right;font-family:Consolas,monospace;"));
+        tr.appendChild(td(sharpe.toFixed(2), `padding:3px 6px;color:${sharpe > 0 ? "#4caf50" : "#f44336"};text-align:right;font-family:Consolas,monospace;`));
+        tr.appendChild(td(multText, `padding:3px 6px;color:${multColor};text-align:right;font-family:Consolas,monospace;`));
+        tr.appendChild(td(`${(weight * 100).toFixed(1)}%`, "padding:3px 6px;color:#ccc;text-align:right;font-family:Consolas,monospace;"));
+        tr.appendChild(td(avgCorr > 0 ? avgCorr.toFixed(2) : "—", `padding:3px 6px;color:${corrColor};text-align:right;font-family:Consolas,monospace;`));
+        tbl.appendChild(tr);
+      }
+      frag.appendChild(tbl);
+    }
+
+    // High correlation pairs
+    if (data.high_correlation_pairs.length > 0) {
+      const corrHdr = document.createElement("div");
+      corrHdr.style.cssText = "padding:6px 12px;font-size:11px;font-weight:bold;color:#ff9800;border-top:1px solid #333;margin-top:6px;";
+      corrHdr.textContent = `Correlated Positions (${data.high_correlation_pairs.length} pairs)`;
+      frag.appendChild(corrHdr);
+      const corrTbl = document.createElement("table");
+      corrTbl.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;";
+      corrTbl.appendChild(theadRow(["Symbol", "DARWIN A", "DARWIN B", "Correlation", "Combined Notional"], "padding:2px 6px;color:#666;border-bottom:1px solid #222;text-align:right;font-size:9px;"));
+      for (const pair of data.high_correlation_pairs.slice(0, 15)) {
+        const tr = document.createElement("tr");
+        const corrColor = pair.correlation > 0.7 ? "#f44336" : pair.correlation < -0.3 ? "#4caf50" : "#ff9800";
+        tr.appendChild(td(pair.symbol_a, "padding:2px 6px;color:#ccc;text-align:left;"));
+        tr.appendChild(td(pair.darwin_a, "padding:2px 6px;color:#2196f3;text-align:center;"));
+        tr.appendChild(td(pair.darwin_b, "padding:2px 6px;color:#2196f3;text-align:center;"));
+        tr.appendChild(td(pair.correlation.toFixed(2), `padding:2px 6px;color:${corrColor};text-align:right;font-family:Consolas,monospace;font-weight:bold;`));
+        tr.appendChild(td(`$${pair.combined_notional.toFixed(0)}`, "padding:2px 6px;color:#ccc;text-align:right;font-family:Consolas,monospace;"));
+        corrTbl.appendChild(tr);
+      }
+      frag.appendChild(corrTbl);
+    }
+
+    // Suggestions — only position-level profit-taking (all accounts run 100% margin)
+    const sugHdr = document.createElement("div");
+    sugHdr.style.cssText = "padding:6px 12px;font-size:11px;font-weight:bold;border-top:1px solid #333;margin-top:6px;";
+    if (data.suggestions.length > 0) {
+      sugHdr.style.color = "#ff9800";
+      sugHdr.textContent = `Actionable Trades (${data.suggestions.length})`;
+      frag.appendChild(sugHdr);
+      for (const s of data.suggestions) {
+        const row = document.createElement("div");
+        row.style.cssText = "padding:4px 12px;font-size:10px;border-left:3px solid #ff9800;margin:2px 12px;";
+        const badge = document.createElement("span");
+        badge.style.cssText = "color:#ff9800;font-weight:bold;margin-right:6px;";
+        badge.textContent = s.action;
+        row.appendChild(badge);
+        const reason = document.createElement("span");
+        reason.style.color = "#ccc";
+        reason.textContent = s.reason;
+        row.appendChild(reason);
+        frag.appendChild(row);
+      }
+    } else {
+      sugHdr.style.color = "#4caf50";
+      sugHdr.textContent = "✓ Portfolio well-balanced — no correlated positions above 0.95 threshold requiring action";
+      frag.appendChild(sugHdr);
+    }
+
+    const footer = document.createElement("div");
+    footer.style.cssText = "padding:8px 12px;font-size:9px;color:#666;border-top:1px solid #333;margin-top:8px;";
+    footer.textContent = "Suggestions based on inverse-volatility weighting + cross-DARWIN correlation analysis. Not financial advice.";
+    frag.appendChild(footer);
+
+    win.contentElement.replaceChildren(frag);
+  } catch (e) { win.setContent(`Failed: ${e}`); }
+}
+
 // ── DARWIN Portfolio Dashboard ────────────────────────────────
 function cmdDarwinPortfolio() {
   const win = createWindow({ title: "DARWIN Portfolio", width: 1000, height: 700 });
@@ -11758,15 +12171,67 @@ function cmdDarwinPortfolio() {
     const s = JSON.parse(json);
     contentDiv.textContent = "";
 
-    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 12px;";
+    const title = document.createElement("div"); title.style.cssText = "font-size:16px;font-weight:bold;color:#fff;padding:4px 0 8px;";
     title.textContent = `DARWIN Portfolio — ${s.accounts.length} Accounts`;
     contentDiv.appendChild(title);
 
+    // Fetch floating equity for mark-to-market P/L
+    let floatingData = null;
+    try {
+      const fJson = await window.__TAURI__.core.invoke("get_floating_equity", {});
+      floatingData = JSON.parse(fJson);
+    } catch (_) {}
+
+    const unrealizedPnl = floatingData ? floatingData.combined_unrealized_pnl : 0;
+    // Balance = final balance from deal history (closed P/L included)
+    // The floating equity endpoint may show closed_balance=0 if XLSX ends with withdrawal,
+    // so always use the portfolio summary's total_final_balance as the authoritative balance.
+    const balance = s.total_final_balance;
+    // Equity = Balance + Unrealized P/L (MT5 definition)
+    const equity = balance + unrealizedPnl;
+
+    // MT5-style margin bar: Balance | Equity | Margin | Free Margin | Margin Level %
+    // Darwinex: entire balance is locked as margin (cash-like account).
+    // No free margin from floating P/L — only realized profit (closed trades) frees capital.
+    const estimatedMargin = balance;
+    // Free margin is always 0 at Darwinex until trades are closed
+    const darwinexFreeMargin = 0;
+    const freeMargin = darwinexFreeMargin;
+    const marginLevel = estimatedMargin > 0 ? (equity / estimatedMargin * 100) : 0;
+    const mlColor = marginLevel > 200 ? "#4caf50" : marginLevel > 150 ? "#ff9800" : "#f44336";
+
+    const marginBar = document.createElement("div");
+    marginBar.style.cssText = "display:flex;gap:4px;padding:8px 0 12px;font-family:Consolas,monospace;font-size:12px;flex-wrap:wrap;border-bottom:1px solid #333;margin-bottom:8px;";
+    const mItems = [
+      ["Balance:", `$${balance.toLocaleString(undefined, {minimumFractionDigits: 2})}`, "#ccc"],
+      ["Equity:", `$${equity.toLocaleString(undefined, {minimumFractionDigits: 2})}`, equity >= balance ? "#4caf50" : "#f44336"],
+      ["Margin:", `$${estimatedMargin.toLocaleString(undefined, {minimumFractionDigits: 2})}`, "#ff9800"],
+      ["Free Margin:", `$${freeMargin.toLocaleString(undefined, {minimumFractionDigits: 2})}`, freeMargin >= 0 ? "#4caf50" : "#f44336"],
+      ["Margin Level:", marginLevel > 0 ? `${marginLevel.toFixed(1)}%` : "—", mlColor],
+    ];
+    for (const [label, val, color] of mItems) {
+      const item = document.createElement("span");
+      item.style.cssText = "margin-right:16px;";
+      const lbl = document.createElement("span");
+      lbl.style.color = "#888";
+      lbl.textContent = label + " ";
+      const v = document.createElement("span");
+      v.style.cssText = `color:${color};font-weight:bold;`;
+      v.textContent = val;
+      item.appendChild(lbl);
+      item.appendChild(v);
+      marginBar.appendChild(item);
+    }
+    contentDiv.appendChild(marginBar);
+
+    // Aggregate stats
     // Aggregate stats
     const statsRows = [
       ["Total Initial Capital", "$" + s.total_initial_balance.toLocaleString(undefined, {minimumFractionDigits: 2})],
-      ["Total Final Balance", "$" + s.total_final_balance.toLocaleString(undefined, {minimumFractionDigits: 2})],
-      ["Net P/L (all accounts)", "$" + s.total_net_pnl.toLocaleString(undefined, {minimumFractionDigits: 2}), s.total_net_pnl],
+      ["Balance (closed P/L)", "$" + balance.toLocaleString(undefined, {minimumFractionDigits: 2})],
+      ["Unrealized P/L", (unrealizedPnl >= 0 ? "+" : "") + "$" + unrealizedPnl.toLocaleString(undefined, {minimumFractionDigits: 2}), unrealizedPnl],
+      ["Equity (Balance + Unrealized)", "$" + equity.toLocaleString(undefined, {minimumFractionDigits: 2}), equity - s.total_initial_balance],
+      ["Net P/L (closed deals)", "$" + s.total_net_pnl.toLocaleString(undefined, {minimumFractionDigits: 2}), s.total_net_pnl],
       ["Total Commission", "$" + s.total_commission.toLocaleString(undefined, {minimumFractionDigits: 2})],
       ["Total Deals", s.total_deals.toLocaleString()],
       ["Total Positions", s.total_positions.toLocaleString()],
@@ -11782,6 +12247,16 @@ function cmdDarwinPortfolio() {
     }
     contentDiv.appendChild(statsTable);
 
+    // Fetch D-Score estimates for per-account table
+    let dscoreLookup = {};
+    for (const a of s.accounts) {
+      try {
+        const dJson = await window.__TAURI__.core.invoke("get_dscore_estimate", { darwinTicker: a.account.darwin_ticker });
+        const ds = JSON.parse(dJson);
+        dscoreLookup[a.account.darwin_ticker] = ds.total_dscore;
+      } catch (_) {}
+    }
+
     // Per-account breakdown
     const breakTitle = document.createElement("div"); breakTitle.style.cssText = "font-weight:bold;color:#fff;padding:8px 0 6px;font-size:13px;";
     breakTitle.textContent = "Per-Account Breakdown";
@@ -11789,28 +12264,40 @@ function cmdDarwinPortfolio() {
 
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
     const thead = document.createElement("tr");
-    ["DARWIN", "MT5 Name", "Final Balance", "Net P/L", "Win Rate", "PF", "Max DD", "Positions"].forEach(h => {
+    ["DARWIN", "MT5 Name", "Balance", "Equity", "Margin", "ML%", "Unrealized", "Net P/L", "Win Rate", "PF", "Max DD", "D-Score"].forEach(h => {
       const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:4px 6px;border-bottom:1px solid #333;"; th.textContent = h; thead.appendChild(th);
     });
     table.appendChild(thead);
 
     for (const a of s.accounts) {
       const netPnl = a.total_profit + a.total_commission + a.total_swap;
+      const fDw = floatingData ? floatingData.darwins.find(d => d.darwin_ticker === a.account.darwin_ticker) : null;
+      const fUnreal = fDw ? fDw.unrealized_pnl : 0;
+      const dwBalance = a.final_balance; // authoritative balance from deal history
+      const fEq = dwBalance + fUnreal; // equity = balance + unrealized P/L
+      // Per-DARWIN margin: at 100% utilization, margin = balance
+      const dwMargin = dwBalance;
+      const dwMl = dwMargin > 0 ? (fEq / dwMargin * 100) : 0;
+      const dwMlColor = dwMl > 200 ? "#4caf50" : dwMl > 150 ? "#ff9800" : dwMl > 0 ? "#f44336" : "#888";
+      const dwDScore = dscoreLookup[a.account.darwin_ticker];
       const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
       const vals = [
-        a.account.darwin_ticker, a.account.name,
-        "$" + a.final_balance.toLocaleString(undefined, {maximumFractionDigits: 0}),
-        "$" + netPnl.toLocaleString(undefined, {maximumFractionDigits: 0}),
-        a.win_rate.toFixed(1) + "%", a.profit_factor === Infinity ? "∞" : a.profit_factor.toFixed(2),
-        a.max_drawdown_pct.toFixed(1) + "%", a.account.position_count,
+        { v: a.account.darwin_ticker, c: "#8af" },
+        { v: a.account.name, c: "#ccc" },
+        { v: "$" + a.final_balance.toLocaleString(undefined, {maximumFractionDigits: 0}), c: "#ccc" },
+        { v: "$" + fEq.toLocaleString(undefined, {maximumFractionDigits: 0}), c: fEq >= a.final_balance ? "#4caf50" : "#f44336" },
+        { v: "$" + dwMargin.toLocaleString(undefined, {maximumFractionDigits: 0}), c: "#ff9800" },
+        { v: dwMl > 0 ? dwMl.toFixed(1) + "%" : "—", c: dwMlColor },
+        { v: (fUnreal >= 0 ? "+" : "") + "$" + fUnreal.toLocaleString(undefined, {maximumFractionDigits: 0}), c: fUnreal >= 0 ? "#4caf50" : "#f44336" },
+        { v: "$" + netPnl.toLocaleString(undefined, {maximumFractionDigits: 0}), c: netPnl >= 0 ? "#4caf50" : "#f44336" },
+        { v: a.win_rate.toFixed(1) + "%", c: a.win_rate >= 50 ? "#4caf50" : "#f44336" },
+        { v: a.profit_factor === Infinity ? "∞" : a.profit_factor.toFixed(2), c: a.profit_factor >= 1 ? "#4caf50" : "#f44336" },
+        { v: a.max_drawdown_pct.toFixed(1) + "%", c: "#f44336" },
+        { v: dwDScore != null ? dwDScore.toFixed(1) : "—", c: dwDScore != null ? (dwDScore >= 60 ? "#4caf50" : dwDScore >= 40 ? "#ff9800" : "#f44336") : "#666" },
       ];
-      for (let i = 0; i < vals.length; i++) {
-        const td = document.createElement("td"); td.style.cssText = "padding:3px 6px;font-family:Consolas,monospace;";
-        td.textContent = String(vals[i]);
-        if (i === 0) td.style.color = "#8af";
-        else if (i === 3) td.style.color = netPnl >= 0 ? "#4caf50" : "#f44336";
-        else if (i === 4) td.style.color = a.win_rate >= 50 ? "#4caf50" : "#f44336";
-        else if (i === 5) td.style.color = a.profit_factor >= 1 ? "#4caf50" : "#f44336";
+      for (const { v, c } of vals) {
+        const td = document.createElement("td"); td.style.cssText = `padding:3px 6px;font-family:Consolas,monospace;color:${c};`;
+        td.textContent = String(v);
         tr.appendChild(td);
       }
       table.appendChild(tr);
@@ -11831,7 +12318,7 @@ function cmdDarwinPortfolio() {
     contentDiv.appendChild(title);
 
     const summaryBar = document.createElement("div"); summaryBar.style.cssText = "display:flex;gap:24px;padding:6px 0 12px;font-size:13px;font-family:Consolas,monospace;";
-    summaryBar.innerHTML = `<span style="color:#4caf50">LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#f44336">SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#888">NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`;
+    summaryBar.innerHTML = `<span style="color:#4caf50">LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#f44336">SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#888">NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`; // safe: numeric only
     contentDiv.appendChild(summaryBar);
 
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
@@ -12210,7 +12697,13 @@ function cmdDarwinPortfolio() {
     contentDiv.appendChild(title);
     const regimeColors = { LOW_VOL: "#4caf50", MEDIUM_VOL: "#ff9800", HIGH_VOL: "#f44336" };
     const currentBox = document.createElement("div"); currentBox.style.cssText = `padding:16px 20px;background:#111;border-left:4px solid ${regimeColors[r.current_regime] || "#888"};margin-bottom:16px;border-radius:2px;`;
-    currentBox.innerHTML = `<div style="font-size:18px;font-weight:bold;color:${regimeColors[r.current_regime] || "#ccc"}">${r.current_regime.replace("_", " ")}</div><div style="color:#888;font-size:11px;margin-top:4px;">Since ${r.regime_start} (${r.regime_duration_days} days) | Rolling Vol: ${r.rolling_vol.toFixed(3)}% | Percentile: ${r.vol_percentile.toFixed(0)}%</div>`;
+    const regimeLabel = document.createElement("div");
+    regimeLabel.style.cssText = `font-size:18px;font-weight:bold;color:${regimeColors[r.current_regime] || "#ccc"}`;
+    regimeLabel.textContent = r.current_regime.replace("_", " ");
+    const regimeDetail = document.createElement("div");
+    regimeDetail.style.cssText = "color:#888;font-size:11px;margin-top:4px;";
+    regimeDetail.textContent = `Since ${r.regime_start} (${r.regime_duration_days} days) | Rolling Vol: ${r.rolling_vol.toFixed(3)}% | Percentile: ${r.vol_percentile.toFixed(0)}%`;
+    currentBox.replaceChildren(regimeLabel, regimeDetail);
     contentDiv.appendChild(currentBox);
     if (r.regime_history && r.regime_history.length > 0) {
       const histTitle = document.createElement("div"); histTitle.style.cssText = "font-weight:bold;color:#ccc;padding:8px 0 6px;font-size:12px;"; histTitle.textContent = "Regime History";
@@ -12249,7 +12742,9 @@ function cmdDarwinPortfolio() {
       if (sector.children) {
         for (const sym of sector.children.slice(0, 8)) {
           const symDiv = document.createElement("div"); symDiv.style.cssText = "font-size:9px;color:rgba(255,255,255,0.7);padding:1px 0;display:flex;justify-content:space-between;";
-          symDiv.innerHTML = `<span>${sym.name}</span><span style="color:${sym.color_value > 0 ? '#81c784' : '#e57373'}">$${Math.abs(sym.value).toLocaleString(undefined,{maximumFractionDigits:0})}</span>`;
+          const symName = document.createElement("span"); symName.textContent = sym.name;
+          const symVal = document.createElement("span"); symVal.style.color = sym.color_value > 0 ? '#81c784' : '#e57373'; symVal.textContent = `$${Math.abs(sym.value).toLocaleString(undefined,{maximumFractionDigits:0})}`;
+          symDiv.replaceChildren(symName, symVal);
           sDiv.appendChild(symDiv);
         }
         if (sector.children.length > 8) {
@@ -12344,7 +12839,18 @@ function cmdDarwinPortfolio() {
       try {
         const json = await window.__TAURI__.core.invoke("what_if_close_symbol", { symbol: sym });
         const r = JSON.parse(json);
-        resultDiv.innerHTML = `<div style="padding:4px 0"><span style="color:#888">Action:</span> ${r.action}</div><div style="padding:4px 0"><span style="color:#888">Current VaR:</span> $${r.current_portfolio_var.toFixed(0)}</div><div style="padding:4px 0"><span style="color:#888">New VaR:</span> $${r.new_portfolio_var.toFixed(0)}</div><div style="padding:4px 0"><span style="color:#888">VaR Change:</span> <span style="color:${r.var_change_pct < 0 ? '#4caf50' : '#f44336'}">${r.var_change_pct.toFixed(2)}%</span></div><div style="padding:4px 0"><span style="color:#888">Notional Removed:</span> $${(r.current_notional - r.new_notional).toLocaleString(undefined,{maximumFractionDigits:0})}</div>`;
+        resultDiv.textContent = "";
+        const mkRow = (label, value, valueColor) => {
+          const row = document.createElement("div"); row.style.padding = "4px 0";
+          const lbl = document.createElement("span"); lbl.style.color = "#888"; lbl.textContent = label;
+          const val = document.createElement("span"); if (valueColor) val.style.color = valueColor; val.textContent = value;
+          row.appendChild(lbl); row.appendChild(val); return row;
+        };
+        resultDiv.appendChild(mkRow("Action: ", r.action));
+        resultDiv.appendChild(mkRow("Current VaR: ", `$${r.current_portfolio_var.toFixed(0)}`));
+        resultDiv.appendChild(mkRow("New VaR: ", `$${r.new_portfolio_var.toFixed(0)}`));
+        resultDiv.appendChild(mkRow("VaR Change: ", `${r.var_change_pct.toFixed(2)}%`, r.var_change_pct < 0 ? '#4caf50' : '#f44336'));
+        resultDiv.appendChild(mkRow("Notional Removed: ", `$${(r.current_notional - r.new_notional).toLocaleString(undefined,{maximumFractionDigits:0})}`));
       } catch (e) { resultDiv.textContent = "Error: " + e; }
     });
   }
@@ -12606,7 +13112,8 @@ function cmdDarwinPortfolio() {
       ctx.stroke();
       // Legend
       const legend = document.createElement("div"); legend.style.cssText = "color:#666;font-size:9px;padding:2px 0;";
-      legend.innerHTML = '<span style="color:#2196f3;">&#9632;</span> AuM &nbsp; <span style="color:#4caf50;">&#9632;</span> Investors &nbsp; | ' + data[0].date + ' to ' + data[data.length - 1].date;
+      const mkLegendSpan = (color, text) => { const s = document.createElement("span"); s.style.color = color; s.textContent = text; return s; };
+      legend.replaceChildren(mkLegendSpan("#2196f3", "\u25A0"), document.createTextNode(" AuM \u00A0 "), mkLegendSpan("#4caf50", "\u25A0"), document.createTextNode(` Investors \u00A0 | ${data[0].date} to ${data[data.length - 1].date}`));
       section.appendChild(legend);
       contentDiv.appendChild(section);
     }
@@ -13192,7 +13699,7 @@ function cmdDarwinPortfolio() {
     const winDays = pnls.filter(p => p > 0).length; const lossDays = pnls.filter(p => p < 0).length;
     const avgWin = pnls.filter(p => p > 0).reduce((s, p) => s + p, 0) / (winDays || 1);
     const avgLoss = pnls.filter(p => p < 0).reduce((s, p) => s + p, 0) / (lossDays || 1);
-    statsDiv.innerHTML = `<span style="color:#4caf50">Win days: ${winDays} (${(winDays/pnls.length*100).toFixed(0)}%) avg: $${avgWin.toFixed(0)}</span><span style="color:#f44336">Loss days: ${lossDays} (${(lossDays/pnls.length*100).toFixed(0)}%) avg: $${avgLoss.toFixed(0)}</span><span style="color:#ccc">Payoff: ${(avgWin/Math.abs(avgLoss)).toFixed(2)}x</span>`;
+    statsDiv.innerHTML = `<span style="color:#4caf50">Win days: ${winDays} (${(winDays/pnls.length*100).toFixed(0)}%) avg: $${avgWin.toFixed(0)}</span><span style="color:#f44336">Loss days: ${lossDays} (${(lossDays/pnls.length*100).toFixed(0)}%) avg: $${avgLoss.toFixed(0)}</span><span style="color:#ccc">Payoff: ${(avgWin/Math.abs(avgLoss)).toFixed(2)}x</span>`; // safe: numeric only
     contentDiv.appendChild(statsDiv);
   }
 
@@ -13236,7 +13743,7 @@ function cmdDarwinPortfolio() {
     contentDiv.appendChild(table);
 
     const legend = document.createElement("div"); legend.style.cssText = "padding:12px 0;font-size:11px;color:#888;";
-    legend.innerHTML = '<span style="color:#4caf50">Green: low correlation (diversified)</span> · <span style="color:#ff9800">Amber: moderate</span> · <span style="color:#f44336">Red: high correlation (redundant)</span>';
+    legend.innerHTML = '<span style="color:#4caf50">Green: low correlation (diversified)</span> · <span style="color:#ff9800">Amber: moderate</span> · <span style="color:#f44336">Red: high correlation (redundant)</span>'; // safe: static strings only
     contentDiv.appendChild(legend);
   }
 
@@ -13524,7 +14031,13 @@ function cmdSources() {
 
     for (const src of sources) {
       const card = document.createElement("div"); card.style.cssText = "padding:12px 16px;margin-bottom:8px;border-left:3px solid " + src.color + ";background:#111;border-radius:2px;";
-      card.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:14px;font-weight:bold;color:#fff;">${src.name}</span><span style="color:${src.color};font-size:10px;font-weight:bold;">${src.status}</span></div><div style="color:#888;font-size:11px;margin-top:4px;">${src.symbols}</div><div style="color:#666;font-size:10px;margin-top:2px;">${src.detail}</div>`;
+      const headerRow = document.createElement("div"); headerRow.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+      const srcName = document.createElement("span"); srcName.style.cssText = "font-size:14px;font-weight:bold;color:#fff;"; srcName.textContent = src.name;
+      const srcStatus = document.createElement("span"); srcStatus.style.cssText = `color:${src.color};font-size:10px;font-weight:bold;`; srcStatus.textContent = src.status;
+      headerRow.appendChild(srcName); headerRow.appendChild(srcStatus);
+      const symLine = document.createElement("div"); symLine.style.cssText = "color:#888;font-size:11px;margin-top:4px;"; symLine.textContent = src.symbols;
+      const detLine = document.createElement("div"); detLine.style.cssText = "color:#666;font-size:10px;margin-top:2px;"; detLine.textContent = src.detail;
+      card.replaceChildren(headerRow, symLine, detLine);
       contentDiv.appendChild(card);
     }
   }
@@ -13683,6 +14196,123 @@ function cmdSources() {
   renderView();
 }
 
+// ── SYMBOL-OVERLAP — Cross-DARWIN Correlation ───────────────
+function cmdSymbolOverlap() {
+  const win = createWindow({ title: "Symbol Overlap — Cross-DARWIN Correlation", width: 1100, height: 750 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div");
+  root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;overflow-y:auto;padding:8px;";
+  win.contentElement.appendChild(root);
+
+  (async () => {
+    root.textContent = "Loading symbol overlap data...";
+    try {
+      const json = await window.__TAURI__.core.invoke("get_symbol_overlap");
+      const overlaps = JSON.parse(json);
+      root.textContent = "";
+
+      // Summary
+      const highCount = overlaps.filter(o => o.correlation_risk === "HIGH").length;
+      const medCount = overlaps.filter(o => o.correlation_risk === "MEDIUM").length;
+      const summary = document.createElement("div");
+      summary.style.cssText = "font-size:13px;font-weight:bold;color:#fff;padding:4px 0 10px;";
+      summary.textContent = `${highCount} symbol${highCount !== 1 ? "s" : ""} in 5+ DARWINs (HIGH correlation risk), ${medCount} in 3-4 (MEDIUM)`;
+      root.appendChild(summary);
+
+      if (overlaps.length === 0) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "color:#888;padding:20px;";
+        empty.textContent = "No open positions found across DARWINs.";
+        root.appendChild(empty);
+        return;
+      }
+
+      // Table
+      const tbl = document.createElement("table");
+      tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px;";
+      const thead = document.createElement("thead");
+      thead.innerHTML = `<tr style="background:#1a1a1a;color:#aaa;text-align:left;">
+        <th style="padding:4px 6px;border-bottom:1px solid #333;">Symbol</th>
+        <th style="padding:4px 6px;border-bottom:1px solid #333;">Side</th>
+        <th style="padding:4px 6px;border-bottom:1px solid #333;">DARWINs (#)</th>
+        <th style="padding:4px 6px;border-bottom:1px solid #333;">DARWIN List</th>
+        <th style="padding:4px 6px;border-bottom:1px solid #333;text-align:right;">Total Volume</th>
+        <th style="padding:4px 6px;border-bottom:1px solid #333;text-align:right;">Total Notional</th>
+        <th style="padding:4px 6px;border-bottom:1px solid #333;">Risk</th>
+      </tr>`;
+      tbl.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (const o of overlaps) {
+        const riskColor = o.correlation_risk === "HIGH" ? "#f44336" : o.correlation_risk === "MEDIUM" ? "#ff9800" : "#4caf50";
+        const sideColor = o.side === "buy" ? "#4caf50" : "#f44336";
+        const tr = document.createElement("tr");
+        tr.style.cssText = "border-bottom:1px solid #222;";
+        tr.innerHTML = `
+          <td style="padding:3px 6px;color:#fff;">${o.symbol}</td>
+          <td style="padding:3px 6px;color:${sideColor};font-weight:bold;">${o.side.toUpperCase()}</td>
+          <td style="padding:3px 6px;color:${riskColor};font-weight:bold;">${o.darwin_count}</td>
+          <td style="padding:3px 6px;color:#aaa;">${o.darwins.join(", ")}</td>
+          <td style="padding:3px 6px;text-align:right;">${o.total_volume.toFixed(2)}</td>
+          <td style="padding:3px 6px;text-align:right;">$${o.total_notional.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
+          <td style="padding:3px 6px;color:${riskColor};font-weight:bold;">${o.correlation_risk}</td>`;
+        tbody.appendChild(tr);
+      }
+      tbl.appendChild(tbody);
+      root.appendChild(tbl);
+
+      // Heatmap: rows = symbols (unique by symbol+side), columns = all DARWINs
+      const allDarwins = [...new Set(overlaps.flatMap(o => o.darwins))].sort();
+      if (allDarwins.length === 0) return;
+
+      const heatTitle = document.createElement("div");
+      heatTitle.style.cssText = "font-size:13px;font-weight:bold;color:#fff;padding:8px 0 6px;border-top:1px solid #333;margin-top:8px;";
+      heatTitle.textContent = "Symbol / DARWIN Heatmap";
+      root.appendChild(heatTitle);
+
+      // Build lookup: (symbol, side, darwin) -> side
+      const lookup = new Map();
+      for (const o of overlaps) {
+        for (const d of o.darwins) {
+          lookup.set(`${o.symbol}|${o.side}|${d}`, o.side);
+        }
+      }
+
+      const htbl = document.createElement("table");
+      htbl.style.cssText = "border-collapse:collapse;font-size:10px;";
+      // Header row
+      const hhead = document.createElement("thead");
+      let hdrHtml = '<tr><th style="padding:3px 6px;border:1px solid #333;background:#111;color:#888;text-align:left;">Symbol</th>';
+      for (const d of allDarwins) {
+        hdrHtml += `<th style="padding:3px 6px;border:1px solid #333;background:#111;color:#888;text-align:center;">${d}</th>`;
+      }
+      hdrHtml += "</tr>";
+      hhead.innerHTML = hdrHtml;
+      htbl.appendChild(hhead);
+
+      const hbody = document.createElement("tbody");
+      for (const o of overlaps) {
+        const tr = document.createElement("tr");
+        const sideLabel = o.side === "buy" ? " (B)" : " (S)";
+        let rowHtml = `<td style="padding:3px 6px;border:1px solid #333;color:#ccc;white-space:nowrap;">${o.symbol}${sideLabel}</td>`;
+        for (const d of allDarwins) {
+          const key = `${o.symbol}|${o.side}|${d}`;
+          const held = lookup.has(key);
+          const side = held ? lookup.get(key) : null;
+          const bg = held ? (side === "buy" ? "#1b5e20" : "#b71c1c") : "#111";
+          const text = held ? (side === "buy" ? "BUY" : "SELL") : "";
+          rowHtml += `<td style="padding:3px 6px;border:1px solid #333;background:${bg};color:#fff;text-align:center;font-size:9px;">${text}</td>`;
+        }
+        tr.innerHTML = rowHtml;
+        hbody.appendChild(tr);
+      }
+      htbl.appendChild(hbody);
+      root.appendChild(htbl);
+    } catch (e) {
+      root.textContent = "Error: " + e;
+    }
+  })();
+}
+
 // ── DARWIN RADAR — FTP Screener ──────────────────────────────
 function cmdDarwinRadar() {
   const win = createWindow({ title: "DARWIN RADAR — FTP Screener", width: 950, height: 600 });
@@ -13772,6 +14402,138 @@ function cmdDarwinRadar() {
   });
 
   win.appendElement(root);
+}
+
+// ── VAR-MULTIPLIER — Darwinex VaR Multiplier Prediction ─────
+async function cmdVaRMultiplier() {
+  const win = createWindow({ title: "Darwinex VaR Multiplier Prediction", width: 950, height: 500 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;padding:8px;overflow-y:auto;";
+  root.textContent = "Computing VaR multipliers...";
+  win.appendElement(root);
+
+  try {
+    const json = await window.__TAURI__.core.invoke("get_var_multipliers");
+    const mults = JSON.parse(json);
+    root.textContent = "";
+
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = `Darwinex VaR Multiplier Prediction \u2014 ${mults.length} DARWINs`;
+    root.appendChild(title);
+
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding-bottom:12px;line-height:1.5;";
+    desc.textContent = "Darwinex VaR = blend of 45-day rolling + 6-month average. Corridor: 3.25-6.5%. Multiplier capped at 2.0x. DARWIN lots = Signal lots × multiplier.";
+    root.appendChild(desc);
+
+    if (mults.length === 0) { root.appendChild(document.createTextNode("No DARWINs with sufficient data.")); return; }
+
+    const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
+    const thead = document.createElement("tr");
+    ["DARWIN", "VaR 45d", "VaR 6m", "Blended VaR", "Multiplier", "DARWIN Lots", "Corridor", "Recommendation"].forEach(h => {
+      const th = document.createElement("td"); th.style.cssText = "color:#666;font-weight:bold;padding:5px 8px;border-bottom:1px solid #333;white-space:nowrap;"; th.textContent = h; thead.appendChild(th);
+    });
+    table.appendChild(thead);
+
+    for (const m of mults) {
+      const tr = document.createElement("tr"); tr.style.cssText = "border-bottom:1px solid #1a1a1a;";
+      const corridorColor = m.corridor_position === "in" ? "#4caf50" : m.corridor_position === "above" ? "#f44336" : "#ff9800";
+      const corridorLabel = m.corridor_position === "in" ? "IN CORRIDOR" : m.corridor_position === "above" ? "ABOVE" : "BELOW";
+      const lotsText = `${(m.multiplier * 100).toFixed(0)}% of signal`;
+      const vals = [
+        { text: m.darwin_ticker, color: "#8af" },
+        { text: (m.var_45d || m.monthly_var).toFixed(1) + "%", color: "#ccc" },
+        { text: (m.var_6m || m.monthly_var).toFixed(1) + "%", color: "#ccc" },
+        { text: m.monthly_var.toFixed(1) + "%", color: "#FFD700" },
+        { text: m.multiplier.toFixed(2) + "x", color: m.multiplier >= 1.5 ? "#4caf50" : m.multiplier >= 1.0 ? "#ff9800" : "#f44336" },
+        { text: lotsText, color: m.multiplier >= 1.0 ? "#4caf50" : "#f44336" },
+        { text: corridorLabel, color: corridorColor },
+        { text: m.recommendation, color: "#888", fontSize: "9px", maxWidth: "350px" },
+      ];
+      for (const v of vals) {
+        const td = document.createElement("td"); td.style.cssText = "padding:5px 8px;font-family:Consolas,monospace;";
+        td.textContent = v.text; td.style.color = v.color;
+        if (v.fontSize) td.style.fontSize = v.fontSize;
+        if (v.maxWidth) { td.style.maxWidth = v.maxWidth; td.style.fontFamily = "inherit"; }
+        tr.appendChild(td);
+      }
+      table.appendChild(tr);
+    }
+    root.appendChild(table);
+  } catch (e) { root.textContent = "Failed: " + e; }
+}
+
+// ── DSCORE — D-Score Estimation from Trade History ──────────
+async function cmdDScore() {
+  const win = createWindow({ title: "D-Score Estimation", width: 800, height: 600 });
+  win.contentElement.textContent = "";
+  const root = document.createElement("div"); root.style.cssText = "display:flex;flex-direction:column;height:100%;font-size:11px;color:#ccc;padding:8px;overflow-y:auto;";
+  root.textContent = "Loading DARWIN accounts...";
+  win.appendElement(root);
+
+  try {
+    const acctJson = await window.__TAURI__.core.invoke("list_darwin_accounts");
+    const accounts = JSON.parse(acctJson);
+    root.textContent = "";
+
+    if (accounts.length === 0) { root.textContent = "No DARWIN accounts imported."; return; }
+
+    const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
+    title.textContent = "D-Score Estimation (Trade History)";
+    root.appendChild(title);
+
+    const desc = document.createElement("div"); desc.style.cssText = "color:#888;font-size:10px;padding-bottom:12px;line-height:1.5;";
+    desc.textContent = "Estimated D-Score components from trade data. 6 components (0-10 each), weighted to 0-100 total. Weights: Ex 15%, Rs 25%, Pf 25%, Mc 15%, Cp 10%, Sc 10%.";
+    root.appendChild(desc);
+
+    for (const acct of accounts) {
+      let ds;
+      try {
+        const json = await window.__TAURI__.core.invoke("get_dscore_estimate", { darwinTicker: acct.darwin_ticker });
+        ds = JSON.parse(json);
+      } catch (e) {
+        const err = document.createElement("div"); err.style.cssText = "color:#f0ad4e;font-size:11px;padding:6px 0;";
+        err.textContent = `${acct.darwin_ticker}: ${e}`;
+        root.appendChild(err); continue;
+      }
+
+      const section = document.createElement("div"); section.style.cssText = "margin-bottom:20px;border:1px solid #333;border-radius:4px;padding:10px;";
+
+      const header = document.createElement("div"); header.style.cssText = "font-size:13px;font-weight:bold;color:#8af;padding-bottom:6px;display:flex;justify-content:space-between;";
+      const headerLeft = document.createElement("span"); headerLeft.textContent = `${acct.name} (${ds.darwin_ticker})`;
+      const headerRight = document.createElement("span"); headerRight.style.cssText = "color:#fff;font-size:14px;";
+      headerRight.textContent = `D-Score: ${ds.total_dscore.toFixed(1)}/100`;
+      headerRight.style.color = ds.total_dscore >= 60 ? "#4caf50" : ds.total_dscore >= 40 ? "#ff9800" : "#f44336";
+      header.appendChild(headerLeft); header.appendChild(headerRight);
+      section.appendChild(header);
+
+      const meta = document.createElement("div"); meta.style.cssText = "color:#666;font-size:10px;padding-bottom:8px;";
+      meta.textContent = `Track record: ${ds.investable_months} months`;
+      section.appendChild(meta);
+
+      // Radar-chart style horizontal bar breakdown
+      const components = [
+        ["Experience (Ex)", ds.experience, "#2196f3"],
+        ["Risk Mgmt (Rs)", ds.risk_mgmt, "#4caf50"],
+        ["Performance (Pf)", ds.performance, "#ff9800"],
+        ["Mkt Timing (Mc)", ds.market_timing, "#9c27b0"],
+        ["Capacity (Cp)", ds.capacity, "#00bcd4"],
+        ["Scalability (Sc)", ds.scalability, "#e91e63"],
+      ];
+
+      for (const [label, val, color] of components) {
+        const row = document.createElement("div"); row.style.cssText = "display:flex;align-items:center;gap:8px;padding:2px 0;";
+        const lbl = document.createElement("div"); lbl.style.cssText = "width:120px;color:#aaa;font-size:10px;text-align:right;flex-shrink:0;"; lbl.textContent = label;
+        const barOuter = document.createElement("div"); barOuter.style.cssText = "flex:1;height:14px;background:#1a1a1a;border-radius:2px;position:relative;";
+        const barInner = document.createElement("div"); barInner.style.cssText = `width:${val * 10}%;height:100%;background:${color};border-radius:2px;opacity:0.8;`;
+        barOuter.appendChild(barInner);
+        const valText = document.createElement("div"); valText.style.cssText = "width:40px;color:#ccc;font-size:10px;font-family:Consolas,monospace;text-align:right;flex-shrink:0;";
+        valText.textContent = val.toFixed(1);
+        row.appendChild(lbl); row.appendChild(barOuter); row.appendChild(valText);
+        section.appendChild(row);
+      }
+      root.appendChild(section);
+    }
+  } catch (e) { root.textContent = "Failed: " + e; }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -14648,6 +15410,9 @@ function cmdCheat() {
       ["DARWIN", "DARWIN account viewer (MT5 history)"],
       ["DARWINS", "Combined DARWIN portfolio dashboard"],
       ["DARWIN-RADAR", "DARWIN RADAR — FTP screener"],
+      ["DARWIN-TRADES", "Toggle DARWIN trade markers on chart"],
+      ["VAR-MULTIPLIER", "Darwinex VaR multiplier prediction"],
+      ["DSCORE", "D-Score estimation from trade history"],
       ["CRYPTO-BACKFILL", "Crypto backfill from Kraken (2013)"],
       ["ACTIVITIES", "Account activities"],
       ["INSIDER", "Insider trading (SEC Form 4)"],
@@ -18233,6 +18998,104 @@ function cmdBackup() {
   log("Backup/Restore window opened", "ok");
 }
 
+// ── Credential & Settings Backup (AES-256-GCM encrypted) ────
+async function cmdBackupCredentials() {
+  const passphrase = window.prompt("Enter backup passphrase (min 8 characters):");
+  if (!passphrase) return;
+  if (passphrase.length < 8) { log("Passphrase must be at least 8 characters", "error"); return; }
+  try {
+    // Collect all typhoon_ localStorage keys
+    const settings = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("typhoon_")) settings[k] = localStorage.getItem(k);
+    }
+    const settingsJson = JSON.stringify(settings);
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const path = `~/typhoon_cred_backup_${dateStr}.ttbackup`;
+    log("Exporting encrypted credential backup...", "info");
+    const result = JSON.parse(await invoke("export_credentials_backup", { path, passphrase, settingsJson }));
+    log(`Credential backup exported: ${result.credentials} credentials, ${(result.size_bytes / 1024).toFixed(1)} KB → ${result.path}`, "ok");
+  } catch (e) {
+    log(`Credential backup failed: ${e}`, "error");
+  }
+}
+
+async function cmdRestoreCredentials() {
+  const path = window.prompt("Path to .ttbackup file:");
+  if (!path) return;
+  const passphrase = window.prompt("Enter backup passphrase:");
+  if (!passphrase) return;
+  if (passphrase.length < 8) { log("Passphrase must be at least 8 characters", "error"); return; }
+  try {
+    log("Importing encrypted credential backup...", "info");
+    const settingsStr = await invoke("import_credentials_backup", { path, passphrase });
+    const settings = JSON.parse(settingsStr);
+    let restored = 0;
+    for (const [key, value] of Object.entries(settings)) {
+      if (key.startsWith("typhoon_")) {
+        localStorage.setItem(key, value);
+        restored++;
+      }
+    }
+    log(`Credential backup restored. ${restored} settings keys written to localStorage. Reload recommended.`, "ok");
+    if (restored > 0 && window.confirm("Settings restored. Reload now?")) {
+      location.reload();
+    }
+  } catch (e) {
+    log(`Credential restore failed: ${e}`, "error");
+  }
+}
+
+// ── LAN Sync (WebSocket server/client for cache replication) ──
+async function cmdLanServer() {
+  const portStr = window.prompt("LAN sync server port:", "9849");
+  if (!portStr) return;
+  const port = parseInt(portStr, 10);
+  if (isNaN(port) || port < 1 || port > 65535) { log("Invalid port", "error"); return; }
+  const passphrase = window.prompt("Shared passphrase (min 8 chars):");
+  if (!passphrase) return;
+  if (passphrase.length < 8) { log("Passphrase must be at least 8 characters", "error"); return; }
+  try {
+    const result = await invoke("lan_sync_start_server", { port, passphrase });
+    log(result, "ok");
+  } catch (e) {
+    log(`LAN server start failed: ${e}`, "error");
+  }
+}
+
+async function cmdLanClient() {
+  const host = window.prompt("Server IP/hostname:", "192.168.1.");
+  if (!host) return;
+  const portStr = window.prompt("Server port:", "9849");
+  if (!portStr) return;
+  const port = parseInt(portStr, 10);
+  if (isNaN(port) || port < 1 || port > 65535) { log("Invalid port", "error"); return; }
+  const passphrase = window.prompt("Shared passphrase:");
+  if (!passphrase) return;
+  try {
+    const result = await invoke("lan_sync_connect", { host, port, passphrase });
+    log(result, "ok");
+  } catch (e) {
+    log(`LAN sync connect failed: ${e}`, "error");
+  }
+}
+
+async function cmdLanStatus() {
+  try {
+    const status = JSON.parse(await invoke("lan_sync_status"));
+    if (status.mode === "idle") {
+      log("LAN Sync: idle (not running)", "info");
+    } else if (status.mode === "server") {
+      log(`LAN Sync: SERVER on port ${status.port}, ${status.clients} client(s) connected`, "ok");
+    } else if (status.mode === "client") {
+      log(`LAN Sync: CLIENT connected to ${status.host}:${status.port} (${status.connected ? "active" : "disconnected"})`, status.connected ? "ok" : "warn");
+    }
+  } catch (e) {
+    log(`LAN status failed: ${e}`, "error");
+  }
+}
+
 // ── Cache Backup / Restore (SQLite portable export) ─────────
 async function cmdCacheBackup() {
   try {
@@ -18256,6 +19119,64 @@ async function cmdCacheRestore() {
     log(`Cache backup imported: ${result.bars_imported} bar entries, ${result.kv_imported} KV entries merged`, "ok");
   } catch (e) {
     log(`Cache restore failed: ${e}`, "error");
+  }
+}
+
+// ── Full Data Backup / Restore (bar_cache + kv_cache + DARWIN tables) ──
+async function cmdBackupData() {
+  try {
+    const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const home = await invoke("keychain_load", { service: "typhoon-terminal", account: "home_dir" }).catch(() => "");
+    const defaultPath = (home || "~") + `/typhoon_data_${dateStr}.ttfull`;
+    const path = prompt("Export path for full data backup:", defaultPath);
+    if (!path) return;
+    log("Exporting full data backup (bars + KV + DARWIN)...", "info");
+    const result = JSON.parse(await invoke("export_full_backup", { path }));
+    const win = createWindow({ title: "Full Data Backup — Export Complete", width: 420, height: 300 });
+    win.contentElement.textContent = "";
+    const pre = document.createElement("pre");
+    pre.style.cssText = "padding:12px;font-size:13px;color:#4caf50;line-height:1.8;";
+    pre.textContent = [
+      `Bar entries:        ${result.bar_entries.toLocaleString()}`,
+      `KV entries:         ${result.kv_entries.toLocaleString()}`,
+      `DARWIN accounts:    ${result.darwin_accounts}`,
+      `DARWIN deals:       ${result.darwin_deals.toLocaleString()}`,
+      `DARWIN positions:   ${result.darwin_positions.toLocaleString()}`,
+      `Compressed size:    ${result.size_mb} MB`,
+      ``,
+      `Saved to: ${path}`,
+    ].join("\n");
+    win.contentElement.appendChild(pre);
+    log(`Full data backup exported: ${result.size_mb} MB -> ${path}`, "ok");
+  } catch (e) {
+    log(`Full data backup failed: ${e}`, "error");
+  }
+}
+
+async function cmdRestoreData() {
+  try {
+    const path = prompt("Path to .ttfull file to import:");
+    if (!path) return;
+    log("Importing full data backup...", "info");
+    const result = JSON.parse(await invoke("import_full_backup", { path }));
+    const win = createWindow({ title: "Full Data Backup — Import Complete", width: 420, height: 320 });
+    win.contentElement.textContent = "";
+    const pre = document.createElement("pre");
+    pre.style.cssText = "padding:12px;font-size:13px;color:#4caf50;line-height:1.8;";
+    pre.textContent = [
+      `Bars imported:              ${result.bars_imported.toLocaleString()}`,
+      `KV entries imported:        ${result.kv_imported.toLocaleString()}`,
+      `DARWIN accounts imported:   ${result.darwin_accounts_imported}`,
+      `DARWIN deals imported:      ${result.darwin_deals_imported.toLocaleString()}`,
+      `DARWIN positions imported:  ${result.darwin_positions_imported.toLocaleString()}`,
+      `DARWIN snapshots imported:  ${result.darwin_snapshots_imported.toLocaleString()}`,
+      ``,
+      `Reload the terminal to pick up new data.`,
+    ].join("\n");
+    win.contentElement.appendChild(pre);
+    log(`Full data imported: ${result.bars_imported} bars, ${result.darwin_deals_imported} DARWIN deals`, "ok");
+  } catch (e) {
+    log(`Full data restore failed: ${e}`, "error");
   }
 }
 
@@ -23675,11 +24596,11 @@ async function cmdAnalystRatings() {
         const trendDiv = document.createElement("div");
         trendDiv.style.cssText = "padding:4px 8px;font-size:11px;";
         if (latestBull > prevBull) {
-          trendDiv.innerHTML = `<span style="color:#4caf50;">&#9650; Improving</span> — bullish ratings increasing`;
+          trendDiv.innerHTML = `<span style="color:#4caf50;">&#9650; Improving</span> — bullish ratings increasing`; // safe: static strings only
         } else if (latestBull < prevBull) {
-          trendDiv.innerHTML = `<span style="color:#f44336;">&#9660; Deteriorating</span> — bullish ratings declining`;
+          trendDiv.innerHTML = `<span style="color:#f44336;">&#9660; Deteriorating</span> — bullish ratings declining`; // safe: static strings only
         } else {
-          trendDiv.innerHTML = `<span style="color:#ff9800;">&#9654; Stable</span> — ratings unchanged`;
+          trendDiv.innerHTML = `<span style="color:#ff9800;">&#9654; Stable</span> — ratings unchanged`; // safe: static strings only
         }
         win.appendElement(trendDiv);
       }
@@ -24737,11 +25658,14 @@ async function cmdRedditSentiment() {
     // Summary bar
     const summary = document.createElement("div");
     summary.style.cssText = "padding:8px 12px;border-bottom:1px solid #222;display:flex;gap:16px;align-items:center;font-size:11px;";
-    summary.innerHTML = `<span style="font-size:18px;">${sentimentIcon}</span>` +
-      `<span style="color:${sentimentColor};font-weight:bold;">${sentimentLabel}</span>` +
-      `<span style="color:#888;">${weekMentions} mentions this week</span>` +
-      `<span style="color:#888;">Avg score: ${avgScore}</span>` +
-      `<span style="color:#888;">Bull: ${bullCount} / Bear: ${bearCount}</span>`;
+    const mkSumSpan = (text, style) => { const s = document.createElement("span"); Object.assign(s.style, style); s.textContent = text; return s; };
+    summary.replaceChildren(
+      mkSumSpan(sentimentIcon, { fontSize: "18px" }),
+      mkSumSpan(sentimentLabel, { color: sentimentColor, fontWeight: "bold" }),
+      mkSumSpan(`${weekMentions} mentions this week`, { color: "#888" }),
+      mkSumSpan(`Avg score: ${avgScore}`, { color: "#888" }),
+      mkSumSpan(`Bull: ${bullCount} / Bear: ${bearCount}`, { color: "#888" })
+    );
     win.appendElement(summary);
 
     // Posts table
@@ -24917,11 +25841,11 @@ async function cmdShortInterest() {
         const trendDiv = document.createElement("div");
         trendDiv.style.cssText = "padding:4px 12px;font-size:11px;";
         if (last > first) {
-          trendDiv.innerHTML = `<span style="color:#f44336;">&#9650; Short interest increasing</span> (+${changePct}% over period) — bearish signal`;
+          trendDiv.innerHTML = `<span style="color:#f44336;">&#9650; Short interest increasing</span> (+${changePct}% over period) — bearish signal`; // safe: numeric only
         } else if (last < first) {
-          trendDiv.innerHTML = `<span style="color:#4caf50;">&#9660; Short interest decreasing</span> (${changePct}% over period) — short covering`;
+          trendDiv.innerHTML = `<span style="color:#4caf50;">&#9660; Short interest decreasing</span> (${changePct}% over period) — short covering`; // safe: numeric only
         } else {
-          trendDiv.innerHTML = `<span style="color:#ff9800;">&#9654; Short interest flat</span> over period`;
+          trendDiv.innerHTML = `<span style="color:#ff9800;">&#9654; Short interest flat</span> over period`; // safe: static strings only
         }
         win.appendElement(trendDiv);
       }
@@ -25257,6 +26181,79 @@ async function cmdEarningsOverlay() {
 }
 
 // ══════════════════════════════════════════════════════════════
+// DARWIN-TRADES — Toggle DARWIN deal history markers on chart
+// ══════════════════════════════════════════════════════════════
+async function cmdDarwinTradeOverlay() {
+  if (!currentSymbol) { log("No symbol loaded", "warn"); return; }
+  window._darwinTradeOverlayEnabled = !window._darwinTradeOverlayEnabled;
+  if (!window._darwinTradeOverlayEnabled) {
+    log("DARWIN trade overlay OFF", "info");
+    try { candleSeries.setMarkers([]); } catch (_) {}
+    return;
+  }
+  log("Loading DARWIN trade markers for " + currentSymbol + "...", "info");
+  try {
+    const json = await invoke("get_darwin_trade_markers", { symbol: currentSymbol });
+    const deals = JSON.parse(json);
+    if (!Array.isArray(deals) || deals.length === 0) {
+      log("No DARWIN deals found for " + currentSymbol, "info");
+      window._darwinTradeOverlayEnabled = false;
+      return;
+    }
+    const markers = [];
+    for (const d of deals) {
+      // Convert MT5 time "YYYY.MM.DD HH:MM:SS" to Unix timestamp
+      // Replace dots with dashes and append UTC timezone for reliable parsing
+      const isoTime = d.time.replace(/\./g, "-").replace(" ", "T") + "Z";
+      const ts = Math.floor(new Date(isoTime).getTime() / 1000);
+      if (!ts || isNaN(ts)) continue;
+      // Snap to nearest chart bar time
+      let barTime = ts;
+      if (currentChartData && currentChartData.length > 0) {
+        let best = currentChartData[0].time;
+        let bestDist = Math.abs(ts - best);
+        for (let i = 1; i < currentChartData.length; i++) {
+          const dist = Math.abs(ts - currentChartData[i].time);
+          if (dist < bestDist) { best = currentChartData[i].time; bestDist = dist; }
+          if (currentChartData[i].time > ts) break; // past the deal time, stop
+        }
+        barTime = best;
+      }
+      let position, color, shape, text;
+      const ticker = d.darwin_ticker || "";
+      const vol = d.volume ? d.volume.toFixed(2) : "";
+      if (d.direction === "in" && d.side === "buy") {
+        position = "belowBar"; color = "#4caf50"; shape = "arrowUp";
+        text = ticker + " BUY " + vol;
+      } else if (d.direction === "in" && d.side === "sell") {
+        position = "aboveBar"; color = "#f44336"; shape = "arrowDown";
+        text = ticker + " SELL " + vol;
+      } else if (d.direction === "out" && d.side === "buy") {
+        position = "aboveBar"; color = "#2196f3"; shape = "circle";
+        text = ticker + " CLOSE " + vol;
+      } else if (d.direction === "out" && d.side === "sell") {
+        position = "belowBar"; color = "#2196f3"; shape = "circle";
+        text = ticker + " CLOSE " + vol;
+      } else { continue; }
+      markers.push({ time: barTime, position, color, shape, text });
+    }
+    // Sort by time (required by lightweight-charts) and deduplicate same-time markers
+    markers.sort((a, b) => a.time - b.time);
+    if (markers.length > 0) {
+      if (currentChartType && currentChartType.startsWith("gpu")) {
+        // GPU mode doesn't support markers yet (GPU_PHASE5).
+        // Switch to CPU candles temporarily for marker support.
+        log(`${markers.length} DARWIN markers found — GPU chart doesn't support markers. Switch to 'Candles' chart type to see trade arrows.`, "warn");
+      }
+      try { candleSeries.setMarkers(markers); } catch (_) {}
+    }
+    log(`DARWIN trade overlay ON: ${markers.length} markers from ${deals.length} deals`, "ok");
+    // Cache for re-application
+    window._darwinTradeMarkers = markers;
+  } catch (e) { log("DARWIN trade overlay error: " + e, "warn"); window._darwinTradeOverlayEnabled = false; }
+}
+
+// ══════════════════════════════════════════════════════════════
 // DARKPOOL — Dark Pool Volume (FINRA short volume)
 // ══════════════════════════════════════════════════════════════
 async function cmdDarkPool() {
@@ -25287,7 +26284,9 @@ async function cmdDarkPool() {
     for (const m of metrics) {
       const card = document.createElement("div");
       card.style.cssText = "background:#111;border-radius:4px;padding:10px;text-align:center;";
-      card.innerHTML = `<div style="font-size:10px;color:#888;margin-bottom:4px;">${m.label}</div><div style="font-size:16px;font-weight:bold;color:${m.color};font-family:Consolas,monospace;">${m.value}</div>`;
+      const cardLabel = document.createElement("div"); cardLabel.style.cssText = "font-size:10px;color:#888;margin-bottom:4px;"; cardLabel.textContent = m.label;
+      const cardValue = document.createElement("div"); cardValue.style.cssText = `font-size:16px;font-weight:bold;color:${m.color};font-family:Consolas,monospace;`; cardValue.textContent = m.value;
+      card.replaceChildren(cardLabel, cardValue);
       grid.appendChild(card);
     }
     frag.appendChild(grid);
@@ -25295,7 +26294,7 @@ async function cmdDarkPool() {
     const gauge = document.createElement("div");
     gauge.style.cssText = "padding:8px 12px;";
     const pct = Math.min(100, Math.max(0, data.darkPoolPct || 0));
-    gauge.innerHTML = `<div style="font-size:10px;color:#888;margin-bottom:4px;">Dark Pool vs Lit Exchange</div>` +
+    gauge.innerHTML = `<div style="font-size:10px;color:#888;margin-bottom:4px;">Dark Pool vs Lit Exchange</div>` + // safe: numeric only
       `<div style="width:100%;height:20px;background:#1a1a2e;border-radius:4px;overflow:hidden;position:relative;">` +
       `<div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#f4433666,#f44336);"></div>` +
       `<div style="position:absolute;top:2px;left:50%;transform:translateX(-50%);font-size:10px;color:#fff;font-weight:bold;">${pct.toFixed(1)}% Dark Pool</div></div>`;
@@ -25703,7 +26702,7 @@ async function cmdVarOutliers() {
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div id="var-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
   const logDiv = out.querySelector("#var-out-log");
-  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Gathering symbols (positions + watchlist + Darwinex)...", "#2196f3");
   try {
@@ -25742,7 +26741,7 @@ async function cmdAtrOutliers() {
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div id="atr-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
   const logDiv = out.querySelector("#atr-out-log");
-  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Gathering symbols (positions + watchlist + Darwinex)...", "#2196f3");
   try {
@@ -25780,7 +26779,7 @@ async function cmdEvOutliers() {
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div id="ev-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
   const logDiv = out.querySelector("#ev-out-log");
-  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Gathering equity symbols for EV analysis...", "#2196f3");
   try {
@@ -25839,7 +26838,7 @@ async function cmdCryptoRisk() {
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div id="crypto-risk-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
   const logDiv = out.querySelector("#crypto-risk-log");
-  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Analyzing crypto risk profiles...", "#2196f3");
   try {
@@ -25905,7 +26904,7 @@ async function cmdScreen() {
     <div id="screen-log"></div>
   </div>`;
   const logDiv = out.querySelector("#screen-log");
-  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Running multi-factor scan...", "#2196f3");
   try {
@@ -25969,7 +26968,7 @@ async function cmdDarwinex() {
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
   out.innerHTML = `<div id="dwx-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
   const logDiv = out.querySelector("#dwx-log");
-  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: all msgs are internal strings, no external data */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("<b>Darwinex Full Analysis</b> — Scanning all imported MT5 symbols", "#4caf50");
   addLog("", "");
@@ -26121,7 +27120,7 @@ async function cmdMt5Import() {
   </div>`;
 
   const logDiv = out.querySelector("#mt5-import-log");
-  const addLog = (msg, color = "#ccc") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg; logDiv.appendChild(d); };
 
   out.querySelector("#mt5-import-btn").addEventListener("click", async () => {
     const path = out.querySelector("#mt5-import-path").value.trim();
@@ -26143,33 +27142,37 @@ async function cmdMt5Import() {
 }
 
 function renderSpecsToDiv(specsDiv, specs) {
+  specsDiv.textContent = "";
   if (!specs || !specs.categories || specs.total_symbols === 0) {
-    specsDiv.innerHTML = `<div style="color:#888">No symbol specs available yet (BarCacheWriter v1.300+ required)</div>`;
+    const noData = document.createElement("div"); noData.style.color = "#888"; noData.textContent = "No symbol specs available yet (BarCacheWriter v1.300+ required)";
+    specsDiv.appendChild(noData);
     return;
   }
 
   const catColors = { Forex: "#2196f3", Crypto: "#9c27b0", Commodities: "#ff9800", Indices: "#00bcd4" };
-  let html = `<div style="color:#4caf50;font-weight:bold;margin-bottom:4px">${specs.total_symbols} symbols | ${specs.total_bar_keys} bar entries synced</div>`;
+  const mkEl = (tag, style, text) => { const el = document.createElement(tag); if (style) el.style.cssText = style; if (text) el.textContent = text; return el; };
+
+  specsDiv.appendChild(mkEl("div", "color:#4caf50;font-weight:bold;margin-bottom:4px", `${specs.total_symbols} symbols | ${specs.total_bar_keys} bar entries synced`));
 
   // Category progress bars
   for (const cat of specs.categories) {
     const pct = cat.total > 0 ? Math.round((cat.complete / cat.total) * 100) : 0;
     const partialPct = cat.total > 0 ? Math.round((cat.partial / cat.total) * 100) : 0;
     const color = catColors[cat.category] || "#888";
-    html += `<div style="margin:2px 0;display:flex;align-items:center;gap:6px">`;
-    html += `<span style="color:${color};width:100px;display:inline-block">${cat.category}</span>`;
+    const row = mkEl("div", "margin:2px 0;display:flex;align-items:center;gap:6px");
+    row.appendChild(mkEl("span", `color:${color};width:100px;display:inline-block`, cat.category));
     // Mini progress bar
-    html += `<div style="background:#222;width:120px;height:10px;border-radius:2px;overflow:hidden;display:inline-flex">`;
-    html += `<div style="background:#4caf50;width:${pct}%;height:100%"></div>`;
-    html += `<div style="background:#ff9800;width:${partialPct}%;height:100%"></div>`;
-    html += `</div>`;
-    html += `<span style="color:#4caf50">${cat.complete}</span>`;
-    html += `<span style="color:#888">/</span>`;
-    html += `<span style="color:${color}">${cat.total}</span>`;
-    html += `<span style="color:#888;font-size:9px">complete</span>`;
-    if (cat.partial > 0) html += `<span style="color:#ff9800;font-size:9px">${cat.partial} partial</span>`;
-    if (cat.none > 0) html += `<span style="color:#666;font-size:9px">${cat.none} pending</span>`;
-    html += `</div>`;
+    const bar = mkEl("div", "background:#222;width:120px;height:10px;border-radius:2px;overflow:hidden;display:inline-flex");
+    bar.appendChild(mkEl("div", `background:#4caf50;width:${pct}%;height:100%`)); // safe: numeric only
+    bar.appendChild(mkEl("div", `background:#ff9800;width:${partialPct}%;height:100%`)); // safe: numeric only
+    row.appendChild(bar);
+    row.appendChild(mkEl("span", "color:#4caf50", String(cat.complete)));
+    row.appendChild(mkEl("span", "color:#888", "/"));
+    row.appendChild(mkEl("span", `color:${color}`, String(cat.total)));
+    row.appendChild(mkEl("span", "color:#888;font-size:9px", "complete"));
+    if (cat.partial > 0) row.appendChild(mkEl("span", "color:#ff9800;font-size:9px", `${cat.partial} partial`));
+    if (cat.none > 0) row.appendChild(mkEl("span", "color:#666;font-size:9px", `${cat.none} pending`));
+    specsDiv.appendChild(row);
   }
 
   // Expandable per-symbol details
@@ -26180,7 +27183,7 @@ function renderSpecsToDiv(specsDiv, specs) {
     grouped[cat].push(sym);
   }
 
-  html += `<div style="margin-top:6px">`;
+  const details = mkEl("div", "margin-top:6px");
   for (const [cat, syms] of Object.entries(grouped)) {
     const color = catColors[cat] || "#888";
     const complete = syms.filter(s => s.status === "complete");
@@ -26188,29 +27191,30 @@ function renderSpecsToDiv(specsDiv, specs) {
     const none = syms.filter(s => s.status === "none");
 
     if (partial.length > 0) {
-      html += `<div style="color:${color};margin-top:3px">${cat} in progress:</div>`;
+      details.appendChild(mkEl("div", `color:${color};margin-top:3px`, `${cat} in progress:`));
       for (const s of partial) {
         const tfs = s.synced_tfs || [];
         const missing = ["1Month","1Week","1Day","4Hour","1Hour","30Min","15Min","5Min","1Min"].filter(t => !tfs.includes(t));
-        html += `<div style="color:#ff9800;margin-left:8px">${s.normalized} ${s.synced_count}/${s.total_tfs} TFs`;
-        if (missing.length <= 4) html += ` <span style="color:#666;font-size:9px">need: ${missing.join(", ")}</span>`;
-        html += `</div>`;
+        const pDiv = mkEl("div", "color:#ff9800;margin-left:8px", `${s.normalized} ${s.synced_count}/${s.total_tfs} TFs`);
+        if (missing.length <= 4) {
+          const need = mkEl("span", "color:#666;font-size:9px", ` need: ${missing.join(", ")}`);
+          pDiv.appendChild(need);
+        }
+        details.appendChild(pDiv);
       }
     }
     if (complete.length > 0) {
-      html += `<div style="color:${color};margin-top:3px">${cat} complete (${complete.length}):</div>`;
-      html += `<div style="color:#4caf50;margin-left:8px;font-size:9px">${complete.map(s => s.normalized).join(", ")}</div>`;
+      details.appendChild(mkEl("div", `color:${color};margin-top:3px`, `${cat} complete (${complete.length}):`));
+      details.appendChild(mkEl("div", "color:#4caf50;margin-left:8px;font-size:9px", complete.map(s => s.normalized).join(", ")));
     }
     if (none.length > 0 && none.length <= 20) {
-      html += `<div style="color:${color};margin-top:3px">${cat} pending (${none.length}):</div>`;
-      html += `<div style="color:#666;margin-left:8px;font-size:9px">${none.map(s => s.normalized).join(", ")}</div>`;
+      details.appendChild(mkEl("div", `color:${color};margin-top:3px`, `${cat} pending (${none.length}):`));
+      details.appendChild(mkEl("div", "color:#666;margin-left:8px;font-size:9px", none.map(s => s.normalized).join(", ")));
     } else if (none.length > 20) {
-      html += `<div style="color:#666;margin-top:3px">${cat} pending: ${none.length} symbols</div>`;
+      details.appendChild(mkEl("div", "color:#666;margin-top:3px", `${cat} pending: ${none.length} symbols`));
     }
   }
-  html += `</div>`;
-
-  specsDiv.innerHTML = html;
+  specsDiv.appendChild(details);
 }
 
 async function showSpecsSyncProgress(addLog) {
@@ -26279,7 +27283,7 @@ async function cmdMt5DbSync() {
   const setStatus = (msg, color = "#4caf50") => { statusEl.textContent = msg; statusEl.style.color = color; };
   const setProgress = (pct) => { barEl.style.width = pct + "%"; };
   const setStats = (msg) => { statsEl.textContent = msg; };
-  const addLog = (msg, color = "#666") => { logDiv.innerHTML += `<div style="color:${color}">${msg}</div>`; logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#666") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   // Live per-DB activity display — listens for progress events from Rust sync
   const dbActivity = {}; // instance -> { symbol, tf, current, total }
@@ -26288,11 +27292,16 @@ async function cmdMt5DbSync() {
     window.__TAURI__.event.listen("mt5-sync-progress", (event) => {
       const d = event.payload;
       dbActivity[d.instance] = d;
-      const lines = Object.keys(dbActivity).sort().map(inst => {
+      activityEl.textContent = "";
+      Object.keys(dbActivity).sort().forEach((inst, i) => {
+        if (i > 0) activityEl.appendChild(document.createTextNode("   "));
         const a = dbActivity[inst];
-        return `<span style="color:#2196f3">DB ${inst}:</span> <span style="color:#4caf50">${a.symbol}</span><span style="color:#666">:${a.tf}</span> <span style="color:#888">(${a.current}/${a.total})</span>`;
+        const mkS = (text, color) => { const s = document.createElement("span"); s.style.color = color; s.textContent = text; return s; };
+        activityEl.appendChild(mkS(`DB ${inst}: `, "#2196f3"));
+        activityEl.appendChild(mkS(a.symbol, "#4caf50"));
+        activityEl.appendChild(mkS(`:${a.tf}`, "#666"));
+        activityEl.appendChild(mkS(` (${a.current}/${a.total})`, "#888"));
       });
-      activityEl.innerHTML = lines.join("&nbsp;&nbsp;&nbsp;");
     }).then(fn => { unlisten = fn; });
   }
   w.addCleanup(() => { if (unlisten) unlisten(); });
@@ -26508,14 +27517,19 @@ async function handleMt5SyncResult(r) {
   if (r.imported > 0) {
     // Refresh symbol list when new data arrives
     await refreshMt5SymbolList();
-    // Invalidate in-memory cache for current symbol and reload chart
+    // Invalidate in-memory cache for current symbol — but DON'T reload chart.
+    // Full loadChart() runs applyIndicators on 8K+ bars every 30s → UI freeze.
+    // The live bar update timer already refreshes the chart incrementally.
     if (currentSymbol) {
       for (const key of Object.keys(barCache)) {
         if (key.startsWith(currentSymbol + ":")) {
           delete barCache[key];
         }
       }
-      loadChart(currentSymbol, currentTimeframe);
+      // Only reload MTF data (small, 500 bars each) + update grid dots — no full chart reload
+      loadMTFData(currentSymbol).then(() => {
+        if (currentSymbol) updateMTFGrid();
+      }).catch(() => {});
     }
   }
   updateDataSourceBadge();
@@ -26743,7 +27757,14 @@ const CMD_PALETTE_COMMANDS = [
   { name: "IMPORTTRADES", desc: "Import external trade history (CSV: MT5, IB, generic)", action: cmdImportTrades },
   { name: "DARWIN", desc: "DARWIN account viewer — import MT5 history, equity curves, P/L analytics", action: cmdDarwin },
   { name: "DARWINS", desc: "Combined DARWIN portfolio — exposure, open positions, equity curves across all accounts", action: cmdDarwinPortfolio },
+  { name: "DRAWDOWN", desc: "Combined drawdown dashboard — max DD, current DD, best/worst days per DARWIN + combined", action: cmdDrawdownDashboard },
+  { name: "FLOATING", desc: "Floating equity — mark-to-market P/L on open DARWIN positions using live quotes", action: cmdFloatingEquity },
+  { name: "REBALANCE", desc: "Portfolio rebalancer — reduce VaR via decorrelation, optimize DARWIN allocation by Sharpe", action: cmdRebalance },
+  { name: "SYMBOL-OVERLAP", desc: "Symbol overlap — cross-DARWIN correlation heatmap, shared positions by symbol+side", action: cmdSymbolOverlap },
   { name: "DARWIN-RADAR", desc: "DARWIN RADAR — scan 50K+ DARWINs from FTP by Sharpe, return, drawdown", action: cmdDarwinRadar },
+  { name: "DARWIN-TRADES", desc: "Toggle DARWIN deal history markers on chart (entries/exits from MT5)", action: cmdDarwinTradeOverlay },
+  { name: "VAR-MULTIPLIER", desc: "Darwinex VaR multiplier prediction — corridor position, investor impact per DARWIN", action: cmdVaRMultiplier },
+  { name: "DSCORE", desc: "D-Score estimation from trade history (Experience, Risk, Performance, Timing, Capacity, Scalability)", action: cmdDScore },
   { name: "CRYPTO-BACKFILL", desc: "Kraken crypto backfill — fill weekend gaps + extend history from 2013", action: cmdBinanceBackfill },
   { name: "SOURCES", desc: "Data source manager — MT5, Alpaca, Kraken overview + add new symbols", action: cmdSources },
   { name: "SIGNAL", desc: "Composite trading signal generator (Fisher, RSI, KAMA, SMA200, volume, ATR)", action: cmdSignal },
@@ -26871,6 +27892,13 @@ const CMD_PALETTE_COMMANDS = [
   { name: "MT5DB", desc: "MT5 SQLite Direct Sync — read bars from BarCacheWriter's shared database (zero CSV)", action: cmdMt5DbSync },
   { name: "CACHE-BACKUP", desc: "Export SQLite cache to portable .typhoon-backup file", action: cmdCacheBackup },
   { name: "CACHE-RESTORE", desc: "Import .typhoon-backup file (merge, newer wins)", action: cmdCacheRestore },
+  { name: "BACKUP-DATA", desc: "Full data backup — bars + KV + DARWIN tables (.ttfull)", action: cmdBackupData },
+  { name: "RESTORE-DATA", desc: "Import full data backup (.ttfull) — merge bars, KV, DARWIN", action: cmdRestoreData },
+  { name: "BACKUP-CREDS", desc: "Export encrypted credential + settings backup (.ttbackup)", action: cmdBackupCredentials },
+  { name: "RESTORE-CREDS", desc: "Import encrypted credential + settings backup (.ttbackup)", action: cmdRestoreCredentials },
+  { name: "LAN-SERVER", desc: "Start LAN sync server (serve cache to other machines)", action: cmdLanServer },
+  { name: "LAN-CLIENT", desc: "Connect to LAN sync server (pull cache from server)", action: cmdLanClient },
+  { name: "LAN-STATUS", desc: "Show LAN sync connection status", action: cmdLanStatus },
 ];
 
 function fuzzyMatch(query, target) {
@@ -30851,40 +31879,59 @@ function setupMTFGrid() {
 
   btn.addEventListener("click", () => {
     if (mtfGridActive) {
-      // Close grid — go back to single chart mode
       closeMTFGrid();
       tfCheckboxes.classList.add("hidden");
     } else {
-      // Open grid with currently checked timeframes
       const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(cb => cb.value);
-      if (selectedTFs.length < 2) {
+      if (selectedTFs.length < 1) {
         tfCheckboxes.classList.remove("hidden");
-        alert("Select at least 2 timeframes");
+        alert("Select at least 1 timeframe");
         return;
       }
-      if (!currentSymbol) { alert("Load a chart first"); return; }
-      tfCheckboxes.classList.remove("hidden"); // Keep checkboxes visible while grid is active
-      openMTFGrid(currentSymbol, selectedTFs);
+      // Multi-symbol: use all open tab symbols (deduplicated)
+      const tabSymbols = [...new Set(tabs.filter(t => t.symbol).map(t => t.symbol))];
+      const symbols = tabSymbols.length > 0 ? tabSymbols : (currentSymbol ? [currentSymbol] : []);
+      if (symbols.length === 0) { alert("Load a chart first"); return; }
+      tfCheckboxes.classList.remove("hidden");
+      openMTFGridMulti(symbols, selectedTFs);
     }
   });
 
-  // Live checkbox changes — add/remove cells without closing grid
+  // Live checkbox changes — rebuild grid with new TF selection
   for (const cb of document.querySelectorAll(".mtf-grid-cb")) {
     cb.addEventListener("change", () => {
-      if (!mtfGridActive) return; // Only live-update when grid is open
+      if (!mtfGridActive) return;
       const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(c => c.value);
-      if (selectedTFs.length < 1) return; // Don't close grid from unchecking all
-      // Rebuild grid with new TF selection
+      if (selectedTFs.length < 1) return;
+      const tabSymbols = [...new Set(tabs.filter(t => t.symbol).map(t => t.symbol))];
+      const symbols = tabSymbols.length > 0 ? tabSymbols : (mtfGridSymbol ? [mtfGridSymbol] : []);
       closeMTFGrid();
-      openMTFGrid(currentSymbol || mtfGridSymbol, selectedTFs);
+      openMTFGridMulti(symbols, selectedTFs);
     });
   }
 }
 
-async function openMTFGrid(symbol, timeframes) {
-  if (!symbol) { log("MTF grid: no symbol", "warn"); return; }
+// Multi-symbol MTF grid: symbols × timeframes = cells.
+// E.g., [CC, SLV] × [H4, MN1] = 4 cells: CC H4, CC MN1, SLV H4, SLV MN1
+function openMTFGridMulti(symbols, timeframes) {
+  // Build flat list of (symbol, tf) pairs — group by symbol for visual coherence
+  const pairs = [];
+  for (const sym of symbols) {
+    for (const tf of timeframes) {
+      pairs.push({ symbol: sym, tf });
+    }
+  }
+  if (pairs.length === 0) return;
+  log(`MTF grid: ${symbols.length} symbols × ${timeframes.length} TFs = ${pairs.length} cells`, "ok");
+  openMTFGrid(pairs[0].symbol, timeframes, pairs);
+}
+
+async function openMTFGrid(symbol, timeframes, multiPairs) {
+  // multiPairs: if provided, use these instead of single symbol × timeframes
+  const cellDefs = multiPairs || timeframes.map(tf => ({ symbol, tf }));
+  if (!symbol && (!cellDefs || cellDefs.length === 0)) { log("MTF grid: no symbol", "warn"); return; }
   mtfGridActive = true;
-  mtfGridSymbol = symbol;
+  mtfGridSymbol = symbol || cellDefs[0].symbol;
   const gridGen = ++mtfGridGeneration; // Capture generation — async loads check this
   const gridUseGpu = currentChartType.startsWith("gpu");
   const btn = document.getElementById("btn-mtf-grid");
@@ -30899,19 +31946,21 @@ async function openMTFGrid(symbol, timeframes) {
   // Create grid container
   const gridContainer = document.createElement("div");
   gridContainer.id = "mtf-grid-container";
-  const count = timeframes.length;
+  const count = cellDefs.length;
   gridContainer.className = `grid-${Math.min(count, 8)}`;
   chartStack.parentElement.insertBefore(gridContainer, chartStack);
 
-  const tfLabels = MTF_LABELS; // Use shared auto-generated labels
+  const tfLabels = MTF_LABELS;
 
-  for (const tf of timeframes) {
+  for (const cellDef of cellDefs) {
+    const tf = cellDef.tf;
+    const cellSymbol = cellDef.symbol;
     const cell = document.createElement("div");
     cell.className = "mtf-grid-cell";
 
     const label = document.createElement("div");
     label.className = "mtf-cell-label";
-    label.textContent = `${symbol} ${tfLabels[tf] || tf}`;
+    label.textContent = `${cellSymbol} ${tfLabels[tf] || tf}`;
     cell.appendChild(label);
 
     const chartDiv = document.createElement("div");
@@ -30938,7 +31987,6 @@ async function openMTFGrid(symbol, timeframes) {
       gpuCanvas.id = `mtf-gpu-${tf}`;
       chartDiv.appendChild(gpuCanvas);
 
-      // Need dimensions before creating GPU chart
       requestAnimationFrame(() => {
         gpuCanvas.width = chartDiv.clientWidth || 300;
         gpuCanvas.height = chartDiv.clientHeight || 200;
@@ -30948,8 +31996,53 @@ async function openMTFGrid(symbol, timeframes) {
       const gpuType = GPU_CHART_TYPES[currentChartType] ?? 0;
       cellGpuChart.set_chart_type(gpuType);
 
-      // Dummy CPU chart objects (not used for rendering, needed for data flow)
-      cellChart = { remove: () => {}, timeScale: () => ({ fitContent: () => {}, setVisibleLogicalRange: () => {} }), addLineSeries: () => ({ setData: () => {} }), addBaselineSeries: () => ({ setData: () => {} }), resize: () => {} };
+      // GPU-compatible chart wrapper that routes indicator lines through GPU engine.
+      // applyIndicators() calls _chart.addLineSeries/addHistogramSeries/addBaselineSeries/priceScale —
+      // this wrapper intercepts those calls and renders via gpu.add_line().
+      const gpuSeries = []; // track for cleanup
+      cellChart = {
+        remove: () => { gpuSeries.length = 0; },
+        resize: (w, h) => { if (cellGpuChart) { cellGpuChart.resize(w, h); cellGpuChart.render(); } },
+        timeScale: () => ({
+          fitContent: () => {},
+          setVisibleLogicalRange: (r) => {},
+          getVisibleLogicalRange: () => ({ from: 0, to: 500 }),
+          subscribeVisibleLogicalRangeChange: () => () => {},
+        }),
+        priceScale: (_id) => ({ applyOptions: () => {} }),
+        addLineSeries: (opts) => {
+          const seriesData = { data: [], opts };
+          gpuSeries.push(seriesData);
+          return {
+            setData: (data) => {
+              seriesData.data = data;
+              if (cellGpuChart && data.length >= 2) {
+                try {
+                  const hex = (opts?.color || "#FFFFFF").replace("#", "");
+                  const r = parseInt(hex.substring(0, 2), 16) / 255;
+                  const g = parseInt(hex.substring(2, 4), 16) / 255;
+                  const b = parseInt(hex.substring(4, 6), 16) / 255;
+                  const values = new Float64Array(data.map(d => d.value));
+                  cellGpuChart.add_line(values, r, g, b, 1.0);
+                } catch (_) {}
+              }
+            },
+            applyOptions: () => {},
+            setMarkers: () => {},
+            createPriceLine: (o) => ({ options: () => o, applyOptions: () => {} }),
+            removePriceLine: () => {},
+          };
+        },
+        addHistogramSeries: (opts) => ({
+          setData: () => {}, // GPU_PHASE4: histogram rendering not yet in GPU
+          applyOptions: () => {},
+        }),
+        addBaselineSeries: (opts) => ({
+          setData: () => {}, // GPU_PHASE4: baseline fill rendering not yet in GPU
+          applyOptions: () => {},
+        }),
+        removeSeries: () => {},
+      };
       cellCandleSeries = {
         setData: (data) => {
           if (cellGpuChart && data.length > 0) {
@@ -30959,13 +32052,13 @@ async function openMTFGrid(symbol, timeframes) {
             cellGpuChart.render();
           }
         },
-        createPriceLine: (opts) => ({ options: () => opts }),
+        createPriceLine: (opts) => ({ options: () => opts, applyOptions: () => {} }),
         removePriceLine: () => {},
         data: () => [],
         update: () => {},
       };
     } else {
-      // CPU mode: use lightweight-charts
+      // CPU fallback: use lightweight-charts
       cellChart = createChart(chartDiv, {
         width: 100, height: 100,
         layout: { background: { color: "#000000" }, textColor: "#d1d4dc", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
@@ -31043,7 +32136,7 @@ async function openMTFGrid(symbol, timeframes) {
       }
     });
 
-    const cellInfo = { tf, chart: cellChart, candleSeries: cellCandleSeries, fisherChart: cellFisherChart, volumeChart: cellVolumeChart, container: cell, chartDiv, fisherDiv, volumeDiv, gpuChart: cellGpuChart };
+    const cellInfo = { tf, symbol: cellSymbol, chart: cellChart, candleSeries: cellCandleSeries, fisherChart: cellFisherChart, volumeChart: cellVolumeChart, container: cell, chartDiv, fisherDiv, volumeDiv, gpuChart: cellGpuChart };
     mtfGridCells.push(cellInfo);
 
     // Single click to select as active trading cell
@@ -31082,7 +32175,14 @@ async function openMTFGrid(symbol, timeframes) {
 
   // Fire all cell loads in parallel — cached cells render instantly, uncached show "loading..."
   // Don't await — let each cell render independently as its data arrives.
-  const allLoads = Promise.all(mtfGridCells.map(c => loadMTFCellData(c, symbol, gridGen)));
+  // Load cells sequentially with yields between each — prevents UI freeze from
+  // 4+ cells all computing heavy indicators simultaneously on the main thread.
+  // Each cell renders its candles immediately, then yields before indicator computation.
+  const allLoads = (async () => {
+    for (const c of mtfGridCells) {
+      await loadMTFCellData(c, c.symbol || symbol, gridGen);
+    }
+  })();
 
   // Initial resize immediately (cells that loaded from cache are already populated)
   requestAnimationFrame(() => {
@@ -31136,15 +32236,15 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    const limit = aggFactor > 1 ? 500 * aggFactor : 500;
+    const GRID_BARS = 250; // 250 bars per grid cell — balances visual quality vs computation cost
+    const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
 
     // Prefer cache — background pre-fetch should have all TFs cached
-    // Limit to last 500 bars for grid cells (small panes don't need 50K bars)
     const cached = barCache[cacheKey];
     if (cached && cached.data && cached.data.length > 0) {
-      bars = cached.data.length > 500 ? cached.data.slice(-500) : cached.data;
+      bars = cached.data.length > GRID_BARS ? cached.data.slice(-GRID_BARS) : cached.data;
       log(`MTF grid ${cellInfo.tf}: ${bars.length} bars from cache`, "info");
     } else {
       // Show loading status on the cell label and status bar
@@ -31196,171 +32296,81 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
       to: chartData.length + 2, // small right margin
     });
 
-    // Fisher — color-segmented like main chart (green bullish, red bearish)
-    if (chartData.length > 32) {
-      const ef = calcEhlersFisher(chartData, 32);
-      if (ef.fisher.length > 0) {
-        // Build color segments (same as main chart)
-        const segments = [];
-        let curColor = ef.colors[0];
-        let curSeg = [ef.fisher[0]];
-        for (let i = 1; i < ef.fisher.length; i++) {
-          if (ef.colors[i] !== curColor) {
-            curSeg.push(ef.fisher[i]);
-            segments.push({ color: curColor, data: curSeg });
-            curColor = ef.colors[i];
-            curSeg = [ef.fisher[i]];
-          } else {
-            curSeg.push(ef.fisher[i]);
-          }
-        }
-        if (curSeg.length > 0) segments.push({ color: curColor, data: curSeg });
+    // ── Fast grid-cell indicators (lightweight, no full applyIndicators) ──
+    // Full applyIndicators is too heavy for 4-6 cells (9+ indicators × 500 bars each
+    // blocks the main thread for 2-3 seconds total). Instead, render the essential
+    // NNFX system indicators inline — matches MT5 visual without the freeze.
+    await new Promise(r => requestAnimationFrame(r));
+    if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
-        // Ensure last segment always has >= 2 points for rendering (fixes last bar color change)
-        if (segments.length >= 2) {
-          const lastSeg = segments[segments.length - 1];
-          if (lastSeg.data.length < 2) {
-            const prevSeg = segments[segments.length - 2];
-            lastSeg.data.unshift(prevSeg.data[prevSeg.data.length - 1]);
-          }
-        }
-
-        for (const seg of segments) {
-          if (seg.data.length < 2) continue;
-          const s = cellInfo.fisherChart.addLineSeries({
-            color: seg.color, lineWidth: 1.5,
-            lastValueVisible: false, priceLineVisible: false,
-          });
-          s.setData(seg.data);
-        }
-
-        // Signal line (gray)
-        const sSignal = cellInfo.fisherChart.addLineSeries({
-          color: "#A9A9A9", lineWidth: 1,
-          lastValueVisible: false, priceLineVisible: false,
-        });
-        sSignal.setData(ef.signal);
-
-        // Zero line
-        const sZero = cellInfo.fisherChart.addLineSeries({
-          color: "#FFFFFF33", lineWidth: 1, lineStyle: 2,
-          lastValueVisible: false, priceLineVisible: false,
-        });
-        sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
-      }
-    }
-    // Sync Fisher time scale after data loaded
-    cellInfo.fisherChart.timeScale().fitContent();
-
-    // BetterVolume
-    if (chartData.length > 22) {
-      const bv = calcBetterVolume(chartData);
-      if (bv.length > 0) {
-        const s = cellInfo.volumeChart.addHistogramSeries({ priceFormat: { type: "volume" } });
-        s.setData(bv);
-      }
-    }
-    // Sync Volume time scale after data loaded
-    cellInfo.volumeChart.timeScale().fitContent();
-
-    // ── Full indicator set (matches main chart NNFX system) ──
     const addLine = (color, width, data) => {
-      if (data.length < 2) return;
-      // GPU mode: route through gpuChart.add_line() instead of dummy CPU chart
+      if (!data || data.length < 2) return;
       if (cellInfo.gpuChart) {
         try {
-          // Parse hex color to [r,g,b] 0-1 range
-          const hex = color.replace("#", "");
+          const hex = (color || "#FFFFFF").replace("#", "");
           const r = parseInt(hex.substring(0, 2), 16) / 255;
           const g = parseInt(hex.substring(2, 4), 16) / 255;
           const b = parseInt(hex.substring(4, 6), 16) / 255;
-          const values = data.map(d => d.value);
-          cellInfo.gpuChart.add_line(new Float64Array(values), r, g, b, 1.0);
-          cellInfo.gpuChart.render();
+          cellInfo.gpuChart.add_line(new Float64Array(data.map(d => d.value)), r, g, b, 1.0);
         } catch (_) {}
-        return;
+      } else {
+        const s = cellInfo.chart.addLineSeries({ color, lineWidth: width, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        s.setData(data);
       }
-      const s = cellInfo.chart.addLineSeries({ color, lineWidth: width, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-      s.setData(data);
     };
 
-    // SMA 200 (yellow) — fall back to SMA 100 if insufficient data
-    if (chartData.length > 200) {
-      addLine("#FFD700", 1, calcSMA(chartData, 200));
-    } else if (chartData.length > 100) {
-      addLine("#FFD700", 1, calcSMA(chartData, 100));
-    }
-
-    // SMA 100 (magenta) if enough data
+    // SMA 200 + 100
+    if (chartData.length > 200) addLine("#FFD700", 1, calcSMA(chartData, 200));
     if (chartData.length > 100) addLine("#FF00FF", 1, calcSMA(chartData, 100));
-
-    // KAMA (white)
+    // KAMA
     if (chartData.length > 11) addLine("#FFFFFF", 2, calcKAMA(chartData, 10));
-
-    // ATR Projection (yellow dotted — horizontal lines at lastOpen ± ATR, matches MQL5)
+    // ATR Projection (current open ± ATR)
     if (chartData.length > 15) {
       const atrp = calcATRProjection(chartData, 14);
       if (atrp.atrValues.length > 0) {
         const lastATR = atrp.atrValues[atrp.atrValues.length - 1].value;
         const lastOpen = chartData[chartData.length - 1].open;
-        const upper = lastOpen + lastATR;
-        const lower = lastOpen - lastATR;
         const startIdx = Math.max(0, chartData.length - 30);
         const levelBars = chartData.slice(startIdx);
         if (levelBars.length >= 2) {
-          // Route through addLine which handles GPU vs CPU
-          addLine("#FFFF00", 1, levelBars.map(d => ({ time: d.time, value: upper })));
-          addLine("#FFFF00", 1, levelBars.map(d => ({ time: d.time, value: lower })));
+          addLine("#FFFF00", 1, levelBars.map(d => ({ time: d.time, value: lastOpen + lastATR })));
+          addLine("#FFFF00", 1, levelBars.map(d => ({ time: d.time, value: lastOpen - lastATR })));
         }
       }
     }
-    // (ATR projection lines now routed through addLine above)
 
-    // Previous Candle Levels removed from MTF grid (MQL5 only draws HTF levels, not per-bar)
+    // Yield before Fisher/BetterVolume — let candles + overlays paint first
+    await new Promise(r => requestAnimationFrame(r));
+    if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
-    // Recent price range — used by supply/demand zones + fib to filter out-of-range levels
-    const recentBars = chartData.slice(-50);
-    const recentHigh = Math.max(...recentBars.map(b => b.high));
-    const recentLow = Math.min(...recentBars.map(b => b.low));
-    const priceRange = recentHigh - recentLow;
-
-    // Supply/Demand zones (lightweight — lines only, recent + visible range only)
-    if (chartData.length > 12) {
-      const zones = calcSupplyDemandZones(chartData);
-      const relevantZones = zones.filter(z => z.low <= recentHigh + priceRange && z.high >= recentLow - priceRange);
-      for (const z of relevantZones.slice(-4)) {
-        const color = z.type === "supply" ? "#87CEEB66" : "#8FBC8F66";
-        const zoneBars = chartData.filter(d => d.time >= z.startTime);
-        if (zoneBars.length < 2) continue;
-        addLine(color, 1, zoneBars.map(d => ({ time: d.time, value: z.high })));
-        addLine(color, 1, zoneBars.map(d => ({ time: d.time, value: z.low })));
-      }
-    }
-
-    // Auto Fibonacci (only levels within visible price range — prevents y-axis stretch)
-    if (chartData.length > 30) {
-      const fib = calcAutoFibonacci(chartData);
-      if (fib) {
-        const fibBars = chartData.filter(d => d.time >= fib.startTime);
-        if (fibBars.length >= 2) {
-          const keyLevels = fib.levels.filter(l => {
-            // Retracements: always show (within swing range)
-            // Extensions: only show within 1.5x recent range to prevent y-axis stretch on higher TFs
-            const maxExt = l.type === "extension" ? 1.5 : 3;
-            return l.price >= recentLow - priceRange * maxExt && l.price <= recentHigh + priceRange * maxExt;
-          });
-          const colors = {
-            "0%": "#888", "23.6%": "#9c27b0", "38.2%": "#ffeb3b", "50%": "#8bc34a",
-            "61.8%": "#00bcd4", "78.6%": "#e91e63", "100%": "#888",
-            "127.2%": "#ff9800", "161.8%": "#ff5722", "200%": "#f44336",
-            "261.8%": "#d32f2f", "361.8%": "#b71c1c", "423.6%": "#880e4f",
-          };
-          for (const level of keyLevels) {
-            addLine(colors[level.label] || "#888", 0.8, fibBars.map(d => ({ time: d.time, value: level.price })));
-          }
+    // Fisher Transform (in dedicated pane)
+    if (chartData.length > 32) {
+      const ef = calcEhlersFisher(chartData, 32);
+      if (ef.fisher.length > 0) {
+        const segments = []; let curColor = ef.colors[0], curSeg = [ef.fisher[0]];
+        for (let i = 1; i < ef.fisher.length; i++) {
+          if (ef.colors[i] !== curColor) { curSeg.push(ef.fisher[i]); segments.push({ color: curColor, data: curSeg }); curColor = ef.colors[i]; curSeg = [ef.fisher[i]]; }
+          else curSeg.push(ef.fisher[i]);
         }
+        if (curSeg.length > 0) segments.push({ color: curColor, data: curSeg });
+        if (segments.length >= 2 && segments[segments.length-1].data.length < 2)
+          segments[segments.length-1].data.unshift(segments[segments.length-2].data[segments[segments.length-2].data.length-1]);
+        for (const seg of segments) { if (seg.data.length < 2) continue; const s = cellInfo.fisherChart.addLineSeries({ color: seg.color, lineWidth: 1.5, lastValueVisible: false, priceLineVisible: false }); s.setData(seg.data); }
+        const sSignal = cellInfo.fisherChart.addLineSeries({ color: "#A9A9A9", lineWidth: 1, lastValueVisible: false, priceLineVisible: false }); sSignal.setData(ef.signal);
+        const sZero = cellInfo.fisherChart.addLineSeries({ color: "#FFFFFF33", lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false }); sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
       }
     }
+    cellInfo.fisherChart.timeScale().fitContent();
+
+    // BetterVolume (in dedicated pane)
+    if (chartData.length > 22) {
+      const bv = calcBetterVolume(chartData);
+      if (bv.length > 0) { const s = cellInfo.volumeChart.addHistogramSeries({ priceFormat: { type: "volume" } }); s.setData(bv); }
+    }
+    cellInfo.volumeChart.timeScale().fitContent();
+
+    // GPU final render
+    if (cellInfo.gpuChart) { try { cellInfo.gpuChart.render(); } catch (_) {} }
     // Clear loading status and restore label
     setLoadingStatus(`${symbol}@${cellInfo.tf}`, null);
     const cellLabel = cellInfo.container?.querySelector(".mtf-cell-label");
@@ -32233,10 +33243,12 @@ function cmdSettings() {
       const equity = parseFloat(ac.equity || ac.portfolio_value || 0).toFixed(2);
       const status = ac.status || "active";
       const acctType = ac.account_number ? ` (#${ac.account_number})` : "";
-      testResult.innerHTML = `<span style="color:#4caf50;">&#10003;</span> Connected — $${Number(equity).toLocaleString()} equity, ${status}${acctType}`;
+      const okIcon = document.createElement("span"); okIcon.style.color = "#4caf50"; okIcon.textContent = "\u2713";
+      testResult.replaceChildren(okIcon, document.createTextNode(` Connected — $${Number(equity).toLocaleString()} equity, ${status}${acctType}`));
       testResult.style.color = "#4caf50";
     } catch (e) {
-      testResult.innerHTML = `<span style="color:#f44336;">&#10007;</span> Not connected — save keys and connect first.`;
+      const failIcon = document.createElement("span"); failIcon.style.color = "#f44336"; failIcon.textContent = "\u2717";
+      testResult.replaceChildren(failIcon, document.createTextNode(" Not connected — save keys and connect first."));
       testResult.style.color = "#f44336";
     }
   });
