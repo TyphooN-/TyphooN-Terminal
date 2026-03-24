@@ -29723,7 +29723,7 @@ async function startMt5BackgroundSync() {
     const r = JSON.parse(await invoke("sync_mt5_sqlite"));
     mt5BgSyncCount++;
     if (r.imported > 0) {
-      console.log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.skipped} unchanged, ${r.deduped || 0} deduped, ${r.total_bars} bars from ${r.databases_read}/${r.databases_found} DBs`);
+      log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.skipped} unchanged, ${r.deduped || 0} deduped, ${r.total_bars} bars from ${r.databases_read}/${r.databases_found} DBs`, "info");
     }
     await handleMt5SyncResult(r);
   } catch (e) {
@@ -29734,12 +29734,12 @@ async function startMt5BackgroundSync() {
       const r = JSON.parse(await invoke("sync_mt5_sqlite"));
       mt5BgSyncCount++;
       if (r.imported > 0) {
-        console.log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.total_bars} bars`);
+        log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.total_bars} bars`, "info");
       }
       await handleMt5SyncResult(r);
     } catch (_) {}
   }, 30000);
-  console.log("[MT5 Sync] Background sync started (30s interval)");
+  log("[MT5 Sync] Background sync started (30s interval)", "ok");
 }
 
 function stopMt5BackgroundSync() {
@@ -29748,7 +29748,7 @@ function stopMt5BackgroundSync() {
     mt5BgSyncInterval = null;
   }
   mt5SyncActive = false;
-  console.log("[MT5 Sync] Background sync stopped");
+  log("[MT5 Sync] Background sync stopped", "info");
 }
 
 // ── Kraken Weekend Crypto Sync ──────────────────────────────────────
@@ -29788,7 +29788,7 @@ async function krakenWeekendSyncTick() {
   try {
     const r = JSON.parse(await invoke("fetch_binance_bars", { symbol: sym, timeframe: tf, startDate: oneWeekAgo }));
     if (r.bars > 0) {
-      console.log(`[Kraken Weekend Sync] ${sym} @ ${tf}: ${r.bars} bars (${r.first} -> ${r.last})`);
+      log(`[Kraken Weekend Sync] ${sym} @ ${tf}: ${r.bars} bars (${r.first} -> ${r.last})`, "info");
       // Invalidate hot cache so next render picks up new data
       const cacheKey = getCacheKey(sym, tf);
       delete barCache[cacheKey];
@@ -29807,14 +29807,14 @@ function startKrakenWeekendSync() {
   // Do an immediate tick, then every 30s
   krakenWeekendSyncTick();
   krakenWeekendSyncInterval = setInterval(krakenWeekendSyncTick, 30000);
-  console.log("[Kraken Weekend Sync] Started (30s interval)");
+  log("[Kraken Weekend Sync] Started (30s interval)", "ok");
 }
 
 function stopKrakenWeekendSync() {
   if (krakenWeekendSyncInterval) {
     clearInterval(krakenWeekendSyncInterval);
     krakenWeekendSyncInterval = null;
-    console.log("[Kraken Weekend Sync] Stopped");
+    log("[Kraken Weekend Sync] Stopped", "info");
   }
 }
 
@@ -34480,8 +34480,8 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       const customTF = CUSTOM_TIMEFRAME_MAP[c.tf];
       const fetchTF = customTF ? customTF.base : c.tf;
       const aggFactor = customTF ? customTF.factor : 1;
-      const htf = c.tf === "1Week" || c.tf === "1Month";
-      const GRID_BARS = htf ? 50000 : 500;
+      const htf = c.tf === "1Week" || c.tf === "1Month" || c.tf === "1Day";
+      const GRID_BARS = htf ? 5000 : 500;
       const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
       const cacheKey = getCacheKey(c.symbol || symbol, fetchTF);
       if (barCache[cacheKey]?.data?.length > 0) return Promise.resolve(); // already cached
@@ -34548,9 +34548,10 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    // Request all available bars so indicators (SMA 200) always compute when data exists.
-    // Backend returns min(limit, available) — 50K is effectively "all".
-    const GRID_BARS = 50000;
+    // Balance: enough bars for SMA 200 to compute, but not so many that 12 cells freeze the UI.
+    // W1/MN1 get all available (usually <1000), lower TFs capped at 500 for responsiveness.
+    const htf = cellInfo.tf === "1Week" || cellInfo.tf === "1Month" || cellInfo.tf === "1Day";
+    const GRID_BARS = htf ? 5000 : 500;
     const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
