@@ -424,11 +424,20 @@ pub async fn scrape_filings_for_ticker(
                 _ => None,
             };
             if let Some((alert_type, message)) = alert_info {
+                // Deduplicate: only one alert per (ticker, alert_type) per day
+                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                let existing: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM sec_filing_alerts WHERE ticker = ?1 AND alert_type = ?2 AND created_at > ?3",
+                    params![f.ticker, alert_type, chrono::Utc::now().timestamp() - 86400],
+                    |row| row.get(0),
+                ).unwrap_or(0);
+                if existing == 0 {
                 conn.execute(
                     "INSERT INTO sec_filing_alerts (ticker, alert_type, message, filing_accession, importance, created_at, dismissed)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, FALSE)",
                     params![f.ticker, alert_type, message, f.accession_number, f.importance_score, now],
                 ).ok();
+                }
             }
 
             inserted.push(f);
