@@ -29904,11 +29904,12 @@ async function handleMt5SyncResult(r) {
 async function startMt5BackgroundSync() {
   if (mt5BgSyncInterval) return; // already running
   mt5SyncActive = true;
-  await refreshMt5SymbolList();
+  // Symbol list needed for grid — await it but it's fast (reads from cache)
+  try { await refreshMt5SymbolList(); } catch (_) {}
 
-  // Adaptive interval: 5s when catching up (deferred > 0), 30s when caught up.
-  // No burst loops — each sync gets 5s of breathing room for bar requests.
-  let _catchingUp = true; // start fast
+  // Simple adaptive interval: 3s when catching up, 30s when caught up.
+  // 100 entries/cycle ≈ 2s compress+write → 1s idle per 3s cycle for bar requests.
+  let _catchingUp = true;
 
   async function syncTick() {
     if (_mt5BgSyncRunning) return;
@@ -29919,27 +29920,27 @@ async function startMt5BackgroundSync() {
       if (r.imported > 0) {
         log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.deduped || 0} deduped, ${r.total_bars} bars${r.deferred > 0 ? ` (${r.deferred} queued)` : ""}`, "info");
       }
-      // Only do heavy UI work (MTF reload) when caught up or every 5th cycle
-      if ((r.deferred || 0) === 0 || mt5BgSyncCount % 5 === 0) {
+      // Heavy UI work only when fully caught up — never during catch-up
+      if ((r.deferred || 0) === 0) {
         await handleMt5SyncResult(r);
       } else {
         if (r.databases_read > 0 || r.total_bars > 0) lastMt5SyncSuccess = Date.now();
         updateDataSourceBadge();
       }
-      // Switch interval speed
-      const wasCatchingUp = _catchingUp;
-      _catchingUp = (r.deferred || 0) > 0;
-      if (_catchingUp !== wasCatchingUp) {
+      // Switch interval speed when state changes
+      const nowCatchingUp = (r.deferred || 0) > 0;
+      if (nowCatchingUp !== _catchingUp) {
+        _catchingUp = nowCatchingUp;
         clearInterval(mt5BgSyncInterval);
-        mt5BgSyncInterval = setInterval(syncTick, _catchingUp ? 5000 : 30000);
+        mt5BgSyncInterval = setInterval(syncTick, _catchingUp ? 3000 : 30000);
       }
     } catch (_) {} finally { _mt5BgSyncRunning = false; }
   }
 
-  // First sync fires immediately, then 5s interval until caught up
-  syncTick();
-  mt5BgSyncInterval = setInterval(syncTick, 5000);
-  log("[MT5 Sync] Background sync started (5s catch-up / 30s steady-state)", "ok");
+  // First sync after a brief delay to let grid bar requests go first
+  setTimeout(syncTick, 2000);
+  mt5BgSyncInterval = setInterval(syncTick, 3000);
+  log("[MT5 Sync] Background sync started (3s catch-up / 30s steady-state)", "ok");
 }
 
 function stopMt5BackgroundSync() {

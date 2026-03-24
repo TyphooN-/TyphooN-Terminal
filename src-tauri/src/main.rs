@@ -3698,9 +3698,9 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
             return Ok((0, 0, symbols.len(), dbs_read, total_skipped, total_deduped, 0));
         }
 
-        // Cap entries per sync cycle to keep cycles short (~3-5s) so UI stays responsive
-        // Frontend re-syncs immediately if deferred > 0
-        const MAX_ENTRIES_PER_SYNC: usize = 250;
+        // Cap entries per sync cycle to keep cycles short (~2s) so UI stays responsive
+        // Frontend uses 3s interval during catch-up, 30s steady-state
+        const MAX_ENTRIES_PER_SYNC: usize = 100;
         let deferred_count = if import_entries.len() > MAX_ENTRIES_PER_SYNC {
             let deferred = import_entries.len() - MAX_ENTRIES_PER_SYNC;
             import_entries.truncate(MAX_ENTRIES_PER_SYNC);
