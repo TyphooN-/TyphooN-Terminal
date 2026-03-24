@@ -13,7 +13,7 @@ path = "src/main.rs"
 typhoon-engine = { path = "../engine" }
 
 # Native GPU UI
-eframe = { version = "0.31", default-features = true, features = ["wgpu", "persistence"] }
+eframe = { version = "0.31", default-features = true, features = ["wgpu"] }
 egui = "0.31"
 egui_plot = "0.31"
 

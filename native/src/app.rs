@@ -14,6 +14,7 @@
 //! - Bottom panel: log messages
 
 use eframe::egui;
+use egui_plot::{Line, PlotPoints, Plot};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2478,6 +2479,7 @@ pub struct TyphooNApp {
     bt_equity: String,
     bt_result: Option<backtest::TradeReport>,
     bt_trades: Vec<backtest::Trade>,
+    bt_equity_curve: Vec<f64>,
 
     // ── optimizer state ──────────────────────────────────────────────────
     opt_fast_range: String,
@@ -2530,11 +2532,21 @@ pub struct TyphooNApp {
     show_indicators_panel: bool,
     show_data_window: bool,
     show_alerts: bool,
+    show_order_entry: bool,
 
     /// Price alerts.
-    alerts: Vec<(f64, String)>, // (price, label)
+    alerts: Vec<(f64, String)>,
     alert_price_input: String,
     alert_label_input: String,
+
+    /// Order entry form.
+    order_symbol: String,
+    order_qty: String,
+    order_side: usize, // 0=buy, 1=sell
+    order_type: usize, // 0=market, 1=limit, 2=stop, 3=bracket
+    order_limit_price: String,
+    order_stop_price: String,
+    order_tp_price: String,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -2651,6 +2663,7 @@ impl TyphooNApp {
             bt_equity: "10000".to_string(),
             bt_result: None,
             bt_trades: Vec::new(),
+            bt_equity_curve: Vec::new(),
             opt_fast_range: "5-50".to_string(),
             opt_slow_range: "20-200".to_string(),
             opt_results: Vec::new(),
@@ -2691,9 +2704,17 @@ impl TyphooNApp {
             show_indicators_panel: false,
             show_data_window: false,
             show_alerts: false,
+            show_order_entry: false,
             alerts: Vec::new(),
             alert_price_input: String::new(),
             alert_label_input: String::new(),
+            order_symbol: String::new(),
+            order_qty: "1.0".to_string(),
+            order_side: 0,
+            order_type: 0,
+            order_limit_price: String::new(),
+            order_stop_price: String::new(),
+            order_tp_price: String::new(),
             bottom_tab: BottomTab::Log,
             log,
             crosshair: None,
@@ -2862,10 +2883,17 @@ impl TyphooNApp {
             "CRYPTO_BACKFILL" => {
                 self.log.push_back(LogEntry::info("Kraken backfill: requires async runtime integration"));
             }
-            // Trading stubs — log the action
-            "OPEN_TRADE" | "CLOSE_ALL" | "CLOSE_PARTIAL" |
-            "SET_SL" | "SET_TP" | "OPEN_MG" | "BUY_LINES" | "SELL_LINES" => {
+            // Trading
+            "OPEN_TRADE" => {
+                self.show_order_entry = true;
+                self.order_symbol = self.symbol_input.clone();
+            }
+            "CLOSE_ALL" | "CLOSE_PARTIAL" | "SET_SL" | "SET_TP" | "OPEN_MG" => {
                 self.log.push_back(LogEntry::info(format!("Trading: {} — connect to broker first", cmd)));
+            }
+            "BUY_LINES" | "SELL_LINES" => {
+                self.draw_mode = DrawMode::PlacingHLine;
+                self.log.push_back(LogEntry::info(format!("Click chart to place {} reference line", cmd)));
             }
             other => {
                 self.log.push_back(LogEntry::warn(format!("Unknown command: {}", other)));
@@ -2990,6 +3018,7 @@ impl TyphooNApp {
         self.show_indicators_panel = false;
         self.show_data_window = false;
         self.show_alerts = false;
+        self.show_order_entry = false;
     }
 
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
@@ -3381,6 +3410,28 @@ impl TyphooNApp {
                                         }
                                     }
 
+                                    // Portfolio Equity Curve
+                                    if let Ok(eq_curve) = darwin::get_portfolio_equity_curve(&conn) {
+                                        if eq_curve.len() > 2 {
+                                            ui.add_space(10.0);
+                                            ui.heading("Equity Curve");
+                                            ui.separator();
+                                            let points: PlotPoints = PlotPoints::new(
+                                                eq_curve.iter().enumerate()
+                                                    .map(|(i, (_, bal))| [i as f64, *bal])
+                                                    .collect()
+                                            );
+                                            let line = Line::new(points).color(ACCENT).name("Equity");
+                                            Plot::new("port_equity_plot")
+                                                .height(180.0)
+                                                .allow_drag(false)
+                                                .allow_zoom(false)
+                                                .show(ui, |plot_ui| {
+                                                    plot_ui.line(line);
+                                                });
+                                        }
+                                    }
+
                                     // Correlation matrix
                                     if let Ok(corrs) = darwin::get_darwin_correlations(&conn) {
                                         if !corrs.is_empty() {
@@ -3553,6 +3604,7 @@ impl TyphooNApp {
                             };
                             self.bt_result = Some(result.report);
                             self.bt_trades = result.trades;
+                            self.bt_equity_curve = result.equity_curve;
                             self.log.push_back(LogEntry::info(format!(
                                 "Backtest complete: {} trades, PF={:.2}, WR={:.1}%",
                                 self.bt_trades.len(),
@@ -3587,6 +3639,25 @@ impl TyphooNApp {
                         });
 
                         // Trade list
+                        // Equity curve plot
+                        if self.bt_equity_curve.len() > 2 {
+                            ui.add_space(10.0);
+                            ui.heading("Equity Curve");
+                            let points: PlotPoints = PlotPoints::new(
+                                self.bt_equity_curve.iter().enumerate()
+                                    .map(|(i, &v)| [i as f64, v])
+                                    .collect()
+                            );
+                            let line = Line::new(points).color(ACCENT).name("Equity");
+                            Plot::new("bt_equity_plot")
+                                .height(150.0)
+                                .allow_drag(false)
+                                .allow_zoom(false)
+                                .show(ui, |plot_ui| {
+                                    plot_ui.line(line);
+                                });
+                        }
+
                         if !self.bt_trades.is_empty() {
                             ui.add_space(10.0);
                             ui.collapsing(format!("Trade List ({})", self.bt_trades.len()), |ui| {
@@ -4426,9 +4497,81 @@ impl TyphooNApp {
                 });
         }
 
-        // DARWIN Equity Curve (uses egui_plot)
-        if self.show_darwin_portfolio {
-            // Already handled above, but add equity curve to portfolio if we have data
+        // Order Entry
+        if self.show_order_entry {
+            egui::Window::new("Order Entry")
+                .open(&mut self.show_order_entry)
+                .default_size([400.0, 350.0])
+                .show(ctx, |ui| {
+                    ui.heading("Place Order");
+                    ui.separator();
+                    egui::Grid::new("order_grid").num_columns(2).show(ui, |ui| {
+                        ui.label("Symbol:");
+                        ui.add(egui::TextEdit::singleline(&mut self.order_symbol).desired_width(120.0));
+                        ui.end_row();
+                        ui.label("Side:");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.order_side, 0, egui::RichText::new("BUY").color(UP));
+                            ui.radio_value(&mut self.order_side, 1, egui::RichText::new("SELL").color(DOWN));
+                        });
+                        ui.end_row();
+                        ui.label("Quantity:");
+                        ui.add(egui::TextEdit::singleline(&mut self.order_qty).desired_width(80.0));
+                        ui.end_row();
+                        ui.label("Type:");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.order_type, 0, "Market");
+                            ui.radio_value(&mut self.order_type, 1, "Limit");
+                            ui.radio_value(&mut self.order_type, 2, "Stop");
+                            ui.radio_value(&mut self.order_type, 3, "Bracket");
+                        });
+                        ui.end_row();
+                        if self.order_type == 1 || self.order_type == 3 {
+                            ui.label("Limit Price:");
+                            ui.add(egui::TextEdit::singleline(&mut self.order_limit_price).desired_width(100.0));
+                            ui.end_row();
+                        }
+                        if self.order_type == 2 {
+                            ui.label("Stop Price:");
+                            ui.add(egui::TextEdit::singleline(&mut self.order_stop_price).desired_width(100.0));
+                            ui.end_row();
+                        }
+                        if self.order_type == 3 {
+                            ui.label("SL Price:");
+                            ui.add(egui::TextEdit::singleline(&mut self.order_stop_price).desired_width(100.0));
+                            ui.end_row();
+                            ui.label("TP Price:");
+                            ui.add(egui::TextEdit::singleline(&mut self.order_tp_price).desired_width(100.0));
+                            ui.end_row();
+                        }
+                    });
+
+                    // Risk preview
+                    if let Ok(qty) = self.order_qty.parse::<f64>() {
+                        if let Some(chart) = self.charts.get(self.active_tab) {
+                            if let Some(last) = chart.bars.last() {
+                                let notional = qty * last.close;
+                                ui.separator();
+                                ui.label(format!("Last price: {}", format_price(last.close)));
+                                ui.label(format!("Notional: ${:.2}", notional));
+                                if let Some(Some(atr)) = chart.atr.last() {
+                                    ui.label(format!("ATR(14): {} ({:.2}%)", format_price(*atr), atr / last.close * 100.0));
+                                }
+                            }
+                        }
+                    }
+
+                    ui.add_space(10.0);
+                    let side_label = if self.order_side == 0 { "BUY" } else { "SELL" };
+                    let type_label = ["Market", "Limit", "Stop", "Bracket"][self.order_type];
+                    let btn_color = if self.order_side == 0 { UP } else { DOWN };
+                    if ui.button(egui::RichText::new(format!("Submit {} {} Order", side_label, type_label)).color(btn_color).strong()).clicked() {
+                        self.log.push_back(LogEntry::info(format!(
+                            "Order: {} {} {} {} — connect broker to execute",
+                            side_label, self.order_qty, self.order_symbol, type_label
+                        )));
+                    }
+                });
         }
     }
 }
@@ -4599,8 +4742,9 @@ impl eframe::App for TyphooNApp {
                     ui.checkbox(&mut self.show_volume_pane,    "Volume");
                 });
                 ui.menu_button("Trading", |ui| {
-                    if ui.button("Open Trade").clicked() {
-                        self.log.push_back(LogEntry::info("Trading: Open Trade — connect to broker first"));
+                    if ui.button("Open Trade…").clicked() {
+                        self.show_order_entry = true;
+                        self.order_symbol = self.symbol_input.clone();
                         ui.close_menu();
                     }
                     if ui.button("Close All").clicked() {
