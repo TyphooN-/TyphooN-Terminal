@@ -3537,6 +3537,8 @@ pub struct TyphooNApp {
     show_crypto_backfill: bool,
     /// Crypto backfill single symbol input.
     backfill_symbol: String,
+    /// SEC filing type filters [Form 4, 13F, DEF 14A, S-1, 10-K, 10-Q, 8-K].
+    sec_filters: [bool; 7],
 
     /// Price alerts.
     alerts: Vec<(f64, String)>,
@@ -3836,6 +3838,7 @@ impl TyphooNApp {
             show_order_entry: false,
             show_crypto_backfill: false,
             backfill_symbol: String::new(),
+            sec_filters: [true; 7],
             alerts: Vec::new(),
             alert_price_input: String::new(),
             alert_label_input: String::new(),
@@ -5175,9 +5178,9 @@ impl TyphooNApp {
                     // Filing type filter checkboxes (matching old WebKit)
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Filter:").color(AXIS_TEXT).small());
-                        for label in &["Form 4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"] {
-                            let mut checked = true; // placeholder — will wire to state
-                            ui.checkbox(&mut checked, *label);
+                        let labels = ["Form 4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
+                        for (i, label) in labels.iter().enumerate() {
+                            ui.checkbox(&mut self.sec_filters[i], *label);
                         }
                     });
                     ui.horizontal(|ui| {
@@ -6887,6 +6890,7 @@ impl eframe::App for TyphooNApp {
                             ui.label(egui::RichText::new("MTF Grid").color(AXIS_TEXT).small().strong());
                             let tf_labels = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
                             let ma_labels = ["SMA200", "KAMA", "Fisher"];
+                            let chart_ref = self.charts.get(self.active_tab);
                             egui::Grid::new("mtf_ma_grid").spacing(egui::vec2(4.0, 2.0)).show(ui, |ui| {
                                 // Header row
                                 ui.label(egui::RichText::new("").small());
@@ -6894,12 +6898,50 @@ impl eframe::App for TyphooNApp {
                                     ui.label(egui::RichText::new(*tf).color(AXIS_TEXT).small());
                                 }
                                 ui.end_row();
-                                // Data rows — use active chart data for current TF, placeholder dots for others
+                                // Data rows — green if bullish, red if bearish, gray if no data
+                                let active_tf_label = chart_ref.map(|c| c.timeframe.label()).unwrap_or("");
                                 for ma in &ma_labels {
                                     ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
-                                    for _ in &tf_labels {
-                                        // TODO: wire to multi-TF indicator data when available
-                                        let dot_color = AXIS_TEXT; // neutral gray until wired
+                                    for tf in &tf_labels {
+                                        let dot_color = if *tf == active_tf_label {
+                                            if let Some(c) = chart_ref {
+                                                let last_bar = c.bars.last();
+                                                let bullish = match *ma {
+                                                    "SMA200" => {
+                                                        let sma = c.sma200.last().and_then(|v| *v);
+                                                        match (last_bar, sma) {
+                                                            (Some(b), Some(s)) => Some(b.close > s),
+                                                            _ => None,
+                                                        }
+                                                    }
+                                                    "KAMA" => {
+                                                        let kama = c.kama.last().and_then(|v| *v);
+                                                        match (last_bar, kama) {
+                                                            (Some(b), Some(k)) => Some(b.close > k),
+                                                            _ => None,
+                                                        }
+                                                    }
+                                                    "Fisher" => {
+                                                        let fisher = c.fisher.last().and_then(|v| *v);
+                                                        let signal = c.fisher_signal.last().and_then(|v| *v);
+                                                        match (fisher, signal) {
+                                                            (Some(f), Some(s)) => Some(f > s),
+                                                            _ => None,
+                                                        }
+                                                    }
+                                                    _ => None,
+                                                };
+                                                match bullish {
+                                                    Some(true) => UP,
+                                                    Some(false) => DOWN,
+                                                    None => AXIS_TEXT,
+                                                }
+                                            } else {
+                                                AXIS_TEXT
+                                            }
+                                        } else {
+                                            egui::Color32::from_rgb(50, 50, 60)
+                                        };
                                         ui.label(egui::RichText::new("\u{25CF}").color(dot_color).small());
                                     }
                                     ui.end_row();

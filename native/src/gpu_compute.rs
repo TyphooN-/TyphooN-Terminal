@@ -2,6 +2,11 @@
 //!
 //! All bar data stored in VRAM. Indicators computed in parallel on GPU.
 //! CPU only reads back small results for UI text display.
+//!
+//! Infrastructure ready — will replace CPU indicator computation paths
+//! when wired to TyphooNApp's chart rendering pipeline.
+
+#![allow(dead_code)]
 
 use std::sync::Arc;
 use wgpu;
