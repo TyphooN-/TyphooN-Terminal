@@ -29904,45 +29904,39 @@ async function handleMt5SyncResult(r) {
 async function startMt5BackgroundSync() {
   if (mt5BgSyncInterval) return; // already running
   mt5SyncActive = true; // set immediately so badge shows MT5 before first sync completes
-  // Load MT5 symbol list on startup
-  await refreshMt5SymbolList();
+  // Load MT5 symbol list on startup (non-blocking)
+  refreshMt5SymbolList().catch(() => {});
 
-  // Adaptive sync: burst until caught up, then relax to 30s
   async function doSync() {
     const r = JSON.parse(await invoke("sync_mt5_sqlite"));
     mt5BgSyncCount++;
     if (r.imported > 0) {
-      log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.skipped} unchanged, ${r.deduped || 0} deduped, ${r.total_bars} bars from ${r.databases_read}/${r.databases_found} DBs${r.deferred > 0 ? ` (${r.deferred} deferred)` : ""}`, "info");
+      log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.deduped || 0} deduped, ${r.total_bars} bars${r.deferred > 0 ? ` (${r.deferred} queued)` : ""}`, "info");
     }
     await handleMt5SyncResult(r);
     return r;
   }
 
-  // Initial burst: keep syncing until no deferred entries remain
-  try {
-    let r = await doSync();
-    while (r.deferred > 0) {
-      await new Promise(resolve => requestAnimationFrame(resolve)); // yield to UI
-      r = await doSync();
-    }
-  } catch (e) {
-    console.warn("[MT5 Sync] initial:", e);
-  }
-
-  // Steady-state: 30s polling for incremental updates
-  mt5BgSyncInterval = setInterval(async () => {
+  // Adaptive interval: burst when deferred > 0, relax to 30s when caught up
+  // Never blocks startup — first sync starts immediately, UI stays responsive
+  async function syncLoop() {
     if (_mt5BgSyncRunning) return;
     _mt5BgSyncRunning = true;
     try {
-      let r = await doSync();
-      // If BarCacheWriter wrote a large batch, burst until caught up
-      while (r.deferred > 0) {
-        await new Promise(resolve => setTimeout(resolve, 100)); // brief yield
-        r = await doSync();
+      const r = await doSync();
+      if (r.deferred > 0) {
+        // More entries waiting — re-sync after brief yield (not 30s)
+        setTimeout(syncLoop, 200);
       }
     } catch (_) {} finally { _mt5BgSyncRunning = false; }
-  }, 30000);
-  log("[MT5 Sync] Background sync started (adaptive burst + 30s steady-state)", "ok");
+  }
+
+  // Kick off first sync immediately (non-blocking)
+  syncLoop();
+
+  // Steady-state: 30s polling catches new BarCacheWriter updates
+  mt5BgSyncInterval = setInterval(syncLoop, 30000);
+  log("[MT5 Sync] Background sync started (adaptive)", "ok");
 }
 
 function stopMt5BackgroundSync() {
