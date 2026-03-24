@@ -40,9 +40,19 @@ function workerCompute(type, bars, period, fastP, slowP) {
     if (!indicatorWorker) { resolve(null); return; }
     const id = workerNextId++;
     // Send compact bar data (only OHLCV, no timestamps — worker returns values only)
-    const compact = bars.map(b => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume || 0 }));
-    indicatorWorker.postMessage({ id, type, bars: compact, period, fastP, slowP });
-    const timer = setTimeout(() => { if (workerCallbacks[id]) { delete workerCallbacks[id]; resolve(null); } }, 5000);
+    // For large datasets, reuse packBarsForWasm flat array (avoids 10K object allocations)
+    let msg;
+    if (bars.length > 2000) {
+      const flat = packBarsForWasm(bars);
+      msg = { id, type, flat, barCount: bars.length, period, fastP, slowP };
+    } else {
+      const compact = bars.map(b => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume || 0 }));
+      msg = { id, type, bars: compact, period, fastP, slowP };
+    }
+    indicatorWorker.postMessage(msg);
+    // Timeout scales with data size: 5s base + 1s per 1000 bars (large datasets need more time)
+    const timeoutMs = 5000 + Math.ceil(bars.length / 1000) * 1000;
+    const timer = setTimeout(() => { if (workerCallbacks[id]) { delete workerCallbacks[id]; resolve(null); } }, timeoutMs);
     workerCallbacks[id] = { resolve, timer };
   });
 }
@@ -55,7 +65,8 @@ function workerComputeBatch(bars, indicators) {
     const id = workerNextId++;
     const compact = bars.map(b => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume || 0 }));
     indicatorWorker.postMessage({ id, type: "batch", bars: compact, indicators });
-    const timer = setTimeout(() => { if (workerCallbacks[id]) { delete workerCallbacks[id]; resolve(null); } }, 10000);
+    const timeoutMs = 10000 + Math.ceil(bars.length / 1000) * 1000;
+    const timer = setTimeout(() => { if (workerCallbacks[id]) { delete workerCallbacks[id]; resolve(null); } }, timeoutMs);
     workerCallbacks[id] = { resolve, timer };
   });
 }

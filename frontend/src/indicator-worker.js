@@ -169,11 +169,25 @@ function jsATR(bars, period) {
 
 // Handle messages from main thread
 self.onmessage = function(e) {
-  const { id, type, bars, period, fastP, slowP } = e.data;
+  const { id, type, period, fastP, slowP } = e.data;
+  // Support both compact object array and pre-packed flat Float64Array
+  let bars = e.data.bars;
+  let flat = e.data.flat || null;
+  if (flat && !bars) {
+    // Reconstruct bars from flat OHLCV array for JS fallback functions
+    const n = e.data.barCount || (flat.length / 5);
+    bars = [];
+    for (let i = 0; i < n; i++) {
+      bars.push({ o: flat[i*5], h: flat[i*5+1], l: flat[i*5+2], c: flat[i*5+3], v: flat[i*5+4] });
+    }
+    // flat is already a Float64Array — use directly for WASM
+    flat = wasmModule ? new Float64Array(flat) : null;
+  } else {
+    flat = wasmModule ? packBars(bars) : null;
+  }
 
   try {
     let values;
-    const flat = wasmModule ? packBars(bars) : null;
 
     switch (type) {
       case "sma":
