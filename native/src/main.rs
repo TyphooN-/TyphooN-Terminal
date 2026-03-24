@@ -2,6 +2,7 @@
 //!
 //! Pure Rust → egui + wgpu pipeline.
 //! Direct memory access from SQLite cache to GPU vertex buffers.
+//! Async broker integration via tokio runtime + mpsc channels.
 
 mod app;
 
@@ -12,6 +13,17 @@ fn main() -> eframe::Result {
         .init();
 
     tracing::info!("TyphooN Terminal (native GPU) starting...");
+
+    // Start tokio runtime in background thread for async broker operations
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("Failed to create tokio runtime");
+    let rt_handle = runtime.handle().clone();
+
+    // Keep runtime alive for the lifetime of the app
+    let _rt_guard = runtime;
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -25,6 +37,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "TyphooN Terminal",
         options,
-        Box::new(|cc| Ok(Box::new(app::TyphooNApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(app::TyphooNApp::new(cc, rt_handle)))),
     )
 }

@@ -25,7 +25,8 @@ use typhoon_engine::core::darwin;
 use typhoon_engine::core::backtest;
 use typhoon_engine::core::risk;
 use typhoon_engine::core::margin;
-use typhoon_engine::broker::alpaca::Bar as EngineBar;
+use typhoon_engine::broker::alpaca::{Bar as EngineBar, AlpacaBroker, AccountInfo, PositionInfo, OrderInfo};
+use tokio::sync::mpsc;
 
 // ─── colours ────────────────────────────────────────────────────────────────
 const BG: egui::Color32 = egui::Color32::from_rgb(0, 0, 0);
@@ -1625,8 +1626,10 @@ fn ehlers_cyber_cycle(bars: &[Bar]) -> Vec<Option<f64>> {
     }
     let alpha = 0.07; // 2/(period+1) with period~27
     for i in 4..n {
-        cycle[i] = (1.0 - 0.5 * alpha).powi(2) * (smooth[i] - 2.0 * smooth[i-1] + smooth[i-2])
-            + 2.0 * (1.0 - alpha) * cycle[i-1] - (1.0 - alpha).powi(2) * cycle[i-2];
+        let c1: f64 = 1.0 - 0.5 * alpha;
+        let c2: f64 = 1.0 - alpha;
+        cycle[i] = c1 * c1 * (smooth[i] - 2.0 * smooth[i-1] + smooth[i-2])
+            + 2.0 * c2 * cycle[i-1] - c2 * c2 * cycle[i-2];
         out[i] = Some(cycle[i]);
     }
     out
@@ -3199,6 +3202,27 @@ enum BottomTab {
     Volume,
 }
 
+/// Messages sent from UI → async broker task.
+#[allow(dead_code)]
+enum BrokerCmd {
+    Connect { api_key: String, secret: String, paper: bool },
+    GetAccount,
+    GetPositions,
+    GetOrders,
+    CloseAll,
+    ClosePosition { symbol: String },
+}
+
+/// Messages sent from async broker task → UI.
+enum BrokerMsg {
+    Connected(String), // success message
+    Error(String),
+    Account(AccountInfo),
+    Positions(Vec<PositionInfo>),
+    Orders(Vec<OrderInfo>),
+    OrderResult(String),
+}
+
 pub struct TyphooNApp {
     /// Shared cache handle — opened once at startup.
     cache: Option<Arc<SqliteCache>>,
@@ -3373,10 +3397,27 @@ pub struct TyphooNApp {
 
     /// Counter to avoid calling ctx.request_repaint in a tight loop.
     frame_count: u64,
+
+    // ── async broker ─────────────────────────────────────────────────────
+    /// Tokio runtime handle for spawning async tasks.
+    #[allow(dead_code)]
+    rt_handle: tokio::runtime::Handle,
+    /// Send commands to broker task.
+    broker_tx: mpsc::UnboundedSender<BrokerCmd>,
+    /// Receive results from broker task.
+    broker_rx: mpsc::UnboundedReceiver<BrokerMsg>,
+    /// Whether broker is connected.
+    broker_connected: bool,
+    /// Live account info.
+    live_account: Option<AccountInfo>,
+    /// Live positions.
+    live_positions: Vec<PositionInfo>,
+    /// Live orders.
+    live_orders: Vec<OrderInfo>,
 }
 
 impl TyphooNApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(_cc: &eframe::CreationContext<'_>, rt_handle: tokio::runtime::Handle) -> Self {
         let mut log: VecDeque<LogEntry> = VecDeque::new();
 
         // ── open SQLite cache ────────────────────────────────────────────────
@@ -3422,6 +3463,78 @@ impl TyphooNApp {
         } else {
             Vec::new()
         };
+
+        // Create async broker channels
+        let (broker_tx, _broker_cmd_rx) = mpsc::unbounded_channel::<BrokerCmd>();
+        let (broker_msg_tx, broker_rx) = mpsc::unbounded_channel::<BrokerMsg>();
+
+        // Spawn broker message processor
+        let broker_msg_tx_clone = broker_msg_tx.clone();
+        let rt = rt_handle.clone();
+        rt_handle.spawn(async move {
+            let mut cmd_rx = _broker_cmd_rx;
+            let mut broker: Option<AlpacaBroker> = None;
+            while let Some(cmd) = cmd_rx.recv().await {
+                match cmd {
+                    BrokerCmd::Connect { api_key, secret, paper } => {
+                        let b = AlpacaBroker::new(api_key, secret, paper);
+                        match b.get_account().await {
+                            Ok(acct) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::Connected(format!(
+                                    "Connected: ${:.2} equity, ${:.2} buying power",
+                                    acct.equity, acct.buying_power
+                                )));
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::Account(acct));
+                                broker = Some(b);
+                            }
+                            Err(e) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Connection failed: {}", e)));
+                            }
+                        }
+                    }
+                    BrokerCmd::GetAccount => {
+                        if let Some(ref b) = broker {
+                            match b.get_account().await {
+                                Ok(acct) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Account(acct)); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetPositions => {
+                        if let Some(ref b) = broker {
+                            match b.get_positions().await {
+                                Ok(pos) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Positions(pos)); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetOrders => {
+                        if let Some(ref b) = broker {
+                            match b.get_orders("open", 100).await {
+                                Ok(orders) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Orders(orders)); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::CloseAll => {
+                        if let Some(ref b) = broker {
+                            match b.close_all_positions().await {
+                                Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("All positions closed".into())); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::ClosePosition { symbol } => {
+                        if let Some(ref b) = broker {
+                            match b.close_position(&symbol, None).await {
+                                Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Closed {}: {}", symbol, r.status))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                }
+            }
+        });
 
         let mut app = Self {
             cache,
@@ -3546,6 +3659,13 @@ impl TyphooNApp {
             log,
             crosshair: None,
             frame_count: 0,
+            rt_handle: rt,
+            broker_tx,
+            broker_rx,
+            broker_connected: false,
+            live_account: None,
+            live_positions: Vec::new(),
+            live_orders: Vec::new(),
         };
         app.load_session();
         app
@@ -3753,8 +3873,20 @@ impl TyphooNApp {
                 self.show_order_entry = true;
                 self.order_symbol = self.symbol_input.clone();
             }
-            "CLOSE_ALL" | "CLOSE_PARTIAL" | "SET_SL" | "SET_TP" | "OPEN_MG" => {
-                self.log.push_back(LogEntry::info(format!("Trading: {} — connect to broker first", cmd)));
+            "CLOSE_ALL" => {
+                if self.broker_connected {
+                    let _ = self.broker_tx.send(BrokerCmd::CloseAll);
+                    self.log.push_back(LogEntry::info("Closing all positions..."));
+                } else {
+                    self.log.push_back(LogEntry::warn("Connect to broker first"));
+                }
+            }
+            "CLOSE_PARTIAL" | "SET_SL" | "SET_TP" | "OPEN_MG" => {
+                if self.broker_connected {
+                    self.log.push_back(LogEntry::info(format!("Trading: {} — not yet implemented for live broker", cmd)));
+                } else {
+                    self.log.push_back(LogEntry::warn("Connect to broker first"));
+                }
             }
             "BUY_LINES" | "SELL_LINES" => {
                 self.draw_mode = DrawMode::PlacingHLine;
@@ -4054,14 +4186,24 @@ impl TyphooNApp {
                         ui.end_row();
                     });
                     ui.add_space(5.0);
-                    if ui.button("Connect").clicked() {
+                    let connect_label = if self.broker_connected {
+                        egui::RichText::new("Connected").color(UP)
+                    } else {
+                        egui::RichText::new("Connect")
+                    };
+                    if ui.button(connect_label).clicked() && !self.broker_connected {
                         if self.broker_api_key.is_empty() || self.broker_secret.is_empty() {
                             self.log.push_back(LogEntry::warn("Enter API key and secret"));
                         } else {
                             self.log.push_back(LogEntry::info(format!(
-                                "Alpaca {} broker — async connection requires tokio runtime integration (Phase 5)",
+                                "Connecting to Alpaca {}...",
                                 if self.broker_paper { "Paper" } else { "Live" }
                             )));
+                            let _ = self.broker_tx.send(BrokerCmd::Connect {
+                                api_key: self.broker_api_key.clone(),
+                                secret: self.broker_secret.clone(),
+                                paper: self.broker_paper,
+                            });
                         }
                     }
                     ui.add_space(10.0);
@@ -5583,6 +5725,37 @@ impl eframe::App for TyphooNApp {
         self.frame_count += 1;
         ctx.set_visuals(Self::dark_visuals());
 
+        // ── poll async broker messages ───────────────────────────────────
+        while let Ok(msg) = self.broker_rx.try_recv() {
+            match msg {
+                BrokerMsg::Connected(s) => {
+                    self.broker_connected = true;
+                    self.log.push_back(LogEntry::info(s));
+                    // Auto-fetch positions and orders
+                    let _ = self.broker_tx.send(BrokerCmd::GetPositions);
+                    let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                }
+                BrokerMsg::Error(e) => {
+                    self.log.push_back(LogEntry::err(e));
+                }
+                BrokerMsg::Account(acct) => {
+                    self.live_account = Some(acct);
+                }
+                BrokerMsg::Positions(pos) => {
+                    self.live_positions = pos;
+                }
+                BrokerMsg::Orders(orders) => {
+                    self.live_orders = orders;
+                }
+                BrokerMsg::OrderResult(msg) => {
+                    self.log.push_back(LogEntry::info(msg));
+                    // Refresh positions after order
+                    let _ = self.broker_tx.send(BrokerCmd::GetPositions);
+                    let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                }
+            }
+        }
+
         // ── ~ (tilde) → Quake-style command palette ─────────────────────────
         let open_palette = ctx.input(|i| i.key_pressed(egui::Key::Backtick));
         if open_palette {
@@ -5746,11 +5919,16 @@ impl eframe::App for TyphooNApp {
                         ui.close_menu();
                     }
                     if ui.button("Close All").clicked() {
-                        self.log.push_back(LogEntry::info("Trading: Close All — connect to broker first"));
+                        if self.broker_connected {
+                            let _ = self.broker_tx.send(BrokerCmd::CloseAll);
+                            self.log.push_back(LogEntry::info("Closing all positions..."));
+                        } else {
+                            self.log.push_back(LogEntry::warn("Connect to broker first"));
+                        }
                         ui.close_menu();
                     }
                     if ui.button("Close Partial").clicked() {
-                        self.log.push_back(LogEntry::info("Trading: Close Partial — connect to broker first"));
+                        self.log.push_back(LogEntry::info("Close Partial: select position in right panel"));
                         ui.close_menu();
                     }
                     ui.separator();
@@ -6149,6 +6327,24 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
+                // Live broker positions (overrides DARWIN positions when connected)
+                if self.broker_connected && !self.live_positions.is_empty() {
+                    has_positions = true;
+                    for pos in &self.live_positions {
+                        let side_c = if pos.side == "long" { UP } else { DOWN };
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&pos.symbol).small().strong());
+                            ui.label(egui::RichText::new(&pos.side).color(side_c).small());
+                            ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small());
+                        });
+                        let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("entry: {}", format_price(pos.avg_entry_price))).color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new(format!("P&L: ${:.2}", pos.unrealized_pl)).color(pl_c).small());
+                        });
+                        ui.separator();
+                    }
+                }
                 if !has_positions {
                     ui.label(egui::RichText::new("No open positions.").color(AXIS_TEXT).small());
                 }
@@ -6156,13 +6352,41 @@ impl eframe::App for TyphooNApp {
 
                 ui.heading("Orders");
                 ui.separator();
-                ui.label(
-                    egui::RichText::new("Connect broker for live orders.").color(AXIS_TEXT).small(),
-                );
+                if self.broker_connected && !self.live_orders.is_empty() {
+                    for order in &self.live_orders {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&order.symbol).small().strong());
+                            ui.label(egui::RichText::new(&order.side).small());
+                            ui.label(egui::RichText::new(&order.order_type).color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new(&order.status).color(ACCENT).small());
+                        });
+                        ui.separator();
+                    }
+                } else {
+                    ui.label(egui::RichText::new(if self.broker_connected { "No open orders." } else { "Connect broker for live orders." }).color(AXIS_TEXT).small());
+                }
                 ui.add_space(10.0);
 
                 ui.heading("Risk");
                 ui.separator();
+                // Live broker account data
+                if let Some(ref acct) = self.live_account {
+                    egui::Grid::new("live_risk_grid").striped(true).num_columns(2).show(ui, |ui| {
+                        ui.label(egui::RichText::new("Equity").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new(format!("${:.2}", acct.equity)).small());
+                        ui.end_row();
+                        ui.label(egui::RichText::new("Cash").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new(format!("${:.2}", acct.cash)).small());
+                        ui.end_row();
+                        ui.label(egui::RichText::new("Buying Power").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new(format!("${:.2}", acct.buying_power)).small());
+                        ui.end_row();
+                        ui.label(egui::RichText::new("Margin Used").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new(format!("${:.2}", acct.initial_margin)).small());
+                        ui.end_row();
+                    });
+                    ui.add_space(5.0);
+                }
                 // Pull live DARWIN data if available
                 if let Some(ref cache) = self.cache {
                     if let Ok(conn) = cache.connection() {
