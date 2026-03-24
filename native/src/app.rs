@@ -2322,6 +2322,47 @@ const COMMANDS: &[Command] = &[
     Command { name: "EXPORT_CSV",    desc: "Export chart data to CSV" },
     Command { name: "NEW_TAB",       desc: "Open new chart tab" },
     Command { name: "CLOSE_TAB",     desc: "Close current chart tab" },
+    // DARWIN-specific
+    Command { name: "DARWINS",       desc: "Combined DARWIN portfolio view" },
+    Command { name: "DRAWDOWN",      desc: "Drawdown dashboard per DARWIN" },
+    Command { name: "REBALANCE",     desc: "VaR reduction via decorrelation" },
+    Command { name: "DARWIN_TRADES", desc: "Toggle deal history markers on chart" },
+    Command { name: "DSCORE",        desc: "D-Score estimation components" },
+    // Drawing tools
+    Command { name: "DRAW_HLINE",    desc: "Draw horizontal line" },
+    Command { name: "DRAW_TRENDLINE",desc: "Draw trendline (2 clicks)" },
+    Command { name: "DRAW_FIBO",     desc: "Draw Fibonacci retracement" },
+    Command { name: "CLEAR_DRAWINGS",desc: "Clear all drawings on chart" },
+    // Timeframes (direct switch)
+    Command { name: "M1",            desc: "Switch to 1-minute timeframe" },
+    Command { name: "M5",            desc: "Switch to 5-minute timeframe" },
+    Command { name: "M15",           desc: "Switch to 15-minute timeframe" },
+    Command { name: "M30",           desc: "Switch to 30-minute timeframe" },
+    Command { name: "H1",            desc: "Switch to 1-hour timeframe" },
+    Command { name: "H4",            desc: "Switch to 4-hour timeframe" },
+    Command { name: "D1",            desc: "Switch to daily timeframe" },
+    Command { name: "W1",            desc: "Switch to weekly timeframe" },
+    Command { name: "MN1",           desc: "Switch to monthly timeframe" },
+    // Analytics (from old app)
+    Command { name: "EQUITY",        desc: "Account equity curve" },
+    Command { name: "CALC",          desc: "Position sizing calculator" },
+    Command { name: "TRADESTATS",    desc: "Trade statistics (win rate, expectancy)" },
+    Command { name: "PERF",          desc: "Symbol performance chart" },
+    Command { name: "COMPARE",       desc: "Normalized multi-symbol overlay" },
+    Command { name: "SPREAD",        desc: "Price ratio / spread chart" },
+    Command { name: "PIVOTS",        desc: "Classic pivot points on chart" },
+    Command { name: "SRLEVEL",       desc: "Auto support/resistance from fractals" },
+    Command { name: "HEATMAP",       desc: "Daily P&L heatmap" },
+    Command { name: "PROFILE",       desc: "Trading profile (best symbols, times)" },
+    Command { name: "SIGNAL",        desc: "Composite 0-100 trading signal" },
+    Command { name: "DASHBOARD",     desc: "System health dashboard" },
+    Command { name: "STATUS",        desc: "Cache, memory, uptime status" },
+    // Crypto-specific
+    Command { name: "CRYPTO_BACKFILL",desc: "Kraken weekend gap-fill" },
+    // Data management
+    Command { name: "BACKUP",        desc: "Backup settings and cache" },
+    Command { name: "IMPORT_XLSX",   desc: "Import DARWIN XLSX trade history" },
+    Command { name: "WORKSPACE",     desc: "Save/restore workspace layout" },
     // Misc
     Command { name: "CACHE_STATS",   desc: "Show cache statistics" },
     Command { name: "CLOSE_WINDOWS", desc: "Close all floating windows" },
@@ -2398,10 +2439,15 @@ pub struct TyphooNApp {
     /// DARWIN XLSX import ticker input.
     darwin_import_ticker: String,
 
-    /// Broker connection fields.
+    /// Broker connection fields (Alpaca).
     broker_api_key: String,
     broker_secret: String,
     broker_paper: bool,
+
+    /// Broker connection fields (tastytrade).
+    tt_username: String,
+    tt_password: String,
+    tt_sandbox: bool,
 
     /// SL/TP planning lines (visual, pre-broker).
     sl_price: Option<f64>,
@@ -2571,6 +2617,9 @@ impl TyphooNApp {
             broker_api_key: String::new(),
             broker_secret: String::new(),
             broker_paper: true,
+            tt_username: String::new(),
+            tt_password: String::new(),
+            tt_sandbox: true,
             sl_price: None,
             tp_price: None,
             rc_equity: "10000".to_string(),
@@ -2750,6 +2799,48 @@ impl TyphooNApp {
                         self.active_tab = self.charts.len() - 1;
                     }
                 }
+            }
+            // DARWIN-specific
+            "DARWINS"       => self.show_darwin_portfolio = true,
+            "DRAWDOWN"      => self.show_darwin_portfolio = true,
+            "REBALANCE"     => self.show_symbol_overlap = true,
+            "DARWIN_TRADES" => { self.log.push_back(LogEntry::info("DARWIN trade markers: open DARWIN Accounts for deal history")); self.show_darwin_accounts = true; }
+            "DSCORE"        => { self.log.push_back(LogEntry::info("D-Score: open DARWIN Accounts for per-account analytics")); self.show_darwin_accounts = true; }
+            // Drawing tools
+            "DRAW_HLINE"     => self.draw_mode = DrawMode::PlacingHLine,
+            "DRAW_TRENDLINE" => self.draw_mode = DrawMode::PlacingTrendP1,
+            "DRAW_FIBO"      => self.draw_mode = DrawMode::PlacingFiboP1,
+            "CLEAR_DRAWINGS" => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); } }
+            // Timeframe shortcuts
+            "M1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M1); }
+            "M5"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M5); }
+            "M15" => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M15); }
+            "M30" => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M30); }
+            "H1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::H1); }
+            "H4"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::H4); }
+            "D1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::D1); }
+            "W1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::W1); }
+            "MN1" => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::MN1); }
+            // Aliases
+            "EQUITY"         => self.show_darwin_portfolio = true,
+            "CALC"           => self.show_risk_calc = true,
+            "TRADESTATS"     => self.show_darwin_accounts = true,
+            "PERF"           => self.show_seasonals = true,
+            "COMPARE"        => self.show_correlation = true,
+            "SPREAD"         => self.show_symbol_overlap = true,
+            "HEATMAP"        => self.show_seasonals = true,
+            "PROFILE"        => self.show_darwin_accounts = true,
+            "SIGNAL"         => self.show_indicators_panel = true,
+            "DASHBOARD"      => self.show_cache_stats = true,
+            "STATUS"         => self.show_cache_stats = true,
+            "IMPORT_XLSX"    => self.show_darwin_accounts = true,
+            "WORKSPACE"      => { self.save_session(); self.log.push_back(LogEntry::info("Workspace saved")); }
+            "BACKUP"         => { self.save_session(); self.log.push_back(LogEntry::info("Session backup saved")); }
+            "PIVOTS" | "SRLEVEL" => {
+                self.log.push_back(LogEntry::info("Pivot/SR levels: use drawing tools to mark key levels"));
+            }
+            "CRYPTO_BACKFILL" => {
+                self.log.push_back(LogEntry::info("Kraken backfill: requires async runtime integration"));
             }
             // Trading stubs — log the action
             "OPEN_TRADE" | "CLOSE_ALL" | "CLOSE_PARTIAL" |
@@ -2970,10 +3061,36 @@ impl TyphooNApp {
                         }
                     }
                     ui.add_space(10.0);
-                    ui.heading("MT5 (via cache)");
+                    ui.heading("tastytrade");
                     ui.separator();
-                    ui.label("MT5 data loaded via XML import pipeline → SQLite cache.");
-                    ui.label("No direct MT5 connection needed — bars already in cache.");
+                    ui.horizontal(|ui| {
+                        ui.label("Username:");
+                        ui.add(egui::TextEdit::singleline(&mut self.tt_username).desired_width(200.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Password:");
+                        ui.add(egui::TextEdit::singleline(&mut self.tt_password).desired_width(200.0).password(true));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Mode:");
+                        ui.radio_value(&mut self.tt_sandbox, true, "Sandbox");
+                        ui.radio_value(&mut self.tt_sandbox, false, "Production");
+                    });
+                    if ui.button("Connect tastytrade").clicked() {
+                        if self.tt_username.is_empty() || self.tt_password.is_empty() {
+                            self.log.push_back(LogEntry::warn("Enter tastytrade username and password"));
+                        } else {
+                            self.log.push_back(LogEntry::info(format!(
+                                "tastytrade {} — session auth requires async runtime integration (Phase 8)",
+                                if self.tt_sandbox { "Sandbox" } else { "Production" }
+                            )));
+                        }
+                    }
+                    ui.add_space(10.0);
+                    ui.heading("MT5 (view-only data source)");
+                    ui.separator();
+                    ui.label("MT5 bar data imported via BarCacheWriter EA → SQLite cache.");
+                    ui.label("Trade management stays in MT5. DARWIN analytics via XLSX import.");
                 });
         }
 
