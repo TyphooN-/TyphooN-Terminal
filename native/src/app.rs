@@ -263,6 +263,7 @@ struct IndicatorFlags {
     hma: bool,
     psar: bool,
     atr_proj: bool,
+    prev_levels: bool,
 }
 
 /// All state for one chart viewport.
@@ -310,6 +311,11 @@ struct ChartState {
     ichi_kijun: Vec<Option<f64>>,
     ichi_span_a: Vec<Option<f64>>,
     ichi_span_b: Vec<Option<f64>>,
+    /// Previous candle levels (daily high/low).
+    prev_daily_high: Option<f64>,
+    prev_daily_low: Option<f64>,
+    prev_weekly_high: Option<f64>,
+    prev_weekly_low: Option<f64>,
     /// WMA(20), HMA(20).
     wma: Vec<Option<f64>>,
     hma: Vec<Option<f64>>,
@@ -377,6 +383,10 @@ impl ChartState {
             ichi_kijun: Vec::new(),
             ichi_span_a: Vec::new(),
             ichi_span_b: Vec::new(),
+            prev_daily_high: None,
+            prev_daily_low: None,
+            prev_weekly_high: None,
+            prev_weekly_low: None,
             wma: Vec::new(),
             hma: Vec::new(),
             cci: Vec::new(),
@@ -474,6 +484,12 @@ impl ChartState {
         self.atr_proj_upper = au;
         self.atr_proj_lower = al;
         self.better_vol_type = compute_better_volume(&self.bars);
+        // Previous candle levels — find the second-to-last daily/weekly bar boundaries
+        let (pdh, pdl, pwh, pwl) = compute_prev_candle_levels(&self.bars);
+        self.prev_daily_high = pdh;
+        self.prev_daily_low = pdl;
+        self.prev_weekly_high = pwh;
+        self.prev_weekly_low = pwl;
     }
 
     fn visible_range(&self) -> (usize, usize) {
@@ -758,6 +774,62 @@ fn renko_bricks(bars: &[Bar]) -> Vec<Bar> {
         }
     }
     if bricks.is_empty() { bars.to_vec() } else { bricks }
+}
+
+fn compute_prev_candle_levels(bars: &[Bar]) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+    if bars.len() < 2 { return (None, None, None, None); }
+
+    // Group bars by day
+    let mut daily_groups: Vec<(f64, f64)> = Vec::new(); // (high, low) per day
+    let mut current_day = -1_i64;
+    let mut day_hi = f64::MIN;
+    let mut day_lo = f64::MAX;
+
+    for bar in bars {
+        let day = bar.ts_ms / (86_400_000); // ms per day
+        if day != current_day {
+            if current_day >= 0 { daily_groups.push((day_hi, day_lo)); }
+            current_day = day;
+            day_hi = bar.high;
+            day_lo = bar.low;
+        } else {
+            day_hi = day_hi.max(bar.high);
+            day_lo = day_lo.min(bar.low);
+        }
+    }
+    if current_day >= 0 { daily_groups.push((day_hi, day_lo)); }
+
+    let (pdh, pdl) = if daily_groups.len() >= 2 {
+        let prev = &daily_groups[daily_groups.len() - 2];
+        (Some(prev.0), Some(prev.1))
+    } else { (None, None) };
+
+    // Group by week (7 days)
+    let mut weekly_groups: Vec<(f64, f64)> = Vec::new();
+    let mut current_week = -1_i64;
+    let mut week_hi = f64::MIN;
+    let mut week_lo = f64::MAX;
+
+    for bar in bars {
+        let week = bar.ts_ms / (7 * 86_400_000);
+        if week != current_week {
+            if current_week >= 0 { weekly_groups.push((week_hi, week_lo)); }
+            current_week = week;
+            week_hi = bar.high;
+            week_lo = bar.low;
+        } else {
+            week_hi = week_hi.max(bar.high);
+            week_lo = week_lo.min(bar.low);
+        }
+    }
+    if current_week >= 0 { weekly_groups.push((week_hi, week_lo)); }
+
+    let (pwh, pwl) = if weekly_groups.len() >= 2 {
+        let prev = &weekly_groups[weekly_groups.len() - 2];
+        (Some(prev.0), Some(prev.1))
+    } else { (None, None) };
+
+    (pdh, pdl, pwh, pwl)
 }
 
 fn compute_stochastic(bars: &[Bar], k_period: usize, k_smooth: usize, d_smooth: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
@@ -1312,6 +1384,37 @@ fn draw_chart(
                 let y = price_to_y(sar);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
                     painter.circle_filled(egui::pos2(x, y), 2.0, SAR_COL);
+                }
+            }
+        }
+    }
+
+    // ── previous candle levels ─────────────────────────────────────────────
+    if flags.prev_levels {
+        let level_pairs = [
+            (chart.prev_daily_high, "D Hi", egui::Color32::WHITE),
+            (chart.prev_daily_low, "D Lo", egui::Color32::WHITE),
+            (chart.prev_weekly_high, "W Hi", egui::Color32::from_rgb(255, 100, 255)),
+            (chart.prev_weekly_low, "W Lo", egui::Color32::from_rgb(255, 100, 255)),
+        ];
+        for (price_opt, label, color) in &level_pairs {
+            if let Some(p) = price_opt {
+                let y = price_to_y(*p);
+                if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                    // Dotted line
+                    let dot = 3.0_f32;
+                    let mut x = chart_rect.left();
+                    while x < chart_rect.right() {
+                        painter.circle_filled(egui::pos2(x, y), 0.5, *color);
+                        x += dot * 3.0;
+                    }
+                    painter.text(
+                        egui::pos2(chart_rect.right() - 40.0, y - 10.0),
+                        egui::Align2::LEFT_TOP,
+                        label,
+                        egui::FontId::monospace(8.0),
+                        *color,
+                    );
                 }
             }
         }
@@ -2376,6 +2479,14 @@ const COMMANDS: &[Command] = &[
     Command { name: "CACHE_STATS",   desc: "Show cache statistics" },
     Command { name: "CLOSE_WINDOWS", desc: "Close all floating windows" },
     Command { name: "HELP",          desc: "Keyboard shortcuts reference" },
+    // NNFX system presets
+    Command { name: "NNFX",          desc: "Enable NNFX indicator preset (KAMA+Fisher+ATR+BVol)" },
+    Command { name: "RESET_IND",     desc: "Disable all indicators" },
+    // Additional analytics
+    Command { name: "DATA_WINDOW",   desc: "All indicator values at cursor" },
+    Command { name: "ALERTS",        desc: "Price alert manager" },
+    Command { name: "ORDER",         desc: "Open order entry panel" },
+    Command { name: "PREV_LEVELS",   desc: "Toggle previous candle levels (D/W)" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -2436,6 +2547,7 @@ pub struct TyphooNApp {
     show_hma: bool,
     show_psar: bool,
     show_atr_proj: bool,
+    show_prev_levels: bool,
     show_cci: bool,
     show_williams_r: bool,
     show_obv: bool,
@@ -2634,6 +2746,7 @@ impl TyphooNApp {
             show_hma: false,
             show_psar: false,
             show_atr_proj: false,
+            show_prev_levels: false,
             show_cci: false,
             show_williams_r: false,
             show_obv: false,
@@ -2766,6 +2879,7 @@ impl TyphooNApp {
             hma: self.show_hma,
             psar: self.show_psar,
             atr_proj: self.show_atr_proj,
+            prev_levels: self.show_prev_levels,
         }
     }
 
@@ -2880,6 +2994,31 @@ impl TyphooNApp {
             "PIVOTS" | "SRLEVEL" => {
                 self.log.push_back(LogEntry::info("Pivot/SR levels: use drawing tools to mark key levels"));
             }
+            "NNFX" => {
+                // Enable NNFX indicator preset
+                self.show_sma200 = true;
+                self.show_kama = true;
+                self.show_fisher = true;
+                self.show_atr_proj = true;
+                self.show_better_volume = true;
+                self.show_prev_levels = true;
+                self.log.push_back(LogEntry::info("NNFX preset enabled: SMA200 + KAMA + Fisher + ATR Proj + Better Volume + Prev Levels"));
+            }
+            "RESET_IND" => {
+                self.show_sma200 = false; self.show_sma100 = false; self.show_kama = false;
+                self.show_ema21 = false; self.show_bollinger = false; self.show_ichimoku = false;
+                self.show_wma = false; self.show_hma = false; self.show_psar = false;
+                self.show_atr_proj = false; self.show_prev_levels = false;
+                self.show_rsi = false; self.show_fisher = false; self.show_macd = false;
+                self.show_stochastic = false; self.show_adx = false; self.show_cci = false;
+                self.show_williams_r = false; self.show_obv = false; self.show_momentum = false;
+                self.show_better_volume = false; self.show_volume_pane = false;
+                self.log.push_back(LogEntry::info("All indicators disabled"));
+            }
+            "DATA_WINDOW"    => self.show_data_window = true,
+            "ALERTS"         => self.show_alerts = true,
+            "ORDER"          => { self.show_order_entry = true; self.order_symbol = self.symbol_input.clone(); }
+            "PREV_LEVELS"    => self.show_prev_levels = !self.show_prev_levels,
             "CRYPTO_BACKFILL" => {
                 self.log.push_back(LogEntry::info("Kraken backfill: requires async runtime integration"));
             }
@@ -3050,8 +3189,9 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("General");
                     ui.separator();
-                    ui.label("Theme: Dark (hardcoded)");
+                    ui.label("Theme: OLED Dark (#000000)");
                     ui.label("Refresh rate: 250ms");
+                    ui.label("Chart default: 200 visible bars");
                     ui.add_space(10.0);
                     ui.heading("Data Sources");
                     ui.separator();
@@ -3064,17 +3204,42 @@ impl TyphooNApp {
                         }
                     }
                     ui.add_space(10.0);
-                    ui.heading("Indicators");
+                    ui.heading("NNFX System (Default)");
                     ui.separator();
-                    ui.checkbox(&mut self.show_sma200,    "SMA(200)");
+                    ui.checkbox(&mut self.show_sma200,      "SMA(200) — Baseline");
+                    ui.checkbox(&mut self.show_kama,         "KAMA(10,2,30) — Trend");
+                    ui.checkbox(&mut self.show_fisher,       "Fisher Transform — Confirmation");
+                    ui.checkbox(&mut self.show_atr_proj,     "ATR Projection — Volatility");
+                    ui.checkbox(&mut self.show_better_volume,"Better Volume — Volume Analysis");
+                    ui.checkbox(&mut self.show_prev_levels,  "Previous Candle Levels (D/W)");
+                    ui.add_space(10.0);
+                    ui.heading("Additional Indicators");
+                    ui.separator();
                     ui.checkbox(&mut self.show_sma100,    "SMA(100)");
-                    ui.checkbox(&mut self.show_kama,      "KAMA(10,2,30)");
                     ui.checkbox(&mut self.show_ema21,     "EMA(21)");
                     ui.checkbox(&mut self.show_bollinger, "Bollinger Bands(20,2)");
-                    ui.checkbox(&mut self.show_rsi,          "RSI(14) sub-pane");
-                    ui.checkbox(&mut self.show_fisher,       "Fisher Transform(10) sub-pane");
-                    ui.checkbox(&mut self.show_macd,         "MACD(12,26,9) sub-pane");
-                    ui.checkbox(&mut self.show_volume_pane,  "Volume sub-pane");
+                    ui.checkbox(&mut self.show_ichimoku,  "Ichimoku Cloud(9,26,52)");
+                    ui.checkbox(&mut self.show_wma,       "WMA(20)");
+                    ui.checkbox(&mut self.show_hma,       "HMA(20)");
+                    ui.checkbox(&mut self.show_psar,      "Parabolic SAR");
+                    ui.add_space(10.0);
+                    ui.heading("Sub-Pane Indicators");
+                    ui.separator();
+                    ui.checkbox(&mut self.show_rsi,          "RSI(14)");
+                    ui.checkbox(&mut self.show_macd,         "MACD(12,26,9)");
+                    ui.checkbox(&mut self.show_stochastic,   "Stochastic(14,3,3)");
+                    ui.checkbox(&mut self.show_adx,          "ADX(14)");
+                    ui.checkbox(&mut self.show_cci,          "CCI(20)");
+                    ui.checkbox(&mut self.show_williams_r,   "Williams %R(14)");
+                    ui.checkbox(&mut self.show_obv,          "OBV");
+                    ui.checkbox(&mut self.show_momentum,     "Momentum(10)");
+                    ui.checkbox(&mut self.show_volume_pane,  "Volume");
+                    ui.add_space(10.0);
+                    ui.heading("Darwinex");
+                    ui.separator();
+                    ui.label("VaR corridor: 3.25% – 6.5%");
+                    ui.label("Correlation limit: 0.95 / 45d");
+                    ui.label("Margin accounts: 100%");
                 });
         }
 
@@ -3163,6 +3328,7 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_hma,      "HMA(20)");
                     ui.checkbox(&mut self.show_psar,     "Parabolic SAR(0.02,0.2)");
                     ui.checkbox(&mut self.show_atr_proj, "ATR Projection(14)");
+                    ui.checkbox(&mut self.show_prev_levels, "Previous Candle Levels (D/W)");
                     ui.add_space(10.0);
                     ui.heading("Sub-Pane Indicators");
                     ui.separator();
@@ -3307,6 +3473,22 @@ impl TyphooNApp {
                                                                 ui.end_row();
                                                             }
                                                         });
+                                                    }
+                                                }
+                                                // Per-DARWIN equity curve
+                                                if let Ok(eq) = darwin::get_darwin_equity_curve(&conn, &acct.darwin_ticker) {
+                                                    if eq.len() > 2 {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new("Equity Curve").strong());
+                                                        let points: PlotPoints = PlotPoints::new(
+                                                            eq.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
+                                                        );
+                                                        let line = Line::new(points).color(ACCENT).name("Equity");
+                                                        Plot::new(format!("eq_{}", acct.darwin_ticker))
+                                                            .height(120.0)
+                                                            .allow_drag(false)
+                                                            .allow_zoom(false)
+                                                            .show(ui, |plot_ui| { plot_ui.line(line); });
                                                     }
                                                 }
                                             });
@@ -4727,6 +4909,7 @@ impl eframe::App for TyphooNApp {
                     ui.checkbox(&mut self.show_hma,      "HMA(20)");
                     ui.checkbox(&mut self.show_psar,     "Parabolic SAR");
                     ui.checkbox(&mut self.show_atr_proj, "ATR Projection");
+                    ui.checkbox(&mut self.show_prev_levels, "Prev Candle Levels (D/W)");
                     ui.separator();
                     ui.label(egui::RichText::new("Sub-Panes").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_rsi,            "RSI(14)");
