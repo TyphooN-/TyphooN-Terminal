@@ -30,22 +30,23 @@ use tokio::sync::mpsc;
 
 // ─── colours ────────────────────────────────────────────────────────────────
 const BG: egui::Color32 = egui::Color32::from_rgb(0, 0, 0);
-const GRID: egui::Color32 = egui::Color32::from_rgb(26, 26, 42);
-const UP: egui::Color32 = egui::Color32::from_rgb(0, 220, 80);
-const DOWN: egui::Color32 = egui::Color32::from_rgb(220, 40, 40);
-const SMA200_COL: egui::Color32 = egui::Color32::from_rgb(255, 200, 50);
-const SMA100_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255);
-const KAMA_COL: egui::Color32 = egui::Color32::from_rgb(200, 100, 255);
+const GRID: egui::Color32 = egui::Color32::from_rgb(33, 33, 33);     // #333 (WebKit dotted grid)
+const UP: egui::Color32 = egui::Color32::from_rgb(0, 255, 0);        // #00ff00 (MT5 bright green)
+const DOWN: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);      // #ff0000 (MT5 bright red)
+const SMA200_COL: egui::Color32 = egui::Color32::from_rgb(255, 255, 0);  // #ffff00 yellow (MT5 match)
+const SMA100_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff blue
+const KAMA_COL: egui::Color32 = egui::Color32::from_rgb(255, 255, 255);  // white (MT5 KAMA)
 const EMA_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 60);
 const BB_COL: egui::Color32 = egui::Color32::from_rgb(80, 160, 200);
 const BB_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(80, 160, 200, 25);
-const AXIS_TEXT: egui::Color32 = egui::Color32::from_rgb(140, 140, 160);
+const AXIS_TEXT: egui::Color32 = egui::Color32::from_rgb(140, 140, 160); // #8c8ca0
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(76, 175, 80);
-const FISHER_POS: egui::Color32 = egui::Color32::from_rgb(0, 200, 100);
-const FISHER_NEG: egui::Color32 = egui::Color32::from_rgb(200, 50, 50);
-const RSI_LINE: egui::Color32 = egui::Color32::from_rgb(200, 180, 60);
-const MACD_LINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255);
-const MACD_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 60);
+const FISHER_POS: egui::Color32 = egui::Color32::from_rgb(60, 179, 113); // #3cb371 (medium sea green, MT5)
+const FISHER_NEG: egui::Color32 = egui::Color32::from_rgb(255, 69, 0);   // #ff4500 (orange-red, MT5)
+const FISHER_SIG: egui::Color32 = egui::Color32::from_rgb(169, 169, 169); // #a9a9a9 (dark gray signal)
+const RSI_LINE: egui::Color32 = egui::Color32::from_rgb(200, 180, 60);   // #c8b43c (mustard yellow)
+const MACD_LINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff
+const MACD_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 48);   // #ff8230 (orange)
 
 // ─── right panel button colours (matching old WebKit) ────────────────────────
 const BTN_GREEN: egui::Color32 = egui::Color32::from_rgb(40, 160, 60);
@@ -1863,15 +1864,24 @@ fn draw_chart(
     let candle_w  = (bar_w * 0.7).max(1.0);
     let half_body = candle_w * 0.5;
 
-    // ── grid lines (price) ───────────────────────────────────────────────────
+    // ── grid lines (price) — dotted style matching MT5/WebKit ──────────────
     let grid_steps = 8;
+    let dot_len = 3.0_f32;
+    let dot_gap = 3.0_f32;
+    let grid_col = egui::Color32::from_rgb(33, 33, 33);
     for i in 0..=grid_steps {
         let p   = price_min + (price_max - price_min) * (i as f64 / grid_steps as f64);
         let y   = price_to_y(p);
-        painter.line_segment(
-            [egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)],
-            egui::Stroke::new(0.5, GRID),
-        );
+        // Dotted horizontal line
+        let mut gx = chart_rect.left();
+        while gx < chart_rect.right() {
+            let end = (gx + dot_len).min(chart_rect.right());
+            painter.line_segment(
+                [egui::pos2(gx, y), egui::pos2(end, y)],
+                egui::Stroke::new(0.5, grid_col),
+            );
+            gx += dot_len + dot_gap;
+        }
         let label = format_price(p);
         painter.text(
             egui::pos2(chart_rect.right() + 4.0, y),
@@ -1882,15 +1892,21 @@ fn draw_chart(
         );
     }
 
-    // ── grid lines (time) ───────────────────────────────────────────────────
+    // ── grid lines (time) — dotted style ─────────────────────────────────────
     let time_step = ((80.0 / bar_w) as usize).max(1);
     for (rel_idx, bar) in bars.iter().enumerate() {
         if rel_idx % time_step != 0 { continue; }
         let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
-        painter.line_segment(
-            [egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom())],
-            egui::Stroke::new(0.5, GRID),
-        );
+        // Dotted vertical line
+        let mut gy = chart_rect.top();
+        while gy < chart_rect.bottom() {
+            let end = (gy + dot_len).min(chart_rect.bottom());
+            painter.line_segment(
+                [egui::pos2(x, gy), egui::pos2(x, end)],
+                egui::Stroke::new(0.5, grid_col),
+            );
+            gy += dot_len + dot_gap;
+        }
         let label = format_ts(bar.ts_ms, chart.timeframe);
         painter.text(
             egui::pos2(x, chart_rect.bottom() + 2.0),
@@ -2258,12 +2274,16 @@ fn draw_chart(
                 );
 
                 if body_height > 2.0 {
-                    let fill = egui::Color32::from_rgba_premultiplied(
-                        color.r(), color.g(), color.b(), 220,
-                    );
-                    painter.rect_filled(body_rect, 0.0, fill);
-                    painter.rect_stroke(body_rect, 0.0, egui::Stroke::new(0.5, color), egui::StrokeKind::Outside);
+                    if bar.close >= bar.open {
+                        // Bullish: hollow body (MT5 style — black fill, colored border)
+                        painter.rect_filled(body_rect, 0.0, BG);
+                        painter.rect_stroke(body_rect, 0.0, egui::Stroke::new(1.0, color), egui::StrokeKind::Outside);
+                    } else {
+                        // Bearish: solid filled body
+                        painter.rect_filled(body_rect, 0.0, color);
+                    }
                 } else {
+                    // Doji: single line
                     painter.line_segment(
                         [egui::pos2(cx - half_body, body_top), egui::pos2(cx + half_body, body_top)],
                         egui::Stroke::new(1.0, color),
@@ -2772,7 +2792,11 @@ fn draw_oscillator_pane(
     os_level: Option<f64>,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(0.5, GRID), egui::StrokeKind::Outside);
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [egui::pos2(rect.left(), rect.top()), egui::pos2(rect.right(), rect.top())],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
 
     let val_to_y = |v: f64| -> f32 {
         let frac = (val_max - v) / (val_max - val_min);
@@ -2823,7 +2847,11 @@ fn draw_fisher_pane(
     bar_w: f32,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(0.5, GRID), egui::StrokeKind::Outside);
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [egui::pos2(rect.left(), rect.top()), egui::pos2(rect.right(), rect.top())],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
 
     // Fisher typically ranges -3..3, auto-scale
     let mut f_min = -2.0_f64;
@@ -2879,7 +2907,7 @@ fn draw_fisher_pane(
         }
     }
     if points.len() > 1 {
-        painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 255, 100))));
+        painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, FISHER_SIG)));
     }
 
     painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "Fisher(32)", egui::FontId::monospace(9.0), FISHER_POS);
@@ -2897,7 +2925,11 @@ fn draw_macd_pane(
     bar_w: f32,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(0.5, GRID), egui::StrokeKind::Outside);
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [egui::pos2(rect.left(), rect.top()), egui::pos2(rect.right(), rect.top())],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
 
     // Auto-scale
     let mut v_min = 0.0_f64;
@@ -2933,12 +2965,17 @@ fn draw_macd_pane(
         if let Some(v) = macd_hist[abs_idx] {
             let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
             let y = val_to_y(v);
-            let color = if v >= 0.0 { FISHER_POS } else { FISHER_NEG };
+            // MACD histogram: teal green positive, coral red negative (TradingView/MT5 style)
+            let color = if v >= 0.0 {
+                egui::Color32::from_rgb(38, 166, 154) // #26a69a (teal green)
+            } else {
+                egui::Color32::from_rgb(239, 83, 80)  // #ef5350 (coral red)
+            };
             let (top, bottom) = if v >= 0.0 { (y, zero_y) } else { (zero_y, y) };
             painter.rect_filled(
                 egui::Rect::from_min_max(egui::pos2(x - hist_w / 2.0, top), egui::pos2(x + hist_w / 2.0, bottom)),
                 0.0,
-                egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 120),
+                color,
             );
         }
     }
@@ -2975,7 +3012,11 @@ fn draw_volume_pane(
     bar_w: f32,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(0.5, GRID), egui::StrokeKind::Outside);
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [egui::pos2(rect.left(), rect.top()), egui::pos2(rect.right(), rect.top())],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
 
     if bars.is_empty() { return; }
     let max_vol = bars.iter().map(|b| b.volume).fold(0.0_f64, f64::max);
@@ -3013,7 +3054,11 @@ fn draw_better_volume_pane(
     bar_w: f32,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(0.5, GRID), egui::StrokeKind::Outside);
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [egui::pos2(rect.left(), rect.top()), egui::pos2(rect.right(), rect.top())],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
 
     if bars.is_empty() { return; }
     let max_vol = bars.iter().map(|b| b.volume).fold(0.0_f64, f64::max);
@@ -3059,7 +3104,11 @@ fn draw_stoch_pane(
     bar_w: f32,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(0.5, GRID), egui::StrokeKind::Outside);
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [egui::pos2(rect.left(), rect.top()), egui::pos2(rect.right(), rect.top())],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
 
     let val_to_y = |v: f64| -> f32 {
         let frac = (100.0 - v) / 100.0;
@@ -3106,7 +3155,11 @@ fn draw_adx_pane(
     bar_w: f32,
 ) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(0, 0, 0));
-    painter.rect_stroke(rect, 0.0, egui::Stroke::new(0.5, GRID), egui::StrokeKind::Outside);
+    // Sub-pane border-top separator (#444 matching old WebKit)
+    painter.line_segment(
+        [egui::pos2(rect.left(), rect.top()), egui::pos2(rect.right(), rect.top())],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)),
+    );
 
     // Auto-scale 0-60
     let val_to_y = |v: f64| -> f32 {
