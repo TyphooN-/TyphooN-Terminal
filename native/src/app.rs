@@ -244,6 +244,15 @@ const CCI_COL: egui::Color32 = egui::Color32::from_rgb(200, 140, 80);
 const WILLR_COL: egui::Color32 = egui::Color32::from_rgb(180, 80, 200);
 const OBV_COL: egui::Color32 = egui::Color32::from_rgb(100, 200, 160);
 const SAR_COL: egui::Color32 = egui::Color32::from_rgb(255, 200, 0);
+const EHLERS_SS_COL: egui::Color32 = egui::Color32::from_rgb(0, 220, 220);
+const EHLERS_DEC_COL: egui::Color32 = egui::Color32::from_rgb(220, 160, 0);
+const EHLERS_ITL_COL: egui::Color32 = egui::Color32::from_rgb(180, 220, 0);
+const EHLERS_MAMA_COL: egui::Color32 = egui::Color32::from_rgb(255, 100, 200);
+const EHLERS_FAMA_COL: egui::Color32 = egui::Color32::from_rgb(100, 200, 255);
+const EHLERS_EBSW_COL: egui::Color32 = egui::Color32::from_rgb(0, 200, 180);
+const EHLERS_CYBER_COL: egui::Color32 = egui::Color32::from_rgb(200, 100, 255);
+const EHLERS_CG_COL: egui::Color32 = egui::Color32::from_rgb(255, 180, 0);
+const EHLERS_ROOF_COL: egui::Color32 = egui::Color32::from_rgb(100, 255, 100);
 const ATR_PROJ_COL: egui::Color32 = egui::Color32::from_rgb(255, 200, 50);
 const BVOL_CLIMAX_UP: egui::Color32 = egui::Color32::from_rgb(0, 200, 80);
 const BVOL_CLIMAX_DN: egui::Color32 = egui::Color32::from_rgb(220, 40, 40);
@@ -267,6 +276,10 @@ struct IndicatorFlags {
     pivots: bool,
     fractals: bool,
     harmonics: bool,
+    ehlers_ss: bool,
+    ehlers_decycler: bool,
+    ehlers_itl: bool,
+    ehlers_mama: bool,
 }
 
 /// All state for one chart viewport.
@@ -345,6 +358,25 @@ struct ChartState {
     /// Bill Williams Fractals (up/down arrows).
     fractal_up: Vec<bool>,
     fractal_down: Vec<bool>,
+    // ── Ehlers indicators ──────────────────────────────────────────────
+    /// Super Smoother (overlay).
+    ehlers_ss: Vec<Option<f64>>,
+    /// Decycler (overlay).
+    ehlers_decycler: Vec<Option<f64>>,
+    /// Instantaneous Trendline (overlay).
+    ehlers_itl: Vec<Option<f64>>,
+    /// MAMA (overlay).
+    ehlers_mama: Vec<Option<f64>>,
+    /// FAMA (overlay).
+    ehlers_fama: Vec<Option<f64>>,
+    /// Even Better Sinewave (sub-pane, -1 to 1).
+    ehlers_ebsw: Vec<Option<f64>>,
+    /// Cyber Cycle (sub-pane).
+    ehlers_cyber: Vec<Option<f64>>,
+    /// CG Oscillator (sub-pane).
+    ehlers_cg: Vec<Option<f64>>,
+    /// Roofing Filter (sub-pane).
+    ehlers_roof: Vec<Option<f64>>,
     /// Detected harmonic patterns.
     harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
@@ -414,6 +446,15 @@ impl ChartState {
             pivot_p: None, pivot_r1: None, pivot_r2: None, pivot_s1: None, pivot_s2: None,
             fractal_up: Vec::new(),
             fractal_down: Vec::new(),
+            ehlers_ss: Vec::new(),
+            ehlers_decycler: Vec::new(),
+            ehlers_itl: Vec::new(),
+            ehlers_mama: Vec::new(),
+            ehlers_fama: Vec::new(),
+            ehlers_ebsw: Vec::new(),
+            ehlers_cyber: Vec::new(),
+            ehlers_cg: Vec::new(),
+            ehlers_roof: Vec::new(),
             harmonics: Vec::new(),
             drawings: Vec::new(),
             visible_bars: 200,
@@ -528,6 +569,17 @@ impl ChartState {
         self.fractal_up = compute_fractals_up(&self.bars);
         self.fractal_down = compute_fractals_down(&self.bars);
         self.harmonics = detect_harmonic_patterns(&self.bars, &self.fractal_up, &self.fractal_down);
+        // Ehlers indicators
+        self.ehlers_ss = ehlers_super_smoother(&self.bars, 10);
+        self.ehlers_decycler = ehlers_decycler(&self.bars, 20);
+        self.ehlers_itl = ehlers_instantaneous_trendline(&self.bars);
+        let (mama, fama) = ehlers_mama_fama(&self.bars, 0.5, 0.05);
+        self.ehlers_mama = mama;
+        self.ehlers_fama = fama;
+        self.ehlers_ebsw = ehlers_even_better_sinewave(&self.bars, 40);
+        self.ehlers_cyber = ehlers_cyber_cycle(&self.bars);
+        self.ehlers_cg = ehlers_cg_oscillator(&self.bars, 10);
+        self.ehlers_roof = ehlers_roofing_filter(&self.bars, 10, 48);
     }
 
     fn visible_range(&self) -> (usize, usize) {
@@ -1344,6 +1396,198 @@ fn compute_better_volume(bars: &[Bar]) -> Vec<u8> {
     out
 }
 
+// ─── Ehlers indicators ───────────────────────────────────────────────────────
+
+fn ehlers_super_smoother(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
+    let n = bars.len();
+    let mut out = vec![None; n];
+    if n < 3 { return out; }
+    let a = (-1.414 * std::f64::consts::PI / period as f64).exp();
+    let b = 2.0 * a * (1.414 * std::f64::consts::PI / period as f64).cos();
+    let c2 = b;
+    let c3 = -a * a;
+    let c1 = 1.0 - c2 - c3;
+    out[0] = Some(bars[0].close);
+    out[1] = Some(bars[1].close);
+    for i in 2..n {
+        let prev1 = out[i-1].unwrap_or(bars[i-1].close);
+        let prev2 = out[i-2].unwrap_or(bars[i-2].close);
+        let val = c1 * (bars[i].close + bars[i-1].close) / 2.0 + c2 * prev1 + c3 * prev2;
+        out[i] = Some(val);
+    }
+    out
+}
+
+fn ehlers_decycler(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
+    // Decycler = price - highpass(price, period)
+    let n = bars.len();
+    let mut out = vec![None; n];
+    if n < 3 { return out; }
+    let alpha = (2.0 * std::f64::consts::PI / (period as f64 * 1.414)).cos();
+    let a1 = (alpha + (alpha * alpha - 1.0).max(0.0).sqrt()).max(0.001).recip();
+    // 2-pole highpass
+    let mut hp = vec![0.0_f64; n];
+    for i in 2..n {
+        hp[i] = (1.0 - a1 / 2.0) * (1.0 - a1 / 2.0) * (bars[i].close - 2.0 * bars[i-1].close + bars[i-2].close)
+            + 2.0 * (1.0 - a1) * hp[i-1] - (1.0 - a1) * (1.0 - a1) * hp[i-2];
+    }
+    for i in 0..n {
+        out[i] = Some(bars[i].close - hp[i]);
+    }
+    out
+}
+
+fn ehlers_instantaneous_trendline(bars: &[Bar]) -> Vec<Option<f64>> {
+    let n = bars.len();
+    let mut out = vec![None; n];
+    if n < 7 { return out; }
+    let mut itl = vec![0.0_f64; n];
+    for i in 0..7.min(n) { itl[i] = bars[i].close; }
+    for i in 7..n {
+        itl[i] = (bars[i].close + 2.0 * bars[i-1].close + bars[i-2].close) / 4.0 * 0.5
+            + itl[i-1] * 0.5;
+        // Simplified Ehlers ITL: 2-bar WMA smoothed recursively
+        itl[i] = (2.0 * itl[i] + itl[i-1] + itl[i-2] + itl[i-3]) / 5.0;
+    }
+    for i in 0..n { out[i] = Some(itl[i]); }
+    out
+}
+
+fn ehlers_mama_fama(bars: &[Bar], fast_limit: f64, slow_limit: f64) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
+    let n = bars.len();
+    let mut mama = vec![None; n];
+    let mut fama = vec![None; n];
+    if n < 6 { return (mama, fama); }
+
+    let mut smooth = vec![0.0_f64; n];
+    let mut phase = vec![0.0_f64; n];
+    let mut mama_v = vec![0.0_f64; n];
+    let mut fama_v = vec![0.0_f64; n];
+    let mut i1 = vec![0.0_f64; n];
+    let mut q1 = vec![0.0_f64; n];
+
+    for i in 3..n {
+        smooth[i] = (4.0 * bars[i].close + 3.0 * bars[i-1].close + 2.0 * bars[i-2].close + bars[i-3].close) / 10.0;
+    }
+
+    for i in 6..n {
+        let det = 0.0962 * smooth[i] + 0.5769 * smooth[i-2] - 0.5769 * smooth[i-4] - 0.0962 * smooth[i-6];
+        q1[i] = det;
+        i1[i] = smooth[i-3];
+
+        // Phase
+        if i1[i].abs() > 0.0 { phase[i] = (q1[i] / i1[i]).atan().to_degrees(); }
+        let delta_phase = (phase[i-1] - phase[i]).max(1.0);
+        let alpha = (fast_limit / delta_phase).max(slow_limit);
+
+        if i < 7 { mama_v[i] = bars[i].close; fama_v[i] = bars[i].close; }
+        else {
+            mama_v[i] = alpha * smooth[i] + (1.0 - alpha) * mama_v[i-1];
+            fama_v[i] = 0.5 * alpha * mama_v[i] + (1.0 - 0.5 * alpha) * fama_v[i-1];
+        }
+        mama[i] = Some(mama_v[i]);
+        fama[i] = Some(fama_v[i]);
+    }
+    (mama, fama)
+}
+
+fn ehlers_even_better_sinewave(bars: &[Bar], duration: usize) -> Vec<Option<f64>> {
+    let n = bars.len();
+    let mut out = vec![None; n];
+    if n < 5 { return out; }
+    // Highpass then super smooth, then compute sinewave
+    let mut hp = vec![0.0_f64; n];
+    let alpha1 = (2.0 * std::f64::consts::PI / (duration as f64 * 1.414)).cos();
+    let a1_coeff = if alpha1.abs() > f64::EPSILON {
+        (alpha1 + (alpha1 * alpha1 - 1.0).max(0.0).sqrt()).max(0.001).recip()
+    } else { 0.5 };
+
+    for i in 2..n {
+        hp[i] = (1.0 - a1_coeff / 2.0).powi(2) * (bars[i].close - 2.0 * bars[i-1].close + bars[i-2].close)
+            + 2.0 * (1.0 - a1_coeff) * hp[i-1] - (1.0 - a1_coeff).powi(2) * hp[i-2];
+    }
+    // Super smoother on HP
+    let period = duration / 4;
+    let a = (-1.414 * std::f64::consts::PI / period.max(1) as f64).exp();
+    let b = 2.0 * a * (1.414 * std::f64::consts::PI / period.max(1) as f64).cos();
+    let c1 = 1.0 - b + a * a;
+    let mut filt = vec![0.0_f64; n];
+    for i in 2..n {
+        filt[i] = c1 * (hp[i] + hp[i-1]) / 2.0 + b * filt[i-1] - a * a * filt[i-2];
+    }
+    // Wave = atan(filt[i] / filt[i-1]) if filt[i-1] != 0
+    for i in 1..n {
+        if filt[i-1].abs() > f64::EPSILON {
+            let wave = (filt[i] / filt[i-1]).atan() / std::f64::consts::FRAC_PI_2;
+            out[i] = Some(wave.clamp(-1.0, 1.0));
+        } else {
+            out[i] = Some(0.0);
+        }
+    }
+    out
+}
+
+fn ehlers_cyber_cycle(bars: &[Bar]) -> Vec<Option<f64>> {
+    let n = bars.len();
+    let mut out = vec![None; n];
+    if n < 5 { return out; }
+    let mut smooth = vec![0.0_f64; n];
+    let mut cycle = vec![0.0_f64; n];
+    for i in 3..n {
+        smooth[i] = (bars[i].close + 2.0 * bars[i-1].close + bars[i-2].close) / 4.0;
+    }
+    let alpha = 0.07; // 2/(period+1) with period~27
+    for i in 4..n {
+        cycle[i] = (1.0 - 0.5 * alpha).powi(2) * (smooth[i] - 2.0 * smooth[i-1] + smooth[i-2])
+            + 2.0 * (1.0 - alpha) * cycle[i-1] - (1.0 - alpha).powi(2) * cycle[i-2];
+        out[i] = Some(cycle[i]);
+    }
+    out
+}
+
+fn ehlers_cg_oscillator(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
+    let n = bars.len();
+    let mut out = vec![None; n];
+    if n < period { return out; }
+    for i in (period - 1)..n {
+        let mut num = 0.0_f64;
+        let mut den = 0.0_f64;
+        for j in 0..period {
+            let p = bars[i - j].close;
+            num += (j as f64 + 1.0) * p;
+            den += p;
+        }
+        out[i] = if den.abs() > f64::EPSILON { Some(-num / den + (period as f64 + 1.0) / 2.0) } else { Some(0.0) };
+    }
+    out
+}
+
+fn ehlers_roofing_filter(bars: &[Bar], lp_period: usize, hp_period: usize) -> Vec<Option<f64>> {
+    let n = bars.len();
+    let mut out = vec![None; n];
+    if n < 3 { return out; }
+    // Highpass
+    let alpha1 = (2.0 * std::f64::consts::PI / hp_period as f64).cos();
+    let a1 = if alpha1.abs() > f64::EPSILON {
+        (alpha1 + (alpha1 * alpha1 - 1.0).max(0.0).sqrt()).max(0.001).recip()
+    } else { 0.5 };
+    let mut hp = vec![0.0_f64; n];
+    for i in 2..n {
+        hp[i] = (1.0 - a1 / 2.0).powi(2) * (bars[i].close - 2.0 * bars[i-1].close + bars[i-2].close)
+            + 2.0 * (1.0 - a1) * hp[i-1] - (1.0 - a1).powi(2) * hp[i-2];
+    }
+    // Super smoother on HP output
+    let a = (-1.414 * std::f64::consts::PI / lp_period as f64).exp();
+    let b = 2.0 * a * (1.414 * std::f64::consts::PI / lp_period as f64).cos();
+    let c1 = 1.0 - b + a * a;
+    let mut filt = vec![0.0_f64; n];
+    for i in 2..n {
+        filt[i] = c1 * (hp[i] + hp[i-1]) / 2.0 + b * filt[i-1] - a * a * filt[i-2];
+        out[i] = Some(filt[i]);
+    }
+    out
+}
+
 // ─── chart rendering ─────────────────────────────────────────────────────────
 
 /// Draw a single chart viewport into `rect` using `painter`.
@@ -1364,6 +1608,10 @@ fn draw_chart(
     show_obv: bool,
     show_momentum: bool,
     show_better_volume: bool,
+    show_ehlers_ebsw: bool,
+    show_ehlers_cyber: bool,
+    show_ehlers_cg: bool,
+    show_ehlers_roof: bool,
     sl_price: Option<f64>,
     tp_price: Option<f64>,
 ) {
@@ -1387,7 +1635,8 @@ fn draw_chart(
     // Allocate sub-pane space at bottom
     let sub_pane_count = show_rsi as u8 + show_fisher as u8 + show_macd as u8 + show_volume_pane as u8
         + show_stochastic as u8 + show_adx as u8 + show_cci as u8 + show_williams_r as u8
-        + show_obv as u8 + show_momentum as u8 + show_better_volume as u8;
+        + show_obv as u8 + show_momentum as u8 + show_better_volume as u8
+        + show_ehlers_ebsw as u8 + show_ehlers_cyber as u8 + show_ehlers_cg as u8 + show_ehlers_roof as u8;
     let sub_pane_height = if sub_pane_count > 0 { 80.0 * sub_pane_count as f32 } else { 0.0 };
     let main_rect = egui::Rect::from_min_max(
         rect.min,
@@ -1568,6 +1817,15 @@ fn draw_chart(
                 }
             }
         }
+    }
+
+    // ── Ehlers overlay indicators ───────────────────────────────────────────
+    if flags.ehlers_ss       { draw_indicator_line(painter, chart_rect, bars, &chart.ehlers_ss,       start_idx, bar_w, &price_to_y, EHLERS_SS_COL,   1.5); }
+    if flags.ehlers_decycler { draw_indicator_line(painter, chart_rect, bars, &chart.ehlers_decycler, start_idx, bar_w, &price_to_y, EHLERS_DEC_COL,  1.5); }
+    if flags.ehlers_itl      { draw_indicator_line(painter, chart_rect, bars, &chart.ehlers_itl,      start_idx, bar_w, &price_to_y, EHLERS_ITL_COL,  1.5); }
+    if flags.ehlers_mama {
+        draw_indicator_line(painter, chart_rect, bars, &chart.ehlers_mama, start_idx, bar_w, &price_to_y, EHLERS_MAMA_COL, 1.5);
+        draw_indicator_line(painter, chart_rect, bars, &chart.ehlers_fama, start_idx, bar_w, &price_to_y, EHLERS_FAMA_COL, 1.0);
     }
 
     // ── previous candle levels ─────────────────────────────────────────────
@@ -2039,6 +2297,37 @@ fn draw_chart(
             egui::pos2(rect.right() - price_axis_w, sub_y + 80.0),
         );
         draw_better_volume_pane(painter, pane_rect, bars, &chart.better_vol_type, start_idx, bar_w);
+        sub_y += 80.0;
+    }
+
+    // Ehlers sub-panes
+    if show_ehlers_ebsw {
+        let pr = egui::Rect::from_min_max(egui::pos2(rect.left(), sub_y), egui::pos2(rect.right() - price_axis_w, sub_y + 80.0));
+        draw_oscillator_pane(painter, pr, bars, &chart.ehlers_ebsw, start_idx, bar_w, "EBSW", EHLERS_EBSW_COL, -1.0, 1.0, None, None);
+        sub_y += 80.0;
+    }
+    if show_ehlers_cyber {
+        let pr = egui::Rect::from_min_max(egui::pos2(rect.left(), sub_y), egui::pos2(rect.right() - price_axis_w, sub_y + 80.0));
+        let mut cmin = f64::MAX; let mut cmax = f64::MIN;
+        for (ri, _) in bars.iter().enumerate() { if let Some(Some(v)) = chart.ehlers_cyber.get(start_idx + ri) { cmin = cmin.min(*v); cmax = cmax.max(*v); } }
+        let pad = (cmax - cmin).max(0.001) * 0.1;
+        draw_oscillator_pane(painter, pr, bars, &chart.ehlers_cyber, start_idx, bar_w, "Cyber Cycle", EHLERS_CYBER_COL, cmin - pad, cmax + pad, None, None);
+        sub_y += 80.0;
+    }
+    if show_ehlers_cg {
+        let pr = egui::Rect::from_min_max(egui::pos2(rect.left(), sub_y), egui::pos2(rect.right() - price_axis_w, sub_y + 80.0));
+        let mut cmin = f64::MAX; let mut cmax = f64::MIN;
+        for (ri, _) in bars.iter().enumerate() { if let Some(Some(v)) = chart.ehlers_cg.get(start_idx + ri) { cmin = cmin.min(*v); cmax = cmax.max(*v); } }
+        let pad = (cmax - cmin).max(0.001) * 0.1;
+        draw_oscillator_pane(painter, pr, bars, &chart.ehlers_cg, start_idx, bar_w, "CG Oscillator", EHLERS_CG_COL, cmin - pad, cmax + pad, None, None);
+        sub_y += 80.0;
+    }
+    if show_ehlers_roof {
+        let pr = egui::Rect::from_min_max(egui::pos2(rect.left(), sub_y), egui::pos2(rect.right() - price_axis_w, sub_y + 80.0));
+        let mut cmin = f64::MAX; let mut cmax = f64::MIN;
+        for (ri, _) in bars.iter().enumerate() { if let Some(Some(v)) = chart.ehlers_roof.get(start_idx + ri) { cmin = cmin.min(*v); cmax = cmax.max(*v); } }
+        let pad = (cmax - cmin).max(0.001) * 0.1;
+        draw_oscillator_pane(painter, pr, bars, &chart.ehlers_roof, start_idx, bar_w, "Roofing Filter", EHLERS_ROOF_COL, cmin - pad, cmax + pad, None, None);
     }
 
     // ── SL/TP planning lines ───────────────────────────────────────────────
@@ -2826,6 +3115,14 @@ pub struct TyphooNApp {
     show_pivots: bool,
     show_fractals: bool,
     show_harmonics: bool,
+    show_ehlers_ss: bool,
+    show_ehlers_decycler: bool,
+    show_ehlers_itl: bool,
+    show_ehlers_mama: bool,
+    show_ehlers_ebsw: bool,
+    show_ehlers_cyber: bool,
+    show_ehlers_cg: bool,
+    show_ehlers_roof: bool,
     show_cci: bool,
     show_williams_r: bool,
     show_obv: bool,
@@ -3028,6 +3325,14 @@ impl TyphooNApp {
             show_pivots: false,
             show_fractals: false,
             show_harmonics: false,
+            show_ehlers_ss: false,
+            show_ehlers_decycler: false,
+            show_ehlers_itl: false,
+            show_ehlers_mama: false,
+            show_ehlers_ebsw: false,
+            show_ehlers_cyber: false,
+            show_ehlers_cg: false,
+            show_ehlers_roof: false,
             show_cci: false,
             show_williams_r: false,
             show_obv: false,
@@ -3164,6 +3469,10 @@ impl TyphooNApp {
             pivots: self.show_pivots,
             fractals: self.show_fractals,
             harmonics: self.show_harmonics,
+            ehlers_ss: self.show_ehlers_ss,
+            ehlers_decycler: self.show_ehlers_decycler,
+            ehlers_itl: self.show_ehlers_itl,
+            ehlers_mama: self.show_ehlers_mama,
         }
     }
 
@@ -3342,6 +3651,10 @@ impl TyphooNApp {
                 "psar": self.show_psar, "atr_proj": self.show_atr_proj,
                 "prev_levels": self.show_prev_levels, "pivots": self.show_pivots,
                 "fractals": self.show_fractals, "harmonics": self.show_harmonics,
+                "ehlers_ss": self.show_ehlers_ss, "ehlers_decycler": self.show_ehlers_decycler,
+                "ehlers_itl": self.show_ehlers_itl, "ehlers_mama": self.show_ehlers_mama,
+                "ehlers_ebsw": self.show_ehlers_ebsw, "ehlers_cyber": self.show_ehlers_cyber,
+                "ehlers_cg": self.show_ehlers_cg, "ehlers_roof": self.show_ehlers_roof,
                 "rsi": self.show_rsi, "fisher": self.show_fisher,
                 "macd": self.show_macd, "stochastic": self.show_stochastic,
                 "adx": self.show_adx, "cci": self.show_cci,
@@ -3374,6 +3687,10 @@ impl TyphooNApp {
                         ("psar", &mut self.show_psar), ("atr_proj", &mut self.show_atr_proj),
                         ("prev_levels", &mut self.show_prev_levels), ("pivots", &mut self.show_pivots),
                         ("fractals", &mut self.show_fractals), ("harmonics", &mut self.show_harmonics),
+                        ("ehlers_ss", &mut self.show_ehlers_ss), ("ehlers_decycler", &mut self.show_ehlers_decycler),
+                        ("ehlers_itl", &mut self.show_ehlers_itl), ("ehlers_mama", &mut self.show_ehlers_mama),
+                        ("ehlers_ebsw", &mut self.show_ehlers_ebsw), ("ehlers_cyber", &mut self.show_ehlers_cyber),
+                        ("ehlers_cg", &mut self.show_ehlers_cg), ("ehlers_roof", &mut self.show_ehlers_roof),
                         ("rsi", &mut self.show_rsi), ("fisher", &mut self.show_fisher),
                         ("macd", &mut self.show_macd), ("stochastic", &mut self.show_stochastic),
                         ("adx", &mut self.show_adx), ("cci", &mut self.show_cci),
@@ -3525,6 +3842,10 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_obv,          "OBV");
                     ui.checkbox(&mut self.show_momentum,     "Momentum(10)");
                     ui.checkbox(&mut self.show_volume_pane,  "Volume");
+                    ui.checkbox(&mut self.show_ehlers_ebsw,  "Even Better Sinewave");
+                    ui.checkbox(&mut self.show_ehlers_cyber, "Cyber Cycle");
+                    ui.checkbox(&mut self.show_ehlers_cg,    "CG Oscillator");
+                    ui.checkbox(&mut self.show_ehlers_roof,  "Roofing Filter");
                     ui.add_space(10.0);
                     ui.heading("Darwinex");
                     ui.separator();
@@ -3637,6 +3958,19 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_momentum,       "Momentum(10)");
                     ui.checkbox(&mut self.show_better_volume,  "Better Volume");
                     ui.checkbox(&mut self.show_volume_pane,    "Volume");
+                    ui.add_space(10.0);
+                    ui.heading("Ehlers Indicators");
+                    ui.separator();
+                    ui.label(egui::RichText::new("Overlay").color(AXIS_TEXT).small());
+                    ui.checkbox(&mut self.show_ehlers_ss,       "Super Smoother(10)");
+                    ui.checkbox(&mut self.show_ehlers_decycler, "Decycler(20)");
+                    ui.checkbox(&mut self.show_ehlers_itl,      "Instantaneous Trendline");
+                    ui.checkbox(&mut self.show_ehlers_mama,     "MAMA / FAMA");
+                    ui.label(egui::RichText::new("Sub-Pane").color(AXIS_TEXT).small());
+                    ui.checkbox(&mut self.show_ehlers_ebsw,  "Even Better Sinewave");
+                    ui.checkbox(&mut self.show_ehlers_cyber, "Cyber Cycle");
+                    ui.checkbox(&mut self.show_ehlers_cg,    "CG Oscillator(10)");
+                    ui.checkbox(&mut self.show_ehlers_roof,  "Roofing Filter(10,48)");
                 });
         }
 
@@ -5208,6 +5542,12 @@ impl eframe::App for TyphooNApp {
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
                     ui.checkbox(&mut self.show_harmonics,   "Harmonic Patterns (Carney)");
                     ui.separator();
+                    ui.label(egui::RichText::new("Ehlers (Overlay)").color(AXIS_TEXT).small());
+                    ui.checkbox(&mut self.show_ehlers_ss,       "Super Smoother(10)");
+                    ui.checkbox(&mut self.show_ehlers_decycler, "Decycler(20)");
+                    ui.checkbox(&mut self.show_ehlers_itl,      "Instant. Trendline");
+                    ui.checkbox(&mut self.show_ehlers_mama,     "MAMA / FAMA");
+                    ui.separator();
                     ui.label(egui::RichText::new("Sub-Panes").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_rsi,            "RSI(14)");
                     ui.checkbox(&mut self.show_fisher,         "Fisher Transform");
@@ -5868,6 +6208,10 @@ impl eframe::App for TyphooNApp {
             let show_obv = self.show_obv;
             let show_momentum = self.show_momentum;
             let show_better_volume = self.show_better_volume;
+            let show_ehlers_ebsw = self.show_ehlers_ebsw;
+            let show_ehlers_cyber = self.show_ehlers_cyber;
+            let show_ehlers_cg = self.show_ehlers_cg;
+            let show_ehlers_roof = self.show_ehlers_roof;
             let sl_price = self.sl_price;
             let tp_price = self.tp_price;
 
@@ -5890,7 +6234,7 @@ impl eframe::App for TyphooNApp {
                     );
 
                     let painter = ui.painter_at(cell_rect);
-                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, sl_price, tp_price);
+                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, sl_price, tp_price);
 
                     ui.painter_at(cell_rect).rect_stroke(
                         cell_rect,
@@ -5904,7 +6248,7 @@ impl eframe::App for TyphooNApp {
 
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
                     let painter = ui.painter_at(rect);
-                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, sl_price, tp_price);
+                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, sl_price, tp_price);
 
                     // ── drawing mode click handling ──────────────────────
                     if resp.clicked() && self.draw_mode != DrawMode::None {
