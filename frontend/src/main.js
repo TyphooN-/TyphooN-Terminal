@@ -2556,13 +2556,21 @@ function calcMACD(data, fastP = 12, slowP = 26, signalP = 9) {
 // ── Bollinger Bands ─────────────────────────────────────────
 function calcBollinger(data, period) {
   const upper = [], lower = [];
-  for (let i = period - 1; i < data.length; i++) {
-    let sum = 0, sumSq = 0;
-    for (let j = i - period + 1; j <= i; j++) { sum += data[j].close; sumSq += data[j].close ** 2; }
+  if (data.length < period) return { upper, lower };
+  // Rolling sum/sumSq — O(n) instead of O(n·period)
+  let sum = 0, sumSq = 0;
+  for (let i = 0; i < period; i++) { sum += data[i].close; sumSq += data[i].close ** 2; }
+  const emit = (i) => {
     const mean = sum / period;
     const std = Math.sqrt(Math.max(0, sumSq / period - mean ** 2));
     upper.push({ time: data[i].time, value: mean + 2 * std });
     lower.push({ time: data[i].time, value: mean - 2 * std });
+  };
+  emit(period - 1);
+  for (let i = period; i < data.length; i++) {
+    sum += data[i].close - data[i - period].close;
+    sumSq += data[i].close ** 2 - data[i - period].close ** 2;
+    emit(i);
   }
   return { upper, lower };
 }
@@ -6803,9 +6811,10 @@ function saveSession() {
       }
     }
 
-    // Gather indicator checkbox states
+    // Gather indicator checkbox states (cached refs avoid querySelectorAll reflow on each save)
+    if (!saveSession._cbRefs) saveSession._cbRefs = document.querySelectorAll("#indicator-list input[type=checkbox]");
     const indicators = {};
-    document.querySelectorAll("#indicator-list input[type=checkbox]").forEach(cb => {
+    saveSession._cbRefs.forEach(cb => {
       const key = `${cb.dataset.ind}_${cb.dataset.period || ""}`;
       indicators[key] = cb.checked;
     });
@@ -8267,7 +8276,7 @@ async function cmdSecScanner() {
       const filtered = filings.filter(f => activeTypes.includes(f.form_type));
 
       if (filtered.length === 0) {
-        listEl.innerHTML = '<div style="color:#888;padding:12px;font-size:11px;">No filings found. Click "Scrape Now" to fetch from SEC EDGAR.</div>';
+        listEl.textContent = ""; listEl.appendChild(el("div", "color:#888;padding:12px;font-size:11px;", 'No filings found. Click "Scrape Now" to fetch from SEC EDGAR.'));
         return;
       }
 
@@ -8367,7 +8376,7 @@ async function cmdInsiderTracker() {
       listEl.textContent = "";
 
       if (trades.length === 0) {
-        listEl.innerHTML = '<div style="color:#888;padding:12px;font-size:11px;">No insider trades found. Run SEC-SCANNER "Scrape Now" first.</div>';
+        listEl.textContent = ""; listEl.appendChild(el("div", "color:#888;padding:12px;font-size:11px;", 'No insider trades found. Run SEC-SCANNER "Scrape Now" first.'));
         summaryDiv.textContent = "";
         return;
       }
@@ -8454,7 +8463,7 @@ async function cmdSecAlerts() {
       listEl.textContent = "";
 
       if (alerts.length === 0) {
-        listEl.innerHTML = '<div style="color:#888;padding:12px;font-size:11px;">No active alerts. Alerts are created when significant insider sells or late filings are detected.</div>';
+        listEl.textContent = ""; listEl.appendChild(el("div", "color:#888;padding:12px;font-size:11px;", "No active alerts. Alerts are created when significant insider sells or late filings are detected."));
         return;
       }
 
@@ -14831,7 +14840,9 @@ function cmdDarwinPortfolio() {
     const winDays = pnls.filter(p => p > 0).length; const lossDays = pnls.filter(p => p < 0).length;
     const avgWin = pnls.filter(p => p > 0).reduce((s, p) => s + p, 0) / (winDays || 1);
     const avgLoss = pnls.filter(p => p < 0).reduce((s, p) => s + p, 0) / (lossDays || 1);
-    statsDiv.innerHTML = `<span style="color:#4caf50">Win days: ${winDays} (${(winDays/pnls.length*100).toFixed(0)}%) avg: $${avgWin.toFixed(0)}</span><span style="color:#f44336">Loss days: ${lossDays} (${(lossDays/pnls.length*100).toFixed(0)}%) avg: $${avgLoss.toFixed(0)}</span><span style="color:#ccc">Payoff: ${(avgWin/Math.abs(avgLoss)).toFixed(2)}x</span>`; // safe: numeric only
+    statsDiv.appendChild(span(`Win days: ${winDays} (${(winDays/pnls.length*100).toFixed(0)}%) avg: $${avgWin.toFixed(0)}`, "color:#4caf50;"));
+    statsDiv.appendChild(span(`Loss days: ${lossDays} (${(lossDays/pnls.length*100).toFixed(0)}%) avg: $${avgLoss.toFixed(0)}`, "color:#f44336;"));
+    statsDiv.appendChild(span(`Payoff: ${(avgWin/Math.abs(avgLoss)).toFixed(2)}x`, "color:#ccc;"));
     contentDiv.appendChild(statsDiv);
   }
 
@@ -14875,7 +14886,9 @@ function cmdDarwinPortfolio() {
     contentDiv.appendChild(table);
 
     const legend = document.createElement("div"); legend.style.cssText = "padding:12px 0;font-size:11px;color:#888;";
-    legend.innerHTML = '<span style="color:#4caf50">Green: low correlation (diversified)</span> · <span style="color:#ff9800">Amber: moderate</span> · <span style="color:#f44336">Red: high correlation (redundant)</span>'; // safe: static strings only
+    legend.appendChild(span("Green: low correlation (diversified)", "color:#4caf50;")); legend.appendChild(document.createTextNode(" \u00B7 "));
+    legend.appendChild(span("Amber: moderate", "color:#ff9800;")); legend.appendChild(document.createTextNode(" \u00B7 "));
+    legend.appendChild(span("Red: high correlation (redundant)", "color:#f44336;"));
     contentDiv.appendChild(legend);
   }
 
@@ -15363,15 +15376,7 @@ function cmdSymbolOverlap() {
       const tbl = document.createElement("table");
       tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px;";
       const thead = document.createElement("thead");
-      thead.innerHTML = `<tr style="background:#1a1a1a;color:#aaa;text-align:left;">
-        <th style="padding:4px 6px;border-bottom:1px solid #333;">Symbol</th>
-        <th style="padding:4px 6px;border-bottom:1px solid #333;">Side</th>
-        <th style="padding:4px 6px;border-bottom:1px solid #333;">DARWINs (#)</th>
-        <th style="padding:4px 6px;border-bottom:1px solid #333;">DARWIN List</th>
-        <th style="padding:4px 6px;border-bottom:1px solid #333;text-align:right;">Total Volume</th>
-        <th style="padding:4px 6px;border-bottom:1px solid #333;text-align:right;">Total Notional</th>
-        <th style="padding:4px 6px;border-bottom:1px solid #333;">Risk</th>
-      </tr>`;
+      thead.appendChild(theadRow(["Symbol", "Side", "DARWINs (#)", "DARWIN List", "Total Volume", "Total Notional", "Risk"], "padding:4px 6px;color:#aaa;border-bottom:1px solid #333;text-align:left;background:#1a1a1a;"));
       tbl.appendChild(thead);
       const tbody = document.createElement("tbody");
       for (const o of overlaps) {
@@ -15412,28 +15417,27 @@ function cmdSymbolOverlap() {
       htbl.style.cssText = "border-collapse:collapse;font-size:10px;";
       // Header row
       const hhead = document.createElement("thead");
-      let hdrHtml = '<tr><th style="padding:3px 6px;border:1px solid #333;background:#111;color:#888;text-align:left;">Symbol</th>';
+      const htr = document.createElement("tr");
+      const hth0 = document.createElement("th"); hth0.style.cssText = "padding:3px 6px;border:1px solid #333;background:#111;color:#888;text-align:left;"; hth0.textContent = "Symbol"; htr.appendChild(hth0);
       for (const d of allDarwins) {
-        hdrHtml += `<th style="padding:3px 6px;border:1px solid #333;background:#111;color:#888;text-align:center;">${d}</th>`;
+        const hth = document.createElement("th"); hth.style.cssText = "padding:3px 6px;border:1px solid #333;background:#111;color:#888;text-align:center;"; hth.textContent = d; htr.appendChild(hth);
       }
-      hdrHtml += "</tr>";
-      hhead.innerHTML = hdrHtml;
+      hhead.appendChild(htr);
       htbl.appendChild(hhead);
 
       const hbody = document.createElement("tbody");
       for (const o of overlaps) {
         const tr = document.createElement("tr");
         const sideLabel = o.side === "buy" ? " (B)" : " (S)";
-        let rowHtml = `<td style="padding:3px 6px;border:1px solid #333;color:#ccc;white-space:nowrap;">${o.symbol}${sideLabel}</td>`;
+        tr.appendChild(td(`${o.symbol}${sideLabel}`, "padding:3px 6px;border:1px solid #333;color:#ccc;white-space:nowrap;"));
         for (const d of allDarwins) {
           const key = `${o.symbol}|${o.side}|${d}`;
           const held = lookup.has(key);
           const side = held ? lookup.get(key) : null;
           const bg = held ? (side === "buy" ? "#1b5e20" : "#b71c1c") : "#111";
           const text = held ? (side === "buy" ? "BUY" : "SELL") : "";
-          rowHtml += `<td style="padding:3px 6px;border:1px solid #333;background:${bg};color:#fff;text-align:center;font-size:9px;">${text}</td>`;
+          tr.appendChild(td(text, `padding:3px 6px;border:1px solid #333;background:${bg};color:#fff;text-align:center;font-size:9px;`));
         }
-        tr.innerHTML = rowHtml;
         hbody.appendChild(tr);
       }
       htbl.appendChild(hbody);
@@ -26201,11 +26205,11 @@ async function cmdAnalystRatings() {
         const trendDiv = document.createElement("div");
         trendDiv.style.cssText = "padding:4px 8px;font-size:11px;";
         if (latestBull > prevBull) {
-          trendDiv.innerHTML = `<span style="color:#4caf50;">&#9650; Improving</span> — bullish ratings increasing`; // safe: static strings only
+          trendDiv.appendChild(span("\u25B2 Improving", "color:#4caf50;")); trendDiv.appendChild(document.createTextNode(" \u2014 bullish ratings increasing"));
         } else if (latestBull < prevBull) {
-          trendDiv.innerHTML = `<span style="color:#f44336;">&#9660; Deteriorating</span> — bullish ratings declining`; // safe: static strings only
+          trendDiv.appendChild(span("\u25BC Deteriorating", "color:#f44336;")); trendDiv.appendChild(document.createTextNode(" \u2014 bullish ratings declining"));
         } else {
-          trendDiv.innerHTML = `<span style="color:#ff9800;">&#9654; Stable</span> — ratings unchanged`; // safe: static strings only
+          trendDiv.appendChild(span("\u25B6 Stable", "color:#ff9800;")); trendDiv.appendChild(document.createTextNode(" \u2014 ratings unchanged"));
         }
         win.appendElement(trendDiv);
       }
@@ -27446,11 +27450,14 @@ async function cmdShortInterest() {
         const trendDiv = document.createElement("div");
         trendDiv.style.cssText = "padding:4px 12px;font-size:11px;";
         if (last > first) {
-          trendDiv.innerHTML = `<span style="color:#f44336;">&#9650; Short interest increasing</span> (+${changePct}% over period) — bearish signal`; // safe: numeric only
+          trendDiv.appendChild(span(`\u25B2 Short interest increasing`, "color:#f44336;"));
+          trendDiv.appendChild(document.createTextNode(` (+${changePct}% over period) \u2014 bearish signal`));
         } else if (last < first) {
-          trendDiv.innerHTML = `<span style="color:#4caf50;">&#9660; Short interest decreasing</span> (${changePct}% over period) — short covering`; // safe: numeric only
+          trendDiv.appendChild(span(`\u25BC Short interest decreasing`, "color:#4caf50;"));
+          trendDiv.appendChild(document.createTextNode(` (${changePct}% over period) \u2014 short covering`));
         } else {
-          trendDiv.innerHTML = `<span style="color:#ff9800;">&#9654; Short interest flat</span> over period`; // safe: static strings only
+          trendDiv.appendChild(span(`\u25B6 Short interest flat`, "color:#ff9800;"));
+          trendDiv.appendChild(document.createTextNode(` over period`));
         }
         win.appendElement(trendDiv);
       }
@@ -27899,10 +27906,11 @@ async function cmdDarkPool() {
     const gauge = document.createElement("div");
     gauge.style.cssText = "padding:8px 12px;";
     const pct = Math.min(100, Math.max(0, data.darkPoolPct || 0));
-    gauge.innerHTML = `<div style="font-size:10px;color:#888;margin-bottom:4px;">Dark Pool vs Lit Exchange</div>` + // safe: numeric only
-      `<div style="width:100%;height:20px;background:#1a1a2e;border-radius:4px;overflow:hidden;position:relative;">` +
-      `<div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#f4433666,#f44336);"></div>` +
-      `<div style="position:absolute;top:2px;left:50%;transform:translateX(-50%);font-size:10px;color:#fff;font-weight:bold;">${pct.toFixed(1)}% Dark Pool</div></div>`;
+    gauge.appendChild(el("div", "font-size:10px;color:#888;margin-bottom:4px;", "Dark Pool vs Lit Exchange"));
+    const gaugeBar = el("div", "width:100%;height:20px;background:#1a1a2e;border-radius:4px;overflow:hidden;position:relative;");
+    const gaugeFill = el("div", `width:${pct}%;height:100%;background:linear-gradient(90deg,#f4433666,#f44336);`);
+    const gaugeLabel = el("div", "position:absolute;top:2px;left:50%;transform:translateX(-50%);font-size:10px;color:#fff;font-weight:bold;", `${pct.toFixed(1)}% Dark Pool`);
+    gaugeBar.appendChild(gaugeFill); gaugeBar.appendChild(gaugeLabel); gauge.appendChild(gaugeBar);
     frag.appendChild(gauge);
     win.contentElement.appendChild(frag);
   } catch (e) { win.contentElement.textContent = ""; win.setContent(`Failed: ${e}`); }
@@ -28754,17 +28762,19 @@ async function cmdCryptoRisk() {
 async function cmdOutliers() {
   const w = createWindow({ title: "Combined Outlier Report", width: 900, height: 650 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
-  out.innerHTML = `<div style="padding:8px">
-    <div style="display:flex;gap:4px;margin-bottom:8px">
-      <button id="out-tab-var" class="btn-action" style="flex:1;padding:6px">VaR Outliers</button>
-      <button id="out-tab-atr" class="btn-action" style="flex:1;padding:6px">ATR Outliers</button>
-      <button id="out-tab-ev" class="btn-action" style="flex:1;padding:6px">EV Analysis</button>
-      <button id="out-tab-crypto" class="btn-action" style="flex:1;padding:6px">Crypto Risk</button>
-    </div>
-    <div id="out-content" style="font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:calc(100% - 50px)">Click a tab to run the scan.</div>
-  </div>`;
-  out.querySelector("#out-tab-var").addEventListener("click", cmdVarOutliers);
-  out.querySelector("#out-tab-atr").addEventListener("click", cmdAtrOutliers);
+  out.textContent = "";
+  const _outWrap = el("div", "padding:8px");
+  const _outBtnRow = el("div", "display:flex;gap:4px;margin-bottom:8px");
+  const _btnVar = el("button", "flex:1;padding:6px", "VaR Outliers"); _btnVar.id = "out-tab-var"; _btnVar.className = "btn-action";
+  const _btnAtr = el("button", "flex:1;padding:6px", "ATR Outliers"); _btnAtr.id = "out-tab-atr"; _btnAtr.className = "btn-action";
+  const _btnEv = el("button", "flex:1;padding:6px", "EV Analysis"); _btnEv.id = "out-tab-ev"; _btnEv.className = "btn-action";
+  const _btnCrypto = el("button", "flex:1;padding:6px", "Crypto Risk"); _btnCrypto.id = "out-tab-crypto"; _btnCrypto.className = "btn-action";
+  _outBtnRow.replaceChildren(_btnVar, _btnAtr, _btnEv, _btnCrypto);
+  const _outContent = el("div", "font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:calc(100% - 50px)", "Click a tab to run the scan.");
+  _outContent.id = "out-content";
+  _outWrap.replaceChildren(_outBtnRow, _outContent); out.appendChild(_outWrap);
+  _btnVar.addEventListener("click", cmdVarOutliers);
+  _btnAtr.addEventListener("click", cmdAtrOutliers);
   out.querySelector("#out-tab-ev").addEventListener("click", cmdEvOutliers);
   out.querySelector("#out-tab-crypto").addEventListener("click", cmdCryptoRisk);
 }
@@ -28772,14 +28782,14 @@ async function cmdOutliers() {
 async function cmdScreen() {
   const w = createWindow({ title: "Multi-Factor Screener", width: 900, height: 650 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
-  out.innerHTML = `<div style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%">
-    <div style="margin-bottom:12px">
-      <b style="color:#4caf50">Multi-Factor Outlier Screener</b><br>
-      <span style="color:#888">Cross-references VaR × ATR to find symbols that are outliers on MULTIPLE metrics.</span>
-    </div>
-    <div id="screen-log"></div>
-  </div>`;
-  const logDiv = out.querySelector("#screen-log");
+  out.textContent = "";
+  const _screenWrap = el("div", "padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%");
+  const _screenHdr = el("div", "margin-bottom:12px");
+  _screenHdr.appendChild(el("b", "color:#4caf50", "Multi-Factor Outlier Screener"));
+  _screenHdr.appendChild(document.createElement("br"));
+  _screenHdr.appendChild(span("Cross-references VaR \u00D7 ATR to find symbols that are outliers on MULTIPLE metrics.", "color:#888;"));
+  const logDiv = el("div"); logDiv.id = "screen-log";
+  _screenWrap.replaceChildren(_screenHdr, logDiv); out.appendChild(_screenWrap);
   const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg.replace(/<\/?b>/g, ""); if (msg.includes("<b>")) d.style.fontWeight = "bold"; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Running multi-factor scan...", "#2196f3");
@@ -29284,20 +29294,16 @@ async function cmdDarwinex() {
 async function cmdMt5Import() {
   const w = createWindow({ title: "MT5 Bar Import", width: 600, height: 400 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
-  out.innerHTML = `<div style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%">
-    <div style="margin-bottom:12px">
-      <b style="color:#4caf50">Import MT5/Darwinex Bar Data</b><br>
-      <span style="color:#888">Import CSVs exported by BarExporter.mq5 into TyphooN-Terminal cache.</span>
-    </div>
-    <div style="margin-bottom:8px">
-      <input id="mt5-import-path" type="text" placeholder="Path to CSV file or directory..." style="width:100%;background:#1a1a2e;color:#ccc;border:1px solid #444;padding:6px;font-family:inherit;font-size:11px;border-radius:3px" />
-    </div>
-    <button id="mt5-import-btn" style="background:#2196f3;color:#fff;border:none;padding:8px 16px;cursor:pointer;border-radius:3px;font-family:inherit">Import</button>
-    <button id="mt5-import-auto" style="background:#4caf50;color:#fff;border:none;padding:8px 16px;cursor:pointer;border-radius:3px;font-family:inherit;margin-left:8px">Auto-Detect</button>
-    <div id="mt5-import-log" style="margin-top:12px"></div>
-  </div>`;
-
-  const logDiv = out.querySelector("#mt5-import-log");
+  out.textContent = "";
+  const _mt5Wrap = el("div", "padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%");
+  const _mt5Hdr = el("div", "margin-bottom:12px"); _mt5Hdr.appendChild(el("b", "color:#4caf50", "Import MT5/Darwinex Bar Data")); _mt5Hdr.appendChild(document.createElement("br")); _mt5Hdr.appendChild(span("Import CSVs exported by BarExporter.mq5 into TyphooN-Terminal cache.", "color:#888;"));
+  const _mt5PathWrap = el("div", "margin-bottom:8px");
+  const _mt5Path = document.createElement("input"); _mt5Path.id = "mt5-import-path"; _mt5Path.type = "text"; _mt5Path.placeholder = "Path to CSV file or directory..."; _mt5Path.style.cssText = "width:100%;background:#1a1a2e;color:#ccc;border:1px solid #444;padding:6px;font-family:inherit;font-size:11px;border-radius:3px";
+  _mt5PathWrap.appendChild(_mt5Path);
+  const _mt5Btn = el("button", "background:#2196f3;color:#fff;border:none;padding:8px 16px;cursor:pointer;border-radius:3px;font-family:inherit", "Import"); _mt5Btn.id = "mt5-import-btn";
+  const _mt5Auto = el("button", "background:#4caf50;color:#fff;border:none;padding:8px 16px;cursor:pointer;border-radius:3px;font-family:inherit;margin-left:8px", "Auto-Detect"); _mt5Auto.id = "mt5-import-auto";
+  const logDiv = el("div", "margin-top:12px"); logDiv.id = "mt5-import-log";
+  _mt5Wrap.replaceChildren(_mt5Hdr, _mt5PathWrap, _mt5Btn, _mt5Auto, logDiv); out.appendChild(_mt5Wrap);
   const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg; logDiv.appendChild(d); };
 
   out.querySelector("#mt5-import-btn").addEventListener("click", async () => {
@@ -29440,23 +29446,17 @@ async function showSpecsSyncProgress(addLog) {
 async function cmdMt5DbSync() {
   const w = createWindow({ title: "MT5 SQLite Direct Sync", width: 700, height: 500 });
   const out = w.element ? w.element.querySelector(".fw-content") : w;
-  out.innerHTML = `<div style="padding:8px">
-    <div id="mt5db-activity" style="font-family:'Iosevka Fixed',monospace;font-size:11px;color:#888;margin-bottom:6px;border:1px solid #333;border-radius:3px;padding:4px 6px;background:#1a1a1a"></div>
-    <div id="mt5db-status" style="font-family:'Iosevka Fixed',monospace;font-size:12px;color:#4caf50;margin-bottom:8px;font-weight:bold">Discovering MT5 databases...</div>
-    <div id="mt5db-progress" style="background:#222;border-radius:3px;height:20px;margin-bottom:8px;overflow:hidden">
-      <div id="mt5db-bar" style="background:#2196f3;height:100%;width:0%;transition:width 0.3s;border-radius:3px"></div>
-    </div>
-    <div id="mt5db-stats" style="font-family:'Iosevka Fixed',monospace;font-size:11px;color:#888;margin-bottom:8px"></div>
-    <div id="mt5db-specs" style="font-family:'Iosevka Fixed',monospace;font-size:10px;color:#888;margin-bottom:8px"></div>
-    <div id="mt5db-log" style="font-family:'Iosevka Fixed',monospace;font-size:10px;color:#666;overflow-y:auto;max-height:250px"></div>
-  </div>`;
-
-  const statusEl = out.querySelector("#mt5db-status");
-  const barEl = out.querySelector("#mt5db-bar");
-  const statsEl = out.querySelector("#mt5db-stats");
-  const logDiv = out.querySelector("#mt5db-log");
-
-  const activityEl = out.querySelector("#mt5db-activity");
+  out.textContent = "";
+  const _syncWrap = el("div", "padding:8px");
+  const activityEl = el("div", "font-family:'Iosevka Fixed',monospace;font-size:11px;color:#888;margin-bottom:6px;border:1px solid #333;border-radius:3px;padding:4px 6px;background:#1a1a1a"); activityEl.id = "mt5db-activity";
+  const statusEl = el("div", "font-family:'Iosevka Fixed',monospace;font-size:12px;color:#4caf50;margin-bottom:8px;font-weight:bold", "Discovering MT5 databases..."); statusEl.id = "mt5db-status";
+  const _progWrap = el("div", "background:#222;border-radius:3px;height:20px;margin-bottom:8px;overflow:hidden"); _progWrap.id = "mt5db-progress";
+  const barEl = el("div", "background:#2196f3;height:100%;width:0%;transition:width 0.3s;border-radius:3px"); barEl.id = "mt5db-bar";
+  _progWrap.appendChild(barEl);
+  const statsEl = el("div", "font-family:'Iosevka Fixed',monospace;font-size:11px;color:#888;margin-bottom:8px"); statsEl.id = "mt5db-stats";
+  const _specsEl = el("div", "font-family:'Iosevka Fixed',monospace;font-size:10px;color:#888;margin-bottom:8px"); _specsEl.id = "mt5db-specs";
+  const logDiv = el("div", "font-family:'Iosevka Fixed',monospace;font-size:10px;color:#666;overflow-y:auto;max-height:250px"); logDiv.id = "mt5db-log";
+  _syncWrap.replaceChildren(activityEl, statusEl, _progWrap, statsEl, _specsEl, logDiv); out.appendChild(_syncWrap);
 
   const setStatus = (msg, color = "#4caf50") => { statusEl.textContent = msg; statusEl.style.color = color; };
   const setProgress = (pct) => { barEl.style.width = pct + "%"; };
