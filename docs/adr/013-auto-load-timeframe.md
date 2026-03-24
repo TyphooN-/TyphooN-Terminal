@@ -1,29 +1,32 @@
 # ADR-013: Auto-Load on Timeframe/Bar Count Change
 
 **Status:** Implemented
-**Date:** 2026-03-15
+**Date:** 2026-03-15 (updated 2026-03-24)
 
 ## Context
 
-The UI had a "Load" button that users had to click after changing the timeframe or bar count dropdown. Every other trading terminal (MT5, TradingView, thinkorswim) auto-loads the chart when timeframe changes. The Load button was unnecessary friction.
+The UI had a "Load" button that users had to click after changing the timeframe. Every other trading terminal (MT5, TradingView, thinkorswim) auto-loads the chart when timeframe changes. The Load button was unnecessary friction.
 
 ## Decision
 
-Remove the Load button. Auto-trigger chart load when:
-- Timeframe dropdown (`#timeframe-select`) changes
-- Bar count dropdown (`#bar-count`) changes
-- Symbol entered via Enter key or autocomplete selection
+Auto-trigger chart load when:
+- Timeframe button clicked in the toolbar
+- Symbol entered via Enter key in the symbol input
+- Watchlist item clicked in the right panel
+- Screener "Load" button clicked
 
-## Changes
+## Implementation
 
-1. Extracted load logic into `triggerLoad()` — shared function with crypto ticker normalization
-2. Added `change` event listeners on `#timeframe-select` and `#bar-count`
-3. Updated autocomplete click and Enter key handlers to call `triggerLoad()` directly
-4. Removed `#btn-load-chart` button from HTML, CSS, and JS
+1. Toolbar timeframe buttons (M1–MN1) call `reload_symbol()` directly on click
+2. Symbol input `lost_focus + Enter` triggers `reload_symbol()`
+3. Watchlist click loads from `cache.get_bars_raw()` → `chart.compute_indicators()`
+4. All paths go through `ChartState::load()` → SQLite cache → indicator recompute
+
+No separate "Load" button exists. Selection triggers load immediately.
 
 ## Consequences
 
 - **Pro**: Matches user expectation from MT5/TradingView — select timeframe, chart loads instantly
-- **Pro**: Fewer UI elements — cleaner top bar
-- **Pro**: Pre-cached timeframes (from background pre-fetch) appear near-instantly
+- **Pro**: Fewer UI elements — cleaner toolbar
+- **Pro**: Pre-cached timeframes (from BarCacheWriter) appear near-instantly
 - **Con**: Accidental timeframe changes trigger a load (acceptable — data is cached)

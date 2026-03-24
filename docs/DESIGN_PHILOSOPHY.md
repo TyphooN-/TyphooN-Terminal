@@ -18,7 +18,7 @@ MT5 provides bar data via the BarCacheWriter EA → SQLite cache pipeline. Trade
 
 The indicator system matches the No-Nonsense Forex (NNFX) methodology:
 - KAMA(10,2,30) for trend direction
-- Fisher Transform(10) for confirmation
+- Fisher Transform(32) for confirmation
 - ATR Projection(14) for volatility bands
 - Better Volume for volume analysis
 - SMA(200) as baseline

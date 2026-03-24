@@ -20,7 +20,7 @@ Fetch news from Alpaca News API, earnings/dividends from Alpaca corporate action
 
 Same three-tier cache as bars:
 - **Hot**: In-memory for current session
-- **Warm**: IndexedDB `typhoon_events` store
+- **Warm**: SQLite cache (typhoon_cache.db events table)
 - **Cold**: `~/.config/typhoon-terminal/cache/news_SYMBOL.zst`
 
 ## Display

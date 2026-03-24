@@ -41,7 +41,7 @@ See [INDICATOR_PORTING.md](../INDICATOR_PORTING.md) for technical details on eac
 
 ## Comprehensive Indicator Audit (2026-03-23)
 
-A full audit of all indicator calculations was performed, fixing bootstrap/seed/edge-case issues across JS, WASM, worker, and fallback layers:
+A full audit of all indicator calculations was performed, fixing bootstrap/seed/edge-case issues across pure Rust indicator implementations:
 
 - **EMA/SMA bootstrap**: Correct SMA seed for initial EMA value
 - **KAMA seed fix**: Proper initialization of Kaufman Adaptive Moving Average
