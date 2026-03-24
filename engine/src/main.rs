@@ -12,10 +12,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![allow(dead_code)]
 
-mod broker;
-mod core;
-mod notifications;
-mod strategies;
+use typhoon_engine::broker;
+use typhoon_engine::core;
+use typhoon_engine::notifications;
+use typhoon_engine::strategies;
 
 use broker::alpaca::{AlpacaBroker, StreamMessage};
 use core::risk::{self, OrderMode, RiskConfig, SymbolSpec};

@@ -1,0 +1,25 @@
+[package]
+name = "typhoon-native"
+version = "0.1.0"
+edition = "2024"
+description = "TyphooN Terminal — Native GPU renderer (egui + wgpu, zero WebKit)"
+
+[[bin]]
+name = "typhoon"
+path = "src/main.rs"
+
+[dependencies]
+# Engine (shared core — no Tauri/WebKit dependency)
+typhoon-engine = { path = "../engine" }
+
+# Native GPU UI
+eframe = { version = "0.31", default-features = true, features = ["wgpu", "persistence"] }
+egui = "0.31"
+egui_plot = "0.31"
+
+# Async runtime (shared with engine)
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
