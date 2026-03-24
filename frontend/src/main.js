@@ -34815,7 +34815,12 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
 
     if (!chartData || chartData.length === 0) return;
 
-    // ── Fast grid-cell indicators ──
+    // ── Indicators: fire-and-forget (don't block cell loop) ──
+    // Worker computes off-thread; when result arrives, add overlays to GPU.
+    // This lets all 8 cells show candles immediately while indicators fill in async.
+    const _chartDataRef = chartData;
+    const _expectedGen = expectedGen;
+    (async () => {
     await new Promise(r => requestAnimationFrame(r));
     if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
@@ -34944,13 +34949,19 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
       if (cellInfo.volumeChart) cellInfo.volumeChart.timeScale().fitContent();
     }
 
-    // GPU final render
+    // GPU final render (after indicators added)
     if (cellInfo.gpuChart) { try { cellInfo.gpuChart.render(); } catch (_) {} }
-    // Clear loading status and restore label
+    // Update label with bar count
+    const cellLabel2 = cellInfo.container?.querySelector(".mtf-cell-label");
+    const tfLabel2 = (typeof MTF_LABELS !== "undefined" && MTF_LABELS[cellInfo.tf]) || cellInfo.tf;
+    if (cellLabel2) cellLabel2.textContent = `${symbol} ${tfLabel2} ✓ ${_chartDataRef.length}`;
+    })(); // end fire-and-forget indicator IIFE
+
+    // Clear loading status immediately (candles are visible, indicators loading async)
     setLoadingStatus(`${symbol}@${cellInfo.tf}`, null);
     const cellLabel = cellInfo.container?.querySelector(".mtf-cell-label");
     const tfLabel = (typeof MTF_LABELS !== "undefined" && MTF_LABELS[cellInfo.tf]) || cellInfo.tf;
-    if (cellLabel) cellLabel.textContent = `${symbol} ${tfLabel} ✓ ${chartData.length}`;
+    if (cellLabel) cellLabel.textContent = `${symbol} ${tfLabel} / ${chartData.length}`;
   } catch (e) {
     setLoadingStatus(`${symbol}@${cellInfo.tf}`, null);
     log(`MTF grid load failed for ${cellInfo.tf}: ${e}`, "warn");
