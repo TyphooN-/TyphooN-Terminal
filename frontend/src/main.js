@@ -4205,16 +4205,14 @@ async function loadChart(symbol, timeframe) {
     // Guard: discard stale MTF data if user switched symbols during fetch
     loadMTFData(symbol).then(() => {
       if (currentSymbol !== symbol) return;
-      // Limit indicator computation to last 1000 bars — indicators don't need 8K+ bars
-      // (longest lookback is SMA200 which needs 200 bars). Full chartData remains for candle scrolling.
-      const indicatorData = chartData.length > 1000 ? chartData.slice(-1000) : chartData;
-      applyIndicators(indicatorData);
+      // Full bar data for indicators — no cap. WASM handles heavy computation,
+      // and MT5 sync no longer triggers reloads so no repeated freeze risk.
+      applyIndicators(chartData);
       renderAnnotations();
       updateMTFGrid();
     }).catch(() => {
       if (currentSymbol !== symbol) return;
-      const indicatorData = chartData.length > 1000 ? chartData.slice(-1000) : chartData;
-      applyIndicators(indicatorData);
+      applyIndicators(chartData);
     });
 
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
@@ -33763,7 +33761,7 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    const GRID_BARS = 250; // 250 bars per grid cell — balances visual quality vs computation cost
+    const GRID_BARS = 500; // 500 bars per grid cell — good balance for small panes
     const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
