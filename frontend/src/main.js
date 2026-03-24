@@ -5933,32 +5933,81 @@ async function openSecFilingInline(url, title) {
   walk(body);
 
   if (container.childNodes.length < 3) {
-    // Fallback: structured walk failed (XHTML/namespaced tags). Extract all visible text.
+    // Fallback: structured walk failed (XHTML/namespaced tags).
+    // Extract text with better formatting — detect sections, paragraphs, tables.
     container.textContent = "";
-    // Get all text blocks from the body, preserving some structure
-    const allElements = body.querySelectorAll("p, div, td, th, li, h1, h2, h3, h4, h5, h6, span, font, b, strong, i, a");
+
+    // Try tables first — SEC filings are heavily table-based
+    const tables = body.querySelectorAll("table");
+    for (const tblNode of tables) {
+      const rows = tblNode.querySelectorAll("tr");
+      if (rows.length < 2) continue;
+      const tbl = document.createElement("table");
+      tbl.style.cssText = "width:100%;border-collapse:collapse;margin:8px 0;font-size:10px;";
+      for (const row of rows) {
+        const cells = row.querySelectorAll("td, th");
+        if (cells.length === 0) continue;
+        const tr = document.createElement("tr");
+        tr.style.borderBottom = "1px solid #222";
+        for (const cell of cells) {
+          const text = cell.textContent.trim();
+          if (!text) continue;
+          const td = document.createElement("td");
+          td.textContent = text.substring(0, 300);
+          const isNum = /^[\$\-\(\)0-9,.\s%]+$/.test(td.textContent) && td.textContent.length < 30;
+          td.style.cssText = `padding:3px 6px;vertical-align:top;${isNum ? "text-align:right;color:#4caf50;font-family:Consolas,monospace;" : "color:#ccc;"}`;
+          if (isNum && (td.textContent.includes("(") || td.textContent.includes("-"))) td.style.color = "#f44336";
+          if (cell.getAttribute("colspan")) td.colSpan = parseInt(cell.getAttribute("colspan")) || 1;
+          tr.appendChild(td);
+        }
+        if (tr.childNodes.length > 0) tbl.appendChild(tr);
+      }
+      if (tbl.childNodes.length > 0) container.appendChild(tbl);
+    }
+
+    // Then extract paragraphs and text blocks (skip content already in tables)
+    const textBlocks = body.querySelectorAll("p, div, li, h1, h2, h3, h4, h5, h6");
     const seen = new Set();
-    for (const el of allElements) {
+    let lastWasShort = false;
+    for (const el of textBlocks) {
+      // Skip elements inside tables (already rendered)
+      if (el.closest("table")) continue;
       const text = el.textContent.trim();
-      if (text.length < 3 || seen.has(text)) continue;
-      // Skip if parent already added this text
-      if (el.parentElement && seen.has(el.parentElement.textContent.trim())) continue;
-      seen.add(text);
-      const isHeader = /^H[1-6]$/.test(el.tagName);
-      const isBold = el.tagName === "B" || el.tagName === "STRONG" || (el.style && el.style.fontWeight === "bold");
-      const isCell = el.tagName === "TD" || el.tagName === "TH";
-      if (isCell) continue; // skip individual cells, let tables handle them
+      if (text.length < 5) continue;
+      // Dedup: skip if we've seen this exact text
+      const key = text.substring(0, 100);
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const isHeader = /^H[1-6]$/.test(el.tagName) ||
+        (text.length < 80 && text === text.toUpperCase() && text.length > 5) || // ALL CAPS = likely header
+        (el.style && (el.style.fontWeight === "bold" || el.style.fontSize) && text.length < 100);
+      const isTOC = /^(table of contents|proposal|item)\s/i.test(text);
+      const isLegalBoilerplate = /^(check|fee|filed|registrant|amendment)/i.test(text) && text.length < 120;
+
       const d = document.createElement("div");
-      d.textContent = text.substring(0, 1000);
+      d.textContent = text.substring(0, 2000);
+
       if (isHeader) {
-        d.style.cssText = "font-size:13px;font-weight:bold;color:#FFD700;margin:10px 0 4px;border-bottom:1px solid #333;padding-bottom:2px;";
-      } else if (isBold) {
-        d.style.cssText = "font-weight:bold;color:#fff;margin:3px 0;";
+        d.style.cssText = "font-size:13px;font-weight:bold;color:#FFD700;margin:14px 0 4px;border-bottom:1px solid #333;padding-bottom:3px;";
+        lastWasShort = false;
+      } else if (isTOC) {
+        d.style.cssText = "color:#82b1ff;margin:2px 0;padding-left:8px;font-size:11px;";
+        lastWasShort = false;
+      } else if (isLegalBoilerplate) {
+        d.style.cssText = "color:#555;margin:1px 0;font-size:10px;";
+        lastWasShort = true;
+      } else if (text.length < 60) {
+        // Short line — likely a label or field value
+        d.style.cssText = "color:#aaa;margin:1px 0;font-size:10px;";
+        lastWasShort = true;
       } else {
-        d.style.cssText = "color:#ccc;margin:2px 0;line-height:1.4;";
+        // Regular paragraph
+        d.style.cssText = `color:#ccc;margin:${lastWasShort ? "8px" : "4px"} 0;line-height:1.5;font-size:11px;`;
+        lastWasShort = false;
       }
       container.appendChild(d);
-      if (container.childNodes.length > 2000) break; // safety cap
+      if (container.childNodes.length > 3000) break;
     }
     // Still nothing? Show fallback
     if (container.childNodes.length === 0) {
