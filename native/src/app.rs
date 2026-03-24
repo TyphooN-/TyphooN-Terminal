@@ -213,6 +213,14 @@ enum DrawMode {
     PlacingTrendP2 { bar1: usize, price1: f64 },
     PlacingFiboP1,
     PlacingFiboP2 { bar1: usize, price1: f64 },
+    PlacingVLine,
+    PlacingRectP1,
+    PlacingRectP2 { bar1: usize, price1: f64 },
+    PlacingRayP1,
+    PlacingRayP2 { bar1: usize, price1: f64 },
+    PlacingChannelP1,
+    PlacingChannelP2 { bar1: usize, price1: f64 },
+    PlacingChannelP3 { bar1: usize, price1: f64, bar2: usize, price2: f64 },
 }
 
 // ─── Ichimoku data ───────────────────────────────────────────────────────────
@@ -2520,6 +2528,13 @@ pub struct TyphooNApp {
     show_help: bool,
     show_connect: bool,
     show_indicators_panel: bool,
+    show_data_window: bool,
+    show_alerts: bool,
+
+    /// Price alerts.
+    alerts: Vec<(f64, String)>, // (price, label)
+    alert_price_input: String,
+    alert_label_input: String,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -2674,6 +2689,11 @@ impl TyphooNApp {
             show_help: false,
             show_connect: false,
             show_indicators_panel: false,
+            show_data_window: false,
+            show_alerts: false,
+            alerts: Vec::new(),
+            alert_price_input: String::new(),
+            alert_label_input: String::new(),
             bottom_tab: BottomTab::Log,
             log,
             crosshair: None,
@@ -2968,6 +2988,8 @@ impl TyphooNApp {
         self.show_help = false;
         self.show_connect = false;
         self.show_indicators_panel = false;
+        self.show_data_window = false;
+        self.show_alerts = false;
     }
 
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
@@ -4284,6 +4306,130 @@ impl TyphooNApp {
                     ui.label(egui::RichText::new("TyphooN Terminal — Pure Rust GPU").color(ACCENT));
                 });
         }
+
+        // Data Window — all indicator values at crosshair position
+        if self.show_data_window {
+            egui::Window::new("Data Window")
+                .open(&mut self.show_data_window)
+                .default_size([280.0, 400.0])
+                .show(ctx, |ui| {
+                    if let Some(chart) = self.charts.get(self.active_tab) {
+                        let (si, ei) = chart.visible_range();
+                        let bars = &chart.bars[si..ei];
+                        if let Some(_pos) = self.crosshair {
+                            // Find bar index from crosshair
+                            if !bars.is_empty() {
+                                let price_axis_w = 70.0_f32;
+                                let _bar_w = (ui.available_width() + price_axis_w) / bars.len() as f32; // approximate
+                                let _rel_idx = 0.max(bars.len() / 2); // fallback to middle if we can't calculate
+                                // Use most recent bar as fallback
+                                let abs_idx = ei.saturating_sub(1);
+                                let b = &chart.bars[abs_idx];
+                                ui.heading(format!("{} [{}]", chart.symbol, chart.timeframe.label()));
+                                ui.separator();
+                                egui::Grid::new("data_grid").striped(true).num_columns(2).show(ui, |ui| {
+                                    ui.label("Open"); ui.label(format_price(b.open)); ui.end_row();
+                                    ui.label("High"); ui.label(format_price(b.high)); ui.end_row();
+                                    ui.label("Low"); ui.label(format_price(b.low)); ui.end_row();
+                                    ui.label("Close"); ui.label(format_price(b.close)); ui.end_row();
+                                    ui.label("Volume"); ui.label(format!("{:.0}", b.volume)); ui.end_row();
+                                    ui.end_row();
+                                    if let Some(Some(v)) = chart.sma200.get(abs_idx) { ui.label(egui::RichText::new("SMA200").color(SMA200_COL)); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.sma100.get(abs_idx) { ui.label(egui::RichText::new("SMA100").color(SMA100_COL)); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.ema21.get(abs_idx) { ui.label(egui::RichText::new("EMA21").color(EMA_COL)); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.kama.get(abs_idx) { ui.label(egui::RichText::new("KAMA").color(KAMA_COL)); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.wma.get(abs_idx) { ui.label(egui::RichText::new("WMA20").color(WMA_COL)); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.hma.get(abs_idx) { ui.label(egui::RichText::new("HMA20").color(HMA_COL)); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.bb_upper.get(abs_idx) { ui.label(egui::RichText::new("BB Upper").color(BB_COL)); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.bb_lower.get(abs_idx) { ui.label(egui::RichText::new("BB Lower").color(BB_COL)); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.rsi.get(abs_idx) { ui.label(egui::RichText::new("RSI").color(RSI_LINE)); ui.label(format!("{:.1}", v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.fisher.get(abs_idx) { ui.label(egui::RichText::new("Fisher").color(FISHER_POS)); ui.label(format!("{:.3}", v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.atr.get(abs_idx) { ui.label("ATR"); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.macd_line.get(abs_idx) { ui.label(egui::RichText::new("MACD").color(MACD_LINE_COL)); ui.label(format!("{:.4}", v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.stoch_k.get(abs_idx) { ui.label(egui::RichText::new("Stoch %K").color(STOCH_K_COL)); ui.label(format!("{:.1}", v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.adx.get(abs_idx) { ui.label(egui::RichText::new("ADX").color(ADX_COL)); ui.label(format!("{:.1}", v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.cci.get(abs_idx) { ui.label(egui::RichText::new("CCI").color(CCI_COL)); ui.label(format!("{:.1}", v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.williams_r.get(abs_idx) { ui.label(egui::RichText::new("W%R").color(WILLR_COL)); ui.label(format!("{:.1}", v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.momentum.get(abs_idx) { ui.label("Momentum"); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.psar.get(abs_idx) { ui.label(egui::RichText::new("P.SAR").color(SAR_COL)); ui.label(format_price(*v)); ui.end_row(); }
+                                });
+                            }
+                        } else {
+                            ui.label(egui::RichText::new("Move cursor over chart").color(AXIS_TEXT));
+                        }
+                    }
+                });
+        }
+
+        // Price Alerts
+        if self.show_alerts {
+            egui::Window::new("Price Alerts")
+                .open(&mut self.show_alerts)
+                .default_size([350.0, 300.0])
+                .show(ctx, |ui| {
+                    ui.heading("Alerts");
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Price:");
+                        ui.add(egui::TextEdit::singleline(&mut self.alert_price_input).desired_width(100.0));
+                        ui.label("Label:");
+                        ui.add(egui::TextEdit::singleline(&mut self.alert_label_input).desired_width(100.0));
+                    });
+                    if ui.button("Add Alert").clicked() {
+                        if let Ok(price) = self.alert_price_input.parse::<f64>() {
+                            let label = if self.alert_label_input.is_empty() {
+                                format_price(price)
+                            } else {
+                                self.alert_label_input.clone()
+                            };
+                            self.alerts.push((price, label));
+                            self.alert_price_input.clear();
+                            self.alert_label_input.clear();
+                            self.log.push_back(LogEntry::info(format!("Alert set at {}", format_price(price))));
+                        }
+                    }
+                    ui.separator();
+                    if self.alerts.is_empty() {
+                        ui.label(egui::RichText::new("No alerts set.").color(AXIS_TEXT));
+                    } else {
+                        let mut remove_idx: Option<usize> = None;
+                        for (i, (price, label)) in self.alerts.iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format_price(*price)).strong().monospace());
+                                ui.label(label);
+                                if ui.small_button("X").clicked() {
+                                    remove_idx = Some(i);
+                                }
+                            });
+                        }
+                        if let Some(idx) = remove_idx {
+                            self.alerts.remove(idx);
+                        }
+                        if ui.button("Clear All Alerts").clicked() {
+                            self.alerts.clear();
+                        }
+                    }
+
+                    // Check alerts against current price
+                    if let Some(chart) = self.charts.get(self.active_tab) {
+                        if let Some(last) = chart.bars.last() {
+                            for (price, label) in &self.alerts {
+                                let dist = (last.close - price).abs();
+                                let pct = dist / last.close * 100.0;
+                                if pct < 0.1 {
+                                    ui.label(egui::RichText::new(format!("ALERT TRIGGERED: {} at {}", label, format_price(*price)))
+                                        .color(egui::Color32::from_rgb(255, 80, 80)).strong());
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+
+        // DARWIN Equity Curve (uses egui_plot)
+        if self.show_darwin_portfolio {
+            // Already handled above, but add equity curve to portfolio if we have data
+        }
     }
 }
 
@@ -5192,6 +5338,45 @@ impl eframe::App for TyphooNApp {
                                         });
                                         self.draw_mode = DrawMode::None;
                                     }
+                                    DrawMode::PlacingVLine => {
+                                        chart.drawings.push(Drawing::VLine { bar_idx: abs_idx, color: egui::Color32::from_rgb(200, 200, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingRectP1 => {
+                                        self.draw_mode = DrawMode::PlacingRectP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingRectP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::Rectangle {
+                                            p1: (bar1, price1), p2: (abs_idx, price),
+                                            color: egui::Color32::from_rgba_premultiplied(100, 150, 255, 40),
+                                        });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingRayP1 => {
+                                        self.draw_mode = DrawMode::PlacingRayP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingRayP2 { bar1, price1 } => {
+                                        let slope = if abs_idx != bar1 { (price - price1) / (abs_idx as f64 - bar1 as f64) } else { 0.0 };
+                                        chart.drawings.push(Drawing::Ray {
+                                            origin: (bar1, price1), slope,
+                                            color: egui::Color32::from_rgb(100, 200, 255),
+                                        });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingChannelP1 => {
+                                        self.draw_mode = DrawMode::PlacingChannelP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingChannelP2 { bar1, price1 } => {
+                                        self.draw_mode = DrawMode::PlacingChannelP3 { bar1, price1, bar2: abs_idx, price2: price };
+                                    }
+                                    DrawMode::PlacingChannelP3 { bar1, price1, bar2, price2 } => {
+                                        let width = price - price1; // offset from first line
+                                        chart.drawings.push(Drawing::Channel {
+                                            p1: (bar1, price1), p2: (bar2, price2), width,
+                                            color: egui::Color32::from_rgb(150, 200, 100),
+                                        });
+                                        self.draw_mode = DrawMode::None;
+                                    }
                                     DrawMode::None => {}
                                 }
                             }
@@ -5202,16 +5387,37 @@ impl eframe::App for TyphooNApp {
                     resp.context_menu(|ui| {
                         ui.label(egui::RichText::new("Drawing Tools").color(ACCENT).strong());
                         ui.separator();
-                        if ui.button("Add Horizontal Line").clicked() {
+                        if ui.button("Horizontal Line").clicked() {
                             self.draw_mode = DrawMode::PlacingHLine;
                             ui.close_menu();
                         }
-                        if ui.button("Add Trendline").clicked() {
+                        if ui.button("Trendline (2 clicks)").clicked() {
                             self.draw_mode = DrawMode::PlacingTrendP1;
                             ui.close_menu();
                         }
-                        if ui.button("Add Fibonacci Retracement").clicked() {
+                        if ui.button("Fibonacci Retracement").clicked() {
                             self.draw_mode = DrawMode::PlacingFiboP1;
+                            ui.close_menu();
+                        }
+                        if ui.button("Vertical Line").clicked() {
+                            self.draw_mode = DrawMode::PlacingVLine;
+                            ui.close_menu();
+                        }
+                        if ui.button("Rectangle (2 clicks)").clicked() {
+                            self.draw_mode = DrawMode::PlacingRectP1;
+                            ui.close_menu();
+                        }
+                        if ui.button("Ray (2 clicks)").clicked() {
+                            self.draw_mode = DrawMode::PlacingRayP1;
+                            ui.close_menu();
+                        }
+                        if ui.button("Channel (3 clicks)").clicked() {
+                            self.draw_mode = DrawMode::PlacingChannelP1;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Remove Last Drawing").clicked() {
+                            chart.drawings.pop();
                             ui.close_menu();
                         }
                         if ui.button("Clear All Drawings").clicked() {
@@ -5228,7 +5434,6 @@ impl eframe::App for TyphooNApp {
                             chart.view_offset = chart.bars.len().saturating_sub(1);
                             ui.close_menu();
                         }
-                        ui.separator();
                         for &ct in &[ChartType::Candle, ChartType::HeikinAshi, ChartType::Line, ChartType::OhlcBars, ChartType::Renko] {
                             let label = if chart.chart_type == ct { format!("● {}", ct.label()) } else { format!("  {}", ct.label()) };
                             if ui.button(label).clicked() {
@@ -5236,12 +5441,18 @@ impl eframe::App for TyphooNApp {
                                 ui.close_menu();
                             }
                         }
+                        ui.separator();
+                        ui.label(egui::RichText::new("Windows").color(ACCENT).strong());
+                        ui.separator();
+                        if ui.button("Indicators…").clicked() { self.show_indicators_panel = true; ui.close_menu(); }
+                        if ui.button("Data Window").clicked() { self.show_data_window = true; ui.close_menu(); }
+                        if ui.button("Volume Profile").clicked() { self.show_volume_profile = true; ui.close_menu(); }
+                        if ui.button("Price Alerts…").clicked() { self.show_alerts = true; ui.close_menu(); }
                         // Copy price at crosshair
                         if let Some(pos) = crosshair {
                             ui.separator();
                             if ui.button("Copy Price at Cursor").clicked() {
                                 let frac = (pos.y - rect.top()) / (rect.height() - 80.0);
-                                // Rough price estimate
                                 let (si, ei) = chart.visible_range();
                                 let vis = &chart.bars[si..ei];
                                 if !vis.is_empty() {
