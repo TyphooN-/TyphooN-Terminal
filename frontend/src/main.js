@@ -34141,9 +34141,9 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
         resize: (w, h) => { if (cellGpuChart) { cellGpuChart.resize(w, h); cellGpuChart.render(); } },
         subscribeCrosshairMove: () => () => {},
         timeScale: () => ({
-          fitContent: () => {},
-          setVisibleLogicalRange: (r) => {},
-          getVisibleLogicalRange: () => ({ from: 0, to: 500 }),
+          fitContent: () => { if (cellGpuChart) { const n = cellGpuChart.total_bar_count(); if (n > 0) cellGpuChart.set_visible_range(0, n); } },
+          setVisibleLogicalRange: (r) => { if (cellGpuChart) { cellGpuChart.set_visible_range(r.from, r.to); cellGpuChart.render(); } },
+          getVisibleLogicalRange: () => { if (cellGpuChart) { const r = cellGpuChart.get_time_range(); return { from: r[0], to: r[1] }; } return { from: 0, to: 500 }; },
           subscribeVisibleLogicalRangeChange: () => () => {},
         }),
         priceScale: (_id) => ({ applyOptions: () => {} }),
