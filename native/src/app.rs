@@ -424,6 +424,12 @@ struct ChartState {
     drag_start: Option<egui::Pos2>,
     drag_start_offset: usize,
     drag_start_ppan: f64,
+    /// True when dragging on the price axis (TradingView-style vertical scale).
+    is_scaling_price: bool,
+    /// Price zoom at start of price-axis drag.
+    scale_start_zoom: f64,
+    /// Y position at start of price-axis drag.
+    scale_start_y: f32,
 }
 
 impl ChartState {
@@ -494,6 +500,9 @@ impl ChartState {
             drag_start: None,
             drag_start_offset: 0,
             drag_start_ppan: 0.0,
+            is_scaling_price: false,
+            scale_start_zoom: 1.0,
+            scale_start_y: 0.0,
         }
     }
 
@@ -1784,6 +1793,31 @@ fn draw_chart(
         main_rect.min,
         egui::pos2(main_rect.right() - price_axis_w, main_rect.bottom() - time_axis_h),
     );
+
+    // Price axis background (subtle — indicates it's interactive like TradingView)
+    let price_axis_bg = egui::Rect::from_min_max(
+        egui::pos2(chart_rect.right(), chart_rect.top()),
+        egui::pos2(rect.right(), chart_rect.bottom()),
+    );
+    painter.rect_filled(price_axis_bg, 0.0, egui::Color32::from_rgb(6, 6, 10));
+    // Thin separator line between chart and price axis
+    painter.line_segment(
+        [egui::pos2(chart_rect.right(), chart_rect.top()), egui::pos2(chart_rect.right(), chart_rect.bottom())],
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(25, 30, 45)),
+    );
+    // Subtle drag handle indicator (3 horizontal lines at center of price axis)
+    if let Some(cross) = crosshair {
+        if cross.x > chart_rect.right() && cross.x < rect.right() {
+            let cx = chart_rect.right() + price_axis_w * 0.5;
+            let cy = price_axis_bg.center().y;
+            for dy in [-4.0_f32, 0.0, 4.0] {
+                painter.line_segment(
+                    [egui::pos2(cx - 6.0, cy + dy), egui::pos2(cx + 6.0, cy + dy)],
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 70, 90)),
+                );
+            }
+        }
+    }
 
     // ── price range ─────────────────────────────────────────────────────────
     let mut price_min = bars.iter().map(|b| b.low).fold(f64::MAX, f64::min);
@@ -4309,7 +4343,11 @@ impl TyphooNApp {
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
 
     fn handle_zoom(chart: &mut ChartState, delta: f32) {
-        let factor = if delta > 0.0 { 0.85_f32 } else { 1.0 / 0.85_f32 };
+        // Progressive zoom: small per-pixel factor so smooth scrolling feels natural.
+        // delta is in pixels (smooth_scroll_delta), typically ±15-120 per gesture.
+        // We want ~5% zoom per "notch" (15px), so factor = 1 - delta * 0.003
+        let pct = (delta * 0.003).clamp(-0.15, 0.15); // cap at 15% per frame
+        let factor = 1.0 - pct;
         let new_vis = ((chart.visible_bars as f32 * factor) as usize)
             .clamp(10, chart.bars.len().max(10));
         chart.visible_bars = new_vis;
@@ -7179,47 +7217,104 @@ impl eframe::App for TyphooNApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let available = ui.available_rect_before_wrap();
 
-            // Scroll → zoom (Ctrl+scroll = vertical zoom)
+            // ── Price axis rect (right 70px of chart — TradingView-style scale) ──
+            let price_axis_w = 70.0_f32;
+            let price_axis_rect = egui::Rect::from_min_max(
+                egui::pos2(available.right() - price_axis_w, available.top()),
+                available.max,
+            );
+            let chart_body_rect = egui::Rect::from_min_max(
+                available.min,
+                egui::pos2(available.right() - price_axis_w, available.bottom()),
+            );
+
+            let hover_pos = ctx.input(|i| i.pointer.hover_pos().unwrap_or_default());
+            let on_price_axis = price_axis_rect.contains(hover_pos);
+            let on_chart_body = chart_body_rect.contains(hover_pos);
+
+            // Scroll → zoom
             let scroll_delta = ctx.input(|i| i.smooth_scroll_delta.y);
-            let ctrl_held = ctx.input(|i| i.modifiers.ctrl);
-            if scroll_delta != 0.0 && available.contains(ctx.input(|i| i.pointer.hover_pos().unwrap_or_default())) {
-                if ctrl_held {
-                    // Vertical zoom (price axis)
+            if scroll_delta != 0.0 {
+                if on_price_axis {
+                    // Scroll on price axis → vertical zoom (TradingView style: squish/expand)
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                        let factor = if scroll_delta > 0.0 { 1.1 } else { 0.9 };
-                        chart.price_zoom = (chart.price_zoom * factor).clamp(0.1, 20.0);
+                        let pct = (scroll_delta * 0.002).clamp(-0.08, 0.08);
+                        chart.price_zoom = (chart.price_zoom * (1.0 + pct as f64)).clamp(0.1, 20.0);
                     }
-                } else {
-                    // Horizontal zoom (time axis)
-                    for chart in &mut self.charts {
-                        Self::handle_zoom(chart, scroll_delta);
+                } else if on_chart_body {
+                    let ctrl_held = ctx.input(|i| i.modifiers.ctrl);
+                    if ctrl_held {
+                        // Ctrl+scroll on chart → vertical zoom (progressive)
+                        if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                            let pct = (scroll_delta * 0.002).clamp(-0.08, 0.08);
+                            chart.price_zoom = (chart.price_zoom * (1.0 + pct as f64)).clamp(0.1, 20.0);
+                        }
+                    } else {
+                        // Scroll on chart → horizontal zoom (time axis, progressive)
+                        for chart in &mut self.charts {
+                            Self::handle_zoom(chart, scroll_delta);
+                        }
                     }
                 }
             }
 
             // Double-click → reset zoom/pan
             if ctx.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) {
-                if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                    chart.price_zoom = 1.0;
-                    chart.price_pan = 0.0;
-                    chart.visible_bars = 200;
-                    chart.view_offset = chart.bars.len().saturating_sub(1);
+                if on_price_axis {
+                    // Double-click price axis → auto-fit vertical only
+                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                        chart.price_zoom = 1.0;
+                        chart.price_pan = 0.0;
+                    }
+                } else if on_chart_body {
+                    // Double-click chart → reset everything
+                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                        chart.price_zoom = 1.0;
+                        chart.price_pan = 0.0;
+                        chart.visible_bars = 200;
+                        chart.view_offset = chart.bars.len().saturating_sub(1);
+                    }
                 }
             }
 
-            // Drag → pan
-            let pointer   = ctx.input(|i| i.pointer.clone());
+            // Drag interactions
+            let pointer    = ctx.input(|i| i.pointer.clone());
             let drag_delta = ctx.input(|i| i.pointer.delta());
+
             for chart in &mut self.charts {
                 if pointer.primary_pressed() {
-                    chart.is_dragging = true;
-                    chart.drag_start  = pointer.press_origin();
-                    chart.drag_start_offset = chart.view_offset;
-                    chart.drag_start_ppan   = chart.price_pan;
+                    let press_pos = pointer.press_origin().unwrap_or_default();
+                    if price_axis_rect.contains(press_pos) {
+                        // Start price-axis scaling drag (TradingView style)
+                        chart.is_scaling_price = true;
+                        chart.is_dragging = false;
+                        chart.scale_start_zoom = chart.price_zoom;
+                        chart.scale_start_y = press_pos.y;
+                    } else {
+                        // Start normal chart pan drag
+                        chart.is_dragging = true;
+                        chart.is_scaling_price = false;
+                        chart.drag_start = pointer.press_origin();
+                        chart.drag_start_offset = chart.view_offset;
+                        chart.drag_start_ppan = chart.price_pan;
+                    }
                 } else if pointer.primary_released() {
                     chart.is_dragging = false;
-                    chart.drag_start  = None;
+                    chart.is_scaling_price = false;
+                    chart.drag_start = None;
                 }
+
+                // Price axis drag → vertical zoom (like TradingView)
+                if chart.is_scaling_price && drag_delta.y.abs() > 0.0 {
+                    // Drag up = zoom in (expand), drag down = zoom out (compress)
+                    // Drag up = expand (zoom in), drag down = squish (zoom out)
+                    // TradingView-style progressive scaling
+                    let sensitivity = 0.003;
+                    let zoom_delta = -drag_delta.y as f64 * sensitivity;
+                    chart.price_zoom = (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
+                }
+
+                // Normal chart body drag → pan
                 if chart.is_dragging && (drag_delta.x.abs() > 0.0 || drag_delta.y.abs() > 0.0) {
                     Self::handle_pan_h(chart, -drag_delta.x, available.width());
                     if drag_delta.y.abs() > 0.5 {
