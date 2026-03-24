@@ -276,6 +276,7 @@ struct IndicatorFlags {
     pivots: bool,
     fractals: bool,
     harmonics: bool,
+    supply_demand: bool,
     ehlers_ss: bool,
     ehlers_decycler: bool,
     ehlers_itl: bool,
@@ -377,6 +378,9 @@ struct ChartState {
     ehlers_cg: Vec<Option<f64>>,
     /// Roofing Filter (sub-pane).
     ehlers_roof: Vec<Option<f64>>,
+    /// Supply/demand zones.
+    supply_zones: Vec<(usize, f64, f64)>, // (bar_idx, zone_high, zone_low)
+    demand_zones: Vec<(usize, f64, f64)>,
     /// Detected harmonic patterns.
     harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
@@ -455,6 +459,8 @@ impl ChartState {
             ehlers_cyber: Vec::new(),
             ehlers_cg: Vec::new(),
             ehlers_roof: Vec::new(),
+            supply_zones: Vec::new(),
+            demand_zones: Vec::new(),
             harmonics: Vec::new(),
             drawings: Vec::new(),
             visible_bars: 200,
@@ -569,6 +575,9 @@ impl ChartState {
         self.fractal_up = compute_fractals_up(&self.bars);
         self.fractal_down = compute_fractals_down(&self.bars);
         self.harmonics = detect_harmonic_patterns(&self.bars, &self.fractal_up, &self.fractal_down);
+        let (sz, dz) = compute_supply_demand_zones(&self.bars);
+        self.supply_zones = sz;
+        self.demand_zones = dz;
         // Ehlers indicators
         self.ehlers_ss = ehlers_super_smoother(&self.bars, 10);
         self.ehlers_decycler = ehlers_decycler(&self.bars, 20);
@@ -969,6 +978,40 @@ fn detect_harmonic_patterns(bars: &[Bar], fractals_up: &[bool], fractals_down: &
                                 name: "Crab", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
                                 c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
                             });
+                        }
+                        // Shark: AB=1.13-1.618 XA, BC=1.618-2.24 AB, XD=0.886 XA
+                        else if in_range(ab_xa, 1.10, 1.65) && in_range(xd_xa, 0.82, 0.92) {
+                            let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                            let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                            let sl = if bullish { x.1 - xa * 0.1 } else { x.1 + xa * 0.1 };
+                            patterns.push(HarmonicPattern {
+                                name: "Shark", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                            });
+                        }
+                        // Cypher: AB=0.382-0.618 XA, BC=1.13-1.414 AB, XD=0.786 XA
+                        else if in_range(ab_xa, 0.35, 0.65) && in_range(bc_ab, 1.10, 1.45) && in_range(xd_xa, 0.72, 0.84) {
+                            let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                            let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                            let sl = if bullish { x.1 - xa * 0.1 } else { x.1 + xa * 0.1 };
+                            patterns.push(HarmonicPattern {
+                                name: "Cypher", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                            });
+                        }
+                        // 5-0: AB=1.13-1.618 XA, BC=1.618-2.24 AB, XD=0.50 BC
+                        else if in_range(ab_xa, 1.10, 1.65) && in_range(bc_ab, 1.55, 2.30) {
+                            let bc_val = (d.1 - c.1).abs();
+                            let xd_bc = if bc > f64::EPSILON { bc_val / bc } else { 0.0 };
+                            if in_range(xd_bc, 0.45, 0.55) {
+                                let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                                let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                                let sl = if bullish { d.1 - xa * 0.15 } else { d.1 + xa * 0.15 };
+                                patterns.push(HarmonicPattern {
+                                    name: "5-0", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                    c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                                });
+                            }
                         }
                     }
                 }
@@ -1394,6 +1437,50 @@ fn compute_better_volume(bars: &[Bar]) -> Vec<u8> {
         }
     }
     out
+}
+
+fn compute_supply_demand_zones(bars: &[Bar]) -> (Vec<(usize, f64, f64)>, Vec<(usize, f64, f64)>) {
+    let n = bars.len();
+    let mut supply = Vec::new();
+    let mut demand = Vec::new();
+    if n < 10 { return (supply, demand); }
+
+    // Compute average range for impulse detection
+    let avg_range: f64 = bars.iter().map(|b| b.high - b.low).sum::<f64>() / n as f64;
+    let impulse_threshold = avg_range * 2.0;
+
+    for i in 1..(n - 1) {
+        let range = bars[i].high - bars[i].low;
+        let body = (bars[i].close - bars[i].open).abs();
+
+        // Impulse candle: large range + large body (>60% of range)
+        if range > impulse_threshold && body > range * 0.6 {
+            let is_bullish = bars[i].close > bars[i].open;
+
+            if is_bullish {
+                // Demand zone: base of the impulse move (previous candle's range)
+                let zone_high = bars[i - 1].high.max(bars[i].open);
+                let zone_low = bars[i - 1].low.min(bars[i].open);
+                if zone_high > zone_low {
+                    demand.push((i - 1, zone_high, zone_low));
+                }
+            } else {
+                // Supply zone: top of the impulse move
+                let zone_high = bars[i - 1].high.max(bars[i].open);
+                let zone_low = bars[i - 1].low.min(bars[i].open);
+                if zone_high > zone_low {
+                    supply.push((i - 1, zone_high, zone_low));
+                }
+            }
+        }
+    }
+
+    // Keep most recent zones (max 10 each)
+    supply.sort_by(|a, b| b.0.cmp(&a.0));
+    demand.sort_by(|a, b| b.0.cmp(&a.0));
+    supply.truncate(10);
+    demand.truncate(10);
+    (supply, demand)
 }
 
 // ─── Ehlers indicators ───────────────────────────────────────────────────────
@@ -1945,6 +2032,44 @@ fn draw_chart(
                         painter.text(egui::pos2(d_pt.x + 2.0, y - 9.0), egui::Align2::LEFT_TOP,
                             &format!("{} {}", label, format_price(price)), egui::FontId::monospace(8.0), c);
                     }
+                }
+            }
+        }
+    }
+
+    // ── supply/demand zones ─────────────────────────────────────────────────
+    if flags.supply_demand {
+        // Demand zones (green fill)
+        for &(idx, zh, zl) in &chart.demand_zones {
+            if idx >= start_idx && idx < end_idx {
+                let x_start = chart_rect.left() + ((idx - start_idx) as f32) * bar_w;
+                let y_top = price_to_y(zh);
+                let y_bot = price_to_y(zl);
+                if y_bot >= chart_rect.top() && y_top <= chart_rect.bottom() {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(x_start, y_top.max(chart_rect.top())),
+                            egui::pos2(chart_rect.right(), y_bot.min(chart_rect.bottom())),
+                        ),
+                        0.0, egui::Color32::from_rgba_premultiplied(0, 180, 80, 25),
+                    );
+                }
+            }
+        }
+        // Supply zones (red fill)
+        for &(idx, zh, zl) in &chart.supply_zones {
+            if idx >= start_idx && idx < end_idx {
+                let x_start = chart_rect.left() + ((idx - start_idx) as f32) * bar_w;
+                let y_top = price_to_y(zh);
+                let y_bot = price_to_y(zl);
+                if y_bot >= chart_rect.top() && y_top <= chart_rect.bottom() {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(x_start, y_top.max(chart_rect.top())),
+                            egui::pos2(chart_rect.right(), y_bot.min(chart_rect.bottom())),
+                        ),
+                        0.0, egui::Color32::from_rgba_premultiplied(220, 40, 40, 25),
+                    );
                 }
             }
         }
@@ -3051,6 +3176,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "PIVOTS",        desc: "Toggle pivot points (P/R1/R2/S1/S2)" },
     Command { name: "FRACTALS",      desc: "Toggle Bill Williams fractals" },
     Command { name: "HARMONICS",     desc: "Toggle harmonic pattern detection (Carney)" },
+    Command { name: "SUPPLY_DEMAND", desc: "Toggle supply/demand zone detection" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -3115,6 +3241,7 @@ pub struct TyphooNApp {
     show_pivots: bool,
     show_fractals: bool,
     show_harmonics: bool,
+    show_supply_demand: bool,
     show_ehlers_ss: bool,
     show_ehlers_decycler: bool,
     show_ehlers_itl: bool,
@@ -3325,6 +3452,7 @@ impl TyphooNApp {
             show_pivots: false,
             show_fractals: false,
             show_harmonics: false,
+            show_supply_demand: false,
             show_ehlers_ss: false,
             show_ehlers_decycler: false,
             show_ehlers_itl: false,
@@ -3469,6 +3597,7 @@ impl TyphooNApp {
             pivots: self.show_pivots,
             fractals: self.show_fractals,
             harmonics: self.show_harmonics,
+            supply_demand: self.show_supply_demand,
             ehlers_ss: self.show_ehlers_ss,
             ehlers_decycler: self.show_ehlers_decycler,
             ehlers_itl: self.show_ehlers_itl,
@@ -3587,7 +3716,8 @@ impl TyphooNApp {
             "PIVOTS"   => self.show_pivots = !self.show_pivots,
             "SRLEVEL"  => self.show_pivots = !self.show_pivots,
             "FRACTALS"  => self.show_fractals = !self.show_fractals,
-            "HARMONICS" => self.show_harmonics = !self.show_harmonics,
+            "HARMONICS"     => self.show_harmonics = !self.show_harmonics,
+            "SUPPLY_DEMAND" => self.show_supply_demand = !self.show_supply_demand,
             "NNFX" => {
                 // Enable NNFX indicator preset
                 self.show_sma200 = true;
@@ -3650,7 +3780,7 @@ impl TyphooNApp {
                 "wma": self.show_wma, "hma": self.show_hma,
                 "psar": self.show_psar, "atr_proj": self.show_atr_proj,
                 "prev_levels": self.show_prev_levels, "pivots": self.show_pivots,
-                "fractals": self.show_fractals, "harmonics": self.show_harmonics,
+                "fractals": self.show_fractals, "harmonics": self.show_harmonics, "supply_demand": self.show_supply_demand,
                 "ehlers_ss": self.show_ehlers_ss, "ehlers_decycler": self.show_ehlers_decycler,
                 "ehlers_itl": self.show_ehlers_itl, "ehlers_mama": self.show_ehlers_mama,
                 "ehlers_ebsw": self.show_ehlers_ebsw, "ehlers_cyber": self.show_ehlers_cyber,
@@ -3663,6 +3793,13 @@ impl TyphooNApp {
                 "volume_pane": self.show_volume_pane,
             },
             "mtf_enabled": self.mtf_enabled,
+            "drawings": self.charts.get(0).map(|c| {
+                c.drawings.iter().filter_map(|d| match d {
+                    Drawing::HLine { price, .. } => Some(serde_json::json!({"type": "hline", "price": price})),
+                    _ => None, // Only persist HLines for now (trendlines need bar indices which shift)
+                }).collect::<Vec<_>>()
+            }).unwrap_or_default(),
+            "alerts": self.alerts.iter().map(|(p, l)| serde_json::json!({"price": p, "label": l})).collect::<Vec<_>>(),
         });
         let mut path = dirs_home();
         path.push("session.json");
@@ -3686,7 +3823,7 @@ impl TyphooNApp {
                         ("wma", &mut self.show_wma), ("hma", &mut self.show_hma),
                         ("psar", &mut self.show_psar), ("atr_proj", &mut self.show_atr_proj),
                         ("prev_levels", &mut self.show_prev_levels), ("pivots", &mut self.show_pivots),
-                        ("fractals", &mut self.show_fractals), ("harmonics", &mut self.show_harmonics),
+                        ("fractals", &mut self.show_fractals), ("harmonics", &mut self.show_harmonics), ("supply_demand", &mut self.show_supply_demand),
                         ("ehlers_ss", &mut self.show_ehlers_ss), ("ehlers_decycler", &mut self.show_ehlers_decycler),
                         ("ehlers_itl", &mut self.show_ehlers_itl), ("ehlers_mama", &mut self.show_ehlers_mama),
                         ("ehlers_ebsw", &mut self.show_ehlers_ebsw), ("ehlers_cyber", &mut self.show_ehlers_cyber),
@@ -3699,6 +3836,26 @@ impl TyphooNApp {
                         ("volume_pane", &mut self.show_volume_pane),
                     ] {
                         if let Some(b) = ind[key].as_bool() { *field = b; }
+                    }
+                }
+                // Restore drawings
+                if let Some(drawings) = v["drawings"].as_array() {
+                    if let Some(chart) = self.charts.get_mut(0) {
+                        for d in drawings {
+                            if d["type"].as_str() == Some("hline") {
+                                if let Some(price) = d["price"].as_f64() {
+                                    chart.drawings.push(Drawing::HLine { price, color: HLINE_COL });
+                                }
+                            }
+                        }
+                    }
+                }
+                // Restore alerts
+                if let Some(alerts) = v["alerts"].as_array() {
+                    for a in alerts {
+                        if let (Some(p), Some(l)) = (a["price"].as_f64(), a["label"].as_str()) {
+                            self.alerts.push((p, l.to_string()));
+                        }
                     }
                 }
                 self.log.push_back(LogEntry::info("Session restored"));
@@ -3943,7 +4100,8 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_prev_levels, "Previous Candle Levels (D/W)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (Classic)");
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
-                    ui.checkbox(&mut self.show_harmonics,   "Harmonic Patterns (Carney XABCD)");
+                    ui.checkbox(&mut self.show_harmonics,     "Harmonic Patterns (Carney XABCD)");
+                    ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
                     ui.add_space(10.0);
                     ui.heading("Sub-Pane Indicators");
                     ui.separator();
@@ -5540,7 +5698,8 @@ impl eframe::App for TyphooNApp {
                     ui.checkbox(&mut self.show_prev_levels, "Prev Candle Levels (D/W)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (P/R1/R2/S1/S2)");
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
-                    ui.checkbox(&mut self.show_harmonics,   "Harmonic Patterns (Carney)");
+                    ui.checkbox(&mut self.show_harmonics,     "Harmonic Patterns (Carney)");
+                    ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
                     ui.separator();
                     ui.label(egui::RichText::new("Ehlers (Overlay)").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_ehlers_ss,       "Super Smoother(10)");
