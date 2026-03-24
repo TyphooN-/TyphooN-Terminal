@@ -16,6 +16,7 @@ typhoon-engine = { path = "../engine" }
 eframe = { version = "0.33", default-features = true, features = ["wgpu"] }
 egui = "0.33"
 egui_plot = "0.34"
+wgpu = "24"
 
 # Async runtime (shared with engine)
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }

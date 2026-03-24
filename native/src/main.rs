@@ -5,6 +5,7 @@
 //! Async broker integration via tokio runtime + mpsc channels.
 
 mod app;
+mod gpu_compute;
 
 fn main() -> eframe::Result {
     // Initialize logging — suppress noisy wgpu/egl/vulkan adapter probing
