@@ -1,29 +1,27 @@
 #!/bin/bash
-# TyphooN Terminal — Launch script for Hyprland/NVIDIA/Wayland
-#
-# Required environment variables for WebKitGTK on Hyprland with NVIDIA:
-#   WEBKIT_DISABLE_DMABUF_RENDERER=1  — prevents DMABUF crash on NVIDIA
-#   WEBKIT_DISABLE_COMPOSITING_MODE=1 — disables GPU compositing (fixes blank window)
-#   GDK_BACKEND=x11                   — forces X11 backend via XWayland (most stable)
+# TyphooN Terminal — Native GPU renderer (egui + wgpu)
+# Pure Rust, zero WebKit, zero JS.
 #
 # Usage:
-#   ./launch.sh        — production build
-#   ./launch.sh dev    — development mode with hot reload
+#   ./launch.sh          — release build + run
+#   ./launch.sh dev      — debug build + run (faster compile)
+#   ./launch.sh build    — release build only
 
 set -euo pipefail
-
-# Tauri CLI v2 runs beforeDevCommand from the project root
 cd "$(dirname "$0")"
 
-export WEBKIT_DISABLE_DMABUF_RENDERER=1
-export WEBKIT_DISABLE_COMPOSITING_MODE=1
-export GDK_BACKEND=x11
-
-if [ "${1:-}" = "dev" ]; then
-    echo "Starting TyphooN Terminal (dev mode)..."
-    cargo tauri dev
-else
-    echo "Starting TyphooN Terminal..."
-    cargo tauri build
-    echo "Build complete. Binary at src-tauri/target/release/typhoon-terminal"
-fi
+case "${1:-}" in
+    dev)
+        echo "TyphooN Terminal (debug)..."
+        cargo run -p typhoon-native
+        ;;
+    build)
+        echo "Building TyphooN Terminal (release)..."
+        cargo build -p typhoon-native --release
+        echo "Binary: target/release/typhoon"
+        ;;
+    *)
+        echo "TyphooN Terminal (release)..."
+        cargo run -p typhoon-native --release
+        ;;
+esac
