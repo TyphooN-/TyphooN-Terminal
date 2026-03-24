@@ -29913,7 +29913,15 @@ async function startMt5BackgroundSync() {
     if (r.imported > 0) {
       log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.deduped || 0} deduped, ${r.total_bars} bars${r.deferred > 0 ? ` (${r.deferred} queued)` : ""}`, "info");
     }
-    await handleMt5SyncResult(r);
+    // Only run heavy UI updates (MTF reload, symbol list refresh) when caught up
+    // During burst sync, skip — avoids hammering backend with concurrent requests
+    if (r.deferred === 0 || r.deferred === undefined) {
+      await handleMt5SyncResult(r);
+    } else {
+      // Lightweight: just update badge + mark MT5 healthy
+      if (r.databases_read > 0 || r.total_bars > 0) lastMt5SyncSuccess = Date.now();
+      updateDataSourceBadge();
+    }
     return r;
   }
 
@@ -29926,7 +29934,7 @@ async function startMt5BackgroundSync() {
       const r = await doSync();
       if (r.deferred > 0) {
         // More entries waiting — re-sync after brief yield (not 30s)
-        setTimeout(syncLoop, 200);
+        setTimeout(syncLoop, 500);
       }
     } catch (_) {} finally { _mt5BgSyncRunning = false; }
   }
