@@ -12954,7 +12954,7 @@ async function cmdFloatingEquity() {
       if (dw.open_positions.length > 0) {
         const tbl = document.createElement("table");
         tbl.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin:2px 12px;";
-        tbl.appendChild(theadRow(["Symbol", "Side", "Volume", "Avg Price", "Current", "Floating P/L", "P/L %"], "padding:2px 6px;color:#666;border-bottom:1px solid #222;text-align:right;font-size:9px;"));
+        tbl.appendChild(theadRow(["Symbol", "Side", "Volume", "Avg Price", "Current", "Floating P/L"], "padding:2px 6px;color:#666;border-bottom:1px solid #222;text-align:right;font-size:9px;"));
         for (const p of dw.open_positions) {
           const tr = document.createElement("tr");
           const pColor = p.unrealized_pnl >= 0 ? "#4caf50" : "#f44336";
@@ -12965,7 +12965,6 @@ async function cmdFloatingEquity() {
           tr.appendChild(td(p.avg_price.toFixed(5), "padding:2px 6px;color:#888;text-align:right;font-family:Consolas,monospace;"));
           tr.appendChild(td(p.current_price.toFixed(5), "padding:2px 6px;color:#ccc;text-align:right;font-family:Consolas,monospace;"));
           tr.appendChild(td(`${p.unrealized_pnl >= 0 ? "+" : ""}$${p.unrealized_pnl.toFixed(2)}`, `padding:2px 6px;color:${pColor};text-align:right;font-family:Consolas,monospace;font-weight:bold;`));
-          tr.appendChild(td(`${p.pnl_pct >= 0 ? "+" : ""}${p.pnl_pct.toFixed(2)}%`, `padding:2px 6px;color:${pColor};text-align:right;font-family:Consolas,monospace;`));
           tbl.appendChild(tr);
         }
         frag.appendChild(tbl);
