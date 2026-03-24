@@ -3726,7 +3726,9 @@ impl TyphooNApp {
                 self.show_atr_proj = true;
                 self.show_better_volume = true;
                 self.show_prev_levels = true;
-                self.log.push_back(LogEntry::info("NNFX preset enabled: SMA200 + KAMA + Fisher + ATR Proj + Better Volume + Prev Levels"));
+                self.show_supply_demand = true;
+                self.show_fractals = true;
+                self.log.push_back(LogEntry::info("NNFX preset: SMA200 + KAMA + Fisher + ATR Proj + Better Volume + Prev Levels + S/D Zones + Fractals"));
             }
             "RESET_IND" => {
                 self.show_sma200 = false; self.show_sma100 = false; self.show_kama = false;
@@ -3815,6 +3817,23 @@ impl TyphooNApp {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
                 if let Some(sym) = v["symbol"].as_str() { self.symbol_input = sym.to_string(); }
                 if let Some(mtf) = v["mtf_enabled"].as_bool() { self.mtf_enabled = mtf; }
+                if let Some(tab) = v["active_tab"].as_u64() { self.active_tab = tab as usize; }
+                // Restore chart types from saved tabs
+                if let Some(tabs) = v["tabs"].as_array() {
+                    for (i, tab) in tabs.iter().enumerate() {
+                        if let Some(chart) = self.charts.get_mut(i) {
+                            if let Some(ct) = tab["chart_type"].as_str() {
+                                chart.chart_type = match ct {
+                                    "Heikin-Ashi" => ChartType::HeikinAshi,
+                                    "Line" => ChartType::Line,
+                                    "OHLC Bars" => ChartType::OhlcBars,
+                                    "Renko" => ChartType::Renko,
+                                    _ => ChartType::Candle,
+                                };
+                            }
+                        }
+                    }
+                }
                 if let Some(ind) = v.get("indicators") {
                     for (key, field) in [
                         ("sma200", &mut self.show_sma200), ("sma100", &mut self.show_sma100),
@@ -6543,6 +6562,32 @@ impl eframe::App for TyphooNApp {
                             ui.close_menu();
                         }
                         ui.separator();
+                        if !chart.drawings.is_empty() {
+                            ui.menu_button("Drawing Color", |ui| {
+                                let colors = [
+                                    ("White", egui::Color32::WHITE),
+                                    ("Yellow", egui::Color32::from_rgb(255, 200, 50)),
+                                    ("Green", egui::Color32::from_rgb(0, 220, 80)),
+                                    ("Red", egui::Color32::from_rgb(220, 40, 40)),
+                                    ("Cyan", egui::Color32::from_rgb(0, 200, 255)),
+                                    ("Magenta", egui::Color32::from_rgb(255, 100, 255)),
+                                    ("Orange", egui::Color32::from_rgb(255, 140, 0)),
+                                    ("Blue", egui::Color32::from_rgb(80, 120, 255)),
+                                ];
+                                for (name, color) in &colors {
+                                    if ui.button(egui::RichText::new(*name).color(*color)).clicked() {
+                                        if let Some(d) = chart.drawings.last_mut() {
+                                            match d {
+                                                Drawing::HLine { color: c, .. } => *c = *color,
+                                                Drawing::TrendLine { color: c, .. } => *c = *color,
+                                                _ => {}
+                                            }
+                                        }
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
+                        }
                         if ui.button("Remove Last Drawing").clicked() {
                             chart.drawings.pop();
                             ui.close_menu();

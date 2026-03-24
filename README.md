@@ -8,16 +8,18 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 
 | Metric | Value |
 |---|---|
-| **GUI Binary** | ~24MB native (egui + wgpu) |
+| **GUI Binary** | ~25MB native (egui + wgpu) |
 | **CLI Binary** | 6.5MB standalone TUI (SSH/VPS ready) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
-| **Startup Time** | <1 second |
-| **Lines of Code** | ~15,000 (pure Rust) |
-| **Indicators** | 39 (9 NNFX + 21 standard + 9 MT5 parity) |
-| **Commands** | 50+ Quake-console style (~) |
-| **Drawing Tools** | 44 GPU-rendered (Fibonacci, channels, pitchforks, Elliott, Gann) |
-| **Data Sources** | 21 free APIs (Alpaca, SEC, FRED, Finnhub, CoinGecko, ECB, ...) |
-| **Security Audit** | 21 passes, 97 findings, 91 fixed |
+| **Startup Time** | < 2 seconds |
+| **Lines of Code** | ~6,600 GUI + ~12,000 engine (pure Rust) |
+| **Indicators** | 32+ (NNFX + Ehlers DSP + standard + harmonics) |
+| **Commands** | 95 Quake-console style (~) |
+| **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
+| **Harmonic Patterns** | 7 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0) |
+| **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
+| **Data Sources** | MT5 (Darwinex), Alpaca, Kraken, tastytrade |
+| **DARWIN Analytics** | 70+ functions (VaR, correlation, equity curves, streaks) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
 ---
@@ -202,11 +204,10 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 |---|---|
 | [004](docs/adr/004-mtf-indicators.md) | Multi-timeframe indicator support |
 | [005](docs/adr/005-indicator-visual-parity.md) | Indicator visual parity with MT5 |
-| [007](docs/adr/007-bar-prefetch-strategy.md) | Background bar pre-fetch strategy |
 | [009](docs/adr/009-rate-limiter.md) | Centralized rate limiter |
 | [012](docs/adr/012-news-earnings-dividends.md) | News, earnings, and dividend data |
 | [013](docs/adr/013-auto-load-timeframe.md) | Auto-load on timeframe change |
-| [028](docs/adr/028-performance-optimization-audit.md) | Performance optimization audit |
+| [022](docs/adr/022-tastytrade-broker.md) | tastytrade broker integration |
 | [033](docs/adr/033-free-api-expansion.md) | Free API expansion — 30+ data sources |
 | [037](docs/adr/037-data-source-hierarchy.md) | Data source hierarchy (MT5 → Kraken → Alpaca) |
 | [038](docs/adr/038-data-source-indicator.md) | Data source indicator UI |
@@ -215,6 +216,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [044](docs/adr/044-backup-lan-sync.md) | Backup & LAN sync |
 | [045](docs/adr/045-darwin-analytics-expansion.md) | DARWIN analytics expansion (VaR, drawdown, rebalancer) |
 | [048](docs/adr/ADR-048-bookmap-depth-heatmap.md) | Bookmap-style depth heatmap (future) |
+| [049](docs/adr/049-harmonic-pattern-detection.md) | Scott Carney harmonic pattern detection |
 
 ---
 
