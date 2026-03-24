@@ -44,15 +44,65 @@ impl eframe::App for TyphooNApp {
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
+                    if ui.button("Connect to Broker...").clicked() { ui.close_menu(); }
+                    if ui.button("Settings").clicked() { ui.close_menu(); }
+                    ui.separator();
                     if ui.button("Quit").clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
-                ui.menu_button("View", |_ui| {});
-                ui.menu_button("Trading", |_ui| {});
-                ui.menu_button("Tools", |_ui| {});
-                ui.menu_button("Research", |_ui| {});
-                ui.menu_button("Analysis", |_ui| {});
+                ui.menu_button("View", |ui| {
+                    if ui.button("MTF Grid").clicked() { ui.close_menu(); }
+                    if ui.button("Single Chart").clicked() { ui.close_menu(); }
+                    ui.separator();
+                    if ui.button("Indicators").clicked() { ui.close_menu(); }
+                    if ui.button("Drawing Tools").clicked() { ui.close_menu(); }
+                });
+                ui.menu_button("Trading", |ui| {
+                    if ui.button("Open Trade").clicked() { ui.close_menu(); }
+                    if ui.button("Close All").clicked() { ui.close_menu(); }
+                    if ui.button("Close Partial").clicked() { ui.close_menu(); }
+                    ui.separator();
+                    if ui.button("Set SL").clicked() { ui.close_menu(); }
+                    if ui.button("Set TP").clicked() { ui.close_menu(); }
+                    ui.separator();
+                    if ui.button("Open MG (Martingale Hedge)").clicked() { ui.close_menu(); }
+                    if ui.button("Buy Lines").clicked() { ui.close_menu(); }
+                    if ui.button("Sell Lines").clicked() { ui.close_menu(); }
+                });
+                ui.menu_button("Tools", |ui| {
+                    if ui.button("DARWIN Accounts").clicked() { ui.close_menu(); }
+                    if ui.button("DARWIN Portfolio").clicked() { ui.close_menu(); }
+                    if ui.button("Symbol Overlap").clicked() { ui.close_menu(); }
+                    ui.separator();
+                    if ui.button("Backtest").clicked() { ui.close_menu(); }
+                    if ui.button("Screener").clicked() { ui.close_menu(); }
+                    if ui.button("Optimizer").clicked() { ui.close_menu(); }
+                    ui.separator();
+                    if ui.button("Risk Calculator").clicked() { ui.close_menu(); }
+                    if ui.button("VaR Multiplier").clicked() { ui.close_menu(); }
+                    if ui.button("Margin Monitor").clicked() { ui.close_menu(); }
+                });
+                ui.menu_button("Research", |ui| {
+                    if ui.button("News & Events").clicked() { ui.close_menu(); }
+                    if ui.button("Economic Calendar").clicked() { ui.close_menu(); }
+                    if ui.button("SEC Filings").clicked() { ui.close_menu(); }
+                    if ui.button("Insider Trades").clicked() { ui.close_menu(); }
+                    ui.separator();
+                    if ui.button("Fundamentals").clicked() { ui.close_menu(); }
+                    if ui.button("Analyst Ratings").clicked() { ui.close_menu(); }
+                    if ui.button("Institutional Holders").clicked() { ui.close_menu(); }
+                });
+                ui.menu_button("Analysis", |ui| {
+                    if ui.button("Correlation Matrix").clicked() { ui.close_menu(); }
+                    if ui.button("Seasonals").clicked() { ui.close_menu(); }
+                    if ui.button("Monte Carlo VaR").clicked() { ui.close_menu(); }
+                    if ui.button("Stress Test").clicked() { ui.close_menu(); }
+                    ui.separator();
+                    if ui.button("Volume Profile").clicked() { ui.close_menu(); }
+                    if ui.button("Order Flow").clicked() { ui.close_menu(); }
+                    if ui.button("Bookmap Heatmap").clicked() { ui.close_menu(); }
+                });
                 ui.separator();
                 ui.label(
                     egui::RichText::new("TyphooN Terminal — Pure Rust GPU")
