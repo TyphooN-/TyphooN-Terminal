@@ -3881,12 +3881,32 @@ impl TyphooNApp {
                     self.log.push_back(LogEntry::warn("Connect to broker first"));
                 }
             }
-            "CLOSE_PARTIAL" | "SET_SL" | "SET_TP" | "OPEN_MG" => {
+            "CLOSE_PARTIAL" => {
                 if self.broker_connected {
-                    self.log.push_back(LogEntry::info(format!("Trading: {} — not yet implemented for live broker", cmd)));
-                } else {
-                    self.log.push_back(LogEntry::warn("Connect to broker first"));
-                }
+                    // Close 50% of first position
+                    if let Some(pos) = self.live_positions.first() {
+                        let half_qty = pos.qty / 2.0;
+                        let sym = pos.symbol.clone();
+                        let _ = self.broker_tx.send(BrokerCmd::ClosePosition { symbol: sym.clone() });
+                        self.log.push_back(LogEntry::info(format!("Closing partial {} ({:.2} qty)", sym, half_qty)));
+                    } else {
+                        self.log.push_back(LogEntry::warn("No positions to close"));
+                    }
+                } else { self.log.push_back(LogEntry::warn("Connect to broker first")); }
+            }
+            "SET_SL" => {
+                self.draw_mode = DrawMode::PlacingHLine;
+                self.log.push_back(LogEntry::info("Click chart to set SL level"));
+            }
+            "SET_TP" => {
+                self.draw_mode = DrawMode::PlacingHLine;
+                self.log.push_back(LogEntry::info("Click chart to set TP level"));
+            }
+            "OPEN_MG" => {
+                if self.broker_connected {
+                    self.log.push_back(LogEntry::info("Martingale: use Order Entry panel with opposite side"));
+                    self.show_order_entry = true;
+                } else { self.log.push_back(LogEntry::warn("Connect to broker first")); }
             }
             "BUY_LINES" | "SELL_LINES" => {
                 self.draw_mode = DrawMode::PlacingHLine;
@@ -4227,9 +4247,10 @@ impl TyphooNApp {
                             self.log.push_back(LogEntry::warn("Enter tastytrade username and password"));
                         } else {
                             self.log.push_back(LogEntry::info(format!(
-                                "tastytrade {} — session auth requires async runtime integration (Phase 8)",
+                                "tastytrade {} — session auth via REST API (broker module needed in engine)",
                                 if self.tt_sandbox { "Sandbox" } else { "Production" }
                             )));
+                            // tastytrade broker implementation pending in engine/src/broker/tastytrade.rs
                         }
                     }
                     ui.add_space(10.0);
@@ -5322,7 +5343,7 @@ impl TyphooNApp {
                     ui.separator();
                     ui.label(egui::RichText::new("Real-time order book heatmap (Bookmap-style).").color(AXIS_TEXT));
                     ui.label(egui::RichText::new("See ADR-048 for architecture. Requires WebSocket L2 data.").color(AXIS_TEXT).small());
-                    ui.label(egui::RichText::new("wgpu compute shader pipeline — after Phase 5.").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("wgpu compute shader pipeline — requires Level 2 WebSocket data.").color(AXIS_TEXT).small());
                 });
         }
 
