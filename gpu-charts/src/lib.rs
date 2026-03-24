@@ -276,6 +276,9 @@ pub struct GpuChart {
     visible_start: f64,
     visible_end: f64,
     total_bars: usize,
+    /// Actual number of OHLC bars in bar_opens/highs/lows/closes arrays.
+    /// Renko may change total_bars to brick count; this stays consistent.
+    data_bar_count: usize,
     // Bar data
     bar_opens: Vec<f32>,
     bar_highs: Vec<f32>,
@@ -357,6 +360,7 @@ impl GpuChart {
             min_price: 0.0, max_price: 100.0,
             visible_start: 0.0, visible_end: 100.0,
             total_bars: 0,
+            data_bar_count: 0,
             bar_opens: vec![], bar_highs: vec![], bar_lows: vec![], bar_closes: vec![],
             line_buffers: vec![],
             histogram_buffers: vec![],
@@ -379,6 +383,7 @@ impl GpuChart {
     pub fn set_data(&mut self, data: &[f64]) {
         let n = data.len() / 5;
         self.total_bars = n;
+        self.data_bar_count = n;
         self.bar_opens.clear();
         self.bar_highs.clear();
         self.bar_lows.clear();
@@ -643,8 +648,8 @@ impl GpuChart {
     /// Avoids rebuilding the entire candle buffer for real-time tick updates.
     #[wasm_bindgen]
     pub fn update_last_bar(&mut self, open: f64, high: f64, low: f64, close: f64) {
-        if self.total_bars == 0 { return; }
-        let idx = self.total_bars - 1;
+        if self.data_bar_count == 0 { return; }
+        let idx = self.data_bar_count - 1;
         self.bar_opens[idx] = open as f32;
         self.bar_highs[idx] = high as f32;
         self.bar_lows[idx] = low as f32;
@@ -1156,7 +1161,7 @@ impl GpuChart {
     }
 
     fn build_line_chart_geometry(&mut self) {
-        let n = self.total_bars;
+        let n = self.data_bar_count;
         let mut vertices: Vec<f32> = Vec::with_capacity(n * 2);
         for i in 0..n {
             vertices.push(i as f32);
@@ -1171,7 +1176,7 @@ impl GpuChart {
     }
 
     fn build_heikin_ashi_geometry(&mut self) {
-        let n = self.total_bars;
+        let n = self.data_bar_count;
         if n == 0 { return; }
         let mut ha_o = Vec::with_capacity(n);
         let mut ha_h = Vec::with_capacity(n);
@@ -1201,7 +1206,7 @@ impl GpuChart {
     }
 
     fn build_candle_geometry(&mut self) {
-        let n = self.total_bars;
+        let n = self.data_bar_count;
         let mut body_verts: Vec<f32> = Vec::with_capacity(n * 6 * 3);
         let mut wick_verts: Vec<f32> = Vec::with_capacity(n * 4 * 3);
 
@@ -1234,7 +1239,7 @@ impl GpuChart {
     }
 
     fn build_ohlc_bars_geometry(&mut self) {
-        let n = self.total_bars;
+        let n = self.data_bar_count;
         let mut vertices: Vec<f32> = Vec::with_capacity(n * 6 * 3);
         for i in 0..n {
             let x = i as f32;

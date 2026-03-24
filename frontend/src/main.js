@@ -34179,10 +34179,10 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
                   values[i] = data[i].value || 0;
                   // Parse color from data item or default
                   const hex = (data[i].color || opts?.color || "#888888").replace("#", "").replace(/[^0-9a-fA-F]/g, "");
-                  const cr = parseInt(hex.substring(0, 2), 16) / 255 || 0.5;
-                  const cg = parseInt(hex.substring(2, 4), 16) / 255 || 0.5;
-                  const cb = parseInt(hex.substring(4, 6), 16) / 255 || 0.5;
-                  const ca = hex.length > 6 ? parseInt(hex.substring(6, 8), 16) / 255 : 0.8;
+                  const cr = (parseInt(hex.substring(0, 2), 16) || 0) / 255;
+                  const cg = (parseInt(hex.substring(2, 4), 16) || 0) / 255;
+                  const cb = (parseInt(hex.substring(4, 6), 16) || 0) / 255;
+                  const ca = hex.length > 6 ? (parseInt(hex.substring(6, 8), 16) || 204) / 255 : 0.8;
                   colors[i * 4] = cr; colors[i * 4 + 1] = cg; colors[i * 4 + 2] = cb; colors[i * 4 + 3] = ca;
                 }
                 cellGpuChart.add_histogram(values, colors, 0.0);
@@ -34200,10 +34200,10 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
                 const botValues = new Float64Array(data.length).fill(basePrice);
                 // Parse fill color
                 const fillHex = (opts?.topFillColor1 || "#4caf5030").replace("#", "").replace(/[^0-9a-fA-F]/g, "");
-                const fr = parseInt(fillHex.substring(0, 2), 16) / 255 || 0.3;
-                const fg = parseInt(fillHex.substring(2, 4), 16) / 255 || 0.7;
-                const fb = parseInt(fillHex.substring(4, 6), 16) / 255 || 0.3;
-                const fa = fillHex.length > 6 ? parseInt(fillHex.substring(6, 8), 16) / 255 : 0.2;
+                const fr = (parseInt(fillHex.substring(0, 2), 16) || 0) / 255;
+                const fg = (parseInt(fillHex.substring(2, 4), 16) || 0) / 255;
+                const fb = (parseInt(fillHex.substring(4, 6), 16) || 0) / 255;
+                const fa = fillHex.length > 6 ? (parseInt(fillHex.substring(6, 8), 16) || 51) / 255 : 0.2;
                 cellGpuChart.add_fill(topValues, botValues, fr, fg, fb, fa);
               } catch (_) {}
             }
@@ -34495,19 +34495,22 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
     if (workerResult) {
-      // SMA 200 + 100
+      // SMA 200 + 100 — clamp length to avoid out-of-bounds on chartData
       if (workerResult.sma200?.length > 0) {
         const offset = 199;
-        addLine("#FFD700", 1, workerResult.sma200.map((v, i) => ({ time: chartData[i + offset]?.time, value: v })).filter(d => d.time));
+        const len = Math.min(workerResult.sma200.length, chartData.length - offset);
+        if (len > 1) addLine("#FFD700", 1, workerResult.sma200.slice(0, len).map((v, i) => ({ time: chartData[i + offset].time, value: v })));
       }
       if (workerResult.sma100?.length > 0) {
         const offset = 99;
-        addLine("#FF00FF", 1, workerResult.sma100.map((v, i) => ({ time: chartData[i + offset]?.time, value: v })).filter(d => d.time));
+        const len = Math.min(workerResult.sma100.length, chartData.length - offset);
+        if (len > 1) addLine("#FF00FF", 1, workerResult.sma100.slice(0, len).map((v, i) => ({ time: chartData[i + offset].time, value: v })));
       }
       // KAMA
       if (workerResult.kama?.length > 0) {
         const offset = 10;
-        addLine("#FFFFFF", 2, workerResult.kama.map((v, i) => ({ time: chartData[i + offset]?.time, value: v })).filter(d => d.time));
+        const len = Math.min(workerResult.kama.length, chartData.length - offset);
+        if (len > 1) addLine("#FFFFFF", 2, workerResult.kama.slice(0, len).map((v, i) => ({ time: chartData[i + offset].time, value: v })));
       }
       // ATR Projection
       if (workerResult.atr?.length > 0) {
@@ -34663,6 +34666,7 @@ function syncMTFGridLivePrice() {
       const data = cell.candleSeries.data();
       if (!data || data.length === 0) continue;
       const lastBar = data[data.length - 1];
+      if (!lastBar || !lastBar.time || lastBar.time <= 0) continue;
       const barDuration = getTimeframeDurationSec(cell.tf);
 
       if (nowSec - lastBar.time >= barDuration) {
@@ -35043,8 +35047,9 @@ function closeMTFGrid() {
   // Remove grid container
   const grid = document.getElementById("mtf-grid-container");
   if (grid) {
-    // Dispose all charts
+    // Dispose all charts and GPU resources
     for (const cell of mtfGridCells) {
+      try { if (cell.gpuChart) cell.gpuChart.free(); } catch (_) {}
       cell.chart.remove();
       try { if (cell.fisherChart) cell.fisherChart.remove(); } catch (_) {}
       try { if (cell.volumeChart) cell.volumeChart.remove(); } catch (_) {}
