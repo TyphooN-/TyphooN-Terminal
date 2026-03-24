@@ -3305,6 +3305,10 @@ const COMMANDS: &[Command] = &[
     Command { name: "QUIT",          desc: "Exit the application" },
     // View
     Command { name: "MTF",           desc: "Toggle multi-timeframe grid" },
+    Command { name: "MTF_2X2",       desc: "2×2 grid (4 charts)" },
+    Command { name: "MTF_3X3",       desc: "3×3 grid (9 charts)" },
+    Command { name: "MTF_4X4",       desc: "4×4 grid (16 charts)" },
+    Command { name: "MTF_4X3",       desc: "4×3 grid (12 charts)" },
     Command { name: "INDICATORS",    desc: "Toggle indicator settings panel" },
     Command { name: "FULLSCREEN",    desc: "Toggle fullscreen mode" },
     // Trading
@@ -3422,6 +3426,26 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
 }
 
 // ─── application state ───────────────────────────────────────────────────────
+
+/// Watchlist row data (TradingView-style).
+#[derive(Clone)]
+#[allow(dead_code)]
+struct WatchlistRow {
+    /// Display symbol name (e.g. "BTCUSD", "SLV", "CC").
+    symbol: String,
+    /// Full cache key for loading.
+    cache_key: String,
+    /// Last close price.
+    last: f64,
+    /// Previous close (for change calculation).
+    prev_close: f64,
+    /// Absolute change.
+    change: f64,
+    /// Percentage change.
+    change_pct: f64,
+    /// Last bar volume.
+    volume: f64,
+}
 
 /// Whether the bottom panel is showing log or volume.
 #[derive(PartialEq)]
@@ -3612,8 +3636,11 @@ pub struct TyphooNApp {
     active_tab: usize,
 
     // ── watchlist ────────────────────────────────────────────────────────
-    /// Cached symbol keys from SQLite cache.
+    /// Cached symbol keys from SQLite cache (used by screener/backfill panels).
+    #[allow(dead_code)]
     watchlist_symbols: Vec<(String, i64)>,
+    /// Rich watchlist data: symbol name, last, prev_close, change, change_pct, volume, cache_key.
+    watchlist_rows: Vec<WatchlistRow>,
 
     // ── floating window visibility ───────────────────────────────────────
     show_settings: bool,
@@ -3743,8 +3770,8 @@ impl TyphooNApp {
             }
         };
 
-        // ── build default chart set (H4 + D1 + H1 + W1 for MTF grid) ────────
-        let default_tfs = [Timeframe::H4, Timeframe::D1, Timeframe::H1, Timeframe::W1];
+        // ── build default chart set (all timeframes for MTF grid up to 9) ────
+        let default_tfs = [Timeframe::H4, Timeframe::D1, Timeframe::H1, Timeframe::W1, Timeframe::M15, Timeframe::M30, Timeframe::M5, Timeframe::M1, Timeframe::MN1];
         let mut charts: Vec<ChartState> = default_tfs
             .iter()
             .map(|&tf| ChartState::new("CC:BTCUSD", tf))
@@ -3766,6 +3793,83 @@ impl TyphooNApp {
         } else {
             Vec::new()
         };
+
+        // ── build rich watchlist rows (TradingView-style) ────────────────────
+        let mut watchlist_rows: Vec<WatchlistRow> = Vec::new();
+        // Deduplicate: group by base symbol, prefer D1 timeframe for last price
+        if let Some(ref c) = cache {
+            // Collect unique base symbols from cache keys
+            let mut seen_symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for (key, _) in &watchlist_symbols {
+                // Parse cache key: "mt5:CC:BTCUSD:4Hour" or "CC:BTCUSD:4Hour"
+                let parts: Vec<&str> = key.split(':').collect();
+                let base_sym = if parts.len() >= 3 {
+                    // Try to get "BTCUSD" from "mt5:CC:BTCUSD:4Hour" or "CC:BTCUSD"
+                    let sym_part = if parts[0] == "mt5" && parts.len() >= 4 {
+                        format!("{}:{}", parts[1], parts[2])
+                    } else if parts.len() >= 2 {
+                        format!("{}:{}", parts[0], parts[1])
+                    } else {
+                        key.clone()
+                    };
+                    sym_part
+                } else {
+                    key.clone()
+                };
+
+                if seen_symbols.contains(&base_sym) { continue; }
+                seen_symbols.insert(base_sym.clone());
+
+                // Try to load last 2 bars from D1, then H4, then any available TF
+                let mut row: Option<WatchlistRow> = None;
+                for tf_suffix in &["1Day", "4Hour", "1Hour", "1Week"] {
+                    let try_key = if key.starts_with("mt5:") {
+                        format!("mt5:{}:{}", base_sym, tf_suffix)
+                    } else {
+                        format!("{}:{}", base_sym, tf_suffix)
+                    };
+                    if let Ok(Some(raw)) = c.get_bars_raw(&try_key) {
+                        let n = raw.len();
+                        if n >= 2 {
+                            let last = &raw[n - 1];
+                            let prev = &raw[n - 2];
+                            let change = last.4 - prev.4; // close - prev_close
+                            let change_pct = if prev.4 != 0.0 { change / prev.4 * 100.0 } else { 0.0 };
+                            // Extract display name from base_sym
+                            let display = base_sym.split(':').last().unwrap_or(&base_sym).to_string();
+                            row = Some(WatchlistRow {
+                                symbol: display,
+                                cache_key: try_key,
+                                last: last.4,  // close
+                                prev_close: prev.4,
+                                change,
+                                change_pct,
+                                volume: last.5, // volume
+                            });
+                            break;
+                        } else if n == 1 {
+                            let last = &raw[0];
+                            let display = base_sym.split(':').last().unwrap_or(&base_sym).to_string();
+                            row = Some(WatchlistRow {
+                                symbol: display,
+                                cache_key: try_key,
+                                last: last.4,
+                                prev_close: last.1, // open as fallback
+                                change: last.4 - last.1,
+                                change_pct: if last.1 != 0.0 { (last.4 - last.1) / last.1 * 100.0 } else { 0.0 },
+                                volume: last.5,
+                            });
+                            break;
+                        }
+                    }
+                }
+                if let Some(r) = row {
+                    watchlist_rows.push(r);
+                }
+            }
+            // Sort by symbol name
+            watchlist_rows.sort_by(|a, b| a.symbol.cmp(&b.symbol));
+        }
 
         // Create async broker channels
         let (broker_tx, _broker_cmd_rx) = mpsc::unbounded_channel::<BrokerCmd>();
@@ -3918,6 +4022,7 @@ impl TyphooNApp {
             mm_result: String::new(),
             active_tab: 0,
             watchlist_symbols,
+            watchlist_rows,
             show_settings: false,
             show_darwin_accounts: false,
             show_darwin_portfolio: false,
@@ -4023,6 +4128,28 @@ impl TyphooNApp {
         }
     }
 
+    /// Set up MTF grid with N columns and target chart count.
+    /// Creates charts for all 9 timeframes, filling up to `target` charts.
+    fn setup_mtf_grid(&mut self, cols: usize, target: usize) {
+        let all_tfs = [
+            Timeframe::M1, Timeframe::M5, Timeframe::M15, Timeframe::M30,
+            Timeframe::H1, Timeframe::H4, Timeframe::D1, Timeframe::W1, Timeframe::MN1,
+        ];
+        let sym = self.symbol_input.trim().to_string();
+        // Grow charts to target count
+        while self.charts.len() < target {
+            let tf_idx = self.charts.len() % all_tfs.len();
+            let mut chart = ChartState::new(&sym, all_tfs[tf_idx]);
+            if let Some(ref cache) = self.cache {
+                chart.load(cache, &mut self.log);
+            }
+            self.charts.push(chart);
+        }
+        self.mtf_cols = cols;
+        self.mtf_enabled = true;
+        self.log.push_back(LogEntry::info(format!("MTF grid: {}×{} ({} charts)", cols, (target + cols - 1) / cols, self.charts.len())));
+    }
+
     fn indicator_flags(&self) -> IndicatorFlags {
         IndicatorFlags {
             sma200: self.show_sma200,
@@ -4057,6 +4184,10 @@ impl TyphooNApp {
                 self.mtf_enabled = !self.mtf_enabled;
                 self.log.push_back(LogEntry::info(format!("MTF grid: {}", self.mtf_enabled)));
             }
+            "MTF_2X2" => { self.setup_mtf_grid(2, 4); }
+            "MTF_3X3" => { self.setup_mtf_grid(3, 9); }
+            "MTF_4X4" => { self.setup_mtf_grid(4, 16); }
+            "MTF_4X3" => { self.setup_mtf_grid(4, 12); }
             "RELOAD" => {
                 if let Some(ref cache) = self.cache.clone() {
                     for chart in &mut self.charts {
@@ -6362,10 +6493,18 @@ impl eframe::App for TyphooNApp {
                     }
                 });
                 ui.menu_button("View", |ui| {
-                    if ui.button(if self.mtf_enabled { "Single Chart" } else { "MTF Grid (4 charts)" }).clicked() {
+                    let mtf_label = if self.mtf_enabled { "Single Chart".to_string() } else { format!("MTF Grid ({} charts)", self.charts.len()) };
+                    if ui.button(&mtf_label).clicked() {
                         self.mtf_enabled = !self.mtf_enabled;
                         ui.close();
                     }
+                    ui.menu_button("Grid Layout", |ui| {
+                        if ui.button("2×2 (4 charts)").clicked() { self.setup_mtf_grid(2, 4); ui.close(); }
+                        if ui.button("3×2 (6 charts)").clicked() { self.setup_mtf_grid(3, 6); ui.close(); }
+                        if ui.button("3×3 (9 charts)").clicked() { self.setup_mtf_grid(3, 9); ui.close(); }
+                        if ui.button("4×3 (12 charts)").clicked() { self.setup_mtf_grid(4, 12); ui.close(); }
+                        if ui.button("4×4 (16 charts)").clicked() { self.setup_mtf_grid(4, 16); ui.close(); }
+                    });
                     if ui.button("Indicators…").clicked() {
                         self.show_indicators_panel = true;
                         ui.close();
@@ -7174,24 +7313,75 @@ impl eframe::App for TyphooNApp {
                         }
 
                         RightTab::Watchlist => {
-                            ui.add_space(4.0);
-                            if self.watchlist_symbols.is_empty() {
+                            // TradingView-style watchlist header
+                            ui.add_space(2.0);
+                            egui::Grid::new("wl_header").num_columns(5).spacing(egui::vec2(4.0, 0.0)).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Symbol").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("Last").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("Chg").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("Chg%").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("Vol").color(AXIS_TEXT).small());
+                                ui.end_row();
+                            });
+                            // Thin separator under header
+                            let sep_rect = ui.available_rect_before_wrap();
+                            ui.painter().line_segment(
+                                [egui::pos2(sep_rect.left(), sep_rect.top()), egui::pos2(sep_rect.right(), sep_rect.top())],
+                                egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 40, 50)),
+                            );
+                            ui.add_space(2.0);
+
+                            if self.watchlist_rows.is_empty() {
                                 ui.label(egui::RichText::new("No cached symbols.").color(AXIS_TEXT).small());
                             } else {
                                 let mut load_key: Option<String> = None;
-                                for (idx, (key, count)) in self.watchlist_symbols.iter().enumerate() {
-                                    let sym_color = WL_COLORS[idx % WL_COLORS.len()];
-                                    let row = ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("\u{25CF}").color(sym_color).small());
-                                        ui.label(egui::RichText::new(key).color(sym_color).small().monospace().strong());
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            ui.label(egui::RichText::new(format!("{}", count)).color(AXIS_TEXT).small());
+                                egui::ScrollArea::vertical().show(ui, |ui| {
+                                    for (idx, wl) in self.watchlist_rows.iter().enumerate() {
+                                        let sym_color = WL_COLORS[idx % WL_COLORS.len()];
+                                        let chg_color = if wl.change >= 0.0 { UP } else { DOWN };
+                                        let is_selected = self.charts.get(self.active_tab)
+                                            .map(|c| c.symbol == wl.cache_key)
+                                            .unwrap_or(false);
+                                        let row_bg = if is_selected {
+                                            egui::Color32::from_rgb(15, 25, 45)
+                                        } else {
+                                            egui::Color32::TRANSPARENT
+                                        };
+
+                                        let row_rect = ui.available_rect_before_wrap();
+                                        let row_rect = egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 18.0));
+                                        ui.painter().rect_filled(row_rect, 0.0, row_bg);
+
+                                        let row = egui::Grid::new(format!("wl_row_{}", idx)).num_columns(5).spacing(egui::vec2(4.0, 0.0)).show(ui, |ui| {
+                                            // Symbol with colored dot
+                                            ui.horizontal(|ui| {
+                                                ui.spacing_mut().item_spacing.x = 2.0;
+                                                ui.label(egui::RichText::new("\u{25CF}").color(sym_color).small());
+                                                ui.label(egui::RichText::new(&wl.symbol).color(egui::Color32::WHITE).small().monospace().strong());
+                                            });
+                                            // Last price
+                                            ui.label(egui::RichText::new(format_price(wl.last)).color(egui::Color32::WHITE).small().monospace());
+                                            // Change
+                                            let chg_str = if wl.change >= 0.0 { format_price(wl.change) } else { format!("-{}", format_price(wl.change.abs())) };
+                                            ui.label(egui::RichText::new(chg_str).color(chg_color).small().monospace());
+                                            // Change %
+                                            ui.label(egui::RichText::new(format!("{:.2}%", wl.change_pct)).color(chg_color).small().monospace());
+                                            // Volume (compact format)
+                                            let vol_str = if wl.volume >= 1_000_000.0 {
+                                                format!("{:.2} M", wl.volume / 1_000_000.0)
+                                            } else if wl.volume >= 1_000.0 {
+                                                format!("{:.2} K", wl.volume / 1_000.0)
+                                            } else {
+                                                format!("{:.0}", wl.volume)
+                                            };
+                                            ui.label(egui::RichText::new(vol_str).color(AXIS_TEXT).small().monospace());
+                                            ui.end_row();
                                         });
-                                    });
-                                    if row.response.interact(egui::Sense::click()).clicked() {
-                                        load_key = Some(key.clone());
+                                        if row.response.interact(egui::Sense::click()).clicked() {
+                                            load_key = Some(wl.cache_key.clone());
+                                        }
                                     }
-                                }
+                                });
                                 if let Some(key) = load_key {
                                     if let Some(ref cache) = self.cache {
                                         if let Some(chart) = self.charts.get_mut(self.active_tab) {
@@ -7513,7 +7703,7 @@ impl eframe::App for TyphooNApp {
             let tp_price = self.tp_price;
 
             if self.mtf_enabled {
-                let total = self.charts.len().min(4);
+                let total = self.charts.len().min(16);
                 let cols   = self.mtf_cols.max(1).min(total);
                 let rows   = (total + cols - 1) / cols;
                 let cell_w = available.width()  / cols  as f32;
