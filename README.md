@@ -1,6 +1,6 @@
 # TyphooN-Terminal
 
-A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in Rust/Tauri for Alpaca Markets.
+A native desktop trading terminal + TUI CLI with full risk management, multi-timeframe charting, and hedged martingale support — built in pure Rust with native GPU rendering (egui + wgpu) for Alpaca Markets.
 
 **Website:** [MarketWizardry.org](https://www.marketwizardry.org/) | **License:** [BSL 1.1](LICENSE) ([Commercial](LICENSE-COMMERCIAL))
 
@@ -8,11 +8,11 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 
 | Metric | Value |
 |---|---|
-| **GUI Binary** | ~12-15MB Tauri (vs Electron ~200MB) |
+| **GUI Binary** | ~24MB native (egui+wgpu, zero WebKit) |
 | **CLI Binary** | 6.5MB standalone TUI (SSH/VPS ready) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | <1 second |
-| **Lines of Code** | ~45,500 (Rust + JS + Wasm) |
+| **Lines of Code** | ~15,000 (pure Rust) |
 | **Indicators** | 39 (9 NNFX + 21 standard + 9 MT5 parity) |
 | **Commands** | 288 Bloomberg-style (Ctrl+K) |
 | **Drawing Tools** | 44 GPU-rendered (Fibonacci, channels, pitchforks, Elliott, Gann) |

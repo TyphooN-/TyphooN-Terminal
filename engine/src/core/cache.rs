@@ -86,6 +86,34 @@ fn unpack_bars(data: &[u8]) -> Result<String, String> {
     serde_json::to_string(&bars).map_err(|e| format!("JSON serialize failed: {e}"))
 }
 
+/// Unpack binary bars to Vec of (timestamp_ms, open, high, low, close, volume) tuples.
+/// Zero-copy-friendly: returns raw f64 data, no JSON serialization.
+/// Used by native GPU renderer to go directly from cache → GPU vertex buffer.
+pub fn unpack_bars_raw(data: &[u8]) -> Result<Vec<(i64, f64, f64, f64, f64, f64)>, String> {
+    if data.len() < 8 || &data[0..4] != BAR_BINARY_MAGIC {
+        return Err("Not binary bar format".into());
+    }
+    let count = u32::from_le_bytes(
+        data[4..8].try_into().map_err(|_| "Failed to read bar_count")?
+    ) as usize;
+    let expected = 8 + count * BYTES_PER_BAR;
+    if data.len() < expected {
+        return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
+    }
+    let mut bars = Vec::with_capacity(count);
+    for i in 0..count {
+        let off = 8 + i * BYTES_PER_BAR;
+        let ts = i64::from_le_bytes(data[off..off+8].try_into().unwrap());
+        let o = f64::from_le_bytes(data[off+8..off+16].try_into().unwrap());
+        let h = f64::from_le_bytes(data[off+16..off+24].try_into().unwrap());
+        let l = f64::from_le_bytes(data[off+24..off+32].try_into().unwrap());
+        let c = f64::from_le_bytes(data[off+32..off+40].try_into().unwrap());
+        let v = f64::from_le_bytes(data[off+40..off+48].try_into().unwrap());
+        bars.push((ts, o, h, l, c, v));
+    }
+    Ok(bars)
+}
+
 /// Extract last and second-to-last bar timestamps from binary data (for metadata columns).
 /// Returns (second_last_ts_rfc3339, last_ts_rfc3339) or empty strings if not enough bars.
 fn extract_tail_timestamps(binary: &[u8], count: usize) -> (Option<String>, Option<String>) {
@@ -240,6 +268,37 @@ impl SqliteCache {
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(format!("SQLite query failed: {e}")),
+        }
+    }
+
+    /// Get bars as raw OHLCV tuples (no JSON serialization).
+    /// Zero-serialization hot path for native GPU renderer: cache → f64 → GPU vertex buffer.
+    pub fn get_bars_raw(&self, key: &str) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
+            .map_err(|e| format!("Prepare failed: {e}"))?;
+        let row: Option<Vec<u8>> = stmt.query_row(rusqlite::params![key], |r| r.get(0)).ok();
+        match row {
+            None => Ok(None),
+            Some(compressed) => {
+                let decompressed = zstd::decode_all(compressed.as_slice())
+                    .map_err(|e| format!("Decompress failed: {e}"))?;
+                if decompressed.len() >= 4 && &decompressed[0..4] == BAR_BINARY_MAGIC {
+                    Ok(Some(unpack_bars_raw(&decompressed)?))
+                } else {
+                    let text = String::from_utf8_lossy(&decompressed);
+                    let bars: Vec<serde_json::Value> = serde_json::from_str(&text)
+                        .map_err(|e| format!("JSON parse failed: {e}"))?;
+                    let result = bars.iter().filter_map(|b| {
+                        Some((
+                            chrono::DateTime::parse_from_rfc3339(b["timestamp"].as_str()?).ok()?.timestamp_millis(),
+                            b["open"].as_f64()?, b["high"].as_f64()?, b["low"].as_f64()?,
+                            b["close"].as_f64()?, b["volume"].as_f64().unwrap_or(0.0),
+                        ))
+                    }).collect();
+                    Ok(Some(result))
+                }
+            }
         }
     }
 
