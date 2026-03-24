@@ -1,0 +1,14 @@
+# ADR-019: Multi-Timeframe Grid
+
+**Status:** Implemented | **Date:** 2026-03-24
+
+## Context
+NNFX system requires viewing multiple timeframes simultaneously.
+
+## Decision
+4-cell 2x2 grid layout. Each cell is an independent chart viewport with the same indicator flags. Default: H4, D1, H1, W1. Toggle via View menu, toolbar MTF button, or ~ → MTF command. All cells share zoom/pan interaction.
+
+## Consequences
+- Pro: MT5-style multi-timeframe view
+- Pro: Same indicator set across all cells
+- Con: Fixed 2x2 layout (no dynamic resize yet)

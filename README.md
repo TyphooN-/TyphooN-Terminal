@@ -202,20 +202,33 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 
 | ADR | Topic |
 |---|---|
+| [001](docs/adr/001-native-gpu-architecture.md) | Native GPU architecture (egui + wgpu, tokio async broker) |
+| [002](docs/adr/002-chart-engine.md) | Chart engine (5 types, egui Painter, egui_plot) |
+| [003](docs/adr/003-sqlite-cache.md) | SQLite + zstd TTBR binary cache |
 | [004](docs/adr/004-mtf-indicators.md) | Multi-timeframe indicator support |
 | [005](docs/adr/005-indicator-visual-parity.md) | Indicator visual parity with MT5 |
+| [006](docs/adr/006-security.md) | Security (no WebView, parameterized SQL, AES-256-GCM) |
+| [008](docs/adr/008-multi-tab-charts.md) | Multi-tab charts (Ctrl+N/W/Tab) |
 | [009](docs/adr/009-rate-limiter.md) | Centralized rate limiter |
+| [010](docs/adr/010-multi-broker.md) | Multi-broker (Alpaca + tastytrade + MT5 view-only) |
+| [011](docs/adr/011-indicator-system.md) | 32+ indicators (NNFX + Ehlers + standard + harmonics) |
 | [012](docs/adr/012-news-earnings-dividends.md) | News, earnings, and dividend data |
 | [013](docs/adr/013-auto-load-timeframe.md) | Auto-load on timeframe change |
+| [014](docs/adr/014-sl-tp-lines.md) | SL/TP planning lines on chart |
+| [015](docs/adr/015-order-management.md) | Order management (Market/Limit/Stop/Bracket, async) |
+| [016](docs/adr/016-price-alerts.md) | Price alerts (session persistent) |
+| [017](docs/adr/017-drawing-tools.md) | 7 drawing tools with color picker |
+| [019](docs/adr/019-mtf-grid.md) | Multi-timeframe 4-cell grid |
 | [022](docs/adr/022-tastytrade-broker.md) | tastytrade broker integration |
+| [032](docs/adr/032-ehlers-dsp-indicators.md) | 8 Ehlers DSP indicators |
 | [033](docs/adr/033-free-api-expansion.md) | Free API expansion — 30+ data sources |
 | [037](docs/adr/037-data-source-hierarchy.md) | Data source hierarchy (MT5 → Kraken → Alpaca) |
 | [038](docs/adr/038-data-source-indicator.md) | Data source indicator UI |
 | [040](docs/adr/040-crypto-data-source.md) | Crypto data sources (Kraken gap-fill) |
 | [041](docs/adr/041-darwin-import-analytics.md) | DARWIN import pipeline & analytics engine |
 | [044](docs/adr/044-backup-lan-sync.md) | Backup & LAN sync |
-| [045](docs/adr/045-darwin-analytics-expansion.md) | DARWIN analytics expansion (VaR, drawdown, rebalancer) |
-| [048](docs/adr/ADR-048-bookmap-depth-heatmap.md) | Bookmap-style depth heatmap (future) |
+| [045](docs/adr/045-darwin-analytics-expansion.md) | DARWIN analytics expansion |
+| [048](docs/adr/ADR-048-bookmap-depth-heatmap.md) | Bookmap depth heatmap |
 | [049](docs/adr/049-harmonic-pattern-detection.md) | Scott Carney harmonic pattern detection |
 
 ---
