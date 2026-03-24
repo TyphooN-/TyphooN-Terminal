@@ -34672,25 +34672,19 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       const customTF = CUSTOM_TIMEFRAME_MAP[c.tf];
       const fetchTF = customTF ? customTF.base : c.tf;
       const aggFactor = customTF ? customTF.factor : 1;
-      const GRID_BARS = 5000;
+      const GRID_BARS = 10000;
       const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
       const cacheKey = getCacheKey(c.symbol || symbol, fetchTF);
       if (barCache[cacheKey]?.data?.length > 0) return Promise.resolve(); // already cached
       return cachedGetBars(c.symbol || symbol, fetchTF, limit).catch(() => {});
     });
     await Promise.all(prefetchPromises);
-    // TWO-PASS rendering: candles first (fast), then indicators (heavy, deferred)
-    // Pass 1: Candles only — each cell gets 150ms of event loop time between WASM calls
+    // Render cells sequentially — GPU set_data is fast, yields keep UI responsive
     for (const c of mtfGridCells) {
       if (mtfGridGeneration !== gridGen) return;
-      await loadMTFCellData(c, c.symbol || symbol, gridGen, true);
-      await new Promise(r => setTimeout(r, 150)); // event loop breathes: commands, clicks, typing
-    }
-    // Pass 2: Indicators — worker computes off-thread, GPU renders with yields
-    for (const c of mtfGridCells) {
-      if (mtfGridGeneration !== gridGen) return;
-      await loadMTFCellData(c, c.symbol || symbol, gridGen, false);
-      await new Promise(r => setTimeout(r, 150));
+      await loadMTFCellData(c, c.symbol || symbol, gridGen);
+      // 200ms yield: GPU rendering is fast but JSON.parse + sanitize needs breathing room
+      await new Promise(r => setTimeout(r, 200));
     }
   })();
 
@@ -34741,14 +34735,14 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
   }
 }
 
-async function loadMTFCellData(cellInfo, symbol, expectedGen, candlesOnly) {
+async function loadMTFCellData(cellInfo, symbol, expectedGen) {
   try {
     // Resolve custom timeframes (H12 → 4Hour × 3, etc.)
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    // 5K bars per cell — candles render fast in pass 1, indicators added async in pass 2
-    const GRID_BARS = 5000;
+    // 10K bars per cell — GPU set_data is fast, bottleneck is JSON.parse + sanitize
+    const GRID_BARS = 10000;
     const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
@@ -34808,16 +34802,6 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen, candlesOnly) {
       to: chartData.length + 2, // small right margin
     });
 
-    // Two-pass rendering: candlesOnly=true sets data, candlesOnly=false adds indicators
-    if (candlesOnly === true) {
-      if (cellInfo.gpuChart) { try { cellInfo.gpuChart.render(); } catch (_) {} }
-      cellInfo._chartData = chartData; // stash for indicator pass
-      return;
-    }
-    // Indicator pass: reuse stashed chartData (skip re-loading from cache)
-    if (candlesOnly === false && cellInfo._chartData) {
-      chartData = cellInfo._chartData;
-    }
     if (!chartData || chartData.length === 0) return;
 
     // ── Fast grid-cell indicators ──
