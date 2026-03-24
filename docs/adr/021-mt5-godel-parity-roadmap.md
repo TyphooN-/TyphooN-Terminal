@@ -38,6 +38,8 @@ TyphooN-Terminal aims to replace both MetaTrader 5 and Godel Terminal. A compreh
 | Feature | Effort | Notes |
 |---|---|---|
 | Account statement export (PDF) | 4h | Build summary, export via Tauri |
+| MQL5 indicator/EA compiler | Major | Compile .mq5 → WASM, run in Worker, render on GPU (ADR-047) |
+| PineScript indicator compiler | Major | Compile .pine → WASM via same IR pipeline (ADR-047) |
 
 ## Blocked Features & Why
 

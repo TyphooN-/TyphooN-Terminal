@@ -1,0 +1,160 @@
+// ══════════════════════════════════════════════════════════════
+// MQL5 Grammar for TyphooN Terminal Indicator/EA Compiler
+// ══════════════════════════════════════════════════════════════
+// Covers: indicators, EAs, #property directives, OnCalculate,
+// OnInit, OnTick, iSeries functions, SetIndexBuffer, drawing,
+// math, arrays, string ops, trading functions.
+
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT    = _{ line_comment | block_comment }
+line_comment  = _{ "//" ~ (!NEWLINE ~ ANY)* }
+block_comment = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+
+// ── Top-level program ──────────────────────────────────────
+program = { SOI ~ (preprocessor | property_directive | global_decl | function_def | enum_def | struct_def | class_def)* ~ EOI }
+
+// ── Preprocessor ───────────────────────────────────────────
+preprocessor  = { "#" ~ (include_dir | define_dir | ifdef_dir | ifndef_dir | endif_dir | else_dir | import_dir) }
+include_dir   = { "include" ~ (angle_path | string_literal) }
+define_dir    = { "define" ~ ident ~ expr? }
+ifdef_dir     = { "ifdef" ~ ident }
+ifndef_dir    = { "ifndef" ~ ident }
+endif_dir     = { "endif" }
+else_dir      = { "else" }
+import_dir    = { "import" ~ string_literal }
+angle_path    = { "<" ~ (!">" ~ ANY)+ ~ ">" }
+
+// ── #property directives ───────────────────────────────────
+property_directive = { "#property" ~ ident ~ expr }
+
+// ── Type system ────────────────────────────────────────────
+type_name = {
+    "void" | "bool" | "char" | "uchar" | "short" | "ushort" |
+    "int" | "uint" | "long" | "ulong" | "float" | "double" |
+    "string" | "datetime" | "color" | "ENUM_TIMEFRAMES" |
+    "ENUM_MA_METHOD" | "ENUM_APPLIED_PRICE" | "ENUM_DRAW_TYPE" |
+    "ENUM_INDEXBUFFER_TYPE" | "ENUM_PLOT_PROPERTY_INTEGER" |
+    "ENUM_PLOT_PROPERTY_DOUBLE" | "ENUM_PLOT_PROPERTY_STRING" |
+    "ENUM_INDICATOR_PROPERTY_INTEGER" | "ENUM_INDICATOR_PROPERTY_STRING" |
+    "ENUM_TRADE_REQUEST_ACTIONS" | "ENUM_ORDER_TYPE" | "ENUM_POSITION_TYPE" |
+    "MqlTradeRequest" | "MqlTradeResult" | "MqlRates" | "MqlDateTime" |
+    "MqlTick" | "MqlParam" |
+    ident
+}
+array_suffix = { "[" ~ expr? ~ "]" }
+type_spec    = { "const"? ~ type_name ~ "&"? ~ array_suffix* }
+
+// ── Enums ──────────────────────────────────────────────────
+enum_def    = { "enum" ~ ident ~ "{" ~ enum_member ~ ("," ~ enum_member)* ~ ","? ~ "}" ~ ";"? }
+enum_member = { ident ~ ("=" ~ expr)? }
+
+// ── Structs ────────────────────────────────────────────────
+struct_def   = { "struct" ~ ident ~ ("{" ~ struct_body ~ "}")? ~ ";" }
+struct_body  = { (struct_field | function_def)* }
+struct_field = { type_spec ~ ident ~ ("=" ~ expr)? ~ ";" }
+
+// ── Classes (basic support) ────────────────────────────────
+class_def    = { "class" ~ ident ~ (":" ~ "public" ~ ident)? ~ "{" ~ class_body ~ "}" ~ ";"? }
+class_body   = { (access_spec | struct_field | function_def)* }
+access_spec  = { ("public" | "private" | "protected") ~ ":" }
+
+// ── Global declarations ────────────────────────────────────
+global_decl = { input_decl | sinput_decl | var_decl }
+input_decl  = { "input" ~ type_spec ~ ident ~ ("=" ~ expr)? ~ ";" }
+sinput_decl = { "sinput" ~ type_spec ~ ident ~ ("=" ~ expr)? ~ ";" }
+var_decl    = { "static"? ~ "const"? ~ type_spec ~ var_init ~ ("," ~ var_init)* ~ ";" }
+var_init    = { ident ~ array_suffix* ~ ("=" ~ (expr | array_init))? }
+array_init  = { "{" ~ (expr ~ ("," ~ expr)*)? ~ "}" }
+
+// ── Functions ──────────────────────────────────────────────
+function_def  = { "static"? ~ "virtual"? ~ type_spec ~ ident ~ "(" ~ param_list? ~ ")" ~ "const"? ~ block }
+param_list    = { param ~ ("," ~ param)* }
+param         = { "const"? ~ type_spec ~ "&"? ~ ident ~ array_suffix* ~ ("=" ~ expr)? }
+block         = { "{" ~ stmt* ~ "}" }
+
+// ── Statements ─────────────────────────────────────────────
+stmt = {
+    var_decl |
+    if_stmt |
+    for_stmt |
+    while_stmt |
+    do_while_stmt |
+    switch_stmt |
+    return_stmt |
+    break_stmt |
+    continue_stmt |
+    block |
+    expr_stmt |
+    empty_stmt
+}
+
+if_stmt       = { "if" ~ "(" ~ expr ~ ")" ~ stmt ~ ("else" ~ stmt)? }
+for_stmt      = { "for" ~ "(" ~ (var_decl | expr_stmt | empty_stmt) ~ expr? ~ ";" ~ expr? ~ ")" ~ stmt }
+while_stmt    = { "while" ~ "(" ~ expr ~ ")" ~ stmt }
+do_while_stmt = { "do" ~ stmt ~ "while" ~ "(" ~ expr ~ ")" ~ ";" }
+switch_stmt   = { "switch" ~ "(" ~ expr ~ ")" ~ "{" ~ case_clause* ~ default_clause? ~ "}" }
+case_clause   = { "case" ~ expr ~ ":" ~ stmt* }
+default_clause = { "default" ~ ":" ~ stmt* }
+return_stmt   = { "return" ~ expr? ~ ";" }
+break_stmt    = { "break" ~ ";" }
+continue_stmt = { "continue" ~ ";" }
+expr_stmt     = { expr ~ ";" }
+empty_stmt    = { ";" }
+
+// ── Expressions (precedence climbing) ──────────────────────
+expr = { assign_expr }
+
+assign_expr  = { ternary_expr ~ (assign_op ~ assign_expr)? }
+assign_op    = { "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" }
+
+ternary_expr = { or_expr ~ ("?" ~ expr ~ ":" ~ ternary_expr)? }
+or_expr      = { and_expr ~ ("||" ~ and_expr)* }
+and_expr     = { bitor_expr ~ ("&&" ~ bitor_expr)* }
+bitor_expr   = { xor_expr ~ ("|" ~ xor_expr)* }
+xor_expr     = { bitand_expr ~ ("^" ~ bitand_expr)* }
+bitand_expr  = { eq_expr ~ ("&" ~ eq_expr)* }
+eq_expr      = { rel_expr ~ (("==" | "!=") ~ rel_expr)* }
+rel_expr     = { shift_expr ~ (("<=" | ">=" | "<" | ">") ~ shift_expr)* }
+shift_expr   = { add_expr ~ (("<<" | ">>") ~ add_expr)* }
+add_expr     = { mul_expr ~ (("+" | "-") ~ mul_expr)* }
+mul_expr     = { unary_expr ~ (("*" | "/" | "%") ~ unary_expr)* }
+
+unary_expr = { (unary_op ~ unary_expr) | postfix_expr }
+unary_op   = { "++" | "--" | "!" | "~" | "-" | "+" | "(int)" | "(double)" | "(string)" | "(bool)" | "(datetime)" | "(color)" }
+
+postfix_expr = { primary ~ postfix_op* }
+postfix_op   = { "++" | "--" | call_args | index_access | member_access }
+call_args    = { "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+index_access = { "[" ~ expr ~ "]" }
+member_access = { "." ~ ident }
+
+primary = {
+    number_literal |
+    string_literal |
+    char_literal |
+    color_literal |
+    bool_literal |
+    null_literal |
+    "(" ~ expr ~ ")" |
+    ident
+}
+
+// ── Literals ───────────────────────────────────────────────
+number_literal = @{ ("0x" ~ ASCII_HEX_DIGIT+) | (ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)?) }
+string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+char_literal   = @{ "'" ~ (!"'" ~ ANY)* ~ "'" }
+color_literal  = @{ "clr" ~ ASCII_ALPHA+ | "C'" ~ ASCII_DIGIT+ ~ "," ~ ASCII_DIGIT+ ~ "," ~ ASCII_DIGIT+ ~ "'" }
+bool_literal   = { "true" | "false" }
+null_literal   = { "NULL" | "EMPTY_VALUE" | "WRONG_VALUE" | "INVALID_HANDLE" }
+
+// ── Identifiers ────────────────────────────────────────────
+ident = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+keyword = {
+    "if" | "else" | "for" | "while" | "do" | "switch" | "case" | "default" |
+    "return" | "break" | "continue" | "void" | "bool" | "int" | "uint" |
+    "long" | "ulong" | "short" | "ushort" | "char" | "uchar" |
+    "float" | "double" | "string" | "datetime" | "color" |
+    "true" | "false" | "NULL" | "input" | "sinput" | "static" | "const" |
+    "class" | "struct" | "enum" | "virtual" | "public" | "private" | "protected"
+}

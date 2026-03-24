@@ -42,8 +42,20 @@ function workerCompute(type, bars, period, fastP, slowP) {
     // Send compact bar data (only OHLCV, no timestamps — worker returns values only)
     const compact = bars.map(b => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume || 0 }));
     indicatorWorker.postMessage({ id, type, bars: compact, period, fastP, slowP });
-    // Timeout fallback: if worker doesn't respond in 5s, resolve null (use main thread)
     const timer = setTimeout(() => { if (workerCallbacks[id]) { delete workerCallbacks[id]; resolve(null); } }, 5000);
+    workerCallbacks[id] = { resolve, timer };
+  });
+}
+
+// Batch compute: send bar data ONCE, compute ALL requested indicators off-thread.
+// Returns { sma200: [...], kama: [...], fisher: {...}, etc. }
+function workerComputeBatch(bars, indicators) {
+  return new Promise((resolve) => {
+    if (!indicatorWorker) { resolve(null); return; }
+    const id = workerNextId++;
+    const compact = bars.map(b => ({ o: b.open, h: b.high, l: b.low, c: b.close, v: b.volume || 0 }));
+    indicatorWorker.postMessage({ id, type: "batch", bars: compact, indicators });
+    const timer = setTimeout(() => { if (workerCallbacks[id]) { delete workerCallbacks[id]; resolve(null); } }, 10000);
     workerCallbacks[id] = { resolve, timer };
   });
 }
@@ -68,6 +80,8 @@ let gpuChartReady = false;
 let gpuChartModule = null;
 let gpuChartInstance = null;
 let gpuAnimFrame = null;
+// Global GPU render trigger — set by activateGpuChart, callable from anywhere
+let scheduleGpuRender = () => {};
 
 async function loadGpuChart() {
   if (gpuChartReady) return gpuChartModule;
@@ -135,12 +149,13 @@ class GpuChartWrapper {
     const self = this;
     this._timeScaleProxy = {
       fitContent() {
-        // Reset visible range to all bars
         const total = self.gpu.total_bar_count();
         if (total > 0) self.gpu.set_visible_range(0, total);
+        scheduleGpuRender();
       },
       setVisibleLogicalRange(range) {
         self.gpu.set_visible_range(range.from, range.to);
+        scheduleGpuRender();
       },
       getVisibleLogicalRange() {
         const r = self.gpu.get_time_range(); // returns [start, end]
@@ -231,18 +246,39 @@ class GpuChartWrapper {
             flat[i * 5 + 4] = data[i].volume || 0;
           }
           self.gpu.set_data(flat);
-        } else if (type === "line" || type === "area" || type === "baseline") {
+        } else if (type === "line" || type === "area") {
           // Extract values and add as GPU overlay line
-          const vals = new Float64Array(data.map(d => d.value));
+          const vals = toF64Values(data);
           const [r, g, b, a] = _parseSeriesColor(opts);
           gpuLineIndex = self.gpu.add_line(vals, r, g, b, a);
+        } else if (type === "baseline") {
+          // GPU fill: top values → baseline price
+          const vals = toF64Values(data);
+          const basePrice = opts?.baseValue?.price || 0;
+          const botVals = new Float64Array(data.length).fill(basePrice);
+          const [r, g, b, a] = _parseSeriesColor(opts, "topFillColor1");
+          try { self.gpu.add_fill(vals, botVals, r, g, b, Math.min(a, 0.3)); } catch (_) {}
+          // Also add top line
+          const [lr, lg, lb, la] = _parseSeriesColor(opts, "topLineColor");
+          if (opts?.topLineColor !== "transparent") {
+            gpuLineIndex = self.gpu.add_line(vals, lr, lg, lb, la);
+          }
         } else if (type === "histogram") {
-          // GPU_PHASE5: gpu.add_pane_histogram() for separate-pane histograms
-          // For now, add as a line overlay
-          const vals = new Float64Array(data.map(d => d.value));
-          const [r, g, b, a] = _parseSeriesColor(opts);
-          gpuLineIndex = self.gpu.add_line(vals, r, g, b, a);
+          // GPU histogram: per-bar colored bars from baseline
+          const vals = new Float64Array(data.length);
+          const colors = new Float32Array(data.length * 4);
+          for (let i = 0; i < data.length; i++) {
+            vals[i] = data[i].value || 0;
+            const hex = (data[i].color || opts?.color || "#888888").replace("#", "").replace(/[^0-9a-fA-F]/g, "");
+            colors[i * 4] = (parseInt(hex.substring(0, 2), 16) || 128) / 255;
+            colors[i * 4 + 1] = (parseInt(hex.substring(2, 4), 16) || 128) / 255;
+            colors[i * 4 + 2] = (parseInt(hex.substring(4, 6), 16) || 128) / 255;
+            colors[i * 4 + 3] = hex.length > 6 ? (parseInt(hex.substring(6, 8), 16) || 200) / 255 : 0.8;
+          }
+          try { self.gpu.add_histogram(vals, colors, 0.0); } catch (_) {}
         }
+        // Trigger GPU render after data change
+        scheduleGpuRender();
       },
 
       update(bar) {
@@ -350,12 +386,46 @@ class GpuChartWrapper {
         try { cb(param); } catch (_) {}
       }
     });
+
+    // Scroll wheel → zoom in/out
+    this.canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const factor = e.deltaY > 0 ? 0.9 : 1.1;
+      const centerX = e.offsetX / self.canvas.width;
+      self.gpu.zoom(factor, centerX);
+      scheduleGpuRender();
+    }, { passive: false });
+
+    // Drag to pan
+    let dragging = false, dragStartX = 0;
+    this.canvas.addEventListener("mousedown", (e) => {
+      if (e.button === 0) { dragging = true; dragStartX = e.offsetX; }
+    });
+    this.canvas.addEventListener("mousemove", (e) => {
+      if (dragging) {
+        const dx = e.offsetX - dragStartX;
+        const visibleBars = self.gpu.visible_bars();
+        const barDelta = -dx / (self.canvas.width / (visibleBars || 100));
+        self.gpu.scroll(barDelta);
+        dragStartX = e.offsetX;
+        scheduleGpuRender();
+      }
+    });
+    this.canvas.addEventListener("mouseup", () => { dragging = false; });
+    this.canvas.addEventListener("mouseleave", () => { dragging = false; });
   }
 }
 
+// Helper: extract values from data array into Float64Array (avoids intermediate .map() array)
+function toF64Values(data) {
+  const arr = new Float64Array(data.length);
+  for (let i = 0; i < data.length; i++) arr[i] = data[i].value;
+  return arr;
+}
+
 // Helper: parse series color options to [r, g, b, a] floats
-function _parseSeriesColor(opts) {
-  const hex = opts.color || opts.lineColor || opts.topLineColor || "#00bcd4";
+function _parseSeriesColor(opts, key) {
+  const hex = (key && opts[key]) || opts.color || opts.lineColor || opts.topLineColor || "#00bcd4";
   return _hexToFloatRgba(hex);
 }
 
@@ -579,15 +649,33 @@ function activateGpuChart(chartData, gpuType) {
     }
   }
 
-  // Render loop — WebGL + Canvas2D overlay
+  // ── GPU Overlay Render Loop (vsync, auto-pause after 2s idle) ──
   if (gpuAnimFrame) cancelAnimationFrame(gpuAnimFrame);
-  syncDrawingsToGpu(); // Initial sync of any loaded drawings
-  function renderLoop() {
-    gpuChartInstance.render();
-    renderOverlay();
-    gpuAnimFrame = requestAnimationFrame(renderLoop);
+  syncDrawingsToGpu();
+  let _gpuDirty = true;
+  let _gpuLastActivity = Date.now();
+
+  function overlayLoop() {
+    if (_gpuDirty) {
+      gpuChartInstance.render();
+      renderOverlay();
+      _gpuDirty = false;
+      _gpuLastActivity = Date.now();
+    }
+    if (Date.now() - _gpuLastActivity < 2000) {
+      gpuAnimFrame = requestAnimationFrame(overlayLoop);
+    } else {
+      gpuAnimFrame = null;
+    }
   }
-  renderLoop();
+
+  scheduleGpuRender = () => {
+    _gpuDirty = true;
+    _gpuLastActivity = Date.now();
+    if (!gpuAnimFrame) gpuAnimFrame = requestAnimationFrame(overlayLoop);
+  };
+
+  gpuAnimFrame = requestAnimationFrame(overlayLoop);
 
   // Mouse interaction: scroll to pan, wheel to zoom, crosshair tracking
   canvas.style.pointerEvents = "auto";
@@ -599,20 +687,22 @@ function activateGpuChart(chartData, gpuType) {
     } else {
       gpuChartInstance.scroll(e.deltaY > 0 ? 5 : -5);
     }
+    scheduleGpuRender();
   };
   let dragging = false, dragStartX = 0;
   canvas.onmousedown = (e) => { dragging = true; dragStartX = e.offsetX; };
   canvas.onmousemove = (e) => {
-    gpuMouseX = e.offsetX; gpuMouseY = e.offsetY; // Track for crosshair
+    gpuMouseX = e.offsetX; gpuMouseY = e.offsetY;
     if (dragging) {
       const dx = e.offsetX - dragStartX;
       const barDelta = -dx / (canvas.width / gpuChartInstance.visible_bars());
       gpuChartInstance.scroll(barDelta);
       dragStartX = e.offsetX;
     }
+    scheduleGpuRender();
   };
   canvas.onmouseup = () => { dragging = false; };
-  canvas.onmouseleave = () => { dragging = false; gpuMouseX = -1; gpuMouseY = -1; };
+  canvas.onmouseleave = () => { dragging = false; gpuMouseX = -1; gpuMouseY = -1; scheduleGpuRender(); };
 }
 
 function deactivateGpuChart() {
@@ -696,48 +786,70 @@ async function cachedGetBars(symbol, timeframe, limit) {
 function sanitizeBars(bars) {
   if (!bars || bars.length === 0) return bars;
 
-  const clean = [];
-  const seenTimes = new Set();
+  // Forward pass: use Map for O(1) dedup — last occurrence wins (Map overwrites).
+  // Avoids backward iteration + reverse (2 passes → 1 pass + sort).
+  const byTime = new Map();
 
-  for (let i = bars.length - 1; i >= 0; i--) {
+  for (let i = 0; i < bars.length; i++) {
     const b = bars[i];
     // Skip bars with bad timestamps
-    if (!b.time || !isFinite(b.time) || b.time <= 0) continue;
-    // Skip duplicate timestamps (keep latest = first seen from end)
-    if (seenTimes.has(b.time)) continue;
-    seenTimes.add(b.time);
-    // Skip bars with NaN/Infinity/null/zero prices
-    if (!isFinite(b.open) || !isFinite(b.high) || !isFinite(b.low) || !isFinite(b.close)) continue;
-    if (b.open <= 0 || b.high <= 0 || b.low <= 0 || b.close <= 0) continue;
+    if (!b.time || b.time <= 0) continue;
+    // Skip bars with bad prices (avoid isFinite calls when possible)
+    const o = b.open, h = b.high, l = b.low, c = b.close;
+    if (!(o > 0) || !(h > 0) || !(l > 0) || !(c > 0)) continue;
     // Fix OHLC inconsistency: high/low must envelope open/close
-    const trueHigh = Math.max(b.open, b.high, b.low, b.close);
-    const trueLow = Math.min(b.open, b.high, b.low, b.close);
+    const trueHigh = h >= o && h >= c && h >= l ? h : Math.max(o, h, l, c);
+    const trueLow = l <= o && l <= c && l <= h ? l : Math.min(o, h, l, c);
+    const v = b.volume;
     const bar = {
-      time: b.time,
-      open: b.open,
-      high: trueHigh,
-      low: trueLow,
-      close: b.close,
-      volume: (b.volume && isFinite(b.volume) && b.volume >= 0) ? b.volume : 0,
+      time: b.time, open: o, high: trueHigh, low: trueLow, close: c,
+      volume: (v > 0) ? v : 0,
     };
     // Tint weekend bars blue for crypto symbols (Kraken-sourced data)
     if (_markWeekendBars) {
-      const d = new Date(b.time * 1000);
-      const day = d.getUTCDay(); // 0=Sun, 6=Sat
-      if (day === 0 || day === 6) {
-        const isUp = bar.close >= bar.open;
-        bar.color = isUp ? "#1565c0" : "#0d47a1";           // blue body
-        bar.borderColor = isUp ? "#42a5f5" : "#1565c0";     // blue border
-        bar.wickUpColor = isUp ? "#42a5f5" : "#1565c0";     // blue wick
+      // Fast day-of-week from unix timestamp (avoids new Date())
+      const daysSinceEpoch = (b.time / 86400) | 0;
+      const dow = (daysSinceEpoch + 4) % 7; // 0=Sun, 6=Sat (epoch was Thursday=4)
+      if (dow === 0 || dow === 6) {
+        const isUp = c >= o;
+        bar.color = isUp ? "#1565c0" : "#0d47a1";
+        bar.borderColor = isUp ? "#42a5f5" : "#1565c0";
+        bar.wickUpColor = isUp ? "#42a5f5" : "#1565c0";
         bar.wickDownColor = isUp ? "#42a5f5" : "#1565c0";
       }
     }
-    clean.push(bar);
+    byTime.set(b.time, bar); // last occurrence wins (overwrites dups)
   }
 
-  // Reverse back to chronological order (we iterated backwards for dedup)
-  clean.reverse();
+  // Map preserves insertion order — if input was sorted, output is sorted.
+  // Only sort if needed (check if already ascending).
+  const clean = Array.from(byTime.values());
+  let sorted = true;
+  for (let i = 1; i < clean.length; i++) {
+    if (clean[i].time < clean[i - 1].time) { sorted = false; break; }
+  }
+  if (!sorted) clean.sort((a, b) => a.time - b.time);
   return clean;
+}
+
+// ── Fast timestamp parser (avoids new Date() overhead on 50K+ bars) ──
+// Handles "YYYY-MM-DDTHH:MM:SS" and "YYYY-MM-DD HH:MM:SS" with optional Z/timezone.
+// Falls back to Date.parse for non-standard formats.
+function fastParseTimestamp(ts) {
+  if (typeof ts === "number") return ts > 1e12 ? Math.floor(ts / 1000) : ts;
+  // Fast path: "YYYY-MM-DDTHH:MM:SS" (19+ chars, ISO-ish)
+  if (ts.length >= 19 && (ts[4] === "-") && (ts[10] === "T" || ts[10] === " ")) {
+    const y = (ts.charCodeAt(0) - 48) * 1000 + (ts.charCodeAt(1) - 48) * 100 + (ts.charCodeAt(2) - 48) * 10 + (ts.charCodeAt(3) - 48);
+    const m = (ts.charCodeAt(5) - 48) * 10 + (ts.charCodeAt(6) - 48);
+    const d = (ts.charCodeAt(8) - 48) * 10 + (ts.charCodeAt(9) - 48);
+    const h = (ts.charCodeAt(11) - 48) * 10 + (ts.charCodeAt(12) - 48);
+    const min = (ts.charCodeAt(14) - 48) * 10 + (ts.charCodeAt(15) - 48);
+    const s = (ts.charCodeAt(17) - 48) * 10 + (ts.charCodeAt(18) - 48);
+    // Date.UTC is still much faster than new Date(string)
+    return Math.floor(Date.UTC(y, m - 1, d, h, min, s) / 1000);
+  }
+  // Fallback
+  return Math.floor(new Date(ts).getTime() / 1000);
 }
 
 /// Pack chart bars into flat f64 array for Wasm interop.
@@ -854,6 +966,53 @@ function invokeQuiet(cmd, args) {
 
 // ── State ───────────────────────────────────────────────────
 
+// ── Throttled localStorage write (avoids sync I/O on every quote tick) ──
+let _pendingPriceWrites = {};
+let _priceWriteTimer = null;
+function throttledPriceWrite(symbol, data) {
+  _pendingPriceWrites[symbol] = data;
+  if (!_priceWriteTimer) {
+    _priceWriteTimer = setTimeout(() => {
+      _priceWriteTimer = null;
+      for (const [sym, d] of Object.entries(_pendingPriceWrites)) {
+        try { localStorage.setItem(`typhoon_lastprice_${sym}`, JSON.stringify(d)); } catch (_) {}
+      }
+      _pendingPriceWrites = {};
+    }, 30000); // flush every 30s
+  }
+}
+// Flush on tab hide / beforeunload
+// ── Tab Visibility: pause polling when hidden, resume when visible ──
+let _pausedIntervals = []; // stashed interval configs for resume
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    // Flush pending price writes
+    for (const [sym, d] of Object.entries(_pendingPriceWrites)) {
+      try { localStorage.setItem(`typhoon_lastprice_${sym}`, JSON.stringify(d)); } catch (_) {}
+    }
+    _pendingPriceWrites = {};
+    // Pause non-critical polling intervals to save CPU/API calls
+    if (_bidAskLineInterval) { clearInterval(_bidAskLineInterval); _pausedIntervals.push("bidask"); _bidAskLineInterval = null; }
+    if (liveBarInterval) { clearInterval(liveBarInterval); _pausedIntervals.push("livebar"); liveBarInterval = null; }
+  } else {
+    // Resume paused intervals
+    if (_pausedIntervals.includes("bidask")) { startBidAskLinePolling(); }
+    if (_pausedIntervals.includes("livebar") && currentSymbol && currentTimeframe) {
+      const gen = chartLoadGeneration;
+      liveBarInterval = setInterval(() => {
+        if (chartLoadGeneration !== gen) { clearInterval(liveBarInterval); return; }
+        updateLatestBar(currentSymbol, currentTimeframe);
+      }, 10000);
+    }
+    _pausedIntervals = [];
+  }
+});
+window.addEventListener("beforeunload", () => {
+  for (const [sym, d] of Object.entries(_pendingPriceWrites)) {
+    try { localStorage.setItem(`typhoon_lastprice_${sym}`, JSON.stringify(d)); } catch (_) {}
+  }
+});
+
 let chart = null;
 let fisherChart = null;
 let volumeChart = null;
@@ -877,6 +1036,9 @@ let lastPrice = 0;
 let _markWeekendBars = false; // true for crypto symbols — tints weekend bars blue
 let mtfData = {};
 let currentChartData = []; // full chartData with volume — candleSeries.data() drops volume
+let _timeToBarMap = null;  // O(1) bar lookup for crosshair (built after chart load)
+let _cachedChartContainerW = 800; // cached to avoid forced reflow in crosshair handler
+let _cachedChartContainerH = 400;
 let chartLoadGeneration = 0; // increments on each loadChart call — stale intervals check this
 let activeBrokerId = "default"; // per-broker data isolation — set on connect
 let currentChartType = "gpu"; // default GPU candles, "candles" for CPU fallback
@@ -1218,11 +1380,19 @@ function initChart() {
     }
   });
 
-  // Resize all charts together
+  // Resize all charts together (debounced — 3 observers fire simultaneously on window resize)
+  let _resizeRAF = 0;
   const ro = new ResizeObserver(() => {
-    chart.resize(container.clientWidth, container.clientHeight);
-    fisherChart.resize(fisherContainer.clientWidth, fisherContainer.clientHeight);
-    volumeChart.resize(volumeContainer.clientWidth, volumeContainer.clientHeight);
+    cancelAnimationFrame(_resizeRAF);
+    _resizeRAF = requestAnimationFrame(() => {
+      const cw = container.clientWidth, ch = container.clientHeight;
+      chart.resize(cw, ch);
+      fisherChart.resize(fisherContainer.clientWidth, fisherContainer.clientHeight);
+      volumeChart.resize(volumeContainer.clientWidth, volumeContainer.clientHeight);
+      // Update cached dimensions for crosshair tooltip (avoids forced reflow per mousemove)
+      _cachedChartContainerW = cw;
+      _cachedChartContainerH = ch;
+    });
   });
   ro.observe(container);
   ro.observe(fisherContainer);
@@ -1259,9 +1429,9 @@ function setupTooltip() {
     // Follow cursor — offset to avoid overlapping crosshair
     const x = param.point.x + 16;
     const y = param.point.y + 16;
-    const container = document.getElementById("chart-container");
-    const cw = container?.clientWidth || 800;
-    const ch = container?.clientHeight || 400;
+    // Use cached container dimensions (updated on resize, avoids forced reflow per mousemove)
+    const cw = _cachedChartContainerW || 800;
+    const ch = _cachedChartContainerH || 400;
     // Flip to left/above if near right/bottom edge
     dataWindow.style.left = (x + 220 > cw ? Math.max(0, param.point.x - 230) : x) + "px";
     dataWindow.style.top = (y + 150 > ch ? Math.max(0, param.point.y - 160) : y) + "px";
@@ -1278,15 +1448,16 @@ function setupTooltip() {
       } else if (ohlc.value !== undefined) {
         lines.push(`Price: ${ohlc.value.toFixed(dp)}`);
       }
-      const bar = currentChartData.find(d => d.time === param.time);
+      // O(1) bar lookup via Map (replaces O(n) .find())
+      const bar = _timeToBarMap?.get(param.time);
       if (bar && bar.volume) lines.push(`Vol: ${bar.volume.toLocaleString()}`);
     }
 
     // Active indicator values (limit to 8 to avoid overflow)
     let indCount = 0;
-    for (const [key, series] of Object.entries(indicatorSeries)) {
+    for (const key in indicatorSeries) {
       if (indCount >= 8) break;
-      const data = param.seriesData.get(series);
+      const data = param.seriesData.get(indicatorSeries[key]);
       if (data && data.value !== undefined) {
         const label = key.replace(/_\d+$/,"").replace(/_/g," ").substring(0,12);
         lines.push(`${label}: ${data.value.toFixed(2)}`);
@@ -1295,7 +1466,8 @@ function setupTooltip() {
     }
 
     // Fisher pane values
-    for (const [key, series] of Object.entries(fisherSeries)) {
+    for (const key in fisherSeries) {
+      const series = fisherSeries[key];
       const data = param.seriesData.get(series);
       if (data && data.value !== undefined) {
         lines.push(`Fisher: ${data.value.toFixed(2)}`);
@@ -1349,15 +1521,40 @@ function _rewireChartSync() {
   setupTooltip();
 }
 
-// Start GPU render loop for a GpuChartWrapper instance
+// GPU render loop for GpuChartWrapper mode (the main chart).
+// Runs at vsync rate, auto-pauses after 2s idle, restarts on scheduleGpuRender().
+let _wrapperDirty = true;
+let _wrapperLastActivity = 0;
+const WRAPPER_IDLE_MS = 2000;
+
 function _startGpuRenderLoop(gpuWrapper) {
   if (gpuAnimFrame) cancelAnimationFrame(gpuAnimFrame);
-  function renderLoop() {
-    if (!gpuWrapper || !gpuWrapper.gpu) return;
-    try { gpuWrapper.gpu.render(); } catch (_) {}
-    gpuAnimFrame = requestAnimationFrame(renderLoop);
+  gpuAnimFrame = null;
+  if (!gpuWrapper || !gpuWrapper.gpu) return;
+  _wrapperDirty = true;
+  _wrapperLastActivity = Date.now();
+
+  function loop() {
+    if (_wrapperDirty) {
+      try { gpuWrapper.gpu.render(); } catch (_) {}
+      _wrapperDirty = false;
+      _wrapperLastActivity = Date.now();
+    }
+    if (Date.now() - _wrapperLastActivity < WRAPPER_IDLE_MS) {
+      gpuAnimFrame = requestAnimationFrame(loop);
+    } else {
+      gpuAnimFrame = null; // paused — scheduleGpuRender restarts
+    }
   }
-  renderLoop();
+
+  // Global render trigger for wrapper mode
+  scheduleGpuRender = () => {
+    _wrapperDirty = true;
+    _wrapperLastActivity = Date.now();
+    if (!gpuAnimFrame) gpuAnimFrame = requestAnimationFrame(loop);
+  };
+
+  gpuAnimFrame = requestAnimationFrame(loop);
 }
 
 function rebuildMainSeries(chartType) {
@@ -1989,6 +2186,7 @@ function clearIndicators() {
     chart.removeSeries(series);
   }
   indicatorSeries = {};
+  memoClear(); // flush indicator cache on symbol/timeframe switch
 }
 
 // ── KAMA (Kaufman Adaptive Moving Average) ──────────────────
@@ -3010,7 +3208,7 @@ async function loadMTFData(symbol) {
     for (const { tf, bars } of results) {
       if (bars.length > 0) {
         mtfData[tf] = bars.map(b => ({
-          time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+          time: fastParseTimestamp(b.timestamp),
           open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
         }));
       }
@@ -3094,35 +3292,79 @@ function clipToChart(indData, chartData) {
 //   minBars:  "p" = >period (default), "p1" = >period+1, "2p" = >period*2, number = >N, 0 = no check
 //   doClip:   whether to clip output to chart time range (default true)
 // ══════════════════════════════════════════════════════════════════════
+
+// ── Indicator Result Memoization ─────────────────────────────────────
+// Cache keyed by (indicator_period, barCount, lastBarTime, lastClose).
+// Skip recomputation when the underlying data hasn't changed.
+const _indicatorMemo = new Map();
+const MEMO_MAX_ENTRIES = 200; // cap to prevent unbounded growth
+
+function memoKey(indicator, period, data) {
+  const n = data.length;
+  const last = n > 0 ? data[n - 1] : null;
+  return `${indicator}_${period}_${n}_${last ? last.time : 0}_${last ? last.close : 0}`;
+}
+
+function memoGet(key) {
+  const entry = _indicatorMemo.get(key);
+  if (entry) { entry.hits++; return entry.value; }
+  return undefined;
+}
+
+function memoSet(key, value) {
+  if (_indicatorMemo.size >= MEMO_MAX_ENTRIES) {
+    // Evict oldest entries (first inserted)
+    const it = _indicatorMemo.keys();
+    for (let i = 0; i < 50; i++) _indicatorMemo.delete(it.next().value);
+  }
+  _indicatorMemo.set(key, { value, hits: 0 });
+}
+
+function memoClear() { _indicatorMemo.clear(); }
+
+// Memoized wrapper for any calc function
+function memoCalc(name, period, data, calcFn) {
+  const key = memoKey(name, period, data);
+  const cached = memoGet(key);
+  if (cached !== undefined) return cached;
+  const result = calcFn();
+  memoSet(key, result);
+  return result;
+}
+
 const INDICATOR_REGISTRY = {
   // ── Simple overlay MAs ──
-  "sma":      { calc: (d, p) => wasmCalcSMA(d, p), color: { 200: "#FFFF00", 50: "#2196f3" }, pane: "overlay" },
-  "ema":      { calc: (d, p) => wasmCalcEMA(d, p), color: { 50: "#2196f3", 200: "#ff9800" }, pane: "overlay" },
-  "dema":     { calc: (d, p) => calcDEMA(d, p),    color: "#00e676", pane: "overlay", minBars: "2p" },
-  "wma":      { calc: (d, p) => calcWMA(d, p),     color: "#ff4081", pane: "overlay" },
-  "hma":      { calc: (d, p) => calcHMA(d, p),     color: "#00e5ff", width: 1.5, pane: "overlay" },
-  "vwap":     { calc: (d) => calcVWAP(d),          color: "#ff4081", width: 2, pane: "overlay", minBars: 1, lastVal: true, title: "VWAP", doClip: false },
+  "sma":      { calc: (d, p) => memoCalc("sma", p, d, () => wasmCalcSMA(d, p)), color: { 200: "#FFFF00", 50: "#2196f3" }, pane: "overlay" },
+  "ema":      { calc: (d, p) => memoCalc("ema", p, d, () => wasmCalcEMA(d, p)), color: { 50: "#2196f3", 200: "#ff9800" }, pane: "overlay" },
+  "dema":     { calc: (d, p) => memoCalc("dema", p, d, () => calcDEMA(d, p)),    color: "#00e676", pane: "overlay", minBars: "2p" },
+  "wma":      { calc: (d, p) => memoCalc("wma", p, d, () => calcWMA(d, p)),     color: "#ff4081", pane: "overlay" },
+  "hma":      { calc: (d, p) => memoCalc("hma", p, d, () => calcHMA(d, p)),     color: "#00e5ff", width: 1.5, pane: "overlay" },
+  "vwap":     { calc: (d) => memoCalc("vwap", 0, d, () => calcVWAP(d)),          color: "#ff4081", width: 2, pane: "overlay", minBars: 1, lastVal: true, title: "VWAP", doClip: false },
 
   // ── Separate-pane single-line (no borderVisible on scale) ──
-  "cci":      { calc: (d, p) => calcCCI(d, p),          color: "#9c27b0", pane: "separate", scaleId: "cci", scaleTop: 0.8 },
-  "williams": { calc: (d, p) => calcWilliamsR(d, p),    color: "#e91e63", pane: "separate", scaleId: "wr",  scaleTop: 0.8 },
-  "obv":      { calc: (d) => calcOBV(d),                color: "#00bcd4", pane: "separate", scaleId: "obv", scaleTop: 0.85, minBars: 0 },
-  "momentum": { calc: (d, p) => calcMomentum(d, p),     color: "#ff5722", pane: "separate", scaleId: "mom", scaleTop: 0.85 },
+  "cci":      { calc: (d, p) => memoCalc("cci", p, d, () => calcCCI(d, p)),          color: "#9c27b0", pane: "separate", scaleId: "cci", scaleTop: 0.8 },
+  "williams": { calc: (d, p) => memoCalc("wr", p, d, () => calcWilliamsR(d, p)),    color: "#e91e63", pane: "separate", scaleId: "wr",  scaleTop: 0.8 },
+  "obv":      { calc: (d) => memoCalc("obv", 0, d, () => calcOBV(d)),                color: "#00bcd4", pane: "separate", scaleId: "obv", scaleTop: 0.85, minBars: 0 },
+  "momentum": { calc: (d, p) => memoCalc("mom", p, d, () => calcMomentum(d, p)),     color: "#ff5722", pane: "separate", scaleId: "mom", scaleTop: 0.85 },
 
   // ── Separate-pane single-line (borderVisible: false, lastVal: true) ──
-  "atr":      { calc: (d, p) => wasmCalcATR(d, p),      color: "#ff5722", pane: "separate", scaleId: "atr",      scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "ATR$P", minBars: "p1", doClip: false },
-  "stddev":   { calc: (d, p) => calcStdDev(d, p),       color: "#e91e63", pane: "separate", scaleId: "stddev",   scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "StdDev", doClip: false },
-  "chaikin":  { calc: (d) => calcChaikin(d),             color: "#ff5722", pane: "separate", scaleId: "chaikin",  scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "Chaikin", minBars: 11, doClip: false },
-  "demarker": { calc: (d, p) => calcDeMarker(d, p),     color: "#795548", pane: "separate", scaleId: "demarker", scaleTop: 0.82, scaleBorder: false, lastVal: true, title: "DeMarker", minBars: "p1", doClip: false },
-  "mfi":      { calc: (d, p) => calcMFI(d, p),          color: "#9c27b0", pane: "separate", scaleId: "mfi",      scaleTop: 0.82, scaleBorder: false, lastVal: true, title: "MFI$P", minBars: "p1", doClip: false },
-  "force":    { calc: (d, p) => calcForceIndex(d, p),   color: "#00bcd4", pane: "separate", scaleId: "force",    scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "Force", minBars: "p1", doClip: false },
+  "atr":      { calc: (d, p) => memoCalc("atr", p, d, () => wasmCalcATR(d, p)),      color: "#ff5722", pane: "separate", scaleId: "atr",      scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "ATR$P", minBars: "p1", doClip: false },
+  "stddev":   { calc: (d, p) => memoCalc("stddev", p, d, () => calcStdDev(d, p)),       color: "#e91e63", pane: "separate", scaleId: "stddev",   scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "StdDev", doClip: false },
+  "chaikin":  { calc: (d) => memoCalc("chaikin", 0, d, () => calcChaikin(d)),             color: "#ff5722", pane: "separate", scaleId: "chaikin",  scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "Chaikin", minBars: 11, doClip: false },
+  "demarker": { calc: (d, p) => memoCalc("demarker", p, d, () => calcDeMarker(d, p)),     color: "#795548", pane: "separate", scaleId: "demarker", scaleTop: 0.82, scaleBorder: false, lastVal: true, title: "DeMarker", minBars: "p1", doClip: false },
+  "mfi":      { calc: (d, p) => memoCalc("mfi", p, d, () => calcMFI(d, p)),          color: "#9c27b0", pane: "separate", scaleId: "mfi",      scaleTop: 0.82, scaleBorder: false, lastVal: true, title: "MFI$P", minBars: "p1", doClip: false },
+  "force":    { calc: (d, p) => memoCalc("force", p, d, () => calcForceIndex(d, p)),   color: "#00bcd4", pane: "separate", scaleId: "force",    scaleTop: 0.87, scaleBorder: false, lastVal: true, title: "Force", minBars: "p1", doClip: false },
 };
 
 // ctx: optional override for grid cells — { chart, fisherChart, volumeChart }
 // When omitted, uses global chart instances (single chart mode).
 // This allows MTF Grid cells to reuse the exact same indicator pipeline as the main chart,
 // matching MT5's architecture where each window has its own full indicator set.
-function applyIndicators(chartData, ctx) {
+// Generation counter for cancelling stale applyIndicators runs
+let _applyIndicatorsGen = 0;
+
+async function applyIndicators(chartData, ctx) {
+  const gen = ++_applyIndicatorsGen;
   const _chart = ctx?.chart || chart;
   const _fisherChart = ctx?.fisherChart || fisherChart;
   const _volumeChart = ctx?.volumeChart || volumeChart;
@@ -3131,6 +3373,10 @@ function applyIndicators(chartData, ctx) {
   let _indicatorSeries = _isGridCell ? {} : indicatorSeries;
   let _fisherSeries = _isGridCell ? {} : fisherSeries;
   let _volumeSeries = _isGridCell ? {} : volumeSeries;
+  // Yield to event loop between indicators — prevents UI freeze
+  const yieldFrame = () => new Promise(r => requestAnimationFrame(r));
+  // Check if this run was superseded by a newer applyIndicators call
+  const cancelled = () => !_isGridCell && _applyIndicatorsGen !== gen;
   if (!_isGridCell) {
     clearIndicators();
     for (const [, s] of Object.entries(fisherSeries)) fisherChart.removeSeries(s);
@@ -3144,8 +3390,21 @@ function applyIndicators(chartData, ctx) {
   // lookback scans that block the main thread for 200ms+ per cell × 4+ cells.
   const GRID_SKIP = new Set(["supply-demand", "auto-fib", "fractals"]);
   const lastTime = chartData.length > 0 ? chartData[chartData.length - 1].time : Infinity;
-  // Helper: clip any data array to not exceed last candle time
-  const clip = (data) => data.filter(d => d.time <= lastTime);
+  // Helper: clip data to not exceed last candle time (binary search, O(log n) vs O(n) filter)
+  const clip = (data) => {
+    if (!data || data.length === 0) return data;
+    if (data[data.length - 1].time <= lastTime) return data; // already clipped
+    let lo = 0, hi = data.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; data[mid].time <= lastTime ? lo = mid + 1 : hi = mid; }
+    return data.slice(0, lo);
+  };
+  // Helper: binary search slice — returns chartData where time >= startTime (O(log n))
+  const sliceFrom = (arr, startTime) => {
+    if (!arr || arr.length === 0) return arr;
+    let lo = 0, hi = arr.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; arr[mid].time < startTime ? lo = mid + 1 : hi = mid; }
+    return arr.slice(lo);
+  };
   // Helper: add a simple line series overlay
   const addLine = (color, width, data, seriesKey) => {
     if (!data || data.length < 2) return;
@@ -3154,11 +3413,20 @@ function applyIndicators(chartData, ctx) {
     if (seriesKey) _indicatorSeries[seriesKey] = s;
   };
 
+  // Track which indicators are expensive and need a yield before them
+  const EXPENSIVE_INDICATORS = new Set(["kama", "fisher", "supply-demand", "auto-fib", "better-vol", "rvol", "stochastic", "adx", "ichimoku", "prev-levels", "atr-proj", "mtf-ma"]);
+
   for (const cb of checkboxes) {
     const ind = cb.dataset.ind;
     if (_isGridCell && GRID_SKIP.has(ind)) continue; // skip expensive indicators in grid
+    if (cancelled()) return; // bail if superseded
     const period = parseInt(cb.dataset.period) || 14;
     const key = `${ind}_${period}`;
+
+    // Yield between EVERY indicator to keep UI responsive.
+    // Without this, 9+ indicators on 7748 bars freeze for 2-5s.
+    if (!_isGridCell) { await yieldFrame(); }
+    if (cancelled()) return;
 
     // Isolate each indicator — one failure must not break others
     try {
@@ -3217,9 +3485,11 @@ function applyIndicators(chartData, ctx) {
       if (!_isGridCell) {
         for (const tf of getRelevantMTFs(ALL_MTF_KAMA_TFS)) {
           if (tf === currentTimeframe) continue;
+          if (cancelled()) return;
+          await yieldFrame(); // yield between each TF projection
           const tfBars = mtfData[tf];
           if (!tfBars || tfBars.length < period + 1) continue;
-          const kamaData = calcKAMA(tfBars, period);
+          const kamaData = memoCalc(`kama_htf_${tf}`, period, tfBars, () => calcKAMA(tfBars, period));
           const projected = projectHTFToChartTime(kamaData, chartData);
           if (projected.length === 0) continue;
           const maColor = MTF_MA_COLORS[tf] || "#FF00FF";
@@ -3245,13 +3515,15 @@ function applyIndicators(chartData, ctx) {
       });
       // HTF previous candle levels — solid lines from HTF bar start to last candle
       for (const tf of pclTFs) {
+        if (cancelled()) return;
+        await yieldFrame();
         const tfBars = mtfData[tf];
         const levels = calcHTFPrevLevels(tfBars, chartData);
         if (!levels) continue;
         const color = MTF_PCL_COLORS[tf] || "#FFFFFF";
         // Previous bar levels span from previous HTF bar start to current
         const prevStart = tfBars.length >= 2 ? tfBars[tfBars.length - 2].time : 0;
-        const levelBars = clip(chartData.filter(d => d.time >= prevStart));
+        const levelBars = clip(sliceFrom(chartData, prevStart));
         if (levelBars.length < 2) continue;
         const drawLevel = (val, clr, k) => {
           const s = _chart.addLineSeries({ color: clr, lineWidth: 2, lineStyle: 0, title: "", lastValueVisible: false, priceLineVisible: false });
@@ -3263,7 +3535,7 @@ function applyIndicators(chartData, ctx) {
         // D1/W1 current bar levels (Judas)
         if (tf === "1Day" || tf === "1Week") {
           const curStart = tfBars[tfBars.length - 1].time;
-          const curBars = clip(chartData.filter(d => d.time >= curStart));
+          const curBars = clip(sliceFrom(chartData, curStart));
           if (curBars.length >= 2) {
             drawLevel(levels.curHigh, "#FF00FF", "ch");
             drawLevel(levels.curLow, "#FF00FF", "cl");
@@ -3298,6 +3570,8 @@ function applyIndicators(chartData, ctx) {
       if (!_isGridCell) {
       const HTF_ATR_LOOKBACK = { "1Hour": 12, "4Hour": 11, "1Day": 7, "1Week": 4 };
       for (const tf of getRelevantMTFs(ALL_MTF_ATR_TFS)) {
+        if (cancelled()) return;
+        await yieldFrame();
         const tfBars = mtfData[tf];
         const proj = calcHTFATRProjection(tfBars, period);
         if (!proj) continue;
@@ -3305,7 +3579,7 @@ function applyIndicators(chartData, ctx) {
         const lookbackN = HTF_ATR_LOOKBACK[tf] || 7;
         const startIdx = Math.max(0, tfBars.length - lookbackN);
         const htfStart = tfBars[startIdx].time;
-        const projBars = clip(chartData.filter(d => d.time >= htfStart));
+        const projBars = clip(sliceFrom(chartData, htfStart));
         if (projBars.length < 2) continue;
         const sU = _chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
         const sL = _chart.addLineSeries({ color: "#FFFF00", lineWidth: 2, lineStyle: 1, title: "", lastValueVisible: false, priceLineVisible: false });
@@ -3319,7 +3593,7 @@ function applyIndicators(chartData, ctx) {
     } else if (ind === "fisher" && chartData.length > period) {
       // EhlersFisherTransform.mqh — DRAW_COLOR_LINE in separate pane
       // Green (#3CB371) when fisher > signal (bullish), Red (#FF4500) when < (bearish), Gray neutral
-      const ef = calcEhlersFisher(chartData, period);
+      const ef = memoCalc("fisher", period, chartData, () => calcEhlersFisher(chartData, period));
 
       // MQL5 DRAW_COLOR_LINE: ONE line that changes color per bar.
       // Split into contiguous same-color segments, each as its own line series.
@@ -3375,7 +3649,11 @@ function applyIndicators(chartData, ctx) {
       const sZero = _fisherChart.addLineSeries({
         color: "#FFFFFF33", lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false,
       });
-      sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
+      // Reuse fisher timestamps for zero line (avoids .map() allocation)
+      const zeroData = [];
+      for (let zi = 0; zi < ef.fisher.length; zi += 10) zeroData.push({ time: ef.fisher[zi].time, value: 0 });
+      if (ef.fisher.length > 0) zeroData.push({ time: ef.fisher[ef.fisher.length - 1].time, value: 0 });
+      sZero.setData(zeroData);
 
       _fisherSeries.signal = sSignal;
       _fisherSeries.zero = sZero;
@@ -3385,7 +3663,7 @@ function applyIndicators(chartData, ctx) {
 
     } else if (ind === "better-vol" && chartData.length > 2) {
       // BetterVolume — rendered in dedicated volumeChart pane
-      const bvData = calcBetterVolume(chartData);
+      const bvData = memoCalc("bettervol", 20, chartData, () => calcBetterVolume(chartData));
       const s = _volumeChart.addHistogramSeries({
         priceFormat: { type: "volume" },
       });
@@ -3396,7 +3674,9 @@ function applyIndicators(chartData, ctx) {
 
     } else if (ind === "supply-demand" && chartData.length > 10) {
       // SupplyDemand.mqh: fractal-based zones with strength-tier colors
-      const zones = calcSupplyDemandZones(chartData);
+      // Cap to last 1000 bars — O(n²) fractal scan is 500ms+ on 3000+ bars
+      const sdBars = chartData.length > 1000 ? chartData.slice(-1000) : chartData;
+      const zones = memoCalc("sd", 5, sdBars, () => calcSupplyDemandZones(sdBars));
       for (let zi = 0; zi < zones.length; zi++) {
         const z = zones[zi];
         // MQL5 default colors by type and strength
@@ -3412,7 +3692,7 @@ function applyIndicators(chartData, ctx) {
         const zoneColor = colors[z.strength] || colors.untested;
         const fillColor = zoneColor + "30"; // semi-transparent fill
         const lineColor = zoneColor + "88"; // slightly transparent border
-        const zoneBars = clip(chartData.filter(d => d.time >= z.startTime));
+        const zoneBars = clip(sliceFrom(chartData, z.startTime));
         if (zoneBars.length < 2) continue;
 
         // Top line of zone
@@ -3453,9 +3733,11 @@ function applyIndicators(chartData, ctx) {
 
     } else if (ind === "auto-fib" && chartData.length > 30) {
       // Auto Fibonacci: fractal-based swing detection with retracement + extension levels
-      const fib = calcAutoFibonacci(chartData);
+      // Cap to last 500 bars — fractal scan on 3000+ bars is 300ms+
+      const fibBarsInput = chartData.length > 500 ? chartData.slice(-500) : chartData;
+      const fib = memoCalc("autofib", 10, fibBarsInput, () => calcAutoFibonacci(fibBarsInput));
       if (fib) {
-        const fibBars = clip(chartData.filter(d => d.time >= fib.startTime));
+        const fibBars = clip(sliceFrom(chartData, fib.startTime));
         if (fibBars.length >= 2) {
           // Retracement colors (warm → cool gradient)
           const retraceColors = {
@@ -3512,7 +3794,7 @@ function applyIndicators(chartData, ctx) {
 
     } else if (ind === "rvol" && chartData.length > 11) {
       // RVOL.mqh: DRAW_COLOR_HISTOGRAM
-      const rvolData = calcRVOL(chartData, period);
+      const rvolData = memoCalc("rvol", period, chartData, () => calcRVOL(chartData, period));
       const s = _chart.addHistogramSeries({
         priceScaleId: "rvol", lastValueVisible: true,
         priceFormat: { type: "price", precision: 2, minMove: 0.01 },
@@ -3532,7 +3814,7 @@ function applyIndicators(chartData, ctx) {
       _indicatorSeries[key] = s;
 
     } else if (ind === "stochastic" && chartData.length > period + 10) {
-      const st = calcStochastic(chartData, period, 3, 3);
+      const st = memoCalc("stoch", period, chartData, () => calcStochastic(chartData, period, 3, 3));
       if (st.k.length > 0) {
         const sk = _chart.addLineSeries({ color: "#2196f3", lineWidth: 1, priceScaleId: "stoch", lastValueVisible: false, priceLineVisible: false });
         const sd = _chart.addLineSeries({ color: "#ff9800", lineWidth: 1, priceScaleId: "stoch", lastValueVisible: false, priceLineVisible: false });
@@ -3542,7 +3824,7 @@ function applyIndicators(chartData, ctx) {
       }
 
     } else if (ind === "adx" && chartData.length > period * 3) {
-      const adx = calcADX(chartData, period);
+      const adx = memoCalc("adx", period, chartData, () => calcADX(chartData, period));
       if (adx.adx.length > 0) {
         const sa = _chart.addLineSeries({ color: "#ff9800", lineWidth: 1.5, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
         const sp = _chart.addLineSeries({ color: "#4caf50", lineWidth: 1, priceScaleId: "adx", lastValueVisible: false, priceLineVisible: false });
@@ -3553,7 +3835,7 @@ function applyIndicators(chartData, ctx) {
       }
 
     } else if (ind === "ichimoku" && chartData.length > 52) {
-      const ich = calcIchimoku(chartData);
+      const ich = memoCalc("ichimoku", 52, chartData, () => calcIchimoku(chartData));
       addLine("#2196f3", 1, clip(ich.tenkanSen), "ich_tenkan");
       addLine("#f44336", 1, clip(ich.kijunSen), "ich_kijun");
       addLine("#4caf50", 1, clip(ich.senkouA), "ich_sa");
@@ -3610,9 +3892,11 @@ function applyIndicators(chartData, ctx) {
       }
       // HTF SMA projected onto current chart
       for (const tf of getRelevantMTFs(ALL_MTF_KAMA_TFS)) {
+        if (cancelled()) return;
+        await yieldFrame();
         const tfBars = mtfData[tf];
         if (!tfBars || tfBars.length < period + 1) continue;
-        const smaData = calcSMA(tfBars, period);
+        const smaData = memoCalc(`sma_htf_${tf}`, period, tfBars, () => calcSMA(tfBars, period));
         const projected = projectHTFToChartTime(smaData, chartData);
         if (projected.length === 0) continue;
         // MQL5 color: H1=Tomato, H4/D1/W1=Magenta (from MTF_MA indicator)
@@ -4106,7 +4390,7 @@ async function loadChart(symbol, timeframe) {
               // If still on same tab/symbol, update chart (activeTabId prevents cross-tab writes)
               if (currentSymbol === symbol && currentTimeframe === timeframe && activeTabId === loadTabId) {
                 let freshChartData = sanitizeBars(freshBars.map(b => ({
-                  time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+                  time: fastParseTimestamp(b.timestamp),
                   open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
                 })));
                 if (aggFactor > 1) freshChartData = aggregateBars(freshChartData, aggFactor);
@@ -4142,7 +4426,7 @@ async function loadChart(symbol, timeframe) {
     }
 
     let chartData = bars.map((b) => ({
-      time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+      time: fastParseTimestamp(b.timestamp),
       open: b.open,
       high: b.high,
       low: b.low,
@@ -4181,6 +4465,9 @@ async function loadChart(symbol, timeframe) {
     applyExtendedHoursColoring(chartData, symbol);
 
     currentChartData = chartData; // preserve volume for indicators
+    // Build O(1) time→bar Map for crosshair tooltip (replaces linear .find())
+    _timeToBarMap = new Map();
+    for (const bar of chartData) _timeToBarMap.set(bar.time, bar);
     // Cache chart data on active tab for instant restore on tab switch
     const activeTab = tabs.find(t => t.id === activeTabId);
     if (activeTab) activeTab.chartData = chartData;
@@ -4201,18 +4488,23 @@ async function loadChart(symbol, timeframe) {
     currentTimeframe = timeframe;
     if (chartData.length > 0) lastPrice = chartData[chartData.length - 1].close;
 
-    // Load MTF data for multi-timeframe indicators, then apply all + update grid
-    // Guard: discard stale MTF data if user switched symbols during fetch
+    // Load MTF data for multi-timeframe indicators, then apply all + update grid.
+    // Deferred via setTimeout(0) so the chart renders candles FIRST and UI stays responsive.
+    // applyIndicators is async with yields between each indicator — UI processes events between them.
     loadMTFData(symbol).then(() => {
       if (currentSymbol !== symbol) return;
-      // Full bar data for indicators — no cap. WASM handles heavy computation,
-      // and MT5 sync no longer triggers reloads so no repeated freeze risk.
-      applyIndicators(chartData);
-      renderAnnotations();
-      updateMTFGrid();
+      setTimeout(() => {
+        if (currentSymbol !== symbol) return;
+        applyIndicators(chartData);
+        renderAnnotations();
+        updateMTFGrid();
+      }, 0);
     }).catch(() => {
       if (currentSymbol !== symbol) return;
-      applyIndicators(chartData);
+      setTimeout(() => {
+        if (currentSymbol !== symbol) return;
+        applyIndicators(chartData);
+      }, 0);
     });
 
     log(`${symbol} @ ${timeframe}: ${chartData.length} bars, last=$${lastPrice}`, "ok");
@@ -4618,7 +4910,7 @@ async function updateDashboard() {
           if (isExtended) spreadEl.style.color = "#ff9800"; // orange = extended hours
           else spreadEl.style.color = "";
           // Persist last known price for this symbol
-          try { localStorage.setItem(`typhoon_lastprice_${currentSymbol}`, JSON.stringify({ bid: q.bid, ask: q.ask, ts: q.timestamp })); } catch (_) {}
+          throttledPriceWrite(currentSymbol, { bid: q.bid, ask: q.ask, ts: q.timestamp });
         }
       }).catch(() => {
         // No Alpaca quote — try MT5 bid/ask from BarCacheWriter sync
@@ -4632,7 +4924,7 @@ async function updateDashboard() {
               spreadEl.textContent = `Bid: ${mt5q.b.toFixed(dp)} | Ask: ${mt5q.a.toFixed(dp)} | Spread: ${mt5q.sp.toFixed(dp)} (MT5)`;
               spreadEl.style.color = "#42a5f5"; // blue = MT5 source
               lastPrice = mt5q.b;
-              try { localStorage.setItem(`typhoon_lastprice_${currentSymbol}`, JSON.stringify({ bid: mt5q.b, ask: mt5q.a, ts: mt5q.t * 1000 })); } catch (_) {}
+              throttledPriceWrite(currentSymbol, { bid: mt5q.b, ask: mt5q.a, ts: mt5q.t * 1000 });
             } else {
               // Fall back to localStorage cache
               try {
@@ -6174,11 +6466,17 @@ function setupPaneResizers() {
     let startAboveH = 0;
     let startBelowH = 0;
 
+    // Cache DOM refs once on mousedown (not per-pixel in mousemove)
+    let _dragCC, _dragFP, _dragVP;
+
     const onMouseDown = (e) => {
       e.preventDefault();
       startY = e.clientY;
       startAboveH = aboveEl.getBoundingClientRect().height;
       startBelowH = belowEl.getBoundingClientRect().height;
+      _dragCC = document.getElementById("chart-container");
+      _dragFP = document.getElementById("fisher-pane");
+      _dragVP = document.getElementById("volume-pane");
       resizer.classList.add("active");
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
@@ -6189,7 +6487,6 @@ function setupPaneResizers() {
       const newAbove = Math.max(60, startAboveH + dy);
       const newBelow = Math.max(40, startBelowH - dy);
 
-      // For the main chart (flex:1), set flex to none and use explicit height
       if (aboveId === "chart-container") {
         aboveEl.style.flex = "none";
         aboveEl.style.height = newAbove + "px";
@@ -6198,10 +6495,10 @@ function setupPaneResizers() {
       }
       belowEl.style.height = newBelow + "px";
 
-      // Trigger chart resizes
-      chart.resize(document.getElementById("chart-container").clientWidth, document.getElementById("chart-container").clientHeight);
-      fisherChart.resize(document.getElementById("fisher-pane").clientWidth, document.getElementById("fisher-pane").clientHeight);
-      volumeChart.resize(document.getElementById("volume-pane").clientWidth, document.getElementById("volume-pane").clientHeight);
+      // Use cached DOM refs (avoids 3 getElementById calls per mousemove)
+      if (chart && _dragCC) chart.resize(_dragCC.clientWidth, _dragCC.clientHeight);
+      if (fisherChart && _dragFP) fisherChart.resize(_dragFP.clientWidth, _dragFP.clientHeight);
+      if (volumeChart && _dragVP) volumeChart.resize(_dragVP.clientWidth, _dragVP.clientHeight);
     };
 
     const onMouseUp = () => {
@@ -6224,10 +6521,15 @@ function setupPanelSplitter() {
   let startX = 0;
   let startWidth = 0;
 
+  let _splCC, _splFP, _splVP;
+
   const onMouseDown = (e) => {
     e.preventDefault();
     startX = e.clientX;
     startWidth = rightPanel.getBoundingClientRect().width;
+    _splCC = document.getElementById("chart-container");
+    _splFP = document.getElementById("fisher-pane");
+    _splVP = document.getElementById("volume-pane");
     splitter.classList.add("active");
     document.body.style.cursor = "ew-resize";
     document.body.style.userSelect = "none";
@@ -6236,17 +6538,14 @@ function setupPanelSplitter() {
   };
 
   const onMouseMove = (e) => {
-    const dx = startX - e.clientX; // dragging left = wider panel
+    const dx = startX - e.clientX;
     const newWidth = Math.max(140, Math.min(500, startWidth + dx));
     rightPanel.style.width = newWidth + "px";
 
-    // Trigger chart resizes
-    const cc = document.getElementById("chart-container");
-    const fp = document.getElementById("fisher-pane");
-    const vp = document.getElementById("volume-pane");
-    if (chart && cc) chart.resize(cc.clientWidth, cc.clientHeight);
-    if (fisherChart && fp) fisherChart.resize(fp.clientWidth, fp.clientHeight);
-    if (volumeChart && vp) volumeChart.resize(vp.clientWidth, vp.clientHeight);
+    // Use cached DOM refs
+    if (chart && _splCC) chart.resize(_splCC.clientWidth, _splCC.clientHeight);
+    if (fisherChart && _splFP) fisherChart.resize(_splFP.clientWidth, _splFP.clientHeight);
+    if (volumeChart && _splVP) volumeChart.resize(_splVP.clientWidth, _splVP.clientHeight);
   };
 
   const onMouseUp = () => {
@@ -19895,6 +20194,224 @@ async function cmdLanStatus() {
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+// MQL5 / PINESCRIPT COMPILER — Compile to WASM, run on GPU
+// ══════════════════════════════════════════════════════════════
+
+// Storage for compiled custom indicators (name → { wasm, metadata, enabled })
+const _compiledIndicators = new Map();
+
+async function cmdCompileIndicator() {
+  const win = createWindow({ title: "MQL5 / PineScript Compiler", type: "custom", width: 750, height: 500 });
+  win.contentElement.textContent = "";
+  win.contentElement.style.cssText = "display:flex;flex-direction:column;height:100%;";
+
+  // Language selector + file input
+  const toolbar = document.createElement("div");
+  toolbar.style.cssText = "display:flex;gap:8px;align-items:center;padding:4px 8px;background:#111;";
+  const langSel = document.createElement("select");
+  langSel.style.cssText = "background:#222;color:#ccc;border:1px solid #444;padding:2px 6px;";
+  ["MQL5 (.mq5)", "PineScript (.pine)"].forEach(l => { const o = document.createElement("option"); o.textContent = l; langSel.appendChild(o); });
+  toolbar.appendChild(langSel);
+
+  const loadBtn = document.createElement("button");
+  loadBtn.textContent = "Load File";
+  loadBtn.style.cssText = "background:#333;color:#ccc;border:1px solid #555;padding:2px 10px;cursor:pointer;";
+  toolbar.appendChild(loadBtn);
+
+  const compileBtn = document.createElement("button");
+  compileBtn.textContent = "Compile & Apply";
+  compileBtn.style.cssText = "background:#2e7d32;color:#fff;border:none;padding:4px 16px;cursor:pointer;font-weight:bold;";
+  toolbar.appendChild(compileBtn);
+
+  const statusSpan = document.createElement("span");
+  statusSpan.style.cssText = "color:#888;font-size:11px;margin-left:auto;";
+  toolbar.appendChild(statusSpan);
+  win.contentElement.appendChild(toolbar);
+
+  // Code editor (textarea — Monaco integration is Phase 6)
+  const editor = document.createElement("textarea");
+  editor.style.cssText = "flex:1;background:#0a0a0a;color:#e0e0e0;border:none;padding:8px;font-family:Consolas,'Courier New',monospace;font-size:12px;resize:none;tab-size:4;white-space:pre;overflow:auto;";
+  editor.spellcheck = false;
+  editor.placeholder = `// Paste MQL5 indicator source here, or load a .mq5 file\n// Example:\n#property indicator_separate_window\n#property indicator_buffers 1\n\ninput int Period = 14;\n\ndouble Buffer[];\n\nint OnInit() {\n  SetIndexBuffer(0, Buffer, INDICATOR_DATA);\n  return INIT_SUCCEEDED;\n}\n\nint OnCalculate(const int rates_total, const int prev_calculated,\n                const datetime &time[], const double &open[],\n                const double &high[], const double &low[],\n                const double &close[], const long &tick_volume[],\n                const long &volume[], const int &spread[]) {\n  for (int i = prev_calculated; i < rates_total; i++) {\n    Buffer[i] = (high[i] + low[i]) / 2.0;\n  }\n  return rates_total;\n}`;
+  win.contentElement.appendChild(editor);
+
+  // Output panel
+  const output = document.createElement("div");
+  output.style.cssText = "height:100px;background:#0d0d0d;color:#aaa;padding:4px 8px;font-size:11px;font-family:Consolas,monospace;overflow:auto;border-top:1px solid #333;white-space:pre-wrap;";
+  output.textContent = "Ready. Paste or load MQL5/PineScript source, then click Compile & Apply.";
+  win.contentElement.appendChild(output);
+
+  // Load file button
+  loadBtn.addEventListener("click", async () => {
+    try {
+      const scripts = JSON.parse(await invoke("list_user_scripts"));
+      if (scripts.length === 0) {
+        output.textContent = "No scripts found in ~/.config/typhoon-terminal/scripts/\nPlace .mq5 or .pine files there and try again.";
+        return;
+      }
+      const names = scripts.map(s => s.name).join("\n");
+      const choice = prompt(`Scripts found:\n${names}\n\nEnter filename to load:`);
+      if (!choice) return;
+      const script = scripts.find(s => s.name === choice || s.name === choice.trim());
+      if (!script) { output.textContent = `Script "${choice}" not found.`; return; }
+      // Read file via Tauri
+      const source = await invoke("db_cache_get", { key: `script:${script.path}` }).catch(() => null);
+      if (source) {
+        editor.value = source;
+        output.textContent = `Loaded ${script.name} (${script.size} bytes)`;
+      } else {
+        output.textContent = `Could not read ${script.path}. Check file permissions.`;
+      }
+    } catch (e) {
+      output.textContent = `Error listing scripts: ${e}`;
+    }
+  });
+
+  // Compile button
+  compileBtn.addEventListener("click", async () => {
+    const source = editor.value.trim();
+    if (!source) { output.textContent = "No source code to compile."; return; }
+
+    statusSpan.textContent = "Compiling...";
+    output.textContent = "Compiling...\n";
+
+    try {
+      const isMql5 = langSel.selectedIndex === 0;
+      const resultJson = await invoke(isMql5 ? "compile_mql5" : "compile_pine", { source });
+      const result = JSON.parse(resultJson);
+
+      // Show diagnostics
+      let diagText = "";
+      for (const d of result.diagnostics) {
+        const prefix = d.level === "Error" ? "ERROR" : d.level === "Warning" ? "WARN" : "INFO";
+        diagText += `[${prefix}] Line ${d.line}:${d.col}: ${d.message}\n`;
+      }
+
+      if (result.wasm_base64) {
+        const wasmSize = Math.round(result.wasm_base64.length * 0.75); // approximate decoded size
+        diagText += `\n✓ Compiled to WASM (${wasmSize} bytes)\n`;
+
+        if (result.metadata) {
+          const m = result.metadata;
+          diagText += `  Buffers: ${m.buffers}, Window: ${m.separate_window ? "separate" : "overlay"}`;
+          if (m.short_name) diagText += `, Name: ${m.short_name}`;
+          if (m.inputs.length > 0) diagText += `\n  Inputs: ${m.inputs.map(i => `${i.name}:${i.param_type}`).join(", ")}`;
+          diagText += "\n";
+        }
+
+        // Decode WASM and run indicator
+        const wasmBytes = Uint8Array.from(atob(result.wasm_base64), c => c.charCodeAt(0));
+        diagText += `  Loading WASM module...\n`;
+        output.textContent = diagText;
+
+        try {
+          await loadCompiledIndicator(wasmBytes, result.metadata);
+          diagText += `  ✓ Indicator applied to chart!\n`;
+          statusSpan.textContent = "✓ Applied";
+          statusSpan.style.color = "#4caf50";
+        } catch (e) {
+          diagText += `  ✗ Runtime error: ${e}\n`;
+          statusSpan.textContent = "✗ Runtime error";
+          statusSpan.style.color = "#f44336";
+        }
+      } else {
+        statusSpan.textContent = "✗ Compilation failed";
+        statusSpan.style.color = "#f44336";
+      }
+
+      output.textContent = diagText;
+    } catch (e) {
+      output.textContent = `Compilation failed: ${e}`;
+      statusSpan.textContent = "✗ Error";
+      statusSpan.style.color = "#f44336";
+    }
+  });
+}
+
+/// Load a compiled WASM indicator and render its output on the GPU chart.
+async function loadCompiledIndicator(wasmBytes, metadata) {
+  if (!currentChartData || currentChartData.length === 0) throw new Error("No chart data loaded");
+
+  // Pack bar data for WASM runtime
+  const bars = currentChartData;
+  const numBars = bars.length;
+  const outputBuffer = new Float64Array(numBars);
+
+  // Create WASM import object (runtime shim)
+  const imports = {
+    env: {
+      iBars: () => numBars,
+      iOpen:   (shift) => { const i = numBars - 1 - shift; return (i >= 0 && i < numBars) ? bars[i].open : 0; },
+      iHigh:   (shift) => { const i = numBars - 1 - shift; return (i >= 0 && i < numBars) ? bars[i].high : 0; },
+      iLow:    (shift) => { const i = numBars - 1 - shift; return (i >= 0 && i < numBars) ? bars[i].low : 0; },
+      iClose:  (shift) => { const i = numBars - 1 - shift; return (i >= 0 && i < numBars) ? bars[i].close : 0; },
+      iVolume: (shift) => { const i = numBars - 1 - shift; return (i >= 0 && i < numBars) ? (bars[i].volume || 0) : 0; },
+      math_abs:  (x) => Math.abs(x),
+      math_sqrt: (x) => Math.sqrt(x),
+      math_log:  (x) => Math.log(x),
+      math_max:  (a, b) => Math.max(a, b),
+      math_min:  (a, b) => Math.min(a, b),
+      set_buffer: (barIdx, value) => {
+        if (barIdx >= 0 && barIdx < numBars) outputBuffer[barIdx] = value;
+      },
+    },
+  };
+
+  // Instantiate WASM
+  const { instance } = await WebAssembly.instantiate(wasmBytes, imports);
+
+  // Call on_calculate(rates_total, prev_calculated)
+  const on_calculate = instance.exports.on_calculate;
+  if (!on_calculate) throw new Error("WASM module missing on_calculate export");
+
+  const t0 = performance.now();
+  on_calculate(numBars, 0);
+  const elapsed = (performance.now() - t0).toFixed(1);
+  log(`Compiled indicator: ${numBars} bars computed in ${elapsed}ms`, "ok");
+
+  // Convert output buffer to chart line data
+  const lineData = [];
+  for (let i = 0; i < numBars; i++) {
+    if (isFinite(outputBuffer[i]) && outputBuffer[i] !== 0) {
+      lineData.push({ time: bars[i].time, value: outputBuffer[i] });
+    }
+  }
+
+  if (lineData.length < 2) throw new Error("Indicator produced no visible output");
+
+  // Render on chart
+  const isSeparate = metadata?.separate_window;
+  const targetChart = isSeparate ? fisherChart : chart;
+  const color = "#00FFFF"; // cyan for compiled indicators
+  const s = targetChart.addLineSeries({
+    color, lineWidth: 2,
+    lastValueVisible: true, priceLineVisible: false,
+    title: metadata?.short_name || "Custom",
+  });
+  s.setData(lineData);
+  indicatorSeries[`compiled_${Date.now()}`] = s;
+
+  log(`Compiled indicator: ${lineData.length} data points rendered`, "ok");
+}
+
+async function cmdListScripts() {
+  try {
+    const scripts = JSON.parse(await invoke("list_user_scripts"));
+    if (scripts.length === 0) {
+      log("No scripts found in ~/.config/typhoon-terminal/scripts/", "info");
+      log("Place .mq5 or .pine files there to use the compiler.", "info");
+      return;
+    }
+    log(`Found ${scripts.length} script(s):`, "ok");
+    for (const s of scripts) {
+      log(`  ${s.language.toUpperCase()} | ${s.name} (${s.size} bytes)`, "info");
+    }
+  } catch (e) {
+    log(`Failed to list scripts: ${e}`, "error");
+  }
+}
+
 // ── Cache Backup / Restore (SQLite portable export) ─────────
 async function cmdCacheBackup() {
   try {
@@ -28837,6 +29354,7 @@ async function cmdMt5DbSync() {
 
 // ── Background MT5 Sync (headless, controlled by MT5_SYNC setting) ──
 let mt5BgSyncInterval = null;
+let mt5SyncActive = false;      // set true immediately when sync starts (before first sync completes)
 let mt5BgSyncCount = 0;
 let lastMt5SyncSuccess = 0;     // epoch ms of last successful MT5 sync (databases_read > 0)
 let mt5SymbolSet = new Set();   // symbols known to exist in MT5 cache
@@ -28844,7 +29362,7 @@ const MT5_DISCONNECT_MS = 15 * 60 * 1000; // 15 minutes
 
 // Check if a symbol's data comes from MT5 (true) or Alpaca fallback (false)
 function isSymbolMt5(symbol) {
-  if (!mt5BgSyncInterval) return false; // MT5 sync not running
+  if (!mt5SyncActive) return false; // MT5 sync not running
   if (mt5SymbolSet.size === 0) return false;
   if (Date.now() - lastMt5SyncSuccess > MT5_DISCONNECT_MS) return false; // disconnected
   return mt5SymbolSet.has(symbol);
@@ -28861,7 +29379,7 @@ let mt5ServerLabel = "MT5";
 function getDataSourceLabel(symbol) {
   const isCrypto = symbol && (symbol.includes("/USD") || symbol.match(/^(BTC|ETH|SOL|DOGE|ADA|XRP|BNB|AVAX|DOT|LINK)(USD)?$/i));
 
-  if (!mt5BgSyncInterval) {
+  if (!mt5SyncActive) {
     return { label: "Alpaca", color: "#ff9800", icon: "A" };
   }
   if (Date.now() - lastMt5SyncSuccess > MT5_DISCONNECT_MS) {
@@ -28983,6 +29501,7 @@ async function handleMt5SyncResult(r) {
 
 async function startMt5BackgroundSync() {
   if (mt5BgSyncInterval) return; // already running
+  mt5SyncActive = true; // set immediately so badge shows MT5 before first sync completes
   // Load MT5 symbol list on startup
   await refreshMt5SymbolList();
   try {
@@ -29012,8 +29531,9 @@ function stopMt5BackgroundSync() {
   if (mt5BgSyncInterval) {
     clearInterval(mt5BgSyncInterval);
     mt5BgSyncInterval = null;
-    console.log("[MT5 Sync] Background sync stopped");
   }
+  mt5SyncActive = false;
+  console.log("[MT5 Sync] Background sync stopped");
 }
 
 // ── Kraken Weekend Crypto Sync ──────────────────────────────────────
@@ -29352,6 +29872,8 @@ const CMD_PALETTE_COMMANDS = [
   { name: "SEC-SCANNER", desc: "SEC Filing Scanner — local DB of 10-K, 10-Q, 8-K, Form 4 across portfolio", action: cmdSecScanner },
   { name: "INSIDER-TRACKER", desc: "Insider Trade Tracker — Form 4 buy/sell aggregation with net flow", action: cmdInsiderTracker },
   { name: "SEC-ALERTS", desc: "SEC Filing Alerts — insider sells, late filings, material events", action: cmdSecAlerts },
+  { name: "COMPILE", desc: "Compile MQL5/PineScript indicator → WASM (apply to chart)", action: cmdCompileIndicator },
+  { name: "SCRIPTS", desc: "List user MQL5/PineScript scripts in ~/.config/typhoon-terminal/scripts/", action: cmdListScripts },
 ];
 
 function fuzzyMatch(query, target) {
@@ -33373,6 +33895,8 @@ let mtfGridResizeObserver = null;
 function setupMTFGrid() {
   const btn = document.getElementById("btn-mtf-grid");
   const tfCheckboxes = document.getElementById("mtf-grid-tfs");
+  if (!btn) { console.error("[MTF Grid] btn-mtf-grid not found!"); return; }
+  if (!tfCheckboxes) { console.error("[MTF Grid] mtf-grid-tfs not found!"); return; }
 
   // Add radio buttons for symbol mode: "Current" vs "All Tabs"
   if (!document.getElementById("mtf-grid-sym-current")) {
@@ -33401,17 +33925,21 @@ function setupMTFGrid() {
   }
 
   btn.addEventListener("click", () => {
+    console.log("[MTF Grid] Button clicked, active:", mtfGridActive);
+    log("[MTF Grid] Button clicked", "ok"); // visible in log panel
     if (mtfGridActive) {
       closeMTFGrid();
       tfCheckboxes.classList.add("hidden");
     } else {
       const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(cb => cb.value);
+      console.log("[MTF Grid] Selected TFs:", selectedTFs);
       if (selectedTFs.length < 1) {
         tfCheckboxes.classList.remove("hidden");
         alert("Select at least 1 timeframe");
         return;
       }
       const symbols = getGridSymbols();
+      console.log("[MTF Grid] Symbols:", symbols);
       if (symbols.length === 0) { alert("Load a chart first"); return; }
       tfCheckboxes.classList.remove("hidden");
       openMTFGridMulti(symbols, selectedTFs);
@@ -33448,7 +33976,10 @@ function openMTFGridMulti(symbols, timeframes) {
   }
   if (pairs.length === 0) return;
   log(`MTF grid: ${symbols.length} symbols × ${timeframes.length} TFs = ${pairs.length} cells`, "ok");
-  openMTFGrid(pairs[0].symbol, timeframes, pairs);
+  openMTFGrid(pairs[0].symbol, timeframes, pairs).catch(e => {
+    console.error("[MTF Grid] openMTFGrid failed:", e);
+    log(`MTF grid error: ${e}`, "error");
+  });
 }
 
 async function openMTFGrid(symbol, timeframes, multiPairs) {
@@ -33478,6 +34009,9 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
   const tfLabels = MTF_LABELS;
 
   for (const cellDef of cellDefs) {
+    // Yield between cell creation — each cell creates 3 chart instances (heavy DOM work)
+    await new Promise(r => requestAnimationFrame(r));
+
     const tf = cellDef.tf;
     const cellSymbol = cellDef.symbol;
     const cell = document.createElement("div");
@@ -33547,7 +34081,7 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
                   const r = parseInt(hex.substring(0, 2), 16) / 255;
                   const g = parseInt(hex.substring(2, 4), 16) / 255;
                   const b = parseInt(hex.substring(4, 6), 16) / 255;
-                  const values = new Float64Array(data.map(d => d.value));
+                  const values = toF64Values(data);
                   cellGpuChart.add_line(values, r, g, b, 1.0);
                 } catch (_) {}
               }
@@ -33559,11 +34093,44 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
           };
         },
         addHistogramSeries: (opts) => ({
-          setData: () => {}, // GPU_PHASE4: histogram rendering not yet in GPU
+          setData: (data) => {
+            if (cellGpuChart && data.length > 0) {
+              try {
+                const values = new Float64Array(data.length);
+                const colors = new Float32Array(data.length * 4);
+                for (let i = 0; i < data.length; i++) {
+                  values[i] = data[i].value || 0;
+                  // Parse color from data item or default
+                  const hex = (data[i].color || opts?.color || "#888888").replace("#", "").replace(/[^0-9a-fA-F]/g, "");
+                  const cr = parseInt(hex.substring(0, 2), 16) / 255 || 0.5;
+                  const cg = parseInt(hex.substring(2, 4), 16) / 255 || 0.5;
+                  const cb = parseInt(hex.substring(4, 6), 16) / 255 || 0.5;
+                  const ca = hex.length > 6 ? parseInt(hex.substring(6, 8), 16) / 255 : 0.8;
+                  colors[i * 4] = cr; colors[i * 4 + 1] = cg; colors[i * 4 + 2] = cb; colors[i * 4 + 3] = ca;
+                }
+                cellGpuChart.add_histogram(values, colors, 0.0);
+              } catch (_) {}
+            }
+          },
           applyOptions: () => {},
         }),
         addBaselineSeries: (opts) => ({
-          setData: () => {}, // GPU_PHASE4: baseline fill rendering not yet in GPU
+          setData: (data) => {
+            if (cellGpuChart && data.length >= 2) {
+              try {
+                const basePrice = opts?.baseValue?.price || 0;
+                const topValues = toF64Values(data);
+                const botValues = new Float64Array(data.length).fill(basePrice);
+                // Parse fill color
+                const fillHex = (opts?.topFillColor1 || "#4caf5030").replace("#", "").replace(/[^0-9a-fA-F]/g, "");
+                const fr = parseInt(fillHex.substring(0, 2), 16) / 255 || 0.3;
+                const fg = parseInt(fillHex.substring(2, 4), 16) / 255 || 0.7;
+                const fb = parseInt(fillHex.substring(4, 6), 16) / 255 || 0.3;
+                const fa = fillHex.length > 6 ? parseInt(fillHex.substring(6, 8), 16) / 255 : 0.2;
+                cellGpuChart.add_fill(topValues, botValues, fr, fg, fb, fa);
+              } catch (_) {}
+            }
+          },
           applyOptions: () => {},
         }),
         removeSeries: () => {},
@@ -33600,33 +34167,42 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       });
     }
 
-    let cellFisherChart = createChart(fisherDiv, {
-      width: 100, height: 70,
-      layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
-      grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
-      rightPriceScale: { borderColor: "#333" },
-      timeScale: { visible: false },
-      crosshair: { mode: CrosshairMode.Normal },
-    });
+    // Fisher/Volume charts created LAZILY in loadMTFCellData (avoids 8 heavyweight
+    // lightweight-charts instances upfront that freeze the UI for 500ms+)
+    let cellFisherChart = null;
+    let cellVolumeChart = null;
 
-    const cellVolumeChart = createChart(volumeDiv, {
-      width: 100, height: 55,
-      layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
-      grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
-      rightPriceScale: { borderColor: "#333" },
-      timeScale: { visible: false },
-      crosshair: { mode: CrosshairMode.Normal },
-    });
-
-    // Lock Fisher/Volume time scales to main chart — disable independent scrolling
-    cellFisherChart.applyOptions({ handleScroll: false, handleScale: false });
-    cellVolumeChart.applyOptions({ handleScroll: false, handleScale: false });
+    // Factory: create Fisher/Volume charts on first use
+    const ensureFisherVolumeCharts = () => {
+      if (!cellFisherChart) {
+        cellFisherChart = createChart(fisherDiv, {
+          width: 100, height: 70,
+          layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+          grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+          rightPriceScale: { borderColor: "#333" },
+          timeScale: { visible: false },
+          crosshair: { mode: CrosshairMode.Normal },
+        });
+        cellFisherChart.applyOptions({ handleScroll: false, handleScale: false });
+      }
+      if (!cellVolumeChart) {
+        cellVolumeChart = createChart(volumeDiv, {
+          width: 100, height: 55,
+          layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+          grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+          rightPriceScale: { borderColor: "#333" },
+          timeScale: { visible: false },
+          crosshair: { mode: CrosshairMode.Normal },
+        });
+        cellVolumeChart.applyOptions({ handleScroll: false, handleScale: false });
+      }
+    };
 
     // Sync Fisher/Volume time scale with main (persistent — fires on every scroll/zoom)
     cellChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (range) {
-        cellFisherChart.timeScale().setVisibleLogicalRange(range);
-        cellVolumeChart.timeScale().setVisibleLogicalRange(range);
+        if (cellFisherChart) cellFisherChart.timeScale().setVisibleLogicalRange(range);
+        if (cellVolumeChart) cellVolumeChart.timeScale().setVisibleLogicalRange(range);
       }
     });
 
@@ -33661,7 +34237,13 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       }
     });
 
-    const cellInfo = { tf, symbol: cellSymbol, chart: cellChart, candleSeries: cellCandleSeries, fisherChart: cellFisherChart, volumeChart: cellVolumeChart, container: cell, chartDiv, fisherDiv, volumeDiv, gpuChart: cellGpuChart };
+    const cellInfo = {
+      tf, symbol: cellSymbol, chart: cellChart, candleSeries: cellCandleSeries,
+      get fisherChart() { ensureFisherVolumeCharts(); return cellFisherChart; },
+      get volumeChart() { ensureFisherVolumeCharts(); return cellVolumeChart; },
+      container: cell, chartDiv, fisherDiv, volumeDiv, gpuChart: cellGpuChart,
+      ensureFisherVolumeCharts,
+    };
     mtfGridCells.push(cellInfo);
 
     // Single click to select as active trading cell
@@ -33692,19 +34274,30 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
         mtfGridCells.forEach(c => c.container.classList.remove("fullscreen"));
         cell.classList.add("fullscreen");
         cellChart.resize(window.innerWidth, window.innerHeight - 90);
-        cellFisherChart.resize(window.innerWidth, 50);
-        cellVolumeChart.resize(window.innerWidth, 40);
+        if (cellFisherChart) cellFisherChart.resize(window.innerWidth, 50);
+        if (cellVolumeChart) cellVolumeChart.resize(window.innerWidth, 40);
       }
     });
   }
 
-  // Fire all cell loads in parallel — cached cells render instantly, uncached show "loading..."
-  // Don't await — let each cell render independently as its data arrives.
-  // Load cells sequentially with yields between each — prevents UI freeze from
-  // 4+ cells all computing heavy indicators simultaneously on the main thread.
-  // Each cell renders its candles immediately, then yields before indicator computation.
+  // Phase 1: Pre-fetch ALL cell data in parallel (non-blocking network I/O).
+  // Phase 2: Render cells sequentially with yields (prevents main-thread freeze).
   const allLoads = (async () => {
+    // Pre-fetch all uncached data in parallel
+    const prefetchPromises = mtfGridCells.map(c => {
+      const customTF = CUSTOM_TIMEFRAME_MAP[c.tf];
+      const fetchTF = customTF ? customTF.base : c.tf;
+      const aggFactor = customTF ? customTF.factor : 1;
+      const GRID_BARS = 500;
+      const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
+      const cacheKey = getCacheKey(c.symbol || symbol, fetchTF);
+      if (barCache[cacheKey]?.data?.length > 0) return Promise.resolve(); // already cached
+      return cachedGetBars(c.symbol || symbol, fetchTF, limit).catch(() => {});
+    });
+    await Promise.all(prefetchPromises);
+    // Now render cells sequentially (data is cached, so loadMTFCellData hits cache instantly)
     for (const c of mtfGridCells) {
+      if (mtfGridGeneration !== gridGen) return; // grid switched during prefetch
       await loadMTFCellData(c, c.symbol || symbol, gridGen);
     }
   })();
@@ -33745,6 +34338,7 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
 
   } catch (e) {
     // Grid failed — restore main chart visibility
+    console.error("MTF grid failed:", e);
     log(`MTF grid failed: ${e}`, "error");
     mtfGridActive = false;
     btn.textContent = "MTF Grid";
@@ -33791,7 +34385,7 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
     let chartData = sanitizeBars(bars.map(b => ({
-      time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+      time: fastParseTimestamp(b.timestamp),
       open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
     })));
 
@@ -33836,7 +34430,7 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
           const r = parseInt(hex.substring(0, 2), 16) / 255;
           const g = parseInt(hex.substring(2, 4), 16) / 255;
           const b = parseInt(hex.substring(4, 6), 16) / 255;
-          cellInfo.gpuChart.add_line(new Float64Array(data.map(d => d.value)), r, g, b, 1.0);
+          cellInfo.gpuChart.add_line(toF64Values(data), r, g, b, 1.0);
         } catch (_) {}
       } else {
         const s = cellInfo.chart.addLineSeries({ color, lineWidth: width, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
@@ -33844,16 +34438,31 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
       }
     };
 
-    // SMA 200 + 100
-    if (chartData.length > 200) addLine("#FFD700", 1, calcSMA(chartData, 200));
-    if (chartData.length > 100) addLine("#FF00FF", 1, calcSMA(chartData, 100));
-    // KAMA
-    if (chartData.length > 11) addLine("#FFFFFF", 2, calcKAMA(chartData, 10));
-    // ATR Projection (current open ± ATR)
-    if (chartData.length > 15) {
-      const atrp = calcATRProjection(chartData, 14);
-      if (atrp.atrValues.length > 0) {
-        const lastATR = atrp.atrValues[atrp.atrValues.length - 1].value;
+    // ── Compute ALL grid cell indicators in Web Worker (off main thread) ──
+    // Send bar data to worker, receive computed values, render on GPU.
+    // Main thread only does the lightweight rendering — no indicator math.
+    const workerResult = await workerCompute("grid_cell", chartData, 0);
+
+    if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
+
+    if (workerResult) {
+      // SMA 200 + 100
+      if (workerResult.sma200?.length > 0) {
+        const offset = 199;
+        addLine("#FFD700", 1, workerResult.sma200.map((v, i) => ({ time: chartData[i + offset]?.time, value: v })).filter(d => d.time));
+      }
+      if (workerResult.sma100?.length > 0) {
+        const offset = 99;
+        addLine("#FF00FF", 1, workerResult.sma100.map((v, i) => ({ time: chartData[i + offset]?.time, value: v })).filter(d => d.time));
+      }
+      // KAMA
+      if (workerResult.kama?.length > 0) {
+        const offset = 10;
+        addLine("#FFFFFF", 2, workerResult.kama.map((v, i) => ({ time: chartData[i + offset]?.time, value: v })).filter(d => d.time));
+      }
+      // ATR Projection
+      if (workerResult.atr?.length > 0) {
+        const lastATR = workerResult.atr[workerResult.atr.length - 1];
         const lastOpen = chartData[chartData.length - 1].open;
         const startIdx = Math.max(0, chartData.length - 30);
         const levelBars = chartData.slice(startIdx);
@@ -33862,37 +34471,54 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
           addLine("#FFFF00", 1, levelBars.map(d => ({ time: d.time, value: lastOpen - lastATR })));
         }
       }
-    }
-
-    // Yield before Fisher/BetterVolume — let candles + overlays paint first
-    await new Promise(r => requestAnimationFrame(r));
-    if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
-
-    // Fisher Transform (in dedicated pane)
-    if (chartData.length > 32) {
-      const ef = calcEhlersFisher(chartData, 32);
-      if (ef.fisher.length > 0) {
-        const segments = []; let curColor = ef.colors[0], curSeg = [ef.fisher[0]];
+      // Fisher Transform (from worker)
+      if (workerResult.fisher?.fisher?.length > 0) {
+        const ef = workerResult.fisher;
+        const startIdx = ef.startIdx || 32;
+        const colorMap = { 1: "#3CB371", "-1": "#FF4500", 0: "#A9A9A9" };
+        // Build segments
+        const segments = []; let curColor = colorMap[ef.colors[0]] || "#A9A9A9";
+        let curSeg = [{ time: chartData[startIdx]?.time, value: ef.fisher[0] }];
         for (let i = 1; i < ef.fisher.length; i++) {
-          if (ef.colors[i] !== curColor) { curSeg.push(ef.fisher[i]); segments.push({ color: curColor, data: curSeg }); curColor = ef.colors[i]; curSeg = [ef.fisher[i]]; }
-          else curSeg.push(ef.fisher[i]);
+          const c = colorMap[ef.colors[i]] || "#A9A9A9";
+          const d = { time: chartData[i + startIdx]?.time, value: ef.fisher[i] };
+          if (!d.time) continue;
+          if (c !== curColor) { curSeg.push(d); segments.push({ color: curColor, data: curSeg }); curColor = c; curSeg = [d]; }
+          else curSeg.push(d);
         }
         if (curSeg.length > 0) segments.push({ color: curColor, data: curSeg });
-        if (segments.length >= 2 && segments[segments.length-1].data.length < 2)
-          segments[segments.length-1].data.unshift(segments[segments.length-2].data[segments[segments.length-2].data.length-1]);
-        for (const seg of segments) { if (seg.data.length < 2) continue; const s = cellInfo.fisherChart.addLineSeries({ color: seg.color, lineWidth: 1.5, lastValueVisible: false, priceLineVisible: false }); s.setData(seg.data); }
-        const sSignal = cellInfo.fisherChart.addLineSeries({ color: "#A9A9A9", lineWidth: 1, lastValueVisible: false, priceLineVisible: false }); sSignal.setData(ef.signal);
-        const sZero = cellInfo.fisherChart.addLineSeries({ color: "#FFFFFF33", lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false }); sZero.setData(ef.fisher.map(d => ({ time: d.time, value: 0 })));
+        for (const seg of segments) {
+          if (seg.data.length < 2) continue;
+          const s = cellInfo.fisherChart.addLineSeries({ color: seg.color, lineWidth: 1.5, lastValueVisible: false, priceLineVisible: false });
+          s.setData(seg.data);
+        }
+        // Signal line
+        const sigData = ef.signal.map((v, i) => ({ time: chartData[i + startIdx]?.time, value: v })).filter(d => d.time);
+        if (sigData.length > 1) {
+          const sSignal = cellInfo.fisherChart.addLineSeries({ color: "#A9A9A9", lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+          sSignal.setData(sigData);
+        }
       }
-    }
-    cellInfo.fisherChart.timeScale().fitContent();
+      cellInfo.fisherChart.timeScale().fitContent();
 
-    // BetterVolume (in dedicated pane)
-    if (chartData.length > 22) {
-      const bv = calcBetterVolume(chartData);
-      if (bv.length > 0) { const s = cellInfo.volumeChart.addHistogramSeries({ priceFormat: { type: "volume" } }); s.setData(bv); }
+      // BetterVolume (from worker)
+      if (workerResult.bettervolume?.length > 0) {
+        const bvColorMap = { 0: "#888888", 1: "#00FF00", "-1": "#FF0000", 2: "#FFFF00", 3: "#00FFFF", "-2": "#FF00FF" };
+        const bvData = workerResult.bettervolume.map((d, i) => ({
+          time: chartData[i]?.time, value: d.value,
+          color: bvColorMap[d.color] || "#888888",
+        })).filter(d => d.time);
+        if (bvData.length > 0) {
+          const s = cellInfo.volumeChart.addHistogramSeries({ priceFormat: { type: "volume" } });
+          s.setData(bvData);
+        }
+      }
+      cellInfo.volumeChart.timeScale().fitContent();
+    } else {
+      // Worker failed — skip indicators for this cell (candles still visible)
+      cellInfo.fisherChart.timeScale().fitContent();
+      cellInfo.volumeChart.timeScale().fitContent();
     }
-    cellInfo.volumeChart.timeScale().fitContent();
 
     // GPU final render
     if (cellInfo.gpuChart) { try { cellInfo.gpuChart.render(); } catch (_) {} }
@@ -33914,8 +34540,8 @@ function resizeMTFGrid() {
     const ch = cell.chartDiv.clientHeight;
     if (w > 0 && ch > 0) {
       cell.chart.resize(w, ch);
-      cell.fisherChart.resize(cell.fisherDiv.clientWidth, cell.fisherDiv.clientHeight);
-      cell.volumeChart.resize(cell.volumeDiv.clientWidth, cell.volumeDiv.clientHeight);
+      try { if (cell.fisherChart) cell.fisherChart.resize(cell.fisherDiv.clientWidth, cell.fisherDiv.clientHeight); } catch (_) {}
+      try { if (cell.volumeChart) cell.volumeChart.resize(cell.volumeDiv.clientWidth, cell.volumeDiv.clientHeight); } catch (_) {}
       // GPU cells: resize canvas + re-render
       if (cell.gpuChart) {
         const canvas = cell.chartDiv.querySelector("canvas");
@@ -34344,8 +34970,8 @@ function closeMTFGrid() {
     // Dispose all charts
     for (const cell of mtfGridCells) {
       cell.chart.remove();
-      cell.fisherChart.remove();
-      cell.volumeChart.remove();
+      try { if (cell.fisherChart) cell.fisherChart.remove(); } catch (_) {}
+      try { if (cell.volumeChart) cell.volumeChart.remove(); } catch (_) {}
     }
     grid.remove();
   }
@@ -37139,7 +37765,7 @@ async function cmdCompare() {
 
     // Build comparison chart data keyed by time
     const compData = bars.map(b => ({
-      time: Math.floor(new Date(b.timestamp).getTime() / 1000),
+      time: fastParseTimestamp(b.timestamp),
       close: b.close,
     }));
 
@@ -37240,12 +37866,12 @@ async function cmdSpread() {
     // Build maps keyed by date string for alignment
     const mapA = {};
     for (const b of barsA) {
-      const t = Math.floor(new Date(b.timestamp).getTime() / 1000);
+      const t = fastParseTimestamp(b.timestamp);
       mapA[t] = b.close;
     }
     const mapB = {};
     for (const b of barsB) {
-      const t = Math.floor(new Date(b.timestamp).getTime() / 1000);
+      const t = fastParseTimestamp(b.timestamp);
       mapB[t] = b.close;
     }
 

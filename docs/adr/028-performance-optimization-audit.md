@@ -107,6 +107,19 @@ Full-scope codebase audit across security, performance, storage, and rendering. 
 6. ✅ **Indicator bar cap (1000)** — indicator computation limited to last 1000 bars, prevents O(N) scaling with deep history
 7. ✅ **MT5 sync no-reload** — background sync updates MTF data without full chart rebuild
 
+### Phase 2 Optimizations (2026-03-24, see ADR-046)
+
+8. ✅ **Async indicator pipeline** — `applyIndicators()` converted to async with yield points between expensive indicators, generation-based cancellation
+9. ✅ **Indicator memoization** — cache keyed by (indicator, period, barCount, lastBarTime, lastClose), 200-entry cap
+10. ✅ **Fast timestamp parser** — `fastParseTimestamp()` hand-rolled ISO parser, 10x faster than `new Date()`
+11. ✅ **Optimized bar sanitization** — forward-pass Map dedup, arithmetic weekend detection, sort-check
+12. ✅ **GPU histogram + fill rendering** — rebuilt WASM with `add_histogram()`, `add_fill()`, `add_pane_histogram()`
+13. ✅ **Parallel grid data prefetch** — `Promise.all` pre-fetch, sequential render with memoized indicators
+14. ✅ **Binary search data clipping** — `sliceFrom()` and `clip()` use O(log n) binary search
+15. ✅ **Crosshair O(1) lookup** — `_timeToBarMap` Map replaces O(n) `.find()`, cached container dims
+16. ✅ **Debounced ResizeObserver** — batched via `requestAnimationFrame`
+17. ✅ **MT5 badge race condition** — `mt5SyncActive` flag set before first sync completes
+
 ### Blocked by External Dependencies
 
 1. **WebSocket bar aggregation** — Alpaca WS provides raw trades/quotes but not aggregated bars. We'd need to aggregate ourselves, adding complexity.

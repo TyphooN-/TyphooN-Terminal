@@ -35,9 +35,13 @@ addLineSeries: (opts) => ({
 - Fisher Transform + signal line (via dedicated lightweight-charts pane)
 - BetterVolume histogram (via dedicated lightweight-charts pane)
 
-### What Requires GPU Phase 4 (Deferred)
-- `addHistogramSeries()` — stubs to no-op (RVOL, Volume, AO in main chart pane)
-- `addBaselineSeries()` — stubs to no-op (Ichimoku cloud fill, S/D zone fills)
+### GPU Phase 4 — Completed (2026-03-24, ADR-046)
+- `addHistogramSeries()` — now routes to `gpu.add_histogram()` with per-bar RGBA colors
+- `addBaselineSeries()` — now routes to `gpu.add_fill()` with top/bottom value arrays
+- GPU WASM rebuilt with `add_histogram()`, `add_fill()`, `add_pane_histogram()` exports
+- Grid cell GPU wrappers fully wired — BetterVolume and S/D zone fills render on GPU
+
+### What Requires GPU Phase 5 (Deferred)
 - Price scale labels for indicator sub-panes
 
 ### Performance Architecture
@@ -59,5 +63,5 @@ Cells load **sequentially** to prevent main-thread starvation from 4+ cells comp
 - **Pro**: GPU rendering for all chart cells — maximum performance
 - **Pro**: Unified `applyIndicators()` code path — one fix applies everywhere
 - **Pro**: Fisher/Volume panes still use lightweight-charts (full feature support)
-- **Con**: Histogram and baseline indicators don't render in GPU main chart pane until Phase 4
 - **Con**: No price labels on GPU indicator lines until Phase 5
+- **Updated 2026-03-24**: GPU Phase 4 completed — histograms and baseline fills now render on GPU (see ADR-046)

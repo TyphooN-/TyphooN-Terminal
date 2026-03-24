@@ -6474,6 +6474,85 @@ async fn lan_sync_status(state: State<'_, SharedState>) -> Result<String, String
     serde_json::to_string(&status).map_err(|e| format!("Serialize failed: {e}"))
 }
 
+// ══════════════════════════════════════════════════════════════
+// MQL5 / PineScript Compiler Commands
+// ══════════════════════════════════════════════════════════════
+
+/// Compile MQL5 source to WASM. Returns JSON with wasm (base64), diagnostics, metadata.
+#[tauri::command]
+fn compile_mql5(source: String) -> Result<String, String> {
+    let result = mql5_compiler::compile_mql5(&source);
+    // Convert wasm bytes to base64 for JSON transport
+    #[derive(serde::Serialize)]
+    struct CompileResponse {
+        wasm_base64: Option<String>,
+        diagnostics: Vec<mql5_compiler::Diagnostic>,
+        metadata: Option<mql5_compiler::IndicatorMeta>,
+    }
+    let response = CompileResponse {
+        wasm_base64: result.wasm.map(|bytes| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)),
+        diagnostics: result.diagnostics,
+        metadata: result.metadata,
+    };
+    serde_json::to_string(&response).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+/// Compile PineScript source to WASM.
+#[tauri::command]
+fn compile_pine(source: String) -> Result<String, String> {
+    let result = mql5_compiler::compile_pine(&source);
+    #[derive(serde::Serialize)]
+    struct CompileResponse {
+        wasm_base64: Option<String>,
+        diagnostics: Vec<mql5_compiler::Diagnostic>,
+        metadata: Option<mql5_compiler::IndicatorMeta>,
+    }
+    let response = CompileResponse {
+        wasm_base64: result.wasm.map(|bytes| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)),
+        diagnostics: result.diagnostics,
+        metadata: result.metadata,
+    };
+    serde_json::to_string(&response).map_err(|e| format!("Serialize failed: {e}"))
+}
+
+/// List user scripts in ~/.config/typhoon-terminal/scripts/
+#[tauri::command]
+fn list_user_scripts() -> Result<String, String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let scripts_dir = std::path::PathBuf::from(&home).join(".config/typhoon-terminal/scripts");
+    std::fs::create_dir_all(&scripts_dir).ok();
+
+    #[derive(serde::Serialize)]
+    struct ScriptEntry {
+        name: String,
+        path: String,
+        language: String, // "mql5" or "pine"
+        size: u64,
+    }
+
+    let mut entries = Vec::new();
+    if let Ok(read_dir) = std::fs::read_dir(&scripts_dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+            let language = match ext.as_str() {
+                "mq5" | "mqh" => "mql5",
+                "pine" | "ps" => "pine",
+                _ => continue,
+            };
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            entries.push(ScriptEntry {
+                name,
+                path: path.to_string_lossy().to_string(),
+                language: language.to_string(),
+                size,
+            });
+        }
+    }
+    serde_json::to_string(&entries).map_err(|e| format!("Serialize failed: {e}"))
+}
+
 fn main() {
     // Log to both stderr and file (~/.config/typhoon-terminal/typhoon.log)
     let log_dir = std::env::var("HOME")
@@ -6820,6 +6899,10 @@ fn main() {
             lan_sync_connect,
             lan_sync_disconnect,
             lan_sync_status,
+            // MQL5 / PineScript Compiler
+            compile_mql5,
+            compile_pine,
+            list_user_scripts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TyphooN Terminal");

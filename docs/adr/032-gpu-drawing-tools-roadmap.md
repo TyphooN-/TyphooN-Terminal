@@ -259,8 +259,8 @@ Once Phases 1-4 are complete, make GPU the default and remove lightweight-charts
 | Drawing tools | ✅ (Canvas2D) | Phase 1 | **TODO** |
 | SL/TP draggable lines | ✅ (createPriceLine) | Phase 2 | **TODO** |
 | Sub-panes (Fisher/Vol) | ✅ (separate charts) | Phase 4 | **TODO** |
-| Histogram series | ✅ | Phase 4 | **TODO** |
-| Baseline series (fills) | ✅ | Phase 4 | **TODO** |
+| Histogram series | ✅ | Phase 4 | ✅ Done (ADR-046, 2026-03-24) |
+| Baseline series (fills) | ✅ | Phase 4 | ✅ Done (ADR-046, 2026-03-24) |
 
 ### 5.2 Migration Strategy
 

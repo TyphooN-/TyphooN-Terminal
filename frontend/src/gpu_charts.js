@@ -1,7 +1,6 @@
 /* @ts-self-types="./typhoon_gpu_charts.d.ts" */
 
 /**
- * Chart rendering mode.
  * @enum {0 | 1 | 2 | 3 | 4}
  */
 export const ChartType = Object.freeze({
@@ -10,6 +9,51 @@ export const ChartType = Object.freeze({
     Line: 2, "2": "Line",
     Bars: 3, "3": "Bars",
     Renko: 4, "4": "Renko",
+});
+
+/**
+ * Drawing tool types — matches frontend drawing type strings.
+ * @enum {0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 | 32 | 33 | 34 | 35 | 36 | 37}
+ */
+export const DrawType = Object.freeze({
+    TrendLine: 0, "0": "TrendLine",
+    Ray: 1, "1": "Ray",
+    Segment: 2, "2": "Segment",
+    ExtendedLine: 3, "3": "ExtendedLine",
+    ArrowLine: 4, "4": "ArrowLine",
+    Horizontal: 5, "5": "Horizontal",
+    Vertical: 6, "6": "Vertical",
+    Rectangle: 7, "7": "Rectangle",
+    Triangle: 8, "8": "Triangle",
+    Circle: 9, "9": "Circle",
+    Ellipse: 10, "10": "Ellipse",
+    Channel: 11, "11": "Channel",
+    ParallelChannel: 12, "12": "ParallelChannel",
+    Pitchfork: 13, "13": "Pitchfork",
+    SchiffPitchfork: 14, "14": "SchiffPitchfork",
+    Fibonacci: 15, "15": "Fibonacci",
+    FibFan: 16, "16": "FibFan",
+    FibArcs: 17, "17": "FibArcs",
+    FibChannel: 18, "18": "FibChannel",
+    FibExtension: 19, "19": "FibExtension",
+    GannFan: 20, "20": "GannFan",
+    GannLine: 21, "21": "GannLine",
+    GannBox: 22, "22": "GannBox",
+    CycleLines: 23, "23": "CycleLines",
+    ArrowUp: 24, "24": "ArrowUp",
+    ArrowDown: 25, "25": "ArrowDown",
+    PriceLabel: 26, "26": "PriceLabel",
+    TextLabel: 27, "27": "TextLabel",
+    RegressionChannel: 28, "28": "RegressionChannel",
+    StdDevChannel: 29, "29": "StdDevChannel",
+    RiskReward: 30, "30": "RiskReward",
+    PositionBox: 31, "31": "PositionBox",
+    DateRange: 32, "32": "DateRange",
+    PriceRange: 33, "33": "PriceRange",
+    ElliottImpulse: 34, "34": "ElliottImpulse",
+    ElliottCorrective: 35, "35": "ElliottCorrective",
+    SpeedLines: 36, "36": "SpeedLines",
+    EquidistantChannel: 37, "37": "EquidistantChannel",
 });
 
 export class GpuChart {
@@ -24,7 +68,59 @@ export class GpuChart {
         wasm.__wbg_gpuchart_free(ptr, 0);
     }
     /**
-     * Add an indicator line overlay. Color as [r, g, b, a] (0-1 range).
+     * Add a drawing. Points are flat [bar0, price0, bar1, price1, ...].
+     * Color is [r, g, b, a]. Fill color is [r, g, b, a] (alpha=0 for no fill).
+     * @param {DrawType} draw_type
+     * @param {Float64Array} points
+     * @param {Float32Array} color
+     * @param {number} line_width
+     * @param {Float32Array} fill
+     */
+    add_drawing(draw_type, points, color, line_width, fill) {
+        const ptr0 = passArrayF64ToWasm0(points, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF32ToWasm0(color, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArrayF32ToWasm0(fill, wasm.__wbindgen_export2);
+        const len2 = WASM_VECTOR_LEN;
+        wasm.gpuchart_add_drawing(this.__wbg_ptr, draw_type, ptr0, len0, ptr1, len1, line_width, ptr2, len2);
+    }
+    /**
+     * Add a filled area between two price-level series.
+     * `top_values` and `bottom_values` are one value per bar (same length).
+     * Color is uniform for the entire fill.
+     * @param {Float64Array} top_values
+     * @param {Float64Array} bottom_values
+     * @param {number} r
+     * @param {number} g
+     * @param {number} b
+     * @param {number} a
+     */
+    add_fill(top_values, bottom_values, r, g, b, a) {
+        const ptr0 = passArrayF64ToWasm0(top_values, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF64ToWasm0(bottom_values, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.gpuchart_add_fill(this.__wbg_ptr, ptr0, len0, ptr1, len1, r, g, b, a);
+    }
+    /**
+     * Add a histogram series to the main chart.
+     * `values`: one value per bar.
+     * `colors`: flat [r,g,b,a, r,g,b,a, ...] per bar (must be values.len() * 4).
+     * `base`: the zero/baseline value.
+     * @param {Float64Array} values
+     * @param {Float32Array} colors
+     * @param {number} base
+     */
+    add_histogram(values, colors, base) {
+        const ptr0 = passArrayF64ToWasm0(values, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArrayF32ToWasm0(colors, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.gpuchart_add_histogram(this.__wbg_ptr, ptr0, len0, ptr1, len1, base);
+    }
+    /**
+     * Add a solid indicator line (convenience wrapper).
      * @param {Float64Array} values
      * @param {number} r
      * @param {number} g
@@ -37,7 +133,69 @@ export class GpuChart {
         wasm.gpuchart_add_line(this.__wbg_ptr, ptr0, len0, r, g, b, a);
     }
     /**
-     * Get bar index at canvas X coordinate.
+     * Add a styled indicator line with custom width and dash style.
+     * @param {Float64Array} values
+     * @param {number} r
+     * @param {number} g
+     * @param {number} b
+     * @param {number} a
+     * @param {number} width
+     * @param {LineStyle} style
+     */
+    add_line_styled(values, r, g, b, a, width, style) {
+        const ptr0 = passArrayF64ToWasm0(values, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.gpuchart_add_line_styled(this.__wbg_ptr, ptr0, len0, r, g, b, a, width, style);
+    }
+    /**
+     * Add a sub-pane below the main chart. Returns pane index.
+     * `height` is fraction of total canvas (e.g., 0.15 = 15%).
+     * @param {number} height
+     * @returns {number}
+     */
+    add_pane(height) {
+        const ret = wasm.gpuchart_add_pane(this.__wbg_ptr, height);
+        return ret >>> 0;
+    }
+    /**
+     * Add a histogram series to a sub-pane. Data is flat [value, colorFlag, value, colorFlag, ...].
+     * @param {number} pane
+     * @param {Float64Array} data
+     */
+    add_pane_histogram(pane, data) {
+        const ptr0 = passArrayF64ToWasm0(data, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.gpuchart_add_pane_histogram(this.__wbg_ptr, pane, ptr0, len0);
+    }
+    /**
+     * Add a line series to a sub-pane. Values are indicator values (one per bar).
+     * @param {number} pane
+     * @param {Float64Array} values
+     * @param {number} r
+     * @param {number} g
+     * @param {number} b
+     * @param {number} a
+     */
+    add_pane_line(pane, values, r, g, b, a) {
+        const ptr0 = passArrayF64ToWasm0(values, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.gpuchart_add_pane_line(this.__wbg_ptr, pane, ptr0, len0, r, g, b, a);
+    }
+    /**
+     * Add a price line (SL/TP/entry). Returns index.
+     * @param {number} price
+     * @param {number} r
+     * @param {number} g
+     * @param {number} b
+     * @param {number} a
+     * @param {number} line_width
+     * @returns {number}
+     */
+    add_price_line(price, r, g, b, a, line_width) {
+        const ret = wasm.gpuchart_add_price_line(this.__wbg_ptr, price, r, g, b, a, line_width);
+        return ret >>> 0;
+    }
+    /**
      * @param {number} x
      * @returns {number}
      */
@@ -46,13 +204,166 @@ export class GpuChart {
         return ret;
     }
     /**
-     * Clear all indicator lines.
+     * Clear all drawings.
      */
+    clear_drawings() {
+        wasm.gpuchart_clear_drawings(this.__wbg_ptr);
+    }
+    /**
+     * Clear all main-pane fill areas.
+     */
+    clear_fills() {
+        wasm.gpuchart_clear_fills(this.__wbg_ptr);
+    }
+    /**
+     * Clear all main-pane histogram series.
+     */
+    clear_histograms() {
+        wasm.gpuchart_clear_histograms(this.__wbg_ptr);
+    }
     clear_lines() {
         wasm.gpuchart_clear_lines(this.__wbg_ptr);
     }
     /**
-     * Create a new GPU chart on the given canvas element ID.
+     * Clear all data from a sub-pane.
+     * @param {number} pane
+     */
+    clear_pane(pane) {
+        wasm.gpuchart_clear_pane(this.__wbg_ptr, pane);
+    }
+    /**
+     * Remove all sub-panes.
+     */
+    clear_panes() {
+        wasm.gpuchart_clear_panes(this.__wbg_ptr);
+    }
+    /**
+     * Clear all price lines.
+     */
+    clear_price_lines() {
+        wasm.gpuchart_clear_price_lines(this.__wbg_ptr);
+    }
+    /**
+     * Get drawing count.
+     * @returns {number}
+     */
+    drawing_count() {
+        const ret = wasm.gpuchart_drawing_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * @param {number} canvas_x
+     * @param {number} canvas_y
+     * @returns {Float64Array}
+     */
+    get_crosshair_data(canvas_x, canvas_y) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.gpuchart_get_crosshair_data(retptr, this.__wbg_ptr, canvas_x, canvas_y);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @returns {Float64Array}
+     */
+    get_price_labels() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.gpuchart_get_price_labels(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Get price of a price line (for drag read-back).
+     * @param {number} index
+     * @returns {number}
+     */
+    get_price_line_price(index) {
+        const ret = wasm.gpuchart_get_price_line_price(this.__wbg_ptr, index);
+        return ret;
+    }
+    /**
+     * @returns {Float64Array}
+     */
+    get_price_range() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.gpuchart_get_price_range(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @returns {Float64Array}
+     */
+    get_time_labels() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.gpuchart_get_time_labels(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @returns {Float64Array}
+     */
+    get_time_range() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.gpuchart_get_time_range(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayF64FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export4(r0, r1 * 8, 8);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * Hit-test: returns drawing index at canvas (x, y), or -1 if none.
+     * @param {number} canvas_x
+     * @param {number} canvas_y
+     * @param {number} tolerance
+     * @returns {number}
+     */
+    hit_test_drawing(canvas_x, canvas_y, tolerance) {
+        const ret = wasm.gpuchart_hit_test_drawing(this.__wbg_ptr, canvas_x, canvas_y, tolerance);
+        return ret;
+    }
+    /**
+     * Hit-test price lines. Returns index or -1.
+     * @param {number} canvas_y
+     * @param {number} tolerance
+     * @returns {number}
+     */
+    hit_test_price_line(canvas_y, tolerance) {
+        const ret = wasm.gpuchart_hit_test_price_line(this.__wbg_ptr, canvas_y, tolerance);
+        return ret;
+    }
+    /**
      * @param {string} canvas_id
      */
     constructor(canvas_id) {
@@ -75,7 +386,6 @@ export class GpuChart {
         }
     }
     /**
-     * Get price at canvas Y coordinate.
      * @param {number} y
      * @returns {number}
      */
@@ -84,13 +394,38 @@ export class GpuChart {
         return ret;
     }
     /**
-     * Render the full chart.
+     * Get price line count.
+     * @returns {number}
      */
+    price_line_count() {
+        const ret = wasm.gpuchart_price_line_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Remove drawing by index.
+     * @param {number} index
+     */
+    remove_drawing(index) {
+        wasm.gpuchart_remove_drawing(this.__wbg_ptr, index);
+    }
+    /**
+     * Remove a price line by index.
+     * @param {number} index
+     */
+    remove_price_line(index) {
+        wasm.gpuchart_remove_price_line(this.__wbg_ptr, index);
+    }
     render() {
         wasm.gpuchart_render(this.__wbg_ptr);
     }
     /**
-     * Resize canvas to container.
+     * @param {number} canvas_x
+     * @param {number} canvas_y
+     */
+    render_crosshair(canvas_x, canvas_y) {
+        wasm.gpuchart_render_crosshair(this.__wbg_ptr, canvas_x, canvas_y);
+    }
+    /**
      * @param {number} width
      * @param {number} height
      */
@@ -98,21 +433,18 @@ export class GpuChart {
         wasm.gpuchart_resize(this.__wbg_ptr, width, height);
     }
     /**
-     * Scroll by delta bars (positive = right, negative = left).
      * @param {number} delta
      */
     scroll(delta) {
         wasm.gpuchart_scroll(this.__wbg_ptr, delta);
     }
     /**
-     * Set chart type: Candles, HeikinAshi, Line, Bars, Renko.
      * @param {ChartType} ct
      */
     set_chart_type(ct) {
         wasm.gpuchart_set_chart_type(this.__wbg_ptr, ct);
     }
     /**
-     * Load OHLCV bar data (flat f64 array: [O,H,L,C,V, O,H,L,C,V, ...]).
      * @param {Float64Array} data
      */
     set_data(data) {
@@ -121,7 +453,15 @@ export class GpuChart {
         wasm.gpuchart_set_data(this.__wbg_ptr, ptr0, len0);
     }
     /**
-     * Set visible range (bar indices).
+     * Set value range for a sub-pane.
+     * @param {number} pane
+     * @param {number} min_val
+     * @param {number} max_val
+     */
+    set_pane_range(pane, min_val, max_val) {
+        wasm.gpuchart_set_pane_range(this.__wbg_ptr, pane, min_val, max_val);
+    }
+    /**
      * @param {number} start
      * @param {number} end
      */
@@ -129,7 +469,6 @@ export class GpuChart {
         wasm.gpuchart_set_visible_range(this.__wbg_ptr, start, end);
     }
     /**
-     * Get total bar count.
      * @returns {number}
      */
     total_bar_count() {
@@ -137,7 +476,45 @@ export class GpuChart {
         return ret >>> 0;
     }
     /**
-     * Get current visible bar count.
+     * Update a drawing's color.
+     * @param {number} index
+     * @param {Float32Array} color
+     */
+    update_drawing_color(index, color) {
+        const ptr0 = passArrayF32ToWasm0(color, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.gpuchart_update_drawing_color(this.__wbg_ptr, index, ptr0, len0);
+    }
+    /**
+     * Update a drawing's points.
+     * @param {number} index
+     * @param {Float64Array} points
+     */
+    update_drawing_points(index, points) {
+        const ptr0 = passArrayF64ToWasm0(points, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.gpuchart_update_drawing_points(this.__wbg_ptr, index, ptr0, len0);
+    }
+    /**
+     * Update the last bar's OHLC data and rebuild only its geometry.
+     * Avoids rebuilding the entire candle buffer for real-time tick updates.
+     * @param {number} open
+     * @param {number} high
+     * @param {number} low
+     * @param {number} close
+     */
+    update_last_bar(open, high, low, close) {
+        wasm.gpuchart_update_last_bar(this.__wbg_ptr, open, high, low, close);
+    }
+    /**
+     * Update a price line's price (for dragging).
+     * @param {number} index
+     * @param {number} price
+     */
+    update_price_line(index, price) {
+        wasm.gpuchart_update_price_line(this.__wbg_ptr, index, price);
+    }
+    /**
      * @returns {number}
      */
     visible_bars() {
@@ -145,7 +522,24 @@ export class GpuChart {
         return ret;
     }
     /**
-     * Zoom in/out (factor > 1 = zoom in, < 1 = zoom out).
+     * Convert a bar index to canvas X coordinate (inverse of bar_at_x).
+     * @param {number} bar
+     * @returns {number}
+     */
+    x_at_bar(bar) {
+        const ret = wasm.gpuchart_x_at_bar(this.__wbg_ptr, bar);
+        return ret;
+    }
+    /**
+     * Convert a price value to canvas Y coordinate (inverse of price_at_y).
+     * @param {number} price
+     * @returns {number}
+     */
+    y_at_price(price) {
+        const ret = wasm.gpuchart_y_at_price(this.__wbg_ptr, price);
+        return ret;
+    }
+    /**
      * @param {number} factor
      * @param {number} center_x
      */
@@ -154,6 +548,17 @@ export class GpuChart {
     }
 }
 if (Symbol.dispose) GpuChart.prototype[Symbol.dispose] = GpuChart.prototype.free;
+
+/**
+ * Line style for indicator lines.
+ * 0 = solid, 1 = dashed, 2 = dotted.
+ * @enum {0 | 1 | 2}
+ */
+export const LineStyle = Object.freeze({
+    Solid: 0, "0": "Solid",
+    Dashed: 1, "1": "Dashed",
+    Dotted: 2, "2": "Dotted",
+});
 
 function __wbg_get_imports() {
     const import0 = {
@@ -208,6 +613,9 @@ function __wbg_get_imports() {
         },
         __wbg_deleteShader_5b6992b5e5894d44: function(arg0, arg1) {
             getObject(arg0).deleteShader(getObject(arg1));
+        },
+        __wbg_disableVertexAttribArray_124a165b099b763b: function(arg0, arg1) {
+            getObject(arg0).disableVertexAttribArray(arg1 >>> 0);
         },
         __wbg_document_c0320cd4183c6d9b: function(arg0) {
             const ret = getObject(arg0).document;
@@ -290,6 +698,9 @@ function __wbg_get_imports() {
             const ret = result;
             return ret;
         },
+        __wbg_lineWidth_1b57aff251eb2695: function(arg0, arg1) {
+            getObject(arg0).lineWidth(arg1);
+        },
         __wbg_linkProgram_b969f67969a850b5: function(arg0, arg1) {
             getObject(arg0).linkProgram(getObject(arg1));
         },
@@ -317,9 +728,6 @@ function __wbg_get_imports() {
         __wbg_static_accessor_WINDOW_bb9f1ba69d61b386: function() {
             const ret = typeof window === 'undefined' ? null : window;
             return isLikeNone(ret) ? 0 : addHeapObject(ret);
-        },
-        __wbg_uniform1f_b8841988568406b9: function(arg0, arg1, arg2) {
-            getObject(arg0).uniform1f(getObject(arg1), arg2);
         },
         __wbg_uniform2f_8fc2c40c50fd770c: function(arg0, arg1, arg2, arg3) {
             getObject(arg0).uniform2f(getObject(arg1), arg2, arg3);
@@ -391,6 +799,11 @@ function getArrayF32FromWasm0(ptr, len) {
     return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
+function getArrayF64FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat64ArrayMemory0().subarray(ptr / 8, ptr / 8 + len);
+}
+
 let cachedDataViewMemory0 = null;
 function getDataViewMemory0() {
     if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
@@ -445,6 +858,13 @@ let heap_next = heap.length;
 
 function isLikeNone(x) {
     return x === undefined || x === null;
+}
+
+function passArrayF32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getFloat32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passArrayF64ToWasm0(arg, malloc) {

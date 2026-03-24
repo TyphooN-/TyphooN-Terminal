@@ -91,41 +91,23 @@ Frontend: import init, { wasm_sma, ... } from './pkg/typhoon_indicators.js'
 - 15+ call sites in chart rendering route through Wasm with JS fallback
 - Grid optimizer runs 50K combinations in ~100ms (50-100x faster than JS)
 
-## Pine Script Compatibility Layer (NOT PLANNED)
+## MQL5 & PineScript Compatibility Layer (PLANNED — ADR-047)
 
-### Why Not Planned
-Pine Script is TradingView's proprietary language. Building a transpiler requires:
-1. **Lexer + Parser** for Pine Script syntax (~5K lines of grammar)
-2. **AST** representation of Pine constructs (series, security(), strategy.*)
-3. **Code generator** to emit JS plugin format
-4. **Runtime library** implementing Pine built-in functions (~200 functions)
-5. **Testing** against hundreds of real Pine scripts
+**Status changed 2026-03-24:** Previously "NOT PLANNED". Now the core strategic direction.
 
-This is a standalone project (3-6 months) with limited value since:
-- Users can manually port Pine logic to JS plugins
-- The JS plugin system already supports the same capabilities
-- Pine Script evolves frequently (v5, v6) requiring ongoing maintenance
+The vision: compile MQL5 indicators/EAs and PineScript indicators to WASM, run them natively in TyphooN Terminal. This inherits both MT5 and TradingView ecosystems instantly.
 
-### Alternative
-Document a "Pine Script to JS Plugin" porting guide with examples:
-```pine
-// Pine Script
-//@version=5
-strategy("My Strategy")
-fast = ta.sma(close, 10)
-slow = ta.sma(close, 50)
-if ta.crossover(fast, slow)
-    strategy.entry("Long", strategy.long)
-```
-```javascript
-// JS Plugin equivalent
-export default {
-  name: "My Strategy",
-  params: { fast: 10, slow: 50 },
-  pane: "overlay",
-  calculate(data, params) {
-    // Use built-in calcSMA from TyphooN-Terminal
-    return calcSMA(data, params.fast);
-  },
-};
-```
+### Architecture
+- MQL5/PineScript → Rust parser (pest grammar) → TyphooN IR → WASM bytecode
+- Compiled indicators run in Web Workers (async, sandboxed)
+- Output buffers route directly to GPU `add_line()`/`add_histogram()`/`add_fill()`
+- EA trading functions route through Tauri commands to broker APIs
+
+### Key Benefits
+- Users compile their existing MQL5 indicators directly (99.99% compatibility)
+- PineScript indicators also supported via same IR pipeline
+- WASM execution: near-native speed, 2-10KB per compiled indicator
+- GPU rendering: all draw types mapped to WebGL2 primitives
+- No ecosystem lock-in — users bring their own code
+
+See **[ADR-047](047-mql5-pinescript-compatibility-layer.md)** for full specification including API surface, compilation pipeline, and implementation plan.
