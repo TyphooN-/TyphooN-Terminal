@@ -33926,7 +33926,8 @@ function setupMTFGrid() {
 
   btn.addEventListener("click", () => {
     console.log("[MTF Grid] Button clicked, active:", mtfGridActive);
-    log("[MTF Grid] Button clicked", "ok"); // visible in log panel
+    log("[MTF Grid] Button clicked", "ok");
+    btn.style.background = mtfGridActive ? "#3a0f60" : "#ff0"; // flash yellow when opening
     if (mtfGridActive) {
       closeMTFGrid();
       tfCheckboxes.classList.add("hidden");
@@ -34167,36 +34168,10 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       });
     }
 
-    // Fisher/Volume charts created LAZILY in loadMTFCellData (avoids 8 heavyweight
-    // lightweight-charts instances upfront that freeze the UI for 500ms+)
+    // Fisher/Volume panes: created on-demand during cell data load to avoid
+    // 8 heavyweight lightweight-charts instances blocking the UI on grid open.
     let cellFisherChart = null;
     let cellVolumeChart = null;
-
-    // Factory: create Fisher/Volume charts on first use
-    const ensureFisherVolumeCharts = () => {
-      if (!cellFisherChart) {
-        cellFisherChart = createChart(fisherDiv, {
-          width: 100, height: 70,
-          layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
-          grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
-          rightPriceScale: { borderColor: "#333" },
-          timeScale: { visible: false },
-          crosshair: { mode: CrosshairMode.Normal },
-        });
-        cellFisherChart.applyOptions({ handleScroll: false, handleScale: false });
-      }
-      if (!cellVolumeChart) {
-        cellVolumeChart = createChart(volumeDiv, {
-          width: 100, height: 55,
-          layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
-          grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
-          rightPriceScale: { borderColor: "#333" },
-          timeScale: { visible: false },
-          crosshair: { mode: CrosshairMode.Normal },
-        });
-        cellVolumeChart.applyOptions({ handleScroll: false, handleScale: false });
-      }
-    };
 
     // Sync Fisher/Volume time scale with main (persistent — fires on every scroll/zoom)
     cellChart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
@@ -34239,10 +34214,8 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
 
     const cellInfo = {
       tf, symbol: cellSymbol, chart: cellChart, candleSeries: cellCandleSeries,
-      get fisherChart() { ensureFisherVolumeCharts(); return cellFisherChart; },
-      get volumeChart() { ensureFisherVolumeCharts(); return cellVolumeChart; },
+      fisherChart: null, volumeChart: null,
       container: cell, chartDiv, fisherDiv, volumeDiv, gpuChart: cellGpuChart,
-      ensureFisherVolumeCharts,
     };
     mtfGridCells.push(cellInfo);
 
@@ -34471,8 +34444,32 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
           addLine("#FFFF00", 1, levelBars.map(d => ({ time: d.time, value: lastOpen - lastATR })));
         }
       }
+      // Create Fisher/Volume charts on demand (deferred from grid open to avoid UI freeze)
+      if ((workerResult.fisher?.fisher?.length > 0) || (workerResult.bettervolume?.length > 0)) {
+        if (!cellInfo.fisherChart) {
+          cellInfo.fisherChart = createChart(cellInfo.fisherDiv, {
+            width: 100, height: 70,
+            layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+            grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+            rightPriceScale: { borderColor: "#333" }, timeScale: { visible: false },
+            crosshair: { mode: CrosshairMode.Normal },
+          });
+          cellInfo.fisherChart.applyOptions({ handleScroll: false, handleScale: false });
+        }
+        if (!cellInfo.volumeChart) {
+          cellInfo.volumeChart = createChart(cellInfo.volumeDiv, {
+            width: 100, height: 55,
+            layout: { background: { color: "#000000" }, textColor: "#888", fontFamily: "Consolas, Courier New, monospace", attributionLogo: false },
+            grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } },
+            rightPriceScale: { borderColor: "#333" }, timeScale: { visible: false },
+            crosshair: { mode: CrosshairMode.Normal },
+          });
+          cellInfo.volumeChart.applyOptions({ handleScroll: false, handleScale: false });
+        }
+      }
+
       // Fisher Transform (from worker)
-      if (workerResult.fisher?.fisher?.length > 0) {
+      if (workerResult.fisher?.fisher?.length > 0 && cellInfo.fisherChart) {
         const ef = workerResult.fisher;
         const startIdx = ef.startIdx || 32;
         const colorMap = { 1: "#3CB371", "-1": "#FF4500", 0: "#A9A9A9" };
@@ -34499,10 +34496,10 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
           sSignal.setData(sigData);
         }
       }
-      cellInfo.fisherChart.timeScale().fitContent();
+      if (cellInfo.fisherChart) cellInfo.fisherChart.timeScale().fitContent();
 
       // BetterVolume (from worker)
-      if (workerResult.bettervolume?.length > 0) {
+      if (workerResult.bettervolume?.length > 0 && cellInfo.volumeChart) {
         const bvColorMap = { 0: "#888888", 1: "#00FF00", "-1": "#FF0000", 2: "#FFFF00", 3: "#00FFFF", "-2": "#FF00FF" };
         const bvData = workerResult.bettervolume.map((d, i) => ({
           time: chartData[i]?.time, value: d.value,
@@ -34513,11 +34510,11 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
           s.setData(bvData);
         }
       }
-      cellInfo.volumeChart.timeScale().fitContent();
+      if (cellInfo.volumeChart) cellInfo.volumeChart.timeScale().fitContent();
     } else {
       // Worker failed — skip indicators for this cell (candles still visible)
-      cellInfo.fisherChart.timeScale().fitContent();
-      cellInfo.volumeChart.timeScale().fitContent();
+      if (cellInfo.fisherChart) cellInfo.fisherChart.timeScale().fitContent();
+      if (cellInfo.volumeChart) cellInfo.volumeChart.timeScale().fitContent();
     }
 
     // GPU final render
