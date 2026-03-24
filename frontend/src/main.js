@@ -34480,7 +34480,7 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       const customTF = CUSTOM_TIMEFRAME_MAP[c.tf];
       const fetchTF = customTF ? customTF.base : c.tf;
       const aggFactor = customTF ? customTF.factor : 1;
-      const GRID_BARS = 5000;
+      const GRID_BARS = 10000;
       const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
       const cacheKey = getCacheKey(c.symbol || symbol, fetchTF);
       if (barCache[cacheKey]?.data?.length > 0) return Promise.resolve(); // already cached
@@ -34547,8 +34547,8 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    // 5000 bars per cell: full indicator history + visible context, 12 cells × 5K = 60K total
-    const GRID_BARS = 5000;
+    // 10K bars per cell with yield-between-cells keeps UI responsive (12 cells × 10K = 120K total)
+    const GRID_BARS = 10000;
     const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
@@ -34575,6 +34575,10 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     }
 
     // Second guard after parse — grid may have switched during JSON parse
+    if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
+
+    // Yield to keep UI responsive between cells (parse + sanitize can block 50-100ms per cell)
+    await new Promise(r => setTimeout(r, 0));
     if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
     let chartData = sanitizeBars(bars.map(b => ({
