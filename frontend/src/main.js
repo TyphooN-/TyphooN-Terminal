@@ -3476,8 +3476,25 @@ const INDICATOR_REGISTRY = {
 // matching MT5's architecture where each window has its own full indicator set.
 // Generation counter for cancelling stale applyIndicators runs
 let _applyIndicatorsGen = 0;
+let _applyIndicatorsDebounce = null;
 
-async function applyIndicators(chartData, ctx) {
+// Debounced wrapper: coalesces rapid applyIndicators calls (e.g., from WS + API polling)
+function applyIndicators(chartData, ctx) {
+  if (ctx) {
+    // Grid cell context — run immediately (no debounce for isolated cells)
+    return _applyIndicatorsImpl(chartData, ctx);
+  }
+  // Main chart — debounce 100ms to coalesce rapid calls
+  if (_applyIndicatorsDebounce) clearTimeout(_applyIndicatorsDebounce);
+  return new Promise(resolve => {
+    _applyIndicatorsDebounce = setTimeout(() => {
+      _applyIndicatorsDebounce = null;
+      _applyIndicatorsImpl(chartData, ctx).then(resolve);
+    }, 100);
+  });
+}
+
+async function _applyIndicatorsImpl(chartData, ctx) {
   const gen = ++_applyIndicatorsGen;
   const _chart = ctx?.chart || chart;
   const _fisherChart = ctx?.fisherChart || fisherChart;
@@ -3519,6 +3536,32 @@ async function applyIndicators(chartData, ctx) {
     while (lo < hi) { const mid = (lo + hi) >> 1; arr[mid].time < startTime ? lo = mid + 1 : hi = mid; }
     return arr.slice(lo);
   };
+  // ── Pre-compute worker-eligible indicators off-thread (batch) ──
+  // Maps indicator type → worker batch type for offloading heavy calc to Web Worker
+  const WORKER_TYPE_MAP = { "mtf-ma": "sma", "sma": "sma", "ema": "ema", "kama": "kama", "rsi": "rsi" };
+  const _workerBatchCache = {}; // key → worker result (values array)
+  if (!_isGridCell && indicatorWorker && chartData.length > 200) {
+    const batchReqs = [];
+    for (const cb of checkboxes) {
+      const ind = cb.dataset.ind;
+      const period = parseInt(cb.dataset.period) || 14;
+      const wType = WORKER_TYPE_MAP[ind];
+      if (wType) {
+        const key = `${ind}_${period}`;
+        batchReqs.push({ key, type: wType, period, fastP: ind === "kama" ? 2 : undefined, slowP: ind === "kama" ? 30 : undefined });
+      }
+    }
+    if (batchReqs.length > 0) {
+      try {
+        const batchResult = await workerComputeBatch(chartData, batchReqs);
+        if (batchResult && _applyIndicatorsGen === gen) {
+          for (const [k, v] of Object.entries(batchResult)) _workerBatchCache[k] = v;
+        }
+      } catch (_) {}
+    }
+  }
+  if (cancelled()) return;
+
   // Helper: add a simple line series overlay
   const addLine = (color, width, data, seriesKey) => {
     if (!data || data.length < 2) return;
@@ -3556,7 +3599,16 @@ async function applyIndicators(chartData, ctx) {
       // Resolve color (may be a per-period map or a plain string)
       const color = (typeof reg.color === "object") ? (reg.color[period] || "#FFFFFF") : reg.color;
       const width = reg.width || 1;
-      const rawData = reg.calc(chartData, period);
+      // Use worker batch result if available (offloaded to Web Worker), else compute on main thread
+      let rawData;
+      if (_workerBatchCache[key] && Array.isArray(_workerBatchCache[key])) {
+        // Worker returned raw values array — convert to {time, value} format
+        const vals = _workerBatchCache[key];
+        const offset = chartData.length - vals.length;
+        rawData = vals.map((v, i) => ({ time: chartData[i + offset]?.time, value: v }));
+      } else {
+        rawData = reg.calc(chartData, period);
+      }
       const data = (reg.doClip !== false) ? clip(rawData) : rawData;
 
       if (reg.pane === "overlay") {
