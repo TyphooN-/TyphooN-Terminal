@@ -34680,17 +34680,17 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
     });
     await Promise.all(prefetchPromises);
     // TWO-PASS rendering: candles first (fast), then indicators (heavy, deferred)
-    // Pass 1: Candles only — all cells get visible data immediately
+    // Pass 1: Candles only — each cell gets 150ms of event loop time between WASM calls
     for (const c of mtfGridCells) {
       if (mtfGridGeneration !== gridGen) return;
-      await loadMTFCellData(c, c.symbol || symbol, gridGen, true); // candlesOnly=true
-      await new Promise(r => setTimeout(r, 16)); // ~1 frame yield
+      await loadMTFCellData(c, c.symbol || symbol, gridGen, true);
+      await new Promise(r => setTimeout(r, 150)); // event loop breathes: commands, clicks, typing
     }
-    // Pass 2: Indicators — added lazily after all candles are visible
+    // Pass 2: Indicators — worker computes off-thread, GPU renders with yields
     for (const c of mtfGridCells) {
       if (mtfGridGeneration !== gridGen) return;
-      await loadMTFCellData(c, c.symbol || symbol, gridGen, false); // add indicators
-      await new Promise(r => setTimeout(r, 50)); // longer yield for UI responsiveness
+      await loadMTFCellData(c, c.symbol || symbol, gridGen, false);
+      await new Promise(r => setTimeout(r, 150));
     }
   })();
 
