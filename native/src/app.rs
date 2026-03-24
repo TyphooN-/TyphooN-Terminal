@@ -4451,7 +4451,7 @@ impl TyphooNApp {
                                                         let points: PlotPoints = PlotPoints::new(
                                                             eq.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
                                                         );
-                                                        let line = Line::new(points).color(ACCENT).name("Equity");
+                                                        let line = Line::new("Equity", points).color(ACCENT);
                                                         Plot::new(format!("eq_{}", acct.darwin_ticker))
                                                             .height(120.0)
                                                             .allow_drag(false)
@@ -4571,7 +4571,7 @@ impl TyphooNApp {
                                                     .map(|(i, (_, bal))| [i as f64, *bal])
                                                     .collect()
                                             );
-                                            let line = Line::new(points).color(ACCENT).name("Equity");
+                                            let line = Line::new("Equity", points).color(ACCENT);
                                             Plot::new("port_equity_plot")
                                                 .height(180.0)
                                                 .allow_drag(false)
@@ -4798,7 +4798,7 @@ impl TyphooNApp {
                                     .map(|(i, &v)| [i as f64, v])
                                     .collect()
                             );
-                            let line = Line::new(points).color(ACCENT).name("Equity");
+                            let line = Line::new("Equity", points).color(ACCENT);
                             Plot::new("bt_equity_plot")
                                 .height(150.0)
                                 .allow_drag(false)
@@ -5857,15 +5857,15 @@ impl eframe::App for TyphooNApp {
 
         // ── top menu bar ─────────────────────────────────────────────────────
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Connect to Broker…").clicked() {
                         self.show_connect = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Settings").clicked() {
                         self.show_settings = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Quit  Alt+F4").clicked() {
@@ -5876,11 +5876,11 @@ impl eframe::App for TyphooNApp {
                 ui.menu_button("View", |ui| {
                     if ui.button(if self.mtf_enabled { "Single Chart" } else { "MTF Grid (4 charts)" }).clicked() {
                         self.mtf_enabled = !self.mtf_enabled;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Indicators…").clicked() {
                         self.show_indicators_panel = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     ui.label(egui::RichText::new("Chart Type").color(AXIS_TEXT).small());
@@ -5892,7 +5892,7 @@ impl eframe::App for TyphooNApp {
                             if let Some(c) = self.charts.get_mut(self.active_tab) {
                                 c.chart_type = chart_type;
                             }
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
                     ui.separator();
@@ -5937,7 +5937,7 @@ impl eframe::App for TyphooNApp {
                     if ui.button("Open Trade…").clicked() {
                         self.show_order_entry = true;
                         self.order_symbol = self.symbol_input.clone();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Close All").clicked() {
                         if self.broker_connected {
@@ -5946,166 +5946,166 @@ impl eframe::App for TyphooNApp {
                         } else {
                             self.log.push_back(LogEntry::warn("Connect to broker first"));
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Close Partial").clicked() {
                         self.log.push_back(LogEntry::info("Close Partial: select position in right panel"));
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Set SL").clicked() {
                         self.log.push_back(LogEntry::info("Trading: Set SL — connect to broker first"));
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Set TP").clicked() {
                         self.log.push_back(LogEntry::info("Trading: Set TP — connect to broker first"));
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Open MG (Martingale Hedge)").clicked() {
                         self.log.push_back(LogEntry::info("Trading: Open MG — connect to broker first"));
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Buy Lines").clicked() {
                         self.draw_mode = DrawMode::PlacingHLine;
                         self.log.push_back(LogEntry::info("Click chart to place buy reference line (green)"));
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Sell Lines").clicked() {
                         self.draw_mode = DrawMode::PlacingHLine;
                         self.log.push_back(LogEntry::info("Click chart to place sell reference line (red)"));
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Set SL Line").clicked() {
                         self.draw_mode = DrawMode::PlacingHLine;
                         self.log.push_back(LogEntry::info("Click chart to set SL level"));
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Set TP Line").clicked() {
                         self.draw_mode = DrawMode::PlacingHLine;
                         self.log.push_back(LogEntry::info("Click chart to set TP level"));
-                        ui.close_menu();
+                        ui.close();
                     }
                     if self.sl_price.is_some() || self.tp_price.is_some() {
                         if ui.button("Clear SL/TP Lines").clicked() {
                             self.sl_price = None;
                             self.tp_price = None;
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
                 });
                 ui.menu_button("Tools", |ui| {
                     if ui.button("DARWIN Accounts").clicked() {
                         self.show_darwin_accounts = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("DARWIN Portfolio").clicked() {
                         self.show_darwin_portfolio = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Symbol Overlap").clicked() {
                         self.show_symbol_overlap = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Backtest").clicked() {
                         self.show_backtest = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Screener").clicked() {
                         self.show_screener = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Optimizer").clicked() {
                         self.show_optimizer = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Risk Calculator").clicked() {
                         self.show_risk_calc = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("VaR Multiplier").clicked() {
                         self.show_var_mult = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Margin Monitor").clicked() {
                         self.show_margin_monitor = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Cache Statistics").clicked() {
                         self.show_cache_stats = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
                 ui.menu_button("Research", |ui| {
                     if ui.button("News & Events").clicked() {
                         self.show_news = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Economic Calendar").clicked() {
                         self.show_calendar = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("SEC Filings").clicked() {
                         self.show_sec = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Insider Trades").clicked() {
                         self.show_insider = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Fundamentals").clicked() {
                         self.show_fundamentals = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Analyst Ratings").clicked() {
                         self.show_analyst = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Institutional Holders").clicked() {
                         self.show_holders = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
                 ui.menu_button("Analysis", |ui| {
                     if ui.button("Correlation Matrix").clicked() {
                         self.show_correlation = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Seasonals").clicked() {
                         self.show_seasonals = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Monte Carlo VaR").clicked() {
                         self.show_montecarlo = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Stress Test").clicked() {
                         self.show_stress_test = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Volume Profile").clicked() {
                         self.show_volume_profile = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Order Flow").clicked() {
                         self.show_order_flow = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Bookmap Heatmap").clicked() {
                         self.show_bookmap = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
                 ui.menu_button("Help", |ui| {
                     if ui.button("Keyboard Shortcuts").clicked() {
                         self.show_help = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     ui.label(egui::RichText::new("TyphooN Terminal v0.1.0").color(AXIS_TEXT).small());
@@ -6780,31 +6780,31 @@ impl eframe::App for TyphooNApp {
                         ui.separator();
                         if ui.button("Horizontal Line").clicked() {
                             self.draw_mode = DrawMode::PlacingHLine;
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Trendline (2 clicks)").clicked() {
                             self.draw_mode = DrawMode::PlacingTrendP1;
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Fibonacci Retracement").clicked() {
                             self.draw_mode = DrawMode::PlacingFiboP1;
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Vertical Line").clicked() {
                             self.draw_mode = DrawMode::PlacingVLine;
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Rectangle (2 clicks)").clicked() {
                             self.draw_mode = DrawMode::PlacingRectP1;
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Ray (2 clicks)").clicked() {
                             self.draw_mode = DrawMode::PlacingRayP1;
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Channel (3 clicks)").clicked() {
                             self.draw_mode = DrawMode::PlacingChannelP1;
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         if !chart.drawings.is_empty() {
@@ -6828,18 +6828,18 @@ impl eframe::App for TyphooNApp {
                                                 _ => {}
                                             }
                                         }
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 }
                             });
                         }
                         if ui.button("Remove Last Drawing").clicked() {
                             chart.drawings.pop();
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("Clear All Drawings").clicked() {
                             chart.drawings.clear();
-                            ui.close_menu();
+                            ui.close();
                         }
                         ui.separator();
                         ui.label(egui::RichText::new("Chart").color(ACCENT).strong());
@@ -6849,22 +6849,22 @@ impl eframe::App for TyphooNApp {
                             chart.price_pan = 0.0;
                             chart.visible_bars = 200;
                             chart.view_offset = chart.bars.len().saturating_sub(1);
-                            ui.close_menu();
+                            ui.close();
                         }
                         for &ct in &[ChartType::Candle, ChartType::HeikinAshi, ChartType::Line, ChartType::OhlcBars, ChartType::Renko] {
                             let label = if chart.chart_type == ct { format!("● {}", ct.label()) } else { format!("  {}", ct.label()) };
                             if ui.button(label).clicked() {
                                 chart.chart_type = ct;
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                         ui.separator();
                         ui.label(egui::RichText::new("Windows").color(ACCENT).strong());
                         ui.separator();
-                        if ui.button("Indicators…").clicked() { self.show_indicators_panel = true; ui.close_menu(); }
-                        if ui.button("Data Window").clicked() { self.show_data_window = true; ui.close_menu(); }
-                        if ui.button("Volume Profile").clicked() { self.show_volume_profile = true; ui.close_menu(); }
-                        if ui.button("Price Alerts…").clicked() { self.show_alerts = true; ui.close_menu(); }
+                        if ui.button("Indicators…").clicked() { self.show_indicators_panel = true; ui.close(); }
+                        if ui.button("Data Window").clicked() { self.show_data_window = true; ui.close(); }
+                        if ui.button("Volume Profile").clicked() { self.show_volume_profile = true; ui.close(); }
+                        if ui.button("Price Alerts…").clicked() { self.show_alerts = true; ui.close(); }
                         // Copy price at crosshair
                         if let Some(pos) = crosshair {
                             ui.separator();
@@ -6878,7 +6878,7 @@ impl eframe::App for TyphooNApp {
                                     let price = hi - frac as f64 * (hi - lo);
                                     ctx.copy_text(format_price(price));
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                     });

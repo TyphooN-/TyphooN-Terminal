@@ -13,9 +13,9 @@ path = "src/main.rs"
 typhoon-engine = { path = "../engine" }
 
 # Native GPU UI
-eframe = { version = "0.31", default-features = true, features = ["wgpu"] }
-egui = "0.31"
-egui_plot = "0.31"
+eframe = { version = "0.33", default-features = true, features = ["wgpu"] }
+egui = "0.33"
+egui_plot = "0.34"
 
 # Async runtime (shared with engine)
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }

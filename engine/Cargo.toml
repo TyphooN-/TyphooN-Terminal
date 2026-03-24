@@ -31,7 +31,6 @@ hmac = "0.12"
 pbkdf2 = { version = "0.12", features = ["simple"] }
 rand = "0.10"
 base64 = "0.22"
-rayon = "1.11"
 calamine = "0.34"
 zip = { version = "7", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 mql5-compiler = { path = "../mql5-compiler" }
