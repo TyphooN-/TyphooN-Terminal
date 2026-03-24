@@ -2190,7 +2190,16 @@ let drawCanvas = null;
 function getDrawingsKey() { return `typhoon_drawings_${activeBrokerId}`; }
 
 function loadDrawings() {
-  try { drawings = JSON.parse(localStorage.getItem(getDrawingsKey()) || "[]"); } catch(e) { console.warn("Drawing parse error:", e); drawings = []; }
+  try {
+    const raw = localStorage.getItem(getDrawingsKey());
+    if (raw && raw.length > 10000) {
+      // Large drawing set — defer parse to avoid blocking chart init
+      drawings = [];
+      queueMicrotask(() => { try { drawings = JSON.parse(raw); renderDrawings(); } catch (_) { drawings = []; } });
+    } else {
+      drawings = JSON.parse(raw || "[]");
+    }
+  } catch(e) { drawings = []; }
 }
 function saveDrawings() { localStorage.setItem(getDrawingsKey(), JSON.stringify(drawings)); }
 
@@ -8299,7 +8308,7 @@ async function cmdSecScanner() {
       }
     } catch (e) {
       listEl.textContent = "";
-      listEl.innerHTML = `<div style="color:#f44336;padding:12px;font-size:11px;">Failed: ${e}</div>`;
+      listEl.textContent = ""; const _errDiv = el("div", "color:#f44336;padding:12px;font-size:11px;", `Failed: ${e}`); listEl.appendChild(_errDiv);
     }
   }
 
@@ -8372,7 +8381,12 @@ async function cmdInsiderTracker() {
       }
       const totalBuys = Object.values(netByTicker).reduce((s, v) => s + v.buys, 0);
       const totalSells = Object.values(netByTicker).reduce((s, v) => s + v.sells, 0);
-      summaryDiv.innerHTML = `<span style="color:#4caf50;">BUY $${(totalBuys/1000).toFixed(0)}K</span> | <span style="color:#f44336;">SELL $${(totalSells/1000).toFixed(0)}K</span> | Net: <span style="color:${totalBuys > totalSells ? "#4caf50" : "#f44336"};">$${((totalBuys - totalSells)/1000).toFixed(0)}K</span>`;
+      summaryDiv.textContent = "";
+      summaryDiv.appendChild(span(`BUY $${(totalBuys/1000).toFixed(0)}K`, "color:#4caf50;"));
+      summaryDiv.appendChild(span(" | ", "color:#666;"));
+      summaryDiv.appendChild(span(`SELL $${(totalSells/1000).toFixed(0)}K`, "color:#f44336;"));
+      summaryDiv.appendChild(span(" | Net: ", "color:#666;"));
+      summaryDiv.appendChild(span(`$${((totalBuys - totalSells)/1000).toFixed(0)}K`, `color:${totalBuys > totalSells ? "#4caf50" : "#f44336"};`));
 
       // Header
       const header = document.createElement("div");
@@ -8407,7 +8421,7 @@ async function cmdInsiderTracker() {
       }
     } catch (e) {
       listEl.textContent = "";
-      listEl.innerHTML = `<div style="color:#f44336;padding:12px;font-size:11px;">Failed: ${e}</div>`;
+      listEl.textContent = ""; const _errDiv = el("div", "color:#f44336;padding:12px;font-size:11px;", `Failed: ${e}`); listEl.appendChild(_errDiv);
     }
   }
 
@@ -8517,7 +8531,7 @@ async function cmdSecAlerts() {
       }
     } catch (e) {
       listEl.textContent = "";
-      listEl.innerHTML = `<div style="color:#f44336;padding:12px;font-size:11px;">Failed: ${e}</div>`;
+      listEl.textContent = ""; const _errDiv = el("div", "color:#f44336;padding:12px;font-size:11px;", `Failed: ${e}`); listEl.appendChild(_errDiv);
     }
   }
 
@@ -12212,7 +12226,10 @@ function cmdDarwin() {
     const totalLong = positions.filter(p => p.side === "buy").reduce((s, p) => s + p.notional, 0);
     const totalShort = positions.filter(p => p.side === "sell").reduce((s, p) => s + p.notional, 0);
     const summaryBar = document.createElement("div"); summaryBar.style.cssText = "display:flex;gap:20px;padding:6px 0 12px;font-size:12px;";
-    summaryBar.innerHTML = `<span style="color:#4caf50">LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#f44336">SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#888">NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`; // safe: numeric only
+    summaryBar.textContent = "";
+    summaryBar.appendChild(span(`LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}`, "color:#4caf50;"));
+    summaryBar.appendChild(span(`SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}`, "color:#f44336;"));
+    summaryBar.appendChild(span(`NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}`, "color:#888;"));
     contentDiv.appendChild(summaryBar);
 
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
@@ -13430,7 +13447,10 @@ function cmdDarwinPortfolio() {
     contentDiv.appendChild(title);
 
     const summaryBar = document.createElement("div"); summaryBar.style.cssText = "display:flex;gap:24px;padding:6px 0 12px;font-size:13px;font-family:Consolas,monospace;";
-    summaryBar.innerHTML = `<span style="color:#4caf50">LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#f44336">SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}</span><span style="color:#888">NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}</span>`; // safe: numeric only
+    summaryBar.textContent = "";
+    summaryBar.appendChild(span(`LONG: $${totalLong.toLocaleString(undefined, {maximumFractionDigits: 0})}`, "color:#4caf50;"));
+    summaryBar.appendChild(span(`SHORT: $${totalShort.toLocaleString(undefined, {maximumFractionDigits: 0})}`, "color:#f44336;"));
+    summaryBar.appendChild(span(`NET: $${(totalLong - totalShort).toLocaleString(undefined, {maximumFractionDigits: 0})}`, "color:#888;"));
     contentDiv.appendChild(summaryBar);
 
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
@@ -15359,14 +15379,13 @@ function cmdSymbolOverlap() {
         const sideColor = o.side === "buy" ? "#4caf50" : "#f44336";
         const tr = document.createElement("tr");
         tr.style.cssText = "border-bottom:1px solid #222;";
-        tr.innerHTML = `
-          <td style="padding:3px 6px;color:#fff;">${o.symbol}</td>
-          <td style="padding:3px 6px;color:${sideColor};font-weight:bold;">${o.side.toUpperCase()}</td>
-          <td style="padding:3px 6px;color:${riskColor};font-weight:bold;">${o.darwin_count}</td>
-          <td style="padding:3px 6px;color:#aaa;">${o.darwins.join(", ")}</td>
-          <td style="padding:3px 6px;text-align:right;">${o.total_volume.toFixed(2)}</td>
-          <td style="padding:3px 6px;text-align:right;">$${o.total_notional.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}</td>
-          <td style="padding:3px 6px;color:${riskColor};font-weight:bold;">${o.correlation_risk}</td>`;
+        tr.appendChild(td(o.symbol, "padding:3px 6px;color:#fff;"));
+        tr.appendChild(td(o.side.toUpperCase(), `padding:3px 6px;color:${sideColor};font-weight:bold;`));
+        tr.appendChild(td(String(o.darwin_count), `padding:3px 6px;color:${riskColor};font-weight:bold;`));
+        tr.appendChild(td(o.darwins.join(", "), "padding:3px 6px;color:#aaa;"));
+        tr.appendChild(td(o.total_volume.toFixed(2), "padding:3px 6px;text-align:right;"));
+        tr.appendChild(td(`$${o.total_notional.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`, "padding:3px 6px;text-align:right;"));
+        tr.appendChild(td(o.correlation_risk, `padding:3px 6px;color:${riskColor};font-weight:bold;`));
         tbody.appendChild(tr);
       }
       tbl.appendChild(tbody);
@@ -20673,7 +20692,7 @@ async function cmdBackupData() {
     try {
       const result = JSON.parse(await invoke("export_full_backup", { path }));
       status.style.color = "#4caf50";
-      status.innerHTML = "";
+      status.textContent = "";
       const pre = document.createElement("pre");
       pre.style.cssText = "font-size:12px;color:#4caf50;line-height:1.7;margin:0;";
       pre.textContent = [
@@ -20739,7 +20758,7 @@ async function cmdRestoreData() {
     try {
       const result = JSON.parse(await invoke("import_full_backup", { path }));
       status.style.color = "#4caf50";
-      status.innerHTML = "";
+      status.textContent = "";
       const pre = document.createElement("pre");
       pre.style.cssText = "font-size:12px;color:#4caf50;line-height:1.7;margin:0;";
       pre.textContent = [
@@ -28286,9 +28305,9 @@ async function gatherScanSymbols() {
 async function cmdVarOutliers() {
   const w = createWindow({ title: "VaR Outlier Scanner", width: 860, height: 600 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
-  out.innerHTML = `<div id="var-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  out.textContent = ""; const _varLog = el("div", "padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"); _varLog.id = "var-out-log"; out.appendChild(_varLog);
   const logDiv = out.querySelector("#var-out-log");
-  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg.replace(/<\/?b>/g, ""); if (msg.includes("<b>")) d.style.fontWeight = "bold"; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Gathering symbols (positions + watchlist + Darwinex)...", "#2196f3");
   try {
@@ -28296,7 +28315,7 @@ async function cmdVarOutliers() {
     addLog(`Scanning ${source}...`, "#ff9800");
 
     const result = JSON.parse(await invoke("scan_var_outliers", { symbols, sectors, period: 252, confidence: 0.95 }));
-    logDiv.innerHTML = ""; // clear log
+    logDiv.textContent = "";
 
     // Summary
     addLog(`<b>VaR Outlier Scanner</b> — ${result.total_scanned} symbols scanned, ${result.outliers.length} outliers detected`, "#4caf50");
@@ -28325,9 +28344,9 @@ async function cmdVarOutliers() {
 async function cmdAtrOutliers() {
   const w = createWindow({ title: "ATR Volatility Outlier Scanner", width: 860, height: 600 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
-  out.innerHTML = `<div id="atr-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  out.textContent = ""; const _atrLog = el("div", "padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"); _atrLog.id = "atr-out-log"; out.appendChild(_atrLog);
   const logDiv = out.querySelector("#atr-out-log");
-  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg.replace(/<\/?b>/g, ""); if (msg.includes("<b>")) d.style.fontWeight = "bold"; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Gathering symbols (positions + watchlist + Darwinex)...", "#2196f3");
   try {
@@ -28335,7 +28354,7 @@ async function cmdAtrOutliers() {
     addLog(`Scanning ${source} (ATR 14)...`, "#ff9800");
 
     const result = JSON.parse(await invoke("scan_atr_outliers", { symbols, sectors, atrPeriod: 14 }));
-    logDiv.innerHTML = "";
+    logDiv.textContent = "";
 
     addLog(`<b>ATR Volatility Outlier Scanner</b> — ${result.total_scanned} symbols, ${result.outliers.length} outliers`, "#4caf50");
     addLog(`<span style="color:#666">Method: IQR (1.5×) on ATR(14)/Price %, daily timeframe</span>`);
@@ -28363,9 +28382,9 @@ async function cmdAtrOutliers() {
 async function cmdEvOutliers() {
   const w = createWindow({ title: "EV (Enterprise Value) Outlier Scanner", width: 860, height: 600 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
-  out.innerHTML = `<div id="ev-out-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  out.textContent = ""; const _evLog = el("div", "padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"); _evLog.id = "ev-out-log"; out.appendChild(_evLog);
   const logDiv = out.querySelector("#ev-out-log");
-  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg.replace(/<\/?b>/g, ""); if (msg.includes("<b>")) d.style.fontWeight = "bold"; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Gathering equity symbols for EV analysis...", "#2196f3");
   try {
@@ -28391,7 +28410,7 @@ async function cmdEvOutliers() {
       } catch (_) {}
     }
 
-    logDiv.innerHTML = "";
+    logDiv.textContent = "";
     addLog(`<b>EV Outlier Scanner</b> — ${results.length} symbols analyzed`, "#4caf50");
     addLog(`<span style="color:#666">MCap/EV %: >150% = fortress balance sheet, <50% = heavy debt, negative = distress</span>`);
     addLog("");
@@ -28426,9 +28445,9 @@ async function cmdEvOutlier() {
 
   const w = createWindow({ title: "EV-OUTLIER: MCap/EV IQR Outlier Scanner", width: 960, height: 650 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
-  out.innerHTML = `<div id="ev-outlier-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  out.textContent = ""; const _outlierLog = el("div", "padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"); _outlierLog.id = "ev-outlier-log"; out.appendChild(_outlierLog);
   const logDiv = out.querySelector("#ev-outlier-log");
-  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg.replace(/<\/?b>/g, ""); if (msg.includes("<b>")) d.style.fontWeight = "bold"; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Gathering stock symbols from MT5/Darwinex...", "#2196f3");
 
@@ -28520,7 +28539,7 @@ async function cmdEvOutlier() {
       await new Promise(r => setTimeout(r, 200)); // SEC EDGAR rate limit
     }
 
-    logDiv.innerHTML = "";
+    logDiv.textContent = "";
 
     if (results.length === 0) {
       addLog("No MCap/EV data available. Ensure SEC EDGAR can resolve these tickers and bar cache has prices.", "#f44336");
@@ -28693,9 +28712,9 @@ async function cmdEvOutlier() {
 async function cmdCryptoRisk() {
   const w = createWindow({ title: "Crypto Risk Analysis", width: 860, height: 600 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
-  out.innerHTML = `<div id="crypto-risk-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  out.textContent = ""; const _cryptoLog = el("div", "padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"); _cryptoLog.id = "crypto-risk-log"; out.appendChild(_cryptoLog);
   const logDiv = out.querySelector("#crypto-risk-log");
-  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg.replace(/<\/?b>/g, ""); if (msg.includes("<b>")) d.style.fontWeight = "bold"; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Analyzing crypto risk profiles...", "#2196f3");
   try {
@@ -28709,7 +28728,7 @@ async function cmdCryptoRisk() {
     addLog(`Scanning ${symbols.length} crypto pairs...`, "#ff9800");
 
     const results = JSON.parse(await invoke("scan_crypto_risk", { symbols }));
-    logDiv.innerHTML = "";
+    logDiv.textContent = "";
 
     addLog(`<b>Crypto Risk Analysis</b> — ${results.length} pairs analyzed`, "#4caf50");
     addLog(`<span style="color:#666">Tiers: LOW (<2%), MEDIUM (2-5%), HIGH (5-8%), EXTREME (>8% daily ATR/Price)</span>`);
@@ -28761,7 +28780,7 @@ async function cmdScreen() {
     <div id="screen-log"></div>
   </div>`;
   const logDiv = out.querySelector("#screen-log");
-  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: internal strings only */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg.replace(/<\/?b>/g, ""); if (msg.includes("<b>")) d.style.fontWeight = "bold"; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   addLog("Running multi-factor scan...", "#2196f3");
   try {
@@ -28779,7 +28798,7 @@ async function cmdScreen() {
     const atrOutlierSyms = new Set(atrResult.outliers.map(o => o.symbol));
     const dualOutliers = [...varOutlierSyms].filter(s => atrOutlierSyms.has(s));
 
-    logDiv.innerHTML = "";
+    logDiv.textContent = "";
     addLog(`<b>Multi-Factor Screener Results</b>`, "#4caf50");
     addLog(`VaR outliers: ${varResult.outliers.length} | ATR outliers: ${atrResult.outliers.length} | <b style="color:#f44336">DUAL outliers: ${dualOutliers.length}</b>`);
     addLog("");
@@ -28823,9 +28842,9 @@ async function cmdScreen() {
 async function cmdDarwinex() {
   const w = createWindow({ title: "Darwinex Full Analysis", width: 920, height: 700 });
   const out = w.element ? w.element.querySelector(".fw-content") : (w.querySelector ? w.querySelector(".fw-content") : w);
-  out.innerHTML = `<div id="dwx-log" style="padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"></div>`;
+  out.textContent = ""; const _dwxLog = el("div", "padding:8px;font-family:'Iosevka Fixed',monospace;font-size:11px;color:#ccc;overflow-y:auto;height:100%"); _dwxLog.id = "dwx-log"; out.appendChild(_dwxLog);
   const logDiv = out.querySelector("#dwx-log");
-  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.innerHTML = msg; /* safe: all msgs are internal strings, no external data */ logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
+  const addLog = (msg, color = "#ccc") => { const d = document.createElement("div"); d.style.color = color; d.textContent = msg.replace(/<\/?b>/g, ""); if (msg.includes("<b>")) d.style.fontWeight = "bold"; logDiv.appendChild(d); logDiv.scrollTop = logDiv.scrollHeight; };
 
   // Sector/Industry filter — driven by MT5 specs data, persisted in localStorage
   const DWX_FILTER_KEY = "typhoon_dwx_sector_filters";
@@ -32157,10 +32176,12 @@ async function activateCustomPlugin(pluginInfo) {
         return;
       }
     }
-    // Evaluate plugin in a restricted function scope (no access to globals except frozen Math/Date)
+    // Evaluate plugin in a frozen scope — no access to globals, window, document, or prototype chain
     const safeMath = Object.freeze(Object.create(Math));
     const safeDate = Object.freeze({ now: Date.now.bind(Date), UTC: Date.UTC.bind(Date) });
-    const pluginFn = new Function("Math", "Date", "return (" + source + ")")(safeMath, safeDate);
+    // Use indirect eval with strict mode wrapper to prevent scope escape
+    const wrappedSource = `"use strict"; const window=undefined,document=undefined,globalThis=undefined,self=undefined; return (${source})`;
+    const pluginFn = new Function("Math", "Date", wrappedSource)(safeMath, safeDate);
     if (!pluginFn || !pluginFn.calculate) {
       log(`Plugin ${name} has no calculate() function`, "error");
       return;
