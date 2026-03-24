@@ -1085,9 +1085,10 @@ document.addEventListener("visibilitychange", () => {
       try { localStorage.setItem(`typhoon_lastprice_${sym}`, JSON.stringify(d)); } catch (_) {}
     }
     _pendingPriceWrites = {};
-    // Pause non-critical polling intervals to save CPU/API calls
+    // Pause non-critical polling intervals to save CPU/API calls when window is hidden
     if (_bidAskLineInterval) { clearInterval(_bidAskLineInterval); _pausedIntervals.push("bidask"); _bidAskLineInterval = null; }
     if (liveBarInterval) { clearInterval(liveBarInterval); _pausedIntervals.push("livebar"); liveBarInterval = null; }
+    if (typeof dashboardInterval !== "undefined" && dashboardInterval) { clearInterval(dashboardInterval); _pausedIntervals.push("dashboard"); dashboardInterval = null; }
   } else {
     // Resume paused intervals
     if (_pausedIntervals.includes("bidask")) { startBidAskLinePolling(); }
@@ -1097,6 +1098,10 @@ document.addEventListener("visibilitychange", () => {
         if (chartLoadGeneration !== gen) { clearInterval(liveBarInterval); return; }
         updateLatestBar(currentSymbol, currentTimeframe);
       }, 10000);
+    }
+    if (_pausedIntervals.includes("dashboard") && typeof updateDashboard === "function") {
+      dashboardInterval = setInterval(updateDashboard, 5000);
+      updateDashboard(); // immediate refresh on return
     }
     _pausedIntervals = [];
   }
@@ -6025,9 +6030,9 @@ function setupConnect() {
 
       setTimeout(() => modal.classList.add("hidden"), 1200);
 
-      // Start dashboard updates
+      // Start dashboard updates (5s interval — balance between responsiveness and CPU)
       if (dashboardInterval) clearInterval(dashboardInterval);
-      dashboardInterval = setInterval(updateDashboard, 2000);
+      dashboardInterval = setInterval(updateDashboard, 5000);
 
       // Predictive prefetch: pre-fetch bar data for all position symbols.
       // With incremental fetch, this costs almost nothing for returning users —
@@ -34683,7 +34688,12 @@ function getTimeframeDurationSec(tf) {
 }
 
 // Sync live price across all MTF grid cells — update last bar's close to current price
+// Throttle MTF grid live price sync to max 1Hz (avoids redundant updates from multiple callers)
+let _mtfSyncLastTs = 0;
 function syncMTFGridLivePrice() {
+  const now = Date.now();
+  if (now - _mtfSyncLastTs < 1000) return; // 1s throttle
+  _mtfSyncLastTs = now;
   if (!mtfGridActive || mtfGridCells.length === 0 || lastPrice <= 0) return;
   // Guard: only sync if the grid symbol matches the current symbol.
   // Prevents cross-symbol contamination during tab switches (e.g. LUMN grid
@@ -34802,18 +34812,18 @@ function updateRiskCalcPanel() {
     riskInfo = `${mode} mode`;
   }
 
-  el.textContent = "";
+  // Reuse existing child divs (avoid DOM churn on repeated updates)
   const lines = [
     { text: `${isBuy ? "BUY" : "SELL"} | R:R ${rr.toFixed(2)}`, color: isBuy ? "#4caf50" : "#f44336" },
     { text: `SL: -${slPct.toFixed(2)}% ($${slDist.toFixed(2)})`, color: "#f44" },
     { text: `TP: +${tpPct.toFixed(2)}% ($${tpDist.toFixed(2)})`, color: "#4caf50" },
     { text: riskInfo, color: "#888" },
   ];
-  for (const l of lines) {
-    const d = document.createElement("div");
-    d.style.color = l.color;
-    d.textContent = l.text;
-    el.appendChild(d);
+  while (el.children.length < lines.length) el.appendChild(document.createElement("div"));
+  while (el.children.length > lines.length) el.removeChild(el.lastChild);
+  for (let i = 0; i < lines.length; i++) {
+    el.children[i].style.color = lines[i].color;
+    el.children[i].textContent = lines[i].text;
   }
 }
 
