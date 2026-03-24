@@ -208,6 +208,7 @@ class GpuChartWrapper {
   }
 
   resize(w, h) {
+    if (w <= 0 || h <= 0) return;
     this.canvas.width = w;
     this.canvas.height = h;
     this.gpu.resize(w, h);
@@ -352,50 +353,93 @@ class GpuChartWrapper {
     return series;
   }
 
-  // ── Internal: mouse events for crosshair emulation ─────────
+  // ── Internal: mouse events for crosshair, pan, Y-axis zoom ──
   _setupMouseEvents() {
     const self = this;
+    const PRICE_SCALE_W = 60;
+    const inPriceScale = (x) => x >= self.canvas.clientWidth - PRICE_SCALE_W;
+
+    let dragging = false, dragStartX = 0;
+    let yDragging = false, yDragStartY = 0;
+
+    // Single mousemove handler for crosshair + drag + Y-zoom
     this.canvas.addEventListener("mousemove", (e) => {
-      if (self._crosshairCallbacks.length === 0) return;
       const x = e.offsetX, y = e.offsetY;
-      // Build a lightweight-charts compatible crosshair event
-      const barIdx = Math.round(self.gpu.bar_at_x(x));
-      const price = self.gpu.price_at_y(y);
-      const param = {
-        point: { x, y },
-        time: null, // GPU_PHASE5: map barIdx back to unix timestamp
-        seriesData: new Map(),
-        sourceEvent: e,
-      };
-      // Populate series data if we have candle data
-      for (const s of self._series) {
-        const d = s.data();
-        if (barIdx >= 0 && barIdx < d.length) {
-          param.time = d[barIdx].time;
-          param.seriesData.set(s, d[barIdx]);
+
+      // Drag/zoom handling first
+      if (yDragging) {
+        const dy = y - yDragStartY;
+        const factor = 1.0 + dy * 0.005;
+        if (factor > 0.01) {
+          const centerY = yDragStartY / self.canvas.clientHeight;
+          self.gpu.zoom_price(1.0 / factor, centerY);
+          yDragStartY = y;
+          scheduleGpuRender();
         }
+      } else if (dragging) {
+        const dx = x - dragStartX;
+        const visibleBars = self.gpu.visible_bars();
+        const barDelta = -dx / (self.canvas.width / (visibleBars || 100));
+        self.gpu.scroll(barDelta);
+        dragStartX = x;
+        scheduleGpuRender();
       }
-      for (const cb of self._crosshairCallbacks) {
-        try { cb(param); } catch (_) {}
+
+      // Cursor hint when hovering price scale
+      if (!dragging && !yDragging) {
+        self.canvas.style.cursor = inPriceScale(x) ? "ns-resize" : "";
+      }
+
+      // Crosshair callbacks
+      if (self._crosshairCallbacks.length > 0 && !dragging && !yDragging) {
+        const barIdx = Math.round(self.gpu.bar_at_x(x));
+        const param = {
+          point: { x, y },
+          time: null,
+          seriesData: new Map(),
+          sourceEvent: e,
+        };
+        for (const s of self._series) {
+          const d = s.data();
+          if (barIdx >= 0 && barIdx < d.length) {
+            param.time = d[barIdx].time;
+            param.seriesData.set(s, d[barIdx]);
+          }
+        }
+        for (const cb of self._crosshairCallbacks) {
+          try { cb(param); } catch (_) {}
+        }
       }
     });
 
     this.canvas.addEventListener("mouseleave", () => {
+      dragging = false; yDragging = false;
+      self.canvas.style.cursor = "";
       const param = { point: null, time: null, seriesData: new Map() };
       for (const cb of self._crosshairCallbacks) {
         try { cb(param); } catch (_) {}
       }
     });
 
-    // Price scale zone width (right edge of canvas)
-    const PRICE_SCALE_W = 60;
-    const inPriceScale = (x) => x >= self.canvas.clientWidth - PRICE_SCALE_W;
+    this.canvas.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      if (inPriceScale(e.offsetX)) {
+        yDragging = true; yDragStartY = e.offsetY;
+        self.canvas.style.cursor = "ns-resize";
+      } else {
+        dragging = true; dragStartX = e.offsetX;
+      }
+    });
+
+    this.canvas.addEventListener("mouseup", () => {
+      dragging = false; yDragging = false;
+      self.canvas.style.cursor = "";
+    });
 
     // Scroll wheel → zoom X or Y depending on cursor position
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
       if (inPriceScale(e.offsetX)) {
-        // Wheel on price scale → Y-axis zoom
         const factor = e.deltaY > 0 ? 0.9 : 1.1;
         const centerY = e.offsetY / self.canvas.clientHeight;
         self.gpu.zoom_price(factor, centerY);
@@ -406,51 +450,6 @@ class GpuChartWrapper {
       }
       scheduleGpuRender();
     }, { passive: false });
-
-    // Drag to pan (chart) or Y-zoom (price scale)
-    let dragging = false, dragStartX = 0;
-    let yDragging = false, yDragStartY = 0;
-    this.canvas.addEventListener("mousedown", (e) => {
-      if (e.button !== 0) return;
-      if (inPriceScale(e.offsetX)) {
-        yDragging = true; yDragStartY = e.offsetY;
-        self.canvas.style.cursor = "ns-resize";
-      } else {
-        dragging = true; dragStartX = e.offsetX;
-      }
-    });
-    this.canvas.addEventListener("mousemove", (e) => {
-      if (yDragging) {
-        const dy = e.offsetY - yDragStartY;
-        // Drag up = zoom in, drag down = zoom out (MT5 behavior)
-        const factor = 1.0 + dy * 0.005;
-        if (factor > 0.01) {
-          const centerY = yDragStartY / self.canvas.clientHeight;
-          self.gpu.zoom_price(1.0 / factor, centerY);
-          yDragStartY = e.offsetY;
-          scheduleGpuRender();
-        }
-      } else if (dragging) {
-        const dx = e.offsetX - dragStartX;
-        const visibleBars = self.gpu.visible_bars();
-        const barDelta = -dx / (self.canvas.width / (visibleBars || 100));
-        self.gpu.scroll(barDelta);
-        dragStartX = e.offsetX;
-        scheduleGpuRender();
-      }
-      // Cursor hint when hovering price scale
-      if (!dragging && !yDragging) {
-        self.canvas.style.cursor = inPriceScale(e.offsetX) ? "ns-resize" : "";
-      }
-    });
-    this.canvas.addEventListener("mouseup", () => {
-      dragging = false; yDragging = false;
-      self.canvas.style.cursor = "";
-    });
-    this.canvas.addEventListener("mouseleave", () => {
-      dragging = false; yDragging = false;
-      self.canvas.style.cursor = "";
-    });
 
     // Double-click on price scale → reset to auto-scale
     this.canvas.addEventListener("dblclick", (e) => {
@@ -34122,15 +34121,14 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       // GPU mode: create canvas + GpuChart per cell
       const gpuCanvas = document.createElement("canvas");
       gpuCanvas.style.cssText = "width:100%;height:100%;";
-      gpuCanvas.id = `mtf-gpu-${tf}`;
+      gpuCanvas.id = `mtf-gpu-${cellSymbol}-${tf}`;
       chartDiv.appendChild(gpuCanvas);
 
-      requestAnimationFrame(() => {
-        gpuCanvas.width = chartDiv.clientWidth || 300;
-        gpuCanvas.height = chartDiv.clientHeight || 200;
-      });
+      // Set canvas dimensions before creating GPU chart (avoids 0×0 viewport)
+      gpuCanvas.width = chartDiv.clientWidth || 300;
+      gpuCanvas.height = chartDiv.clientHeight || 200;
 
-      cellGpuChart = new gpuChartModule.GpuChart(`mtf-gpu-${tf}`);
+      cellGpuChart = new gpuChartModule.GpuChart(`mtf-gpu-${cellSymbol}-${tf}`);
       const gpuType = GPU_CHART_TYPES[currentChartType] ?? 0;
       cellGpuChart.set_chart_type(gpuType);
 
@@ -34660,6 +34658,9 @@ function syncMTFGridLivePrice() {
   const nowSec = Math.floor(Date.now() / 1000);
   for (const cell of mtfGridCells) {
     try {
+      if (!cell.candleSeries || typeof cell.candleSeries.data !== "function") continue;
+      // Guard: skip cells whose symbol doesn't match current (multi-symbol grid)
+      if (cell.symbol && cell.symbol !== currentSymbol) continue;
       const data = cell.candleSeries.data();
       if (!data || data.length === 0) continue;
       const lastBar = data[data.length - 1];
