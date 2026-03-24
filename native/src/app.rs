@@ -31,8 +31,8 @@ use tokio::sync::mpsc;
 // ─── colours ────────────────────────────────────────────────────────────────
 const BG: egui::Color32 = egui::Color32::from_rgb(0, 0, 0);
 const GRID: egui::Color32 = egui::Color32::from_rgb(33, 33, 33);     // #333 (WebKit dotted grid)
-const UP: egui::Color32 = egui::Color32::from_rgb(0, 255, 0);        // #00ff00 (MT5 bright green)
-const DOWN: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);      // #ff0000 (MT5 bright red)
+const UP: egui::Color32 = egui::Color32::from_rgb(0, 255, 0);        // #00ff00 (MT5 bright green — solid fill)
+const DOWN: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);      // #ff0000 (MT5 bright red — solid fill)
 const SMA200_COL: egui::Color32 = egui::Color32::from_rgb(255, 255, 0);  // #ffff00 yellow (MT5 match)
 const SMA100_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff blue
 const KAMA_COL: egui::Color32 = egui::Color32::from_rgb(255, 255, 255);  // white (MT5 KAMA)
@@ -41,9 +41,9 @@ const BB_COL: egui::Color32 = egui::Color32::from_rgb(80, 160, 200);
 const BB_FILL: egui::Color32 = egui::Color32::from_rgba_premultiplied(80, 160, 200, 25);
 const AXIS_TEXT: egui::Color32 = egui::Color32::from_rgb(140, 140, 160); // #8c8ca0
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(76, 175, 80);
-const FISHER_POS: egui::Color32 = egui::Color32::from_rgb(60, 179, 113); // #3cb371 (medium sea green, MT5)
-const FISHER_NEG: egui::Color32 = egui::Color32::from_rgb(255, 69, 0);   // #ff4500 (orange-red, MT5)
-const FISHER_SIG: egui::Color32 = egui::Color32::from_rgb(169, 169, 169); // #a9a9a9 (dark gray signal)
+const FISHER_POS: egui::Color32 = egui::Color32::from_rgb(0, 255, 0);     // #00ff00 (MT5 bright green)
+const FISHER_NEG: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);    // #ff0000 (MT5 bright red)
+const FISHER_SIG: egui::Color32 = egui::Color32::from_rgb(180, 180, 60); // yellow-gray signal line
 const RSI_LINE: egui::Color32 = egui::Color32::from_rgb(200, 180, 60);   // #c8b43c (mustard yellow)
 const MACD_LINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff
 const MACD_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 48);   // #ff8230 (orange)
@@ -2274,14 +2274,8 @@ fn draw_chart(
                 );
 
                 if body_height > 2.0 {
-                    if bar.close >= bar.open {
-                        // Bullish: hollow body (MT5 style — black fill, colored border)
-                        painter.rect_filled(body_rect, 0.0, BG);
-                        painter.rect_stroke(body_rect, 0.0, egui::Stroke::new(1.0, color), egui::StrokeKind::Outside);
-                    } else {
-                        // Bearish: solid filled body
-                        painter.rect_filled(body_rect, 0.0, color);
-                    }
+                    // Solid filled candles (TradingView/lightweight-charts style)
+                    painter.rect_filled(body_rect, 0.0, color);
                 } else {
                     // Doji: single line
                     painter.line_segment(
@@ -2877,20 +2871,26 @@ fn draw_fisher_pane(
     let zero_y = val_to_y(0.0);
     painter.line_segment([egui::pos2(rect.left(), zero_y), egui::pos2(rect.right(), zero_y)], egui::Stroke::new(0.5, GRID));
 
-    // Histogram bars
-    let hist_w = (bar_w * 0.6).max(1.0);
+    // Histogram bars — MT5 style: green when fisher > signal, red when fisher < signal
+    let hist_w = (bar_w * 0.7).max(1.5);
     for (rel_idx, _) in bars.iter().enumerate() {
         let abs_idx = start_idx + rel_idx;
         if abs_idx >= fisher.len() { continue; }
-        if let Some(v) = fisher[abs_idx] {
+        if let Some(f_val) = fisher[abs_idx] {
+            let sig_val = if abs_idx < signal.len() { signal[abs_idx] } else { None };
             let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
-            let y = val_to_y(v);
-            let color = if v >= 0.0 { FISHER_POS } else { FISHER_NEG };
-            let (top, bottom) = if v >= 0.0 { (y, zero_y) } else { (zero_y, y) };
+            let y = val_to_y(f_val);
+            // Color based on fisher vs signal (MT5 parity)
+            let color = match sig_val {
+                Some(s) if f_val > s => FISHER_POS,
+                Some(_) => FISHER_NEG,
+                None => if f_val >= 0.0 { FISHER_POS } else { FISHER_NEG },
+            };
+            let (top, bottom) = if f_val >= 0.0 { (y, zero_y) } else { (zero_y, y) };
             painter.rect_filled(
                 egui::Rect::from_min_max(egui::pos2(x - hist_w / 2.0, top), egui::pos2(x + hist_w / 2.0, bottom)),
                 0.0,
-                egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 180),
+                color,
             );
         }
     }
@@ -2910,7 +2910,15 @@ fn draw_fisher_pane(
         painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, FISHER_SIG)));
     }
 
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "Fisher(32)", egui::FontId::monospace(9.0), FISHER_POS);
+    // Label with current values (MT5 style: "Ehlers Fisher transform (32) -2.037 -2.068")
+    let last_fisher = fisher.iter().rev().find_map(|v| *v);
+    let last_signal = signal.iter().rev().find_map(|v| *v);
+    let label = match (last_fisher, last_signal) {
+        (Some(f), Some(s)) => format!("Ehlers Fisher transform (32) {:.3} {:.3}", f, s),
+        (Some(f), None) => format!("Ehlers Fisher transform (32) {:.3}", f),
+        _ => "Ehlers Fisher transform (32)".to_string(),
+    };
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, &label, egui::FontId::monospace(9.0), FISHER_POS);
 }
 
 /// Draw MACD sub-pane with two lines + histogram.
@@ -3090,7 +3098,10 @@ fn draw_better_volume_pane(
             0.0, color,
         );
     }
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "BetterVolume", egui::FontId::monospace(9.0), BVOL_HIGH);
+    // Label with current volume value (MT5 style: "BetterVol(20) 10748 0")
+    let last_vol = bars.last().map(|b| b.volume as i64).unwrap_or(0);
+    let label = format!("BetterVol(20) {} 0", last_vol);
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, &label, egui::FontId::monospace(9.0), BVOL_HIGH);
 }
 
 /// Draw Stochastic sub-pane.
