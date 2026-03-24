@@ -9,8 +9,7 @@ license = "LicenseRef-BSL-1.1"
 name = "typhoon_engine"
 path = "src/lib.rs"
 
-# No [[bin]] — main.rs is the legacy Tauri app, kept for reference only.
-# The native app lives in ../native/
+# Library crate only — native app binary lives in ../native/
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -2,14 +2,14 @@
 name = "typhoon-native"
 version = "0.1.0"
 edition = "2024"
-description = "TyphooN Terminal — Native GPU renderer (egui + wgpu, zero WebKit)"
+description = "TyphooN Terminal — Native GPU renderer (egui + wgpu)"
 
 [[bin]]
 name = "typhoon"
 path = "src/main.rs"
 
 [dependencies]
-# Engine (shared core — no Tauri/WebKit dependency)
+# Engine (shared core library)
 typhoon-engine = { path = "../engine" }
 
 # Native GPU UI
@@ -19,6 +19,16 @@ egui_plot = "0.31"
 
 # Async runtime (shared with engine)
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+# Date/time formatting (for chart time axis labels)
+chrono = { version = "0.4", features = ["serde"] }
+
+# Native file dialog
+rfd = "0.15"
+
+# Serialization for session persistence
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Logging
 tracing = "0.1"

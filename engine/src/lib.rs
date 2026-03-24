@@ -1,12 +1,7 @@
 //! TyphooN Terminal Engine — shared library crate.
 //!
-//! This module re-exports core trading engine functionality for use by:
-//! - `main.rs` (Tauri WebKit frontend — legacy)
-//! - `native/` (egui + wgpu native GPU frontend)
-//! - Future TUI/CLI interfaces
-//!
-//! All broker, cache, risk, and analytics modules are available without
-//! Tauri IPC overhead when used directly from Rust.
+//! Core trading engine: broker, cache, risk, DARWIN analytics, backtest, screener.
+//! Used by the native GPU renderer (egui + wgpu) in `native/`.
 
 pub mod broker;
 pub mod core;

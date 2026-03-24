@@ -1,14 +1,14 @@
 //! TyphooN Terminal — Native GPU Renderer
 //!
-//! Pure Rust → wgpu pipeline. Zero WebKit, zero JS, zero JSON serialization.
+//! Pure Rust → egui + wgpu pipeline.
 //! Direct memory access from SQLite cache to GPU vertex buffers.
 
 mod app;
 
 fn main() -> eframe::Result {
-    // Initialize logging
+    // Initialize logging — suppress noisy wgpu/egl/vulkan adapter probing
     tracing_subscriber::fmt()
-        .with_env_filter("typhoon=info,wgpu=warn,eframe=warn")
+        .with_env_filter("typhoon=info,wgpu_hal=error,wgpu_core=error,wgpu=error,eframe=warn,naga=error")
         .init();
 
     tracing::info!("TyphooN Terminal (native GPU) starting...");
