@@ -187,6 +187,13 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 
 | Document | Purpose |
 |---|---|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Native GPU architecture, data flow, project structure |
+| [INDICATORS.md](docs/INDICATORS.md) | All 21 indicators with parameters and colors |
+| [KEYBOARD_SHORTCUTS.md](docs/KEYBOARD_SHORTCUTS.md) | Keybindings, commands, menu reference |
+| [PERFORMANCE.md](docs/PERFORMANCE.md) | Benchmarks, data pipeline timing, cache format |
+| [ROADMAP.md](docs/ROADMAP.md) | Current status and future plans |
+| [DESIGN_PHILOSOPHY.md](docs/DESIGN_PHILOSOPHY.md) | Core design principles |
+| [API_KEYS.md](docs/API_KEYS.md) | Data source API key setup |
 | [docs/adr/](docs/adr/) | Architecture Decision Records |
 
 ### ADR Index
