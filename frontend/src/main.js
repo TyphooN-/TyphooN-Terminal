@@ -33385,7 +33385,7 @@ function setupMTFGrid() {
     const l1 = document.createElement("label"); l1.htmlFor = "mtf-grid-sym-current"; l1.textContent = "Current"; l1.style.cssText = "color:#ccc;cursor:pointer;margin-right:6px;";
 
     const r2 = document.createElement("input"); r2.type = "radio"; r2.name = "mtf-sym-mode"; r2.id = "mtf-grid-sym-all"; r2.value = "all"; r2.checked = true;
-    const l2 = document.createElement("label"); l2.htmlFor = "mtf-grid-sym-all"; l2.textContent = "All Tabs"; l2.style.cssText = "color:#FFD700;cursor:pointer;font-weight:bold;";
+    const l2 = document.createElement("label"); l2.htmlFor = "mtf-grid-sym-all"; l2.textContent = "All Tabs"; l2.style.cssText = "color:#ccc;cursor:pointer;";
 
     radioWrap.appendChild(r1); radioWrap.appendChild(l1);
     radioWrap.appendChild(r2); radioWrap.appendChild(l2);
