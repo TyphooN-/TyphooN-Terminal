@@ -34672,19 +34672,25 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       const customTF = CUSTOM_TIMEFRAME_MAP[c.tf];
       const fetchTF = customTF ? customTF.base : c.tf;
       const aggFactor = customTF ? customTF.factor : 1;
-      const GRID_BARS = 2000;
+      const GRID_BARS = 5000;
       const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
       const cacheKey = getCacheKey(c.symbol || symbol, fetchTF);
       if (barCache[cacheKey]?.data?.length > 0) return Promise.resolve(); // already cached
       return cachedGetBars(c.symbol || symbol, fetchTF, limit).catch(() => {});
     });
     await Promise.all(prefetchPromises);
-    // Render cells sequentially with yields between cells (keeps UI responsive)
+    // TWO-PASS rendering: candles first (fast), then indicators (heavy, deferred)
+    // Pass 1: Candles only — all cells get visible data immediately
     for (const c of mtfGridCells) {
-      if (mtfGridGeneration !== gridGen) return; // grid switched during prefetch
-      await loadMTFCellData(c, c.symbol || symbol, gridGen);
-      // Yield between cells — 50ms gives browser time to paint + handle events
-      await new Promise(r => setTimeout(r, 50));
+      if (mtfGridGeneration !== gridGen) return;
+      await loadMTFCellData(c, c.symbol || symbol, gridGen, true); // candlesOnly=true
+      await new Promise(r => setTimeout(r, 16)); // ~1 frame yield
+    }
+    // Pass 2: Indicators — added lazily after all candles are visible
+    for (const c of mtfGridCells) {
+      if (mtfGridGeneration !== gridGen) return;
+      await loadMTFCellData(c, c.symbol || symbol, gridGen, false); // add indicators
+      await new Promise(r => setTimeout(r, 50)); // longer yield for UI responsiveness
     }
   })();
 
@@ -34735,14 +34741,14 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
   }
 }
 
-async function loadMTFCellData(cellInfo, symbol, expectedGen) {
+async function loadMTFCellData(cellInfo, symbol, expectedGen, candlesOnly) {
   try {
     // Resolve custom timeframes (H12 → 4Hour × 3, etc.)
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    // 2K bars per cell — grid cells are small, more bars waste GPU/CPU for invisible data
-    const GRID_BARS = 2000;
+    // 5K bars per cell — candles render fast in pass 1, indicators added async in pass 2
+    const GRID_BARS = 5000;
     const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
@@ -34802,10 +34808,19 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
       to: chartData.length + 2, // small right margin
     });
 
-    // ── Fast grid-cell indicators (lightweight, no full applyIndicators) ──
-    // Full applyIndicators is too heavy for 4-6 cells (9+ indicators × 500 bars each
-    // blocks the main thread for 2-3 seconds total). Instead, render the essential
-    // NNFX system indicators inline — matches MT5 visual without the freeze.
+    // Two-pass rendering: candlesOnly=true sets data, candlesOnly=false adds indicators
+    if (candlesOnly === true) {
+      if (cellInfo.gpuChart) { try { cellInfo.gpuChart.render(); } catch (_) {} }
+      cellInfo._chartData = chartData; // stash for indicator pass
+      return;
+    }
+    // Indicator pass: reuse stashed chartData (skip re-loading from cache)
+    if (candlesOnly === false && cellInfo._chartData) {
+      chartData = cellInfo._chartData;
+    }
+    if (!chartData || chartData.length === 0) return;
+
+    // ── Fast grid-cell indicators ──
     await new Promise(r => requestAnimationFrame(r));
     if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
