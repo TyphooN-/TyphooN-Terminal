@@ -34480,8 +34480,7 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       const customTF = CUSTOM_TIMEFRAME_MAP[c.tf];
       const fetchTF = customTF ? customTF.base : c.tf;
       const aggFactor = customTF ? customTF.factor : 1;
-      const htf = c.tf === "1Week" || c.tf === "1Month" || c.tf === "1Day";
-      const GRID_BARS = htf ? 5000 : 500;
+      const GRID_BARS = 5000;
       const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
       const cacheKey = getCacheKey(c.symbol || symbol, fetchTF);
       if (barCache[cacheKey]?.data?.length > 0) return Promise.resolve(); // already cached
@@ -34548,10 +34547,8 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    // Balance: enough bars for SMA 200 to compute, but not so many that 12 cells freeze the UI.
-    // W1/MN1 get all available (usually <1000), lower TFs capped at 500 for responsiveness.
-    const htf = cellInfo.tf === "1Week" || cellInfo.tf === "1Month" || cellInfo.tf === "1Day";
-    const GRID_BARS = htf ? 5000 : 500;
+    // 5000 bars per cell: full indicator history + visible context, 12 cells × 5K = 60K total
+    const GRID_BARS = 5000;
     const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
