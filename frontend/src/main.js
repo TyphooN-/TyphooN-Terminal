@@ -3542,7 +3542,7 @@ async function _applyIndicatorsImpl(chartData, ctx) {
   };
   // ── Pre-compute worker-eligible indicators off-thread (batch) ──
   // Maps indicator type → worker batch type for offloading heavy calc to Web Worker
-  const WORKER_TYPE_MAP = { "mtf-ma": "sma", "sma": "sma", "ema": "ema", "kama": "kama", "rsi": "rsi" };
+  const WORKER_TYPE_MAP = { "mtf-ma": "sma", "sma": "sma", "ema": "ema", "kama": "kama", "rsi": "rsi", "fisher": "fisher", "better-vol": "bettervolume", "atr-proj": "atr" };
   const _workerBatchCache = {}; // key → worker result (values array)
   if (!_isGridCell && indicatorWorker && chartData.length > 200) {
     const batchReqs = [];
@@ -3763,7 +3763,19 @@ async function _applyIndicatorsImpl(chartData, ctx) {
     } else if (ind === "fisher" && chartData.length > period) {
       // EhlersFisherTransform.mqh — DRAW_COLOR_LINE in separate pane
       // Green (#3CB371) when fisher > signal (bullish), Red (#FF4500) when < (bearish), Gray neutral
-      const ef = memoCalc("fisher", period, chartData, () => calcEhlersFisher(chartData, period));
+      let ef;
+      const workerFisher = _workerBatchCache[key];
+      if (workerFisher && workerFisher.fisher) {
+        // Worker result: raw arrays + startIdx — convert to timestamped format
+        const si = workerFisher.startIdx || period;
+        ef = {
+          fisher: workerFisher.fisher.map((v, i) => ({ time: chartData[i + si]?.time, value: v })),
+          signal: workerFisher.signal.map((v, i) => ({ time: chartData[i + si]?.time, value: v })),
+          colors: workerFisher.colors,
+        };
+      } else {
+        ef = memoCalc("fisher", period, chartData, () => calcEhlersFisher(chartData, period));
+      }
 
       // MQL5 DRAW_COLOR_LINE: ONE line that changes color per bar.
       // Split into contiguous same-color segments, each as its own line series.
@@ -3833,7 +3845,15 @@ async function _applyIndicatorsImpl(chartData, ctx) {
 
     } else if (ind === "better-vol" && chartData.length > 2) {
       // BetterVolume — rendered in dedicated volumeChart pane
-      const bvData = memoCalc("bettervol", 20, chartData, () => calcBetterVolume(chartData));
+      let bvData;
+      const workerBV = _workerBatchCache[key];
+      if (workerBV && Array.isArray(workerBV)) {
+        // Worker result: [{value, color}] — convert to chart format with timestamps
+        const bvColorMap = { 0: "#888888", 1: "#00FF00", "-1": "#FF0000", 2: "#FFFF00", 3: "#00FFFF", "-2": "#FF00FF" };
+        bvData = workerBV.map((d, i) => ({ time: chartData[i]?.time, value: d.value, color: bvColorMap[d.color] || "#888888" })).filter(d => d.time);
+      } else {
+        bvData = memoCalc("bettervol", 20, chartData, () => calcBetterVolume(chartData));
+      }
       const s = _volumeChart.addHistogramSeries({
         priceFormat: { type: "volume" },
       });
@@ -5105,7 +5125,7 @@ async function updateDashboard() {
             } else {
               // Fall back to localStorage cache
               try {
-                const cached = JSON.parse(localStorage.getItem(`typhoon_lastprice_${currentSymbol}`) || "null");
+                const cached = _pendingPriceWrites[currentSymbol] || JSON.parse(localStorage.getItem(`typhoon_lastprice_${currentSymbol}`) || "null");
                 if (cached && cached.bid > 0) {
                   const dp = cached.bid > 100 ? 2 : cached.bid > 1 ? 4 : 6;
                   const ts = cached.ts ? new Date(cached.ts) : null;
