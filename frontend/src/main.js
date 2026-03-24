@@ -34672,7 +34672,7 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       const customTF = CUSTOM_TIMEFRAME_MAP[c.tf];
       const fetchTF = customTF ? customTF.base : c.tf;
       const aggFactor = customTF ? customTF.factor : 1;
-      const GRID_BARS = 10000;
+      const GRID_BARS = 2000;
       const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
       const cacheKey = getCacheKey(c.symbol || symbol, fetchTF);
       if (barCache[cacheKey]?.data?.length > 0) return Promise.resolve(); // already cached
@@ -34683,8 +34683,8 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
     for (const c of mtfGridCells) {
       if (mtfGridGeneration !== gridGen) return; // grid switched during prefetch
       await loadMTFCellData(c, c.symbol || symbol, gridGen);
-      // Yield between cells to keep UI clickable during grid population
-      await new Promise(r => setTimeout(r, 0));
+      // Yield between cells — 50ms gives browser time to paint + handle events
+      await new Promise(r => setTimeout(r, 50));
     }
   })();
 
@@ -34741,8 +34741,8 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    // 10K bars per cell with yield-between-cells keeps UI responsive (12 cells × 10K = 120K total)
-    const GRID_BARS = 10000;
+    // 2K bars per cell — grid cells are small, more bars waste GPU/CPU for invisible data
+    const GRID_BARS = 2000;
     const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
