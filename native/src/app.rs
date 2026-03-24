@@ -266,6 +266,7 @@ struct IndicatorFlags {
     prev_levels: bool,
     pivots: bool,
     fractals: bool,
+    harmonics: bool,
 }
 
 /// All state for one chart viewport.
@@ -344,6 +345,8 @@ struct ChartState {
     /// Bill Williams Fractals (up/down arrows).
     fractal_up: Vec<bool>,
     fractal_down: Vec<bool>,
+    /// Detected harmonic patterns.
+    harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
     drawings: Vec<Drawing>,
 
@@ -411,6 +414,7 @@ impl ChartState {
             pivot_p: None, pivot_r1: None, pivot_r2: None, pivot_s1: None, pivot_s2: None,
             fractal_up: Vec::new(),
             fractal_down: Vec::new(),
+            harmonics: Vec::new(),
             drawings: Vec::new(),
             visible_bars: 200,
             view_offset: 0,
@@ -523,6 +527,7 @@ impl ChartState {
         // Fractals
         self.fractal_up = compute_fractals_up(&self.bars);
         self.fractal_down = compute_fractals_down(&self.bars);
+        self.harmonics = detect_harmonic_patterns(&self.bars, &self.fractal_up, &self.fractal_down);
     }
 
     fn visible_range(&self) -> (usize, usize) {
@@ -808,6 +813,123 @@ fn renko_bricks(bars: &[Bar]) -> Vec<Bar> {
     }
     if bricks.is_empty() { bars.to_vec() } else { bricks }
 }
+
+// ─── harmonic pattern detection (Scott Carney) ───────────────────────────────
+
+#[derive(Clone, Debug)]
+struct HarmonicPattern {
+    name: &'static str,
+    x: (usize, f64),  // bar index, price
+    a: (usize, f64),
+    b: (usize, f64),
+    c: (usize, f64),
+    d: (usize, f64),  // completion / entry point
+    tp1: f64,          // target 1 (0.382 AD)
+    tp2: f64,          // target 2 (0.618 AD)
+    sl: f64,           // stop loss (beyond X)
+    bullish: bool,
+}
+
+fn detect_harmonic_patterns(bars: &[Bar], fractals_up: &[bool], fractals_down: &[bool]) -> Vec<HarmonicPattern> {
+    let n = bars.len();
+    if n < 20 { return Vec::new(); }
+    let mut patterns: Vec<HarmonicPattern> = Vec::new();
+
+    // Collect swing points from fractals
+    let mut swings: Vec<(usize, f64, bool)> = Vec::new(); // (index, price, is_high)
+    for i in 0..n {
+        if i < fractals_up.len() && fractals_up[i] { swings.push((i, bars[i].high, true)); }
+        if i < fractals_down.len() && fractals_down[i] { swings.push((i, bars[i].low, false)); }
+    }
+
+    // Need at least 5 swing points for XABCD
+    if swings.len() < 5 { return patterns; }
+
+    // Check the most recent swing combinations (limit to last 20 swings for performance)
+    let start = swings.len().saturating_sub(20);
+    let recent = &swings[start..];
+
+    for i in 0..recent.len().saturating_sub(4) {
+        for j in (i+1)..recent.len().saturating_sub(3) {
+            for k in (j+1)..recent.len().saturating_sub(2) {
+                for l in (k+1)..recent.len().saturating_sub(1) {
+                    for m in (l+1)..recent.len() {
+                        let x = recent[i];
+                        let a = recent[j];
+                        let b = recent[k];
+                        let c = recent[l];
+                        let d = recent[m];
+
+                        // Must alternate: high-low-high-low-high or low-high-low-high-low
+                        if x.2 == a.2 || a.2 == b.2 || b.2 == c.2 || c.2 == d.2 { continue; }
+
+                        let xa = (a.1 - x.1).abs();
+                        if xa < f64::EPSILON { continue; }
+                        let ab = (b.1 - a.1).abs();
+                        let bc = (c.1 - b.1).abs();
+                        let cd = (d.1 - c.1).abs();
+                        let xd = (d.1 - x.1).abs();
+                        let ad = (d.1 - a.1).abs();
+
+                        let ab_xa = ab / xa;
+                        let bc_ab = if ab > f64::EPSILON { bc / ab } else { continue };
+                        let _cd_bc = if bc > f64::EPSILON { cd / bc } else { continue };
+                        let xd_xa = xd / xa;
+
+                        let bullish = x.1 < a.1; // X is low, A is high = bullish
+
+                        // Gartley: AB=0.618 XA, BC=0.382-0.886 AB, CD=1.27-1.618 BC, XD=0.786 XA
+                        if in_range(ab_xa, 0.55, 0.68) && in_range(bc_ab, 0.35, 0.92) && in_range(xd_xa, 0.72, 0.84) {
+                            let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                            let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                            let sl = if bullish { x.1 - xa * 0.1 } else { x.1 + xa * 0.1 };
+                            patterns.push(HarmonicPattern {
+                                name: "Gartley", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                            });
+                        }
+                        // Butterfly: AB=0.786 XA, BC=0.382-0.886 AB, XD=1.27 XA
+                        else if in_range(ab_xa, 0.72, 0.84) && in_range(bc_ab, 0.35, 0.92) && in_range(xd_xa, 1.20, 1.35) {
+                            let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                            let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                            let sl = if bullish { d.1 - xa * 0.15 } else { d.1 + xa * 0.15 };
+                            patterns.push(HarmonicPattern {
+                                name: "Butterfly", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                            });
+                        }
+                        // Bat: AB=0.382-0.50 XA, BC=0.382-0.886 AB, XD=0.886 XA
+                        else if in_range(ab_xa, 0.35, 0.55) && in_range(bc_ab, 0.35, 0.92) && in_range(xd_xa, 0.82, 0.92) {
+                            let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                            let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                            let sl = if bullish { x.1 - xa * 0.1 } else { x.1 + xa * 0.1 };
+                            patterns.push(HarmonicPattern {
+                                name: "Bat", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                            });
+                        }
+                        // Crab: AB=0.382-0.618 XA, BC=0.382-0.886 AB, XD=1.618 XA
+                        else if in_range(ab_xa, 0.35, 0.65) && in_range(bc_ab, 0.35, 0.92) && in_range(xd_xa, 1.55, 1.72) {
+                            let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                            let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                            let sl = if bullish { d.1 - xa * 0.1 } else { d.1 + xa * 0.1 };
+                            patterns.push(HarmonicPattern {
+                                name: "Crab", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Deduplicate (keep most recent pattern of each type)
+    patterns.sort_by(|a, b| b.d.0.cmp(&a.d.0));
+    patterns.truncate(10); // keep max 10 most recent
+    patterns
+}
+
+fn in_range(v: f64, lo: f64, hi: f64) -> bool { v >= lo && v <= hi }
 
 fn compute_fractals_up(bars: &[Bar]) -> Vec<bool> {
     let n = bars.len();
@@ -1520,6 +1642,51 @@ fn draw_chart(
                 let y = price_to_y(bar.low) + 2.0;
                 if y <= chart_rect.bottom() {
                     painter.text(egui::pos2(x, y), egui::Align2::CENTER_TOP, "▼", egui::FontId::proportional(10.0), DOWN);
+                }
+            }
+        }
+    }
+
+    // ── harmonic patterns (Scott Carney XABCD) ────────────────────────────
+    if flags.harmonics {
+        let pattern_col = egui::Color32::from_rgb(0, 200, 255);
+        let tp_col = egui::Color32::from_rgb(0, 200, 80);
+        let sl_col = egui::Color32::from_rgb(220, 40, 40);
+        for pat in &chart.harmonics {
+            let pts = [pat.x, pat.a, pat.b, pat.c, pat.d];
+            let screen_pts: Vec<Option<egui::Pos2>> = pts.iter().map(|(idx, price)| {
+                if *idx >= start_idx && *idx < end_idx {
+                    Some(egui::pos2(chart_rect.left() + ((*idx - start_idx) as f32 + 0.5) * bar_w, price_to_y(*price)))
+                } else { None }
+            }).collect();
+            // XABCD lines
+            for w in screen_pts.windows(2) {
+                if let (Some(p1), Some(p2)) = (w[0], w[1]) {
+                    painter.line_segment([p1, p2], egui::Stroke::new(1.5, pattern_col));
+                }
+            }
+            // Labels
+            let labels = ["X", "A", "B", "C", "D"];
+            for (i, sp) in screen_pts.iter().enumerate() {
+                if let Some(p) = sp {
+                    painter.text(egui::pos2(p.x, p.y + if i % 2 == 0 { -12.0 } else { 4.0 }),
+                        egui::Align2::CENTER_TOP, labels[i], egui::FontId::monospace(10.0), pattern_col);
+                }
+            }
+            // Pattern name
+            if let Some(d_pt) = screen_pts[4] {
+                let dir = if pat.bullish { "BULL" } else { "BEAR" };
+                let col = if pat.bullish { UP } else { DOWN };
+                painter.text(egui::pos2(d_pt.x + 5.0, d_pt.y - 20.0), egui::Align2::LEFT_TOP,
+                    &format!("{} {}", pat.name, dir), egui::FontId::monospace(9.0), col);
+                // TP/SL from D
+                for (price, label, c) in [(pat.tp1, "TP1", tp_col), (pat.tp2, "TP2", tp_col), (pat.sl, "SL", sl_col)] {
+                    let y = price_to_y(price);
+                    if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                        painter.line_segment([egui::pos2(d_pt.x, y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(0.7, c));
+                        painter.text(egui::pos2(d_pt.x + 2.0, y - 9.0), egui::Align2::LEFT_TOP,
+                            &format!("{} {}", label, format_price(price)), egui::FontId::monospace(8.0), c);
+                    }
                 }
             }
         }
@@ -2594,6 +2761,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "PREV_LEVELS",   desc: "Toggle previous candle levels (D/W)" },
     Command { name: "PIVOTS",        desc: "Toggle pivot points (P/R1/R2/S1/S2)" },
     Command { name: "FRACTALS",      desc: "Toggle Bill Williams fractals" },
+    Command { name: "HARMONICS",     desc: "Toggle harmonic pattern detection (Carney)" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -2657,6 +2825,7 @@ pub struct TyphooNApp {
     show_prev_levels: bool,
     show_pivots: bool,
     show_fractals: bool,
+    show_harmonics: bool,
     show_cci: bool,
     show_williams_r: bool,
     show_obv: bool,
@@ -2858,6 +3027,7 @@ impl TyphooNApp {
             show_prev_levels: false,
             show_pivots: false,
             show_fractals: false,
+            show_harmonics: false,
             show_cci: false,
             show_williams_r: false,
             show_obv: false,
@@ -2993,6 +3163,7 @@ impl TyphooNApp {
             prev_levels: self.show_prev_levels,
             pivots: self.show_pivots,
             fractals: self.show_fractals,
+            harmonics: self.show_harmonics,
         }
     }
 
@@ -3106,7 +3277,8 @@ impl TyphooNApp {
             "BACKUP"         => { self.save_session(); self.log.push_back(LogEntry::info("Session backup saved")); }
             "PIVOTS"   => self.show_pivots = !self.show_pivots,
             "SRLEVEL"  => self.show_pivots = !self.show_pivots,
-            "FRACTALS" => self.show_fractals = !self.show_fractals,
+            "FRACTALS"  => self.show_fractals = !self.show_fractals,
+            "HARMONICS" => self.show_harmonics = !self.show_harmonics,
             "NNFX" => {
                 // Enable NNFX indicator preset
                 self.show_sma200 = true;
@@ -3169,7 +3341,7 @@ impl TyphooNApp {
                 "wma": self.show_wma, "hma": self.show_hma,
                 "psar": self.show_psar, "atr_proj": self.show_atr_proj,
                 "prev_levels": self.show_prev_levels, "pivots": self.show_pivots,
-                "fractals": self.show_fractals,
+                "fractals": self.show_fractals, "harmonics": self.show_harmonics,
                 "rsi": self.show_rsi, "fisher": self.show_fisher,
                 "macd": self.show_macd, "stochastic": self.show_stochastic,
                 "adx": self.show_adx, "cci": self.show_cci,
@@ -3201,7 +3373,7 @@ impl TyphooNApp {
                         ("wma", &mut self.show_wma), ("hma", &mut self.show_hma),
                         ("psar", &mut self.show_psar), ("atr_proj", &mut self.show_atr_proj),
                         ("prev_levels", &mut self.show_prev_levels), ("pivots", &mut self.show_pivots),
-                        ("fractals", &mut self.show_fractals),
+                        ("fractals", &mut self.show_fractals), ("harmonics", &mut self.show_harmonics),
                         ("rsi", &mut self.show_rsi), ("fisher", &mut self.show_fisher),
                         ("macd", &mut self.show_macd), ("stochastic", &mut self.show_stochastic),
                         ("adx", &mut self.show_adx), ("cci", &mut self.show_cci),
@@ -3450,6 +3622,7 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_prev_levels, "Previous Candle Levels (D/W)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (Classic)");
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
+                    ui.checkbox(&mut self.show_harmonics,   "Harmonic Patterns (Carney XABCD)");
                     ui.add_space(10.0);
                     ui.heading("Sub-Pane Indicators");
                     ui.separator();
@@ -5033,6 +5206,7 @@ impl eframe::App for TyphooNApp {
                     ui.checkbox(&mut self.show_prev_levels, "Prev Candle Levels (D/W)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (P/R1/R2/S1/S2)");
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
+                    ui.checkbox(&mut self.show_harmonics,   "Harmonic Patterns (Carney)");
                     ui.separator();
                     ui.label(egui::RichText::new("Sub-Panes").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_rsi,            "RSI(14)");
