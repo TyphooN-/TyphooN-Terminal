@@ -298,6 +298,8 @@ pub struct GpuChart {
     panes: Vec<SubPane>,
     /// Main chart height fraction (1.0 = full, reduced when panes added)
     main_pane_height: f32,
+    /// When true, set_visible_range/scroll/update_last_bar skip Y auto-scale
+    manual_price_scale: bool,
 }
 
 #[wasm_bindgen]
@@ -364,6 +366,7 @@ impl GpuChart {
             price_lines: vec![],
             panes: vec![],
             main_pane_height: 1.0,
+            manual_price_scale: false,
         })
     }
 
@@ -417,18 +420,20 @@ impl GpuChart {
     pub fn set_visible_range(&mut self, start: f64, end: f64) {
         self.visible_start = start;
         self.visible_end = end;
-        let s = start.max(0.0) as usize;
-        let e = (end as usize).min(self.total_bars);
-        if s < e {
-            let mut min_p = f64::MAX;
-            let mut max_p = f64::MIN;
-            for i in s..e {
-                if (self.bar_highs[i] as f64) > max_p { max_p = self.bar_highs[i] as f64; }
-                if (self.bar_lows[i] as f64) < min_p { min_p = self.bar_lows[i] as f64; }
+        if !self.manual_price_scale {
+            let s = start.max(0.0) as usize;
+            let e = (end as usize).min(self.total_bars);
+            if s < e {
+                let mut min_p = f64::MAX;
+                let mut max_p = f64::MIN;
+                for i in s..e {
+                    if (self.bar_highs[i] as f64) > max_p { max_p = self.bar_highs[i] as f64; }
+                    if (self.bar_lows[i] as f64) < min_p { min_p = self.bar_lows[i] as f64; }
+                }
+                let padding = (max_p - min_p) * 0.05;
+                self.min_price = min_p - padding;
+                self.max_price = max_p + padding;
             }
-            let padding = (max_p - min_p) * 0.05;
-            self.min_price = min_p - padding;
-            self.max_price = max_p + padding;
         }
         self.build_grid_geometry();
     }
@@ -455,14 +460,56 @@ impl GpuChart {
         self.set_visible_range(self.visible_start, self.visible_end);
     }
 
+    /// Zoom the Y-axis (price scale) around a center point.
+    /// factor > 1.0 = zoom in (narrower range), < 1.0 = zoom out.
+    /// center_y is 0.0..1.0 fraction from top of chart.
+    #[wasm_bindgen]
+    pub fn zoom_price(&mut self, factor: f64, center_y: f64) {
+        self.manual_price_scale = true;
+        let range = self.max_price - self.min_price;
+        // center_y=0 is top (max_price), center_y=1 is bottom (min_price)
+        let center_price = self.max_price - range * center_y;
+        let new_range = (range / factor).max(1e-10);
+        self.min_price = center_price - new_range * (1.0 - center_y);
+        self.max_price = center_price + new_range * center_y;
+        self.build_grid_geometry();
+    }
+
+    /// Pan the Y-axis by a pixel delta. Positive delta = drag down = prices shift up.
+    #[wasm_bindgen]
+    pub fn pan_price(&mut self, delta_fraction: f64) {
+        self.manual_price_scale = true;
+        let range = self.max_price - self.min_price;
+        let shift = range * delta_fraction;
+        self.min_price += shift;
+        self.max_price += shift;
+        self.build_grid_geometry();
+    }
+
+    /// Reset to auto-scale mode (double-click on price axis).
+    #[wasm_bindgen]
+    pub fn reset_price_scale(&mut self) {
+        self.manual_price_scale = false;
+        // Re-auto-scale to visible range
+        self.set_visible_range(self.visible_start, self.visible_end);
+    }
+
+    /// Returns true if the price scale is in manual (user-zoomed) mode.
+    #[wasm_bindgen]
+    pub fn is_manual_price_scale(&self) -> bool {
+        self.manual_price_scale
+    }
+
     // ── Indicator Lines ─────────────────────────────────────────
 
     /// Add a styled indicator line with custom width and dash style.
     #[wasm_bindgen]
     pub fn add_line_styled(&mut self, values: &[f64], r: f32, g: f32, b: f32, a: f32, width: f32, style: LineStyle) {
+        // Auto-compute offset: if fewer values than bars, right-align to latest bar
+        let offset = if values.len() < self.total_bars { self.total_bars - values.len() } else { 0 };
         let mut vertices: Vec<f32> = Vec::with_capacity(values.len() * 2);
         for (i, &v) in values.iter().enumerate() {
-            vertices.push(i as f32);
+            vertices.push((i + offset) as f32);
             vertices.push(v as f32);
         }
         let vbo = self.gl.create_buffer().unwrap();
@@ -506,10 +553,11 @@ impl GpuChart {
         if n == 0 { return; }
         let hw = 0.35f32;
         let base_f = base as f32;
+        let offset = if n < self.total_bars { self.total_bars - n } else { 0 };
         // 6 vertices per bar, each vertex = 2 pos + 4 color = 6 floats
         let mut vertices: Vec<f32> = Vec::with_capacity(n * 6 * 6);
         for i in 0..n {
-            let x = i as f32;
+            let x = (i + offset) as f32;
             let val = values[i] as f32;
             let top = val.max(base_f);
             let bot = val.min(base_f);
@@ -558,12 +606,13 @@ impl GpuChart {
     pub fn add_fill(&mut self, top_values: &[f64], bottom_values: &[f64], r: f32, g: f32, b: f32, a: f32) {
         let n = top_values.len().min(bottom_values.len());
         if n < 2 { return; }
+        let offset = if n < self.total_bars { self.total_bars - n } else { 0 };
         // Build triangle strip: for each bar, emit (x, top) then (x, bottom)
         let mut vertices: Vec<f32> = Vec::with_capacity(n * 2 * 2);
         for i in 0..n {
-            vertices.push(i as f32);
+            vertices.push((i + offset) as f32);
             vertices.push(top_values[i] as f32);
-            vertices.push(i as f32);
+            vertices.push((i + offset) as f32);
             vertices.push(bottom_values[i] as f32);
         }
         let vbo = self.gl.create_buffer().unwrap();
@@ -601,12 +650,14 @@ impl GpuChart {
         self.bar_lows[idx] = low as f32;
         self.bar_closes[idx] = close as f32;
 
-        // Update price range if needed
-        let h = high;
-        let l = low;
-        let padding = (self.max_price - self.min_price) * 0.05;
-        if h > self.max_price - padding { self.max_price = h + padding; }
-        if l < self.min_price + padding { self.min_price = l - padding; }
+        // Update price range if needed (only when auto-scaling)
+        if !self.manual_price_scale {
+            let h = high;
+            let l = low;
+            let padding = (self.max_price - self.min_price) * 0.05;
+            if h > self.max_price - padding { self.max_price = h + padding; }
+            if l < self.min_price + padding { self.min_price = l - padding; }
+        }
 
         // Rebuild all geometry (chart type may be HA/Renko which needs full recalc)
         self.rebuild_geometry();
@@ -822,9 +873,10 @@ impl GpuChart {
     #[wasm_bindgen]
     pub fn add_pane_line(&mut self, pane: usize, values: &[f64], r: f32, g: f32, b: f32, a: f32) {
         if pane >= self.panes.len() { return; }
+        let offset = if values.len() < self.total_bars { self.total_bars - values.len() } else { 0 };
         let mut vertices: Vec<f32> = Vec::with_capacity(values.len() * 2);
         for (i, &v) in values.iter().enumerate() {
-            vertices.push(i as f32);
+            vertices.push((i + offset) as f32);
             vertices.push(v as f32);
         }
         let vbo = self.gl.create_buffer().unwrap();
@@ -841,12 +893,13 @@ impl GpuChart {
     pub fn add_pane_histogram(&mut self, pane: usize, data: &[f64]) {
         if pane >= self.panes.len() { return; }
         let n = data.len() / 2;
+        let offset = if n < self.total_bars { self.total_bars - n } else { 0 };
         let mut vertices: Vec<f32> = Vec::with_capacity(n * 6 * 3);
         let hw = 0.35f32;
         for i in 0..n {
             let val = data[i * 2] as f32;
             let flag = data[i * 2 + 1] as f32;
-            let x = i as f32;
+            let x = (i + offset) as f32;
             // Bar from 0 to val
             let top = val.max(0.0);
             let bot = val.min(0.0);

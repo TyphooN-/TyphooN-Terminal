@@ -387,22 +387,50 @@ class GpuChartWrapper {
       }
     });
 
-    // Scroll wheel → zoom in/out
+    // Price scale zone width (right edge of canvas)
+    const PRICE_SCALE_W = 60;
+    const inPriceScale = (x) => x >= self.canvas.clientWidth - PRICE_SCALE_W;
+
+    // Scroll wheel → zoom X or Y depending on cursor position
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      const centerX = e.offsetX / self.canvas.width;
-      self.gpu.zoom(factor, centerX);
+      if (inPriceScale(e.offsetX)) {
+        // Wheel on price scale → Y-axis zoom
+        const factor = e.deltaY > 0 ? 0.9 : 1.1;
+        const centerY = e.offsetY / self.canvas.clientHeight;
+        self.gpu.zoom_price(factor, centerY);
+      } else {
+        const factor = e.deltaY > 0 ? 0.9 : 1.1;
+        const centerX = e.offsetX / self.canvas.width;
+        self.gpu.zoom(factor, centerX);
+      }
       scheduleGpuRender();
     }, { passive: false });
 
-    // Drag to pan
+    // Drag to pan (chart) or Y-zoom (price scale)
     let dragging = false, dragStartX = 0;
+    let yDragging = false, yDragStartY = 0;
     this.canvas.addEventListener("mousedown", (e) => {
-      if (e.button === 0) { dragging = true; dragStartX = e.offsetX; }
+      if (e.button !== 0) return;
+      if (inPriceScale(e.offsetX)) {
+        yDragging = true; yDragStartY = e.offsetY;
+        self.canvas.style.cursor = "ns-resize";
+      } else {
+        dragging = true; dragStartX = e.offsetX;
+      }
     });
     this.canvas.addEventListener("mousemove", (e) => {
-      if (dragging) {
+      if (yDragging) {
+        const dy = e.offsetY - yDragStartY;
+        // Drag up = zoom in, drag down = zoom out (MT5 behavior)
+        const factor = 1.0 + dy * 0.005;
+        if (factor > 0.01) {
+          const centerY = yDragStartY / self.canvas.clientHeight;
+          self.gpu.zoom_price(1.0 / factor, centerY);
+          yDragStartY = e.offsetY;
+          scheduleGpuRender();
+        }
+      } else if (dragging) {
         const dx = e.offsetX - dragStartX;
         const visibleBars = self.gpu.visible_bars();
         const barDelta = -dx / (self.canvas.width / (visibleBars || 100));
@@ -410,9 +438,27 @@ class GpuChartWrapper {
         dragStartX = e.offsetX;
         scheduleGpuRender();
       }
+      // Cursor hint when hovering price scale
+      if (!dragging && !yDragging) {
+        self.canvas.style.cursor = inPriceScale(e.offsetX) ? "ns-resize" : "";
+      }
     });
-    this.canvas.addEventListener("mouseup", () => { dragging = false; });
-    this.canvas.addEventListener("mouseleave", () => { dragging = false; });
+    this.canvas.addEventListener("mouseup", () => {
+      dragging = false; yDragging = false;
+      self.canvas.style.cursor = "";
+    });
+    this.canvas.addEventListener("mouseleave", () => {
+      dragging = false; yDragging = false;
+      self.canvas.style.cursor = "";
+    });
+
+    // Double-click on price scale → reset to auto-scale
+    this.canvas.addEventListener("dblclick", (e) => {
+      if (inPriceScale(e.offsetX)) {
+        self.gpu.reset_price_scale();
+        scheduleGpuRender();
+      }
+    });
   }
 }
 
@@ -680,9 +726,16 @@ function activateGpuChart(chartData, gpuType) {
   // Mouse interaction: scroll to pan, wheel to zoom, crosshair tracking
   canvas.style.pointerEvents = "auto";
   overlay.style.pointerEvents = "none"; // overlay is transparent to clicks
+  const PRICE_SCALE_W_OVL = 60;
+  const inPriceScaleOvl = (x) => x >= canvas.clientWidth - PRICE_SCALE_W_OVL;
+
   canvas.onwheel = (e) => {
     e.preventDefault();
-    if (e.ctrlKey) {
+    if (inPriceScaleOvl(e.offsetX)) {
+      const factor = e.deltaY > 0 ? 0.9 : 1.1;
+      const centerY = e.offsetY / canvas.clientHeight;
+      gpuChartInstance.zoom_price(factor, centerY);
+    } else if (e.ctrlKey) {
       gpuChartInstance.zoom(e.deltaY > 0 ? 0.9 : 1.1, e.offsetX / canvas.width);
     } else {
       gpuChartInstance.scroll(e.deltaY > 0 ? 5 : -5);
@@ -690,19 +743,44 @@ function activateGpuChart(chartData, gpuType) {
     scheduleGpuRender();
   };
   let dragging = false, dragStartX = 0;
-  canvas.onmousedown = (e) => { dragging = true; dragStartX = e.offsetX; };
+  let yDraggingOvl = false, yDragStartYOvl = 0;
+  canvas.onmousedown = (e) => {
+    if (inPriceScaleOvl(e.offsetX)) {
+      yDraggingOvl = true; yDragStartYOvl = e.offsetY;
+      canvas.style.cursor = "ns-resize";
+    } else {
+      dragging = true; dragStartX = e.offsetX;
+    }
+  };
   canvas.onmousemove = (e) => {
     gpuMouseX = e.offsetX; gpuMouseY = e.offsetY;
-    if (dragging) {
+    if (yDraggingOvl) {
+      const dy = e.offsetY - yDragStartYOvl;
+      const factor = 1.0 + dy * 0.005;
+      if (factor > 0.01) {
+        const centerY = yDragStartYOvl / canvas.clientHeight;
+        gpuChartInstance.zoom_price(1.0 / factor, centerY);
+        yDragStartYOvl = e.offsetY;
+      }
+    } else if (dragging) {
       const dx = e.offsetX - dragStartX;
       const barDelta = -dx / (canvas.width / gpuChartInstance.visible_bars());
       gpuChartInstance.scroll(barDelta);
       dragStartX = e.offsetX;
     }
+    if (!dragging && !yDraggingOvl) {
+      canvas.style.cursor = inPriceScaleOvl(e.offsetX) ? "ns-resize" : "";
+    }
     scheduleGpuRender();
   };
-  canvas.onmouseup = () => { dragging = false; };
-  canvas.onmouseleave = () => { dragging = false; gpuMouseX = -1; gpuMouseY = -1; scheduleGpuRender(); };
+  canvas.onmouseup = () => { dragging = false; yDraggingOvl = false; canvas.style.cursor = ""; };
+  canvas.onmouseleave = () => { dragging = false; yDraggingOvl = false; canvas.style.cursor = ""; gpuMouseX = -1; gpuMouseY = -1; scheduleGpuRender(); };
+  canvas.ondblclick = (e) => {
+    if (inPriceScaleOvl(e.offsetX)) {
+      gpuChartInstance.reset_price_scale();
+      scheduleGpuRender();
+    }
+  };
 }
 
 function deactivateGpuChart() {
@@ -34063,6 +34141,7 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       cellChart = {
         remove: () => { gpuSeries.length = 0; },
         resize: (w, h) => { if (cellGpuChart) { cellGpuChart.resize(w, h); cellGpuChart.render(); } },
+        subscribeCrosshairMove: () => () => {},
         timeScale: () => ({
           fitContent: () => {},
           setVisibleLogicalRange: (r) => {},
@@ -34229,7 +34308,7 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
     });
 
     // Auto-select first cell
-    if (mtfGridCells.length === 0) {
+    if (mtfGridCells.length === 1) {
       cell.style.outline = "2px solid #4caf50";
       mtfActiveCell = cellInfo;
     }
