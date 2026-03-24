@@ -29903,48 +29903,43 @@ async function handleMt5SyncResult(r) {
 
 async function startMt5BackgroundSync() {
   if (mt5BgSyncInterval) return; // already running
-  mt5SyncActive = true; // set immediately so badge shows MT5 before first sync completes
-  // Load MT5 symbol list on startup (non-blocking)
-  refreshMt5SymbolList().catch(() => {});
+  mt5SyncActive = true;
+  await refreshMt5SymbolList();
 
-  async function doSync() {
-    const r = JSON.parse(await invoke("sync_mt5_sqlite"));
-    mt5BgSyncCount++;
-    if (r.imported > 0) {
-      log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.deduped || 0} deduped, ${r.total_bars} bars${r.deferred > 0 ? ` (${r.deferred} queued)` : ""}`, "info");
-    }
-    // Only run heavy UI updates (MTF reload, symbol list refresh) when caught up
-    // During burst sync, skip — avoids hammering backend with concurrent requests
-    if (r.deferred === 0 || r.deferred === undefined) {
-      await handleMt5SyncResult(r);
-    } else {
-      // Lightweight: just update badge + mark MT5 healthy
-      if (r.databases_read > 0 || r.total_bars > 0) lastMt5SyncSuccess = Date.now();
-      updateDataSourceBadge();
-    }
-    return r;
-  }
+  // Adaptive interval: 5s when catching up (deferred > 0), 30s when caught up.
+  // No burst loops — each sync gets 5s of breathing room for bar requests.
+  let _catchingUp = true; // start fast
 
-  // Adaptive interval: burst when deferred > 0, relax to 30s when caught up
-  // Never blocks startup — first sync starts immediately, UI stays responsive
-  async function syncLoop() {
+  async function syncTick() {
     if (_mt5BgSyncRunning) return;
     _mt5BgSyncRunning = true;
     try {
-      const r = await doSync();
-      if (r.deferred > 0) {
-        // More entries waiting — re-sync after brief yield (not 30s)
-        setTimeout(syncLoop, 500);
+      const r = JSON.parse(await invoke("sync_mt5_sqlite"));
+      mt5BgSyncCount++;
+      if (r.imported > 0) {
+        log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.deduped || 0} deduped, ${r.total_bars} bars${r.deferred > 0 ? ` (${r.deferred} queued)` : ""}`, "info");
+      }
+      // Only do heavy UI work (MTF reload) when caught up or every 5th cycle
+      if ((r.deferred || 0) === 0 || mt5BgSyncCount % 5 === 0) {
+        await handleMt5SyncResult(r);
+      } else {
+        if (r.databases_read > 0 || r.total_bars > 0) lastMt5SyncSuccess = Date.now();
+        updateDataSourceBadge();
+      }
+      // Switch interval speed
+      const wasCatchingUp = _catchingUp;
+      _catchingUp = (r.deferred || 0) > 0;
+      if (_catchingUp !== wasCatchingUp) {
+        clearInterval(mt5BgSyncInterval);
+        mt5BgSyncInterval = setInterval(syncTick, _catchingUp ? 5000 : 30000);
       }
     } catch (_) {} finally { _mt5BgSyncRunning = false; }
   }
 
-  // Kick off first sync immediately (non-blocking)
-  syncLoop();
-
-  // Steady-state: 30s polling catches new BarCacheWriter updates
-  mt5BgSyncInterval = setInterval(syncLoop, 30000);
-  log("[MT5 Sync] Background sync started (adaptive)", "ok");
+  // First sync fires immediately, then 5s interval until caught up
+  syncTick();
+  mt5BgSyncInterval = setInterval(syncTick, 5000);
+  log("[MT5 Sync] Background sync started (5s catch-up / 30s steady-state)", "ok");
 }
 
 function stopMt5BackgroundSync() {
