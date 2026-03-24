@@ -4718,14 +4718,13 @@ async function loadChart(symbol, timeframe) {
           ? [...new Set(tabs.filter(t => t.symbol).map(t => t.symbol))]
           : [gridSymbol];
         const syms = gridSymbols.length > 0 ? gridSymbols : [gridSymbol];
-        openMTFGridMulti(syms, selectedTFs);
-        // openMTFGridMulti calls openMTFGrid internally
-        Promise.resolve().then(() => {
+        try {
+          openMTFGridMulti(syms, selectedTFs);
           setTimeout(() => resizeMTFGrid(), 100);
-        }).catch(e => {
+        } catch (e) {
           log(`MTF grid reload failed: ${e}`, "warn");
           document.getElementById("chart-stack").style.display = "";
-        });
+        }
       });
     } else {
       prefetchAllTimeframes(symbol, timeframe, limit);
@@ -34507,10 +34506,9 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     const customTF = CUSTOM_TIMEFRAME_MAP[cellInfo.tf];
     const fetchTF = customTF ? customTF.base : cellInfo.tf;
     const aggFactor = customTF ? customTF.factor : 1;
-    // Higher TFs: request all available bars so SMA 200 can compute when data exists.
-    // Lower TFs: cap at 500 to keep grid cells lightweight.
-    const htf = cellInfo.tf === "1Week" || cellInfo.tf === "1Month";
-    const GRID_BARS = htf ? 50000 : 500; // 50K = "all" (backend returns min(limit, available))
+    // Request all available bars so indicators (SMA 200) always compute when data exists.
+    // Backend returns min(limit, available) — 50K is effectively "all".
+    const GRID_BARS = 50000;
     const limit = aggFactor > 1 ? GRID_BARS * aggFactor : GRID_BARS;
     const cacheKey = getCacheKey(symbol, fetchTF);
     let bars;
