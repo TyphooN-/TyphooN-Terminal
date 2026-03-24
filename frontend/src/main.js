@@ -124,7 +124,7 @@ const GPU_DRAW_TYPES = {
 
 // ── GPU Chart Wrapper (lightweight-charts compatible API) ──────
 // Drop-in replacement so chart code can use either GPU or lightweight-charts backend.
-// Methods marked GPU_PHASE5 are stubbed — will be wired up incrementally.
+// GPU chart wrapper — lightweight-charts compatible API backed by WebGL2 WASM engine.
 class GpuChartWrapper {
   constructor(container, options = {}) {
     // Create canvas element
@@ -166,11 +166,23 @@ class GpuChartWrapper {
         return () => { self._rangeCallbacks = self._rangeCallbacks.filter(c => c !== cb); };
       },
       timeToCoordinate(time) {
-        // GPU_PHASE5: convert unix timestamp to canvas X coordinate
+        // Find bar index for timestamp, convert to canvas X via x_at_bar
+        for (const s of self._series) {
+          const d = s.data();
+          if (!d || d.length === 0) continue;
+          // Binary search for timestamp
+          let lo = 0, hi = d.length;
+          while (lo < hi) { const mid = (lo + hi) >> 1; d[mid].time < time ? lo = mid + 1 : hi = mid; }
+          if (lo < d.length) return self.gpu.x_at_bar(lo);
+        }
         return null;
       },
       coordinateToTime(x) {
-        // GPU_PHASE5: convert canvas X to unix timestamp
+        const barIdx = Math.round(self.gpu.bar_at_x(x));
+        for (const s of self._series) {
+          const d = s.data();
+          if (d && barIdx >= 0 && barIdx < d.length) return d[barIdx].time;
+        }
         return null;
       },
       applyOptions() {}, // stub
@@ -283,15 +295,18 @@ class GpuChartWrapper {
       },
 
       update(bar) {
-        // GPU_PHASE5: gpu engine needs update_last_bar() method
-        // For now, append to stored data
         if (storedData.length > 0 && storedData[storedData.length - 1].time === bar.time) {
+          // Same bar — update in-place via GPU incremental update (O(1) vs O(n) re-send)
           storedData[storedData.length - 1] = bar;
+          if (type === "candle" && bar.open !== undefined) {
+            self.gpu.update_last_bar(bar.open, bar.high, bar.low, bar.close);
+          }
         } else {
+          // New bar — must re-send full dataset (GPU doesn't support append yet)
           storedData.push(bar);
+          series.setData(storedData);
         }
-        // Re-send full dataset (inefficient but correct until incremental update exists)
-        series.setData(storedData);
+        scheduleGpuRender();
       },
 
       createPriceLine(lineOpts = {}) {
@@ -326,11 +341,7 @@ class GpuChartWrapper {
       data() { return storedData; },
 
       priceToCoordinate(price) {
-        // GPU_PHASE5: GPU engine needs y_at_price() method
-        // Approximate using price range and canvas height
-        const pr = self.gpu.get_price_range(); // [min, max]
-        if (pr[1] === pr[0]) return 0;
-        return self.canvas.height * (1 - (price - pr[0]) / (pr[1] - pr[0]));
+        return self.gpu.y_at_price(price);
       },
 
       coordinateToPrice(y) {
@@ -339,11 +350,10 @@ class GpuChartWrapper {
 
       applyOptions(newOpts) {
         Object.assign(series._opts, newOpts);
-        // GPU_PHASE5: propagate color/style changes to GPU
       },
 
       setMarkers(_markers) {
-        // GPU_PHASE5: GPU engine needs marker rendering support
+        // Markers not supported in GPU mode — use CPU candles for DARWIN trade markers
       },
 
       seriesType() { return type; },
@@ -930,7 +940,13 @@ function fastParseTimestamp(ts) {
 }
 
 /// Pack chart bars into flat f64 array for Wasm interop.
+// Cached flat bar packing — avoids redundant O(n) flattening when data hasn't changed
+let _packedBarsCache = null; // { bars, flat }
 function packBarsForWasm(bars) {
+  // Return cached if same array reference and length (covers same-tick re-renders)
+  if (_packedBarsCache && _packedBarsCache.bars === bars && _packedBarsCache.flat.length === bars.length * 5) {
+    return _packedBarsCache.flat;
+  }
   const flat = new Float64Array(bars.length * 5);
   for (let i = 0; i < bars.length; i++) {
     flat[i * 5] = bars[i].open;
@@ -939,6 +955,7 @@ function packBarsForWasm(bars) {
     flat[i * 5 + 3] = bars[i].close;
     flat[i * 5 + 4] = bars[i].volume || 0;
   }
+  _packedBarsCache = { bars, flat };
   return flat;
 }
 
@@ -1110,6 +1127,21 @@ let _bidAskLineInterval = null;
 let currentSymbol = "";
 let currentTimeframe = "1Hour";
 let lastPrice = 0;
+
+/**
+ * Returns the symbol(s) that commands should operate on based on current UI context:
+ * - MTF Grid "All Tabs" mode → all unique symbols in the grid
+ * - MTF Grid "Current" mode → the single grid symbol
+ * - Single chart mode → the active chart symbol
+ * @returns {string[]} Array of symbol strings (never empty if a chart is loaded)
+ */
+function getActiveSymbols() {
+  if (typeof mtfGridActive !== "undefined" && mtfGridActive && typeof mtfGridCells !== "undefined" && mtfGridCells.length > 0) {
+    const syms = [...new Set(mtfGridCells.map(c => c.symbol).filter(Boolean))];
+    if (syms.length > 0) return syms;
+  }
+  return currentSymbol ? [currentSymbol] : [];
+}
 let _markWeekendBars = false; // true for crypto symbols — tints weekend bars blue
 let mtfData = {};
 let currentChartData = []; // full chartData with volume — candleSeries.data() drops volume
