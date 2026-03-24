@@ -601,10 +601,14 @@ async fn get_bars_incremental(
     {
         let s = state.lock().await;
         if s.bar_inflight.contains(&dedup_key) {
-            // Another request is fetching this — wait for it and return from cache
+            // Another request is fetching this — poll cache until ready (max 2s)
             drop(s);
             tracing::debug!("{} @ {}: dedup — waiting for in-flight request", symbol, timeframe);
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            for _ in 0..20 {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let s2 = state.lock().await;
+                if !s2.bar_inflight.contains(&dedup_key) { break; }
+            }
             // Return whatever is in cache now (the other request should have stored it)
             let s = state.lock().await;
             if let Some(cache) = s.db_cache.as_ref() {
@@ -3563,7 +3567,7 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
             if prev == &current_mtimes {
                 // Nothing changed — return immediately without allocating anything
                 return Ok(serde_json::json!({
-                    "imported": 0, "skipped": 0, "deduped": 0,
+                    "imported": 0, "skipped": 0, "deduped": 0, "deferred": 0,
                     "total_bars": 0, "symbols": 0,
                     "databases_read": 0, "databases_found": mt5_dbs.len(),
                 }).to_string());
@@ -3583,7 +3587,7 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
     let db_count = db_paths.len();
 
     let app_handle = app.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<(usize, i64, usize, usize, usize, usize), String> {
+    let result = tokio::task::spawn_blocking(move || -> Result<(usize, i64, usize, usize, usize, usize, usize), String> {
         use rayon::prelude::*;
 
         let t0 = std::time::Instant::now();
@@ -3691,16 +3695,18 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
         }
 
         if import_entries.is_empty() {
-            return Ok((0, 0, symbols.len(), dbs_read, total_skipped, total_deduped));
+            return Ok((0, 0, symbols.len(), dbs_read, total_skipped, total_deduped, 0));
         }
 
         // Cap entries per sync cycle to limit peak memory (remaining deferred to next cycle)
-        const MAX_ENTRIES_PER_SYNC: usize = 100;
-        if import_entries.len() > MAX_ENTRIES_PER_SYNC {
+        // 1000 entries ≈ 2-4s on typical hardware; frontend re-syncs immediately if deferred > 0
+        const MAX_ENTRIES_PER_SYNC: usize = 1000;
+        let deferred_count = if import_entries.len() > MAX_ENTRIES_PER_SYNC {
             let deferred = import_entries.len() - MAX_ENTRIES_PER_SYNC;
             import_entries.truncate(MAX_ENTRIES_PER_SYNC);
-            tracing::info!("MT5 sync: capping to {} entries this cycle ({} deferred)", MAX_ENTRIES_PER_SYNC, deferred);
-        }
+            tracing::info!("MT5 sync: processing {} entries this cycle ({} deferred)", MAX_ENTRIES_PER_SYNC, deferred);
+            deferred
+        } else { 0 };
 
         let t1 = std::time::Instant::now();
 
@@ -3832,10 +3838,10 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
             }
         }
 
-        Ok((total_imported, total_bars, symbols.len(), dbs_read, total_skipped, total_deduped))
+        Ok((total_imported, total_bars, symbols.len(), dbs_read, total_skipped, total_deduped, deferred_count))
     }).await.map_err(|e| format!("Task failed: {e}"))??;
 
-    let (imported, total_bars, sym_count, dbs_read, skipped, deduped) = result;
+    let (imported, total_bars, sym_count, dbs_read, skipped, deduped, deferred_count) = result;
 
     // Sync bid/ask quotes from MT5 databases
     let mut quotes_synced = 0usize;
@@ -3896,6 +3902,7 @@ async fn sync_mt5_sqlite(app: tauri::AppHandle, state: State<'_, SharedState>) -
         "imported": imported,
         "skipped": skipped,
         "deduped": deduped,
+        "deferred": deferred_count,
         "total_bars": total_bars,
         "symbols": sym_count,
         "quotes_synced": quotes_synced,

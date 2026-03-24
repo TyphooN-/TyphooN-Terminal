@@ -29906,29 +29906,43 @@ async function startMt5BackgroundSync() {
   mt5SyncActive = true; // set immediately so badge shows MT5 before first sync completes
   // Load MT5 symbol list on startup
   await refreshMt5SymbolList();
-  try {
+
+  // Adaptive sync: burst until caught up, then relax to 30s
+  async function doSync() {
     const r = JSON.parse(await invoke("sync_mt5_sqlite"));
     mt5BgSyncCount++;
     if (r.imported > 0) {
-      log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.skipped} unchanged, ${r.deduped || 0} deduped, ${r.total_bars} bars from ${r.databases_read}/${r.databases_found} DBs`, "info");
+      log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.skipped} unchanged, ${r.deduped || 0} deduped, ${r.total_bars} bars from ${r.databases_read}/${r.databases_found} DBs${r.deferred > 0 ? ` (${r.deferred} deferred)` : ""}`, "info");
     }
     await handleMt5SyncResult(r);
+    return r;
+  }
+
+  // Initial burst: keep syncing until no deferred entries remain
+  try {
+    let r = await doSync();
+    while (r.deferred > 0) {
+      await new Promise(resolve => requestAnimationFrame(resolve)); // yield to UI
+      r = await doSync();
+    }
   } catch (e) {
     console.warn("[MT5 Sync] initial:", e);
   }
+
+  // Steady-state: 30s polling for incremental updates
   mt5BgSyncInterval = setInterval(async () => {
     if (_mt5BgSyncRunning) return;
     _mt5BgSyncRunning = true;
     try {
-      const r = JSON.parse(await invoke("sync_mt5_sqlite"));
-      mt5BgSyncCount++;
-      if (r.imported > 0) {
-        log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.total_bars} bars`, "info");
+      let r = await doSync();
+      // If BarCacheWriter wrote a large batch, burst until caught up
+      while (r.deferred > 0) {
+        await new Promise(resolve => setTimeout(resolve, 100)); // brief yield
+        r = await doSync();
       }
-      await handleMt5SyncResult(r);
     } catch (_) {} finally { _mt5BgSyncRunning = false; }
   }, 30000);
-  log("[MT5 Sync] Background sync started (30s interval)", "ok");
+  log("[MT5 Sync] Background sync started (adaptive burst + 30s steady-state)", "ok");
 }
 
 function stopMt5BackgroundSync() {
