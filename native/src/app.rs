@@ -2137,53 +2137,68 @@ fn draw_chart(
     // ── supply/demand zones ─────────────────────────────────────────────────
     if flags.supply_demand {
         let status_label = |s: u8| -> &str { match s { 0 => "Untested", 1 => "Tested", 2 => "Proven", _ => "" } };
-        // Demand zones (green fill)
+        // Demand zones — MT5 colors: DarkSeaGreen/MediumSeaGreen/SeaGreen
         for &(idx, zh, zl, status) in &chart.demand_zones {
             if idx >= start_idx && idx < end_idx {
                 let x_start = chart_rect.left() + ((idx - start_idx) as f32) * bar_w;
                 let y_top = price_to_y(zh);
                 let y_bot = price_to_y(zl);
                 if y_bot >= chart_rect.top() && y_top <= chart_rect.bottom() {
-                    let alpha = if status == 2 { 35 } else { 20 };
+                    // MT5 exact colors: clrDarkSeaGreen / clrMediumSeaGreen / clrSeaGreen
+                    let (fill_col, label_col) = match status {
+                        0 => (egui::Color32::from_rgba_premultiplied(143, 188, 143, 50), // DarkSeaGreen
+                              egui::Color32::from_rgb(143, 188, 143)),
+                        1 => (egui::Color32::from_rgba_premultiplied(60, 179, 113, 60),  // MediumSeaGreen
+                              egui::Color32::from_rgb(60, 179, 113)),
+                        _ => (egui::Color32::from_rgba_premultiplied(46, 139, 87, 70),   // SeaGreen
+                              egui::Color32::from_rgb(46, 139, 87)),
+                    };
                     painter.rect_filled(
                         egui::Rect::from_min_max(
                             egui::pos2(x_start, y_top.max(chart_rect.top())),
                             egui::pos2(chart_rect.right(), y_bot.min(chart_rect.bottom())),
                         ),
-                        0.0, egui::Color32::from_rgba_premultiplied(0, 180, 80, alpha),
+                        0.0, fill_col,
                     );
-                    // Label
                     painter.text(
                         egui::pos2(chart_rect.right() - 4.0, y_bot.min(chart_rect.bottom()) - 12.0),
                         egui::Align2::RIGHT_TOP,
                         &format!("Demand [{}]", status_label(status)),
                         egui::FontId::monospace(9.0),
-                        egui::Color32::from_rgb(0, 200, 80),
+                        label_col,
                     );
                 }
             }
         }
-        // Supply zones (red fill)
+        // Supply zones — MT5 colors: SkyBlue/DeepSkyBlue/DodgerBlue
         for &(idx, zh, zl, status) in &chart.supply_zones {
             if idx >= start_idx && idx < end_idx {
                 let x_start = chart_rect.left() + ((idx - start_idx) as f32) * bar_w;
                 let y_top = price_to_y(zh);
                 let y_bot = price_to_y(zl);
                 if y_bot >= chart_rect.top() && y_top <= chart_rect.bottom() {
-                    let alpha = if status == 2 { 35 } else { 20 };
+                    // MT5 exact colors: clrSkyBlue / clrDeepSkyBlue / clrDodgerBlue
+                    let (fill_col, label_col) = match status {
+                        0 => (egui::Color32::from_rgba_premultiplied(135, 206, 235, 50), // SkyBlue
+                              egui::Color32::from_rgb(135, 206, 235)),
+                        1 => (egui::Color32::from_rgba_premultiplied(0, 191, 255, 60),   // DeepSkyBlue
+                              egui::Color32::from_rgb(0, 191, 255)),
+                        _ => (egui::Color32::from_rgba_premultiplied(30, 144, 255, 70),  // DodgerBlue
+                              egui::Color32::from_rgb(30, 144, 255)),
+                    };
                     painter.rect_filled(
                         egui::Rect::from_min_max(
                             egui::pos2(x_start, y_top.max(chart_rect.top())),
                             egui::pos2(chart_rect.right(), y_bot.min(chart_rect.bottom())),
                         ),
-                        0.0, egui::Color32::from_rgba_premultiplied(220, 40, 40, alpha),
+                        0.0, fill_col,
                     );
                     painter.text(
                         egui::pos2(chart_rect.right() - 4.0, y_top.max(chart_rect.top()) + 2.0),
                         egui::Align2::RIGHT_TOP,
                         &format!("Supply [{}]", status_label(status)),
                         egui::FontId::monospace(9.0),
-                        egui::Color32::from_rgb(220, 40, 40),
+                        label_col,
                     );
                 }
             }
