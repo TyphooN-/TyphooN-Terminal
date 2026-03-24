@@ -3534,6 +3534,9 @@ pub struct TyphooNApp {
     show_data_window: bool,
     show_alerts: bool,
     show_order_entry: bool,
+    show_crypto_backfill: bool,
+    /// Crypto backfill single symbol input.
+    backfill_symbol: String,
 
     /// Price alerts.
     alerts: Vec<(f64, String)>,
@@ -3730,13 +3733,14 @@ impl TyphooNApp {
             mtf_enabled: false,
             command_open: false,
             command_input: String::new(),
+            // ── NNFX default preset (matching old WebKit defaults) ──
             show_sma200: true,
-            show_sma100: true,
+            show_sma100: false,
             show_kama: true,
             show_ema21: false,
             show_bollinger: false,
             show_rsi: false,
-            show_fisher: false,
+            show_fisher: true,          // NNFX confirmation
             show_macd: false,
             show_volume_pane: false,
             show_stochastic: false,
@@ -3745,12 +3749,12 @@ impl TyphooNApp {
             show_wma: false,
             show_hma: false,
             show_psar: false,
-            show_atr_proj: false,
-            show_prev_levels: false,
+            show_atr_proj: true,        // NNFX exit
+            show_prev_levels: true,     // NNFX support/resistance
             show_pivots: false,
-            show_fractals: false,
+            show_fractals: true,        // NNFX pattern
             show_harmonics: false,
-            show_supply_demand: false,
+            show_supply_demand: true,   // NNFX zones
             show_ehlers_ss: false,
             show_ehlers_decycler: false,
             show_ehlers_itl: false,
@@ -3763,7 +3767,7 @@ impl TyphooNApp {
             show_williams_r: false,
             show_obv: false,
             show_momentum: false,
-            show_better_volume: false,
+            show_better_volume: true,   // NNFX volume
             draw_mode: DrawMode::None,
             darwin_import_ticker: String::new(),
             broker_api_key: String::new(),
@@ -3830,6 +3834,8 @@ impl TyphooNApp {
             show_data_window: false,
             show_alerts: false,
             show_order_entry: false,
+            show_crypto_backfill: false,
+            backfill_symbol: String::new(),
             alerts: Vec::new(),
             alert_price_input: String::new(),
             alert_label_input: String::new(),
@@ -4066,7 +4072,7 @@ impl TyphooNApp {
             "ORDER"          => { self.show_order_entry = true; self.order_symbol = self.symbol_input.clone(); }
             "PREV_LEVELS"    => self.show_prev_levels = !self.show_prev_levels,
             "CRYPTO_BACKFILL" => {
-                self.log.push_back(LogEntry::info("Kraken backfill: requires async runtime integration"));
+                self.show_crypto_backfill = true;
             }
             // Trading
             "OPEN_TRADE" => {
@@ -4294,6 +4300,7 @@ impl TyphooNApp {
         self.show_data_window = false;
         self.show_alerts = false;
         self.show_order_entry = false;
+        self.show_crypto_backfill = false;
     }
 
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
@@ -4348,6 +4355,8 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_atr_proj,     "ATR Projection — Volatility");
                     ui.checkbox(&mut self.show_better_volume,"Better Volume — Volume Analysis");
                     ui.checkbox(&mut self.show_prev_levels,  "Previous Candle Levels (D/W)");
+                    ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
+                    ui.checkbox(&mut self.show_fractals,      "Fractals (Bill Williams)");
                     ui.add_space(10.0);
                     ui.heading("Additional Indicators");
                     ui.separator();
@@ -5159,25 +5168,145 @@ impl TyphooNApp {
 
         // SEC
         if self.show_sec {
-            egui::Window::new("SEC Filings")
+            egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
-                .default_size([500.0, 350.0])
+                .default_size([650.0, 500.0])
                 .show(ctx, |ui| {
-                    ui.heading("SEC EDGAR Filings");
+                    // Filing type filter checkboxes (matching old WebKit)
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Filter:").color(AXIS_TEXT).small());
+                        for label in &["Form 4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"] {
+                            let mut checked = true; // placeholder — will wire to state
+                            ui.checkbox(&mut checked, *label);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(egui::RichText::new("Scrape Now").color(egui::Color32::WHITE).small()).fill(BTN_BLUE)).clicked() {
+                            self.log.push_back(LogEntry::info("SEC scrape: requires EDGAR API connection"));
+                        }
+                        ui.label(egui::RichText::new("via SEC EDGAR Full-Text Search").color(AXIS_TEXT).small());
+                    });
                     ui.separator();
-                    ui.label(egui::RichText::new("10-K, 10-Q, 8-K, proxy — requires EDGAR API.").color(AXIS_TEXT));
+
+                    // Filing table header
+                    egui::Grid::new("sec_filings_grid").striped(true).num_columns(6).show(ui, |ui| {
+                        ui.strong("Date");
+                        ui.strong("Symbol");
+                        ui.strong("Type");
+                        ui.strong("Category");
+                        ui.strong("Company");
+                        ui.strong("View");
+                        ui.end_row();
+                        // Placeholder rows — wired when EDGAR API is connected
+                        ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new("Connect EDGAR API for live filings").color(AXIS_TEXT).small());
+                        ui.end_row();
+                    });
+
+                    ui.add_space(10.0);
+                    // ── SEC Filing Alerts ─────────────────────────────────
+                    ui.label(egui::RichText::new("Filing Alerts").strong());
+                    ui.separator();
+                    // Alert severity bar examples (matching old WebKit)
+                    let alert_types = [
+                        ("SEC_INQUIRY", egui::Color32::from_rgb(220, 40, 40), "High"),
+                        ("ACTIVIST", egui::Color32::from_rgb(255, 160, 40), "Medium"),
+                        ("ACTIVE_DILUTION", egui::Color32::from_rgb(255, 160, 40), "Medium"),
+                        ("RESTATEMENT", egui::Color32::from_rgb(220, 40, 40), "High"),
+                    ];
+                    for (alert_type, color, severity) in &alert_types {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("\u{2588}").color(*color));
+                            ui.label(egui::RichText::new(*severity).color(*color).small());
+                            ui.label(egui::RichText::new(*alert_type).color(egui::Color32::WHITE).small().strong());
+                            ui.label(egui::RichText::new("— requires API connection").color(AXIS_TEXT).small());
+                        });
+                    }
                 });
         }
 
-        // Insider
+        // Insider (SEC Form 4 viewer)
         if self.show_insider {
-            egui::Window::new("Insider Trades")
+            egui::Window::new("Insider Trades (Form 4)")
                 .open(&mut self.show_insider)
-                .default_size([500.0, 350.0])
+                .default_size([600.0, 400.0])
                 .show(ctx, |ui| {
-                    ui.heading("SEC Form 4 — Insider Transactions");
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT).small());
+                        let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
+                        ui.label(egui::RichText::new(&sym).strong().monospace());
+                    });
                     ui.separator();
-                    ui.label(egui::RichText::new("Requires Finnhub or SEC EDGAR connection.").color(AXIS_TEXT));
+                    egui::Grid::new("insider_grid").striped(true).num_columns(6).show(ui, |ui| {
+                        ui.strong("Date");
+                        ui.strong("Insider");
+                        ui.strong("Title");
+                        ui.strong("Type");
+                        ui.strong("Shares");
+                        ui.strong("Value");
+                        ui.end_row();
+                        ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new("Connect Finnhub or SEC EDGAR API").color(AXIS_TEXT).small());
+                        ui.end_row();
+                    });
+                });
+        }
+
+        // Crypto Backfill (Kraken) — matching old WebKit layout
+        if self.show_crypto_backfill {
+            egui::Window::new("Crypto Backfill (Kraken)")
+                .open(&mut self.show_crypto_backfill)
+                .default_size([550.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (2013-Now)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
+                            self.log.push_back(LogEntry::info("Kraken backfill ALL: requires async Kraken API connection"));
+                        }
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT).small());
+                        ui.add(egui::TextEdit::singleline(&mut self.backfill_symbol).desired_width(100.0).hint_text("XBTUSD").font(egui::TextStyle::Monospace));
+                        if ui.add(egui::Button::new("Backfill").fill(BTN_BLUE)).clicked() {
+                            let sym = self.backfill_symbol.trim().to_string();
+                            if !sym.is_empty() {
+                                self.log.push_back(LogEntry::info(format!("Backfill {}: requires Kraken API", sym)));
+                            }
+                        }
+                    });
+                    ui.separator();
+
+                    // Progress section
+                    ui.label(egui::RichText::new("Progress").small().strong());
+                    ui.label(egui::RichText::new("Connect Kraken API to start backfill").color(AXIS_TEXT).small());
+                    ui.add_space(4.0);
+
+                    // Table header (matching old WebKit)
+                    egui::Grid::new("backfill_grid").striped(true).num_columns(5).show(ui, |ui| {
+                        ui.strong("Symbol");
+                        ui.strong("Timeframe");
+                        ui.strong("New Bars");
+                        ui.strong("Total Bars");
+                        ui.strong("Status");
+                        ui.end_row();
+                        // Show cached crypto symbols if available
+                        if let Some(ref cache) = self.cache {
+                            if let Ok(stats) = cache.detailed_stats() {
+                                for (key, count, _) in &stats {
+                                    if key.starts_with("CC:") || key.starts_with("KRAKEN:") {
+                                        let parts: Vec<&str> = key.rsplitn(2, ':').collect();
+                                        let (tf_part, sym_part) = if parts.len() == 2 { (parts[0], parts[1]) } else { ("—", key.as_str()) };
+                                        ui.label(egui::RichText::new(sym_part).small().monospace());
+                                        ui.label(egui::RichText::new(tf_part).color(AXIS_TEXT).small());
+                                        ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
+                                        ui.label(egui::RichText::new(format!("{}", count)).small());
+                                        ui.label(egui::RichText::new("cached").color(ACCENT).small());
+                                        ui.end_row();
+                                    }
+                                }
+                            }
+                        }
+                    });
                 });
         }
 
