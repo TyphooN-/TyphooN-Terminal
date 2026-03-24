@@ -804,6 +804,15 @@ impl GpuChart {
         }
     }
 
+    /// Update a price line's color and width.
+    #[wasm_bindgen]
+    pub fn update_price_line_style(&mut self, index: usize, r: f32, g: f32, b: f32, a: f32, width: f32) {
+        if index < self.price_lines.len() {
+            self.price_lines[index].color = [r, g, b, a];
+            self.price_lines[index].line_width = width;
+        }
+    }
+
     /// Remove a price line by index.
     #[wasm_bindgen]
     pub fn remove_price_line(&mut self, index: usize) {

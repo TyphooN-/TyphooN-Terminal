@@ -322,7 +322,11 @@ class GpuChartWrapper {
             if (newOpts.price !== undefined) {
               self.gpu.update_price_line(idx, newOpts.price);
             }
-            // GPU_PHASE5: color/width updates need GPU engine support
+            if (newOpts.color !== undefined || newOpts.lineWidth !== undefined) {
+              const [r, g, b, a] = _parseLineColor(priceLine._opts.color);
+              self.gpu.update_price_line_style(idx, r, g, b, a, priceLine._opts.lineWidth || 1);
+            }
+            scheduleGpuRender();
           },
           options() { return { ...priceLine._opts }; },
         };
@@ -34026,13 +34030,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const elapsed = Date.now() - lastScrape;
       const ONE_DAY = 24 * 60 * 60 * 1000;
       if (elapsed > ONE_DAY) {
-        console.log("[SEC] Filing scrape started (daily auto-scan)...");
+        log("[SEC] Filing scrape started (daily auto-scan)", "info");
         log("SEC filing scrape started (daily auto-scan)...", "info");
         localStorage.setItem(SEC_SCRAPE_KEY, String(Date.now()));
         const result = JSON.parse(await invoke("scrape_sec_filings"));
         const newFilings = result.new_filings ?? result.filings ?? 0;
         const insiderTrades = result.insider_trades ?? 0;
-        console.log(`[SEC] ${newFilings} new filings, ${insiderTrades} insider trades found`);
+        log(`[SEC] ${newFilings} new filings, ${insiderTrades} insider trades found`, "info");
         log(`SEC: ${newFilings} new filings, ${insiderTrades} insider trades found`, "ok");
       }
     } catch (e) {
@@ -34097,7 +34101,6 @@ function setupMTFGrid() {
   }
 
   btn.addEventListener("click", () => {
-    console.log("[MTF Grid] Button clicked, active:", mtfGridActive);
     log("[MTF Grid] Button clicked", "ok");
     btn.style.background = mtfGridActive ? "#3a0f60" : "#ff0"; // flash yellow when opening
     if (mtfGridActive) {
@@ -34105,14 +34108,12 @@ function setupMTFGrid() {
       tfCheckboxes.classList.add("hidden");
     } else {
       const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(cb => cb.value);
-      console.log("[MTF Grid] Selected TFs:", selectedTFs);
       if (selectedTFs.length < 1) {
         tfCheckboxes.classList.remove("hidden");
         alert("Select at least 1 timeframe");
         return;
       }
       const symbols = getGridSymbols();
-      console.log("[MTF Grid] Symbols:", symbols);
       if (symbols.length === 0) { alert("Load a chart first"); return; }
       tfCheckboxes.classList.remove("hidden");
       openMTFGridMulti(symbols, selectedTFs);
