@@ -379,9 +379,10 @@ struct ChartState {
     ehlers_cg: Vec<Option<f64>>,
     /// Roofing Filter (sub-pane).
     ehlers_roof: Vec<Option<f64>>,
-    /// Supply/demand zones.
-    supply_zones: Vec<(usize, f64, f64)>, // (bar_idx, zone_high, zone_low)
-    demand_zones: Vec<(usize, f64, f64)>,
+    /// Supply/demand zones: (bar_idx, zone_high, zone_low, status).
+    /// Status: 0=untested, 1=tested (price returned), 2=proven (price bounced)
+    supply_zones: Vec<(usize, f64, f64, u8)>,
+    demand_zones: Vec<(usize, f64, f64, u8)>,
     /// Detected harmonic patterns.
     harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
@@ -519,7 +520,7 @@ impl ChartState {
         self.bb_upper = upper;
         self.bb_lower = lower;
         self.rsi = compute_rsi(&self.bars, 14);
-        let (f, fs) = compute_fisher(&self.bars, 10);
+        let (f, fs) = compute_fisher(&self.bars, 32);
         self.fisher = f;
         self.fisher_signal = fs;
         self.atr = compute_atr(&self.bars, 14);
@@ -1440,13 +1441,12 @@ fn compute_better_volume(bars: &[Bar]) -> Vec<u8> {
     out
 }
 
-fn compute_supply_demand_zones(bars: &[Bar]) -> (Vec<(usize, f64, f64)>, Vec<(usize, f64, f64)>) {
+fn compute_supply_demand_zones(bars: &[Bar]) -> (Vec<(usize, f64, f64, u8)>, Vec<(usize, f64, f64, u8)>) {
     let n = bars.len();
-    let mut supply = Vec::new();
-    let mut demand = Vec::new();
+    let mut supply: Vec<(usize, f64, f64, u8)> = Vec::new();
+    let mut demand: Vec<(usize, f64, f64, u8)> = Vec::new();
     if n < 10 { return (supply, demand); }
 
-    // Compute average range for impulse detection
     let avg_range: f64 = bars.iter().map(|b| b.high - b.low).sum::<f64>() / n as f64;
     let impulse_threshold = avg_range * 2.0;
 
@@ -1454,29 +1454,52 @@ fn compute_supply_demand_zones(bars: &[Bar]) -> (Vec<(usize, f64, f64)>, Vec<(us
         let range = bars[i].high - bars[i].low;
         let body = (bars[i].close - bars[i].open).abs();
 
-        // Impulse candle: large range + large body (>60% of range)
         if range > impulse_threshold && body > range * 0.6 {
             let is_bullish = bars[i].close > bars[i].open;
 
             if is_bullish {
-                // Demand zone: base of the impulse move (previous candle's range)
                 let zone_high = bars[i - 1].high.max(bars[i].open);
                 let zone_low = bars[i - 1].low.min(bars[i].open);
                 if zone_high > zone_low {
-                    demand.push((i - 1, zone_high, zone_low));
+                    demand.push((i - 1, zone_high, zone_low, 0)); // untested
                 }
             } else {
-                // Supply zone: top of the impulse move
                 let zone_high = bars[i - 1].high.max(bars[i].open);
                 let zone_low = bars[i - 1].low.min(bars[i].open);
                 if zone_high > zone_low {
-                    supply.push((i - 1, zone_high, zone_low));
+                    supply.push((i - 1, zone_high, zone_low, 0)); // untested
                 }
             }
         }
     }
 
-    // Keep most recent zones (max 10 each)
+    // Determine zone status: check if price returned to zone after creation
+    for zone in &mut demand {
+        for j in (zone.0 + 2)..n {
+            if bars[j].low <= zone.1 && bars[j].low >= zone.2 {
+                // Price returned to zone
+                if bars[j].close > zone.1 {
+                    zone.3 = 2; // proven (bounced)
+                } else {
+                    zone.3 = 1; // tested
+                }
+                break;
+            }
+        }
+    }
+    for zone in &mut supply {
+        for j in (zone.0 + 2)..n {
+            if bars[j].high >= zone.2 && bars[j].high <= zone.1 {
+                if bars[j].close < zone.2 {
+                    zone.3 = 2; // proven (bounced down)
+                } else {
+                    zone.3 = 1; // tested
+                }
+                break;
+            }
+        }
+    }
+
     supply.sort_by(|a, b| b.0.cmp(&a.0));
     demand.sort_by(|a, b| b.0.cmp(&a.0));
     supply.truncate(10);
@@ -2042,36 +2065,54 @@ fn draw_chart(
 
     // ── supply/demand zones ─────────────────────────────────────────────────
     if flags.supply_demand {
+        let status_label = |s: u8| -> &str { match s { 0 => "Untested", 1 => "Tested", 2 => "Proven", _ => "" } };
         // Demand zones (green fill)
-        for &(idx, zh, zl) in &chart.demand_zones {
+        for &(idx, zh, zl, status) in &chart.demand_zones {
             if idx >= start_idx && idx < end_idx {
                 let x_start = chart_rect.left() + ((idx - start_idx) as f32) * bar_w;
                 let y_top = price_to_y(zh);
                 let y_bot = price_to_y(zl);
                 if y_bot >= chart_rect.top() && y_top <= chart_rect.bottom() {
+                    let alpha = if status == 2 { 35 } else { 20 };
                     painter.rect_filled(
                         egui::Rect::from_min_max(
                             egui::pos2(x_start, y_top.max(chart_rect.top())),
                             egui::pos2(chart_rect.right(), y_bot.min(chart_rect.bottom())),
                         ),
-                        0.0, egui::Color32::from_rgba_premultiplied(0, 180, 80, 25),
+                        0.0, egui::Color32::from_rgba_premultiplied(0, 180, 80, alpha),
+                    );
+                    // Label
+                    painter.text(
+                        egui::pos2(chart_rect.right() - 4.0, y_bot.min(chart_rect.bottom()) - 12.0),
+                        egui::Align2::RIGHT_TOP,
+                        &format!("Demand [{}]", status_label(status)),
+                        egui::FontId::monospace(9.0),
+                        egui::Color32::from_rgb(0, 200, 80),
                     );
                 }
             }
         }
         // Supply zones (red fill)
-        for &(idx, zh, zl) in &chart.supply_zones {
+        for &(idx, zh, zl, status) in &chart.supply_zones {
             if idx >= start_idx && idx < end_idx {
                 let x_start = chart_rect.left() + ((idx - start_idx) as f32) * bar_w;
                 let y_top = price_to_y(zh);
                 let y_bot = price_to_y(zl);
                 if y_bot >= chart_rect.top() && y_top <= chart_rect.bottom() {
+                    let alpha = if status == 2 { 35 } else { 20 };
                     painter.rect_filled(
                         egui::Rect::from_min_max(
                             egui::pos2(x_start, y_top.max(chart_rect.top())),
                             egui::pos2(chart_rect.right(), y_bot.min(chart_rect.bottom())),
                         ),
-                        0.0, egui::Color32::from_rgba_premultiplied(220, 40, 40, 25),
+                        0.0, egui::Color32::from_rgba_premultiplied(220, 40, 40, alpha),
+                    );
+                    painter.text(
+                        egui::pos2(chart_rect.right() - 4.0, y_top.max(chart_rect.top()) + 2.0),
+                        egui::Align2::RIGHT_TOP,
+                        &format!("Supply [{}]", status_label(status)),
+                        egui::FontId::monospace(9.0),
+                        egui::Color32::from_rgb(220, 40, 40),
                     );
                 }
             }
@@ -2733,7 +2774,7 @@ fn draw_fisher_pane(
         painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 255, 100))));
     }
 
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "Fisher(10)", egui::FontId::monospace(9.0), FISHER_POS);
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "Fisher(32)", egui::FontId::monospace(9.0), FISHER_POS);
 }
 
 /// Draw MACD sub-pane with two lines + histogram.
