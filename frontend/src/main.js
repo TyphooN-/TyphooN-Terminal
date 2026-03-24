@@ -5932,13 +5932,43 @@ async function openSecFilingInline(url, title) {
 
   walk(body);
 
-  if (container.childNodes.length === 0) {
-    container.textContent = "Filing content could not be parsed. Try opening in browser.";
-    const openBtn = document.createElement("button");
-    openBtn.textContent = "Open in Browser";
-    openBtn.style.cssText = "margin-top:8px;padding:4px 12px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;";
-    openBtn.addEventListener("click", () => invoke("open_url", { url }).catch(() => {}));
-    container.appendChild(openBtn);
+  if (container.childNodes.length < 3) {
+    // Fallback: structured walk failed (XHTML/namespaced tags). Extract all visible text.
+    container.textContent = "";
+    // Get all text blocks from the body, preserving some structure
+    const allElements = body.querySelectorAll("p, div, td, th, li, h1, h2, h3, h4, h5, h6, span, font, b, strong, i, a");
+    const seen = new Set();
+    for (const el of allElements) {
+      const text = el.textContent.trim();
+      if (text.length < 3 || seen.has(text)) continue;
+      // Skip if parent already added this text
+      if (el.parentElement && seen.has(el.parentElement.textContent.trim())) continue;
+      seen.add(text);
+      const isHeader = /^H[1-6]$/.test(el.tagName);
+      const isBold = el.tagName === "B" || el.tagName === "STRONG" || (el.style && el.style.fontWeight === "bold");
+      const isCell = el.tagName === "TD" || el.tagName === "TH";
+      if (isCell) continue; // skip individual cells, let tables handle them
+      const d = document.createElement("div");
+      d.textContent = text.substring(0, 1000);
+      if (isHeader) {
+        d.style.cssText = "font-size:13px;font-weight:bold;color:#FFD700;margin:10px 0 4px;border-bottom:1px solid #333;padding-bottom:2px;";
+      } else if (isBold) {
+        d.style.cssText = "font-weight:bold;color:#fff;margin:3px 0;";
+      } else {
+        d.style.cssText = "color:#ccc;margin:2px 0;line-height:1.4;";
+      }
+      container.appendChild(d);
+      if (container.childNodes.length > 2000) break; // safety cap
+    }
+    // Still nothing? Show fallback
+    if (container.childNodes.length === 0) {
+      container.textContent = "Filing content could not be parsed.";
+      const openBtn = document.createElement("button");
+      openBtn.textContent = "Open in Browser";
+      openBtn.style.cssText = "margin-top:8px;padding:4px 12px;background:#1a237e;color:#82b1ff;border:1px solid #3949ab;cursor:pointer;";
+      openBtn.addEventListener("click", () => invoke("open_url", { url }).catch(() => {}));
+      container.appendChild(openBtn);
+    }
   }
 
   win.contentElement.appendChild(container);
