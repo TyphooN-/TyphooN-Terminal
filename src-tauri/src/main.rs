@@ -2215,12 +2215,21 @@ async fn fetch_article(url: String) -> Result<String, String> {
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    // Limit response body to 2MB
+    // SEC filings (DEF14A, 10-K) can be 10-50MB. Limit to 10MB, truncate if needed.
     let bytes = resp.bytes().await.map_err(|_| "Read failed".to_string())?;
-    if bytes.len() > 2 * 1024 * 1024 {
-        return Err("Response too large".to_string());
-    }
-    String::from_utf8(bytes.to_vec()).map_err(|_| "Invalid UTF-8".to_string())
+    let max_size = 10 * 1024 * 1024; // 10MB
+    let data = if bytes.len() > max_size {
+        // Truncate to limit but try to end at a tag boundary
+        let truncated = &bytes[..max_size];
+        let mut s = String::from_utf8_lossy(truncated).into_owned();
+        s.push_str("\n\n<!-- Filing truncated (original size: ");
+        s.push_str(&format!("{}MB", bytes.len() / (1024 * 1024)));
+        s.push_str(") -->");
+        s
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    Ok(data)
 }
 
 /// Clear all cached data for a specific symbol from cold storage.
