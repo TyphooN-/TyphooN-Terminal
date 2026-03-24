@@ -27853,7 +27853,7 @@ async function cmdDarwinTradeOverlay() {
     markers.sort((a, b) => a.time - b.time);
     if (markers.length > 0) {
       if (currentChartType && currentChartType.startsWith("gpu")) {
-        // GPU mode doesn't support markers yet (GPU_PHASE5).
+        // GPU mode: markers not supported — use CPU candles for DARWIN trade markers.
         // Switch to CPU candles temporarily for marker support.
         log(`${markers.length} DARWIN markers found — GPU chart doesn't support markers. Switch to 'Candles' chart type to see trade arrows.`, "warn");
       }
@@ -33660,9 +33660,9 @@ async function updateOrderPriceLines() {
 
     // Debug: log what we found for this symbol
     const symOrders = orders.filter(o => (o.symbol || "") === sym || (o.symbol || "") === symNoSlash);
-    console.log(`[OrderLines] ${sym}: pos=${pos ? pos.side + " " + pos.qty + " @" + pos.avg_entry_price : "none"}, ` +
+    log(`[OrderLines] ${sym}: pos=${pos ? pos.side + " " + pos.qty + " @" + pos.avg_entry_price : "none"}, ` +
       `posSL=${posSL}, posTP=${posTP}, ` +
-      `orders=${symOrders.length} [${symOrders.map(o => `${o.order_type}:lp=${o.limit_price},sp=${o.stop_price},legs=${o.legs?.length||0}`).join(", ")}]`);
+      `orders=${symOrders.length} [${symOrders.map(o => `${o.order_type}:lp=${o.limit_price},sp=${o.stop_price},legs=${o.legs?.length||0}`).join(", ")}]`, "info");
     if (symOrders.length > 0 || pos) {
       log(`OrderLines: ${sym} pos=${pos ? pos.side + " @" + pos.avg_entry_price : "none"} SL=${posSL || "—"} TP=${posTP || "—"}, orders=${symOrders.length}`, "info");
     }
@@ -39070,7 +39070,7 @@ async function cmdScannerPlus() {
         const row = document.createElement("div"); row.style.cssText = "display:flex;justify-content:space-between;padding:3px 4px;border-bottom:1px solid #1a1a2e;cursor:pointer;";
         row.addEventListener("mouseenter", function() { this.style.background = "#1a1a2e"; }); row.addEventListener("mouseleave", function() { this.style.background = ""; });
         row.addEventListener("click", function() { document.getElementById("symbol-input").value = m.symbol; triggerLoad(); });
-        var vals = [
+        const vals = [
           { text: m.symbol, css: "color:#fff;font-weight:bold;" }, { text: "$" + m.price.toFixed(2), css: "color:#ccc;font-family:Consolas,monospace;" },
           { text: m.rsi !== null ? m.rsi.toFixed(1) : "\u2014", css: "color:" + (m.rsi !== null && m.rsi < 30 ? "#4caf50" : m.rsi !== null && m.rsi > 70 ? "#f44336" : "#ccc") + ";" },
           { text: m.vsSMA200, css: "color:" + (m.vsSMA200 === "ABOVE" ? "#4caf50" : m.vsSMA200 === "BELOW" ? "#f44336" : "#888") + ";" },
@@ -39134,7 +39134,7 @@ function cmdOptProfit() {
     for (const be of breakevens) { const x = toX(be), y = toY(0); ctx.fillStyle = "#ff9800"; ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill(); ctx.font = "9px Consolas, monospace"; ctx.textAlign = "center"; ctx.fillText("$" + be.toFixed(1), x, y - 8); }
     ctx.fillStyle = "#888"; ctx.font = "10px Consolas, monospace"; ctx.textAlign = "center"; for (let i = 0; i <= 5; i++) { const pr = minPr + (pRange * i / 5); ctx.fillText("$" + pr.toFixed(0), toX(pr), H - 5); } ctx.textAlign = "right"; for (let i = 0; i <= 4; i++) { const v = vMin + (vRange * i / 4); ctx.fillText("$" + v.toFixed(0), pad - 4, toY(v) + 3); }
     ctx.fillStyle = "#4caf50"; ctx.textAlign = "left"; ctx.fillText("At Expiry", pad + 10, 15); if (dte > 0) { ctx.fillStyle = "#2196f3"; ctx.fillText("At " + dte + " DTE (dashed)", pad + 10, 28); }
-    statsDiv.textContent = ""; var addStat = function(label, value, color) { const s = document.createElement("span"); s.style.cssText = "color:" + color + ";"; s.textContent = label + ": " + value; statsDiv.appendChild(s); };
+    statsDiv.textContent = ""; const addStat = (label, value, color) => { const s = document.createElement("span"); s.style.cssText = "color:" + color + ";"; s.textContent = label + ": " + value; statsDiv.appendChild(s); };
     addStat("Max Profit", maxProfit >= 1e9 ? "Unlimited" : "$" + maxProfit.toFixed(0), "#4caf50"); addStat("Max Loss", "$" + maxLoss.toFixed(0), "#f44336"); for (let i = 0; i < breakevens.length; i++) addStat("BE" + (i + 1), "$" + breakevens[i].toFixed(2), "#ff9800");
   });
 }
