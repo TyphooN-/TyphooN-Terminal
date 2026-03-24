@@ -4745,7 +4745,7 @@ async function loadChart(symbol, timeframe) {
 
     // If MTF grid is active, reload cells with new symbol (defer to let DOM settle)
     if (mtfGridActive && mtfGridCells.length > 0) {
-      const selectedTFs = mtfGridCells.map(c => c.tf);
+      const selectedTFs = [...new Set(mtfGridCells.map(c => c.tf))];
       closeMTFGrid();
       // Wait for DOM cleanup, then reopen grid with new symbol
       // Capture symbol to guard against rapid tab switching
@@ -34487,10 +34487,12 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       return cachedGetBars(c.symbol || symbol, fetchTF, limit).catch(() => {});
     });
     await Promise.all(prefetchPromises);
-    // Now render cells sequentially (data is cached, so loadMTFCellData hits cache instantly)
+    // Render cells sequentially with yields between cells (keeps UI responsive)
     for (const c of mtfGridCells) {
       if (mtfGridGeneration !== gridGen) return; // grid switched during prefetch
       await loadMTFCellData(c, c.symbol || symbol, gridGen);
+      // Yield between cells to keep UI clickable during grid population
+      await new Promise(r => setTimeout(r, 0));
     }
   })();
 
@@ -34575,10 +34577,6 @@ async function loadMTFCellData(cellInfo, symbol, expectedGen) {
     }
 
     // Second guard after parse — grid may have switched during JSON parse
-    if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
-
-    // Yield to keep UI responsive between cells (parse + sanitize can block 50-100ms per cell)
-    await new Promise(r => setTimeout(r, 0));
     if (expectedGen !== undefined && mtfGridGeneration !== expectedGen) return;
 
     let chartData = sanitizeBars(bars.map(b => ({
