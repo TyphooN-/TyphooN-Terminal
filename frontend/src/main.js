@@ -4712,7 +4712,15 @@ async function loadChart(symbol, timeframe) {
       requestAnimationFrame(() => {
         // Discard if user already switched to another symbol
         if (currentSymbol !== gridSymbol) return;
-        openMTFGrid(gridSymbol, selectedTFs).then(() => {
+        // Use multi-symbol mode if "All Tabs" is selected
+        const allMode = document.getElementById("mtf-grid-sym-all")?.checked;
+        const gridSymbols = allMode
+          ? [...new Set(tabs.filter(t => t.symbol).map(t => t.symbol))]
+          : [gridSymbol];
+        const syms = gridSymbols.length > 0 ? gridSymbols : [gridSymbol];
+        openMTFGridMulti(syms, selectedTFs);
+        // openMTFGridMulti calls openMTFGrid internally
+        Promise.resolve().then(() => {
           setTimeout(() => resizeMTFGrid(), 100);
         }).catch(e => {
           log(`MTF grid reload failed: ${e}`, "warn");
@@ -34215,7 +34223,9 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
       gpuCanvas.id = `mtf-gpu-${cellSymbol}-${tf}`;
       chartDiv.appendChild(gpuCanvas);
 
-      // Set canvas dimensions before creating GPU chart (avoids 0×0 viewport)
+      // Force layout calc, then set canvas dimensions (avoids 0×0 viewport)
+      // offsetHeight triggers a synchronous reflow — ensures clientWidth/Height are valid
+      void gridContainer.offsetHeight;
       gpuCanvas.width = chartDiv.clientWidth || 300;
       gpuCanvas.height = chartDiv.clientHeight || 200;
 
