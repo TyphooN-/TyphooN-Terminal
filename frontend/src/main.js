@@ -817,6 +817,199 @@ function deactivateGpuChart() {
   if (overlay) overlay.style.display = "none";
 }
 
+// ── GpuMiniChart — Lightweight GPU-accelerated chart for analytics ────
+// Wraps GpuChart for non-OHLC data: equity curves, bar charts, histograms, P/L.
+// Uses set_line_data() for line rendering, add_histogram() for bars.
+// Text labels rendered via thin Canvas 2D overlay (GPU has no text shaper).
+class GpuMiniChart {
+  constructor(container, width, height) {
+    this._container = container;
+    const w = width || container.clientWidth || 600;
+    const h = height || container.clientHeight || 300;
+
+    // GPU canvas
+    this.canvas = document.createElement("canvas");
+    this.canvas.id = "gmc-" + Math.random().toString(36).slice(2, 8);
+    this.canvas.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;";
+    this.canvas.width = w;
+    this.canvas.height = h;
+
+    // Text overlay canvas (for axis labels, titles)
+    this._overlay = document.createElement("canvas");
+    this._overlay.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;";
+    this._overlay.width = w;
+    this._overlay.height = h;
+
+    // Wrapper div with relative positioning
+    const wrap = document.createElement("div");
+    wrap.style.cssText = `position:relative;width:${w}px;height:${h}px;`;
+    wrap.appendChild(this.canvas);
+    wrap.appendChild(this._overlay);
+    container.appendChild(wrap);
+    this._wrap = wrap;
+
+    // Init GPU engine
+    this.gpu = new gpuChartModule.GpuChart(this.canvas.id);
+    this.gpu.set_chart_type(2); // Line
+    this._ctx = this._overlay.getContext("2d");
+    this._lines = [];
+    this._freed = false;
+  }
+
+  /** Render a single line series (equity curve, time series). */
+  drawLine(values, color, lineWidth) {
+    if (!values || values.length === 0) return;
+    const f64 = values instanceof Float64Array ? values : new Float64Array(values);
+    this.gpu.set_line_data(f64);
+    this.gpu.set_visible_range(0, values.length + 2);
+    this.gpu.resize(this.canvas.width, this.canvas.height);
+    this.gpu.render();
+  }
+
+  /** Render multiple line series overlaid. First series sets the data range. */
+  drawMultiLine(seriesArray) {
+    if (!seriesArray || seriesArray.length === 0) return;
+    // Use first series as base data (defines Y range)
+    const first = seriesArray[0];
+    const f64 = first.values instanceof Float64Array ? first.values : new Float64Array(first.values);
+    this.gpu.set_line_data(f64);
+    // Add remaining series as indicator lines
+    this.gpu.clear_lines();
+    for (let i = 1; i < seriesArray.length; i++) {
+      const s = seriesArray[i];
+      const sv = s.values instanceof Float64Array ? s.values : new Float64Array(s.values);
+      const [r, g, b] = hexToRgb(s.color || "#ffffff");
+      this.gpu.add_line(sv, r, g, b, s.alpha || 1.0);
+    }
+    this.gpu.set_visible_range(0, first.values.length + 2);
+    this.gpu.resize(this.canvas.width, this.canvas.height);
+    this.gpu.render();
+  }
+
+  /** Render histogram bars (P/L, monthly returns, distribution). */
+  drawBars(values, colorFlags, baseline) {
+    if (!values || values.length === 0) return;
+    // Pack as line data for Y-axis range, then overlay histogram
+    const f64 = values instanceof Float64Array ? values : new Float64Array(values);
+    // Create synthetic OHLC so the chart knows the Y range
+    this.gpu.set_line_data(f64);
+    this.gpu.clear_lines();
+    this.gpu.clear_histograms();
+    // Build per-bar RGBA color array
+    const colors = new Float32Array(values.length * 4);
+    for (let i = 0; i < values.length; i++) {
+      if (colorFlags && colorFlags[i]) {
+        const cf = colorFlags[i];
+        colors[i * 4] = cf[0]; colors[i * 4 + 1] = cf[1];
+        colors[i * 4 + 2] = cf[2]; colors[i * 4 + 3] = cf[3] !== undefined ? cf[3] : 1.0;
+      } else {
+        // Default: green for positive, red for negative
+        const positive = values[i] >= (baseline || 0);
+        colors[i * 4] = positive ? 0.3 : 0.96;
+        colors[i * 4 + 1] = positive ? 0.69 : 0.26;
+        colors[i * 4 + 2] = positive ? 0.31 : 0.21;
+        colors[i * 4 + 3] = 0.85;
+      }
+    }
+    this.gpu.add_histogram(f64, colors, baseline || 0);
+    this.gpu.set_visible_range(0, values.length + 2);
+    this.gpu.resize(this.canvas.width, this.canvas.height);
+    this.gpu.render();
+  }
+
+  /** Render filled area between two series (drawdown, bands). */
+  drawFill(topValues, bottomValues, color) {
+    if (!topValues || topValues.length === 0) return;
+    const top = topValues instanceof Float64Array ? topValues : new Float64Array(topValues);
+    const bot = bottomValues instanceof Float64Array ? bottomValues : new Float64Array(bottomValues);
+    // Set base data from top series for Y range
+    this.gpu.set_line_data(top);
+    this.gpu.clear_fills();
+    const [r, g, b] = hexToRgb(color || "#2196f3");
+    this.gpu.add_fill(top, bot, r, g, b, 0.3);
+    this.gpu.set_visible_range(0, topValues.length + 2);
+    this.gpu.resize(this.canvas.width, this.canvas.height);
+    this.gpu.render();
+  }
+
+  /** Add a horizontal reference line (zero line, threshold). */
+  addHorizontalLine(value, color) {
+    const [r, g, b] = hexToRgb(color || "#888888");
+    this.gpu.add_price_line(value, r, g, b, 0.5, 1.0);
+  }
+
+  /** Draw text labels on overlay canvas (title, axis labels). */
+  setLabels(opts) {
+    const ctx = this._ctx;
+    const w = this._overlay.width;
+    const h = this._overlay.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.font = "10px Consolas, monospace";
+
+    // Title
+    if (opts.title) {
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 12px Consolas, monospace";
+      ctx.fillText(opts.title, 6, 14);
+      ctx.font = "10px Consolas, monospace";
+    }
+
+    // Subtitle
+    if (opts.subtitle) {
+      ctx.fillStyle = "#888";
+      ctx.fillText(opts.subtitle, 6, 28);
+    }
+
+    // X-axis labels
+    if (opts.xLabels && opts.xLabels.length > 0) {
+      ctx.fillStyle = "#666";
+      const step = w / opts.xLabels.length;
+      for (let i = 0; i < opts.xLabels.length; i++) {
+        ctx.fillText(opts.xLabels[i], step * i + 4, h - 4);
+      }
+    }
+
+    // Y-axis labels (right side)
+    if (opts.yLabels && opts.yLabels.length > 0) {
+      ctx.fillStyle = "#666";
+      ctx.textAlign = "right";
+      const step = (h - 40) / (opts.yLabels.length - 1 || 1);
+      for (let i = 0; i < opts.yLabels.length; i++) {
+        ctx.fillText(opts.yLabels[i], w - 4, 30 + step * i);
+      }
+      ctx.textAlign = "left";
+    }
+
+    // Stats (key-value pairs in top-right)
+    if (opts.stats) {
+      ctx.textAlign = "right";
+      let y = 14;
+      for (const [k, v, color] of opts.stats) {
+        ctx.fillStyle = "#888";
+        ctx.fillText(k + ": ", w - ctx.measureText(String(v)).width - 8, y);
+        ctx.fillStyle = color || "#ccc";
+        ctx.fillText(String(v), w - 8, y);
+        y += 14;
+      }
+      ctx.textAlign = "left";
+    }
+  }
+
+  resize(w, h) {
+    this.canvas.width = w; this.canvas.height = h;
+    this._overlay.width = w; this._overlay.height = h;
+    this._wrap.style.width = w + "px"; this._wrap.style.height = h + "px";
+    this.gpu.resize(w, h);
+  }
+
+  free() {
+    if (this._freed) return;
+    this._freed = true;
+    try { this.gpu.free(); } catch (_) {}
+    if (this._wrap.parentNode) this._wrap.parentNode.removeChild(this._wrap);
+  }
+}
+
 // ── Safe DOM helpers (innerHTML elimination) ─────────────────
 // All user-facing DOM construction MUST use these instead of innerHTML.
 function el(tag, style, text) {
@@ -4855,6 +5048,7 @@ async function prefetchAllTimeframes(symbol, currentTF) {
 
 let lastBarTime = 0;
 let _wsBarPollInterval = null;
+let _wsBarPollRunning = false;
 
 /// Update chart with latest bar data. Uses WebSocket-built bars when available
 /// (sub-second latency), falls back to API polling (10s) when WS is down.
@@ -4921,6 +5115,8 @@ async function updateLatestBar(symbol, timeframe) {
 function startWsBarPolling() {
   if (_wsBarPollInterval) clearInterval(_wsBarPollInterval);
   _wsBarPollInterval = setInterval(async () => {
+    if (_wsBarPollRunning) return;
+    _wsBarPollRunning = true;
     try {
       const json = await invoke("poll_bars");
       const { completed, active } = JSON.parse(json);
@@ -4973,7 +5169,7 @@ function startWsBarPolling() {
       }
     } catch (_) {
       // WS bars not available — API polling fallback handles it
-    }
+    } finally { _wsBarPollRunning = false; }
   }, 2000);
 }
 
@@ -6030,11 +6226,14 @@ async function fillFormFromAccount(name) {
 
 // ── DARWIN XLSX File Watcher ─────────────────────────────────
 let _darwinWatcherInterval = null;
+let _darwinWatcherRunning = false;
 const DARWIN_IMPORT_DIR = "/home/typhoon/mt5xml";
 
 function startDarwinFileWatcher() {
   stopDarwinFileWatcher();
   _darwinWatcherInterval = setInterval(async () => {
+    if (_darwinWatcherRunning) return;
+    _darwinWatcherRunning = true;
     try {
       const json = await invoke("watch_darwin_imports", { dir: DARWIN_IMPORT_DIR });
       const reimported = JSON.parse(json);
@@ -6047,7 +6246,7 @@ function startDarwinFileWatcher() {
           }
         }
       }
-    } catch (_) {}
+    } catch (_) {} finally { _darwinWatcherRunning = false; }
   }, 60000);
 }
 
@@ -7842,7 +8041,10 @@ function cmdTimeSales() {
 
   // Poll stream for trades
   if (tsPollInterval) clearInterval(tsPollInterval);
+  let _tsPollRunning = false;
   tsPollInterval = setInterval(async () => {
+    if (_tsPollRunning) return;
+    _tsPollRunning = true;
     try {
       const json = await invoke("poll_stream");
       const messages = JSON.parse(json);
@@ -7862,7 +8064,7 @@ function cmdTimeSales() {
         }
       }
       renderTSList(listEl);
-    } catch (_) {}
+    } catch (_) {} finally { _tsPollRunning = false; }
   }, 250);
 }
 
@@ -12085,8 +12287,8 @@ function cmdImportTrades() {
     const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 0;
     const grossWin = wins.reduce((s, t) => s + t.pnl, 0); const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0));
     const profitFactor = grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : "\u221e";
-    const bestTrade = trades.length > 0 ? Math.max(...trades.map(t => t.pnl || 0)) : 0;
-    const worstTrade = trades.length > 0 ? Math.min(...trades.map(t => t.pnl || 0)) : 0;
+    let bestTrade = 0, worstTrade = 0;
+    for (const t of trades) { const p = t.pnl || 0; if (p > bestTrade) bestTrade = p; if (p < worstTrade) worstTrade = p; }
     const bySym = {}; for (const t of trades) { if (!bySym[t.symbol]) bySym[t.symbol] = { total: 0, count: 0 }; bySym[t.symbol].total += (t.pnl || 0); bySym[t.symbol].count++; }
     const statsTitle = document.createElement("div"); statsTitle.textContent = "Trade Statistics"; statsTitle.style.cssText = "font-weight:bold;color:#ccc;padding:4px 0;"; resultsDiv.appendChild(statsTitle);
     const rows = [["Total Trades", trades.length], ["Wins", wins.length], ["Losses", losses.length], ["Win Rate", winRate + "%"], ["Avg Win", "$" + avgWin.toFixed(2)], ["Avg Loss", "$" + avgLoss.toFixed(2)], ["Best Trade", "$" + bestTrade.toFixed(2)], ["Worst Trade", "$" + worstTrade.toFixed(2)], ["Profit Factor", profitFactor], ["Total Commission", "$" + totalComm.toFixed(2)], ["Total P&L", "$" + totalPnL.toFixed(2)]];
@@ -12157,6 +12359,7 @@ function cmdDarwin() {
     if (!ticker || ticker === "No accounts imported") { contentDiv.textContent = "Import DARWIN accounts first."; return; }
     const view = viewSel.value;
     contentDiv.textContent = "Loading...";
+    await new Promise(r => requestAnimationFrame(r)); // Yield to paint "Loading..."
     try {
       if (view === "summary") await renderSummary(ticker);
       else if (view === "open_positions") await renderOpenPositions(ticker);
@@ -12289,50 +12492,28 @@ function cmdDarwin() {
     contentDiv.textContent = "";
     if (data.length === 0) { contentDiv.textContent = "No equity data."; return; }
 
-    const canvas = document.createElement("canvas"); canvas.width = 860; canvas.height = 400; canvas.style.cssText = "width:100%;max-height:400px;";
-    contentDiv.appendChild(canvas);
-    const ctx = canvas.getContext("2d");
-
     const balances = data.map(d => d[1]);
-    const minB = Math.min(...balances); const maxB = Math.max(...balances);
-    const range = maxB - minB || 1;
-    const padTop = 30; const padBottom = 40; const padLeft = 80; const padRight = 20;
-    const w = canvas.width - padLeft - padRight; const h = canvas.height - padTop - padBottom;
-
-    // Background
-    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Grid lines
-    ctx.strokeStyle = "#222"; ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 5; i++) {
-      const y = padTop + (h * i / 5);
-      ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(padLeft + w, y); ctx.stroke();
-      ctx.fillStyle = "#666"; ctx.font = "10px Consolas";
-      const val = maxB - (range * i / 5);
-      ctx.fillText("$" + val.toLocaleString(undefined, {maximumFractionDigits: 0}), 4, y + 4);
-    }
-
-    // Equity line
-    ctx.strokeStyle = "#4caf50"; ctx.lineWidth = 1.5; ctx.beginPath();
-    for (let i = 0; i < data.length; i++) {
-      const x = padLeft + (i / (data.length - 1)) * w;
-      const y = padTop + h - ((balances[i] - minB) / range) * h;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Start/end labels
-    ctx.fillStyle = "#888"; ctx.font = "10px Consolas";
-    ctx.fillText(data[0][0].substring(0, 10), padLeft, canvas.height - 8);
-    ctx.fillText(data[data.length - 1][0].substring(0, 10), padLeft + w - 70, canvas.height - 8);
-
-    // Title
-    ctx.fillStyle = "#fff"; ctx.font = "bold 13px Consolas";
-    ctx.fillText("Equity Curve — " + ticker, padLeft, 18);
-    const finalBal = balances[balances.length - 1]; const startBal = balances[0];
+    const startBal = balances[0]; const finalBal = balances[balances.length - 1];
     const pct = ((finalBal - startBal) / startBal * 100).toFixed(2);
-    ctx.fillStyle = finalBal >= startBal ? "#4caf50" : "#f44336"; ctx.font = "11px Consolas";
-    ctx.fillText(`$${startBal.toLocaleString()} → $${finalBal.toLocaleString()} (${pct}%)`, padLeft + 250, 18);
+
+    if (gpuChartModule) {
+      const mc = new GpuMiniChart(contentDiv, 860, 400);
+      mc.drawLine(balances, "#4caf50");
+      mc.setLabels({
+        title: "Equity Curve — " + ticker,
+        stats: [
+          ["", `$${startBal.toLocaleString()} → $${finalBal.toLocaleString()} (${pct}%)`, finalBal >= startBal ? "#4caf50" : "#f44336"],
+        ],
+        xLabels: [data[0][0].substring(0, 10), data[data.length - 1][0].substring(0, 10)],
+      });
+      // Store reference for cleanup
+      if (!win._gpuMiniCharts) win._gpuMiniCharts = [];
+      win._gpuMiniCharts.push(mc);
+    } else {
+      // Fallback: simple text display
+      const info = el("div", "color:#4caf50;padding:8px;", `Equity: $${startBal.toLocaleString()} → $${finalBal.toLocaleString()} (${pct}%)`);
+      contentDiv.appendChild(info);
+    }
   }
 
   async function renderPnLBySymbol(ticker) {
@@ -12416,24 +12597,20 @@ function cmdDarwin() {
     const title = document.createElement("div"); title.style.cssText = "font-size:14px;font-weight:bold;color:#fff;padding:4px 0 8px;";
     title.textContent = `Hourly P/L Heatmap — ${ticker}`;
     contentDiv.appendChild(title);
-    const maxPnl = Math.max(...data.map(d => Math.abs(d.total_pnl)), 1);
-    const canvas = document.createElement("canvas"); canvas.width = 900; canvas.height = 200; canvas.style.cssText = "width:100%;";
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, 900, 200);
-    const barW = 34; const padL = 40;
-    for (let h = 0; h < 24; h++) {
-      const d = data[h] || { total_pnl: 0, trade_count: 0 };
-      const barH = Math.abs(d.total_pnl) / maxPnl * 140;
-      const x = padL + h * barW;
-      const y = d.total_pnl >= 0 ? 150 - barH : 150;
-      ctx.fillStyle = d.total_pnl >= 0 ? "rgba(76,175,80,0.7)" : "rgba(244,67,54,0.7)";
-      ctx.fillRect(x, y, barW - 2, barH);
-      ctx.fillStyle = "#666"; ctx.font = "9px Consolas"; ctx.fillText(String(h).padStart(2, "0"), x + 8, 170);
-      if (d.trade_count > 0) { ctx.fillStyle = "#888"; ctx.font = "8px Consolas"; ctx.fillText(d.trade_count, x + 10, 185); }
+
+    if (gpuChartModule) {
+      const values = new Array(24);
+      for (let h = 0; h < 24; h++) values[h] = (data[h] || { total_pnl: 0 }).total_pnl;
+      const mc = new GpuMiniChart(contentDiv, 900, 200);
+      mc.drawBars(values, null, 0);
+      mc.addHorizontalLine(0, "#444444");
+      mc.setLabels({
+        title: "Hour (UTC)",
+        xLabels: Array.from({length: 24}, (_, i) => String(i).padStart(2, "0")),
+      });
+      if (!win._gpuMiniCharts) win._gpuMiniCharts = [];
+      win._gpuMiniCharts.push(mc);
     }
-    ctx.strokeStyle = "#444"; ctx.beginPath(); ctx.moveTo(padL, 150); ctx.lineTo(padL + 24 * barW, 150); ctx.stroke();
-    ctx.fillStyle = "#fff"; ctx.font = "bold 12px Consolas"; ctx.fillText("Hour (UTC)", padL + 350, 198);
-    contentDiv.appendChild(canvas);
     // Table below
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:10px;margin-top:8px;";
     const thead = document.createElement("tr");
@@ -12753,49 +12930,33 @@ function cmdDarwin() {
       msg.textContent = "No investor flow data available for this DARWIN.";
       contentDiv.appendChild(msg); return;
     }
-    // AuM chart
+    // AuM chart (GPU)
     const aumTitle = document.createElement("div"); aumTitle.style.cssText = "font-size:12px;font-weight:bold;color:#aaa;padding:8px 0 4px;";
     aumTitle.textContent = "Assets under Management (AuM)";
     contentDiv.appendChild(aumTitle);
-    const aumCanvas = document.createElement("canvas"); aumCanvas.width = 900; aumCanvas.height = 200;
-    contentDiv.appendChild(aumCanvas);
-    const aumCtx = aumCanvas.getContext("2d");
-    const maxAum = Math.max(...data.map(d => d.aum), 1);
-    const aumW = aumCanvas.width; const aumH = aumCanvas.height;
-    aumCtx.fillStyle = "#111"; aumCtx.fillRect(0, 0, aumW, aumH);
-    aumCtx.strokeStyle = "#333"; aumCtx.beginPath();
-    for (let y = 0; y < aumH; y += aumH / 4) { aumCtx.moveTo(0, y); aumCtx.lineTo(aumW, y); }
-    aumCtx.stroke();
-    aumCtx.beginPath(); aumCtx.strokeStyle = "#2196f3"; aumCtx.lineWidth = 1.5;
-    data.forEach((d, i) => {
-      const x = (i / (data.length - 1 || 1)) * aumW;
-      const y = aumH - (d.aum / maxAum) * (aumH - 10) - 5;
-      i === 0 ? aumCtx.moveTo(x, y) : aumCtx.lineTo(x, y);
-    });
-    aumCtx.stroke();
+    if (gpuChartModule) {
+      const aumVals = data.map(d => d.aum);
+      const aumMc = new GpuMiniChart(contentDiv, 900, 200);
+      aumMc.drawLine(aumVals, "#2196f3");
+      aumMc.setLabels({ subtitle: `Latest: $${data[data.length - 1].aum.toLocaleString(undefined, {minimumFractionDigits: 2})}` });
+      if (!win._gpuMiniCharts) win._gpuMiniCharts = [];
+      win._gpuMiniCharts.push(aumMc);
+    }
     const aumLabel = document.createElement("div"); aumLabel.style.cssText = "color:#888;font-size:9px;padding:2px 0 12px;";
     aumLabel.textContent = `Latest AuM: $${data[data.length - 1].aum.toLocaleString(undefined, {minimumFractionDigits: 2})} | Range: ${data[0].date} to ${data[data.length - 1].date}`;
     contentDiv.appendChild(aumLabel);
-    // Investor count chart
+    // Investor count chart (GPU)
     const invTitle = document.createElement("div"); invTitle.style.cssText = "font-size:12px;font-weight:bold;color:#aaa;padding:8px 0 4px;";
     invTitle.textContent = "Investor Count";
     contentDiv.appendChild(invTitle);
-    const invCanvas = document.createElement("canvas"); invCanvas.width = 900; invCanvas.height = 200;
-    contentDiv.appendChild(invCanvas);
-    const invCtx = invCanvas.getContext("2d");
-    const maxInv = Math.max(...data.map(d => d.investors), 1);
-    const invW = invCanvas.width; const invH = invCanvas.height;
-    invCtx.fillStyle = "#111"; invCtx.fillRect(0, 0, invW, invH);
-    invCtx.strokeStyle = "#333"; invCtx.beginPath();
-    for (let y = 0; y < invH; y += invH / 4) { invCtx.moveTo(0, y); invCtx.lineTo(invW, y); }
-    invCtx.stroke();
-    invCtx.beginPath(); invCtx.strokeStyle = "#4caf50"; invCtx.lineWidth = 1.5;
-    data.forEach((d, i) => {
-      const x = (i / (data.length - 1 || 1)) * invW;
-      const y = invH - (d.investors / maxInv) * (invH - 10) - 5;
-      i === 0 ? invCtx.moveTo(x, y) : invCtx.lineTo(x, y);
-    });
-    invCtx.stroke();
+    if (gpuChartModule) {
+      const invVals = data.map(d => d.investors);
+      const invMc = new GpuMiniChart(contentDiv, 900, 200);
+      invMc.drawLine(invVals, "#4caf50");
+      invMc.setLabels({ subtitle: `Latest: ${Math.round(data[data.length - 1].investors)}` });
+      if (!win._gpuMiniCharts) win._gpuMiniCharts = [];
+      win._gpuMiniCharts.push(invMc);
+    }
     const invLabel = document.createElement("div"); invLabel.style.cssText = "color:#888;font-size:9px;padding:2px 0;";
     invLabel.textContent = `Latest Investors: ${Math.round(data[data.length - 1].investors)} | Range: ${data[0].date} to ${data[data.length - 1].date}`;
     contentDiv.appendChild(invLabel);
@@ -13278,6 +13439,7 @@ function cmdDarwinPortfolio() {
   async function renderView() {
     const view = viewSel.value;
     contentDiv.textContent = "Loading...";
+    await new Promise(r => requestAnimationFrame(r)); // Yield to paint "Loading..."
     try {
       if (view === "portfolio_summary") await renderPortfolioSummary();
       else if (view === "daily_report") await renderDailyReport();
@@ -13561,47 +13723,26 @@ function cmdDarwinPortfolio() {
     contentDiv.textContent = "";
     if (data.length === 0) { contentDiv.textContent = "No equity data."; return; }
 
-    const canvas = document.createElement("canvas"); canvas.width = 960; canvas.height = 450; canvas.style.cssText = "width:100%;max-height:450px;";
-    contentDiv.appendChild(canvas);
-    const ctx = canvas.getContext("2d");
-
     const balances = data.map(d => d[1]);
-    const minB = Math.min(...balances); const maxB = Math.max(...balances);
-    const range = maxB - minB || 1;
-    const padTop = 30; const padBottom = 40; const padLeft = 100; const padRight = 20;
-    const w = canvas.width - padLeft - padRight; const h = canvas.height - padTop - padBottom;
-
-    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Grid
-    ctx.strokeStyle = "#222"; ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 5; i++) {
-      const y = padTop + (h * i / 5);
-      ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(padLeft + w, y); ctx.stroke();
-      ctx.fillStyle = "#666"; ctx.font = "10px Consolas";
-      ctx.fillText("$" + (maxB - (range * i / 5)).toLocaleString(undefined, {maximumFractionDigits: 0}), 4, y + 4);
-    }
-
-    // Line
-    ctx.strokeStyle = "#42a5f5"; ctx.lineWidth = 1.5; ctx.beginPath();
-    for (let i = 0; i < data.length; i++) {
-      const x = padLeft + (i / (data.length - 1)) * w;
-      const y = padTop + h - ((balances[i] - minB) / range) * h;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Labels
-    ctx.fillStyle = "#888"; ctx.font = "10px Consolas";
-    ctx.fillText(data[0][0], padLeft, canvas.height - 8);
-    ctx.fillText(data[data.length - 1][0], padLeft + w - 70, canvas.height - 8);
-
-    ctx.fillStyle = "#fff"; ctx.font = "bold 13px Consolas";
-    ctx.fillText("Combined Equity — All DARWINs", padLeft, 18);
     const start = balances[0]; const end = balances[balances.length - 1];
     const pct = ((end - start) / start * 100).toFixed(2);
-    ctx.fillStyle = end >= start ? "#4caf50" : "#f44336"; ctx.font = "11px Consolas";
-    ctx.fillText(`$${start.toLocaleString()} → $${end.toLocaleString()} (${pct}%)`, padLeft + 320, 18);
+
+    if (gpuChartModule) {
+      const mc = new GpuMiniChart(contentDiv, 960, 450);
+      mc.drawLine(balances, "#42a5f5");
+      mc.setLabels({
+        title: "Combined Equity — All DARWINs",
+        stats: [
+          ["", `$${start.toLocaleString()} → $${end.toLocaleString()} (${pct}%)`, end >= start ? "#4caf50" : "#f44336"],
+        ],
+        xLabels: [data[0][0], data[data.length - 1][0]],
+      });
+      if (!win._gpuMiniCharts) win._gpuMiniCharts = [];
+      win._gpuMiniCharts.push(mc);
+    } else {
+      const info = el("div", "color:#42a5f5;padding:8px;", `Combined: $${start.toLocaleString()} → $${end.toLocaleString()} (${pct}%)`);
+      contentDiv.appendChild(info);
+    }
   }
 
   async function renderMonteCarlo() {
@@ -13748,24 +13889,35 @@ function cmdDarwinPortfolio() {
     title.textContent = "Seasonal Analysis — Portfolio Monthly Patterns";
     contentDiv.appendChild(title);
     if (data.length === 0) { contentDiv.appendChild(document.createTextNode("Insufficient data.")); return; }
-    // Bar chart
-    const maxAvg = Math.max(...data.map(d => Math.abs(d.avg_return_pct)), 0.01);
-    const canvas = document.createElement("canvas"); canvas.width = 900; canvas.height = 250; canvas.style.cssText = "width:100%;margin-bottom:16px;";
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, 900, 250);
-    const barW = 65; const padL = 50; const midY = 130;
-    for (let i = 0; i < data.length; i++) {
-      const d = data[i]; const barH = Math.abs(d.avg_return_pct) / maxAvg * 100;
-      const x = padL + i * barW; const y = d.avg_return_pct >= 0 ? midY - barH : midY;
-      ctx.fillStyle = d.avg_return_pct >= 0 ? "rgba(76,175,80,0.7)" : "rgba(244,67,54,0.7)";
-      ctx.fillRect(x, y, barW - 4, barH);
-      ctx.fillStyle = "#888"; ctx.font = "10px Consolas"; ctx.fillText(d.month_name.substring(0, 3), x + 15, 245);
-      ctx.fillStyle = d.avg_return_pct >= 0 ? "#4caf50" : "#f44336"; ctx.font = "9px Consolas";
-      ctx.fillText(d.avg_return_pct.toFixed(2) + "%", x + 5, d.avg_return_pct >= 0 ? midY - barH - 4 : midY + barH + 12);
+    // Bar chart (GPU)
+    if (gpuChartModule) {
+      const vals = data.map(d => d.avg_return_pct);
+      const mc = new GpuMiniChart(contentDiv, 900, 250);
+      mc.drawBars(vals, null, 0);
+      mc.addHorizontalLine(0, "#444444");
+      mc.setLabels({
+        title: "Average Monthly Return by Calendar Month",
+        xLabels: data.map(d => d.month_name.substring(0, 3)),
+      });
+      if (!win._gpuMiniCharts) win._gpuMiniCharts = [];
+      win._gpuMiniCharts.push(mc);
+    } else {
+      const maxAvg = Math.max(...data.map(d => Math.abs(d.avg_return_pct)), 0.01);
+      const canvas = document.createElement("canvas"); canvas.width = 900; canvas.height = 250; canvas.style.cssText = "width:100%;margin-bottom:16px;";
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, 900, 250);
+      const barW = 65; const padL = 50; const midY = 130;
+      for (let i = 0; i < data.length; i++) {
+        const d = data[i]; const barH = Math.abs(d.avg_return_pct) / maxAvg * 100;
+        const x = padL + i * barW; const y = d.avg_return_pct >= 0 ? midY - barH : midY;
+        ctx.fillStyle = d.avg_return_pct >= 0 ? "rgba(76,175,80,0.7)" : "rgba(244,67,54,0.7)";
+        ctx.fillRect(x, y, barW - 4, barH);
+        ctx.fillStyle = "#888"; ctx.font = "10px Consolas"; ctx.fillText(d.month_name.substring(0, 3), x + 15, 245);
+      }
+      ctx.strokeStyle = "#444"; ctx.beginPath(); ctx.moveTo(padL, midY); ctx.lineTo(padL + 12 * barW, midY); ctx.stroke();
+      ctx.fillStyle = "#fff"; ctx.font = "bold 12px Consolas"; ctx.fillText("Average Monthly Return by Calendar Month", padL, 16);
+      contentDiv.appendChild(canvas);
     }
-    ctx.strokeStyle = "#444"; ctx.beginPath(); ctx.moveTo(padL, midY); ctx.lineTo(padL + 12 * barW, midY); ctx.stroke();
-    ctx.fillStyle = "#fff"; ctx.font = "bold 12px Consolas"; ctx.fillText("Average Monthly Return by Calendar Month", padL, 16);
-    contentDiv.appendChild(canvas);
     // Table
     const table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:11px;";
     const thead = document.createElement("tr");
@@ -14482,15 +14634,51 @@ function cmdDarwinPortfolio() {
 
   // ── Canvas helper ──
   function drawChart(titleText, dataPoints, opts = {}) {
+    if (gpuChartModule && dataPoints.length > 0) {
+      const wrap = document.createElement("div"); wrap.style.cssText = "width:100%;";
+      const mc = new GpuMiniChart(wrap, opts.width || 960, opts.height || 420);
+      const vals = dataPoints.map(d => d[1]);
+
+      if (opts.line2) {
+        // Multi-line: primary + secondary
+        mc.drawMultiLine([
+          { values: vals, color: opts.color || "#42a5f5" },
+          { values: opts.line2, color: opts.line2Color || "#ff9800", alpha: 0.8 },
+        ]);
+      } else {
+        mc.drawLine(vals, opts.color || "#42a5f5");
+      }
+
+      if (opts.fill) {
+        const zeros = new Float64Array(vals.length); // baseline at 0
+        mc.gpu.clear_fills();
+        const [r, g, b] = hexToRgb(opts.color || "#42a5f5");
+        const top = new Float64Array(vals);
+        mc.gpu.add_fill(top, zeros, r, g, b, 0.15);
+        mc.gpu.render();
+      }
+
+      const labels = { title: titleText };
+      if (opts.subtitle) labels.stats = [["", opts.subtitle, opts.subtitleColor || "#888"]];
+      if (dataPoints.length > 0) labels.xLabels = [String(dataPoints[0][0]).substring(0, 10), String(dataPoints[dataPoints.length - 1][0]).substring(0, 10)];
+      mc.setLabels(labels);
+
+      // Track for cleanup
+      if (!win._gpuMiniCharts) win._gpuMiniCharts = [];
+      win._gpuMiniCharts.push(mc);
+      return wrap;
+    }
+
+    // Fallback: Canvas 2D
     const canvas = document.createElement("canvas"); canvas.width = opts.width || 960; canvas.height = opts.height || 420; canvas.style.cssText = "width:100%;";
     const ctx = canvas.getContext("2d");
     const padTop = 30, padBottom = 40, padLeft = opts.padLeft || 90, padRight = 20;
     const w = canvas.width - padLeft - padRight, h = canvas.height - padTop - padBottom;
     ctx.fillStyle = "#0a0a0a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    // Grid
     const vals = dataPoints.map(d => d[1]);
-    let minV = opts.minV !== undefined ? opts.minV : Math.min(...vals);
-    let maxV = opts.maxV !== undefined ? opts.maxV : Math.max(...vals);
+    let minV = opts.minV !== undefined ? opts.minV : Infinity;
+    let maxV = opts.maxV !== undefined ? opts.maxV : -Infinity;
+    if (minV === Infinity || maxV === -Infinity) { for (const v of vals) { if (v < minV) minV = v; if (v > maxV) maxV = v; } }
     if (minV === maxV) { minV -= 1; maxV += 1; }
     const range = maxV - minV;
     ctx.strokeStyle = "#222"; ctx.lineWidth = 0.5;
@@ -14498,10 +14686,8 @@ function cmdDarwinPortfolio() {
       const y = padTop + (h * i / 5);
       ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(padLeft + w, y); ctx.stroke();
       ctx.fillStyle = "#666"; ctx.font = "10px Consolas";
-      const v = maxV - (range * i / 5);
-      ctx.fillText((opts.fmtY || (x => x.toFixed(2)))(v), 4, y + 4);
+      ctx.fillText((opts.fmtY || (x => x.toFixed(2)))(maxV - (range * i / 5)), 4, y + 4);
     }
-    // Line
     ctx.strokeStyle = opts.color || "#42a5f5"; ctx.lineWidth = 1.5; ctx.beginPath();
     for (let i = 0; i < dataPoints.length; i++) {
       const x = padLeft + (i / Math.max(dataPoints.length - 1, 1)) * w;
@@ -14509,7 +14695,6 @@ function cmdDarwinPortfolio() {
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
-    // Second line
     if (opts.line2) {
       ctx.strokeStyle = opts.line2Color || "#ff9800"; ctx.lineWidth = 1; ctx.setLineDash([4,2]); ctx.beginPath();
       for (let i = 0; i < opts.line2.length; i++) {
@@ -14519,19 +14704,6 @@ function cmdDarwinPortfolio() {
       }
       ctx.stroke(); ctx.setLineDash([]);
     }
-    // Fill area
-    if (opts.fill) {
-      const baseline = padTop + h - ((0 - minV) / range) * h;
-      ctx.fillStyle = opts.fillColor || "rgba(66,165,245,0.15)";
-      ctx.beginPath();
-      for (let i = 0; i < dataPoints.length; i++) {
-        const x = padLeft + (i / Math.max(dataPoints.length - 1, 1)) * w;
-        const y = padTop + h - ((dataPoints[i][1] - minV) / range) * h;
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.lineTo(padLeft + w, baseline); ctx.lineTo(padLeft, baseline); ctx.closePath(); ctx.fill();
-    }
-    // Labels
     if (dataPoints.length > 0) {
       ctx.fillStyle = "#888"; ctx.font = "10px Consolas";
       ctx.fillText(String(dataPoints[0][0]).substring(0, 10), padLeft, canvas.height - 8);
@@ -14539,12 +14711,6 @@ function cmdDarwinPortfolio() {
     }
     ctx.fillStyle = "#fff"; ctx.font = "bold 13px Consolas"; ctx.fillText(titleText, padLeft, 18);
     if (opts.subtitle) { ctx.fillStyle = opts.subtitleColor || "#888"; ctx.font = "11px Consolas"; ctx.fillText(opts.subtitle, padLeft + 350, 18); }
-    if (opts.legend) {
-      let lx = padLeft + w - 200;
-      for (const [label, color] of opts.legend) {
-        ctx.fillStyle = color; ctx.fillRect(lx, 6, 12, 12); ctx.fillStyle = "#ccc"; ctx.font = "10px Consolas"; ctx.fillText(label, lx + 16, 16); lx += 80;
-      }
-    }
     return canvas;
   }
 
@@ -14630,7 +14796,7 @@ function cmdDarwinPortfolio() {
     if (data.length === 0) { contentDiv.textContent = "No data."; return; }
 
     const points = data.map(d => [d.date, -d.drawdown_pct]);
-    const maxDD = Math.max(...data.map(d => d.drawdown_pct));
+    let maxDD = 0; for (const d of data) { if (d.drawdown_pct > maxDD) maxDD = d.drawdown_pct; }
     contentDiv.appendChild(drawChart("Portfolio Drawdown", points, {
       color: "#f44336", fill: true, fillColor: "rgba(244,67,54,0.2)",
       minV: -maxDD * 1.1, maxV: 0.5,
@@ -14787,12 +14953,12 @@ function cmdDarwinPortfolio() {
     if (data.length < 10) { contentDiv.textContent = "Need more data for distribution."; return; }
 
     const pnls = data.map(d => d.pnl).filter(p => p !== 0);
-    const minP = Math.min(...pnls); const maxP = Math.max(...pnls);
+    let minP = Infinity, maxP = -Infinity; for (const p of pnls) { if (p < minP) minP = p; if (p > maxP) maxP = p; }
     const bucketCount = 50;
     const bucketSize = (maxP - minP) / bucketCount;
     const buckets = new Array(bucketCount).fill(0);
     for (const p of pnls) { const idx = Math.min(Math.floor((p - minP) / bucketSize), bucketCount - 1); buckets[idx]++; }
-    const maxCount = Math.max(...buckets);
+    let maxCount = 0; for (const b of buckets) { if (b > maxCount) maxCount = b; }
 
     const canvas = document.createElement("canvas"); canvas.width = 960; canvas.height = 350; canvas.style.cssText = "width:100%;";
     const ctx = canvas.getContext("2d");
@@ -16715,7 +16881,10 @@ function cmdTape() {
     listEl.scrollTop = 0;
   }
 
+  let _tapeRunning = false;
   tapeInterval = setInterval(async () => {
+    if (_tapeRunning) return;
+    _tapeRunning = true;
     try {
       const json = await invoke("poll_stream");
       const messages = JSON.parse(json);
@@ -16734,7 +16903,7 @@ function cmdTape() {
         }
       }
       if (updated) { updateSummary(); renderTapeList(); }
-    } catch (_) {}
+    } catch (_) {} finally { _tapeRunning = false; }
   }, 1000);
 }
 
@@ -23231,7 +23400,10 @@ function cmdAnomalyStream() {
     try { Notification.requestPermission(); } catch (_) {}
   }
 
+  let _anomalyRunning = false;
   anomalyInterval = setInterval(async () => {
+    if (_anomalyRunning) return;
+    _anomalyRunning = true;
     try {
       const json = await invoke("poll_stream");
       const messages = JSON.parse(json);
@@ -23282,7 +23454,7 @@ function cmdAnomalyStream() {
           tradeTimestamps.length = 0;
         }
       }
-    } catch (_) {}
+    } catch (_) {} finally { _anomalyRunning = false; }
   }, 1000);
 }
 
@@ -26781,7 +26953,8 @@ async function cmdInsiderSentiment() {
 
     const msprValues = sorted.map(d => d.mspr || 0);
     const changeValues = sorted.map(d => d.change || 0);
-    const maxAbs = Math.max(Math.abs(Math.min(...msprValues)), Math.abs(Math.max(...msprValues)), 0.01);
+    let _msMin = 0, _msMax = 0; for (const v of msprValues) { if (v < _msMin) _msMin = v; if (v > _msMax) _msMax = v; }
+    const maxAbs = Math.max(Math.abs(_msMin), Math.abs(_msMax), 0.01);
     const padL = 40, padR = 10, padT = 10, padB = 30;
     const w = canvas.width - padL - padR;
     const h = canvas.height - padT - padB;
@@ -29108,23 +29281,27 @@ async function cmdDarwinex() {
       addLog("<b>SEC FUNDAMENTALS SCAN</b>", "#ff9800");
       addLog(`Scanning ${Math.min(stockSymbols.length, 50)} stock symbols (SEC EDGAR)...`, "#888");
       let secCompleted = 0;
-      for (const sym of stockSymbols.slice(0, 50)) {
-        try {
-          const fJson = await invoke("get_company_fundamentals", { symbol: sym });
-          const f = JSON.parse(fJson);
-          const epsBasic = f.eps?.value ?? null;
-          const epsDiluted = f.eps_diluted?.value ?? null;
-          const eps = epsDiluted ?? epsBasic;
-          const revenue = f.revenue?.value ?? null;
-          const netIncome = f.net_income?.value ?? null;
-          const totalLiabilities = f.total_liabilities?.value ?? null;
-          const equity = f.stockholders_equity?.value ?? null;
-          const debtToEquity = (totalLiabilities != null && equity != null && equity > 0) ? totalLiabilities / equity : null;
-          secResults.push({ symbol: sym, eps, revenue, netIncome, debtToEquity, entity: f.entity || sym });
-          secCompleted++;
-          if (secCompleted % 10 === 0) addLog(`  SEC: ${secCompleted}/${Math.min(stockSymbols.length, 50)} scanned...`, "#888");
-        } catch (_) { secCompleted++; }
-        await new Promise(r => setTimeout(r, 200)); // SEC EDGAR rate limit: 10 req/sec
+      const batch = stockSymbols.slice(0, 50);
+      // Process in batches of 5 concurrent (SEC EDGAR rate limit: 10 req/sec)
+      for (let bi = 0; bi < batch.length; bi += 5) {
+        const chunk = batch.slice(bi, bi + 5);
+        const results = await Promise.allSettled(chunk.map(sym =>
+          invoke("get_company_fundamentals", { symbol: sym }).then(fJson => {
+            const f = JSON.parse(fJson);
+            const epsBasic = f.eps?.value ?? null;
+            const epsDiluted = f.eps_diluted?.value ?? null;
+            const eps = epsDiluted ?? epsBasic;
+            const revenue = f.revenue?.value ?? null;
+            const netIncome = f.net_income?.value ?? null;
+            const totalLiabilities = f.total_liabilities?.value ?? null;
+            const equity = f.stockholders_equity?.value ?? null;
+            const debtToEquity = (totalLiabilities != null && equity != null && equity > 0) ? totalLiabilities / equity : null;
+            return { symbol: sym, eps, revenue, netIncome, debtToEquity, entity: f.entity || sym };
+          })
+        ));
+        for (const r of results) { secCompleted++; if (r.status === "fulfilled") secResults.push(r.value); }
+        if (secCompleted % 10 === 0) addLog(`  SEC: ${secCompleted}/${batch.length} scanned...`, "#888");
+        if (bi + 5 < batch.length) await new Promise(r => setTimeout(r, 500)); // Rate limit pause between batches
       }
 
       // Flag outliers: negative EPS, negative net income, high D/E
@@ -29381,9 +29558,8 @@ function renderSpecsToDiv(specsDiv, specs) {
   const details = mkEl("div", "margin-top:6px");
   for (const [cat, syms] of Object.entries(grouped)) {
     const color = catColors[cat] || "#888";
-    const complete = syms.filter(s => s.status === "complete");
-    const partial = syms.filter(s => s.status === "partial");
-    const none = syms.filter(s => s.status === "none");
+    const complete = [], partial = [], none = [];
+    for (const s of syms) { if (s.status === "complete") complete.push(s); else if (s.status === "partial") partial.push(s); else if (s.status === "none") none.push(s); }
 
     if (partial.length > 0) {
       details.appendChild(mkEl("div", `color:${color};margin-top:3px`, `${cat} in progress:`));
@@ -29440,9 +29616,8 @@ async function showSpecsSyncProgress(addLog) {
 
     for (const [cat, syms] of Object.entries(grouped)) {
       const color = catColors[cat] || "#888";
-      const complete = syms.filter(s => s.status === "complete").map(s => s.normalized);
-      const partial = syms.filter(s => s.status === "partial").map(s => `${s.normalized}(${s.synced_count}/${s.total_tfs})`);
-      const none = syms.filter(s => s.status === "none").map(s => s.normalized);
+      const complete = [], partial = [], none = [];
+      for (const s of syms) { if (s.status === "complete") complete.push(s.normalized); else if (s.status === "partial") partial.push(`${s.normalized}(${s.synced_count}/${s.total_tfs})`); else if (s.status === "none") none.push(s.normalized); }
 
       if (complete.length > 0) addLog(`  <span style="color:${color}">${cat}</span> <span style="color:#4caf50">complete:</span> ${complete.join(", ")}`, "#4caf50");
       if (partial.length > 0) addLog(`  <span style="color:${color}">${cat}</span> <span style="color:#ff9800">partial:</span> ${partial.join(", ")}`, "#ff9800");
@@ -29580,6 +29755,7 @@ async function cmdMt5DbSync() {
 
 // ── Background MT5 Sync (headless, controlled by MT5_SYNC setting) ──
 let mt5BgSyncInterval = null;
+let _mt5BgSyncRunning = false;
 let mt5SyncActive = false;      // set true immediately when sync starts (before first sync completes)
 let mt5BgSyncCount = 0;
 let lastMt5SyncSuccess = 0;     // epoch ms of last successful MT5 sync (databases_read > 0)
@@ -29741,6 +29917,8 @@ async function startMt5BackgroundSync() {
     console.warn("[MT5 Sync] initial:", e);
   }
   mt5BgSyncInterval = setInterval(async () => {
+    if (_mt5BgSyncRunning) return;
+    _mt5BgSyncRunning = true;
     try {
       const r = JSON.parse(await invoke("sync_mt5_sqlite"));
       mt5BgSyncCount++;
@@ -29748,7 +29926,7 @@ async function startMt5BackgroundSync() {
         log(`[MT5 Sync #${mt5BgSyncCount}] ${r.imported} new, ${r.total_bars} bars`, "info");
       }
       await handleMt5SyncResult(r);
-    } catch (_) {}
+    } catch (_) {} finally { _mt5BgSyncRunning = false; }
   }, 30000);
   log("[MT5 Sync] Background sync started (30s interval)", "ok");
 }
@@ -39135,7 +39313,7 @@ function cmdOptProfit() {
     for (let p = minPr; p <= maxPr; p += step) { let pnlExpiry = 0, pnlDTE = 0; for (const l of legs) { const dir = l.qty > 0 ? 1 : -1, absQty = Math.abs(l.qty); const intrinsic = l.type === "call" ? Math.max(0, p - l.strike) : Math.max(0, l.strike - p); pnlExpiry += dir * (intrinsic - l.prem) * absQty * 100; const currentIntrinsic = l.type === "call" ? Math.max(0, price - l.strike) : Math.max(0, l.strike - price); const timeValue = Math.max(0, l.prem - currentIntrinsic); const remainingTV = dte > 0 ? timeValue * (dte / 60) : 0; pnlDTE += dir * (intrinsic + remainingTV - l.prem) * absQty * 100; } expiryPoints.push({ price: p, pnl: pnlExpiry }); dtePoints.push({ price: p, pnl: pnlDTE }); maxProfit = Math.max(maxProfit, pnlExpiry); maxLoss = Math.min(maxLoss, pnlExpiry); }
     for (let i = 1; i < expiryPoints.length; i++) { if ((expiryPoints[i - 1].pnl <= 0 && expiryPoints[i].pnl > 0) || (expiryPoints[i - 1].pnl >= 0 && expiryPoints[i].pnl < 0)) { const ratio = Math.abs(expiryPoints[i - 1].pnl) / (Math.abs(expiryPoints[i - 1].pnl) + Math.abs(expiryPoints[i].pnl)); breakevens.push(expiryPoints[i - 1].price + ratio * step); } }
     const ctx = chartCanvas.getContext("2d"); const W = chartCanvas.width, H = chartCanvas.height; ctx.clearRect(0, 0, W, H); ctx.fillStyle = "#0a0a14"; ctx.fillRect(0, 0, W, H);
-    const pad = 50, pRange = maxPr - minPr; const allPnl = expiryPoints.map(function(pt) { return pt.pnl; }).concat(dtePoints.map(function(pt) { return pt.pnl; })); const vMin = Math.min.apply(null, allPnl), vMax = Math.max.apply(null, allPnl), vRange = Math.max(vMax - vMin, 1);
+    const pad = 50, pRange = maxPr - minPr; let vMin = Infinity, vMax = -Infinity; for (let pi = 0; pi < expiryPoints.length; pi++) { const v = expiryPoints[pi].pnl; if (v < vMin) vMin = v; if (v > vMax) vMax = v; } for (let pi = 0; pi < dtePoints.length; pi++) { const v = dtePoints[pi].pnl; if (v < vMin) vMin = v; if (v > vMax) vMax = v; } const vRange = Math.max(vMax - vMin, 1);
     const toX = function(pr) { return pad + (pr - minPr) / pRange * (W - 2 * pad); }; const toY = function(v) { return H - pad - (v - vMin) / vRange * (H - 2 * pad); };
     ctx.strokeStyle = "#ffffff33"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad, toY(0)); ctx.lineTo(W - pad, toY(0)); ctx.stroke();
     for (let i = 0; i < expiryPoints.length - 1; i++) { const x1 = toX(expiryPoints[i].price), x2 = toX(expiryPoints[i + 1].price), y0 = toY(0); ctx.fillStyle = expiryPoints[i].pnl >= 0 ? "rgba(76,175,80,0.1)" : "rgba(244,67,54,0.1)"; ctx.beginPath(); ctx.moveTo(x1, y0); ctx.lineTo(x1, toY(expiryPoints[i].pnl)); ctx.lineTo(x2, toY(expiryPoints[i + 1].pnl)); ctx.lineTo(x2, y0); ctx.fill(); }
@@ -39170,7 +39348,10 @@ function cmdOrderFlow() {
   const volChart = createChart(volDiv, { width: 620, height: 120, layout: { background: { color: "#000" }, textColor: "#888", fontFamily: "Consolas, monospace", attributionLogo: false }, grid: { vertLines: { color: "#111" }, horzLines: { color: "#111" } }, rightPriceScale: { borderColor: "#333" }, timeScale: { borderColor: "#333", timeVisible: true, secondsVisible: true } });
   const ofVolSeries = volChart.addHistogramSeries({ title: "Trade Vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
   invoke("get_latest_quote", { symbol: currentSymbol }).then(function(json) { const q = JSON.parse(json); if (q.bid > 0) lastBidOF = q.bid; if (q.ask > 0) lastAskOF = q.ask; }).catch(function() {});
+  let _ofPollRunning = false;
   ofPollInterval = setInterval(async function() {
+    if (_ofPollRunning) return;
+    _ofPollRunning = true;
     try {
       const json = await invoke("poll_stream"); const messages = JSON.parse(json); let updated = false;
       for (const msg of messages) {
@@ -39193,7 +39374,7 @@ function cmdOrderFlow() {
         statDelta.textContent = "Net Delta: " + (cumDelta >= 0 ? "+" : "") + cumDelta.toFixed(0); statDelta.style.color = cumDelta >= 0 ? "#4caf50" : "#f44336";
         const ratio = totalSells > 0 ? (totalBuys / totalSells) : totalBuys > 0 ? 999 : 0; statRatio.textContent = "B/S Ratio: " + ratio.toFixed(2);
       }
-    } catch (_) {}
+    } catch (_) {} finally { _ofPollRunning = false; }
   }, 1000);
 }
 

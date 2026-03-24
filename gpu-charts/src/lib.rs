@@ -415,6 +415,42 @@ impl GpuChart {
         self.build_grid_geometry();
     }
 
+    /// Load a flat array of values as a line chart (no OHLC needed).
+    /// Packs internally as O=H=L=C=value, V=0 and sets chart type to Line.
+    #[wasm_bindgen]
+    pub fn set_line_data(&mut self, values: &[f64]) {
+        let n = values.len();
+        self.total_bars = n;
+        self.data_bar_count = n;
+        self.bar_opens.clear();
+        self.bar_highs.clear();
+        self.bar_lows.clear();
+        self.bar_closes.clear();
+
+        let mut min_p = f64::MAX;
+        let mut max_p = f64::MIN;
+
+        for &v in values {
+            let f = v as f32;
+            self.bar_opens.push(f);
+            self.bar_highs.push(f);
+            self.bar_lows.push(f);
+            self.bar_closes.push(f);
+            if v > max_p { max_p = v; }
+            if v < min_p { min_p = v; }
+        }
+
+        let padding = (max_p - min_p) * 0.05;
+        self.min_price = min_p - padding;
+        self.max_price = max_p + padding;
+        self.visible_start = 0.0;
+        self.visible_end = n as f64 + 2.0;
+        self.chart_type = ChartType::Line;
+
+        self.rebuild_geometry();
+        self.build_grid_geometry();
+    }
+
     #[wasm_bindgen]
     pub fn set_chart_type(&mut self, ct: ChartType) {
         self.chart_type = ct;

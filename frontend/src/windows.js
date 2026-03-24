@@ -228,6 +228,11 @@ export function createWindow(opts) {
     titleBar.removeEventListener("mousedown", onTitleBarMouseDown);
     resizeHandle.removeEventListener("mousedown", onResizeHandleMouseDown);
     win.removeEventListener("mousedown", onWinMouseDown);
+    // Free GPU mini charts if any were attached to this window
+    if (handle._gpuMiniCharts) {
+      for (const mc of handle._gpuMiniCharts) { try { mc.free(); } catch (_) {} }
+      handle._gpuMiniCharts = null;
+    }
     // Run all registered cleanup callbacks
     for (const cb of _cleanupCallbacks) {
       try { cb(); } catch (_) {}

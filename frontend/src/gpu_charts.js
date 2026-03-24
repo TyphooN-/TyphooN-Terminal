@@ -453,6 +453,15 @@ export class GpuChart {
         wasm.gpuchart_set_data(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * Load a flat array of values as a line chart (no OHLC needed).
+     * @param {Float64Array} values
+     */
+    set_line_data(values) {
+        const ptr0 = passArrayF64ToWasm0(values, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.gpuchart_set_line_data(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
      * Set value range for a sub-pane.
      * @param {number} pane
      * @param {number} min_val
