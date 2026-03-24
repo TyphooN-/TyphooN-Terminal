@@ -34016,10 +34016,10 @@ function setupMTFGrid() {
     const radioWrap = document.createElement("span");
     radioWrap.style.cssText = "margin-left:8px;font-size:10px;display:inline-flex;align-items:center;gap:2px;";
 
-    const r1 = document.createElement("input"); r1.type = "radio"; r1.name = "mtf-sym-mode"; r1.id = "mtf-grid-sym-current"; r1.value = "current"; r1.checked = true;
+    const r1 = document.createElement("input"); r1.type = "radio"; r1.name = "mtf-sym-mode"; r1.id = "mtf-grid-sym-current"; r1.value = "current";
     const l1 = document.createElement("label"); l1.htmlFor = "mtf-grid-sym-current"; l1.textContent = "Current"; l1.style.cssText = "color:#ccc;cursor:pointer;margin-right:6px;";
 
-    const r2 = document.createElement("input"); r2.type = "radio"; r2.name = "mtf-sym-mode"; r2.id = "mtf-grid-sym-all"; r2.value = "all";
+    const r2 = document.createElement("input"); r2.type = "radio"; r2.name = "mtf-sym-mode"; r2.id = "mtf-grid-sym-all"; r2.value = "all"; r2.checked = true;
     const l2 = document.createElement("label"); l2.htmlFor = "mtf-grid-sym-all"; l2.textContent = "All Tabs"; l2.style.cssText = "color:#ccc;cursor:pointer;";
 
     radioWrap.appendChild(r1); radioWrap.appendChild(l1);
@@ -34117,7 +34117,10 @@ async function openMTFGrid(symbol, timeframes, multiPairs) {
   const gridContainer = document.createElement("div");
   gridContainer.id = "mtf-grid-container";
   const count = cellDefs.length;
-  gridContainer.className = `grid-${Math.min(count, 8)}`;
+  // Pick best grid layout: exact match or next larger
+  const gridSizes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16];
+  const gridClass = gridSizes.find(s => s >= count) || 16;
+  gridContainer.className = `grid-${gridClass}`;
   chartStack.parentElement.insertBefore(gridContainer, chartStack);
 
   const tfLabels = MTF_LABELS;
