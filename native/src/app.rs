@@ -264,6 +264,8 @@ struct IndicatorFlags {
     psar: bool,
     atr_proj: bool,
     prev_levels: bool,
+    pivots: bool,
+    fractals: bool,
 }
 
 /// All state for one chart viewport.
@@ -333,6 +335,15 @@ struct ChartState {
     atr_proj_lower: Vec<Option<f64>>,
     /// Better Volume classification.
     better_vol_type: Vec<u8>, // 0=normal, 1=climax_up, 2=climax_dn, 3=high, 4=low, 5=churn
+    /// Pivot points (computed from daily data).
+    pivot_p: Option<f64>,
+    pivot_r1: Option<f64>,
+    pivot_r2: Option<f64>,
+    pivot_s1: Option<f64>,
+    pivot_s2: Option<f64>,
+    /// Bill Williams Fractals (up/down arrows).
+    fractal_up: Vec<bool>,
+    fractal_down: Vec<bool>,
     /// Drawing annotations.
     drawings: Vec<Drawing>,
 
@@ -397,6 +408,9 @@ impl ChartState {
             atr_proj_upper: Vec::new(),
             atr_proj_lower: Vec::new(),
             better_vol_type: Vec::new(),
+            pivot_p: None, pivot_r1: None, pivot_r2: None, pivot_s1: None, pivot_s2: None,
+            fractal_up: Vec::new(),
+            fractal_down: Vec::new(),
             drawings: Vec::new(),
             visible_bars: 200,
             view_offset: 0,
@@ -490,6 +504,25 @@ impl ChartState {
         self.prev_daily_low = pdl;
         self.prev_weekly_high = pwh;
         self.prev_weekly_low = pwl;
+        // Pivot points from previous day
+        if let (Some(h), Some(l)) = (pdh, pdl) {
+            let prev_close = self.bars.iter().rev().find(|b| {
+                let day = b.ts_ms / 86_400_000;
+                let last_day = self.bars.last().map(|lb| lb.ts_ms / 86_400_000).unwrap_or(0);
+                day < last_day
+            }).map(|b| b.close);
+            if let Some(c) = prev_close {
+                let p = (h + l + c) / 3.0;
+                self.pivot_p = Some(p);
+                self.pivot_r1 = Some(2.0 * p - l);
+                self.pivot_r2 = Some(p + (h - l));
+                self.pivot_s1 = Some(2.0 * p - h);
+                self.pivot_s2 = Some(p - (h - l));
+            }
+        }
+        // Fractals
+        self.fractal_up = compute_fractals_up(&self.bars);
+        self.fractal_down = compute_fractals_down(&self.bars);
     }
 
     fn visible_range(&self) -> (usize, usize) {
@@ -774,6 +807,32 @@ fn renko_bricks(bars: &[Bar]) -> Vec<Bar> {
         }
     }
     if bricks.is_empty() { bars.to_vec() } else { bricks }
+}
+
+fn compute_fractals_up(bars: &[Bar]) -> Vec<bool> {
+    let n = bars.len();
+    let mut out = vec![false; n];
+    if n < 5 { return out; }
+    for i in 2..(n - 2) {
+        if bars[i].high > bars[i-1].high && bars[i].high > bars[i-2].high
+            && bars[i].high > bars[i+1].high && bars[i].high > bars[i+2].high {
+            out[i] = true;
+        }
+    }
+    out
+}
+
+fn compute_fractals_down(bars: &[Bar]) -> Vec<bool> {
+    let n = bars.len();
+    let mut out = vec![false; n];
+    if n < 5 { return out; }
+    for i in 2..(n - 2) {
+        if bars[i].low < bars[i-1].low && bars[i].low < bars[i-2].low
+            && bars[i].low < bars[i+1].low && bars[i].low < bars[i+2].low {
+            out[i] = true;
+        }
+    }
+    out
 }
 
 fn compute_prev_candle_levels(bars: &[Bar]) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
@@ -1415,6 +1474,52 @@ fn draw_chart(
                         egui::FontId::monospace(8.0),
                         *color,
                     );
+                }
+            }
+        }
+    }
+
+    // ── pivot points ──────────────────────────────────────────────────────
+    if flags.pivots {
+        let pivot_levels = [
+            (chart.pivot_p, "P", egui::Color32::from_rgb(200, 200, 200)),
+            (chart.pivot_r1, "R1", egui::Color32::from_rgb(200, 80, 80)),
+            (chart.pivot_r2, "R2", egui::Color32::from_rgb(255, 40, 40)),
+            (chart.pivot_s1, "S1", egui::Color32::from_rgb(80, 200, 80)),
+            (chart.pivot_s2, "S2", egui::Color32::from_rgb(40, 255, 40)),
+        ];
+        for (price_opt, label, color) in &pivot_levels {
+            if let Some(p) = price_opt {
+                let y = price_to_y(*p);
+                if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                    painter.line_segment(
+                        [egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)],
+                        egui::Stroke::new(0.7, *color),
+                    );
+                    painter.text(
+                        egui::pos2(chart_rect.left() + 2.0, y - 10.0),
+                        egui::Align2::LEFT_TOP, label, egui::FontId::monospace(8.0), *color,
+                    );
+                }
+            }
+        }
+    }
+
+    // ── fractals ─────────────────────────────────────────────────────────
+    if flags.fractals {
+        for (rel_idx, bar) in bars.iter().enumerate() {
+            let abs_idx = start_idx + rel_idx;
+            let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+            if abs_idx < chart.fractal_up.len() && chart.fractal_up[abs_idx] {
+                let y = price_to_y(bar.high) - 8.0;
+                if y >= chart_rect.top() {
+                    painter.text(egui::pos2(x, y), egui::Align2::CENTER_BOTTOM, "▲", egui::FontId::proportional(10.0), UP);
+                }
+            }
+            if abs_idx < chart.fractal_down.len() && chart.fractal_down[abs_idx] {
+                let y = price_to_y(bar.low) + 2.0;
+                if y <= chart_rect.bottom() {
+                    painter.text(egui::pos2(x, y), egui::Align2::CENTER_TOP, "▼", egui::FontId::proportional(10.0), DOWN);
                 }
             }
         }
@@ -2487,6 +2592,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "ALERTS",        desc: "Price alert manager" },
     Command { name: "ORDER",         desc: "Open order entry panel" },
     Command { name: "PREV_LEVELS",   desc: "Toggle previous candle levels (D/W)" },
+    Command { name: "PIVOTS",        desc: "Toggle pivot points (P/R1/R2/S1/S2)" },
+    Command { name: "FRACTALS",      desc: "Toggle Bill Williams fractals" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -2548,6 +2655,8 @@ pub struct TyphooNApp {
     show_psar: bool,
     show_atr_proj: bool,
     show_prev_levels: bool,
+    show_pivots: bool,
+    show_fractals: bool,
     show_cci: bool,
     show_williams_r: bool,
     show_obv: bool,
@@ -2747,6 +2856,8 @@ impl TyphooNApp {
             show_psar: false,
             show_atr_proj: false,
             show_prev_levels: false,
+            show_pivots: false,
+            show_fractals: false,
             show_cci: false,
             show_williams_r: false,
             show_obv: false,
@@ -2880,6 +2991,8 @@ impl TyphooNApp {
             psar: self.show_psar,
             atr_proj: self.show_atr_proj,
             prev_levels: self.show_prev_levels,
+            pivots: self.show_pivots,
+            fractals: self.show_fractals,
         }
     }
 
@@ -2991,9 +3104,9 @@ impl TyphooNApp {
             "IMPORT_XLSX"    => self.show_darwin_accounts = true,
             "WORKSPACE"      => { self.save_session(); self.log.push_back(LogEntry::info("Workspace saved")); }
             "BACKUP"         => { self.save_session(); self.log.push_back(LogEntry::info("Session backup saved")); }
-            "PIVOTS" | "SRLEVEL" => {
-                self.log.push_back(LogEntry::info("Pivot/SR levels: use drawing tools to mark key levels"));
-            }
+            "PIVOTS"   => self.show_pivots = !self.show_pivots,
+            "SRLEVEL"  => self.show_pivots = !self.show_pivots,
+            "FRACTALS" => self.show_fractals = !self.show_fractals,
             "NNFX" => {
                 // Enable NNFX indicator preset
                 self.show_sma200 = true;
@@ -3050,17 +3163,18 @@ impl TyphooNApp {
                 "chart_type": c.chart_type.label(),
             })).collect::<Vec<_>>(),
             "indicators": {
-                "sma200": self.show_sma200,
-                "sma100": self.show_sma100,
-                "kama": self.show_kama,
-                "ema21": self.show_ema21,
-                "bollinger": self.show_bollinger,
-                "ichimoku": self.show_ichimoku,
-                "rsi": self.show_rsi,
-                "fisher": self.show_fisher,
-                "macd": self.show_macd,
-                "stochastic": self.show_stochastic,
-                "adx": self.show_adx,
+                "sma200": self.show_sma200, "sma100": self.show_sma100,
+                "kama": self.show_kama, "ema21": self.show_ema21,
+                "bollinger": self.show_bollinger, "ichimoku": self.show_ichimoku,
+                "wma": self.show_wma, "hma": self.show_hma,
+                "psar": self.show_psar, "atr_proj": self.show_atr_proj,
+                "prev_levels": self.show_prev_levels, "pivots": self.show_pivots,
+                "fractals": self.show_fractals,
+                "rsi": self.show_rsi, "fisher": self.show_fisher,
+                "macd": self.show_macd, "stochastic": self.show_stochastic,
+                "adx": self.show_adx, "cci": self.show_cci,
+                "williams_r": self.show_williams_r, "obv": self.show_obv,
+                "momentum": self.show_momentum, "better_volume": self.show_better_volume,
                 "volume_pane": self.show_volume_pane,
             },
             "mtf_enabled": self.mtf_enabled,
@@ -3080,18 +3194,23 @@ impl TyphooNApp {
                 if let Some(sym) = v["symbol"].as_str() { self.symbol_input = sym.to_string(); }
                 if let Some(mtf) = v["mtf_enabled"].as_bool() { self.mtf_enabled = mtf; }
                 if let Some(ind) = v.get("indicators") {
-                    if let Some(b) = ind["sma200"].as_bool() { self.show_sma200 = b; }
-                    if let Some(b) = ind["sma100"].as_bool() { self.show_sma100 = b; }
-                    if let Some(b) = ind["kama"].as_bool() { self.show_kama = b; }
-                    if let Some(b) = ind["ema21"].as_bool() { self.show_ema21 = b; }
-                    if let Some(b) = ind["bollinger"].as_bool() { self.show_bollinger = b; }
-                    if let Some(b) = ind["ichimoku"].as_bool() { self.show_ichimoku = b; }
-                    if let Some(b) = ind["rsi"].as_bool() { self.show_rsi = b; }
-                    if let Some(b) = ind["fisher"].as_bool() { self.show_fisher = b; }
-                    if let Some(b) = ind["macd"].as_bool() { self.show_macd = b; }
-                    if let Some(b) = ind["stochastic"].as_bool() { self.show_stochastic = b; }
-                    if let Some(b) = ind["adx"].as_bool() { self.show_adx = b; }
-                    if let Some(b) = ind["volume_pane"].as_bool() { self.show_volume_pane = b; }
+                    for (key, field) in [
+                        ("sma200", &mut self.show_sma200), ("sma100", &mut self.show_sma100),
+                        ("kama", &mut self.show_kama), ("ema21", &mut self.show_ema21),
+                        ("bollinger", &mut self.show_bollinger), ("ichimoku", &mut self.show_ichimoku),
+                        ("wma", &mut self.show_wma), ("hma", &mut self.show_hma),
+                        ("psar", &mut self.show_psar), ("atr_proj", &mut self.show_atr_proj),
+                        ("prev_levels", &mut self.show_prev_levels), ("pivots", &mut self.show_pivots),
+                        ("fractals", &mut self.show_fractals),
+                        ("rsi", &mut self.show_rsi), ("fisher", &mut self.show_fisher),
+                        ("macd", &mut self.show_macd), ("stochastic", &mut self.show_stochastic),
+                        ("adx", &mut self.show_adx), ("cci", &mut self.show_cci),
+                        ("williams_r", &mut self.show_williams_r), ("obv", &mut self.show_obv),
+                        ("momentum", &mut self.show_momentum), ("better_volume", &mut self.show_better_volume),
+                        ("volume_pane", &mut self.show_volume_pane),
+                    ] {
+                        if let Some(b) = ind[key].as_bool() { *field = b; }
+                    }
                 }
                 self.log.push_back(LogEntry::info("Session restored"));
             }
@@ -3329,6 +3448,8 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_psar,     "Parabolic SAR(0.02,0.2)");
                     ui.checkbox(&mut self.show_atr_proj, "ATR Projection(14)");
                     ui.checkbox(&mut self.show_prev_levels, "Previous Candle Levels (D/W)");
+                    ui.checkbox(&mut self.show_pivots,      "Pivot Points (Classic)");
+                    ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
                     ui.add_space(10.0);
                     ui.heading("Sub-Pane Indicators");
                     ui.separator();
@@ -4910,6 +5031,8 @@ impl eframe::App for TyphooNApp {
                     ui.checkbox(&mut self.show_psar,     "Parabolic SAR");
                     ui.checkbox(&mut self.show_atr_proj, "ATR Projection");
                     ui.checkbox(&mut self.show_prev_levels, "Prev Candle Levels (D/W)");
+                    ui.checkbox(&mut self.show_pivots,      "Pivot Points (P/R1/R2/S1/S2)");
+                    ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
                     ui.separator();
                     ui.label(egui::RichText::new("Sub-Panes").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_rsi,            "RSI(14)");
