@@ -47,6 +47,27 @@ const RSI_LINE: egui::Color32 = egui::Color32::from_rgb(200, 180, 60);
 const MACD_LINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255);
 const MACD_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 60);
 
+// ─── right panel button colours (matching old WebKit) ────────────────────────
+const BTN_GREEN: egui::Color32 = egui::Color32::from_rgb(40, 160, 60);
+const BTN_BLUE: egui::Color32 = egui::Color32::from_rgb(50, 100, 200);
+const BTN_RED: egui::Color32 = egui::Color32::from_rgb(200, 50, 50);
+const BTN_GRAY: egui::Color32 = egui::Color32::from_rgb(80, 80, 100);
+// Quake console colours
+const QUAKE_BG: egui::Color32 = egui::Color32::from_rgb(5, 15, 25);
+const QUAKE_CMD: egui::Color32 = egui::Color32::from_rgb(0, 220, 220);
+const QUAKE_DESC: egui::Color32 = egui::Color32::from_rgb(100, 120, 140);
+// Watchlist symbol colours (rotating palette)
+const WL_COLORS: [egui::Color32; 8] = [
+    egui::Color32::from_rgb(0, 220, 80),    // green
+    egui::Color32::from_rgb(255, 200, 50),   // yellow
+    egui::Color32::from_rgb(180, 100, 255),  // purple
+    egui::Color32::from_rgb(220, 40, 40),    // red
+    egui::Color32::from_rgb(255, 255, 255),  // white
+    egui::Color32::from_rgb(0, 180, 255),    // cyan
+    egui::Color32::from_rgb(255, 130, 60),   // orange
+    egui::Color32::from_rgb(200, 80, 200),   // pink
+];
+
 // ─── types ───────────────────────────────────────────────────────────────────
 
 /// A single OHLCV bar.
@@ -2354,6 +2375,59 @@ fn draw_chart(
         painter.text(egui::pos2(lx, ly), egui::Align2::LEFT_TOP, "BB(20,2)", egui::FontId::monospace(10.0), BB_COL);
     }
 
+    // ── MT5-style chart overlay text (top-right) ─────────────────────────────
+    {
+        let overlay_x = chart_rect.right() - 8.0;
+        let mut oy = chart_rect.top() + 6.0;
+        let font = egui::FontId::monospace(10.0);
+        let dim = egui::Color32::from_rgb(120, 130, 150);
+
+        // ATR values per timeframe (from current chart data)
+        if let Some(last_atr) = chart.atr.last().and_then(|v| *v) {
+            painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
+                &format!("ATR(14): {}", format_price(last_atr)), font.clone(), dim);
+            oy += 13.0;
+        }
+
+        // Last close price
+        if let Some(bar) = chart.bars.last() {
+            painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
+                &format!("Close: {}", format_price(bar.close)), font.clone(), egui::Color32::from_rgb(200, 200, 220));
+            oy += 13.0;
+
+            // Volume
+            painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
+                &format!("Vol: {:.0}", bar.volume), font.clone(), dim);
+            oy += 13.0;
+        }
+
+        // SL/TP info if set
+        if let Some(sl) = sl_price {
+            if let Some(bar) = chart.bars.last() {
+                let sl_dist = (bar.close - sl).abs();
+                painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
+                    &format!("SL: {} ({:.1} pts)", format_price(sl), sl_dist), font.clone(), FISHER_NEG);
+                oy += 13.0;
+            }
+        }
+        if let Some(tp) = tp_price {
+            if let Some(bar) = chart.bars.last() {
+                let tp_dist = (tp - bar.close).abs();
+                painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
+                    &format!("TP: {} ({:.1} pts)", format_price(tp), tp_dist), font.clone(), FISHER_POS);
+                oy += 13.0;
+            }
+        }
+        if let (Some(sl), Some(tp)) = (sl_price, tp_price) {
+            let risk = if let Some(bar) = chart.bars.last() { (bar.close - sl).abs() } else { 1.0 };
+            let reward = if let Some(bar) = chart.bars.last() { (tp - bar.close).abs() } else { 1.0 };
+            let rr = if risk > 0.0 { reward / risk } else { 0.0 };
+            painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
+                &format!("R:R {:.2}", rr), font.clone(), egui::Color32::from_rgb(200, 200, 60));
+            let _ = oy; // suppress unused warning
+        }
+    }
+
     // ── sub-panes (RSI, Fisher) ──────────────────────────────────────────────
     let mut sub_y = main_rect.bottom();
 
@@ -3243,6 +3317,54 @@ enum BottomTab {
     Volume,
 }
 
+/// Right panel section tabs (matching old WebKit layout).
+#[derive(Clone, Copy, PartialEq)]
+enum RightTab {
+    Trading,
+    Positions,
+    Orders,
+    Watchlist,
+    Risk,
+}
+
+/// Risk sizing mode (old app had dropdown).
+#[derive(Clone, Copy, PartialEq)]
+enum RiskMode {
+    VaR,
+    Standard,
+    Fixed,
+    Dynamic,
+}
+
+impl RiskMode {
+    fn label(self) -> &'static str {
+        match self {
+            RiskMode::VaR => "VaR",
+            RiskMode::Standard => "Standard",
+            RiskMode::Fixed => "Fixed",
+            RiskMode::Dynamic => "Dynamic",
+        }
+    }
+}
+
+/// Order type dropdown.
+#[derive(Clone, Copy, PartialEq)]
+enum OrderTypeMode {
+    Market,
+    Limit,
+    Stop,
+}
+
+impl OrderTypeMode {
+    fn label(self) -> &'static str {
+        match self {
+            OrderTypeMode::Market => "Market",
+            OrderTypeMode::Limit => "Limit",
+            OrderTypeMode::Stop => "Stop",
+        }
+    }
+}
+
 /// Messages sent from UI → async broker task.
 #[allow(dead_code)]
 enum BrokerCmd {
@@ -3455,6 +3577,28 @@ pub struct TyphooNApp {
     live_positions: Vec<PositionInfo>,
     /// Live orders.
     live_orders: Vec<OrderInfo>,
+
+    // ── right panel state (WebKit parity) ─────────────────────────────
+    /// Active right panel tab.
+    right_tab: RightTab,
+    /// Risk sizing mode dropdown.
+    risk_mode: RiskMode,
+    /// Order type mode dropdown.
+    order_type_mode: OrderTypeMode,
+    /// SL price input text.
+    sl_input: String,
+    /// TP price input text.
+    tp_input: String,
+    /// Whether SL checkbox is enabled.
+    sl_enabled: bool,
+    /// Whether TP checkbox is enabled.
+    tp_enabled: bool,
+    /// Recent fills (symbol, side, qty, price, time).
+    recent_fills: Vec<(String, String, f64, f64, String)>,
+
+    // ── DARWIN portfolio view selector ─────────────────────────────────
+    /// Which DARWIN view is selected in the portfolio dropdown.
+    darwin_view: usize,
 }
 
 impl TyphooNApp {
@@ -3707,6 +3851,15 @@ impl TyphooNApp {
             live_account: None,
             live_positions: Vec::new(),
             live_orders: Vec::new(),
+            right_tab: RightTab::Trading,
+            risk_mode: RiskMode::VaR,
+            order_type_mode: OrderTypeMode::Market,
+            sl_input: String::new(),
+            tp_input: String::new(),
+            sl_enabled: false,
+            tp_enabled: false,
+            recent_fills: Vec::new(),
+            darwin_view: 0,
         };
         app.load_session();
         app
@@ -3717,13 +3870,19 @@ impl TyphooNApp {
     fn dark_visuals() -> egui::Visuals {
         let mut v = egui::Visuals::dark();
         v.panel_fill                        = egui::Color32::from_rgb(0, 0, 0);
-        v.window_fill                       = egui::Color32::from_rgb(5, 5, 8);
+        v.window_fill                       = egui::Color32::from_rgb(5, 5, 10);
         v.extreme_bg_color                  = egui::Color32::from_rgb(0, 0, 0);
+        v.faint_bg_color                    = egui::Color32::from_rgb(8, 8, 14);
         v.widgets.noninteractive.bg_fill    = egui::Color32::from_rgb(8, 8, 12);
+        v.widgets.noninteractive.fg_stroke  = egui::Stroke::new(1.0, egui::Color32::from_rgb(140, 140, 160));
         v.widgets.inactive.bg_fill          = egui::Color32::from_rgb(12, 12, 18);
-        v.widgets.hovered.bg_fill           = egui::Color32::from_rgb(20, 20, 35);
+        v.widgets.hovered.bg_fill           = egui::Color32::from_rgb(15, 25, 45);
         v.widgets.active.bg_fill            = egui::Color32::from_rgb(20, 40, 100);
         v.selection.bg_fill                 = egui::Color32::from_rgb(20, 50, 120);
+        v.window_stroke                     = egui::Stroke::new(1.0, egui::Color32::from_rgb(30, 40, 60));
+        v.window_shadow                     = egui::Shadow { offset: [4, 8], blur: 16, spread: 0, color: egui::Color32::from_rgba_premultiplied(0, 0, 0, 200) };
+        v.window_corner_radius              = egui::CornerRadius::same(4);
+        v.menu_corner_radius                = egui::CornerRadius::same(4);
         v
     }
 
@@ -4555,7 +4714,25 @@ impl TyphooNApp {
                 .open(&mut self.show_darwin_portfolio)
                 .default_size([700.0, 500.0])
                 .show(ctx, |ui| {
-                    ui.heading("Portfolio Dashboard");
+                    // View selector dropdown (matching old WebKit 20+ views)
+                    let views = [
+                        "Portfolio Summary", "Portfolio VaR", "Equity Curve", "Correlation Matrix",
+                        "Symbol Exposure", "Combined Positions", "Trade Overlaps", "Combined Equity",
+                        "Monte Carlo", "Stress Test", "VaR Forecast", "Conditional VaR",
+                        "Market Regime", "Tail Risk", "Seasonals", "Sector Exposure",
+                        "Liquidity Risk", "Margin Call Sim", "Optimal Allocation", "What-If",
+                    ];
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("View:").color(AXIS_TEXT));
+                        egui::ComboBox::from_id_salt("darwin_view_combo")
+                            .selected_text(*views.get(self.darwin_view).unwrap_or(&"Portfolio Summary"))
+                            .width(200.0)
+                            .show_ui(ui, |ui| {
+                                for (i, v) in views.iter().enumerate() {
+                                    ui.selectable_value(&mut self.darwin_view, i, *v);
+                                }
+                            });
+                    });
                     ui.separator();
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
@@ -6218,7 +6395,16 @@ impl eframe::App for TyphooNApp {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new("~: command palette").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("~ console").color(AXIS_TEXT).small());
+                    ui.separator();
+                    if self.broker_connected {
+                        ui.label(egui::RichText::new("\u{25CF} LIVE").color(UP).small());
+                        if let Some(ref acct) = self.live_account {
+                            ui.label(egui::RichText::new(format!("${:.0}", acct.equity)).color(egui::Color32::WHITE).small());
+                        }
+                    } else {
+                        ui.label(egui::RichText::new("\u{25CB} OFFLINE").color(AXIS_TEXT).small());
+                    }
                 });
             });
         });
@@ -6331,19 +6517,38 @@ impl eframe::App for TyphooNApp {
 
         // ── bottom status bar ────────────────────────────────────────────────
         egui::TopBottomPanel::bottom("status_bar")
-            .exact_height(18.0)
+            .exact_height(20.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let n_bars = self.charts.first().map(|c| c.bars.len()).unwrap_or(0);
                     let sym    = self.charts.first().map(|c| c.symbol.as_str()).unwrap_or("—");
+                    let tf     = self.charts.first().map(|c| c.timeframe.label()).unwrap_or("—");
                     ui.label(
-                        egui::RichText::new(format!(
-                            "TyphooN Terminal | {} | {} bars | frame {}",
-                            sym, n_bars, self.frame_count
-                        ))
+                        egui::RichText::new(format!("TyphooN Terminal"))
+                        .color(QUAKE_CMD)
+                        .small()
+                        .strong(),
+                    );
+                    ui.label(egui::RichText::new("|").color(egui::Color32::from_rgb(40, 50, 70)).small());
+                    ui.label(
+                        egui::RichText::new(format!("{} [{}]", sym, tf))
+                        .color(egui::Color32::WHITE)
+                        .small()
+                        .monospace(),
+                    );
+                    ui.label(egui::RichText::new("|").color(egui::Color32::from_rgb(40, 50, 70)).small());
+                    ui.label(
+                        egui::RichText::new(format!("{} bars", n_bars))
                         .color(AXIS_TEXT)
                         .small(),
                     );
+                    if let Some(chart) = self.charts.first() {
+                        if let Some(bar) = chart.bars.last() {
+                            ui.label(egui::RichText::new("|").color(egui::Color32::from_rgb(40, 50, 70)).small());
+                            let c_col = if bar.close >= bar.open { UP } else { DOWN };
+                            ui.label(egui::RichText::new(format_price(bar.close)).color(c_col).small().monospace());
+                        }
+                    }
                     if let Some(err) = &self.cache_err {
                         ui.label(
                             egui::RichText::new(format!(" | {}", err))
@@ -6351,197 +6556,428 @@ impl eframe::App for TyphooNApp {
                                 .small(),
                         );
                     }
+                    // Right-aligned: DARWIN info
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(egui::RichText::new("VaR 3.25%–6.5%").color(egui::Color32::from_rgb(80, 90, 110)).small());
+                        if self.broker_connected {
+                            ui.label(egui::RichText::new("|").color(egui::Color32::from_rgb(40, 50, 70)).small());
+                            ui.label(egui::RichText::new(format!("{} pos", self.live_positions.len())).color(AXIS_TEXT).small());
+                        }
+                    });
                 });
             });
 
-        // ── right panel (positions / orders / risk) ──────────────────────────
+        // ── right panel (WebKit parity — trading buttons, positions, watchlist) ──
         egui::SidePanel::right("right_panel")
-            .default_width(280.0)
-            .min_width(180.0)
+            .default_width(300.0)
+            .min_width(240.0)
             .show(ctx, |ui| {
-                ui.heading("Positions");
-                ui.separator();
-                // Show DARWIN open positions if available
-                let mut has_positions = false;
-                if let Some(ref cache) = self.cache {
-                    if let Ok(conn) = cache.connection() {
-                        let _ = darwin::create_darwin_tables(&conn);
-                        if let Ok(positions) = darwin::get_portfolio_open_positions(&conn) {
-                            if !positions.is_empty() {
-                                has_positions = true;
-                                for pos in &positions {
-                                    let side_c = if pos.side == "buy" { UP } else { DOWN };
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(&pos.symbol).small().strong());
-                                        ui.label(egui::RichText::new(&pos.side).color(side_c).small());
-                                        ui.label(egui::RichText::new(format!("{:.2}", pos.total_volume)).small());
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(format!("avg: {}", format_price(pos.avg_price))).color(AXIS_TEXT).small());
-                                        ui.label(egui::RichText::new(format!("${:.0}", pos.notional)).color(AXIS_TEXT).small());
-                                    });
-                                    // Show which DARWINs
-                                    let darwins: Vec<String> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.clone()).collect();
-                                    ui.label(egui::RichText::new(darwins.join(", ")).color(AXIS_TEXT).small());
-                                    ui.separator();
-                                }
-                            }
+                // ── tab bar (compact tabs across top) ──────────────────
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for &tab in &[RightTab::Trading, RightTab::Positions, RightTab::Orders, RightTab::Watchlist, RightTab::Risk] {
+                        let label = match tab {
+                            RightTab::Trading => "Trade",
+                            RightTab::Positions => "Pos",
+                            RightTab::Orders => "Ord",
+                            RightTab::Watchlist => "WL",
+                            RightTab::Risk => "Risk",
+                        };
+                        let selected = self.right_tab == tab;
+                        let color = if selected { ACCENT } else { AXIS_TEXT };
+                        if ui.add(egui::Button::new(egui::RichText::new(label).color(color).small()).fill(if selected { egui::Color32::from_rgb(20, 40, 60) } else { egui::Color32::TRANSPARENT }).min_size(egui::vec2(40.0, 20.0))).clicked() {
+                            self.right_tab = tab;
                         }
                     }
-                }
-                // Live broker positions (overrides DARWIN positions when connected)
-                if self.broker_connected && !self.live_positions.is_empty() {
-                    has_positions = true;
-                    for pos in &self.live_positions {
-                        let side_c = if pos.side == "long" { UP } else { DOWN };
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&pos.symbol).small().strong());
-                            ui.label(egui::RichText::new(&pos.side).color(side_c).small());
-                            ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small());
-                        });
-                        let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(format!("entry: {}", format_price(pos.avg_entry_price))).color(AXIS_TEXT).small());
-                            ui.label(egui::RichText::new(format!("P&L: ${:.2}", pos.unrealized_pl)).color(pl_c).small());
-                        });
-                        ui.separator();
-                    }
-                }
-                if !has_positions {
-                    ui.label(egui::RichText::new("No open positions.").color(AXIS_TEXT).small());
-                }
-                ui.add_space(10.0);
-
-                ui.heading("Orders");
+                });
                 ui.separator();
-                if self.broker_connected && !self.live_orders.is_empty() {
-                    for order in &self.live_orders {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&order.symbol).small().strong());
-                            ui.label(egui::RichText::new(&order.side).small());
-                            ui.label(egui::RichText::new(&order.order_type).color(AXIS_TEXT).small());
-                            ui.label(egui::RichText::new(&order.status).color(ACCENT).small());
-                        });
-                        ui.separator();
-                    }
-                } else {
-                    ui.label(egui::RichText::new(if self.broker_connected { "No open orders." } else { "Connect broker for live orders." }).color(AXIS_TEXT).small());
-                }
-                ui.add_space(10.0);
 
-                ui.heading("Risk");
-                ui.separator();
-                // Live broker account data
-                if let Some(ref acct) = self.live_account {
-                    egui::Grid::new("live_risk_grid").striped(true).num_columns(2).show(ui, |ui| {
-                        ui.label(egui::RichText::new("Equity").color(AXIS_TEXT).small());
-                        ui.label(egui::RichText::new(format!("${:.2}", acct.equity)).small());
-                        ui.end_row();
-                        ui.label(egui::RichText::new("Cash").color(AXIS_TEXT).small());
-                        ui.label(egui::RichText::new(format!("${:.2}", acct.cash)).small());
-                        ui.end_row();
-                        ui.label(egui::RichText::new("Buying Power").color(AXIS_TEXT).small());
-                        ui.label(egui::RichText::new(format!("${:.2}", acct.buying_power)).small());
-                        ui.end_row();
-                        ui.label(egui::RichText::new("Margin Used").color(AXIS_TEXT).small());
-                        ui.label(egui::RichText::new(format!("${:.2}", acct.initial_margin)).small());
-                        ui.end_row();
-                    });
-                    ui.add_space(5.0);
-                }
-                // Pull live DARWIN data if available
-                if let Some(ref cache) = self.cache {
-                    if let Ok(conn) = cache.connection() {
-                        let _ = darwin::create_darwin_tables(&conn);
-                        if let Ok(portfolio) = darwin::get_portfolio_summary(&conn) {
-                            if !portfolio.accounts.is_empty() {
-                                egui::Grid::new("risk_grid").striped(true).num_columns(2).show(ui, |ui| {
-                                    ui.label(egui::RichText::new("Accounts").color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new(format!("{}", portfolio.accounts.len())).small());
-                                    ui.end_row();
-                                    ui.label(egui::RichText::new("Equity").color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new(format!("${:.0}", portfolio.total_final_balance)).small());
-                                    ui.end_row();
-                                    let pnl_c = if portfolio.total_net_pnl >= 0.0 { UP } else { DOWN };
-                                    ui.label(egui::RichText::new("Net P&L").color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new(format!("${:.0}", portfolio.total_net_pnl)).color(pnl_c).small());
-                                    ui.end_row();
-                                    ui.label(egui::RichText::new("Max DD").color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new(format!("{:.1}%", portfolio.combined_max_drawdown_pct)).small());
-                                    ui.end_row();
-                                    ui.label(egui::RichText::new("Deals").color(AXIS_TEXT).small());
-                                    ui.label(egui::RichText::new(format!("{}", portfolio.total_deals)).small());
-                                    ui.end_row();
-                                });
-                                // Portfolio VaR
-                                if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                    if !daily.is_empty() {
-                                        let vs = darwin::compute_var(&daily);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    match self.right_tab {
+                        RightTab::Trading => {
+                            // ── Trading Buttons Grid (matching old WebKit) ──
+                            ui.add_space(4.0);
+                            let btn_w = (ui.available_width() - 8.0) / 2.0;
+                            let btn_size = egui::vec2(btn_w, 24.0);
+
+                            // Row 1: Open Trade (green) | Buy Lines (blue)
+                            ui.horizontal(|ui| {
+                                if ui.add(egui::Button::new(egui::RichText::new("Open Trade").color(egui::Color32::WHITE).small()).fill(BTN_GREEN).min_size(btn_size)).clicked() {
+                                    self.show_order_entry = true;
+                                }
+                                if ui.add(egui::Button::new(egui::RichText::new("Buy Lines").color(egui::Color32::WHITE).small()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
+                                    self.draw_mode = DrawMode::PlacingHLine;
+                                }
+                            });
+                            // Row 2: Sell Lines (blue) | Destroy Lines (gray)
+                            ui.horizontal(|ui| {
+                                if ui.add(egui::Button::new(egui::RichText::new("Sell Lines").color(egui::Color32::WHITE).small()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
+                                    self.draw_mode = DrawMode::PlacingHLine;
+                                }
+                                if ui.add(egui::Button::new(egui::RichText::new("Destroy Lines").color(egui::Color32::WHITE).small()).fill(BTN_GRAY).min_size(btn_size)).clicked() {
+                                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                                        chart.drawings.clear();
+                                    }
+                                    self.sl_price = None;
+                                    self.tp_price = None;
+                                }
+                            });
+                            // Row 3: Open MG (gray) | Close All (red)
+                            ui.horizontal(|ui| {
+                                if ui.add(egui::Button::new(egui::RichText::new("Open MG").color(egui::Color32::WHITE).small()).fill(BTN_GRAY).min_size(btn_size)).clicked() {
+                                    self.log.push_back(LogEntry::info("Martingale: connect broker first"));
+                                }
+                                if ui.add(egui::Button::new(egui::RichText::new("Close All").color(egui::Color32::WHITE).small()).fill(BTN_RED).min_size(btn_size)).clicked() {
+                                    let _ = self.broker_tx.send(BrokerCmd::CloseAll);
+                                }
+                            });
+                            // Row 4: Close Partial (red) | Set SL (blue)
+                            ui.horizontal(|ui| {
+                                if ui.add(egui::Button::new(egui::RichText::new("Close Partial").color(egui::Color32::WHITE).small()).fill(BTN_RED).min_size(btn_size)).clicked() {
+                                    self.log.push_back(LogEntry::info("Close partial: connect broker"));
+                                }
+                                if ui.add(egui::Button::new(egui::RichText::new("Set SL").color(egui::Color32::WHITE).small()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
+                                    self.sl_enabled = true;
+                                }
+                            });
+                            // Row 5: Set TP (blue) | (empty)
+                            ui.horizontal(|ui| {
+                                if ui.add(egui::Button::new(egui::RichText::new("Set TP").color(egui::Color32::WHITE).small()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
+                                    self.tp_enabled = true;
+                                }
+                            });
+                            ui.add_space(6.0);
+
+                            // ── SL / TP Price Inputs ──────────────────────────
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut self.sl_enabled, "");
+                                ui.label(egui::RichText::new("SL Price").color(AXIS_TEXT).small());
+                                let resp = ui.add(egui::TextEdit::singleline(&mut self.sl_input).desired_width(100.0).hint_text("0.0").font(egui::TextStyle::Small));
+                                if resp.lost_focus() && self.sl_enabled {
+                                    self.sl_price = self.sl_input.parse().ok();
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut self.tp_enabled, "");
+                                ui.label(egui::RichText::new("TP Price").color(AXIS_TEXT).small());
+                                let resp = ui.add(egui::TextEdit::singleline(&mut self.tp_input).desired_width(100.0).hint_text("0.0").font(egui::TextStyle::Small));
+                                if resp.lost_focus() && self.tp_enabled {
+                                    self.tp_price = self.tp_input.parse().ok();
+                                }
+                            });
+                            ui.add_space(6.0);
+
+                            // ── Mode / Type Dropdowns ──────────────────────────
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Mode").color(AXIS_TEXT).small());
+                                egui::ComboBox::from_id_salt("risk_mode_combo")
+                                    .selected_text(self.risk_mode.label())
+                                    .width(80.0)
+                                    .show_ui(ui, |ui| {
+                                        for mode in &[RiskMode::VaR, RiskMode::Standard, RiskMode::Fixed, RiskMode::Dynamic] {
+                                            ui.selectable_value(&mut self.risk_mode, *mode, mode.label());
+                                        }
+                                    });
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Type").color(AXIS_TEXT).small());
+                                egui::ComboBox::from_id_salt("order_type_combo")
+                                    .selected_text(self.order_type_mode.label())
+                                    .width(80.0)
+                                    .show_ui(ui, |ui| {
+                                        for t in &[OrderTypeMode::Market, OrderTypeMode::Limit, OrderTypeMode::Stop] {
+                                            ui.selectable_value(&mut self.order_type_mode, *t, t.label());
+                                        }
+                                    });
+                            });
+                            ui.add_space(6.0);
+
+                            // ── Position Info Block ────────────────────────────
+                            ui.separator();
+                            if let Some(chart) = self.charts.get(self.active_tab) {
+                                if let Some(bar) = chart.bars.last() {
+                                    let close = bar.close;
+                                    // Show current position info if any
+                                    let mut has_pos = false;
+                                    for pos in &self.live_positions {
+                                        if pos.symbol.contains(&chart.symbol.split(':').last().unwrap_or("")) {
+                                            let side_c = if pos.side == "long" { UP } else { DOWN };
+                                            let side_label = if pos.side == "long" { "Long" } else { "Short" };
+                                            ui.label(egui::RichText::new(format!("{} {:.2} lots", side_label, pos.qty)).color(side_c).strong());
+                                            let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("P&L: ${:.2}", pos.unrealized_pl)).color(pl_c));
+
+                                            // SL/TP P&L if set
+                                            if let Some(sl) = self.sl_price {
+                                                let sl_pl = (close - sl) * pos.qty * if pos.side == "long" { 1.0 } else { -1.0 };
+                                                let sl_c = if sl_pl >= 0.0 { UP } else { DOWN };
+                                                ui.label(egui::RichText::new(format!("SL P/L: ${:.2}", sl_pl)).color(sl_c).small());
+                                            }
+                                            if let Some(tp) = self.tp_price {
+                                                let tp_pl = (tp - close) * pos.qty * if pos.side == "long" { 1.0 } else { -1.0 };
+                                                let tp_c = if tp_pl >= 0.0 { UP } else { DOWN };
+                                                ui.label(egui::RichText::new(format!("TP P/L: ${:.2}", tp_pl)).color(tp_c).small());
+                                            }
+                                            if let (Some(sl), Some(tp)) = (self.sl_price, self.tp_price) {
+                                                let risk = (close - sl).abs();
+                                                let reward = (tp - close).abs();
+                                                let rr = if risk > 0.0 { reward / risk } else { 0.0 };
+                                                ui.label(egui::RichText::new(format!("R:R {:.2}", rr)).color(AXIS_TEXT).small());
+                                            }
+                                            has_pos = true;
+                                            break;
+                                        }
+                                    }
+                                    if !has_pos {
+                                        ui.label(egui::RichText::new("No position").color(AXIS_TEXT).small());
+                                    }
+
+                                    // Account summary line
+                                    if let Some(ref acct) = self.live_account {
                                         ui.add_space(4.0);
-                                        egui::Grid::new("risk_var").striped(true).num_columns(2).show(ui, |ui| {
-                                            ui.label(egui::RichText::new("VaR 95%").color(AXIS_TEXT).small());
-                                            ui.label(egui::RichText::new(format!("${:.0}", vs.var_95)).small());
+                                        egui::Grid::new("acct_mini").num_columns(2).show(ui, |ui| {
+                                            ui.label(egui::RichText::new("Eq").color(AXIS_TEXT).small());
+                                            ui.label(egui::RichText::new(format!("${:.0}", acct.equity)).small());
                                             ui.end_row();
-                                            ui.label(egui::RichText::new("Sharpe").color(AXIS_TEXT).small());
-                                            ui.label(egui::RichText::new(format!("{:.3}", vs.sharpe)).small());
+                                            ui.label(egui::RichText::new("Bal").color(AXIS_TEXT).small());
+                                            ui.label(egui::RichText::new(format!("${:.0}", acct.cash)).small());
+                                            ui.end_row();
+                                            ui.label(egui::RichText::new("BP").color(AXIS_TEXT).small());
+                                            ui.label(egui::RichText::new(format!("${:.0}", acct.buying_power)).small());
                                             ui.end_row();
                                         });
                                     }
                                 }
-                            } else {
-                                ui.label(egui::RichText::new("Import DARWIN data").color(AXIS_TEXT).small());
                             }
-                        }
-                    }
-                }
-                ui.add_space(10.0);
 
-                ui.heading("DARWIN");
-                ui.separator();
-                ui.label(egui::RichText::new("VaR corridor: 3.25% – 6.5%").color(AXIS_TEXT).small());
-                ui.label(egui::RichText::new("Correlation limit: 0.95 / 45d").color(AXIS_TEXT).small());
-                ui.add_space(10.0);
-
-                // ── Watchlist ────────────────────────────────────────────
-                ui.heading("Watchlist");
-                ui.separator();
-                if self.watchlist_symbols.is_empty() {
-                    ui.label(egui::RichText::new("No cached symbols.").color(AXIS_TEXT).small());
-                } else {
-                    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                        let mut load_key: Option<String> = None;
-                        for (key, count) in &self.watchlist_symbols {
-                            let row = ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(key).color(egui::Color32::WHITE).small().monospace());
-                                ui.label(egui::RichText::new(format!("{} bars", count)).color(AXIS_TEXT).small());
+                            // ── MTF MA Grid (colored dots) ─────────────────────
+                            ui.add_space(6.0);
+                            ui.separator();
+                            ui.label(egui::RichText::new("MTF Grid").color(AXIS_TEXT).small().strong());
+                            let tf_labels = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
+                            let ma_labels = ["SMA200", "KAMA", "Fisher"];
+                            egui::Grid::new("mtf_ma_grid").spacing(egui::vec2(4.0, 2.0)).show(ui, |ui| {
+                                // Header row
+                                ui.label(egui::RichText::new("").small());
+                                for tf in &tf_labels {
+                                    ui.label(egui::RichText::new(*tf).color(AXIS_TEXT).small());
+                                }
+                                ui.end_row();
+                                // Data rows — use active chart data for current TF, placeholder dots for others
+                                for ma in &ma_labels {
+                                    ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
+                                    for _ in &tf_labels {
+                                        // TODO: wire to multi-TF indicator data when available
+                                        let dot_color = AXIS_TEXT; // neutral gray until wired
+                                        ui.label(egui::RichText::new("\u{25CF}").color(dot_color).small());
+                                    }
+                                    ui.end_row();
+                                }
                             });
-                            if row.response.interact(egui::Sense::click()).clicked() {
-                                load_key = Some(key.clone());
+                        }
+
+                        RightTab::Positions => {
+                            ui.add_space(4.0);
+                            let mut has_positions = false;
+                            // DARWIN positions
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let _ = darwin::create_darwin_tables(&conn);
+                                    if let Ok(positions) = darwin::get_portfolio_open_positions(&conn) {
+                                        if !positions.is_empty() {
+                                            has_positions = true;
+                                            for pos in &positions {
+                                                let side_c = if pos.side == "buy" { UP } else { DOWN };
+                                                ui.horizontal(|ui| {
+                                                    ui.label(egui::RichText::new(&pos.symbol).small().strong());
+                                                    let side_label = if pos.side == "buy" { "L" } else { "S" };
+                                                    ui.label(egui::RichText::new(side_label).color(side_c).small());
+                                                    ui.label(egui::RichText::new(format!("{:.2}", pos.total_volume)).small());
+                                                    let pl_c = if pos.notional >= 0.0 { UP } else { DOWN };
+                                                    ui.label(egui::RichText::new(format!("${:.0}", pos.notional)).color(pl_c).small());
+                                                });
+                                                let darwins: Vec<String> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.clone()).collect();
+                                                ui.label(egui::RichText::new(darwins.join(", ")).color(AXIS_TEXT).small());
+                                                ui.separator();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Live broker positions
+                            if self.broker_connected && !self.live_positions.is_empty() {
+                                has_positions = true;
+                                for pos in &self.live_positions {
+                                    let side_c = if pos.side == "long" { UP } else { DOWN };
+                                    let side_label = if pos.side == "long" { "L" } else { "S" };
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(&pos.symbol).small().strong());
+                                        ui.label(egui::RichText::new(side_label).color(side_c).small());
+                                        ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small());
+                                        let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("${:.2}", pos.unrealized_pl)).color(pl_c).small());
+                                    });
+                                    ui.label(egui::RichText::new(format!("entry: {}", format_price(pos.avg_entry_price))).color(AXIS_TEXT).small());
+                                    ui.separator();
+                                }
+                            }
+                            if !has_positions {
+                                ui.label(egui::RichText::new("No open positions.").color(AXIS_TEXT).small());
+                            }
+
+                            // ── Recent Fills ──────────────────────────────────
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new("Recent Fills").color(AXIS_TEXT).small().strong());
+                            ui.separator();
+                            if self.recent_fills.is_empty() {
+                                ui.label(egui::RichText::new("No recent fills.").color(AXIS_TEXT).small());
+                            } else {
+                                for (sym, side, qty, price, time) in &self.recent_fills {
+                                    let c = if side == "buy" { UP } else { DOWN };
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(sym).small().strong());
+                                        ui.label(egui::RichText::new(side).color(c).small());
+                                        ui.label(egui::RichText::new(format!("{:.2}@{}", qty, format_price(*price))).small());
+                                        ui.label(egui::RichText::new(time).color(AXIS_TEXT).small());
+                                    });
+                                }
                             }
                         }
-                        if let Some(key) = load_key {
-                            // Load this cache key directly into active chart
-                            if let Some(ref cache) = self.cache {
-                                if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                                    // Set the cache key directly by parsing it
-                                    match cache.get_bars_raw(&key) {
-                                        Ok(Some(raw)) => {
-                                            chart.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
-                                                ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
-                                            }).collect();
-                                            chart.view_offset = chart.bars.len().saturating_sub(1);
-                                            chart.symbol = key.clone();
-                                            chart.compute_indicators();
-                                            self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
+
+                        RightTab::Orders => {
+                            ui.add_space(4.0);
+                            if self.broker_connected && !self.live_orders.is_empty() {
+                                for order in &self.live_orders {
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(&order.symbol).small().strong());
+                                        let side_c = if order.side == "buy" { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(&order.side).color(side_c).small());
+                                        ui.label(egui::RichText::new(&order.order_type).color(AXIS_TEXT).small());
+                                    });
+                                    ui.label(egui::RichText::new(format!("qty: {} | {}", order.qty, order.status)).color(ACCENT).small());
+                                    ui.separator();
+                                }
+                            } else {
+                                ui.label(egui::RichText::new(if self.broker_connected { "No open orders." } else { "Connect broker for live orders." }).color(AXIS_TEXT).small());
+                            }
+                        }
+
+                        RightTab::Watchlist => {
+                            ui.add_space(4.0);
+                            if self.watchlist_symbols.is_empty() {
+                                ui.label(egui::RichText::new("No cached symbols.").color(AXIS_TEXT).small());
+                            } else {
+                                let mut load_key: Option<String> = None;
+                                for (idx, (key, count)) in self.watchlist_symbols.iter().enumerate() {
+                                    let sym_color = WL_COLORS[idx % WL_COLORS.len()];
+                                    let row = ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("\u{25CF}").color(sym_color).small());
+                                        ui.label(egui::RichText::new(key).color(sym_color).small().monospace().strong());
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            ui.label(egui::RichText::new(format!("{}", count)).color(AXIS_TEXT).small());
+                                        });
+                                    });
+                                    if row.response.interact(egui::Sense::click()).clicked() {
+                                        load_key = Some(key.clone());
+                                    }
+                                }
+                                if let Some(key) = load_key {
+                                    if let Some(ref cache) = self.cache {
+                                        if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                                            match cache.get_bars_raw(&key) {
+                                                Ok(Some(raw)) => {
+                                                    chart.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                                                        ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                                                    }).collect();
+                                                    chart.view_offset = chart.bars.len().saturating_sub(1);
+                                                    chart.symbol = key.clone();
+                                                    chart.compute_indicators();
+                                                    self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
+                                                }
+                                                Ok(None) => { self.log.push_back(LogEntry::warn(format!("No data for {}", key))); }
+                                                Err(e) => { self.log.push_back(LogEntry::err(format!("Load error: {}", e))); }
+                                            }
                                         }
-                                        Ok(None) => { self.log.push_back(LogEntry::warn(format!("No data for {}", key))); }
-                                        Err(e) => { self.log.push_back(LogEntry::err(format!("Load error: {}", e))); }
                                     }
                                 }
                             }
                         }
-                    });
-                }
+
+                        RightTab::Risk => {
+                            ui.add_space(4.0);
+                            // Live broker account data
+                            if let Some(ref acct) = self.live_account {
+                                egui::Grid::new("live_risk_grid").striped(true).num_columns(2).show(ui, |ui| {
+                                    ui.label(egui::RichText::new("Equity").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(format!("${:.2}", acct.equity)).small());
+                                    ui.end_row();
+                                    ui.label(egui::RichText::new("Cash").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(format!("${:.2}", acct.cash)).small());
+                                    ui.end_row();
+                                    ui.label(egui::RichText::new("Buying Power").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(format!("${:.2}", acct.buying_power)).small());
+                                    ui.end_row();
+                                    ui.label(egui::RichText::new("Margin Used").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(format!("${:.2}", acct.initial_margin)).small());
+                                    ui.end_row();
+                                });
+                                ui.add_space(5.0);
+                            }
+                            // DARWIN portfolio data
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(conn) = cache.connection() {
+                                    let _ = darwin::create_darwin_tables(&conn);
+                                    if let Ok(portfolio) = darwin::get_portfolio_summary(&conn) {
+                                        if !portfolio.accounts.is_empty() {
+                                            egui::Grid::new("risk_grid").striped(true).num_columns(2).show(ui, |ui| {
+                                                ui.label(egui::RichText::new("Accounts").color(AXIS_TEXT).small());
+                                                ui.label(egui::RichText::new(format!("{}", portfolio.accounts.len())).small());
+                                                ui.end_row();
+                                                ui.label(egui::RichText::new("Equity").color(AXIS_TEXT).small());
+                                                ui.label(egui::RichText::new(format!("${:.0}", portfolio.total_final_balance)).small());
+                                                ui.end_row();
+                                                let pnl_c = if portfolio.total_net_pnl >= 0.0 { UP } else { DOWN };
+                                                ui.label(egui::RichText::new("Net P&L").color(AXIS_TEXT).small());
+                                                ui.label(egui::RichText::new(format!("${:.0}", portfolio.total_net_pnl)).color(pnl_c).small());
+                                                ui.end_row();
+                                                ui.label(egui::RichText::new("Max DD").color(AXIS_TEXT).small());
+                                                ui.label(egui::RichText::new(format!("{:.1}%", portfolio.combined_max_drawdown_pct)).small());
+                                                ui.end_row();
+                                                ui.label(egui::RichText::new("Deals").color(AXIS_TEXT).small());
+                                                ui.label(egui::RichText::new(format!("{}", portfolio.total_deals)).small());
+                                                ui.end_row();
+                                            });
+                                            // VaR
+                                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
+                                                if !daily.is_empty() {
+                                                    let vs = darwin::compute_var(&daily);
+                                                    ui.add_space(4.0);
+                                                    egui::Grid::new("risk_var").striped(true).num_columns(2).show(ui, |ui| {
+                                                        ui.label(egui::RichText::new("VaR 95%").color(AXIS_TEXT).small());
+                                                        ui.label(egui::RichText::new(format!("${:.0}", vs.var_95)).small());
+                                                        ui.end_row();
+                                                        ui.label(egui::RichText::new("Sharpe").color(AXIS_TEXT).small());
+                                                        ui.label(egui::RichText::new(format!("{:.3}", vs.sharpe)).small());
+                                                        ui.end_row();
+                                                    });
+                                                }
+                                            }
+                                        } else {
+                                            ui.label(egui::RichText::new("Import DARWIN data").color(AXIS_TEXT).small());
+                                        }
+                                    }
+                                }
+                            }
+                            ui.add_space(6.0);
+                            ui.separator();
+                            ui.label(egui::RichText::new("DARWIN").small().strong());
+                            ui.label(egui::RichText::new("VaR corridor: 3.25% – 6.5%").color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new("Correlation limit: 0.95 / 45d").color(AXIS_TEXT).small());
+                        }
+                    }
+                });
             });
 
         // ── floating windows ─────────────────────────────────────────────────
@@ -6611,51 +7047,82 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // ── command palette overlay ──────────────────────────────────────
+            // ── Quake-style console (full-width top dropdown) ────────────────
             if self.command_open {
                 let palette_commands: Vec<&Command> = COMMANDS
                     .iter()
                     .filter(|c| fuzzy_match(&self.command_input, c.name) || fuzzy_match(&self.command_input, c.desc))
                     .collect();
 
-                let palette_height = (palette_commands.len().clamp(1, 12) as f32) * 24.0 + 50.0;
+                let num_visible = palette_commands.len().clamp(1, 15);
+                let console_height = (num_visible as f32) * 22.0 + 48.0;
+                let screen_w = available.width();
 
-                egui::Window::new("__palette__")
-                    .anchor(egui::Align2::CENTER_TOP, [0.0, 40.0])
-                    .fixed_size([620.0, palette_height])
-                    .title_bar(false)
-                    .frame(egui::Frame::window(&ctx.style()).inner_margin(8.0))
-                    .show(ctx, |ui| {
-                        let input_resp = ui.add(
-                            egui::TextEdit::singleline(&mut self.command_input)
-                                .desired_width(600.0)
-                                .hint_text("Type a command… (Esc or ~ to close)")
-                                .font(egui::TextStyle::Monospace),
-                        );
-                        input_resp.request_focus();
-                        ui.separator();
+                // Full-width top-anchored panel (Quake console style)
+                let console_rect = egui::Rect::from_min_size(
+                    egui::pos2(available.left(), available.top()),
+                    egui::vec2(screen_w, console_height),
+                );
 
-                        let mut execute: Option<String> = None;
-                        egui::ScrollArea::vertical().max_height(palette_height - 50.0).show(ui, |ui| {
-                            for cmd in &palette_commands {
-                                let row = ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(cmd.name).color(ACCENT).strong().monospace());
-                                    ui.label(egui::RichText::new(cmd.desc).color(AXIS_TEXT).small());
-                                });
-                                if row.response.interact(egui::Sense::click()).clicked() {
-                                    execute = Some(cmd.name.to_string());
-                                }
-                            }
+                let painter = ui.painter_at(console_rect);
+                painter.rect_filled(console_rect, 0.0, QUAKE_BG);
+                painter.rect_stroke(
+                    console_rect, 0.0,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 80, 100)),
+                    egui::StrokeKind::Outside,
+                );
+
+                let console_ui_rect = console_rect.shrink(6.0);
+                let mut console_ui = ui.new_child(egui::UiBuilder::new().max_rect(console_ui_rect));
+
+                // Input line with cyan prompt
+                console_ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(">").color(QUAKE_CMD).monospace().strong());
+                    let input_resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.command_input)
+                            .desired_width(screen_w - 40.0)
+                            .hint_text("type a command… (~ or Esc to close)")
+                            .font(egui::TextStyle::Monospace)
+                            .text_color(egui::Color32::from_rgb(200, 240, 255))
+                            .frame(false),
+                    );
+                    input_resp.request_focus();
+                });
+
+                // Thin separator
+                let sep_y = console_ui_rect.top() + 26.0;
+                painter.line_segment(
+                    [egui::pos2(console_ui_rect.left(), sep_y), egui::pos2(console_ui_rect.right(), sep_y)],
+                    egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 60, 80)),
+                );
+
+                // Command list
+                let list_rect = egui::Rect::from_min_max(
+                    egui::pos2(console_ui_rect.left(), sep_y + 2.0),
+                    console_ui_rect.max,
+                );
+                let mut list_ui = ui.new_child(egui::UiBuilder::new().max_rect(list_rect));
+
+                let mut execute: Option<String> = None;
+                egui::ScrollArea::vertical().max_height(console_height - 48.0).show(&mut list_ui, |ui| {
+                    for cmd in &palette_commands {
+                        let row = ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(cmd.name).color(QUAKE_CMD).monospace().strong());
+                            ui.label(egui::RichText::new(cmd.desc).color(QUAKE_DESC).small());
                         });
+                        if row.response.interact(egui::Sense::click()).clicked() {
+                            execute = Some(cmd.name.to_string());
+                        }
+                    }
+                });
 
-                        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) && !self.command_input.is_empty() {
-                            execute = palette_commands.first().map(|c| c.name.to_string());
-                        }
-                        if let Some(cmd_name) = execute {
-                            self.command_open = false;
-                            self.handle_command(&cmd_name, ctx);
-                        }
-                    });
+                if ctx.input(|i| i.key_pressed(egui::Key::Enter)) && !self.command_input.is_empty() {
+                    execute = palette_commands.first().map(|c| c.name.to_string());
+                }
+                if let Some(cmd_name) = execute {
+                    self.command_open = false;
+                    self.handle_command(&cmd_name, ctx);
+                }
             }
 
             // ── chart drawing ────────────────────────────────────────────────
