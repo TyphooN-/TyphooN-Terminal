@@ -33376,6 +33376,32 @@ function setupMTFGrid() {
   const btn = document.getElementById("btn-mtf-grid");
   const tfCheckboxes = document.getElementById("mtf-grid-tfs");
 
+  // Add radio buttons for symbol mode: "Current" vs "All Tabs"
+  if (!document.getElementById("mtf-grid-sym-current")) {
+    const radioWrap = document.createElement("span");
+    radioWrap.style.cssText = "margin-left:8px;font-size:10px;display:inline-flex;align-items:center;gap:2px;";
+
+    const r1 = document.createElement("input"); r1.type = "radio"; r1.name = "mtf-sym-mode"; r1.id = "mtf-grid-sym-current"; r1.value = "current";
+    const l1 = document.createElement("label"); l1.htmlFor = "mtf-grid-sym-current"; l1.textContent = "Current"; l1.style.cssText = "color:#ccc;cursor:pointer;margin-right:6px;";
+
+    const r2 = document.createElement("input"); r2.type = "radio"; r2.name = "mtf-sym-mode"; r2.id = "mtf-grid-sym-all"; r2.value = "all"; r2.checked = true;
+    const l2 = document.createElement("label"); l2.htmlFor = "mtf-grid-sym-all"; l2.textContent = "All Tabs"; l2.style.cssText = "color:#FFD700;cursor:pointer;font-weight:bold;";
+
+    radioWrap.appendChild(r1); radioWrap.appendChild(l1);
+    radioWrap.appendChild(r2); radioWrap.appendChild(l2);
+    tfCheckboxes.appendChild(radioWrap);
+  }
+
+  function getGridSymbols() {
+    const allMode = document.getElementById("mtf-grid-sym-all")?.checked;
+    if (allMode) {
+      const tabSymbols = [...new Set(tabs.filter(t => t.symbol).map(t => t.symbol))];
+      return tabSymbols.length > 0 ? tabSymbols : (currentSymbol ? [currentSymbol] : []);
+    } else {
+      return currentSymbol ? [currentSymbol] : [];
+    }
+  }
+
   btn.addEventListener("click", () => {
     if (mtfGridActive) {
       closeMTFGrid();
@@ -33387,27 +33413,29 @@ function setupMTFGrid() {
         alert("Select at least 1 timeframe");
         return;
       }
-      // Multi-symbol: use all open tab symbols (deduplicated)
-      const tabSymbols = [...new Set(tabs.filter(t => t.symbol).map(t => t.symbol))];
-      const symbols = tabSymbols.length > 0 ? tabSymbols : (currentSymbol ? [currentSymbol] : []);
+      const symbols = getGridSymbols();
       if (symbols.length === 0) { alert("Load a chart first"); return; }
       tfCheckboxes.classList.remove("hidden");
       openMTFGridMulti(symbols, selectedTFs);
     }
   });
 
-  // Live checkbox changes — rebuild grid with new TF selection
+  // Live checkbox changes — rebuild grid with new TF selection or symbol mode
+  const rebuildGrid = () => {
+    if (!mtfGridActive) return;
+    const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(c => c.value);
+    if (selectedTFs.length < 1) return;
+    const symbols = getGridSymbols();
+    if (symbols.length === 0) return;
+    closeMTFGrid();
+    openMTFGridMulti(symbols, selectedTFs);
+  };
+
   for (const cb of document.querySelectorAll(".mtf-grid-cb")) {
-    cb.addEventListener("change", () => {
-      if (!mtfGridActive) return;
-      const selectedTFs = [...document.querySelectorAll(".mtf-grid-cb:checked")].map(c => c.value);
-      if (selectedTFs.length < 1) return;
-      const tabSymbols = [...new Set(tabs.filter(t => t.symbol).map(t => t.symbol))];
-      const symbols = tabSymbols.length > 0 ? tabSymbols : (mtfGridSymbol ? [mtfGridSymbol] : []);
-      closeMTFGrid();
-      openMTFGridMulti(symbols, selectedTFs);
-    });
+    cb.addEventListener("change", rebuildGrid);
   }
+  document.getElementById("mtf-grid-sym-current")?.addEventListener("change", rebuildGrid);
+  document.getElementById("mtf-grid-sym-all")?.addEventListener("change", rebuildGrid);
 }
 
 // Multi-symbol MTF grid: symbols × timeframes = cells.
