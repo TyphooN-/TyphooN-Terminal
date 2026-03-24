@@ -5078,13 +5078,34 @@ impl TyphooNApp {
                                 egui::Grid::new("screener_grid").striped(true).num_columns(3).show(ui, |ui| {
                                     ui.strong("Symbol / Key"); ui.strong("Bars"); ui.strong("Action");
                                     ui.end_row();
+                                    let mut load_key: Option<String> = None;
                                     for (key, count, _size) in &details {
                                         ui.label(egui::RichText::new(key).monospace());
                                         ui.label(format!("{}", count));
                                         if ui.small_button("Load").clicked() {
-                                            self.log.push_back(LogEntry::info(format!("Screener: load {}", key)));
+                                            load_key = Some(key.clone());
                                         }
                                         ui.end_row();
+                                    }
+                                    // Load symbol into active chart
+                                    if let Some(key) = load_key {
+                                        if let Some(ref cache_arc) = self.cache {
+                                            if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                                                match cache_arc.get_bars_raw(&key) {
+                                                    Ok(Some(raw)) => {
+                                                        chart.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                                                            ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                                                        }).collect();
+                                                        chart.view_offset = chart.bars.len().saturating_sub(1);
+                                                        chart.symbol = key.clone();
+                                                        chart.compute_indicators();
+                                                        self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
+                                                    }
+                                                    Ok(None) => { self.log.push_back(LogEntry::warn(format!("No data for {}", key))); }
+                                                    Err(e) => { self.log.push_back(LogEntry::err(format!("Load error: {}", e))); }
+                                                }
+                                            }
+                                        }
                                     }
                                 });
                             });
