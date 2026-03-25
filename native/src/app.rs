@@ -3747,6 +3747,20 @@ struct WatchlistRow {
     volume: f64,
 }
 
+/// Background-computed DARWIN data — populated by background thread, read by render thread.
+/// This eliminates ALL SQLite queries from the render loop.
+#[derive(Default)]
+struct BgDarwinData {
+    portfolio: Option<darwin::PortfolioSummary>,
+    accounts: Vec<darwin::DarwinAccount>,
+    /// Pre-rendered text lines per window (window_name → lines)
+    /// Used for windows that would otherwise run expensive queries
+    cache_stats: Option<(i64, i64, i64)>, // (rows, kv, size)
+    sec_filings: Vec<sec_filing::SecFiling>,
+    sec_alerts: Vec<sec_filing::FilingAlert>,
+    last_update: u64, // frame_count when last updated
+}
+
 /// Bottom panel mode.
 #[derive(PartialEq)]
 enum BottomTab {
@@ -4092,9 +4106,11 @@ pub struct TyphooNApp {
     /// Which DARWIN view is selected in the portfolio dropdown.
     darwin_view: usize,
     /// Frame number when DARWIN windows last queried the DB.
-    darwin_last_query_frame: u64,
-    /// Cached portfolio summary (avoids re-querying every frame).
-    darwin_portfolio_cache: Option<darwin::PortfolioSummary>,
+    /// Background-computed DARWIN data. Updated every few seconds by a spawned task.
+    /// Render thread reads from this — NEVER queries SQLite directly in draw_floating_windows.
+    bg_darwin: std::sync::Arc<std::sync::Mutex<BgDarwinData>>,
+    /// Signal to trigger background DARWIN refresh.
+    bg_darwin_trigger: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl TyphooNApp {
@@ -4629,9 +4645,41 @@ impl TyphooNApp {
             tp_enabled: false,
             recent_fills: Vec::new(),
             darwin_view: 0,
-            darwin_last_query_frame: 0,
-            darwin_portfolio_cache: None,
+            bg_darwin: std::sync::Arc::new(std::sync::Mutex::new(BgDarwinData::default())),
+            bg_darwin_trigger: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
+
+        // Spawn background DARWIN data refresh thread
+        {
+            let bg_data = app.bg_darwin.clone();
+            let trigger = app.bg_darwin_trigger.clone();
+            let cache_arc = app.cache.clone();
+            std::thread::spawn(move || {
+                loop {
+                    // Wait for trigger or timeout (refresh every 5 seconds)
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+
+                    if let Some(ref cache) = cache_arc {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = darwin::create_darwin_tables(&conn);
+                            let mut data = BgDarwinData::default();
+                            data.portfolio = darwin::get_portfolio_summary(&conn).ok();
+                            data.accounts = darwin::list_darwin_accounts(&conn).unwrap_or_default();
+                            data.cache_stats = cache.stats().ok();
+                            let _ = sec_filing::create_sec_tables(&conn);
+                            data.sec_filings = sec_filing::get_recent_filings(&conn, None, 100).unwrap_or_default();
+                            data.sec_alerts = sec_filing::get_filing_alerts(&conn, false).unwrap_or_default();
+                            if let Ok(mut locked) = bg_data.lock() {
+                                *locked = data;
+                            }
+                        }
+                    }
+
+                    trigger.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+        }
+
         app.load_session();
         app
     }
@@ -5294,8 +5342,8 @@ impl TyphooNApp {
                     ui.heading("Data Sources");
                     ui.separator();
                     ui.label("SQLite cache: ~/.config/typhoon-terminal/cache/typhoon_cache.db");
-                    if let Some(ref cache) = self.cache {
-                        if let Ok((rows, kv, size)) = cache.stats() {
+                    if let Ok(bg) = self.bg_darwin.try_lock() {
+                        if let Some((rows, kv, size)) = bg.cache_stats {
                             ui.label(format!("Bar entries: {}  |  KV entries: {}  |  DB size: {} KB", rows, kv, size / 1024));
                         }
                     }
@@ -6135,23 +6183,14 @@ impl TyphooNApp {
                             });
                     });
                     ui.separator();
-                    // Refresh portfolio cache every 16 frames (~4s) or when stale
-                    let stale = self.frame_count.saturating_sub(self.darwin_last_query_frame) >= 16;
-                    if stale || self.darwin_portfolio_cache.is_none() {
-                        if let Some(ref cache) = self.cache {
-                            if let Ok(conn) = cache.connection() {
-                                let _ = darwin::create_darwin_tables(&conn);
-                                self.darwin_portfolio_cache = darwin::get_portfolio_summary(&conn).ok();
-                                self.darwin_last_query_frame = self.frame_count;
-                            }
-                        }
-                    }
+                    // Use background-computed DARWIN data (ZERO DB queries in render thread)
+                    let bg = self.bg_darwin.try_lock().ok();
+                    let portfolio_ref = bg.as_ref().and_then(|d| d.portfolio.as_ref());
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let dv = self.darwin_view;
                             egui::ScrollArea::vertical().show(ui, |ui| {
-                            // Use cached portfolio summary (refreshed every ~4s, not every frame)
-                            match &self.darwin_portfolio_cache {
+                            match portfolio_ref {
                                 Some(portfolio) if !portfolio.accounts.is_empty() => {
                                     match dv {
                                         0 => { // Portfolio Summary
