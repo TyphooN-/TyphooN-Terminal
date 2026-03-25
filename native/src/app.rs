@@ -4669,42 +4669,53 @@ impl TyphooNApp {
             let cache_arc = app.cache.clone();
             std::thread::spawn(move || {
                 loop {
-                    // Wait for trigger or timeout (refresh every 5 seconds)
                     std::thread::sleep(std::time::Duration::from_secs(5));
 
                     if let Some(ref cache) = cache_arc {
+                        let mut data = BgDarwinData::default();
+
+                        // Phase 1: quick queries (release conn quickly)
                         if let Ok(conn) = cache.connection() {
                             let _ = darwin::create_darwin_tables(&conn);
-                            let mut data = BgDarwinData::default();
                             data.portfolio = darwin::get_portfolio_summary(&conn).ok();
                             data.accounts = darwin::list_darwin_accounts(&conn).unwrap_or_default();
                             data.cache_stats = cache.stats().ok();
+                            data.detailed_stats = cache.detailed_stats().unwrap_or_default();
                             let _ = sec_filing::create_sec_tables(&conn);
                             data.sec_filings = sec_filing::get_recent_filings(&conn, None, 100).unwrap_or_default();
                             data.sec_alerts = sec_filing::get_filing_alerts(&conn, false).unwrap_or_default();
-                            // Heavy analytics
                             data.daily_returns = darwin::get_portfolio_daily_returns(&conn).unwrap_or_default();
-                            if !data.daily_returns.is_empty() {
-                                data.var_stats = Some(darwin::compute_var(&data.daily_returns));
-                            }
                             data.correlations = darwin::get_darwin_correlations(&conn).unwrap_or_default();
                             data.exposure = darwin::get_portfolio_exposure(&conn).unwrap_or_default();
                             data.equity_curve = darwin::get_portfolio_equity_curve(&conn).unwrap_or_default();
                             data.open_positions = darwin::get_portfolio_open_positions(&conn).unwrap_or_default();
                             data.trade_overlaps = darwin::get_trade_overlaps(&conn).unwrap_or_default();
-                            data.detailed_stats = cache.detailed_stats().unwrap_or_default();
-                            // Heavy analytics (these were freezing the UI)
+                        } // conn released here — render thread can use SQLite
+
+                        // Phase 2: pure computation (no DB, no lock contention)
+                        if !data.daily_returns.is_empty() {
+                            data.var_stats = Some(darwin::compute_var(&data.daily_returns));
+                            data.monte_carlo = Some(darwin::monte_carlo_var(&data.daily_returns, 252, 1000));
+                        }
+
+                        // Phase 3: heavy DB queries (one at a time, releasing conn between each)
+                        if let Ok(conn) = cache.connection() {
                             data.optimal_allocation = darwin::compute_optimal_allocation(&conn).unwrap_or_default();
+                        }
+                        if let Ok(conn) = cache.connection() {
                             let prices = std::collections::HashMap::new();
                             data.rebalance = darwin::compute_rebalance_suggestions(&conn, &prices).ok();
-                            if !data.daily_returns.is_empty() {
-                                data.monte_carlo = Some(darwin::monte_carlo_var(&data.daily_returns, 252, 1000));
-                            }
+                        }
+                        if let Ok(conn) = cache.connection() {
                             data.stress_tests = darwin::run_stress_tests(&conn).unwrap_or_default();
+                        }
+                        if let Ok(conn) = cache.connection() {
                             data.margin_call_sim = darwin::simulate_margin_call(&conn).ok();
-                            if let Ok(mut locked) = bg_data.lock() {
-                                *locked = data;
-                            }
+                        }
+
+                        // Swap into shared state (brief lock)
+                        if let Ok(mut locked) = bg_data.lock() {
+                            *locked = data;
                         }
                     }
 
