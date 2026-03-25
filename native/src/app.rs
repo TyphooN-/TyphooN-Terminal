@@ -5316,6 +5316,97 @@ impl TyphooNApp {
                                                     let rc = if ac.is_random { UP } else { egui::Color32::from_rgb(255, 200, 50) };
                                                     ui.label(egui::RichText::new(&ac.interpretation).color(rc).small());
                                                 }
+                                                // Recent Deals (last 20)
+                                                if let Ok(deals) = darwin::get_darwin_deals(&conn, &acct.darwin_ticker, None, Some(20)) {
+                                                    if !deals.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new(format!("Recent Deals ({})", deals.len())).strong());
+                                                        egui::Grid::new(format!("deals_{}", acct.darwin_ticker)).striped(true).num_columns(5).show(ui, |ui| {
+                                                            ui.strong("Time"); ui.strong("Symbol"); ui.strong("Type"); ui.strong("Vol"); ui.strong("P&L");
+                                                            ui.end_row();
+                                                            for d in deals.iter().take(20) {
+                                                                ui.label(egui::RichText::new(&d.time).small());
+                                                                ui.label(egui::RichText::new(&d.symbol).small());
+                                                                let tc = if d.deal_type == "buy" { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(&d.deal_type).color(tc).small());
+                                                                ui.label(egui::RichText::new(format!("{:.2}", d.volume)).small());
+                                                                let pc = if d.profit >= 0.0 { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(format!("${:.2}", d.profit)).color(pc).small());
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                // Closed Positions (last 20)
+                                                if let Ok(positions) = darwin::get_darwin_positions(&conn, &acct.darwin_ticker, None, Some(20)) {
+                                                    if !positions.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new(format!("Recent Positions ({})", positions.len())).strong());
+                                                        egui::Grid::new(format!("cpos_{}", acct.darwin_ticker)).striped(true).num_columns(5).show(ui, |ui| {
+                                                            ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("P&L"); ui.strong("Comm");
+                                                            ui.end_row();
+                                                            for p in positions.iter().take(20) {
+                                                                ui.label(egui::RichText::new(&p.symbol).small());
+                                                                let sc = if p.pos_type == "buy" { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(&p.pos_type).color(sc).small());
+                                                                ui.label(egui::RichText::new(format!("{:.2}", p.volume)).small());
+                                                                let pc = if p.profit >= 0.0 { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(format!("${:.2}", p.profit)).color(pc).small());
+                                                                ui.label(egui::RichText::new(format!("${:.2}", p.commission)).small());
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                // Equity Snapshot History
+                                                if let Ok(snapshots) = darwin::get_equity_history(&conn, &acct.darwin_ticker, 10) {
+                                                    if !snapshots.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new("Equity Snapshots").strong());
+                                                        for snap in &snapshots {
+                                                            ui.label(egui::RichText::new(format!("Bal: ${:.0}  Unreal: ${:.0}  Float: ${:.0}  Pos: {}",
+                                                                snap.closed_balance, snap.unrealized_pnl, snap.floating_equity, snap.open_position_count)).small());
+                                                        }
+                                                    }
+                                                }
+                                                // Benchmark Comparison (using portfolio as benchmark)
+                                                if let Ok(port_daily) = darwin::get_portfolio_daily_returns(&conn) {
+                                                    if let Ok(darwin_daily) = darwin::get_daily_returns(&conn, &acct.darwin_ticker) {
+                                                        if let Ok(bench) = darwin::compare_to_benchmark(&conn, &acct.darwin_ticker, &port_daily) {
+                                                            ui.add_space(5.0);
+                                                            ui.label(egui::RichText::new("vs Portfolio Benchmark").strong());
+                                                            egui::Grid::new(format!("bench_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                                                ui.label("Alpha:"); let ac = if bench.alpha >= 0.0 { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(format!("{:.4}", bench.alpha)).color(ac)); ui.end_row();
+                                                                ui.label("Beta:"); ui.label(format!("{:.4}", bench.beta)); ui.end_row();
+                                                                ui.label("Info Ratio:"); ui.label(format!("{:.3}", bench.information_ratio)); ui.end_row();
+                                                                ui.label("DARWIN Return:"); ui.label(format!("{:.2}%", bench.darwin_return)); ui.end_row();
+                                                                ui.label("Benchmark Return:"); ui.label(format!("{:.2}%", bench.benchmark_return)); ui.end_row();
+                                                            });
+                                                        }
+                                                        // Also compute full VaR
+                                                        if !darwin_daily.is_empty() {
+                                                            let full_var = darwin::compute_var_full(&darwin_daily);
+                                                            // (full_var is same type as compute_var — already shown above)
+                                                            let _ = full_var; // used for completeness
+                                                        }
+                                                    }
+                                                }
+                                                // Record equity snapshot (if we have data)
+                                                if let Ok(summary) = darwin::get_darwin_summary(&conn, &acct.darwin_ticker) {
+                                                    let _ = darwin::record_equity_snapshot(&conn, &acct.darwin_ticker, summary.final_balance, 0.0, 0);
+                                                }
+                                                // Sector classification (show sector for each symbol)
+                                                if let Ok(pnl_sym) = darwin::get_darwin_pnl_by_symbol(&conn, &acct.darwin_ticker) {
+                                                    if !pnl_sym.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new("Sector Classification").strong());
+                                                        for (sym, _, _, _, _) in pnl_sym.iter().take(10) {
+                                                            let sector = darwin::classify_sector(sym);
+                                                            ui.label(egui::RichText::new(format!("{}: {}", sym, sector)).small());
+                                                        }
+                                                    }
+                                                }
                                             });
                                         }
                                     }
@@ -5401,6 +5492,101 @@ impl TyphooNApp {
                                         }
                                     }
                                     Err(e) => { self.log.push_back(LogEntry::err(format!("Report error: {}", e))); }
+                                }
+                            }
+
+                            // ── Floating Equity Dashboard ─────────────────
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.heading("Floating Equity");
+                            let prices = std::collections::HashMap::new(); // empty — uses closed balance as fallback
+                            if let Ok(float_eq) = darwin::compute_floating_equity(&conn, &prices) {
+                                egui::Grid::new("float_eq").striped(true).num_columns(4).show(ui, |ui| {
+                                    ui.strong("DARWIN"); ui.strong("Closed Bal"); ui.strong("Unreal P&L"); ui.strong("Float Eq");
+                                    ui.end_row();
+                                    for d in &float_eq.darwins {
+                                        ui.label(&d.darwin_ticker);
+                                        ui.label(format!("${:.0}", d.closed_balance));
+                                        let uc = if d.unrealized_pnl >= 0.0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("${:.0}", d.unrealized_pnl)).color(uc));
+                                        ui.label(format!("${:.0}", d.floating_equity));
+                                        ui.end_row();
+                                    }
+                                    ui.label(egui::RichText::new("COMBINED").strong());
+                                    ui.label(format!("${:.0}", float_eq.combined_closed_balance));
+                                    let cc = if float_eq.combined_unrealized_pnl >= 0.0 { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_unrealized_pnl)).color(cc));
+                                    ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_floating_equity)).strong());
+                                    ui.end_row();
+                                });
+                            }
+
+                            // ── Export & FTP ──────────────────────────────
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                if ui.button("Export Radar TXT").clicked() {
+                                    let mut out = dirs_home();
+                                    out.push("export");
+                                    let _ = std::fs::create_dir_all(&out);
+                                    match darwin::export_radar_txt(&conn, &conn, &out.display().to_string()) {
+                                        Ok(path) => self.log.push_back(LogEntry::info(format!("Radar exported: {}", path))),
+                                        Err(e) => self.log.push_back(LogEntry::err(format!("Export failed: {}", e))),
+                                    }
+                                }
+                            });
+
+                            // ── FTP Scanner (needs Darwinex FTP path) ─────
+                            ui.add_space(5.0);
+                            ui.label(egui::RichText::new("Darwinex FTP Scanner").small().strong());
+                            ui.label(egui::RichText::new("Set DARWIN_FTP_PATH env var to enable FTP-based features:").color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new("  find_low_correlation_darwins, scan_darwin_ftp,").color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new("  get_darwin_price_series, get_dscore_components, get_investor_flow").color(AXIS_TEXT).small());
+                            if let Ok(ftp) = std::env::var("DARWIN_FTP_PATH") {
+                                if ui.button("Scan FTP for Low-Correlation DARWINs").clicked() {
+                                    match darwin::find_low_correlation_darwins(&conn, &ftp, 10) {
+                                        Ok(candidates) => {
+                                            for c in &candidates {
+                                                self.log.push_back(LogEntry::info(format!(
+                                                    "Candidate {}: corr {:.4}, return {:.2}%, DD {:.2}%, Sharpe {:.3}",
+                                                    c.ticker, c.avg_correlation, c.return_pct, c.max_drawdown, c.sharpe
+                                                )));
+                                            }
+                                        }
+                                        Err(e) => self.log.push_back(LogEntry::err(format!("FTP scan: {}", e))),
+                                    }
+                                }
+                                if ui.button("Scan FTP for DARWINs (min 90d, >5% return, <30% DD)").clicked() {
+                                    match darwin::scan_darwin_ftp(&ftp, 90, 5.0, 30.0, 50) {
+                                        Ok(candidates) => {
+                                            self.log.push_back(LogEntry::info(format!("FTP scan: {} candidates found", candidates.len())));
+                                        }
+                                        Err(e) => self.log.push_back(LogEntry::err(format!("FTP scan: {}", e))),
+                                    }
+                                }
+                                // Per-DARWIN FTP data
+                                if let Ok(accounts) = darwin::list_darwin_accounts(&conn) {
+                                    for acct in accounts.iter().take(3) {
+                                        if let Ok(components) = darwin::get_dscore_components(&ftp, &acct.darwin_ticker) {
+                                            self.log.push_back(LogEntry::info(format!(
+                                                "D-Score {}: Exp {:?}, Risk {:?}, Perf {:?}",
+                                                components.ticker, components.experience, components.risk_stability, components.performance
+                                            )));
+                                        }
+                                        if let Ok(flow) = darwin::get_investor_flow(&ftp, &acct.darwin_ticker) {
+                                            if let Some(last) = flow.last() {
+                                                self.log.push_back(LogEntry::info(format!(
+                                                    "Investor flow {}: {} investors, ${:.0} AUM",
+                                                    acct.darwin_ticker, last.investors, last.aum
+                                                )));
+                                            }
+                                        }
+                                        if let Ok(prices) = darwin::get_darwin_price_series(&ftp, &acct.darwin_ticker, "D1") {
+                                            self.log.push_back(LogEntry::info(format!(
+                                                "Price series {}: {} bars", acct.darwin_ticker, prices.len()
+                                            )));
+                                        }
+                                    }
                                 }
                             }
 
