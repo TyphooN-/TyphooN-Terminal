@@ -529,13 +529,52 @@ impl ChartState {
     }
 
     /// Cache key for this symbol + timeframe.
-    fn cache_key(&self) -> String {
-        format!("mt5:CC:{}", self.timeframe.cache_suffix())
+    /// Try multiple prefix variants to find data in cache.
+    fn find_cache_key(&self, cache: &SqliteCache) -> String {
+        let tf = self.timeframe.cache_suffix();
+        let sym = {
+            let parts: Vec<&str> = self.symbol.split(':').collect();
+            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
+            if is_tf && parts.len() > 1 {
+                parts[..parts.len()-1].join(":")
+            } else {
+                self.symbol.clone()
+            }
+        };
+
+        // Try these key patterns in order of priority
+        let candidates = [
+            format!("{}:{}", sym, tf),                    // exact: "mt5:SLV:4Hour" or "SLV:4Hour"
+            format!("mt5:{}:{}", sym, tf),                // mt5 prefix: "mt5:SLV:4Hour"
+            format!("default:{}:{}", sym, tf),            // default: "default:SLV:4Hour"
+            format!("paper_TyphooN:{}:{}", sym, tf),      // paper: "paper_TyphooN:SLV:4Hour"
+            format!("alpaca_paper_TyphooN:{}:{}", sym, tf),// alpaca: "alpaca_paper_TyphooN:SLV:4Hour"
+        ];
+
+        for key in &candidates {
+            if let Ok(Some(_)) = cache.get_bars_raw(key) {
+                return key.clone();
+            }
+        }
+
+        // Fallback: try partial match from detailed_stats
+        if let Ok(stats) = cache.detailed_stats() {
+            let sym_lower = sym.to_lowercase();
+            for (key, _, _) in &stats {
+                let key_lower = key.to_lowercase();
+                if key_lower.contains(&sym_lower) && key_lower.ends_with(&tf.to_lowercase()) {
+                    return key.clone();
+                }
+            }
+        }
+
+        // Default fallback
+        format!("mt5:{}:{}", sym, tf)
     }
 
     /// Load bars from the shared cache, re-compute indicators.
     fn load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>) {
-        let key = self.cache_key();
+        let key = self.find_cache_key(cache);
         match cache.get_bars_raw(&key) {
             Ok(Some(raw)) => {
                 self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
@@ -3811,7 +3850,7 @@ impl TyphooNApp {
         let default_tfs = [Timeframe::H4, Timeframe::D1, Timeframe::H1, Timeframe::W1, Timeframe::M15, Timeframe::M30, Timeframe::M5, Timeframe::M1, Timeframe::MN1];
         let mut charts: Vec<ChartState> = default_tfs
             .iter()
-            .map(|&tf| ChartState::new("CC:BTCUSD", tf))
+            .map(|&tf| ChartState::new("CC", tf))
             .collect();
 
         // ── load bars into all charts ────────────────────────────────────────
@@ -3838,10 +3877,10 @@ impl TyphooNApp {
             // Collect unique base symbols from cache keys
             let mut seen_symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
             for (key, _) in &watchlist_symbols {
-                // Parse cache key: "mt5:CC:BTCUSD:4Hour" or "CC:BTCUSD:4Hour"
+                // Parse cache key: "mt5:CC:4Hour" or "CC:4Hour"
                 let parts: Vec<&str> = key.split(':').collect();
                 let base_sym = if parts.len() >= 3 {
-                    // Try to get "BTCUSD" from "mt5:CC:BTCUSD:4Hour" or "CC:BTCUSD"
+                    // Try to get "BTCUSD" from "mt5:CC:4Hour" or "CC"
                     let sym_part = if parts[0] == "mt5" && parts.len() >= 4 {
                         format!("{}:{}", parts[1], parts[2])
                     } else if parts.len() >= 2 {
@@ -4012,7 +4051,7 @@ impl TyphooNApp {
         let mut app = Self {
             cache,
             cache_err,
-            symbol_input: "CC:BTCUSD".to_string(),
+            symbol_input: "CC".to_string(),
             charts,
             mtf_cols: 2,
             mtf_enabled: false,
@@ -4495,18 +4534,39 @@ impl TyphooNApp {
                 if let Some(sym) = v["symbol"].as_str() { self.symbol_input = sym.to_string(); }
                 if let Some(mtf) = v["mtf_enabled"].as_bool() { self.mtf_enabled = mtf; }
                 if let Some(tab) = v["active_tab"].as_u64() { self.active_tab = tab as usize; }
-                // Restore chart types from saved tabs
+                // Restore tabs: symbol, timeframe, chart type — rebuild charts from session
                 if let Some(tabs) = v["tabs"].as_array() {
-                    for (i, tab) in tabs.iter().enumerate() {
-                        if let Some(chart) = self.charts.get_mut(i) {
-                            if let Some(ct) = tab["chart_type"].as_str() {
-                                chart.chart_type = match ct {
-                                    "Heikin-Ashi" => ChartType::HeikinAshi,
-                                    "Line" => ChartType::Line,
-                                    "OHLC Bars" => ChartType::OhlcBars,
-                                    "Renko" => ChartType::Renko,
-                                    _ => ChartType::Candle,
-                                };
+                    if !tabs.is_empty() {
+                        // Rebuild chart set from session data
+                        self.charts.clear();
+                        for tab in tabs {
+                            let sym = tab["symbol"].as_str().unwrap_or("CC").to_string();
+                            let tf = match tab["timeframe"].as_str() {
+                                Some("M1") => Timeframe::M1,
+                                Some("M5") => Timeframe::M5,
+                                Some("M15") => Timeframe::M15,
+                                Some("M30") => Timeframe::M30,
+                                Some("H1") => Timeframe::H1,
+                                Some("D1") => Timeframe::D1,
+                                Some("W1") => Timeframe::W1,
+                                Some("MN1") => Timeframe::MN1,
+                                _ => Timeframe::H4,
+                            };
+                            let ct = match tab["chart_type"].as_str() {
+                                Some("Heikin-Ashi") => ChartType::HeikinAshi,
+                                Some("Line") => ChartType::Line,
+                                Some("OHLC Bars") => ChartType::OhlcBars,
+                                Some("Renko") => ChartType::Renko,
+                                _ => ChartType::Candle,
+                            };
+                            let mut chart = ChartState::new(&sym, tf);
+                            chart.chart_type = ct;
+                            self.charts.push(chart);
+                        }
+                        // Reload all charts from cache
+                        if let Some(ref cache) = self.cache {
+                            for chart in &mut self.charts {
+                                chart.load(cache, &mut self.log);
                             }
                         }
                     }
@@ -6603,7 +6663,7 @@ impl TyphooNApp {
                     egui::Grid::new("help_grid").striped(true).num_columns(2).show(ui, |ui| {
                         ui.strong("Key"); ui.strong("Action");
                         ui.end_row();
-                        ui.label("~ / F12"); ui.label("Command palette (Quake console)");
+                        ui.label("~ (tilde)"); ui.label("Console");
                         ui.end_row();
                         ui.label("Esc"); ui.label("Close palette / cancel drawing");
                         ui.end_row();
@@ -6924,23 +6984,16 @@ impl eframe::App for TyphooNApp {
             }
         }
 
-        // ── ~ (tilde/backtick) → Quake-style command palette ─────────────
-        // Multiple detection methods for Wayland/Hyprland compatibility:
-        // 1. egui Key::Backtick (may not fire on Wayland)
-        // 2. Event::Text containing ` or ~ (catches keyboard layout variants)
-        // 3. Event::Key with scancode matching (physical key)
-        // 4. F12 as universal fallback
+        // ── Quake console toggle ─────────────────────────────────────────
+        // Scans ALL input events for any sign of backtick/tilde/grave key.
+        // Logs the first 20 unrecognized events for debugging Wayland issues.
         let open_palette = ctx.input_mut(|i| {
             let mut found = false;
-            // Method 1: standard key_pressed
-            if i.key_pressed(egui::Key::Backtick) {
-                found = true;
-            }
-            // Method 4: F12 fallback (always works regardless of Wayland/keyboard)
-            if i.key_pressed(egui::Key::F12) {
-                found = true;
-            }
-            // Method 2+3: scan raw events for text or key events
+
+            // Check all key methods
+            if i.key_pressed(egui::Key::Backtick) { found = true; }
+
+            // Scan every event
             i.events.retain(|e| {
                 match e {
                     egui::Event::Text(t) if t == "`" || t == "~" => {
@@ -6951,7 +7004,24 @@ impl eframe::App for TyphooNApp {
                         found = true;
                         false // consume
                     }
-                    _ => true, // keep
+                    // Catch ANY key press and check the physical key
+                    egui::Event::Key { key, pressed: true, physical_key, .. } => {
+                        // Check if physical_key matches backtick/grave
+                        if let Some(pk) = physical_key {
+                            if *pk == egui::Key::Backtick {
+                                found = true;
+                                return false; // consume
+                            }
+                        }
+                        // Also check if the logical key name contains "grave" or "backtick"
+                        let key_name = format!("{:?}", key);
+                        if key_name.contains("Backtick") || key_name.contains("Grave") {
+                            found = true;
+                            return false;
+                        }
+                        true
+                    }
+                    _ => true,
                 }
             });
             found
@@ -7186,6 +7256,12 @@ impl eframe::App for TyphooNApp {
                     }
                 });
                 ui.menu_button("Tools", |ui| {
+                    if ui.button("Console (~)").clicked() {
+                        self.command_open = !self.command_open;
+                        if self.command_open { self.command_input.clear(); }
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button("DARWIN Accounts").clicked() {
                         self.show_darwin_accounts = true;
                         ui.close();
@@ -7367,7 +7443,7 @@ impl eframe::App for TyphooNApp {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new("~/F12 console").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("~").color(AXIS_TEXT).small());
                     ui.separator();
                     if self.broker_connected {
                         ui.label(egui::RichText::new("\u{25CF} LIVE").color(UP).small());
