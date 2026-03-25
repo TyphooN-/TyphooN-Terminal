@@ -3395,6 +3395,12 @@ const COMMANDS: &[Command] = &[
     Command { name: "SETTINGS",      desc: "Application settings" },
     Command { name: "RELOAD",        desc: "Reload bars from cache" },
     Command { name: "QUIT",          desc: "Exit the application" },
+    Command { name: "QUOTE",         desc: "Get latest bid/ask quote for current symbol" },
+    Command { name: "CLOCK",         desc: "Market clock — open/closed status" },
+    Command { name: "FILLS",         desc: "Recent account fills/activities" },
+    Command { name: "MOVERS",        desc: "Top market movers (stocks)" },
+    Command { name: "SEARCH",        desc: "Search symbols by name" },
+    Command { name: "HISTORY",       desc: "Order history (closed orders)" },
     // View
     Command { name: "MTF",           desc: "Toggle multi-timeframe grid" },
     Command { name: "MTF_2X2",       desc: "2×2 grid (4 charts)" },
@@ -3607,6 +3613,18 @@ enum BrokerCmd {
     SecScrape { db_path: PathBuf },
     /// Fetch Finnhub news for a symbol.
     FinnhubNews { symbol: String, api_key: String },
+    /// Get latest quote for a symbol.
+    GetQuote { symbol: String },
+    /// Get market clock (hours/status).
+    GetMarketClock,
+    /// Get account activities (fills, transfers).
+    GetActivities { limit: u32 },
+    /// Get top movers.
+    GetTopMovers,
+    /// Search symbols.
+    SearchSymbols { query: String },
+    /// Get order history.
+    GetOrderHistory { limit: u32 },
 }
 
 /// Messages sent from async broker task → UI.
@@ -3617,10 +3635,14 @@ enum BrokerMsg {
     Positions(Vec<PositionInfo>),
     Orders(Vec<OrderInfo>),
     OrderResult(String),
-    /// SEC scrape completed.
     SecScrapeResult(String),
-    /// Finnhub news results.
-    FinnhubNewsResult(Vec<(String, String, String)>), // (headline, source, datetime)
+    FinnhubNewsResult(Vec<(String, String, String)>),
+    /// Latest quote data.
+    Quote(String, f64, f64, f64), // symbol, bid, ask, last
+    /// Market clock status.
+    MarketClock(String),
+    /// Generic JSON results for various API calls.
+    JsonResult(String, String), // (label, formatted text)
 }
 
 pub struct TyphooNApp {
@@ -4076,6 +4098,75 @@ impl TyphooNApp {
                             let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect broker first for Finnhub news".into()));
                         }
                     }
+                    BrokerCmd::GetQuote { symbol } => {
+                        if let Some(ref b) = broker {
+                            match b.get_latest_quote(&symbol).await {
+                                Ok(q) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Quote(symbol, q.bid, q.ask, (q.bid + q.ask) / 2.0)); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetMarketClock => {
+                        if let Some(ref b) = broker {
+                            match b.get_market_clock().await {
+                                Ok(v) => {
+                                    let is_open = v["is_open"].as_bool().unwrap_or(false);
+                                    let next = v["next_open"].as_str().unwrap_or("—");
+                                    let msg = if is_open { "Market: OPEN".to_string() } else { format!("Market: CLOSED (opens {})", next) };
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::MarketClock(msg));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetActivities { limit } => {
+                        if let Some(ref b) = broker {
+                            match b.get_account_activities("FILL", limit).await {
+                                Ok(activities) => {
+                                    let text = activities.iter().take(20).map(|a| {
+                                        format!("{} {} {} {} {}", a.date, a.side.as_deref().unwrap_or("—"), a.qty.as_deref().unwrap_or("—"), a.symbol.as_deref().unwrap_or("—"), a.net_amount.as_deref().unwrap_or("—"))
+                                    }).collect::<Vec<_>>().join("\n");
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Account Activities".into(), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetTopMovers => {
+                        if let Some(ref b) = broker {
+                            match b.get_top_movers("stocks", 10).await {
+                                Ok(v) => {
+                                    let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Top Movers".into(), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::SearchSymbols { query } => {
+                        if let Some(ref b) = broker {
+                            match b.get_all_assets().await {
+                                Ok(assets) => {
+                                    let q = query.to_uppercase();
+                                    let text = assets.iter()
+                                        .filter(|a| a.symbol.contains(&q) || a.name.to_uppercase().contains(&q))
+                                        .take(20)
+                                        .map(|a| format!("{} — {} ({})", a.symbol, a.name, a.asset_class))
+                                        .collect::<Vec<_>>().join("\n");
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Symbol Search".into(), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetOrderHistory { limit } => {
+                        if let Some(ref b) = broker {
+                            match b.get_orders("closed", limit).await {
+                                Ok(orders) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Orders(orders)); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -4429,6 +4520,22 @@ impl TyphooNApp {
             "IMPORT_XLSX"    => self.show_darwin_accounts = true,
             "WORKSPACE"      => { self.save_session(); self.log.push_back(LogEntry::info("Workspace saved")); }
             "BACKUP"         => { self.save_session(); self.log.push_back(LogEntry::info("Session backup saved")); }
+            "QUOTE" => {
+                let sym = self.symbol_input.trim().to_string();
+                let _ = self.broker_tx.send(BrokerCmd::GetQuote { symbol: sym });
+            }
+            "CLOCK" => { let _ = self.broker_tx.send(BrokerCmd::GetMarketClock); }
+            "FILLS" => { let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 20 }); }
+            "MOVERS" => { let _ = self.broker_tx.send(BrokerCmd::GetTopMovers); }
+            "SEARCH" => {
+                let query = self.command_input.trim().to_string();
+                if query.len() >= 2 {
+                    let _ = self.broker_tx.send(BrokerCmd::SearchSymbols { query });
+                } else {
+                    self.log.push_back(LogEntry::warn("Type at least 2 characters to search"));
+                }
+            }
+            "HISTORY" => { let _ = self.broker_tx.send(BrokerCmd::GetOrderHistory { limit: 50 }); }
             "PIVOTS"   => self.show_pivots = !self.show_pivots,
             "SRLEVEL"  => self.show_pivots = !self.show_pivots,
             "FRACTALS"  => self.show_fractals = !self.show_fractals,
@@ -7632,6 +7739,15 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::FinnhubNewsResult(articles) => {
                     self.log.push_back(LogEntry::info(format!("Finnhub: {} articles loaded", articles.len())));
                     self.news_articles = articles;
+                }
+                BrokerMsg::Quote(symbol, bid, ask, last) => {
+                    self.log.push_back(LogEntry::info(format!("{}: bid {} ask {} last {}", symbol, format_price(bid), format_price(ask), format_price(last))));
+                }
+                BrokerMsg::MarketClock(msg) => {
+                    self.log.push_back(LogEntry::info(msg));
+                }
+                BrokerMsg::JsonResult(label, text) => {
+                    self.log.push_back(LogEntry::info(format!("{}:\n{}", label, text)));
                 }
             }
         }
