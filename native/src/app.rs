@@ -3747,18 +3747,22 @@ struct WatchlistRow {
     volume: f64,
 }
 
-/// Background-computed DARWIN data — populated by background thread, read by render thread.
-/// This eliminates ALL SQLite queries from the render loop.
+/// Background-computed data — populated by background thread, read by render thread.
+/// This eliminates SQLite queries from the render loop.
 #[derive(Default)]
 struct BgDarwinData {
     portfolio: Option<darwin::PortfolioSummary>,
     accounts: Vec<darwin::DarwinAccount>,
-    /// Pre-rendered text lines per window (window_name → lines)
-    /// Used for windows that would otherwise run expensive queries
-    cache_stats: Option<(i64, i64, i64)>, // (rows, kv, size)
+    cache_stats: Option<(i64, i64, i64)>,
     sec_filings: Vec<sec_filing::SecFiling>,
     sec_alerts: Vec<sec_filing::FilingAlert>,
-    last_update: u64, // frame_count when last updated
+    // Heavy analytics cached
+    daily_returns: Vec<darwin::DailyReturn>,
+    var_stats: Option<darwin::VaRResult>,
+    correlations: Vec<darwin::CorrelationEntry>,
+    exposure: Vec<darwin::PortfolioSymbolExposure>,
+    equity_curve: Vec<(String, f64)>,
+    open_positions: Vec<darwin::PortfolioOpenPosition>,
 }
 
 /// Bottom panel mode.
@@ -4669,6 +4673,15 @@ impl TyphooNApp {
                             let _ = sec_filing::create_sec_tables(&conn);
                             data.sec_filings = sec_filing::get_recent_filings(&conn, None, 100).unwrap_or_default();
                             data.sec_alerts = sec_filing::get_filing_alerts(&conn, false).unwrap_or_default();
+                            // Heavy analytics
+                            data.daily_returns = darwin::get_portfolio_daily_returns(&conn).unwrap_or_default();
+                            if !data.daily_returns.is_empty() {
+                                data.var_stats = Some(darwin::compute_var(&data.daily_returns));
+                            }
+                            data.correlations = darwin::get_darwin_correlations(&conn).unwrap_or_default();
+                            data.exposure = darwin::get_portfolio_exposure(&conn).unwrap_or_default();
+                            data.equity_curve = darwin::get_portfolio_equity_curve(&conn).unwrap_or_default();
+                            data.open_positions = darwin::get_portfolio_open_positions(&conn).unwrap_or_default();
                             if let Ok(mut locked) = bg_data.lock() {
                                 *locked = data;
                             }
@@ -9532,7 +9545,7 @@ impl eframe::App for TyphooNApp {
 
             let hover_pos = ctx.input(|i| i.pointer.hover_pos().unwrap_or_default());
             // Don't interact with chart when pointer is over a floating window or egui wants pointer
-            let egui_hover = ctx.wants_pointer_input() || ctx.is_using_pointer();
+            let egui_hover = ctx.wants_pointer_input() || ctx.is_using_pointer() || ctx.dragged_id().is_some();
             let layer_at_hover = ctx.layer_id_at(hover_pos);
             let hover_over_window = egui_hover || layer_at_hover
                 .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
@@ -9590,8 +9603,9 @@ impl eframe::App for TyphooNApp {
             let drag_delta = ctx.input(|i| i.pointer.delta());
             // Block chart interaction when ANY egui widget/window is using the pointer
             let egui_wants_pointer = ctx.wants_pointer_input() || ctx.is_using_pointer();
+            let anything_dragged = ctx.dragged_id().is_some();
             let layer_id_at_pointer = ctx.layer_id_at(pointer.hover_pos().unwrap_or_default());
-            let pointer_over_window = egui_wants_pointer || layer_id_at_pointer
+            let pointer_over_window = egui_wants_pointer || anything_dragged || layer_id_at_pointer
                 .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
                 .unwrap_or(false);
 
