@@ -4098,9 +4098,10 @@ pub struct TyphooNApp {
     // ── DARWIN portfolio view selector ─────────────────────────────────
     /// Which DARWIN view is selected in the portfolio dropdown.
     darwin_view: usize,
-    /// Cached DARWIN portfolio data (future: compute once per view change).
-    #[allow(dead_code)]
-    darwin_cache: Option<(usize, String)>,
+    /// Frame number when DARWIN windows last queried the DB.
+    darwin_last_query_frame: u64,
+    /// Cached portfolio summary (avoids re-querying every frame).
+    darwin_portfolio_cache: Option<darwin::PortfolioSummary>,
 }
 
 impl TyphooNApp {
@@ -4635,7 +4636,8 @@ impl TyphooNApp {
             tp_enabled: false,
             recent_fills: Vec::new(),
             darwin_view: 0,
-            darwin_cache: None,
+            darwin_last_query_frame: 0,
+            darwin_portfolio_cache: None,
         };
         app.load_session();
         app
@@ -5222,6 +5224,13 @@ impl TyphooNApp {
     }
 
     // ── floating window rendering ────────────────────────────────────────────
+
+    /// Whether expensive DB queries should run this frame.
+    /// Returns true once every ~4 seconds (every 16th frame at 4 FPS).
+    #[allow(dead_code)]
+    fn should_query_db(&self) -> bool {
+        self.frame_count % 16 == 0 || self.frame_count < 4
+    }
 
     fn draw_floating_windows(&mut self, ctx: &egui::Context) {
         // Settings
@@ -6128,13 +6137,24 @@ impl TyphooNApp {
                             });
                     });
                     ui.separator();
+                    // Refresh portfolio cache every 16 frames (~4s) or when stale
+                    let stale = self.frame_count.saturating_sub(self.darwin_last_query_frame) >= 16;
+                    if stale || self.darwin_portfolio_cache.is_none() {
+                        if let Some(ref cache) = self.cache {
+                            if let Ok(conn) = cache.connection() {
+                                let _ = darwin::create_darwin_tables(&conn);
+                                self.darwin_portfolio_cache = darwin::get_portfolio_summary(&conn).ok();
+                                self.darwin_last_query_frame = self.frame_count;
+                            }
+                        }
+                    }
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            let _ = darwin::create_darwin_tables(&conn);
                             let dv = self.darwin_view;
                             egui::ScrollArea::vertical().show(ui, |ui| {
-                            match darwin::get_portfolio_summary(&conn) {
-                                Ok(portfolio) if !portfolio.accounts.is_empty() => {
+                            // Use cached portfolio summary (refreshed every ~4s, not every frame)
+                            match &self.darwin_portfolio_cache {
+                                Some(portfolio) if !portfolio.accounts.is_empty() => {
                                     match dv {
                                         0 => { // Portfolio Summary
                                             egui::Grid::new("port_summary").striped(true).num_columns(2).show(ui, |ui| {
@@ -6655,11 +6675,11 @@ impl TyphooNApp {
                                         }
                                     }
                                 }
-                                Ok(_) => {
+                                Some(_) => {
                                     ui.label(egui::RichText::new("No DARWIN accounts imported.").color(AXIS_TEXT));
                                 }
-                                Err(e) => {
-                                    ui.label(egui::RichText::new(format!("Error: {}", e)).color(egui::Color32::from_rgb(255, 80, 80)));
+                                None => {
+                                    ui.label(egui::RichText::new("Loading DARWIN data...").color(AXIS_TEXT));
                                 }
                             }
                             });
@@ -9994,17 +10014,10 @@ impl eframe::App for TyphooNApp {
             self.save_session();
         }
 
-        // Reduce repaint rate when ANY floating window with DB queries is open.
-        // Every DB-querying window runs SQLite queries per frame in immediate mode.
-        let any_db_window = self.show_darwin_portfolio || self.show_darwin_accounts
-            || self.show_var_mult || self.show_settings || self.show_indicators_panel
-            || self.show_screener || self.show_calendar || self.show_sec || self.show_insider
-            || self.show_crypto_backfill || self.show_fundamentals || self.show_analyst
-            || self.show_holders || self.show_symbol_overlap || self.show_correlation
-            || self.show_seasonals || self.show_montecarlo || self.show_stress_test
-            || self.show_order_flow || self.show_bookmap || self.show_margin_monitor
-            || self.show_cache_stats || self.show_alerts;
-        let repaint_ms = if any_db_window { 1000 } else { 250 };
+        // Repaint strategy: fast for charts, slower when DB windows are open.
+        // egui automatically repaints on user interaction (mouse, keyboard).
+        // We only need periodic repaints for live data updates.
+        let repaint_ms = 500; // 2 FPS base — egui adds instant repaints on interaction
         ctx.request_repaint_after(std::time::Duration::from_millis(repaint_ms));
     }
 }
