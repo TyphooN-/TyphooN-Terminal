@@ -4726,67 +4726,92 @@ impl TyphooNApp {
         if self.show_settings {
             egui::Window::new("Settings")
                 .open(&mut self.show_settings)
-                .default_size([400.0, 300.0])
+                .default_size([450.0, 500.0])
                 .show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    // ── API Keys (matching old WebKit connection modal) ──
+                    ui.heading("API Keys");
+                    ui.separator();
+                    egui::Grid::new("api_keys_settings").num_columns(2).spacing(egui::vec2(8.0, 4.0)).show(ui, |ui| {
+                        ui.label("Alpaca API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.broker_api_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Alpaca Secret:");
+                        ui.add(egui::TextEdit::singleline(&mut self.broker_secret).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Alpaca Mode:");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.broker_paper, true, "Paper");
+                            ui.radio_value(&mut self.broker_paper, false, "Live");
+                        });
+                        ui.end_row();
+                        ui.label("Finnhub API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.finnhub_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("tastytrade User:");
+                        ui.add(egui::TextEdit::singleline(&mut self.tt_username).desired_width(250.0));
+                        ui.end_row();
+                        ui.label("tastytrade Pass:");
+                        ui.add(egui::TextEdit::singleline(&mut self.tt_password).desired_width(250.0).password(true));
+                        ui.end_row();
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let connect_label = if self.broker_connected {
+                            egui::RichText::new("Connected").color(UP)
+                        } else {
+                            egui::RichText::new("Connect Alpaca")
+                        };
+                        if ui.button(connect_label).clicked() && !self.broker_connected {
+                            if !self.broker_api_key.is_empty() && !self.broker_secret.is_empty() {
+                                let _ = self.broker_tx.send(BrokerCmd::Connect {
+                                    api_key: self.broker_api_key.clone(),
+                                    secret: self.broker_secret.clone(),
+                                    paper: self.broker_paper,
+                                });
+                            }
+                        }
+                    });
+
+                    ui.add_space(10.0);
                     ui.heading("General");
                     ui.separator();
                     ui.label("Theme: OLED Dark (#000000)");
+                    ui.label("Font: Monospace 11px (Consolas equiv.)");
                     ui.label("Refresh rate: 250ms");
                     ui.label("Chart default: 200 visible bars");
+
                     ui.add_space(10.0);
                     ui.heading("Data Sources");
                     ui.separator();
                     ui.label("SQLite cache: ~/.config/typhoon-terminal/cache/typhoon_cache.db");
                     if let Some(ref cache) = self.cache {
                         if let Ok((rows, kv, size)) = cache.stats() {
-                            ui.label(format!("Bar entries: {}", rows));
-                            ui.label(format!("KV entries: {}", kv));
-                            ui.label(format!("DB size: {} KB", size / 1024));
+                            ui.label(format!("Bar entries: {}  |  KV entries: {}  |  DB size: {} KB", rows, kv, size / 1024));
                         }
                     }
-                    ui.add_space(10.0);
-                    ui.heading("NNFX System (Default)");
-                    ui.separator();
-                    ui.checkbox(&mut self.show_sma200,      "SMA(200) — Baseline");
-                    ui.checkbox(&mut self.show_kama,         "KAMA(10,2,30) — Trend");
-                    ui.checkbox(&mut self.show_fisher,       "Fisher Transform — Confirmation");
-                    ui.checkbox(&mut self.show_atr_proj,     "ATR Projection — Volatility");
-                    ui.checkbox(&mut self.show_better_volume,"Better Volume — Volume Analysis");
-                    ui.checkbox(&mut self.show_prev_levels,  "Previous Candle Levels (D/W)");
-                    ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
-                    ui.checkbox(&mut self.show_fractals,      "Fractals (Bill Williams)");
-                    ui.add_space(10.0);
-                    ui.heading("Additional Indicators");
-                    ui.separator();
-                    ui.checkbox(&mut self.show_sma100,    "SMA(100)");
-                    ui.checkbox(&mut self.show_ema21,     "EMA(21)");
-                    ui.checkbox(&mut self.show_bollinger, "Bollinger Bands(20,2)");
-                    ui.checkbox(&mut self.show_ichimoku,  "Ichimoku Cloud(9,26,52)");
-                    ui.checkbox(&mut self.show_wma,       "WMA(20)");
-                    ui.checkbox(&mut self.show_hma,       "HMA(20)");
-                    ui.checkbox(&mut self.show_psar,      "Parabolic SAR");
-                    ui.add_space(10.0);
-                    ui.heading("Sub-Pane Indicators");
-                    ui.separator();
-                    ui.checkbox(&mut self.show_rsi,          "RSI(14)");
-                    ui.checkbox(&mut self.show_macd,         "MACD(12,26,9)");
-                    ui.checkbox(&mut self.show_stochastic,   "Stochastic(14,3,3)");
-                    ui.checkbox(&mut self.show_adx,          "ADX(14)");
-                    ui.checkbox(&mut self.show_cci,          "CCI(20)");
-                    ui.checkbox(&mut self.show_williams_r,   "Williams %R(14)");
-                    ui.checkbox(&mut self.show_obv,          "OBV");
-                    ui.checkbox(&mut self.show_momentum,     "Momentum(10)");
-                    ui.checkbox(&mut self.show_volume_pane,  "Volume");
-                    ui.checkbox(&mut self.show_ehlers_ebsw,  "Even Better Sinewave");
-                    ui.checkbox(&mut self.show_ehlers_cyber, "Cyber Cycle");
-                    ui.checkbox(&mut self.show_ehlers_cg,    "CG Oscillator");
-                    ui.checkbox(&mut self.show_ehlers_roof,  "Roofing Filter");
+                    ui.label("MT5: view-only data via BarCacheWriter EA → SQLite");
+                    ui.label("Alpaca: REST API + WebSocket streaming");
+                    ui.label("Finnhub: News, Analyst, Insider Sentiment, Short Interest");
+                    ui.label("SEC EDGAR: Filing scraper + Form 4 insider trades");
+
                     ui.add_space(10.0);
                     ui.heading("Darwinex");
                     ui.separator();
                     ui.label("VaR corridor: 3.25% – 6.5%");
                     ui.label("Correlation limit: 0.95 / 45d");
                     ui.label("Margin accounts: 100%");
+
+                    ui.add_space(10.0);
+                    ui.heading("Notifications");
+                    ui.separator();
+                    ui.label("Discord / Pushover / ntfy (configure in engine)");
+
+                    ui.add_space(10.0);
+                    if ui.button("Open Indicators Panel").clicked() {
+                        self.show_indicators_panel = true;
+                    }
+                    });
                 });
         }
 
