@@ -2625,30 +2625,73 @@ fn draw_chart(
         painter.text(egui::pos2(lx, ly), egui::Align2::LEFT_TOP, "BB(20,2)", egui::FontId::monospace(10.0), BB_COL);
     }
 
-    // ── MT5-style chart overlay text (top-right) ─────────────────────────────
+    // ── MT5-style chart overlay text (top-right, matching MTF_MA.mqh) ────────
     {
         let overlay_x = chart_rect.right() - 8.0;
         let mut oy = chart_rect.top() + 6.0;
-        let font = egui::FontId::monospace(10.0);
+        let font = egui::FontId::monospace(8.0);
         let dim = egui::Color32::from_rgb(120, 130, 150);
+        let white = egui::Color32::from_rgb(220, 220, 220);
 
-        // ATR values per timeframe (from current chart data)
+        // ATR per timeframe line (matching MTF_MA.mqh info text)
         if let Some(last_atr) = chart.atr.last().and_then(|v| *v) {
             painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
-                &format!("ATR(14): {}", format_price(last_atr)), font.clone(), dim);
-            oy += 13.0;
+                &format!("ATR| {}: {}", chart.timeframe.label(), format_price(last_atr)), font.clone(), dim);
+            oy += 11.0;
         }
 
-        // Last close price
+        // Close + Volume
         if let Some(bar) = chart.bars.last() {
             painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
-                &format!("Close: {}", format_price(bar.close)), font.clone(), egui::Color32::from_rgb(200, 200, 220));
-            oy += 13.0;
+                &format!("Close: {}  Vol: {:.0}", format_price(bar.close), bar.volume), font.clone(), white);
+            oy += 11.0;
 
-            // Volume
+            // ── MTF_MA Bull/Bear Power (matching MTF_MA.mqh) ──────────
+            // 200 SMA status: price above/below
+            let sma200_val = chart.sma200.last().and_then(|v| *v);
+            let sma100_val = chart.sma100.last().and_then(|v| *v);
+            let kama_val = chart.kama.last().and_then(|v| *v);
+            let close = bar.close;
+
+            // SMA cross status line (matching MT5: "200 SMA  M1 M5 M15 M30 H1 H4 D1 W1")
+            if let Some(sma200) = sma200_val {
+                let status_col = if close > sma200 { UP } else { DOWN };
+                let status_txt = if close > sma200 { "ABOVE" } else { "BELOW" };
+                painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
+                    &format!("200 SMA: {} {}", format_price(sma200), status_txt), font.clone(), status_col);
+                oy += 11.0;
+            }
+
+            // KAMA status
+            if let Some(kama) = kama_val {
+                let kc = if close > kama { UP } else { DOWN };
+                painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
+                    &format!("KAMA: {}", format_price(kama)), font.clone(), kc);
+                oy += 11.0;
+            }
+
+            // Bull/Bear Power calculation (matching MTF_MA.mqh logic)
+            // Bull Power: count how many MAs price is above
+            // Bear Power: count how many MAs price is below
+            let ma_vals: Vec<Option<f64>> = vec![
+                sma200_val, sma100_val, kama_val,
+                chart.ema21.last().and_then(|v| *v),
+            ];
+            let mut bull = 0i32;
+            let mut bear = 0i32;
+            for ma in &ma_vals {
+                if let Some(m) = ma {
+                    if close > *m { bull += 1; } else { bear += 1; }
+                }
+            }
+            let bull_pct = if !ma_vals.is_empty() { bull * 100 / ma_vals.len().max(1) as i32 } else { 0 };
+            let bear_pct = if !ma_vals.is_empty() { bear * 100 / ma_vals.len().max(1) as i32 } else { 0 };
+
+            let bull_col = if bull_pct > 50 { UP } else { egui::Color32::from_rgb(255, 200, 50) };
+            let _bear_col = if bear_pct > 50 { DOWN } else { egui::Color32::from_rgb(255, 200, 50) };
             painter.text(egui::pos2(overlay_x, oy), egui::Align2::RIGHT_TOP,
-                &format!("Vol: {:.0}", bar.volume), font.clone(), dim);
-            oy += 13.0;
+                &format!("Bull Power: {}  Bear Power: {}", bull_pct, bear_pct), font.clone(), bull_col);
+            oy += 11.0;
         }
 
         // SL/TP info if set
