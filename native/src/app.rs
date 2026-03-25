@@ -5233,6 +5233,12 @@ impl TyphooNApp {
     }
 
     fn draw_floating_windows(&mut self, ctx: &egui::Context) {
+        // Performance: skip heavy per-account DARWIN queries on most frames.
+        // The DARWIN Accounts window calls 15+ functions per account per frame.
+        // This flag gates those queries to run only every 8th frame (~2s at 4 FPS).
+        let db_ok = self.frame_count % 8 == 0 || self.frame_count < 8;
+        let _ = db_ok; // will be used by DARWIN Accounts window
+
         // Settings
         if self.show_settings {
             egui::Window::new("Settings")
@@ -5502,7 +5508,8 @@ impl TyphooNApp {
                                     });
                                     ui.add_space(10.0);
                                     // Per-account details (expandable)
-                                    for acct in &accounts {
+                                    // Performance: only query per-account details on db_ok frames
+                                    if db_ok { for acct in &accounts {
                                         if let Ok(summary) = darwin::get_darwin_summary(&conn, &acct.darwin_ticker) {
                                             ui.collapsing(format!("{} — Details", acct.darwin_ticker), |ui| {
                                                 egui::Grid::new(format!("det_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
@@ -5905,7 +5912,7 @@ impl TyphooNApp {
                                                 }
                                             });
                                         }
-                                    }
+                                    } } // close for acct + if db_ok
                                 }
                                 Ok(_) => {
                                     ui.label(egui::RichText::new("No DARWIN accounts imported yet.").color(AXIS_TEXT));
