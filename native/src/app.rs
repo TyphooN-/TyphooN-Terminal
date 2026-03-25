@@ -5283,6 +5283,39 @@ impl TyphooNApp {
                                                         });
                                                     }
                                                 }
+                                                // Pyramiding Analysis
+                                                if let Ok(pyra) = darwin::analyze_pyramiding(&conn, &acct.darwin_ticker) {
+                                                    if !pyra.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new("Pyramiding").strong());
+                                                        for p in &pyra {
+                                                            let c = if p.final_pnl >= 0.0 { UP } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("{}: {} adds ({}h avg), {} win/{} loss → ${:.0} [{}]",
+                                                                p.symbol, p.total_adds, p.avg_add_interval_hours as i64,
+                                                                p.adds_in_profit, p.adds_in_loss, p.final_pnl, p.strategy)).color(c).small());
+                                                        }
+                                                    }
+                                                }
+                                                // Trading Bursts
+                                                if let Ok(bursts) = darwin::detect_trading_bursts(&conn, &acct.darwin_ticker) {
+                                                    if !bursts.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new("Trading Bursts").strong());
+                                                        for b in bursts.iter().take(5) {
+                                                            let c = if b.total_pnl >= 0.0 { UP } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("{} → {}: {} trades ({:.1}/day) ${:.0}",
+                                                                b.start_date, b.end_date, b.trade_count, b.avg_trades_per_day, b.total_pnl)).color(c).small());
+                                                        }
+                                                    }
+                                                }
+                                                // Trade Autocorrelation
+                                                if let Ok(ac) = darwin::compute_trade_autocorrelation(&conn, &acct.darwin_ticker) {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("Autocorrelation").strong());
+                                                    ui.label(format!("Lag1: {:.4}  Lag2: {:.4}  Lag3: {:.4}  Lag5: {:.4}", ac.lag1, ac.lag2, ac.lag3, ac.lag5));
+                                                    let rc = if ac.is_random { UP } else { egui::Color32::from_rgb(255, 200, 50) };
+                                                    ui.label(egui::RichText::new(&ac.interpretation).color(rc).small());
+                                                }
                                             });
                                         }
                                     }
