@@ -2425,7 +2425,7 @@ fn draw_chart(
                 egui::Color32::WHITE,
             );
 
-            // OHLCV + indicator values tooltip for nearest bar
+            // OHLCV + indicator values data window (WebKit: .data-window — #000000ee bg)
             let rel_x = pos.x - chart_rect.left();
             let bar_idx = ((rel_x / bar_w) as usize).min(bars.len().saturating_sub(1));
             if bar_idx < bars.len() {
@@ -2436,11 +2436,17 @@ fn draw_chart(
                     format_price(b.open), format_price(b.high),
                     format_price(b.low),  format_price(b.close), b.volume
                 );
+                // Semi-transparent background behind data text (WebKit: background #000000ee)
+                let data_bg = egui::Rect::from_min_size(
+                    egui::pos2(chart_rect.left() + 2.0, chart_rect.top() + 2.0),
+                    egui::vec2(tooltip.len() as f32 * 6.5 + 8.0, 30.0),
+                );
+                painter.rect_filled(data_bg, 2.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, 238));
                 painter.text(
                     egui::pos2(chart_rect.left() + 6.0, chart_rect.top() + 4.0),
                     egui::Align2::LEFT_TOP,
                     &tooltip,
-                    egui::FontId::monospace(11.0),
+                    egui::FontId::monospace(10.0),
                     egui::Color32::from_rgb(220, 220, 255),
                 );
 
@@ -2466,13 +2472,22 @@ fn draw_chart(
         }
     }
 
-    // ── symbol / tf label ────────────────────────────────────────────────────
+    // ── symbol / tf label (WebKit: .mtf-cell-label — #8cf, 11px bold, text-shadow)
+    let sym_label = format!("{} [{}]", chart.symbol, chart.timeframe.label());
+    // Shadow for readability over candles
+    painter.text(
+        egui::pos2(chart_rect.left() + 9.0, chart_rect.top() + 7.0),
+        egui::Align2::LEFT_TOP,
+        &sym_label,
+        egui::FontId::monospace(11.0),
+        egui::Color32::from_rgb(0, 0, 0),
+    );
     painter.text(
         egui::pos2(chart_rect.left() + 8.0, chart_rect.top() + 6.0),
         egui::Align2::LEFT_TOP,
-        &format!("{} [{}]", chart.symbol, chart.timeframe.label()),
-        egui::FontId::proportional(13.0),
-        egui::Color32::from_rgb(200, 200, 220),
+        &sym_label,
+        egui::FontId::monospace(11.0),
+        egui::Color32::from_rgb(136, 204, 255), // #8cf — WebKit .mtf-cell-label color
     );
 
     // ── indicator legend ─────────────────────────────────────────────────────
