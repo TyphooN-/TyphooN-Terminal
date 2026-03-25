@@ -25,6 +25,7 @@ use typhoon_engine::core::darwin;
 use typhoon_engine::core::backtest;
 use typhoon_engine::core::risk;
 use typhoon_engine::core::margin;
+use typhoon_engine::core::sec_filing;
 use typhoon_engine::broker::alpaca::{Bar as EngineBar, AlpacaBroker, AccountInfo, PositionInfo, OrderInfo};
 use tokio::sync::mpsc;
 
@@ -5789,89 +5790,140 @@ impl TyphooNApp {
                 });
         }
 
-        // SEC
+        // SEC Filing Scanner — wired to engine sec_filing.rs
         if self.show_sec {
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
-                .default_size([650.0, 500.0])
+                .default_size([700.0, 500.0])
                 .show(ctx, |ui| {
-                    // Filing type filter checkboxes (matching old WebKit)
+                    // Filing type filter checkboxes
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Filter:").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new("Filter:").color(AXIS_TEXT));
                         let labels = ["Form 4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
                         for (i, label) in labels.iter().enumerate() {
                             ui.checkbox(&mut self.sec_filters[i], *label);
                         }
                     });
-                    ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("Scrape Now").color(egui::Color32::WHITE).small()).fill(BTN_BLUE)).clicked() {
-                            self.log.push_back(LogEntry::info("SEC scrape: requires EDGAR API connection"));
+                    ui.separator();
+
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = sec_filing::create_sec_tables(&conn);
+
+                            // Filings table
+                            egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
+                                if let Ok(filings) = sec_filing::get_recent_filings(&conn, None, 100) {
+                                    if filings.is_empty() {
+                                        ui.label(egui::RichText::new("No filings in database. Run SEC scraper to populate.").color(AXIS_TEXT));
+                                    } else {
+                                        egui::Grid::new("sec_filings_grid").striped(true).num_columns(6).show(ui, |ui| {
+                                            ui.strong("Date"); ui.strong("Symbol"); ui.strong("Type"); ui.strong("Category"); ui.strong("Company"); ui.strong("Score");
+                                            ui.end_row();
+                                            let filter_types: Vec<&str> = vec!["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
+                                            for f in &filings {
+                                                // Apply filter
+                                                let pass = self.sec_filters.iter().enumerate().any(|(i, &enabled)| {
+                                                    enabled && f.form_type.contains(filter_types.get(i).unwrap_or(&""))
+                                                }) || self.sec_filters.iter().all(|&v| v); // show all if all checked
+                                                if !pass { continue; }
+
+                                                ui.label(egui::RichText::new(&f.filing_date).small());
+                                                ui.label(egui::RichText::new(&f.ticker).small().strong());
+                                                // Type badge with color
+                                                let type_col = match f.form_type.as_str() {
+                                                    "4" => egui::Color32::from_rgb(255, 200, 50),
+                                                    "10-K" | "10-Q" => egui::Color32::from_rgb(100, 200, 255),
+                                                    "8-K" => egui::Color32::from_rgb(255, 130, 60),
+                                                    "S-1" => egui::Color32::from_rgb(200, 100, 255),
+                                                    _ => AXIS_TEXT,
+                                                };
+                                                ui.label(egui::RichText::new(&f.form_type).color(type_col).small());
+                                                ui.label(egui::RichText::new(&f.category).color(AXIS_TEXT).small());
+                                                ui.label(egui::RichText::new(&f.company_name).small());
+                                                let score_col = if f.importance_score >= 80 { DOWN }
+                                                    else if f.importance_score >= 50 { egui::Color32::from_rgb(255, 200, 50) }
+                                                    else { AXIS_TEXT };
+                                                ui.label(egui::RichText::new(format!("{}", f.importance_score)).color(score_col).small());
+                                                ui.end_row();
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+
+                            // Filing Alerts
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new("Filing Alerts").strong());
+                            ui.separator();
+                            if let Ok(alerts) = sec_filing::get_filing_alerts(&conn, false) {
+                                if alerts.is_empty() {
+                                    ui.label(egui::RichText::new("No active alerts.").color(AXIS_TEXT));
+                                } else {
+                                    for alert in &alerts {
+                                        let color = if alert.importance >= 80 { DOWN }
+                                                    else if alert.importance >= 50 { egui::Color32::from_rgb(255, 160, 40) }
+                                                    else { AXIS_TEXT };
+                                        let severity = if alert.importance >= 80 { "High" }
+                                                       else if alert.importance >= 50 { "Medium" }
+                                                       else { "Low" };
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new("\u{2588}").color(color));
+                                            ui.label(egui::RichText::new(severity).color(color).small());
+                                            ui.label(egui::RichText::new(&alert.alert_type).color(egui::Color32::WHITE).small().strong());
+                                            ui.label(egui::RichText::new(&alert.ticker).small().strong());
+                                            ui.label(egui::RichText::new(&alert.message).color(AXIS_TEXT).small());
+                                        });
+                                    }
+                                }
+                            }
                         }
-                        ui.label(egui::RichText::new("via SEC EDGAR Full-Text Search").color(AXIS_TEXT).small());
-                    });
-                    ui.separator();
-
-                    // Filing table header
-                    egui::Grid::new("sec_filings_grid").striped(true).num_columns(6).show(ui, |ui| {
-                        ui.strong("Date");
-                        ui.strong("Symbol");
-                        ui.strong("Type");
-                        ui.strong("Category");
-                        ui.strong("Company");
-                        ui.strong("View");
-                        ui.end_row();
-                        // Placeholder rows — wired when EDGAR API is connected
-                        ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
-                        ui.label(egui::RichText::new("Connect EDGAR API for live filings").color(AXIS_TEXT).small());
-                        ui.end_row();
-                    });
-
-                    ui.add_space(10.0);
-                    // ── SEC Filing Alerts ─────────────────────────────────
-                    ui.label(egui::RichText::new("Filing Alerts").strong());
-                    ui.separator();
-                    // Alert severity bar examples (matching old WebKit)
-                    let alert_types = [
-                        ("SEC_INQUIRY", egui::Color32::from_rgb(220, 40, 40), "High"),
-                        ("ACTIVIST", egui::Color32::from_rgb(255, 160, 40), "Medium"),
-                        ("ACTIVE_DILUTION", egui::Color32::from_rgb(255, 160, 40), "Medium"),
-                        ("RESTATEMENT", egui::Color32::from_rgb(220, 40, 40), "High"),
-                    ];
-                    for (alert_type, color, severity) in &alert_types {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("\u{2588}").color(*color));
-                            ui.label(egui::RichText::new(*severity).color(*color).small());
-                            ui.label(egui::RichText::new(*alert_type).color(egui::Color32::WHITE).small().strong());
-                            ui.label(egui::RichText::new("— requires API connection").color(AXIS_TEXT).small());
-                        });
                     }
                 });
         }
 
-        // Insider (SEC Form 4 viewer)
+        // Insider Trades (SEC Form 4) — wired to engine sec_filing.rs
         if self.show_insider {
             egui::Window::new("Insider Trades (Form 4)")
                 .open(&mut self.show_insider)
-                .default_size([600.0, 400.0])
+                .default_size([650.0, 400.0])
                 .show(ctx, |ui| {
+                    let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT).small());
-                        let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
+                        ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT));
                         ui.label(egui::RichText::new(&sym).strong().monospace());
                     });
                     ui.separator();
-                    egui::Grid::new("insider_grid").striped(true).num_columns(6).show(ui, |ui| {
-                        ui.strong("Date");
-                        ui.strong("Insider");
-                        ui.strong("Title");
-                        ui.strong("Type");
-                        ui.strong("Shares");
-                        ui.strong("Value");
-                        ui.end_row();
-                        ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
-                        ui.label(egui::RichText::new("Connect Finnhub or SEC EDGAR API").color(AXIS_TEXT).small());
-                        ui.end_row();
-                    });
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            let _ = sec_filing::create_sec_tables(&conn);
+                            // Extract ticker from cache key (e.g. "mt5:CC:SLV:4Hour" → "SLV")
+                            let ticker = sym.split(':').rev().nth(1).or_else(|| sym.split(':').last()).unwrap_or(&sym);
+                            if let Ok(trades) = sec_filing::get_insider_trades(&conn, Some(ticker), 90) {
+                                if trades.is_empty() {
+                                    ui.label(egui::RichText::new(format!("No insider trades for {} (last 90 days)", ticker)).color(AXIS_TEXT));
+                                } else {
+                                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                                        egui::Grid::new("insider_grid").striped(true).num_columns(6).show(ui, |ui| {
+                                            ui.strong("Date"); ui.strong("Insider"); ui.strong("Title"); ui.strong("Type"); ui.strong("Shares"); ui.strong("Value");
+                                            ui.end_row();
+                                            for t in &trades {
+                                                ui.label(egui::RichText::new(&t.transaction_date).small());
+                                                ui.label(egui::RichText::new(&t.insider_name).small().strong());
+                                                ui.label(egui::RichText::new(&t.insider_title).color(AXIS_TEXT).small());
+                                                let type_col = if t.transaction_type.contains("Buy") || t.transaction_type.contains("Acquisition") { UP } else { DOWN };
+                                                ui.label(egui::RichText::new(&t.transaction_type).color(type_col).small());
+                                                ui.label(egui::RichText::new(format!("{:.0}", t.shares)).small());
+                                                ui.label(egui::RichText::new(format!("${:.0}", t.aggregate_value)).small());
+                                                ui.end_row();
+                                            }
+                                        });
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        ui.label(egui::RichText::new("No cache available.").color(AXIS_TEXT));
+                    }
                 });
         }
 
