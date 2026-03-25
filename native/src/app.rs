@@ -298,11 +298,13 @@ const EHLERS_CYBER_COL: egui::Color32 = egui::Color32::from_rgb(200, 100, 255);
 const EHLERS_CG_COL: egui::Color32 = egui::Color32::from_rgb(255, 180, 0);
 const EHLERS_ROOF_COL: egui::Color32 = egui::Color32::from_rgb(100, 255, 100);
 const ATR_PROJ_COL: egui::Color32 = egui::Color32::from_rgb(255, 200, 50);
-const BVOL_CLIMAX_UP: egui::Color32 = egui::Color32::from_rgb(0, 200, 80);
-const BVOL_CLIMAX_DN: egui::Color32 = egui::Color32::from_rgb(220, 40, 40);
-const BVOL_HIGH: egui::Color32 = egui::Color32::from_rgb(0, 120, 255);
-const BVOL_LOW: egui::Color32 = egui::Color32::from_rgb(255, 200, 50);
-const BVOL_CHURN: egui::Color32 = egui::Color32::from_rgb(180, 180, 180);
+// BetterVolume colors — exact MT5 BetterVolume.mqh values
+const BVOL_CLIMAX_UP: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);      // clrRed — bullish climax
+const BVOL_CLIMAX_DN: egui::Color32 = egui::Color32::from_rgb(255, 255, 255);  // clrWhite — bearish climax
+const BVOL_HIGH: egui::Color32 = egui::Color32::from_rgb(0, 255, 0);           // clrGreen — churn (high vol, low move)
+const BVOL_LOW: egui::Color32 = egui::Color32::from_rgb(255, 255, 0);          // clrYellow — low volume
+const BVOL_CHURN: egui::Color32 = egui::Color32::from_rgb(255, 0, 255);        // clrMagenta — climax + churn
+const BVOL_NORMAL: egui::Color32 = egui::Color32::from_rgb(70, 130, 180);      // clrSteelBlue — normal volume
 
 /// Indicator visibility flags passed to draw_chart.
 struct IndicatorFlags {
@@ -2985,19 +2987,38 @@ fn draw_fisher_pane(
         }
     }
 
-    // Signal line
-    let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
+    // Fisher value line — colored segments (MT5: green when Fisher > Signal, red when < Signal)
+    for (rel_idx, _) in bars.iter().enumerate() {
+        let abs_idx = start_idx + rel_idx;
+        if abs_idx + 1 >= fisher.len() || rel_idx + 1 >= bars.len() { continue; }
+        if let (Some(f0), Some(f1)) = (fisher[abs_idx], fisher[abs_idx + 1]) {
+            let sig = if abs_idx < signal.len() { signal[abs_idx] } else { None };
+            let color = match sig {
+                Some(s) if f0 > s => FISHER_POS,
+                Some(_) => FISHER_NEG,
+                None => if f0 >= 0.0 { FISHER_POS } else { FISHER_NEG },
+            };
+            let x0 = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+            let x1 = rect.left() + (rel_idx as f32 + 1.5) * bar_w;
+            let y0 = val_to_y(f0).clamp(rect.top(), rect.bottom());
+            let y1 = val_to_y(f1).clamp(rect.top(), rect.bottom());
+            painter.line_segment([egui::pos2(x0, y0), egui::pos2(x1, y1)], egui::Stroke::new(2.0, color));
+        }
+    }
+
+    // Signal line (MT5: clrDarkGray, width 1)
+    let mut sig_points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
     for (rel_idx, _) in bars.iter().enumerate() {
         let abs_idx = start_idx + rel_idx;
         if abs_idx >= signal.len() { continue; }
         if let Some(v) = signal[abs_idx] {
             let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
             let y = val_to_y(v).clamp(rect.top(), rect.bottom());
-            points.push(egui::pos2(x, y));
+            sig_points.push(egui::pos2(x, y));
         }
     }
-    if points.len() > 1 {
-        painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, FISHER_SIG)));
+    if sig_points.len() > 1 {
+        painter.add(egui::Shape::line(sig_points, egui::Stroke::new(1.0, FISHER_SIG)));
     }
 
     // Label with current values (MT5 style: "Ehlers Fisher transform (32) -2.037 -2.068")
@@ -3174,11 +3195,7 @@ fn draw_better_volume_pane(
             3 => BVOL_HIGH,
             4 => BVOL_LOW,
             5 => BVOL_CHURN,
-            _ => if b.close >= b.open {
-                egui::Color32::from_rgba_premultiplied(0, 150, 60, 140)
-            } else {
-                egui::Color32::from_rgba_premultiplied(150, 30, 30, 140)
-            },
+            _ => BVOL_NORMAL, // clrSteelBlue — normal volume
         };
         painter.rect_filled(
             egui::Rect::from_min_max(
