@@ -7077,6 +7077,33 @@ impl TyphooNApp {
                             }
                         }
                     }
+                    // ── DARWIN Risk Alerts ──────────────────────
+                    ui.add_space(10.0);
+                    ui.label(egui::RichText::new("DARWIN Risk Alerts").strong());
+                    ui.separator();
+                    let darwin_alerts = self.cache.as_ref().and_then(|c| c.connection().ok()).and_then(|conn| {
+                        let _ = darwin::create_darwin_tables(&conn);
+                        darwin::check_alerts(&conn).ok()
+                    });
+                    if let Some(alerts) = darwin_alerts {
+                        if alerts.is_empty() {
+                            ui.label(egui::RichText::new("No risk alerts — all clear.").color(UP));
+                        } else {
+                            for alert in &alerts {
+                                let color = match alert.severity.as_str() {
+                                    "CRITICAL" => DOWN,
+                                    "WARNING" => egui::Color32::from_rgb(255, 200, 50),
+                                    _ => AXIS_TEXT,
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("\u{2588}").color(color));
+                                    ui.label(egui::RichText::new(&alert.severity).color(color).small().strong());
+                                    ui.label(egui::RichText::new(&alert.alert_type).small().strong());
+                                    ui.label(egui::RichText::new(&alert.message).color(AXIS_TEXT).small());
+                                });
+                            }
+                        }
+                    }
                 });
         }
 
