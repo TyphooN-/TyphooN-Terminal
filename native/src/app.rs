@@ -5328,6 +5328,27 @@ impl TyphooNApp {
                                     ui.label(egui::RichText::new(format!("Error: {}", e)).color(egui::Color32::from_rgb(255, 80, 80)));
                                 }
                             }
+                            // ── Tax Summary (current year) ──────────────
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.heading("Tax Summary (2026)");
+                            if let Ok(accounts) = darwin::list_darwin_accounts(&conn) {
+                                for acct in &accounts {
+                                    if let Ok(tax) = darwin::compute_tax_lots(&conn, &acct.darwin_ticker, 2026) {
+                                        ui.label(egui::RichText::new(&acct.darwin_ticker).strong());
+                                        egui::Grid::new(format!("tax_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                            ui.label("Short-term gains:"); ui.label(egui::RichText::new(format!("${:.2}", tax.short_term_gains)).color(UP)); ui.end_row();
+                                            ui.label("Short-term losses:"); ui.label(egui::RichText::new(format!("${:.2}", tax.short_term_losses)).color(DOWN)); ui.end_row();
+                                            ui.label("Long-term gains:"); ui.label(egui::RichText::new(format!("${:.2}", tax.long_term_gains)).color(UP)); ui.end_row();
+                                            ui.label("Long-term losses:"); ui.label(egui::RichText::new(format!("${:.2}", tax.long_term_losses)).color(DOWN)); ui.end_row();
+                                            let net_c = if tax.total_net >= 0.0 { UP } else { DOWN };
+                                            ui.label("Net Total:"); ui.label(egui::RichText::new(format!("${:.2}", tax.total_net)).color(net_c).strong()); ui.end_row();
+                                        });
+                                        ui.add_space(4.0);
+                                    }
+                                }
+                            }
+
                             // ── XLSX Import section ──────────────────
                             ui.add_space(10.0);
                             ui.separator();
@@ -5506,6 +5527,40 @@ impl TyphooNApp {
                                                         ui.label("Trading Days:"); ui.label(format!("{}", vs.trading_days));
                                                         ui.end_row();
                                                     });
+                                                    // Rolling VaR (30-day window)
+                                                    let rolling = darwin::get_rolling_var(&daily, 30);
+                                                    if rolling.len() > 5 {
+                                                        ui.add_space(10.0);
+                                                        ui.label(egui::RichText::new("Rolling 30d VaR").strong());
+                                                        let points: PlotPoints = PlotPoints::new(
+                                                            rolling.iter().enumerate().map(|(i, rv)| [i as f64, rv.var_95]).collect()
+                                                        );
+                                                        let line = Line::new("VaR95", points).color(DOWN);
+                                                        Plot::new("rolling_var_plot").height(120.0).allow_drag(false).allow_zoom(false)
+                                                            .show(ui, |plot_ui| { plot_ui.line(line); });
+                                                    }
+                                                    // Combined drawdown dashboard
+                                                    if let Ok(dd) = darwin::get_combined_drawdown_dashboard(&conn, 5) {
+                                                        ui.add_space(10.0);
+                                                        ui.label(egui::RichText::new("Drawdown Dashboard").strong());
+                                                        egui::Grid::new("dd_dash").striped(true).num_columns(4).show(ui, |ui| {
+                                                            ui.strong("DARWIN"); ui.strong("Max DD"); ui.strong("Date"); ui.strong("Current DD");
+                                                            ui.end_row();
+                                                            for d in &dd.darwins {
+                                                                ui.label(&d.darwin_ticker);
+                                                                ui.label(egui::RichText::new(format!("{:.2}%", d.max_drawdown_pct)).color(DOWN));
+                                                                ui.label(&d.max_dd_date);
+                                                                ui.label(format!("{:.2}%", d.current_drawdown_pct));
+                                                                ui.end_row();
+                                                            }
+                                                            // Combined row
+                                                            ui.label(egui::RichText::new("COMBINED").strong());
+                                                            ui.label(egui::RichText::new(format!("{:.2}%", dd.combined.max_drawdown_pct)).color(DOWN).strong());
+                                                            ui.label(&dd.combined.max_dd_date);
+                                                            ui.label(format!("{:.2}%", dd.combined.current_drawdown_pct));
+                                                            ui.end_row();
+                                                        });
+                                                    }
                                                 }
                                             }
                                         }
