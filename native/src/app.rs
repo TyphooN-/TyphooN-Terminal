@@ -5608,6 +5608,20 @@ impl TyphooNApp {
                                                     }
                                                 });
                                             }
+                                            // Exposure Treemap (flattened)
+                                            ui.add_space(10.0);
+                                            ui.heading("Exposure by Sector");
+                                            ui.separator();
+                                            if let Ok(tree) = darwin::get_exposure_treemap(&conn) {
+                                                for child in &tree.children {
+                                                    let sector_c = if child.color_value > 0.0 { UP } else if child.color_value < 0.0 { DOWN } else { AXIS_TEXT };
+                                                    ui.label(egui::RichText::new(format!("{}: ${:.0}", child.name, child.value)).color(sector_c).strong());
+                                                    for sym in &child.children {
+                                                        let sc = if sym.color_value > 0.0 { UP } else { DOWN };
+                                                        ui.label(egui::RichText::new(format!("  {} ${:.0}", sym.name, sym.value)).color(sc).small());
+                                                    }
+                                                }
+                                            }
                                         }
                                         5 => { // Combined Positions
                                             if let Ok(positions) = darwin::get_portfolio_open_positions(&conn) {
