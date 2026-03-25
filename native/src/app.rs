@@ -6196,9 +6196,15 @@ impl TyphooNApp {
                             });
                     });
                     ui.separator();
-                    // Use background-computed DARWIN data (ZERO DB queries in render thread)
+                    // Use background-computed DARWIN data (minimal DB queries in render)
                     let bg = self.bg_darwin.try_lock().ok();
                     let portfolio_ref = bg.as_ref().and_then(|d| d.portfolio.as_ref());
+                    let bg_daily = bg.as_ref().map(|d| &d.daily_returns);
+                    let bg_var = bg.as_ref().and_then(|d| d.var_stats.as_ref());
+                    let bg_corrs = bg.as_ref().map(|d| &d.correlations);
+                    let bg_exposure = bg.as_ref().map(|d| &d.exposure);
+                    let bg_eq_curve = bg.as_ref().map(|d| &d.equity_curve);
+                    let bg_positions = bg.as_ref().map(|d| &d.open_positions);
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let dv = self.darwin_view;
@@ -6244,10 +6250,9 @@ impl TyphooNApp {
                                                 }
                                             });
                                         }
-                                        1 => { // Portfolio VaR
-                                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                                if !daily.is_empty() {
-                                                    let vs = darwin::compute_var(&daily);
+                                        1 => { // Portfolio VaR (from bg cache)
+                                            if let Some(daily) = bg_daily { if !daily.is_empty() {
+                                                if let Some(vs) = bg_var {
                                                     egui::Grid::new("port_var").striped(true).num_columns(4).show(ui, |ui| {
                                                         ui.label("VaR 95%:"); ui.label(format!("${:.2}", vs.var_95));
                                                         ui.label("Sharpe:"); ui.label(format!("{:.3}", vs.sharpe));
@@ -6305,11 +6310,11 @@ impl TyphooNApp {
                                                             ui.end_row();
                                                         });
                                                     }
-                                                }
-                                            }
+                                                } // if let Some(vs)
+                                            } } // if !daily.is_empty() + if let Some(daily)
                                         }
-                                        2 => { // Equity Curve
-                                            if let Ok(eq_curve) = darwin::get_portfolio_equity_curve(&conn) {
+                                        2 => { // Equity Curve (from bg cache)
+                                            if let Some(eq_curve) = bg_eq_curve {
                                                 if eq_curve.len() > 2 {
                                                     let points: PlotPoints = PlotPoints::new(
                                                         eq_curve.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
@@ -6320,12 +6325,12 @@ impl TyphooNApp {
                                                 }
                                             }
                                         }
-                                        3 => { // Correlation Matrix
-                                            if let Ok(corrs) = darwin::get_darwin_correlations(&conn) {
+                                        3 => { // Correlation Matrix (from bg cache)
+                                            if let Some(corrs) = bg_corrs {
                                                 egui::Grid::new("corr_grid").striped(true).num_columns(3).show(ui, |ui| {
                                                     ui.strong("DARWIN A"); ui.strong("DARWIN B"); ui.strong("Correlation");
                                                     ui.end_row();
-                                                    for c in &corrs {
+                                                    for c in corrs.iter() {
                                                         ui.label(&c.darwin_a); ui.label(&c.darwin_b);
                                                         let color = if c.correlation.abs() > 0.95 { egui::Color32::from_rgb(255, 80, 80) }
                                                                     else if c.correlation.abs() > 0.7 { egui::Color32::from_rgb(255, 200, 50) }
@@ -6336,12 +6341,12 @@ impl TyphooNApp {
                                                 });
                                             }
                                         }
-                                        4 => { // Symbol Exposure
-                                            if let Ok(exposure) = darwin::get_portfolio_exposure(&conn) {
+                                        4 => { // Symbol Exposure (from bg cache)
+                                            if let Some(exposure) = bg_exposure {
                                                 egui::Grid::new("exp_grid").striped(true).num_columns(5).show(ui, |ui| {
                                                     ui.strong("Symbol"); ui.strong("Long $"); ui.strong("Short $"); ui.strong("Net $"); ui.strong("DARWINs");
                                                     ui.end_row();
-                                                    for e in &exposure {
+                                                    for e in exposure.iter() {
                                                         ui.label(&e.symbol);
                                                         ui.label(format!("{:.0}", e.long_notional));
                                                         ui.label(format!("{:.0}", e.short_notional));
@@ -6367,15 +6372,15 @@ impl TyphooNApp {
                                                 }
                                             }
                                         }
-                                        5 => { // Combined Positions
-                                            if let Ok(positions) = darwin::get_portfolio_open_positions(&conn) {
+                                        5 => { // Combined Positions (from bg cache)
+                                            if let Some(positions) = bg_positions {
                                                 if positions.is_empty() {
                                                     ui.label(egui::RichText::new("No open positions.").color(AXIS_TEXT));
                                                 } else {
                                                     egui::Grid::new("cpos_grid").striped(true).num_columns(5).show(ui, |ui| {
                                                         ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Avg Price"); ui.strong("DARWINs");
                                                         ui.end_row();
-                                                        for pos in &positions {
+                                                        for pos in positions.iter() {
                                                             ui.label(&pos.symbol);
                                                             let side_c = if pos.side == "buy" { UP } else { DOWN };
                                                             ui.label(egui::RichText::new(&pos.side).color(side_c));
@@ -6707,7 +6712,7 @@ impl TyphooNApp {
                                             ui.label("Click a symbol to see VaR impact of closing:");
                                             ui.add_space(4.0);
                                             if let Ok(exposure) = darwin::get_portfolio_exposure(&conn) {
-                                                for e in &exposure {
+                                                for e in exposure.iter() {
                                                     if ui.button(format!("Close {} (${:.0} net)", e.symbol, e.net_notional)).clicked() {
                                                         if let Ok(result) = darwin::what_if_close_symbol(&conn, &e.symbol) {
                                                             self.log.push_back(LogEntry::info(format!(
@@ -7480,7 +7485,7 @@ impl TyphooNApp {
                                     egui::Grid::new("corr_matrix").striped(true).num_columns(3).show(ui, |ui| {
                                         ui.strong("DARWIN A"); ui.strong("DARWIN B"); ui.strong("Correlation");
                                         ui.end_row();
-                                        for c in &corrs {
+                                        for c in corrs.iter() {
                                             ui.label(&c.darwin_a);
                                             ui.label(&c.darwin_b);
                                             let color = if c.correlation.abs() > 0.95 { egui::Color32::from_rgb(255, 40, 40) }
@@ -9280,7 +9285,7 @@ impl eframe::App for TyphooNApp {
                                     if let Ok(positions) = darwin::get_portfolio_open_positions(&conn) {
                                         if !positions.is_empty() {
                                             has_positions = true;
-                                            for pos in &positions {
+                                            for pos in positions.iter() {
                                                 let side_c = if pos.side == "buy" { UP } else { DOWN };
                                                 ui.horizontal(|ui| {
                                                     ui.label(egui::RichText::new(&pos.symbol).small().strong());
