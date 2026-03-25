@@ -5119,6 +5119,76 @@ impl TyphooNApp {
                                                             .show(ui, |plot_ui| { plot_ui.line(line); });
                                                     }
                                                 }
+                                                // P&L by Symbol
+                                                if let Ok(pnl_sym) = darwin::get_darwin_pnl_by_symbol(&conn, &acct.darwin_ticker) {
+                                                    if !pnl_sym.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new("P&L by Symbol").strong());
+                                                        egui::Grid::new(format!("sym_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                                            ui.strong("Symbol"); ui.strong("P&L"); ui.strong("Comm"); ui.strong("Trades");
+                                                            ui.end_row();
+                                                            for (sym, pnl, comm, _swap, count) in &pnl_sym {
+                                                                ui.label(sym);
+                                                                let c = if *pnl >= 0.0 { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(format!("${:.2}", pnl)).color(c));
+                                                                ui.label(format!("${:.2}", comm));
+                                                                ui.label(format!("{}", count));
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                // Day of Week P&L
+                                                if let Ok(dow) = darwin::get_day_of_week_pnl(&conn, &acct.darwin_ticker) {
+                                                    if !dow.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new("Day of Week").strong());
+                                                        egui::Grid::new(format!("dow_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                                            ui.strong("Day"); ui.strong("P&L"); ui.strong("Win%"); ui.strong("Trades");
+                                                            ui.end_row();
+                                                            for d in &dow {
+                                                                ui.label(&d.day);
+                                                                let c = if d.total_pnl >= 0.0 { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(format!("${:.2}", d.total_pnl)).color(c));
+                                                                ui.label(format!("{:.0}%", d.win_rate));
+                                                                ui.label(format!("{}", d.trade_count));
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                // Hold Time Stats
+                                                if let Ok(ht) = darwin::get_hold_time_stats(&conn, &acct.darwin_ticker) {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("Hold Time").strong());
+                                                    ui.label(format!("Avg: {:.1}h  Med: {:.1}h  Min: {:.1}h  Max: {:.1}h", ht.avg_hold_hours, ht.median_hold_hours, ht.min_hold_hours, ht.max_hold_hours));
+                                                    if !ht.buckets.is_empty() {
+                                                        egui::Grid::new(format!("ht_{}", acct.darwin_ticker)).striped(true).num_columns(3).show(ui, |ui| {
+                                                            ui.strong("Bucket"); ui.strong("Trades"); ui.strong("Avg P&L");
+                                                            ui.end_row();
+                                                            for (label, count, avg_pnl) in &ht.buckets {
+                                                                ui.label(label);
+                                                                ui.label(format!("{}", count));
+                                                                let c = if *avg_pnl >= 0.0 { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(format!("${:.2}", avg_pnl)).color(c));
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                // Kelly Criterion
+                                                if let Ok(kelly) = darwin::compute_kelly(&conn, &acct.darwin_ticker) {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("Kelly Criterion").strong());
+                                                    egui::Grid::new(format!("kelly_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                                        ui.label("Win Rate:"); ui.label(format!("{:.1}%", kelly.win_rate * 100.0)); ui.end_row();
+                                                        ui.label("Avg Win:"); ui.label(egui::RichText::new(format!("${:.2}", kelly.avg_win)).color(UP)); ui.end_row();
+                                                        ui.label("Avg Loss:"); ui.label(egui::RichText::new(format!("${:.2}", kelly.avg_loss)).color(DOWN)); ui.end_row();
+                                                        ui.label("Kelly %:"); ui.label(format!("{:.1}%", kelly.kelly_fraction * 100.0)); ui.end_row();
+                                                        ui.label("Half Kelly:"); ui.label(format!("{:.1}%", kelly.half_kelly * 100.0)); ui.end_row();
+                                                        ui.label("Optimal Risk:"); ui.label(format!("{:.1}%", kelly.optimal_risk_pct)); ui.end_row();
+                                                    });
+                                                }
                                             });
                                         }
                                     }
@@ -6616,6 +6686,26 @@ impl TyphooNApp {
                                             }
                                         }
                                     });
+                                    // VaR Multipliers (Darwinex-style)
+                                    ui.add_space(10.0);
+                                    ui.heading("VaR Multipliers");
+                                    ui.separator();
+                                    if let Ok(mults) = darwin::compute_var_multipliers(&conn) {
+                                        egui::Grid::new("var_mult_grid").striped(true).num_columns(5).show(ui, |ui| {
+                                            ui.strong("DARWIN"); ui.strong("Monthly VaR"); ui.strong("Multiplier"); ui.strong("Corridor"); ui.strong("45d VaR");
+                                            ui.end_row();
+                                            for m in &mults {
+                                                ui.label(&m.darwin_ticker);
+                                                ui.label(format!("{:.2}%", m.monthly_var));
+                                                let mc = if m.multiplier >= 1.5 { UP } else if m.multiplier >= 0.8 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
+                                                ui.label(egui::RichText::new(format!("{:.2}x", m.multiplier)).color(mc));
+                                                let cc = if m.in_corridor { UP } else { DOWN };
+                                                ui.label(egui::RichText::new(&m.corridor_position).color(cc));
+                                                ui.label(format!("{:.2}%", m.var_45d));
+                                                ui.end_row();
+                                            }
+                                        });
+                                    }
                                 } else {
                                     ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
                                 }
