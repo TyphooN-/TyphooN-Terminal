@@ -9474,7 +9474,15 @@ impl eframe::App for TyphooNApp {
             });
 
         // ── floating windows ─────────────────────────────────────────────────
-        self.draw_floating_windows(ctx);
+        // Performance: skip ALL floating window rendering during active chart interaction.
+        // This prevents 1600+ widget calls from running while user zooms/pans/scrolls.
+        // Windows reappear instantly when interaction stops (next idle frame).
+        let chart_active = ctx.input(|i| {
+            i.pointer.primary_down() || i.smooth_scroll_delta.y.abs() > 0.5
+        });
+        if !chart_active || self.frame_count % 4 == 0 {
+            self.draw_floating_windows(ctx);
+        }
 
         // ── central panel (chart area) ────────────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
