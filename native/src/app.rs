@@ -3764,6 +3764,14 @@ struct BgDarwinData {
     exposure: Vec<darwin::PortfolioSymbolExposure>,
     equity_curve: Vec<(String, f64)>,
     open_positions: Vec<darwin::PortfolioOpenPosition>,
+    trade_overlaps: Vec<darwin::TradeOverlap>,
+    detailed_stats: Vec<(String, i64, i64)>,
+    // ── Heavy analytics that froze the UI when computed in render thread ──
+    optimal_allocation: Vec<darwin::OptimalAllocation>,
+    rebalance: Option<darwin::RebalanceDashboard>,
+    monte_carlo: Option<darwin::MonteCarloResult>,
+    stress_tests: Vec<darwin::StressTestResult>,
+    margin_call_sim: Option<darwin::MarginCallSimulation>,
 }
 
 /// Bottom panel mode.
@@ -4683,6 +4691,17 @@ impl TyphooNApp {
                             data.exposure = darwin::get_portfolio_exposure(&conn).unwrap_or_default();
                             data.equity_curve = darwin::get_portfolio_equity_curve(&conn).unwrap_or_default();
                             data.open_positions = darwin::get_portfolio_open_positions(&conn).unwrap_or_default();
+                            data.trade_overlaps = darwin::get_trade_overlaps(&conn).unwrap_or_default();
+                            data.detailed_stats = cache.detailed_stats().unwrap_or_default();
+                            // Heavy analytics (these were freezing the UI)
+                            data.optimal_allocation = darwin::compute_optimal_allocation(&conn).unwrap_or_default();
+                            let prices = std::collections::HashMap::new();
+                            data.rebalance = darwin::compute_rebalance_suggestions(&conn, &prices).ok();
+                            if !data.daily_returns.is_empty() {
+                                data.monte_carlo = Some(darwin::monte_carlo_var(&data.daily_returns, 252, 1000));
+                            }
+                            data.stress_tests = darwin::run_stress_tests(&conn).unwrap_or_default();
+                            data.margin_call_sim = darwin::simulate_margin_call(&conn).ok();
                             if let Ok(mut locked) = bg_data.lock() {
                                 *locked = data;
                             }
@@ -6237,6 +6256,12 @@ impl TyphooNApp {
                     let bg_exposure = bg.as_ref().map(|d| &d.exposure);
                     let bg_eq_curve = bg.as_ref().map(|d| &d.equity_curve);
                     let bg_positions = bg.as_ref().map(|d| &d.open_positions);
+                    let bg_overlaps = bg.as_ref().map(|d| &d.trade_overlaps);
+                    let bg_alloc = bg.as_ref().map(|d| &d.optimal_allocation);
+                    let bg_rebal = bg.as_ref().and_then(|d| d.rebalance.as_ref());
+                    let bg_mc = bg.as_ref().and_then(|d| d.monte_carlo.as_ref());
+                    let bg_stress = bg.as_ref().map(|d| &d.stress_tests);
+                    let bg_margin = bg.as_ref().and_then(|d| d.margin_call_sim.as_ref());
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let dv = self.darwin_view;
@@ -6426,15 +6451,15 @@ impl TyphooNApp {
                                                 }
                                             }
                                         }
-                                        6 => { // Trade Overlaps
-                                            if let Ok(overlaps) = darwin::get_trade_overlaps(&conn) {
+                                        6 => { // Trade Overlaps (from bg cache)
+                                            if let Some(overlaps) = bg_overlaps {
                                                 if overlaps.is_empty() {
                                                     ui.label("No trade overlaps found.");
                                                 } else {
                                                     egui::Grid::new("overlap_grid").striped(true).num_columns(4).show(ui, |ui| {
                                                         ui.strong("Symbol"); ui.strong("DARWINs"); ui.strong("Volume"); ui.strong("Notional");
                                                         ui.end_row();
-                                                        for o in &overlaps {
+                                                        for o in overlaps.iter() {
                                                             ui.label(&o.symbol);
                                                             ui.label(o.darwins.join(", "));
                                                             ui.label(format!("{:.2}", o.combined_volume));
@@ -6457,9 +6482,8 @@ impl TyphooNApp {
                                                 }
                                             }
                                         }
-                                        8 => { // Monte Carlo
-                                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                                let mc = darwin::monte_carlo_var(&daily, 252, 1000);
+                                        8 => { // Monte Carlo (from bg cache)
+                                            if let Some(mc) = bg_mc {
                                                     egui::Grid::new("mc_grid").striped(true).num_columns(2).show(ui, |ui| {
                                                         ui.label("Simulations:"); ui.label(format!("{}", mc.simulations));
                                                         ui.end_row();
@@ -6480,12 +6504,12 @@ impl TyphooNApp {
                                                     });
                                             }
                                         }
-                                        9 => { // Stress Test (engine-powered)
-                                            if let Ok(results) = darwin::run_stress_tests(&conn) {
+                                        9 => { // Stress Test (from bg cache)
+                                            let results = bg_stress; if let Some(results) = results {
                                                 egui::Grid::new("stress_grid").striped(true).num_columns(4).show(ui, |ui| {
                                                     ui.strong("Scenario"); ui.strong("Market Drop"); ui.strong("Portfolio Impact"); ui.strong("Impact %");
                                                     ui.end_row();
-                                                    for r in &results {
+                                                    for r in results.iter() {
                                                         ui.label(&r.scenario);
                                                         ui.label(egui::RichText::new(format!("{:.1}%", r.market_drop_pct)).color(DOWN));
                                                         ui.label(egui::RichText::new(format!("${:.0}", r.estimated_portfolio_impact)).color(DOWN));
@@ -6660,8 +6684,8 @@ impl TyphooNApp {
                                                 });
                                             }
                                         }
-                                        17 => { // Margin Call Sim
-                                            if let Ok(sim) = darwin::simulate_margin_call(&conn) {
+                                        17 => { // Margin Call Sim (from bg cache)
+                                            if let Some(sim) = bg_margin {
                                                 egui::Grid::new("mc_sim").striped(true).num_columns(2).show(ui, |ui| {
                                                     ui.label("Current Equity:"); ui.label(format!("${:.2}", sim.current_equity));
                                                     ui.end_row();
@@ -6686,12 +6710,12 @@ impl TyphooNApp {
                                                 });
                                             }
                                         }
-                                        18 => { // Optimal Allocation
-                                            if let Ok(alloc) = darwin::compute_optimal_allocation(&conn) {
+                                        18 => { // Optimal Allocation (from bg cache)
+                                            if let Some(alloc) = bg_alloc { if !alloc.is_empty() {
                                                 egui::Grid::new("alloc_grid").striped(true).num_columns(4).show(ui, |ui| {
                                                     ui.strong("DARWIN"); ui.strong("Current %"); ui.strong("Optimal %"); ui.strong("Sharpe Contr.");
                                                     ui.end_row();
-                                                    for a in &alloc {
+                                                    for a in alloc.iter() {
                                                         ui.label(&a.darwin_ticker);
                                                         ui.label(format!("{:.1}%", a.current_weight * 100.0));
                                                         ui.label(format!("{:.1}%", a.optimal_weight * 100.0));
@@ -6699,13 +6723,12 @@ impl TyphooNApp {
                                                         ui.end_row();
                                                     }
                                                 });
-                                            }
+                                            } } // close if !alloc.is_empty() + if let Some(alloc)
                                             // Rebalance suggestions (VaR reduction via decorrelation)
                                             ui.add_space(10.0);
                                             ui.heading("Rebalance Suggestions");
                                             ui.separator();
-                                            let prices = std::collections::HashMap::new();
-                                            if let Ok(rebal) = darwin::compute_rebalance_suggestions(&conn, &prices) {
+                                            if let Some(rebal) = bg_rebal {
                                                 egui::Grid::new("rebal_summary").striped(true).num_columns(2).show(ui, |ui| {
                                                     ui.label("Portfolio VaR 95%:"); ui.label(format!("{:.2}%", rebal.current_portfolio_var_95));
                                                     ui.end_row();
@@ -7469,7 +7492,7 @@ impl TyphooNApp {
                                         egui::Grid::new("overlap_grid").striped(true).num_columns(6).show(ui, |ui| {
                                             ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Notional"); ui.strong("Risk"); ui.strong("DARWINs");
                                             ui.end_row();
-                                            for o in &overlaps {
+                                            for o in overlaps.iter() {
                                                 ui.label(&o.symbol);
                                                 let side_c = if o.side == "buy" { UP } else { DOWN };
                                                 ui.label(egui::RichText::new(&o.side).color(side_c));
