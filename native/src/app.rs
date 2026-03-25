@@ -26,6 +26,7 @@ use typhoon_engine::core::backtest;
 use typhoon_engine::core::risk;
 use typhoon_engine::core::margin;
 use typhoon_engine::core::sec_filing;
+use typhoon_engine::core::keyring;
 use typhoon_engine::broker::alpaca::{Bar as EngineBar, AlpacaBroker, AccountInfo, PositionInfo, OrderInfo};
 use tokio::sync::mpsc;
 
@@ -4694,6 +4695,16 @@ impl TyphooNApp {
         }
 
         app.load_session();
+
+        // Load credentials from system keyring (libsecret/Keychain)
+        if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_API_KEY) { app.broker_api_key = v; }
+        if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_SECRET) { app.broker_secret = v; }
+        if let Ok(Some(v)) = keyring::load(keyring::keys::FINNHUB_KEY) { app.finnhub_key = v; }
+        if let Ok(Some(v)) = keyring::load(keyring::keys::TT_USERNAME) { app.tt_username = v; }
+        if let Ok(Some(v)) = keyring::load(keyring::keys::TT_PASSWORD) { app.tt_password = v; }
+        if !app.broker_api_key.is_empty() {
+            app.log.push_back(LogEntry::info("Credentials loaded from system keyring"));
+        }
         app
     }
 
@@ -5340,6 +5351,17 @@ impl TyphooNApp {
                         };
                         if ui.button(connect_label).clicked() && !self.broker_connected {
                             if !self.broker_api_key.is_empty() && !self.broker_secret.is_empty() {
+                                // Save credentials to system keyring
+                                let _ = keyring::store(keyring::keys::ALPACA_API_KEY, &self.broker_api_key);
+                                let _ = keyring::store(keyring::keys::ALPACA_SECRET, &self.broker_secret);
+                                if !self.finnhub_key.is_empty() {
+                                    let _ = keyring::store(keyring::keys::FINNHUB_KEY, &self.finnhub_key);
+                                }
+                                if !self.tt_username.is_empty() {
+                                    let _ = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username);
+                                    let _ = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password);
+                                }
+                                self.log.push_back(LogEntry::info("Credentials saved to system keyring"));
                                 let _ = self.broker_tx.send(BrokerCmd::Connect {
                                     api_key: self.broker_api_key.clone(),
                                     secret: self.broker_secret.clone(),
