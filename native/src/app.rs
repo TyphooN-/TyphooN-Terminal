@@ -4098,6 +4098,9 @@ pub struct TyphooNApp {
     // ── DARWIN portfolio view selector ─────────────────────────────────
     /// Which DARWIN view is selected in the portfolio dropdown.
     darwin_view: usize,
+    /// Cached DARWIN portfolio data (future: compute once per view change).
+    #[allow(dead_code)]
+    darwin_cache: Option<(usize, String)>,
 }
 
 impl TyphooNApp {
@@ -4632,6 +4635,7 @@ impl TyphooNApp {
             tp_enabled: false,
             recent_fills: Vec::new(),
             darwin_view: 0,
+            darwin_cache: None,
         };
         app.load_session();
         app
@@ -6111,6 +6115,7 @@ impl TyphooNApp {
                         "Market Regime", "Tail Risk", "Seasonals", "Sector Exposure",
                         "Liquidity Risk", "Margin Call Sim", "Optimal Allocation", "What-If",
                     ];
+                    let _prev_view = self.darwin_view;
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("View:").color(AXIS_TEXT));
                         egui::ComboBox::from_id_salt("darwin_view_combo")
@@ -9989,7 +9994,13 @@ impl eframe::App for TyphooNApp {
             self.save_session();
         }
 
-        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        // Reduce repaint rate when expensive DARWIN windows are open (DB queries per frame)
+        let repaint_ms = if self.show_darwin_portfolio || self.show_darwin_accounts || self.show_var_mult {
+            2000 // 0.5 FPS when DARWIN analytics are visible (heavy DB queries)
+        } else {
+            250 // 4 FPS normal
+        };
+        ctx.request_repaint_after(std::time::Duration::from_millis(repaint_ms));
     }
 }
 
