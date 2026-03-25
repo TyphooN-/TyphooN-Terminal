@@ -6719,17 +6719,26 @@ impl eframe::App for TyphooNApp {
         // ── Global font/spacing to match old WebKit (Consolas 11px) ──────
         if self.frame_count == 1 {
             let mut style = (*ctx.style()).clone();
-            // Font sizes matching WebKit CSS: body 11px, small 9px, heading 13px
-            style.text_styles.insert(egui::TextStyle::Small, egui::FontId::new(9.0, egui::FontFamily::Monospace));
+            // Font sizes matching WebKit CSS: body 11px, small 10px, heading 13px
+            // All monospace to match Consolas throughout
+            style.text_styles.insert(egui::TextStyle::Small, egui::FontId::new(10.0, egui::FontFamily::Monospace));
             style.text_styles.insert(egui::TextStyle::Body, egui::FontId::new(11.0, egui::FontFamily::Monospace));
             style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::new(11.0, egui::FontFamily::Monospace));
             style.text_styles.insert(egui::TextStyle::Button, egui::FontId::new(11.0, egui::FontFamily::Monospace));
             style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::new(13.0, egui::FontFamily::Monospace));
             // Compact spacing (matching WebKit's tight layout)
-            style.spacing.item_spacing = egui::vec2(4.0, 3.0);     // was 8.0, 3.0
-            style.spacing.button_padding = egui::vec2(4.0, 2.0);   // was 4.0, 1.0
-            style.spacing.interact_size = egui::vec2(28.0, 16.0);   // minimum widget size
+            style.spacing.item_spacing = egui::vec2(4.0, 2.0);
+            style.spacing.button_padding = egui::vec2(6.0, 3.0);
+            style.spacing.interact_size = egui::vec2(20.0, 16.0);
             style.spacing.indent = 12.0;
+            style.spacing.scroll = egui::style::ScrollStyle {
+                bar_width: 6.0,       // thin scrollbars like WebKit
+                ..style.spacing.scroll
+            };
+            // Widget rounding — WebKit: border-radius 2px for buttons, 0 for inputs
+            style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(2);
+            style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(2);
+            style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(2);
             ctx.set_style(style);
         }
 
