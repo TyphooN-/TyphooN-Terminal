@@ -5189,6 +5189,31 @@ impl TyphooNApp {
                                                         ui.label("Optimal Risk:"); ui.label(format!("{:.1}%", kelly.optimal_risk_pct)); ui.end_row();
                                                     });
                                                 }
+                                                // Cost Analysis
+                                                if let Ok(costs) = darwin::get_cost_analysis(&conn, &acct.darwin_ticker) {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("Cost Analysis").strong());
+                                                    egui::Grid::new(format!("cost_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                                        ui.label("Total Commission:"); ui.label(egui::RichText::new(format!("${:.2}", costs.total_commission)).color(DOWN)); ui.end_row();
+                                                        ui.label("Total Swap:"); ui.label(format!("${:.2}", costs.total_swap)); ui.end_row();
+                                                        ui.label("Comm % of Equity:"); ui.label(format!("{:.2}%", costs.commission_pct_of_equity)); ui.end_row();
+                                                        ui.label("Avg Comm/Trade:"); ui.label(format!("${:.2}", costs.avg_commission_per_trade)); ui.end_row();
+                                                    });
+                                                }
+                                                // D-Score Estimate
+                                                if let Ok(ds) = darwin::estimate_dscore(&conn, &acct.darwin_ticker) {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("D-Score Estimate").strong());
+                                                    egui::Grid::new(format!("ds_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                                        ui.label("Experience:"); ui.label(format!("{:.1}/10", ds.experience)); ui.end_row();
+                                                        ui.label("Risk Mgmt:"); ui.label(format!("{:.1}/10", ds.risk_mgmt)); ui.end_row();
+                                                        ui.label("Performance:"); ui.label(format!("{:.1}/10", ds.performance)); ui.end_row();
+                                                        ui.label("Market Timing:"); ui.label(format!("{:.1}/10", ds.market_timing)); ui.end_row();
+                                                        ui.label("Capacity:"); ui.label(format!("{:.1}/10", ds.capacity)); ui.end_row();
+                                                        ui.label("Scalability:"); ui.label(format!("{:.1}/10", ds.scalability)); ui.end_row();
+                                                        ui.label("Total D-Score:"); ui.label(egui::RichText::new(format!("{:.1}", ds.total_dscore)).strong()); ui.end_row();
+                                                    });
+                                                }
                                             });
                                         }
                                     }
@@ -6358,31 +6383,35 @@ impl TyphooNApp {
                     if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = darwin::create_darwin_tables(&conn);
-                            if let Ok(exposure) = darwin::get_portfolio_exposure(&conn) {
-                                if !exposure.is_empty() {
-                                    // Symbols traded by multiple DARWINs
-                                    let overlaps: Vec<_> = exposure.iter().filter(|e| e.darwin_count > 1).collect();
-                                    if overlaps.is_empty() {
-                                        ui.label("No overlapping symbols across DARWINs.");
-                                    } else {
-                                        ui.label(egui::RichText::new(format!("{} overlapping symbols", overlaps.len())).strong());
-                                        egui::Grid::new("overlap_grid").striped(true).num_columns(5).show(ui, |ui| {
-                                            ui.strong("Symbol"); ui.strong("Long $"); ui.strong("Short $"); ui.strong("Net $"); ui.strong("DARWINs");
+                            if let Ok(overlaps) = darwin::get_symbol_overlap(&conn) {
+                                if overlaps.is_empty() {
+                                    ui.label("No overlapping symbols across DARWINs.");
+                                } else {
+                                    ui.label(egui::RichText::new(format!("{} overlapping symbols", overlaps.len())).strong());
+                                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                                        egui::Grid::new("overlap_grid").striped(true).num_columns(6).show(ui, |ui| {
+                                            ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Notional"); ui.strong("Risk"); ui.strong("DARWINs");
                                             ui.end_row();
-                                            for e in &overlaps {
-                                                ui.label(&e.symbol);
-                                                ui.label(format!("{:.0}", e.long_notional));
-                                                ui.label(format!("{:.0}", e.short_notional));
-                                                let c = if e.net_notional >= 0.0 { UP } else { DOWN };
-                                                ui.label(egui::RichText::new(format!("{:.0}", e.net_notional)).color(c));
-                                                ui.label(e.darwins.join(", "));
+                                            for o in &overlaps {
+                                                ui.label(&o.symbol);
+                                                let side_c = if o.side == "buy" { UP } else { DOWN };
+                                                ui.label(egui::RichText::new(&o.side).color(side_c));
+                                                ui.label(format!("{:.2}", o.total_volume));
+                                                ui.label(format!("${:.0}", o.total_notional));
+                                                let risk_c = match o.correlation_risk.as_str() {
+                                                    "HIGH" => DOWN,
+                                                    "MEDIUM" => egui::Color32::from_rgb(255, 200, 50),
+                                                    _ => UP,
+                                                };
+                                                ui.label(egui::RichText::new(&o.correlation_risk).color(risk_c));
+                                                ui.label(o.darwins.join(", "));
                                                 ui.end_row();
                                             }
                                         });
-                                    }
-                                } else {
-                                    ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
+                                    });
                                 }
+                            } else {
+                                ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
                             }
                         }
                     }
