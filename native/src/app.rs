@@ -785,12 +785,12 @@ impl ChartState {
         for i in lookback..search.len().saturating_sub(lookback) {
             let abs_i = recent_start + i;
             if abs_i < self.fractal_up.len() && self.fractal_up[abs_i] {
-                if swing_high.is_none() || search[i].high > swing_high.unwrap().0 {
+                if swing_high.map_or(true, |(h, _)| search[i].high > h) {
                     swing_high = Some((search[i].high, abs_i));
                 }
             }
             if abs_i < self.fractal_down.len() && self.fractal_down[abs_i] {
-                if swing_low.is_none() || search[i].low < swing_low.unwrap().0 {
+                if swing_low.map_or(true, |(l, _)| search[i].low < l) {
                     swing_low = Some((search[i].low, abs_i));
                 }
             }
@@ -7686,7 +7686,7 @@ impl TyphooNApp {
                                     bins[idx] += b.volume;
                                 }
                                 let max_vol = bins.iter().fold(0.0_f64, |a, &b| a.max(b));
-                                let poc_idx = bins.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).map(|(i, _)| i).unwrap_or(0);
+                                let poc_idx = bins.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal)).map(|(i, _)| i).unwrap_or(0);
                                 let poc_price = price_min + (poc_idx as f64 + 0.5) * bin_size;
                                 ui.label(egui::RichText::new(format!("POC: {}", format_price(poc_price))).strong().color(ACCENT));
 
