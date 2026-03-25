@@ -6454,7 +6454,7 @@ impl TyphooNApp {
                     egui::Grid::new("help_grid").striped(true).num_columns(2).show(ui, |ui| {
                         ui.strong("Key"); ui.strong("Action");
                         ui.end_row();
-                        ui.label("~ (tilde)"); ui.label("Command palette (Quake console)");
+                        ui.label("~ / F12"); ui.label("Command palette (Quake console)");
                         ui.end_row();
                         ui.label("Esc"); ui.label("Close palette / cancel drawing");
                         ui.end_row();
@@ -6712,6 +6712,23 @@ impl eframe::App for TyphooNApp {
         self.frame_count += 1;
         ctx.set_visuals(Self::dark_visuals());
 
+        // ── Global font/spacing to match old WebKit (Consolas 11px) ──────
+        if self.frame_count == 1 {
+            let mut style = (*ctx.style()).clone();
+            // Font sizes matching WebKit CSS: body 11px, small 9px, heading 13px
+            style.text_styles.insert(egui::TextStyle::Small, egui::FontId::new(9.0, egui::FontFamily::Monospace));
+            style.text_styles.insert(egui::TextStyle::Body, egui::FontId::new(11.0, egui::FontFamily::Monospace));
+            style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::new(11.0, egui::FontFamily::Monospace));
+            style.text_styles.insert(egui::TextStyle::Button, egui::FontId::new(11.0, egui::FontFamily::Monospace));
+            style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::new(13.0, egui::FontFamily::Monospace));
+            // Compact spacing (matching WebKit's tight layout)
+            style.spacing.item_spacing = egui::vec2(4.0, 3.0);     // was 8.0, 3.0
+            style.spacing.button_padding = egui::vec2(4.0, 2.0);   // was 4.0, 1.0
+            style.spacing.interact_size = egui::vec2(28.0, 16.0);   // minimum widget size
+            style.spacing.indent = 12.0;
+            ctx.set_style(style);
+        }
+
         // ── poll async broker messages ───────────────────────────────────
         while let Ok(msg) = self.broker_rx.try_recv() {
             match msg {
@@ -6743,24 +6760,34 @@ impl eframe::App for TyphooNApp {
             }
         }
 
-        // ── ~ (tilde) → Quake-style command palette ─────────────────────────
-        // Must consume the event to prevent ` from appearing in text fields.
+        // ── ~ (tilde/backtick) → Quake-style command palette ─────────────
+        // Multiple detection methods for Wayland/Hyprland compatibility:
+        // 1. egui Key::Backtick (may not fire on Wayland)
+        // 2. Event::Text containing ` or ~ (catches keyboard layout variants)
+        // 3. Event::Key with scancode matching (physical key)
+        // 4. F12 as universal fallback
         let open_palette = ctx.input_mut(|i| {
             let mut found = false;
-            // Check for backtick key press
+            // Method 1: standard key_pressed
             if i.key_pressed(egui::Key::Backtick) {
                 found = true;
             }
-            // Also check raw events for ` or ~ text
+            // Method 4: F12 fallback (always works regardless of Wayland/keyboard)
+            if i.key_pressed(egui::Key::F12) {
+                found = true;
+            }
+            // Method 2+3: scan raw events for text or key events
             i.events.retain(|e| {
-                if matches!(e, egui::Event::Text(t) if t == "`" || t == "~") {
-                    found = true;
-                    false // consume it
-                } else if matches!(e, egui::Event::Key { key: egui::Key::Backtick, pressed: true, .. }) {
-                    found = true;
-                    false // consume it
-                } else {
-                    true // keep
+                match e {
+                    egui::Event::Text(t) if t == "`" || t == "~" => {
+                        found = true;
+                        false // consume
+                    }
+                    egui::Event::Key { key: egui::Key::Backtick, pressed: true, .. } => {
+                        found = true;
+                        false // consume
+                    }
+                    _ => true, // keep
                 }
             });
             found
@@ -7125,8 +7152,8 @@ impl eframe::App for TyphooNApp {
                 ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT).small());
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut self.symbol_input)
-                        .desired_width(120.0)
-                        .font(egui::TextStyle::Monospace),
+                        .desired_width(180.0) // WebKit: width: 220px (minus padding)
+                        .font(egui::FontId::monospace(13.0)), // WebKit: font-size: 13px
                 );
                 if resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
                     let sym = self.symbol_input.trim().to_string();
@@ -7176,7 +7203,7 @@ impl eframe::App for TyphooNApp {
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new("~ console").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("~/F12 console").color(AXIS_TEXT).small());
                     ui.separator();
                     if self.broker_connected {
                         ui.label(egui::RichText::new("\u{25CF} LIVE").color(UP).small());
@@ -7378,8 +7405,8 @@ impl eframe::App for TyphooNApp {
 
         // ── right panel (WebKit parity — trading buttons, positions, watchlist) ──
         egui::SidePanel::right("right_panel")
-            .default_width(300.0)
-            .min_width(240.0)
+            .default_width(240.0)  // WebKit: width: 240px
+            .min_width(140.0)      // WebKit: min-width: 140px
             .show(ctx, |ui| {
                 // ── tab bar (compact tabs across top) ──────────────────
                 ui.horizontal(|ui| {
