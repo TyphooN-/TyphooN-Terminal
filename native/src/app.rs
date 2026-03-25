@@ -8378,87 +8378,7 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // ── Quake-style console (full-width top dropdown) ────────────────
-            if self.command_open {
-                let palette_commands: Vec<&Command> = COMMANDS
-                    .iter()
-                    .filter(|c| fuzzy_match(&self.command_input, c.name) || fuzzy_match(&self.command_input, c.desc))
-                    .collect();
-
-                let num_visible = palette_commands.len().clamp(1, 15);
-                let console_height = (num_visible as f32) * 22.0 + 48.0;
-                let screen_w = available.width();
-
-                // Full-width top-anchored panel (Quake console style)
-                let console_rect = egui::Rect::from_min_size(
-                    egui::pos2(available.left(), available.top()),
-                    egui::vec2(screen_w, console_height),
-                );
-
-                let painter = ui.painter_at(console_rect);
-                // WebKit: rgba(8, 8, 24, 0.97) with 2px green bottom border + shadow
-                painter.rect_filled(console_rect, 0.0, egui::Color32::from_rgba_premultiplied(8, 8, 24, 247));
-                // Green bottom border (WebKit: border-bottom: 2px solid #4caf50)
-                painter.line_segment(
-                    [egui::pos2(console_rect.left(), console_rect.bottom()), egui::pos2(console_rect.right(), console_rect.bottom())],
-                    egui::Stroke::new(2.0, egui::Color32::from_rgb(76, 175, 80)),
-                );
-
-                let console_ui_rect = console_rect.shrink(6.0);
-                let mut console_ui = ui.new_child(egui::UiBuilder::new().max_rect(console_ui_rect));
-
-                // Input line (WebKit: #cmd-palette-input — bg #060614, color #4caf50, 14px, 10px 16px padding)
-                console_ui.horizontal(|ui| {
-                    let input_resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.command_input)
-                            .desired_width(screen_w - 20.0)
-                            .hint_text("type a command… (~ or Esc to close)")
-                            .font(egui::FontId::monospace(14.0))
-                            .text_color(egui::Color32::from_rgb(76, 175, 80)) // caret-color: #4caf50
-                            .frame(false),
-                    );
-                    input_resp.request_focus();
-                });
-
-                // Thin separator
-                let sep_y = console_ui_rect.top() + 26.0;
-                painter.line_segment(
-                    [egui::pos2(console_ui_rect.left(), sep_y), egui::pos2(console_ui_rect.right(), sep_y)],
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 60, 80)),
-                );
-
-                // Command list
-                let list_rect = egui::Rect::from_min_max(
-                    egui::pos2(console_ui_rect.left(), sep_y + 2.0),
-                    console_ui_rect.max,
-                );
-                let mut list_ui = ui.new_child(egui::UiBuilder::new().max_rect(list_rect));
-
-                let mut execute: Option<String> = None;
-                egui::ScrollArea::vertical().max_height(console_height - 48.0).show(&mut list_ui, |ui| {
-                    // WebKit: .cmd-result-item — 8px 16px padding, 12px font
-                    for cmd in &palette_commands {
-                        let row = ui.horizontal(|ui| {
-                            // WebKit: .cmd-name — #8ff, bold, 13px, min-width 50px
-                            ui.label(egui::RichText::new(cmd.name).color(egui::Color32::from_rgb(136, 255, 255)).monospace().strong().size(13.0));
-                            ui.add_space(12.0);
-                            // WebKit: .cmd-desc — #888, 11px
-                            ui.label(egui::RichText::new(cmd.desc).color(egui::Color32::from_rgb(136, 136, 136)).size(11.0));
-                        });
-                        if row.response.interact(egui::Sense::click()).clicked() {
-                            execute = Some(cmd.name.to_string());
-                        }
-                    }
-                });
-
-                if ctx.input(|i| i.key_pressed(egui::Key::Enter)) && !self.command_input.is_empty() {
-                    execute = palette_commands.first().map(|c| c.name.to_string());
-                }
-                if let Some(cmd_name) = execute {
-                    self.command_open = false;
-                    self.handle_command(&cmd_name, ctx);
-                }
-            }
+            // Console is rendered as egui::Window after CentralPanel (see below)
 
             // ── chart drawing ────────────────────────────────────────────────
             let crosshair = self.crosshair;
@@ -8728,6 +8648,59 @@ impl eframe::App for TyphooNApp {
                 }
             }
         });
+
+        // ── Console (egui::Window for proper focus/interaction on Wayland) ────
+        if self.command_open {
+            let palette_commands: Vec<&Command> = COMMANDS
+                .iter()
+                .filter(|c| fuzzy_match(&self.command_input, c.name) || fuzzy_match(&self.command_input, c.desc))
+                .collect();
+
+            let num_visible = palette_commands.len().clamp(1, 15);
+            let console_height = (num_visible as f32) * 24.0 + 52.0;
+
+            egui::Window::new("__console__")
+                .title_bar(false)
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 0.0])
+                .fixed_size([700.0, console_height])
+                .frame(egui::Frame::window(&ctx.style())
+                    .fill(egui::Color32::from_rgba_premultiplied(8, 8, 24, 247))
+                    .inner_margin(8.0)
+                    .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(76, 175, 80))))
+                .show(ctx, |ui| {
+                    let input_resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.command_input)
+                            .desired_width(680.0)
+                            .hint_text("type a command… (Esc to close)")
+                            .font(egui::FontId::monospace(14.0))
+                            .text_color(egui::Color32::from_rgb(76, 175, 80)),
+                    );
+                    input_resp.request_focus();
+                    ui.separator();
+
+                    let mut execute: Option<String> = None;
+                    egui::ScrollArea::vertical().max_height(console_height - 52.0).show(ui, |ui| {
+                        for cmd in &palette_commands {
+                            let row = ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(cmd.name).color(egui::Color32::from_rgb(136, 255, 255)).monospace().strong().size(13.0));
+                                ui.add_space(12.0);
+                                ui.label(egui::RichText::new(cmd.desc).color(egui::Color32::from_rgb(136, 136, 136)).size(11.0));
+                            });
+                            if row.response.interact(egui::Sense::click()).clicked() {
+                                execute = Some(cmd.name.to_string());
+                            }
+                        }
+                    });
+
+                    if ctx.input(|i| i.key_pressed(egui::Key::Enter)) && !self.command_input.is_empty() {
+                        execute = palette_commands.first().map(|c| c.name.to_string());
+                    }
+                    if let Some(cmd_name) = execute {
+                        self.command_open = false;
+                        self.handle_command(&cmd_name, ctx);
+                    }
+                });
+        }
 
         // Request continuous repainting for real-time tick updates
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
