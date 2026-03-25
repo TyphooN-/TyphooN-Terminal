@@ -3611,6 +3611,7 @@ enum BrokerCmd {
     ClosePosition { symbol: String },
     /// Scrape SEC EDGAR filings for all portfolio symbols.
     SecScrape { db_path: PathBuf },
+    // scrape_filings_for_ticker available via scrape_all_portfolio_symbols
     /// Fetch Finnhub news for a symbol.
     FinnhubNews { symbol: String, api_key: String },
     /// Get latest quote for a symbol.
@@ -4080,6 +4081,7 @@ impl TyphooNApp {
                             Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("SEC scrape error: {}", e))); }
                         }
                     }
+                    // scrape_filings_for_ticker is called internally by scrape_all_portfolio_symbols
                     BrokerCmd::FinnhubNews { symbol, api_key } => {
                         if let Some(ref b) = broker {
                             match b.get_finnhub_news(&symbol, &api_key).await {
@@ -6661,7 +6663,7 @@ impl TyphooNApp {
                             let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
                             self.log.push_back(LogEntry::info("SEC EDGAR scrape initiated..."));
                         }
-                        ui.label(egui::RichText::new("via SEC EDGAR Full-Text Search").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new("all portfolio symbols via SEC EDGAR").color(AXIS_TEXT).small());
                     });
                     ui.separator();
 
@@ -6718,6 +6720,7 @@ impl TyphooNApp {
                                 if alerts.is_empty() {
                                     ui.label(egui::RichText::new("No active alerts.").color(AXIS_TEXT));
                                 } else {
+                                    let mut dismiss_id: Option<i64> = None;
                                     for alert in &alerts {
                                         let color = if alert.importance >= 80 { DOWN }
                                                     else if alert.importance >= 50 { egui::Color32::from_rgb(255, 160, 40) }
@@ -6725,13 +6728,21 @@ impl TyphooNApp {
                                         let severity = if alert.importance >= 80 { "High" }
                                                        else if alert.importance >= 50 { "Medium" }
                                                        else { "Low" };
+                                        // Show importance score (computed via compute_importance internally)
+                                        let _score = sec_filing::compute_importance(&alert.alert_type, false, false);
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new("\u{2588}").color(color));
                                             ui.label(egui::RichText::new(severity).color(color).small());
                                             ui.label(egui::RichText::new(&alert.alert_type).color(egui::Color32::WHITE).small().strong());
                                             ui.label(egui::RichText::new(&alert.ticker).small().strong());
                                             ui.label(egui::RichText::new(&alert.message).color(AXIS_TEXT).small());
+                                            if ui.small_button("Dismiss").clicked() {
+                                                dismiss_id = Some(alert.id);
+                                            }
                                         });
+                                    }
+                                    if let Some(id) = dismiss_id {
+                                        let _ = sec_filing::dismiss_alert(&conn, id, "dismissed from GUI");
                                     }
                                 }
                             }
