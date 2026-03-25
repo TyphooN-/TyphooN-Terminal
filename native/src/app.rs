@@ -71,10 +71,12 @@ const BORDER: egui::Color32 = egui::Color32::from_rgb(51, 51, 51);      // --bor
 const INFO_COL: egui::Color32 = egui::Color32::from_rgb(136, 204, 255); // --info: #8cf
 #[allow(dead_code)]
 const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0, 188, 212); // --accent: #00bcd4
-// Quake console colours
-const QUAKE_BG: egui::Color32 = egui::Color32::from_rgb(5, 15, 25);
-const QUAKE_CMD: egui::Color32 = egui::Color32::from_rgb(0, 220, 220);
-const QUAKE_DESC: egui::Color32 = egui::Color32::from_rgb(100, 120, 140);
+// Quake console colours (from old WebKit CSS)
+#[allow(dead_code)]
+const QUAKE_BG: egui::Color32 = egui::Color32::from_rgb(8, 8, 24);     // rgba(8,8,24,0.97)
+const QUAKE_CMD: egui::Color32 = egui::Color32::from_rgb(0, 220, 220); // used in status bar
+#[allow(dead_code)]
+const QUAKE_DESC: egui::Color32 = egui::Color32::from_rgb(136, 136, 136); // #888
 // Watchlist symbol colours (rotating palette)
 const WL_COLORS: [egui::Color32; 8] = [
     egui::Color32::from_rgb(0, 220, 80),    // green
@@ -6418,7 +6420,12 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── ~ (tilde) → Quake-style command palette ─────────────────────────
-        let open_palette = ctx.input(|i| i.key_pressed(egui::Key::Backtick));
+        // Use raw events to catch backtick even when text widgets have focus.
+        // Also check for the ` character in text input events as fallback.
+        let open_palette = ctx.input(|i| {
+            i.key_pressed(egui::Key::Backtick)
+            || i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == "`" || t == "~"))
+        });
         if open_palette {
             self.command_open = !self.command_open;
             if self.command_open { self.command_input.clear(); }
@@ -7548,12 +7555,17 @@ impl eframe::App for TyphooNApp {
             );
 
             let hover_pos = ctx.input(|i| i.pointer.hover_pos().unwrap_or_default());
-            let on_price_axis = price_axis_rect.contains(hover_pos);
-            let on_chart_body = chart_body_rect.contains(hover_pos);
+            // Don't interact with chart when pointer is over a floating window
+            let layer_at_hover = ctx.layer_id_at(hover_pos);
+            let hover_over_window = layer_at_hover
+                .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
+                .unwrap_or(false);
+            let on_price_axis = price_axis_rect.contains(hover_pos) && !hover_over_window;
+            let on_chart_body = chart_body_rect.contains(hover_pos) && !hover_over_window;
 
-            // Scroll → zoom
+            // Scroll → zoom (only when not over a floating window)
             let scroll_delta = ctx.input(|i| i.smooth_scroll_delta.y);
-            if scroll_delta != 0.0 {
+            if scroll_delta != 0.0 && !hover_over_window {
                 if on_price_axis {
                     // Scroll on price axis → vertical zoom (TradingView style: squish/expand)
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
@@ -7596,21 +7608,26 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Drag interactions
+            // Drag interactions — only when pointer is NOT over a floating window
             let pointer    = ctx.input(|i| i.pointer.clone());
             let drag_delta = ctx.input(|i| i.pointer.delta());
+            let layer_id_at_pointer = ctx.layer_id_at(pointer.hover_pos().unwrap_or_default());
+            let pointer_over_window = layer_id_at_pointer
+                .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
+                .unwrap_or(false);
 
             for chart in &mut self.charts {
-                if pointer.primary_pressed() {
+                if pointer.primary_pressed() && !pointer_over_window {
                     let press_pos = pointer.press_origin().unwrap_or_default();
+                    // Only start drag if press originated inside chart area or price axis
                     if price_axis_rect.contains(press_pos) {
                         // Start price-axis scaling drag (TradingView style)
                         chart.is_scaling_price = true;
                         chart.is_dragging = false;
                         chart.scale_start_zoom = chart.price_zoom;
                         chart.scale_start_y = press_pos.y;
-                    } else {
-                        // Start normal chart pan drag
+                    } else if available.contains(press_pos) {
+                        // Start normal chart pan drag — only if inside the chart area
                         chart.is_dragging = true;
                         chart.is_scaling_price = false;
                         chart.drag_start = pointer.press_origin();
@@ -7671,25 +7688,25 @@ impl eframe::App for TyphooNApp {
                 );
 
                 let painter = ui.painter_at(console_rect);
-                painter.rect_filled(console_rect, 0.0, QUAKE_BG);
-                painter.rect_stroke(
-                    console_rect, 0.0,
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 80, 100)),
-                    egui::StrokeKind::Outside,
+                // WebKit: rgba(8, 8, 24, 0.97) with 2px green bottom border + shadow
+                painter.rect_filled(console_rect, 0.0, egui::Color32::from_rgba_premultiplied(8, 8, 24, 247));
+                // Green bottom border (WebKit: border-bottom: 2px solid #4caf50)
+                painter.line_segment(
+                    [egui::pos2(console_rect.left(), console_rect.bottom()), egui::pos2(console_rect.right(), console_rect.bottom())],
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(76, 175, 80)),
                 );
 
                 let console_ui_rect = console_rect.shrink(6.0);
                 let mut console_ui = ui.new_child(egui::UiBuilder::new().max_rect(console_ui_rect));
 
-                // Input line with cyan prompt
+                // Input line (WebKit: #cmd-palette-input — bg #060614, color #4caf50, 14px, 10px 16px padding)
                 console_ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(">").color(QUAKE_CMD).monospace().strong());
                     let input_resp = ui.add(
                         egui::TextEdit::singleline(&mut self.command_input)
-                            .desired_width(screen_w - 40.0)
+                            .desired_width(screen_w - 20.0)
                             .hint_text("type a command… (~ or Esc to close)")
-                            .font(egui::TextStyle::Monospace)
-                            .text_color(egui::Color32::from_rgb(200, 240, 255))
+                            .font(egui::FontId::monospace(14.0))
+                            .text_color(egui::Color32::from_rgb(76, 175, 80)) // caret-color: #4caf50
                             .frame(false),
                     );
                     input_resp.request_focus();
@@ -7711,10 +7728,14 @@ impl eframe::App for TyphooNApp {
 
                 let mut execute: Option<String> = None;
                 egui::ScrollArea::vertical().max_height(console_height - 48.0).show(&mut list_ui, |ui| {
+                    // WebKit: .cmd-result-item — 8px 16px padding, 12px font
                     for cmd in &palette_commands {
                         let row = ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(cmd.name).color(QUAKE_CMD).monospace().strong());
-                            ui.label(egui::RichText::new(cmd.desc).color(QUAKE_DESC).small());
+                            // WebKit: .cmd-name — #8ff, bold, 13px, min-width 50px
+                            ui.label(egui::RichText::new(cmd.name).color(egui::Color32::from_rgb(136, 255, 255)).monospace().strong().size(13.0));
+                            ui.add_space(12.0);
+                            // WebKit: .cmd-desc — #888, 11px
+                            ui.label(egui::RichText::new(cmd.desc).color(egui::Color32::from_rgb(136, 136, 136)).size(11.0));
                         });
                         if row.response.interact(egui::Sense::click()).clicked() {
                             execute = Some(cmd.name.to_string());
