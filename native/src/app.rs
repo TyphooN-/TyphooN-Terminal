@@ -3620,14 +3620,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "INDICATORS",    desc: "Toggle indicator settings panel" },
     Command { name: "FULLSCREEN",    desc: "Toggle fullscreen mode" },
     // Trading
-    Command { name: "OPEN_TRADE",    desc: "Open a new trade" },
-    Command { name: "CLOSE_ALL",     desc: "Close all open positions" },
-    Command { name: "CLOSE_PARTIAL", desc: "Close partial position" },
-    Command { name: "SET_SL",        desc: "Set stop-loss on current position" },
-    Command { name: "SET_TP",        desc: "Set take-profit on current position" },
-    Command { name: "OPEN_MG",       desc: "Open Martingale hedge" },
-    Command { name: "BUY_LINES",     desc: "Place buy reference lines on chart" },
-    Command { name: "SELL_LINES",    desc: "Place sell reference lines on chart" },
+    // Order placement commands removed from console — use Trading tab buttons instead
     // Tools
     Command { name: "DARWIN",        desc: "DARWIN accounts overview" },
     Command { name: "PORTFOLIO",     desc: "DARWIN portfolio dashboard" },
@@ -3714,7 +3707,7 @@ const COMMANDS: &[Command] = &[
     // Additional analytics
     Command { name: "DATA_WINDOW",   desc: "All indicator values at cursor" },
     Command { name: "ALERTS",        desc: "Price alert manager" },
-    Command { name: "ORDER",         desc: "Open order entry panel" },
+    // ORDER command removed — use Trading tab Open Trade button
     Command { name: "PREV_LEVELS",   desc: "Toggle previous candle levels (D/W)" },
     Command { name: "PIVOTS",        desc: "Toggle pivot points (P/R1/R2/S1/S2)" },
     Command { name: "FRACTALS",      desc: "Toggle Bill Williams fractals" },
