@@ -268,7 +268,7 @@ impl GpuCompute {
         let slice = rb_buf.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| { let _ = tx.send(result); });
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
 
         if rx.recv().ok()?.is_ok() {
             let data = slice.get_mapped_range();

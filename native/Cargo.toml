@@ -16,7 +16,7 @@ typhoon-engine = { path = "../engine" }
 eframe = { version = "0.33", default-features = true, features = ["wgpu"] }
 egui = "0.33"
 egui_plot = "0.34"
-wgpu = "24"
+wgpu = "27"  # Match eframe 0.33's internal wgpu version (was 24 — caused naga duplicate)
 
 # Async runtime (shared with engine)
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
@@ -25,7 +25,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Native file dialog
-rfd = "0.15"
+rfd = "0.17"  # Updated from 0.15
 
 # Serialization for session persistence
 serde = { version = "1", features = ["derive"] }
