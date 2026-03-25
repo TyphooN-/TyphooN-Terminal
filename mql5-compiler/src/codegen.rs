@@ -163,7 +163,7 @@ fn emit_stmt(func: &mut Function, stmt: &IrStmt, num_imports: u32) -> Result<(),
 fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(), String> {
     match expr {
         IrExpr::I32Const(n) => { func.instruction(&Instruction::I32Const(*n)); }
-        IrExpr::F64Const(f) => { func.instruction(&Instruction::F64Const(*f)); }
+        IrExpr::F64Const(f) => { func.instruction(&Instruction::F64Const((*f).into())); }
         IrExpr::GetLocal(_name) => {
             // TODO: resolve local index
             func.instruction(&Instruction::LocalGet(2));
@@ -243,7 +243,7 @@ fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(),
                 "set_buffer" => { func.instruction(&Instruction::Call(11)); }
                 _ => {
                     // Unknown function — emit a NaN placeholder
-                    func.instruction(&Instruction::F64Const(f64::NAN));
+                    func.instruction(&Instruction::F64Const(f64::NAN.into()));
                 }
             }
         }
@@ -256,7 +256,7 @@ fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(),
             func.instruction(&Instruction::F64ConvertI32S);
         }
         _ => {
-            func.instruction(&Instruction::F64Const(0.0));
+            func.instruction(&Instruction::F64Const(0.0f64.into()));
         }
     }
     Ok(())
