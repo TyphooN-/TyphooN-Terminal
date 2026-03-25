@@ -5226,11 +5226,13 @@ impl TyphooNApp {
     }
 
     fn draw_floating_windows(&mut self, ctx: &egui::Context) {
-        // Performance: skip heavy per-account DARWIN queries on most frames.
-        // The DARWIN Accounts window calls 15+ functions per account per frame.
-        // This flag gates those queries to run only every 8th frame (~2s at 4 FPS).
+        // Performance: gate DB queries to every 8th frame (~2s at 4 FPS).
+        // Window chrome (title bar, close button) always renders.
+        // Heavy body content only renders on db_ok frames.
         let db_ok = self.frame_count % 8 == 0 || self.frame_count < 8;
-        let _ = db_ok; // will be used by DARWIN Accounts window
+        // Also skip during active chart scrolling/dragging
+        let scrolling = ctx.input(|i| i.smooth_scroll_delta.y.abs() > 0.5);
+        let db_ok = db_ok && !scrolling;
 
         // Settings
         if self.show_settings {
@@ -5477,9 +5479,8 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("Account Overview");
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
+                    if db_ok { if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
-                            // Ensure tables exist
                             let _ = darwin::create_darwin_tables(&conn);
                             match darwin::list_darwin_accounts(&conn) {
                                 Ok(accounts) if !accounts.is_empty() => {
@@ -6106,7 +6107,7 @@ impl TyphooNApp {
                         }
                     } else {
                         ui.label(egui::RichText::new("Cache not available").color(egui::Color32::from_rgb(255, 80, 80)));
-                    }
+                    } } // close if db_ok + if let Some(ref cache)
                 });
         }
 
@@ -6148,7 +6149,7 @@ impl TyphooNApp {
                             }
                         }
                     }
-                    if let Some(ref cache) = self.cache {
+                    if db_ok { if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let dv = self.darwin_view;
                             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -6686,7 +6687,7 @@ impl TyphooNApp {
                             ui.add_space(10.0);
                             ui.label(egui::RichText::new("VaR corridor: 3.25% – 6.5%  |  Correlation limit: 0.95 / 45d").color(AXIS_TEXT));
                         }
-                    }
+                    } } // close if db_ok + if let Some(ref cache)
                 });
         }
 
@@ -9474,15 +9475,9 @@ impl eframe::App for TyphooNApp {
             });
 
         // ── floating windows ─────────────────────────────────────────────────
-        // Performance: skip ALL floating window rendering during active chart interaction.
-        // This prevents 1600+ widget calls from running while user zooms/pans/scrolls.
-        // Windows reappear instantly when interaction stops (next idle frame).
-        let chart_active = ctx.input(|i| {
-            i.pointer.primary_down() || i.smooth_scroll_delta.y.abs() > 0.5
-        });
-        if !chart_active || self.frame_count % 4 == 0 {
-            self.draw_floating_windows(ctx);
-        }
+        // Always call draw_floating_windows so close buttons work.
+        // Performance optimization is inside: heavy content gated by db_ok flag.
+        self.draw_floating_windows(ctx);
 
         // ── central panel (chart area) ────────────────────────────────────────
         egui::CentralPanel::default().show(ctx, |ui| {
