@@ -4790,7 +4790,9 @@ impl TyphooNApp {
     }
 
     fn handle_command(&mut self, cmd: &str, ctx: &egui::Context) {
-        match cmd.trim().to_uppercase().as_str() {
+        let cmd_upper = cmd.trim().to_uppercase();
+        self.log.push_back(LogEntry::info(format!("CMD: {}", cmd_upper)));
+        match cmd_upper.as_str() {
             "QUIT" => {
                 self.save_session();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -5043,7 +5045,9 @@ impl TyphooNApp {
             "darwin_view": self.darwin_view,
             "finnhub_key": self.finnhub_key,
             "broker_api_key": self.broker_api_key,
+            "broker_secret": self.broker_secret,
             "broker_paper": self.broker_paper,
+            "tt_username": self.tt_username,
             "sl_enabled": self.sl_enabled,
             "tp_enabled": self.tp_enabled,
             "windows": {
@@ -5173,6 +5177,8 @@ impl TyphooNApp {
                 // Restore API keys
                 if let Some(fk) = v["finnhub_key"].as_str() { self.finnhub_key = fk.to_string(); }
                 if let Some(ak) = v["broker_api_key"].as_str() { self.broker_api_key = ak.to_string(); }
+                if let Some(bs) = v["broker_secret"].as_str() { self.broker_secret = bs.to_string(); }
+                if let Some(tu) = v["tt_username"].as_str() { self.tt_username = tu.to_string(); }
                 if let Some(bp) = v["broker_paper"].as_bool() { self.broker_paper = bp; }
                 // Restore SL/TP state
                 if let Some(sl) = v["sl_enabled"].as_bool() { self.sl_enabled = sl; }
@@ -9634,7 +9640,8 @@ impl eframe::App for TyphooNApp {
                         chart.drag_start_offset = chart.view_offset;
                         chart.drag_start_ppan = chart.price_pan;
                     }
-                } else if pointer.primary_released() {
+                } else if pointer.primary_released() || pointer_over_window {
+                    // Stop dragging when mouse released OR pointer moves over a floating window
                     chart.is_dragging = false;
                     chart.is_scaling_price = false;
                     chart.drag_start = None;
