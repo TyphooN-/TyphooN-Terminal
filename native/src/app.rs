@@ -9630,16 +9630,22 @@ impl eframe::App for TyphooNApp {
                         }
                     }
 
+                    // Auto-focus on hover, confirm on click
+                    let ptr_in_cell = ctx.input(|i| i.pointer.hover_pos().map(|p| cell_rect.contains(p)).unwrap_or(false));
+                    if ptr_in_cell {
+                        // Auto-set focus when hovering (no click required for zoom)
+                        self.mtf_focused = Some(idx);
+                        self.active_tab = idx;
+                    }
                     let is_focused = self.mtf_focused == Some(idx);
 
-                    // Zoom/pan only the focused cell when pointer is inside it
-                    let ptr_in_cell = ctx.input(|i| i.pointer.hover_pos().map(|p| cell_rect.contains(p)).unwrap_or(false));
-                    if is_focused && ptr_in_cell {
+                    // Zoom when pointer is in this cell (no focus-click required)
+                    if ptr_in_cell {
                         let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
                         if scroll != 0.0 {
                             Self::handle_zoom(chart, scroll);
                         }
-                        // Also handle drag pan for focused cell
+                        // Drag pan for this cell
                         let drag = ctx.input(|i| i.pointer.delta());
                         if ctx.input(|i| i.pointer.primary_down()) && drag.x.abs() > 0.5 {
                             Self::handle_pan_h(chart, -drag.x, cell_rect.width());
