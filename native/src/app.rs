@@ -48,11 +48,29 @@ const RSI_LINE: egui::Color32 = egui::Color32::from_rgb(200, 180, 60);   // #c8b
 const MACD_LINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff
 const MACD_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 48);   // #ff8230 (orange)
 
-// ─── right panel button colours (matching old WebKit) ────────────────────────
-const BTN_GREEN: egui::Color32 = egui::Color32::from_rgb(40, 160, 60);
-const BTN_BLUE: egui::Color32 = egui::Color32::from_rgb(50, 100, 200);
-const BTN_RED: egui::Color32 = egui::Color32::from_rgb(200, 50, 50);
-const BTN_GRAY: egui::Color32 = egui::Color32::from_rgb(80, 80, 100);
+// ─── right panel button colours (exact WebKit CSS values) ────────────────────
+const BTN_GREEN: egui::Color32 = egui::Color32::from_rgb(10, 95, 56);   // .btn-action: #0a5f38
+const BTN_GREEN_TEXT: egui::Color32 = egui::Color32::from_rgb(136, 255, 136); // #8f8
+const BTN_MG: egui::Color32 = egui::Color32::from_rgb(58, 58, 0);       // .btn-mg: #3a3a00
+const BTN_MG_TEXT: egui::Color32 = egui::Color32::from_rgb(255, 255, 136);   // #ff8
+const BTN_BLUE: egui::Color32 = egui::Color32::from_rgb(15, 52, 96);    // .btn-lines: #0f3460
+const BTN_BLUE_TEXT: egui::Color32 = egui::Color32::from_rgb(136, 204, 255); // #8cf
+const BTN_RED: egui::Color32 = egui::Color32::from_rgb(90, 26, 26);     // .btn-danger: #5a1a1a
+const BTN_RED_TEXT: egui::Color32 = egui::Color32::from_rgb(255, 136, 136);  // #f88
+// Old CSS variable equivalents (used throughout for WebKit parity)
+#[allow(dead_code)]
+const BG_DARK: egui::Color32 = egui::Color32::from_rgb(10, 10, 20);     // --bg-dark: #0a0a14
+#[allow(dead_code)]
+const BG_INPUT: egui::Color32 = egui::Color32::from_rgb(15, 52, 96);    // --bg-input: #0f3460
+const BG_BUTTON: egui::Color32 = egui::Color32::from_rgb(26, 26, 46);   // --bg-button: #1a1a2e
+#[allow(dead_code)]
+const BG_HOVER: egui::Color32 = egui::Color32::from_rgb(22, 33, 62);    // --bg-hover: #16213e
+#[allow(dead_code)]
+const BORDER: egui::Color32 = egui::Color32::from_rgb(51, 51, 51);      // --border: #333
+#[allow(dead_code)]
+const INFO_COL: egui::Color32 = egui::Color32::from_rgb(136, 204, 255); // --info: #8cf
+#[allow(dead_code)]
+const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0, 188, 212); // --accent: #00bcd4
 // Quake console colours
 const QUAKE_BG: egui::Color32 = egui::Color32::from_rgb(5, 15, 25);
 const QUAKE_CMD: egui::Color32 = egui::Color32::from_rgb(0, 220, 220);
@@ -4096,20 +4114,23 @@ impl TyphooNApp {
 
     fn dark_visuals() -> egui::Visuals {
         let mut v = egui::Visuals::dark();
-        v.panel_fill                        = egui::Color32::from_rgb(0, 0, 0);
-        v.window_fill                       = egui::Color32::from_rgb(5, 5, 10);
+        // Exact WebKit CSS color mapping
+        v.panel_fill                        = egui::Color32::from_rgb(0, 0, 0);         // body bg: #000
+        v.window_fill                       = egui::Color32::from_rgb(17, 17, 34);      // .menu-dropdown: #111122
         v.extreme_bg_color                  = egui::Color32::from_rgb(0, 0, 0);
-        v.faint_bg_color                    = egui::Color32::from_rgb(8, 8, 14);
-        v.widgets.noninteractive.bg_fill    = egui::Color32::from_rgb(8, 8, 12);
-        v.widgets.noninteractive.fg_stroke  = egui::Stroke::new(1.0, egui::Color32::from_rgb(140, 140, 160));
-        v.widgets.inactive.bg_fill          = egui::Color32::from_rgb(12, 12, 18);
-        v.widgets.hovered.bg_fill           = egui::Color32::from_rgb(15, 25, 45);
-        v.widgets.active.bg_fill            = egui::Color32::from_rgb(20, 40, 100);
-        v.selection.bg_fill                 = egui::Color32::from_rgb(20, 50, 120);
-        v.window_stroke                     = egui::Stroke::new(1.0, egui::Color32::from_rgb(30, 40, 60));
-        v.window_shadow                     = egui::Shadow { offset: [4, 8], blur: 16, spread: 0, color: egui::Color32::from_rgba_premultiplied(0, 0, 0, 200) };
+        v.faint_bg_color                    = egui::Color32::from_rgb(10, 10, 20);      // --bg-dark: #0a0a14
+        v.widgets.noninteractive.bg_fill    = egui::Color32::from_rgb(10, 10, 20);      // --bg-dark
+        v.widgets.noninteractive.fg_stroke  = egui::Stroke::new(1.0, egui::Color32::from_rgb(224, 224, 224)); // --text-primary: #e0e0e0
+        v.widgets.inactive.bg_fill          = egui::Color32::from_rgb(15, 52, 96);      // --bg-input: #0f3460
+        v.widgets.hovered.bg_fill           = egui::Color32::from_rgb(22, 33, 62);      // --bg-hover: #16213e
+        v.widgets.active.bg_fill            = egui::Color32::from_rgb(15, 52, 96);      // --bg-input (active)
+        v.selection.bg_fill                 = egui::Color32::from_rgb(15, 52, 96);      // --bg-input (selection)
+        v.window_stroke                     = egui::Stroke::new(1.0, egui::Color32::from_rgb(51, 51, 51));   // --border: #333
+        v.window_shadow                     = egui::Shadow { offset: [2, 4], blur: 8, spread: 0, color: egui::Color32::from_rgba_premultiplied(0, 0, 0, 160) };
         v.window_corner_radius              = egui::CornerRadius::same(4);
-        v.menu_corner_radius                = egui::CornerRadius::same(4);
+        v.menu_corner_radius                = egui::CornerRadius::same(0);              // menus have no radius in old CSS
+        // Separator styling
+        v.widgets.noninteractive.bg_stroke  = egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 34, 34));  // #222
         v
     }
 
@@ -6819,28 +6840,56 @@ impl eframe::App for TyphooNApp {
         });
 
         // ── tab bar ───────────────────────────────────────────────────────────
-        egui::TopBottomPanel::top("tab_bar").show(ctx, |ui| {
+        egui::TopBottomPanel::top("tab_bar")
+            .exact_height(26.0) // WebKit: height: 26px
+            .show(ctx, |ui| {
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
                 let mut switch_to: Option<usize> = None;
                 let mut close_tab: Option<usize> = None;
                 for (idx, chart) in self.charts.iter().enumerate() {
                     let active = idx == self.active_tab;
                     let label = format!("{} [{}]", chart.symbol, chart.timeframe.label());
-                    let color = if active { ACCENT } else { AXIS_TEXT };
-                    let text = egui::RichText::new(&label).color(color).small().strong();
-                    if ui.selectable_label(active, text).clicked() {
-                        switch_to = Some(idx);
-                    }
-                    // Close button (only if >1 tab)
-                    if self.charts.len() > 1 {
-                        if ui.small_button(egui::RichText::new("×").color(AXIS_TEXT).small()).clicked() {
-                            close_tab = Some(idx);
+                    // WebKit: .chart-tab — #0a0a0a bg, active gets #1a1a2e + green bottom border
+                    let tab_bg = if active { BG_BUTTON } else { egui::Color32::from_rgb(10, 10, 10) };
+                    let tab_text = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(136, 136, 136) };
+
+                    let resp = ui.horizontal(|ui| {
+                        // Background for tab
+                        let tab_rect = egui::Rect::from_min_size(
+                            ui.cursor().min,
+                            egui::vec2(label.len() as f32 * 7.5 + 30.0, 24.0),
+                        );
+                        ui.painter().rect_filled(tab_rect, 0.0, tab_bg);
+                        if active {
+                            // Green bottom border (WebKit: border-bottom: 2px solid var(--success))
+                            ui.painter().line_segment(
+                                [egui::pos2(tab_rect.left(), tab_rect.bottom()), egui::pos2(tab_rect.right(), tab_rect.bottom())],
+                                egui::Stroke::new(2.0, egui::Color32::from_rgb(76, 175, 80)),
+                            );
                         }
-                    }
-                    ui.separator();
+                        // Right border separator
+                        ui.painter().line_segment(
+                            [egui::pos2(tab_rect.right(), tab_rect.top()), egui::pos2(tab_rect.right(), tab_rect.bottom())],
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 34, 34)),
+                        );
+
+                        ui.add_space(6.0);
+                        if ui.add(egui::Label::new(egui::RichText::new(&label).color(tab_text).small().strong()).sense(egui::Sense::click())).clicked() {
+                            switch_to = Some(idx);
+                        }
+                        if self.charts.len() > 1 {
+                            let close_color = egui::Color32::from_rgb(85, 85, 85);
+                            if ui.add(egui::Label::new(egui::RichText::new("×").color(close_color)).sense(egui::Sense::click())).clicked() {
+                                close_tab = Some(idx);
+                            }
+                        }
+                        ui.add_space(6.0);
+                    });
+                    let _ = resp;
                 }
-                // + button to add new tab
-                if ui.small_button(egui::RichText::new("+").color(ACCENT).strong()).clicked() {
+                // + button (WebKit: .tab-add)
+                if ui.add(egui::Label::new(egui::RichText::new("+").color(egui::Color32::from_rgb(85, 85, 85)).size(16.0)).sense(egui::Sense::click())).clicked() {
                     let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
                     let mut new_chart = ChartState::new(&self.symbol_input, tf);
                     if let Some(ref cache) = self.cache.clone() {
@@ -7004,26 +7053,27 @@ impl eframe::App for TyphooNApp {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     match self.right_tab {
                         RightTab::Trading => {
-                            // ── Trading Buttons Grid (matching old WebKit) ──
-                            ui.add_space(4.0);
-                            let btn_w = (ui.available_width() - 8.0) / 2.0;
-                            let btn_size = egui::vec2(btn_w, 24.0);
+                            // ── Trading Buttons Grid (exact WebKit CSS: #button-grid) ──
+                            ui.add_space(8.0);
+                            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0); // gap: 4px
+                            let btn_w = (ui.available_width() - 4.0) / 2.0;
+                            let btn_size = egui::vec2(btn_w, 28.0); // padding: 8px 4px ≈ 28px
 
-                            // Row 1: Open Trade (green) | Buy Lines (blue)
+                            // Row 1: Open Trade (.btn-action) | Buy Lines (.btn-lines)
                             ui.horizontal(|ui| {
-                                if ui.add(egui::Button::new(egui::RichText::new("Open Trade").color(egui::Color32::WHITE).small()).fill(BTN_GREEN).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Open Trade").color(BTN_GREEN_TEXT).small().strong()).fill(BTN_GREEN).min_size(btn_size)).clicked() {
                                     self.show_order_entry = true;
                                 }
-                                if ui.add(egui::Button::new(egui::RichText::new("Buy Lines").color(egui::Color32::WHITE).small()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Buy Lines").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
                                     self.draw_mode = DrawMode::PlacingHLine;
                                 }
                             });
-                            // Row 2: Sell Lines (blue) | Destroy Lines (gray)
+                            // Row 2: Sell Lines (.btn-lines) | Destroy Lines (.btn-lines)
                             ui.horizontal(|ui| {
-                                if ui.add(egui::Button::new(egui::RichText::new("Sell Lines").color(egui::Color32::WHITE).small()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Sell Lines").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
                                     self.draw_mode = DrawMode::PlacingHLine;
                                 }
-                                if ui.add(egui::Button::new(egui::RichText::new("Destroy Lines").color(egui::Color32::WHITE).small()).fill(BTN_GRAY).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Destroy Lines").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
                                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
                                         chart.drawings.clear();
                                     }
@@ -7031,27 +7081,27 @@ impl eframe::App for TyphooNApp {
                                     self.tp_price = None;
                                 }
                             });
-                            // Row 3: Open MG (gray) | Close All (red)
+                            // Row 3: Open MG (.btn-mg) | Close All (.btn-danger)
                             ui.horizontal(|ui| {
-                                if ui.add(egui::Button::new(egui::RichText::new("Open MG").color(egui::Color32::WHITE).small()).fill(BTN_GRAY).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Open MG").color(BTN_MG_TEXT).small().strong()).fill(BTN_MG).min_size(btn_size)).clicked() {
                                     self.log.push_back(LogEntry::info("Martingale: connect broker first"));
                                 }
-                                if ui.add(egui::Button::new(egui::RichText::new("Close All").color(egui::Color32::WHITE).small()).fill(BTN_RED).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Close All").color(BTN_RED_TEXT).small().strong()).fill(BTN_RED).min_size(btn_size)).clicked() {
                                     let _ = self.broker_tx.send(BrokerCmd::CloseAll);
                                 }
                             });
-                            // Row 4: Close Partial (red) | Set SL (blue)
+                            // Row 4: Close Partial (.btn-danger) | Set SL (.btn-lines)
                             ui.horizontal(|ui| {
-                                if ui.add(egui::Button::new(egui::RichText::new("Close Partial").color(egui::Color32::WHITE).small()).fill(BTN_RED).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Close Partial").color(BTN_RED_TEXT).small().strong()).fill(BTN_RED).min_size(btn_size)).clicked() {
                                     self.log.push_back(LogEntry::info("Close partial: connect broker"));
                                 }
-                                if ui.add(egui::Button::new(egui::RichText::new("Set SL").color(egui::Color32::WHITE).small()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Set SL").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
                                     self.sl_enabled = true;
                                 }
                             });
-                            // Row 5: Set TP (blue) | (empty)
+                            // Row 5: Set TP (.btn-lines)
                             ui.horizontal(|ui| {
-                                if ui.add(egui::Button::new(egui::RichText::new("Set TP").color(egui::Color32::WHITE).small()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Set TP").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
                                     self.tp_enabled = true;
                                 }
                             });
