@@ -5214,6 +5214,75 @@ impl TyphooNApp {
                                                         ui.label("Total D-Score:"); ui.label(egui::RichText::new(format!("{:.1}", ds.total_dscore)).strong()); ui.end_row();
                                                     });
                                                 }
+                                                // Slippage Analysis
+                                                if let Ok(slip) = darwin::analyze_slippage(&conn, &acct.darwin_ticker) {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("Slippage").strong());
+                                                    ui.label(format!("Avg: {:.4}%  Total cost: ${:.2}  Worst: {:.4}%", slip.avg_slippage_pct, slip.total_slippage_cost, slip.worst_slippage));
+                                                }
+                                                // MAE/MFE
+                                                if let Ok(mae) = darwin::estimate_mae_mfe(&conn, &acct.darwin_ticker) {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("MAE / MFE").strong());
+                                                    ui.label(format!("Avg MAE: {:.2}%  Avg MFE: {:.2}%  Ratio: {:.2}", mae.avg_mae_pct, mae.avg_mfe_pct, mae.mae_mfe_ratio));
+                                                }
+                                                // Sizing Efficiency
+                                                if let Ok(sizing) = darwin::get_sizing_efficiency(&conn, &acct.darwin_ticker) {
+                                                    if !sizing.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new("Sizing Efficiency").strong());
+                                                        egui::Grid::new(format!("sz_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                                            ui.strong("Quartile"); ui.strong("Avg Vol"); ui.strong("Win%"); ui.strong("P&L");
+                                                            ui.end_row();
+                                                            for s in &sizing {
+                                                                ui.label(&s.quartile);
+                                                                ui.label(format!("{:.2}", s.avg_volume));
+                                                                ui.label(format!("{:.0}%", s.win_rate));
+                                                                let c = if s.total_pnl >= 0.0 { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(format!("${:.0}", s.total_pnl)).color(c));
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                // Symbol Rotation
+                                                if let Ok(rot) = darwin::get_symbol_rotation(&conn, &acct.darwin_ticker) {
+                                                    if !rot.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new("Symbol Rotation").strong());
+                                                        egui::Grid::new(format!("rot_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                                            ui.strong("Symbol"); ui.strong("Trades"); ui.strong("P&L"); ui.strong("Active");
+                                                            ui.end_row();
+                                                            for r in &rot {
+                                                                ui.label(&r.symbol);
+                                                                ui.label(format!("{}", r.trade_count));
+                                                                let c = if r.total_pnl >= 0.0 { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(format!("${:.0}", r.total_pnl)).color(c));
+                                                                ui.label(format!("{} mo", r.active_months));
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                                // Open Positions (per-DARWIN)
+                                                if let Ok(pos) = darwin::get_darwin_open_positions(&conn, &acct.darwin_ticker) {
+                                                    if !pos.is_empty() {
+                                                        ui.add_space(5.0);
+                                                        ui.label(egui::RichText::new(format!("Open Positions ({})", pos.len())).strong());
+                                                        egui::Grid::new(format!("pos_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                                            ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Price");
+                                                            ui.end_row();
+                                                            for p in &pos {
+                                                                ui.label(&p.symbol);
+                                                                let sc = if p.side == "buy" { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(&p.side).color(sc));
+                                                                ui.label(format!("{:.2}", p.total_volume));
+                                                                ui.label(format_price(p.avg_price));
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                    }
+                                                }
                                             });
                                         }
                                     }
@@ -5528,25 +5597,33 @@ impl TyphooNApp {
                                                     });
                                             }
                                         }
-                                        9 => { // Stress Test
-                                            let equity = portfolio.total_final_balance;
-                                            let scenarios = [
-                                                ("2008 GFC", -56.8), ("COVID Mar 2020", -33.9),
-                                                ("2022 Bear Market", -25.4), ("Flash Crash 2010", -9.0),
-                                                ("Brexit Vote 2016", -5.3), ("10% Correction", -10.0),
-                                                ("20% Bear", -20.0), ("50% Crash", -50.0),
-                                            ];
-                                            egui::Grid::new("stress_grid").striped(true).num_columns(3).show(ui, |ui| {
-                                                ui.strong("Scenario"); ui.strong("Drawdown"); ui.strong("Equity After");
-                                                ui.end_row();
-                                                for (name, dd_pct) in &scenarios {
-                                                    let after = equity * (1.0 + dd_pct / 100.0);
-                                                    ui.label(*name);
-                                                    ui.label(egui::RichText::new(format!("{:.1}%", dd_pct)).color(DOWN));
-                                                    ui.label(egui::RichText::new(format!("${:.0}", after)).color(DOWN));
+                                        9 => { // Stress Test (engine-powered)
+                                            if let Ok(results) = darwin::run_stress_tests(&conn) {
+                                                egui::Grid::new("stress_grid").striped(true).num_columns(4).show(ui, |ui| {
+                                                    ui.strong("Scenario"); ui.strong("Market Drop"); ui.strong("Portfolio Impact"); ui.strong("Impact %");
                                                     ui.end_row();
+                                                    for r in &results {
+                                                        ui.label(&r.scenario);
+                                                        ui.label(egui::RichText::new(format!("{:.1}%", r.market_drop_pct)).color(DOWN));
+                                                        ui.label(egui::RichText::new(format!("${:.0}", r.estimated_portfolio_impact)).color(DOWN));
+                                                        ui.label(egui::RichText::new(format!("{:.1}%", r.estimated_portfolio_impact_pct)).color(DOWN));
+                                                        ui.end_row();
+                                                    }
+                                                });
+                                            }
+                                            // Also show timing divergences
+                                            ui.add_space(10.0);
+                                            ui.heading("Timing Divergences");
+                                            ui.separator();
+                                            if let Ok(divs) = darwin::get_timing_divergences(&conn) {
+                                                if divs.is_empty() {
+                                                    ui.label("No timing divergences found.");
+                                                } else {
+                                                    for d in &divs {
+                                                        ui.label(egui::RichText::new(format!("{}: spread {:.1}h, price {:.2}%", d.symbol, d.time_spread_hours, d.price_spread_pct)).small());
+                                                    }
                                                 }
-                                            });
+                                            }
                                         }
                                         10 => { // VaR Forecast
                                             if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
