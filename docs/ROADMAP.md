@@ -18,15 +18,15 @@
 - [x] SL/TP planning lines
 
 ### Phase 3: Indicators
-- [x] 21 indicators: SMA, EMA, KAMA, WMA, HMA, Bollinger, Ichimoku, Parabolic SAR, ATR Projection, RSI, Fisher, MACD, Stochastic, ADX, CCI, Williams %R, OBV, Momentum, Better Volume, Volume, ATR
-- [x] Sub-pane rendering for oscillators
-- [x] NNFX core system (KAMA + Fisher + ATR Projection + Better Volume)
+- [x] 32+ indicators: SMA, EMA, KAMA, WMA, HMA, Bollinger, Ichimoku, Parabolic SAR, ATR Projection, RSI, Fisher(32), MACD, Stochastic, ADX, CCI, Williams %R, OBV, Momentum, Better Volume, Volume, ATR, Ehlers (8 DSP indicators)
+- [x] Sub-pane rendering with MT5-matching histogram/line coloring
+- [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Quake console (`~`) command palette with 50+ commands
-- [x] Tab bar (Ctrl+N/W/Tab)
-- [x] MTF grid (4-cell 2x2 layout)
-- [x] Right panel: positions (DARWIN data), orders, risk, watchlist
+- [x] Console (`~`) with 104 commands
+- [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
+- [x] MTF grid (2×2 to 4×4, up to 16 charts)
+- [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
 - [x] Bottom panel: log + volume bars
 - [x] 29 floating windows
 - [x] Right-click context menu with drawing tools + chart type switcher

@@ -10,24 +10,26 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  ┌─────────────────────────────────────────────┐│
 │  │ Chart Renderer (egui Painter)               ││
 │  │ - Candle/HeikinAshi/Line/Bars/Renko         ││
-│  │ - 21 indicators (pure Rust computation)     ││
-│  │ - 7 drawing tools                           ││
+│  │ - 32+ indicators (pure Rust computation)    ││
+│  │ - 7 drawing tools + 7 harmonic patterns     ││
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
 │  │ egui Panels                                 ││
-│  │ - Quake console (~) command palette         ││
-│  │ - Positions / Orders / Watchlist            ││
+│  │ - Console (~) with 104 commands             ││
+│  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
-│  │ - DARWIN analytics (70+ engine functions)   ││
+│  │ - DARWIN analytics (69/69 engine functions) ││
+│  │ - SEC Filing Scanner + Insider Trades       ││
+│  │ - Finnhub News + Market Data APIs           ││
 │  │ - Backtest engine + optimizer               ││
-│  │ - MTF Grid (4 chart viewports)              ││
-│  │ - 29 floating windows                       ││
+│  │ - MTF Grid (up to 16 chart viewports)       ││
+│  │ - 32 floating windows                       ││
 │  └─────────────────────────────────────────────┘│
 ├─────────────────────────────────────────────────┤
 │  Engine Library (typhoon-engine crate)          │
 │  - AlpacaBroker (REST + WebSocket)              │
 │  - SqliteCache (TTBR binary, zstd compression)  │
-│  - DarwinDB (70+ analytics functions)           │
+│  - DarwinDB (69 analytics functions, 100% wired)│
 │  - RiskEngine (VaR, TRIM, martingale)           │
 │  - BacktestEngine (bar-by-bar, optimization)    │
 │  - BarBuilder (WebSocket → OHLCV)               │

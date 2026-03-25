@@ -4,7 +4,7 @@
 
 | Key | Action |
 |-----|--------|
-| `~` (tilde/backtick) | Open Quake-style command palette |
+| `~` (tilde/backtick) | Open Console (also: Tools → Console) |
 | `Esc` | Close palette / cancel drawing mode |
 
 ## Navigation

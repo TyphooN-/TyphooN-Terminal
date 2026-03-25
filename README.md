@@ -12,14 +12,14 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **CLI Binary** | 6.5MB standalone TUI (SSH/VPS ready) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | < 2 seconds |
-| **Lines of Code** | ~6,600 GUI + ~12,000 engine (pure Rust) |
+| **Lines of Code** | ~9,500 GUI + ~12,000 engine (pure Rust) |
 | **Indicators** | 32+ (NNFX + Ehlers DSP + standard + harmonics) |
-| **Commands** | 95 Quake-console style (~) |
+| **Commands** | 104 Quake-console style (~) |
 | **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
 | **Harmonic Patterns** | 7 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
 | **Data Sources** | MT5 (Darwinex), Alpaca, Kraken, tastytrade |
-| **DARWIN Analytics** | 70+ functions (VaR, correlation, equity curves, streaks) |
+| **DARWIN Analytics** | 69/69 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
 ---
