@@ -5231,6 +5231,48 @@ impl TyphooNApp {
                                     }
                                 }
                             }
+                            // ── Daily Risk Report ──────────────────────
+                            ui.add_space(10.0);
+                            ui.separator();
+                            if ui.button("Generate Daily Risk Report").clicked() {
+                                match darwin::generate_daily_report(&conn) {
+                                    Ok(report) => {
+                                        self.log.push_back(LogEntry::info(format!(
+                                            "Daily Report {}: Equity ${:.0}, P&L ${:.2} ({:.2}%), VaR95 {:.2}%, DD {:.2}%, {} positions, ${:.0} notional",
+                                            report.date, report.portfolio_equity, report.daily_pnl,
+                                            report.daily_return_pct, report.current_var_95,
+                                            report.current_drawdown_pct, report.open_position_count, report.total_notional
+                                        )));
+                                        if !report.top_gainers.is_empty() {
+                                            let gainers: Vec<String> = report.top_gainers.iter().map(|(s, p)| format!("{} +${:.0}", s, p)).collect();
+                                            self.log.push_back(LogEntry::info(format!("Top gainers: {}", gainers.join(", "))));
+                                        }
+                                        if !report.top_losers.is_empty() {
+                                            let losers: Vec<String> = report.top_losers.iter().map(|(s, p)| format!("{} ${:.0}", s, p)).collect();
+                                            self.log.push_back(LogEntry::info(format!("Top losers: {}", losers.join(", "))));
+                                        }
+                                    }
+                                    Err(e) => { self.log.push_back(LogEntry::err(format!("Report error: {}", e))); }
+                                }
+                            }
+
+                            // ── Delete Account ───────────────────────────
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.label(egui::RichText::new("Delete Account").color(DOWN));
+                            ui.horizontal(|ui| {
+                                ui.label("Ticker:");
+                                ui.add(egui::TextEdit::singleline(&mut self.darwin_import_ticker).desired_width(80.0));
+                                if ui.button(egui::RichText::new("Delete").color(BTN_RED_TEXT)).clicked() {
+                                    let ticker = self.darwin_import_ticker.trim().to_string();
+                                    if !ticker.is_empty() {
+                                        match darwin::delete_darwin_account(&conn, &ticker) {
+                                            Ok(()) => { self.log.push_back(LogEntry::info(format!("Deleted DARWIN account: {}", ticker))); }
+                                            Err(e) => { self.log.push_back(LogEntry::err(format!("Delete failed: {}", e))); }
+                                        }
+                                    }
+                                }
+                            });
                         }
                     } else {
                         ui.label(egui::RichText::new("Cache not available").color(egui::Color32::from_rgb(255, 80, 80)));
