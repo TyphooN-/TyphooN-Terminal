@@ -8659,10 +8659,11 @@ impl eframe::App for TyphooNApp {
             let num_visible = palette_commands.len().clamp(1, 15);
             let console_height = (num_visible as f32) * 24.0 + 52.0;
 
+            let screen_width = ctx.input(|i| i.viewport_rect()).width();
             egui::Window::new("__console__")
                 .title_bar(false)
-                .anchor(egui::Align2::CENTER_TOP, [0.0, 0.0])
-                .fixed_size([700.0, console_height])
+                .anchor(egui::Align2::LEFT_TOP, [0.0, 0.0])
+                .fixed_size([screen_width, console_height])
                 .frame(egui::Frame::window(&ctx.style())
                     .fill(egui::Color32::from_rgba_premultiplied(8, 8, 24, 247))
                     .inner_margin(8.0)
@@ -8670,7 +8671,7 @@ impl eframe::App for TyphooNApp {
                 .show(ctx, |ui| {
                     let input_resp = ui.add(
                         egui::TextEdit::singleline(&mut self.command_input)
-                            .desired_width(680.0)
+                            .desired_width(screen_width - 24.0)
                             .hint_text("type a command… (Esc to close)")
                             .font(egui::FontId::monospace(14.0))
                             .text_color(egui::Color32::from_rgb(76, 175, 80)),
