@@ -323,6 +323,7 @@ struct IndicatorFlags {
     pivots: bool,
     fractals: bool,
     harmonics: bool,
+    auto_fib: bool,
     supply_demand: bool,
     ehlers_ss: bool,
     ehlers_decycler: bool,
@@ -429,6 +430,10 @@ struct ChartState {
     /// Status: 0=untested, 1=tested (price returned), 2=proven (price bounced)
     supply_zones: Vec<(usize, f64, f64, u8)>,
     demand_zones: Vec<(usize, f64, f64, u8)>,
+    /// Auto Fibonacci levels: (price, label, is_extension).
+    auto_fib_levels: Vec<(f64, String, bool)>,
+    /// Auto Fibonacci swing: (swing_high_price, swing_low_price, swing_high_idx, swing_low_idx).
+    auto_fib_swing: Option<(f64, f64, usize, usize)>,
     /// Detected harmonic patterns.
     harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
@@ -515,6 +520,8 @@ impl ChartState {
             ehlers_roof: Vec::new(),
             supply_zones: Vec::new(),
             demand_zones: Vec::new(),
+            auto_fib_levels: Vec::new(),
+            auto_fib_swing: None,
             harmonics: Vec::new(),
             drawings: Vec::new(),
             visible_bars: 200,
@@ -674,6 +681,8 @@ impl ChartState {
         let (sz, dz) = compute_supply_demand_zones(&self.bars);
         self.supply_zones = sz;
         self.demand_zones = dz;
+        // Auto Fibonacci (fractal-based swing detection, matching AutoFibonacci.mqh)
+        self.compute_auto_fibonacci();
         // Ehlers indicators
         self.ehlers_ss = ehlers_super_smoother(&self.bars, 10);
         self.ehlers_decycler = ehlers_decycler(&self.bars, 20);
@@ -685,6 +694,60 @@ impl ChartState {
         self.ehlers_cyber = ehlers_cyber_cycle(&self.bars);
         self.ehlers_cg = ehlers_cg_oscillator(&self.bars, 10);
         self.ehlers_roof = ehlers_roofing_filter(&self.bars, 10, 48);
+    }
+
+    /// Compute Auto Fibonacci levels from fractal swing points.
+    /// Mirrors AutoFibonacci.mqh: finds most significant recent swing high/low
+    /// and computes retracement (0-100%) + extension (127.2-423.6%) levels.
+    fn compute_auto_fibonacci(&mut self) {
+        self.auto_fib_levels.clear();
+        self.auto_fib_swing = None;
+        if self.bars.len() < 20 { return; }
+
+        let lookback = 10usize; // InpFractalLookback
+        let recent_start = (self.bars.len() as f64 * 0.4) as usize; // search recent 60%
+        let search = &self.bars[recent_start..];
+
+        // Find swing high and swing low from fractals in search range
+        let mut swing_high: Option<(f64, usize)> = None;
+        let mut swing_low: Option<(f64, usize)> = None;
+
+        for i in lookback..search.len().saturating_sub(lookback) {
+            let abs_i = recent_start + i;
+            if abs_i < self.fractal_up.len() && self.fractal_up[abs_i] {
+                if swing_high.is_none() || search[i].high > swing_high.unwrap().0 {
+                    swing_high = Some((search[i].high, abs_i));
+                }
+            }
+            if abs_i < self.fractal_down.len() && self.fractal_down[abs_i] {
+                if swing_low.is_none() || search[i].low < swing_low.unwrap().0 {
+                    swing_low = Some((search[i].low, abs_i));
+                }
+            }
+        }
+
+        if let (Some((high, hi_idx)), Some((low, lo_idx))) = (swing_high, swing_low) {
+            if (high - low).abs() < f64::EPSILON { return; }
+            self.auto_fib_swing = Some((high, low, hi_idx, lo_idx));
+            let range = high - low;
+            let is_bull = lo_idx < hi_idx; // uptrend: low comes before high
+
+            // Retracement levels (from high toward low for bull, from low toward high for bear)
+            let retrace_levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
+            let retrace_labels = ["0%", "23.6%", "38.2%", "50%", "61.8%", "78.6%", "100%"];
+            for (lvl, label) in retrace_levels.iter().zip(retrace_labels.iter()) {
+                let price = if is_bull { high - lvl * range } else { low + lvl * range };
+                self.auto_fib_levels.push((price, label.to_string(), false));
+            }
+
+            // Extension levels (beyond the swing)
+            let ext_levels = [1.272, 1.618, 2.0, 2.618, 3.618, 4.236];
+            let ext_labels = ["127.2%", "161.8%", "200%", "261.8%", "361.8%", "423.6%"];
+            for (lvl, label) in ext_levels.iter().zip(ext_labels.iter()) {
+                let price = if is_bull { low + lvl * range } else { high - lvl * range };
+                self.auto_fib_levels.push((price, label.to_string(), true));
+            }
+        }
     }
 
     fn visible_range(&self) -> (usize, usize) {
@@ -2268,6 +2331,52 @@ fn draw_chart(
         }
     }
 
+    // ── Auto Fibonacci levels (matching AutoFibonacci.mqh) ─────────────────
+    if flags.auto_fib && !chart.auto_fib_levels.is_empty() {
+        for (price, label, is_ext) in &chart.auto_fib_levels {
+            let y = price_to_y(*price);
+            if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                // Dotted line: gold for retracement, dodger blue for extension
+                let color = if *is_ext {
+                    egui::Color32::from_rgb(30, 144, 255)  // clrDodgerBlue
+                } else {
+                    egui::Color32::from_rgb(255, 215, 0)   // clrGold
+                };
+                // Dotted line
+                let mut fx = chart_rect.left();
+                while fx < chart_rect.right() {
+                    let end = (fx + 4.0).min(chart_rect.right());
+                    painter.line_segment(
+                        [egui::pos2(fx, y), egui::pos2(end, y)],
+                        egui::Stroke::new(1.0, color),
+                    );
+                    fx += 7.0;
+                }
+                // Label on right
+                painter.text(
+                    egui::pos2(chart_rect.right() - 4.0, y - 1.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                    &format!("{} {}", label, format_price(*price)),
+                    egui::FontId::monospace(8.0),
+                    color,
+                );
+            }
+        }
+        // Draw swing line
+        if let Some((_high, _low, hi_idx, lo_idx)) = chart.auto_fib_swing {
+            if hi_idx >= start_idx && hi_idx < end_idx && lo_idx >= start_idx && lo_idx < end_idx {
+                let x1 = chart_rect.left() + ((hi_idx - start_idx) as f32 + 0.5) * bar_w;
+                let y1 = price_to_y(_high);
+                let x2 = chart_rect.left() + ((lo_idx - start_idx) as f32 + 0.5) * bar_w;
+                let y2 = price_to_y(_low);
+                painter.line_segment(
+                    [egui::pos2(x1, y1), egui::pos2(x2, y2)],
+                    egui::Stroke::new(1.0, egui::Color32::WHITE),
+                );
+            }
+        }
+    }
+
     // ── price data (possibly Heikin-Ashi transformed) ──────────────────────
     let ha_bars;
     let renko_bars;
@@ -3498,6 +3607,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "PIVOTS",        desc: "Toggle pivot points (P/R1/R2/S1/S2)" },
     Command { name: "FRACTALS",      desc: "Toggle Bill Williams fractals" },
     Command { name: "HARMONICS",     desc: "Toggle harmonic pattern detection (Carney)" },
+    Command { name: "AUTO_FIB",      desc: "Auto Fibonacci (fractal swing retracement + extension)" },
     Command { name: "SUPPLY_DEMAND", desc: "Toggle supply/demand zone detection" },
 ];
 
@@ -3687,6 +3797,7 @@ pub struct TyphooNApp {
     show_pivots: bool,
     show_fractals: bool,
     show_harmonics: bool,
+    show_auto_fib: bool,
     show_supply_demand: bool,
     show_ehlers_ss: bool,
     show_ehlers_decycler: bool,
@@ -4244,6 +4355,7 @@ impl TyphooNApp {
             show_pivots: false,
             show_fractals: false,       // Bill Williams — separate from NNFX
             show_harmonics: false,
+            show_auto_fib: false,
             show_supply_demand: true,   // NNFX zones
             show_ehlers_ss: false,
             show_ehlers_decycler: false,
@@ -4443,6 +4555,7 @@ impl TyphooNApp {
             pivots: self.show_pivots,
             fractals: self.show_fractals,
             harmonics: self.show_harmonics,
+            auto_fib: self.show_auto_fib,
             supply_demand: self.show_supply_demand,
             ehlers_ss: self.show_ehlers_ss,
             ehlers_decycler: self.show_ehlers_decycler,
@@ -4583,6 +4696,7 @@ impl TyphooNApp {
             "SRLEVEL"  => self.show_pivots = !self.show_pivots,
             "FRACTALS"  => self.show_fractals = !self.show_fractals,
             "HARMONICS"     => self.show_harmonics = !self.show_harmonics,
+            "AUTO_FIB"      => self.show_auto_fib = !self.show_auto_fib,
             "SUPPLY_DEMAND" => self.show_supply_demand = !self.show_supply_demand,
             "NNFX" => {
                 // Enable NNFX indicator preset
@@ -5146,6 +5260,7 @@ impl TyphooNApp {
                     ui.separator();
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
                     ui.checkbox(&mut self.show_harmonics,     "Harmonic Patterns (Carney XABCD)");
+                    ui.checkbox(&mut self.show_auto_fib,      "Auto Fibonacci (swing retracement)");
                     ui.add_space(10.0);
                     ui.heading("Sub-Pane Indicators");
                     ui.separator();
@@ -8125,6 +8240,7 @@ impl eframe::App for TyphooNApp {
                     ui.label(egui::RichText::new("Pattern Recognition").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
                     ui.checkbox(&mut self.show_harmonics,     "Harmonic Patterns (Carney)");
+                    ui.checkbox(&mut self.show_auto_fib,      "Auto Fibonacci");
                     ui.separator();
                     ui.label(egui::RichText::new("Ehlers (Overlay)").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_ehlers_ss,       "Super Smoother(10)");
