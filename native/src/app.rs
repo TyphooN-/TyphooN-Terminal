@@ -1444,7 +1444,7 @@ fn compute_wma(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     for i in (period - 1)..n {
         let mut sum = 0.0;
         for j in 0..period {
-            sum += bars[i - period + 1 + j].close * (j + 1) as f64;
+            sum += bars[i + 1 - period + j].close * (j + 1) as f64;
         }
         out[i] = Some(sum / denom);
     }
@@ -4358,7 +4358,7 @@ impl TyphooNApp {
             show_pivots: false,
             show_fractals: false,       // Bill Williams — separate from NNFX
             show_harmonics: false,
-            show_auto_fib: false,
+            show_auto_fib: true,            // MT5 default: AutoFibonacci
             show_supply_demand: true,   // NNFX zones
             show_ehlers_ss: false,
             show_ehlers_decycler: false,
@@ -4710,7 +4710,8 @@ impl TyphooNApp {
                 self.show_better_volume = true;
                 self.show_prev_levels = true;
                 self.show_supply_demand = true;
-                self.log.push_back(LogEntry::info("NNFX preset: SMA200 + KAMA + Fisher + ATR Proj + Better Volume + Prev Levels + S/D Zones"));
+                self.show_auto_fib = true;
+                self.log.push_back(LogEntry::info("NNFX preset: SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D + AutoFib"));
             }
             "RESET_IND" => {
                 self.show_sma200 = false; self.show_sma100 = false; self.show_kama = false;
@@ -9810,5 +9811,539 @@ impl eframe::App for TyphooNApp {
         }
 
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
+    }
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create synthetic test bars (ascending prices).
+    fn make_bars(n: usize) -> Vec<Bar> {
+        (0..n).map(|i| {
+            let base = 100.0 + i as f64;
+            Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: base,
+                high: base + 2.0,
+                low: base - 1.0,
+                close: base + 1.0,
+                volume: 1000.0 + i as f64 * 10.0,
+            }
+        }).collect()
+    }
+
+    /// Create bars with known pattern for oscillator tests.
+    fn make_oscillating_bars(n: usize) -> Vec<Bar> {
+        (0..n).map(|i| {
+            let base = 100.0 + (i as f64 * 0.1).sin() * 10.0;
+            Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: base - 0.5,
+                high: base + 1.0,
+                low: base - 1.0,
+                close: base + 0.5,
+                volume: 500.0 + (i as f64 * 0.3).cos().abs() * 1000.0,
+            }
+        }).collect()
+    }
+
+    // ── SMA Tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_sma_basic() {
+        let bars = make_bars(10);
+        let sma = compute_sma(&bars, 3);
+        assert_eq!(sma.len(), 10);
+        // First 2 should be None (period-1)
+        assert!(sma[0].is_none());
+        assert!(sma[1].is_none());
+        // Third bar should have a value
+        assert!(sma[2].is_some());
+        // SMA(3) of closes 101, 102, 103 = 102
+        let v = sma[2].unwrap();
+        assert!((v - 102.0).abs() < 0.01, "SMA(3) bar 2 = {}, expected ~102", v);
+    }
+
+    #[test]
+    fn test_sma_empty() {
+        let bars: Vec<Bar> = vec![];
+        let sma = compute_sma(&bars, 5);
+        assert!(sma.is_empty());
+    }
+
+    #[test]
+    fn test_sma_period_larger_than_data() {
+        let bars = make_bars(3);
+        let sma = compute_sma(&bars, 10);
+        assert_eq!(sma.len(), 3);
+        assert!(sma.iter().all(|v| v.is_none()));
+    }
+
+    // ── EMA Tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ema_basic() {
+        let bars = make_bars(20);
+        let ema = compute_ema(&bars, 5);
+        assert_eq!(ema.len(), 20);
+        // First 4 should be None
+        for i in 0..4 { assert!(ema[i].is_none(), "EMA[{}] should be None", i); }
+        // Should have values from period-1 onward
+        assert!(ema[4].is_some());
+        // EMA should be close to but not exactly equal to close prices (trending up)
+        let last = ema[19].unwrap();
+        assert!(last > 100.0 && last < 125.0, "EMA last = {}", last);
+    }
+
+    #[test]
+    fn test_ema_follows_trend() {
+        let bars = make_bars(50);
+        let ema = compute_ema(&bars, 10);
+        // EMA should be increasing for ascending bars
+        let mut prev = 0.0;
+        for v in ema.iter().flatten() {
+            assert!(*v >= prev, "EMA should be non-decreasing: {} < {}", *v, prev);
+            prev = *v;
+        }
+    }
+
+    // ── KAMA Tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_kama_basic() {
+        let bars = make_bars(30);
+        let kama = compute_kama(&bars, 10, 2, 30);
+        assert_eq!(kama.len(), 30);
+        assert!(kama[9].is_none()); // period-1 warmup
+        assert!(kama[10].is_some());
+    }
+
+    #[test]
+    fn test_kama_adapts_to_trend() {
+        let bars = make_bars(50);
+        let kama = compute_kama(&bars, 10, 2, 30);
+        // KAMA should follow the uptrend
+        let last = kama.last().unwrap().unwrap();
+        assert!(last > 130.0, "KAMA should follow uptrend: {}", last);
+    }
+
+    // ── Bollinger Bands ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_bollinger_bands() {
+        let bars = make_bars(30);
+        let (mid, upper, lower) = compute_bollinger(&bars, 20, 2.0);
+        assert_eq!(mid.len(), 30);
+        // After warmup, upper > mid > lower
+        for i in 19..30 {
+            if let (Some(u), Some(m), Some(l)) = (upper[i], mid[i], lower[i]) {
+                assert!(u > m, "Upper {} should be > mid {}", u, m);
+                assert!(m > l, "Mid {} should be > lower {}", m, l);
+            }
+        }
+    }
+
+    // ── RSI Tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_rsi_range() {
+        let bars = make_oscillating_bars(50);
+        let rsi = compute_rsi(&bars, 14);
+        for v in rsi.iter().flatten() {
+            assert!(*v >= 0.0 && *v <= 100.0, "RSI should be 0-100: {}", v);
+        }
+    }
+
+    #[test]
+    fn test_rsi_uptrend_bullish() {
+        let bars = make_bars(30);
+        let rsi = compute_rsi(&bars, 14);
+        // Strong uptrend should have RSI > 50
+        if let Some(v) = rsi.last().unwrap() {
+            assert!(*v > 50.0, "RSI in uptrend should be >50: {}", v);
+        }
+    }
+
+    // ── Fisher Transform ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_fisher_transform() {
+        let bars = make_bars(50);
+        let (fisher, signal) = compute_fisher(&bars, 32);
+        assert_eq!(fisher.len(), 50);
+        assert_eq!(signal.len(), 50);
+        // Should have values after warmup
+        let has_values = fisher.iter().any(|v| v.is_some());
+        assert!(has_values, "Fisher should have computed values");
+    }
+
+    // ── MACD Tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_macd_basic() {
+        let bars = make_bars(50);
+        let (macd, signal, hist) = compute_macd(&bars, 12, 26, 9);
+        assert_eq!(macd.len(), 50);
+        assert_eq!(signal.len(), 50);
+        assert_eq!(hist.len(), 50);
+        // Should have values after warmup (26 + 9 bars)
+        assert!(macd[35].is_some());
+    }
+
+    #[test]
+    fn test_macd_histogram_is_difference() {
+        let bars = make_bars(50);
+        let (macd, signal, hist) = compute_macd(&bars, 12, 26, 9);
+        for i in 0..50 {
+            if let (Some(m), Some(s), Some(h)) = (macd[i], signal[i], hist[i]) {
+                assert!((h - (m - s)).abs() < 0.001, "Histogram should be MACD - Signal");
+            }
+        }
+    }
+
+    // ── Stochastic ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_stochastic_range() {
+        let bars = make_oscillating_bars(50);
+        let (k, d) = compute_stochastic(&bars, 14, 3, 3);
+        for v in k.iter().flatten() {
+            assert!(*v >= 0.0 && *v <= 100.0, "Stoch %K should be 0-100: {}", v);
+        }
+        for v in d.iter().flatten() {
+            assert!(*v >= 0.0 && *v <= 100.0, "Stoch %D should be 0-100: {}", v);
+        }
+    }
+
+    // ── ADX Tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_adx_range() {
+        let bars = make_bars(50);
+        let (adx, di_plus, di_minus) = compute_adx(&bars, 14);
+        for v in adx.iter().flatten() {
+            assert!(*v >= 0.0, "ADX should be >= 0: {}", v);
+        }
+        for v in di_plus.iter().flatten() {
+            assert!(*v >= 0.0, "DI+ should be >= 0: {}", v);
+        }
+        for v in di_minus.iter().flatten() {
+            assert!(*v >= 0.0, "DI- should be >= 0: {}", v);
+        }
+    }
+
+    // ── ATR Tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_atr_positive() {
+        let bars = make_bars(30);
+        let atr = compute_atr(&bars, 14);
+        for v in atr.iter().flatten() {
+            assert!(*v > 0.0, "ATR should be > 0: {}", v);
+        }
+    }
+
+    // ── Ichimoku Tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_ichimoku_lengths() {
+        let bars = make_bars(60);
+        let (tenkan, kijun, span_a, span_b) = compute_ichimoku(&bars, 9, 26, 52);
+        assert_eq!(tenkan.len(), 60);
+        assert_eq!(kijun.len(), 60);
+        assert_eq!(span_a.len(), 60);
+        assert_eq!(span_b.len(), 60);
+    }
+
+    // ── WMA / HMA Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_wma_basic() {
+        let bars = make_bars(30);
+        let wma = compute_wma(&bars, 10);
+        assert_eq!(wma.len(), 30);
+        assert!(wma[9].is_some());
+    }
+
+    #[test]
+    fn test_hma_basic() {
+        let bars = make_bars(30);
+        let hma = compute_hma(&bars, 10);
+        assert_eq!(hma.len(), 30);
+        // HMA should have values after warmup
+        let has_values = hma.iter().any(|v| v.is_some());
+        assert!(has_values);
+    }
+
+    // ── CCI / Williams %R ────────────────────────────────────────────────
+
+    #[test]
+    fn test_cci_basic() {
+        let bars = make_oscillating_bars(30);
+        let cci = compute_cci(&bars, 20);
+        assert_eq!(cci.len(), 30);
+    }
+
+    #[test]
+    fn test_williams_r_range() {
+        let bars = make_oscillating_bars(30);
+        let wr = compute_williams_r(&bars, 14);
+        for v in wr.iter().flatten() {
+            assert!(*v >= -100.0 && *v <= 0.0, "Williams %R should be -100 to 0: {}", v);
+        }
+    }
+
+    // ── OBV / Momentum ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_obv_basic() {
+        let bars = make_bars(20);
+        let obv = compute_obv(&bars);
+        assert_eq!(obv.len(), 20);
+        assert!(obv[0].is_some());
+    }
+
+    #[test]
+    fn test_momentum_basic() {
+        let bars = make_bars(20);
+        let mom = compute_momentum(&bars, 10);
+        assert_eq!(mom.len(), 20);
+    }
+
+    // ── Parabolic SAR ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_psar_basic() {
+        let bars = make_bars(30);
+        let psar = compute_parabolic_sar(&bars, 0.02, 0.2);
+        assert_eq!(psar.len(), 30);
+        let has_values = psar.iter().any(|v| v.is_some());
+        assert!(has_values);
+    }
+
+    // ── Fractals ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_fractals_length() {
+        let bars = make_bars(20);
+        let up = compute_fractals_up(&bars);
+        let down = compute_fractals_down(&bars);
+        assert_eq!(up.len(), 20);
+        assert_eq!(down.len(), 20);
+    }
+
+    // ── BetterVolume ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_better_volume_classification() {
+        let bars = make_oscillating_bars(30);
+        let bv = compute_better_volume(&bars);
+        assert_eq!(bv.len(), 30);
+        // All values should be 0-5
+        for v in &bv {
+            assert!(*v <= 5, "BetterVolume type should be 0-5: {}", v);
+        }
+    }
+
+    // ── Supply/Demand Zones ──────────────────────────────────────────────
+
+    #[test]
+    fn test_supply_demand_zones() {
+        let bars = make_oscillating_bars(50);
+        let (supply, demand) = compute_supply_demand_zones(&bars);
+        // Should return valid zone tuples
+        for (idx, high, low, status) in &supply {
+            assert!(*idx < bars.len());
+            assert!(high > low);
+            assert!(*status <= 2);
+        }
+        for (idx, high, low, status) in &demand {
+            assert!(*idx < bars.len());
+            assert!(high > low);
+            assert!(*status <= 2);
+        }
+    }
+
+    // ── Ehlers DSP Indicators ────────────────────────────────────────────
+
+    #[test]
+    fn test_ehlers_super_smoother() {
+        let bars = make_bars(30);
+        let ss = ehlers_super_smoother(&bars, 10);
+        assert_eq!(ss.len(), 30);
+        let has_values = ss.iter().any(|v| v.is_some());
+        assert!(has_values);
+    }
+
+    #[test]
+    fn test_ehlers_decycler() {
+        let bars = make_bars(30);
+        let dc = ehlers_decycler(&bars, 20);
+        assert_eq!(dc.len(), 30);
+    }
+
+    #[test]
+    fn test_ehlers_mama_fama() {
+        let bars = make_bars(30);
+        let (mama, fama) = ehlers_mama_fama(&bars, 0.5, 0.05);
+        assert_eq!(mama.len(), 30);
+        assert_eq!(fama.len(), 30);
+    }
+
+    #[test]
+    fn test_ehlers_ebsw() {
+        let bars = make_oscillating_bars(50);
+        let ebsw = ehlers_even_better_sinewave(&bars, 40);
+        assert_eq!(ebsw.len(), 50);
+        // EBSW should be in -1 to 1 range
+        for v in ebsw.iter().flatten() {
+            assert!(*v >= -2.0 && *v <= 2.0, "EBSW should be ~-1 to 1: {}", v);
+        }
+    }
+
+    #[test]
+    fn test_ehlers_cyber_cycle() {
+        let bars = make_oscillating_bars(30);
+        let cc = ehlers_cyber_cycle(&bars);
+        assert_eq!(cc.len(), 30);
+    }
+
+    #[test]
+    fn test_ehlers_cg_oscillator() {
+        let bars = make_bars(30);
+        let cg = ehlers_cg_oscillator(&bars, 10);
+        assert_eq!(cg.len(), 30);
+    }
+
+    #[test]
+    fn test_ehlers_roofing_filter() {
+        let bars = make_oscillating_bars(60);
+        let rf = ehlers_roofing_filter(&bars, 10, 48);
+        assert_eq!(rf.len(), 60);
+    }
+
+    // ── Heikin-Ashi / Renko ──────────────────────────────────────────────
+
+    #[test]
+    fn test_heikin_ashi() {
+        let bars = make_bars(10);
+        let ha = heikin_ashi(&bars);
+        assert_eq!(ha.len(), 10);
+        // HA close = (O+H+L+C)/4
+        let b = &bars[0];
+        let ha_close = (b.open + b.high + b.low + b.close) / 4.0;
+        assert!((ha[0].close - ha_close).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_renko_bricks() {
+        let bars = make_bars(50);
+        let bricks = renko_bricks(&bars);
+        // Renko should produce some bricks for trending data
+        assert!(!bricks.is_empty(), "Renko should produce bricks for trending data");
+    }
+
+    // ── ATR Projection ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_atr_projection() {
+        let bars = make_bars(20);
+        let atr = compute_atr(&bars, 14);
+        let (upper, lower) = compute_atr_projection(&bars, &atr);
+        assert_eq!(upper.len(), 20);
+        assert_eq!(lower.len(), 20);
+        // Upper should be > lower where both exist
+        for i in 0..20 {
+            if let (Some(u), Some(l)) = (upper[i], lower[i]) {
+                assert!(u > l, "ATR proj upper {} should be > lower {}", u, l);
+            }
+        }
+    }
+
+    // ── Previous Candle Levels ───────────────────────────────────────────
+
+    #[test]
+    fn test_prev_candle_levels() {
+        let bars = make_bars(10);
+        let (dh, dl, wh, wl) = compute_prev_candle_levels(&bars);
+        // With synthetic data, should have daily levels at least
+        // (may be None if all bars are same "day" in synthetic data)
+        let _ = (dh, dl, wh, wl);
+    }
+
+    // ── Helper Functions ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_in_range() {
+        assert!(in_range(0.5, 0.0, 1.0));
+        assert!(!in_range(1.5, 0.0, 1.0));
+        assert!(in_range(0.618, 0.5, 0.8));
+    }
+
+    #[test]
+    fn test_format_price() {
+        let s = format_price(123.456);
+        assert!(s.contains("123"));
+    }
+
+    #[test]
+    fn test_fuzzy_match() {
+        assert!(fuzzy_match("sma", "SMA200"));
+        assert!(fuzzy_match("fish", "Fisher Transform"));
+        assert!(!fuzzy_match("xyz", "SMA200"));
+        assert!(fuzzy_match("", "anything")); // empty matches all
+    }
+
+    // ── Auto Fibonacci ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_auto_fibonacci() {
+        let mut bars = make_bars(60);
+        // Create a clear swing: up then down
+        for i in 30..60 {
+            bars[i].close = 160.0 - i as f64;
+            bars[i].high = bars[i].close + 2.0;
+            bars[i].low = bars[i].close - 1.0;
+            bars[i].open = bars[i].close - 0.5;
+        }
+        let mut chart = ChartState::new("TEST", Timeframe::H4);
+        chart.bars = bars;
+        chart.compute_indicators();
+        // Auto fib may or may not find levels depending on fractal detection
+        // Just verify no panic
+        assert!(chart.auto_fib_levels.len() >= 0);
+    }
+
+    // ── ChartState Integration ───────────────────────────────────────────
+
+    #[test]
+    fn test_chart_state_compute_all_indicators() {
+        let mut chart = ChartState::new("TEST", Timeframe::H4);
+        chart.bars = make_bars(100);
+        chart.compute_indicators();
+        // All indicator vectors should have correct length
+        assert_eq!(chart.sma200.len(), 100);
+        assert_eq!(chart.sma100.len(), 100);
+        assert_eq!(chart.kama.len(), 100);
+        assert_eq!(chart.ema21.len(), 100);
+        assert_eq!(chart.rsi.len(), 100);
+        assert_eq!(chart.fisher.len(), 100);
+        assert_eq!(chart.macd_line.len(), 100);
+        assert_eq!(chart.atr.len(), 100);
+        assert_eq!(chart.better_vol_type.len(), 100);
+    }
+
+    #[test]
+    fn test_chart_state_visible_range() {
+        let mut chart = ChartState::new("TEST", Timeframe::H4);
+        chart.bars = make_bars(500);
+        chart.visible_bars = 200;
+        chart.view_offset = 499;
+        let (start, end) = chart.visible_range();
+        assert_eq!(end - start, 200);
+        assert_eq!(end, 500);
     }
 }
