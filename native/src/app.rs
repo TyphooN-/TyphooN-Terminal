@@ -9994,12 +9994,17 @@ impl eframe::App for TyphooNApp {
             self.save_session();
         }
 
-        // Reduce repaint rate when expensive DARWIN windows are open (DB queries per frame)
-        let repaint_ms = if self.show_darwin_portfolio || self.show_darwin_accounts || self.show_var_mult {
-            2000 // 0.5 FPS when DARWIN analytics are visible (heavy DB queries)
-        } else {
-            250 // 4 FPS normal
-        };
+        // Reduce repaint rate when ANY floating window with DB queries is open.
+        // Every DB-querying window runs SQLite queries per frame in immediate mode.
+        let any_db_window = self.show_darwin_portfolio || self.show_darwin_accounts
+            || self.show_var_mult || self.show_settings || self.show_indicators_panel
+            || self.show_screener || self.show_calendar || self.show_sec || self.show_insider
+            || self.show_crypto_backfill || self.show_fundamentals || self.show_analyst
+            || self.show_holders || self.show_symbol_overlap || self.show_correlation
+            || self.show_seasonals || self.show_montecarlo || self.show_stress_test
+            || self.show_order_flow || self.show_bookmap || self.show_margin_monitor
+            || self.show_cache_stats || self.show_alerts;
+        let repaint_ms = if any_db_window { 1000 } else { 250 };
         ctx.request_repaint_after(std::time::Duration::from_millis(repaint_ms));
     }
 }
