@@ -3532,16 +3532,24 @@ enum BrokerCmd {
     GetOrders,
     CloseAll,
     ClosePosition { symbol: String },
+    /// Scrape SEC EDGAR filings for all portfolio symbols.
+    SecScrape { db_path: PathBuf },
+    /// Fetch Finnhub news for a symbol.
+    FinnhubNews { symbol: String, api_key: String },
 }
 
 /// Messages sent from async broker task → UI.
 enum BrokerMsg {
-    Connected(String), // success message
+    Connected(String),
     Error(String),
     Account(AccountInfo),
     Positions(Vec<PositionInfo>),
     Orders(Vec<OrderInfo>),
     OrderResult(String),
+    /// SEC scrape completed.
+    SecScrapeResult(String),
+    /// Finnhub news results.
+    FinnhubNewsResult(Vec<(String, String, String)>), // (headline, source, datetime)
 }
 
 pub struct TyphooNApp {
@@ -3616,6 +3624,11 @@ pub struct TyphooNApp {
     tt_username: String,
     tt_password: String,
     tt_sandbox: bool,
+
+    /// Finnhub API key.
+    finnhub_key: String,
+    /// Cached news articles (headline, source, datetime).
+    news_articles: Vec<(String, String, String)>,
 
     /// SL/TP planning lines (visual, pre-broker).
     sl_price: Option<f64>,
@@ -3963,6 +3976,35 @@ impl TyphooNApp {
                             }
                         }
                     }
+                    BrokerCmd::SecScrape { db_path } => {
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("SEC scrape started...".into()));
+                        match sec_filing::scrape_all_portfolio_symbols(db_path).await {
+                            Ok(stats) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::SecScrapeResult(
+                                    format!("SEC scrape complete: {} tickers, {} filings, {} insider trades, {} alerts", stats.tickers_scanned, stats.new_filings, stats.new_insider_trades, stats.new_alerts)
+                                ));
+                            }
+                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("SEC scrape error: {}", e))); }
+                        }
+                    }
+                    BrokerCmd::FinnhubNews { symbol, api_key } => {
+                        if let Some(ref b) = broker {
+                            match b.get_finnhub_news(&symbol, &api_key).await {
+                                Ok(articles) => {
+                                    let results: Vec<(String, String, String)> = articles.iter().filter_map(|a| {
+                                        let headline = a["headline"].as_str()?.to_string();
+                                        let source = a["source"].as_str().unwrap_or("Unknown").to_string();
+                                        let dt = a["datetime"].as_str().unwrap_or("").to_string();
+                                        Some((headline, source, dt))
+                                    }).collect();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::FinnhubNewsResult(results));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Finnhub: {}", e))); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect broker first for Finnhub news".into()));
+                        }
+                    }
                 }
             }
         });
@@ -4019,6 +4061,8 @@ impl TyphooNApp {
             tt_username: String::new(),
             tt_password: String::new(),
             tt_sandbox: true,
+            finnhub_key: String::new(),
+            news_articles: Vec::new(),
             sl_price: None,
             tp_price: None,
             rc_equity: "10000".to_string(),
@@ -4741,6 +4785,15 @@ impl TyphooNApp {
                             // tastytrade broker implementation pending in engine/src/broker/tastytrade.rs
                         }
                     }
+                    ui.add_space(10.0);
+                    ui.heading("Data APIs");
+                    ui.separator();
+                    egui::Grid::new("api_keys_grid").num_columns(2).show(ui, |ui| {
+                        ui.label("Finnhub API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.finnhub_key).desired_width(200.0).password(true));
+                        ui.end_row();
+                    });
+                    ui.label(egui::RichText::new("Used for: News, Analyst Ratings, Insider Sentiment, Short Interest").color(AXIS_TEXT).small());
                     ui.add_space(10.0);
                     ui.heading("MT5 (view-only data source)");
                     ui.separator();
@@ -5770,11 +5823,41 @@ impl TyphooNApp {
         if self.show_news {
             egui::Window::new("News & Events")
                 .open(&mut self.show_news)
-                .default_size([500.0, 400.0])
+                .default_size([550.0, 400.0])
                 .show(ctx, |ui| {
-                    ui.heading("Market News");
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Finnhub Key:").color(AXIS_TEXT));
+                        ui.add(egui::TextEdit::singleline(&mut self.finnhub_key).desired_width(160.0).password(true));
+                        let sym = self.charts.get(self.active_tab).map(|c| {
+                            c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("AAPL").to_string()
+                        }).unwrap_or_else(|| "AAPL".to_string());
+                        if ui.add(egui::Button::new("Fetch News").fill(BTN_BLUE)).clicked() {
+                            if self.finnhub_key.is_empty() {
+                                self.log.push_back(LogEntry::warn("Enter Finnhub API key"));
+                            } else {
+                                let _ = self.broker_tx.send(BrokerCmd::FinnhubNews {
+                                    symbol: sym.clone(),
+                                    api_key: self.finnhub_key.clone(),
+                                });
+                                self.log.push_back(LogEntry::info(format!("Fetching Finnhub news for {}...", sym)));
+                            }
+                        }
+                    });
                     ui.separator();
-                    ui.label(egui::RichText::new("News feed requires Alpaca/Finnhub connection.").color(AXIS_TEXT));
+                    if self.news_articles.is_empty() {
+                        ui.label(egui::RichText::new("No news loaded. Enter Finnhub API key and click Fetch News.").color(AXIS_TEXT));
+                    } else {
+                        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                            for (headline, source, dt) in &self.news_articles {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(dt).color(egui::Color32::from_rgb(102, 102, 102)).small());
+                                    ui.label(egui::RichText::new(source).color(egui::Color32::from_rgb(85, 85, 85)).small());
+                                });
+                                ui.label(egui::RichText::new(headline).color(egui::Color32::from_rgb(204, 204, 204)));
+                                ui.separator();
+                            }
+                        });
+                    }
                 });
         }
 
@@ -5803,6 +5886,16 @@ impl TyphooNApp {
                         for (i, label) in labels.iter().enumerate() {
                             ui.checkbox(&mut self.sec_filters[i], *label);
                         }
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(egui::RichText::new("Scrape Now").color(BTN_GREEN_TEXT).strong()).fill(BTN_GREEN)).clicked() {
+                            let mut db_path = dirs_home();
+                            db_path.push("cache");
+                            db_path.push("typhoon_cache.db");
+                            let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
+                            self.log.push_back(LogEntry::info("SEC EDGAR scrape initiated..."));
+                        }
+                        ui.label(egui::RichText::new("via SEC EDGAR Full-Text Search").color(AXIS_TEXT).small());
                     });
                     ui.separator();
 
@@ -6818,9 +6911,15 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::OrderResult(msg) => {
                     self.log.push_back(LogEntry::info(msg));
-                    // Refresh positions after order
                     let _ = self.broker_tx.send(BrokerCmd::GetPositions);
                     let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                }
+                BrokerMsg::SecScrapeResult(msg) => {
+                    self.log.push_back(LogEntry::info(msg));
+                }
+                BrokerMsg::FinnhubNewsResult(articles) => {
+                    self.log.push_back(LogEntry::info(format!("Finnhub: {} articles loaded", articles.len())));
+                    self.news_articles = articles;
                 }
             }
         }
