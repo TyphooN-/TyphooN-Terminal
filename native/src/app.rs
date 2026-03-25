@@ -3626,6 +3626,14 @@ enum BrokerCmd {
     SearchSymbols { query: String },
     /// Get order history.
     GetOrderHistory { limit: u32 },
+    /// Fetch fundamentals for a symbol (SEC EDGAR).
+    GetFundamentals { ticker: String },
+    /// Fetch institutional holders (13F).
+    GetHolders { ticker: String },
+    /// Fetch analyst ratings (Finnhub).
+    GetAnalyst { symbol: String, finnhub_key: String },
+    /// Fetch orderbook (Level 2).
+    GetOrderbook { symbol: String },
 }
 
 /// Messages sent from async broker task → UI.
@@ -3661,6 +3669,8 @@ pub struct TyphooNApp {
     mtf_cols: usize,
     /// MTF grid enabled flag.
     mtf_enabled: bool,
+    /// Which chart cell is focused in MTF grid (click to select).
+    mtf_focused: Option<usize>,
 
     /// Command palette open state.
     command_open: bool,
@@ -4169,6 +4179,46 @@ impl TyphooNApp {
                             }
                         }
                     }
+                    BrokerCmd::GetFundamentals { ticker } => {
+                        match AlpacaBroker::get_financial_analysis(&ticker).await {
+                            Ok(v) => {
+                                let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("Fundamentals: {}", ticker), text));
+                            }
+                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                        }
+                    }
+                    BrokerCmd::GetHolders { ticker } => {
+                        match AlpacaBroker::get_institutional_holders(&ticker).await {
+                            Ok(v) => {
+                                let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("Holders: {}", ticker), text));
+                            }
+                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                        }
+                    }
+                    BrokerCmd::GetAnalyst { symbol, finnhub_key } => {
+                        if let Some(ref b) = broker {
+                            match b.get_finnhub_recommendations(&symbol, &finnhub_key).await {
+                                Ok(v) => {
+                                    let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("Analyst: {}", symbol), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetOrderbook { symbol } => {
+                        if let Some(ref b) = broker {
+                            match b.get_orderbook(&symbol).await {
+                                Ok(v) => {
+                                    let text: String = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("Orderbook: {}", symbol), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -4180,6 +4230,7 @@ impl TyphooNApp {
             charts,
             mtf_cols: 2,
             mtf_enabled: false,
+            mtf_focused: None,
             command_open: false,
             command_input: String::new(),
             // ── NNFX default preset (matching old WebKit defaults) ──
@@ -6861,35 +6912,66 @@ impl TyphooNApp {
                 .open(&mut self.show_fundamentals)
                 .default_size([500.0, 400.0])
                 .show(ctx, |ui| {
-                    ui.heading("Company Fundamentals");
+                    let ticker = self.charts.get(self.active_tab)
+                        .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Fundamentals: {}", ticker)).strong());
+                        if ui.button("Fetch").clicked() && !ticker.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::GetFundamentals { ticker: ticker.clone() });
+                            self.log.push_back(LogEntry::info(format!("Fetching fundamentals for {}...", ticker)));
+                        }
+                    });
                     ui.separator();
-                    ui.label(egui::RichText::new("Income statement, balance sheet, cash flow.").color(AXIS_TEXT));
-                    ui.label(egui::RichText::new("Requires Finnhub or Yahoo Finance API.").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("Income statement, balance sheet, cash flow via SEC EDGAR.").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("Results appear in the log panel below.").color(AXIS_TEXT).small());
                 });
         }
 
-        // Analyst
+        // Analyst — wired to Finnhub recommendations
         if self.show_analyst {
             egui::Window::new("Analyst Ratings")
                 .open(&mut self.show_analyst)
                 .default_size([400.0, 300.0])
                 .show(ctx, |ui| {
-                    ui.heading("Analyst Recommendations");
+                    let sym = self.charts.get(self.active_tab)
+                        .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Analyst: {}", sym)).strong());
+                        if ui.button("Fetch Ratings").clicked() && !sym.is_empty() && !self.finnhub_key.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::GetAnalyst { symbol: sym.clone(), finnhub_key: self.finnhub_key.clone() });
+                            self.log.push_back(LogEntry::info(format!("Fetching analyst ratings for {}...", sym)));
+                        }
+                    });
                     ui.separator();
-                    ui.label(egui::RichText::new("Buy/Hold/Sell ratings, price targets.").color(AXIS_TEXT));
-                    ui.label(egui::RichText::new("Requires Finnhub API.").color(AXIS_TEXT).small());
+                    if self.finnhub_key.is_empty() {
+                        ui.label(egui::RichText::new("Enter Finnhub API key in Settings to fetch analyst data.").color(AXIS_TEXT).small());
+                    } else {
+                        ui.label(egui::RichText::new("Buy/Hold/Sell ratings, price targets via Finnhub.").color(AXIS_TEXT).small());
+                    }
+                    ui.label(egui::RichText::new("Results appear in the log panel below.").color(AXIS_TEXT).small());
                 });
         }
 
-        // Holders
+        // Holders — wired to SEC EDGAR 13F
         if self.show_holders {
             egui::Window::new("Institutional Holders")
                 .open(&mut self.show_holders)
                 .default_size([500.0, 350.0])
                 .show(ctx, |ui| {
-                    ui.heading("Top Institutional Holders");
+                    let ticker = self.charts.get(self.active_tab)
+                        .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Holders: {}", ticker)).strong());
+                        if ui.button("Fetch 13F").clicked() && !ticker.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::GetHolders { ticker: ticker.clone() });
+                            self.log.push_back(LogEntry::info(format!("Fetching 13F holders for {}...", ticker)));
+                        }
+                    });
                     ui.separator();
-                    ui.label(egui::RichText::new("13F filings — requires SEC EDGAR API.").color(AXIS_TEXT));
+                    ui.label(egui::RichText::new("Top institutional holders via SEC EDGAR 13F filings.").color(AXIS_TEXT).small());
                 });
         }
 
@@ -7222,24 +7304,40 @@ impl TyphooNApp {
                 .open(&mut self.show_order_flow)
                 .default_size([400.0, 350.0])
                 .show(ctx, |ui| {
-                    ui.heading("Order Flow / Delta");
+                    let sym = self.charts.get(self.active_tab)
+                        .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Order Flow: {}", sym)).strong());
+                        if ui.button("Fetch L2").clicked() && !sym.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: sym.clone() });
+                            self.log.push_back(LogEntry::info(format!("Fetching orderbook for {}...", sym)));
+                        }
+                    });
                     ui.separator();
                     ui.label(egui::RichText::new("Bid/ask delta, cumulative delta, footprint.").color(AXIS_TEXT));
-                    ui.label(egui::RichText::new("Requires Level 2 data feed.").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("Connect broker + click Fetch L2 for live data.").color(AXIS_TEXT).small());
                 });
         }
 
-        // Bookmap
+        // Bookmap — wired to orderbook API
         if self.show_bookmap {
             egui::Window::new("Bookmap Heatmap")
                 .open(&mut self.show_bookmap)
                 .default_size([500.0, 400.0])
                 .show(ctx, |ui| {
-                    ui.heading("Depth Heatmap");
+                    let sym = self.charts.get(self.active_tab)
+                        .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Bookmap: {}", sym)).strong());
+                        if ui.button("Fetch Depth").clicked() && !sym.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: sym.clone() });
+                        }
+                    });
                     ui.separator();
-                    ui.label(egui::RichText::new("Real-time order book heatmap (Bookmap-style).").color(AXIS_TEXT));
-                    ui.label(egui::RichText::new("See ADR-048 for architecture. Requires WebSocket L2 data.").color(AXIS_TEXT).small());
-                    ui.label(egui::RichText::new("wgpu compute shader pipeline — requires Level 2 WebSocket data.").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("Depth heatmap visualization (see ADR-048).").color(AXIS_TEXT));
+                    ui.label(egui::RichText::new("GPU compute shader pipeline for real-time rendering.").color(AXIS_TEXT).small());
                 });
         }
 
@@ -9037,9 +9135,9 @@ impl eframe::App for TyphooNApp {
             let on_price_axis = price_axis_rect.contains(hover_pos) && !hover_over_window;
             let on_chart_body = chart_body_rect.contains(hover_pos) && !hover_over_window;
 
-            // Scroll → zoom (only when not over a floating window)
+            // Scroll → zoom (only when not over a floating window, skip in MTF mode — cells handle own zoom)
             let scroll_delta = ctx.input(|i| i.smooth_scroll_delta.y);
-            if scroll_delta != 0.0 && !hover_over_window {
+            if scroll_delta != 0.0 && !hover_over_window && !self.mtf_enabled {
                 if on_price_axis {
                     // Scroll on price axis → vertical zoom (TradingView style: squish/expand)
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
@@ -9090,6 +9188,8 @@ impl eframe::App for TyphooNApp {
                 .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
                 .unwrap_or(false);
 
+            // Skip drag in MTF mode — individual cells handle their own interaction
+            if !self.mtf_enabled {
             for chart in &mut self.charts {
                 if pointer.primary_pressed() && !pointer_over_window {
                     let press_pos = pointer.press_origin().unwrap_or_default();
@@ -9143,6 +9243,7 @@ impl eframe::App for TyphooNApp {
                     }
                 }
             }
+            } // end !mtf_enabled drag guard
 
             // Console is rendered as egui::Window after CentralPanel (see below)
 
@@ -9174,6 +9275,11 @@ impl eframe::App for TyphooNApp {
                 let cell_w = available.width()  / cols  as f32;
                 let cell_h = available.height() / rows  as f32;
 
+                // Detect click on grid cell to focus it
+                let click_pos = if ctx.input(|i| i.pointer.primary_clicked()) {
+                    ctx.input(|i| i.pointer.interact_pos())
+                } else { None };
+
                 for (idx, chart) in self.charts.iter_mut().take(total).enumerate() {
                     let col = idx % cols;
                     let row = idx / cols;
@@ -9185,13 +9291,38 @@ impl eframe::App for TyphooNApp {
                         egui::vec2(cell_w - 2.0, cell_h - 2.0),
                     );
 
+                    // Click to focus this cell
+                    if let Some(pos) = click_pos {
+                        if cell_rect.contains(pos) {
+                            self.mtf_focused = Some(idx);
+                            self.active_tab = idx;
+                        }
+                    }
+
+                    let is_focused = self.mtf_focused == Some(idx);
+
+                    // Only apply zoom/pan to the focused cell
+                    if is_focused && !hover_over_window {
+                        let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
+                        if scroll != 0.0 {
+                            Self::handle_zoom(chart, scroll);
+                        }
+                    }
+
                     let painter = ui.painter_at(cell_rect);
                     draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, sl_price, tp_price);
 
+                    // Border: green for focused, dim for others (WebKit: .mtf-grid-cell:hover outline)
+                    let border_color = if is_focused {
+                        egui::Color32::from_rgb(76, 175, 80) // green — focused
+                    } else {
+                        egui::Color32::from_rgb(40, 40, 60) // dim
+                    };
+                    let border_width = if is_focused { 2.0 } else { 1.0 };
                     ui.painter_at(cell_rect).rect_stroke(
                         cell_rect,
                         0.0,
-                        egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 40, 60)),
+                        egui::Stroke::new(border_width, border_color),
                         egui::StrokeKind::Outside,
                     );
                 }
