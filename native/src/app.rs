@@ -3779,11 +3779,9 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
     let q = query.to_lowercase();
     let t = target.to_lowercase();
     if q.is_empty() { return true; }
-    let mut qi = q.chars().peekable();
-    for c in t.chars() {
-        if qi.peek() == Some(&c) { qi.next(); }
-    }
-    qi.peek().is_none()
+    // Prefer substring match (contains) over subsequence
+    // This ensures "SEC" matches "SEC Filings" but not "Screener"
+    t.contains(&q)
 }
 
 // ─── application state ───────────────────────────────────────────────────────
@@ -3896,7 +3894,8 @@ enum BrokerCmd {
     GetAnalyst { symbol: String, finnhub_key: String },
     /// Fetch orderbook (Level 2).
     GetOrderbook { symbol: String },
-    // Crypto backfill: needs Kraken REST API in engine/src/core/kraken.rs
+    /// Crypto backfill via Kraken public OHLC API.
+    KrakenBackfill { symbol: String, timeframes: Vec<String>, db_path: std::path::PathBuf },
 }
 
 /// Messages sent from async broker task → UI.
@@ -4485,7 +4484,52 @@ impl TyphooNApp {
                             }
                         }
                     }
-                    // CryptoBackfill: needs Kraken REST OHLCV API in engine
+                    BrokerCmd::KrakenBackfill { symbol, timeframes, db_path } => {
+                        use typhoon_engine::core::kraken;
+                        let client = reqwest::Client::builder()
+                            .user_agent("TyphooN-Terminal/1.0")
+                            .build().unwrap_or_default();
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Kraken backfill {} started ({} TFs)...", symbol, timeframes.len())));
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        let mut total_bars = 0usize;
+                        for tf in &timeframes {
+                            // Fetch last ~1000 bars worth of history
+                            let span_ms = match tf.as_str() {
+                                "1Min" => 60_000i64 * 1000,
+                                "5Min" => 300_000i64 * 1000,
+                                "15Min" => 900_000i64 * 1000,
+                                "30Min" => 1_800_000i64 * 1000,
+                                "1Hour" => 3_600_000i64 * 1000,
+                                "4Hour" => 14_400_000i64 * 1000,
+                                "1Day" => 86_400_000i64 * 1000,
+                                "1Week" => 604_800_000i64 * 1000,
+                                "1Month" => 2_592_000_000i64 * 1000,
+                                _ => 86_400_000i64 * 1000,
+                            };
+                            let start = now_ms - span_ms;
+                            match kraken::fetch_binance_klines(&client, &symbol, tf, start, now_ms).await {
+                                Ok(bars) => {
+                                    let count = bars.len();
+                                    total_bars += count;
+                                    // Store in cache
+                                    if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                        let json = serde_json::to_string(&bars).unwrap_or_default();
+                                        let key = format!("kraken:{}:{}", symbol, tf);
+                                        let _ = cache.put_bars(&key, &json);
+                                    }
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                        format!("Kraken {} {}: {} bars cached", symbol, tf, count)
+                                    ));
+                                }
+                                Err(e) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Kraken {} {}: {}", symbol, tf, e)));
+                                }
+                            }
+                        }
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::SecScrapeResult(
+                            format!("Kraken backfill complete: {} {} bars across {} timeframes", symbol, total_bars, timeframes.len())
+                        ));
+                    }
                 }
             }
         });
@@ -7212,7 +7256,12 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (2013-Now)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
-                            self.log.push_back(LogEntry::info("Kraken OHLCV backfill: engine/src/core/kraken.rs needs Kraken REST API implementation"));
+                            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                            let tfs = vec!["1Day".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
+                            for sym in &["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"] {
+                                let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone() });
+                            }
+                            self.log.push_back(LogEntry::info("Kraken backfill started for 10 crypto pairs × 4 timeframes"));
                         }
                     });
                     ui.add_space(4.0);
@@ -7222,7 +7271,10 @@ impl TyphooNApp {
                         if ui.add(egui::Button::new("Backfill").fill(BTN_BLUE)).clicked() {
                             let sym = self.backfill_symbol.trim().to_string();
                             if !sym.is_empty() {
-                                self.log.push_back(LogEntry::info(format!("Kraken backfill {}: engine needs Kraken REST API", sym)));
+                                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                let tfs = vec!["1Day".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
+                                let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: sym.clone(), timeframes: tfs, db_path });
+                                self.log.push_back(LogEntry::info(format!("Kraken backfill {} started (4 timeframes)", sym)));
                             }
                         }
                     });

@@ -21,6 +21,9 @@ wgpu = "27"  # Match eframe 0.33's internal wgpu version (was 24 — caused naga
 # Async runtime (shared with engine)
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 
+# HTTP client (for Kraken API in broker task — matches engine)
+reqwest = { version = "0.13", features = ["json"] }
+
 # Date/time formatting (for chart time axis labels)
 chrono = { version = "0.4", features = ["serde"] }
 
