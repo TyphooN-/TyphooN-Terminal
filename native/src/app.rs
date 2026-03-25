@@ -5226,13 +5226,10 @@ impl TyphooNApp {
     }
 
     fn draw_floating_windows(&mut self, ctx: &egui::Context) {
-        // Performance: gate DB queries to every 8th frame (~2s at 4 FPS).
-        // Window chrome (title bar, close button) always renders.
-        // Heavy body content only renders on db_ok frames.
+        // Performance: gate HEAVY DB queries to every 8th frame (~2s at 4 FPS).
+        // Windows ALWAYS render their full body (no flicker).
+        // Only the per-account detail loops and portfolio sub-queries are gated.
         let db_ok = self.frame_count % 8 == 0 || self.frame_count < 8;
-        // Also skip during active chart scrolling/dragging
-        let scrolling = ctx.input(|i| i.smooth_scroll_delta.y.abs() > 0.5);
-        let db_ok = db_ok && !scrolling;
 
         // Settings
         if self.show_settings {
@@ -5479,7 +5476,7 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("Account Overview");
                     ui.separator();
-                    if db_ok { if let Some(ref cache) = self.cache {
+                    if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let _ = darwin::create_darwin_tables(&conn);
                             match darwin::list_darwin_accounts(&conn) {
@@ -6107,7 +6104,7 @@ impl TyphooNApp {
                         }
                     } else {
                         ui.label(egui::RichText::new("Cache not available").color(egui::Color32::from_rgb(255, 80, 80)));
-                    } } // close if db_ok + if let Some(ref cache)
+                    }
                 });
         }
 
@@ -6149,7 +6146,7 @@ impl TyphooNApp {
                             }
                         }
                     }
-                    if db_ok { if let Some(ref cache) = self.cache {
+                    if let Some(ref cache) = self.cache {
                         if let Ok(conn) = cache.connection() {
                             let dv = self.darwin_view;
                             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -6687,7 +6684,7 @@ impl TyphooNApp {
                             ui.add_space(10.0);
                             ui.label(egui::RichText::new("VaR corridor: 3.25% – 6.5%  |  Correlation limit: 0.95 / 45d").color(AXIS_TEXT));
                         }
-                    } } // close if db_ok + if let Some(ref cache)
+                    }
                 });
         }
 
