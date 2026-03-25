@@ -9499,9 +9499,10 @@ impl eframe::App for TyphooNApp {
             );
 
             let hover_pos = ctx.input(|i| i.pointer.hover_pos().unwrap_or_default());
-            // Don't interact with chart when pointer is over a floating window
+            // Don't interact with chart when pointer is over a floating window or egui wants pointer
+            let egui_hover = ctx.wants_pointer_input() || ctx.is_using_pointer();
             let layer_at_hover = ctx.layer_id_at(hover_pos);
-            let hover_over_window = layer_at_hover
+            let hover_over_window = egui_hover || layer_at_hover
                 .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
                 .unwrap_or(false);
             let on_price_axis = price_axis_rect.contains(hover_pos) && !hover_over_window;
@@ -9555,8 +9556,10 @@ impl eframe::App for TyphooNApp {
             // Drag interactions — only when pointer is NOT over a floating window
             let pointer    = ctx.input(|i| i.pointer.clone());
             let drag_delta = ctx.input(|i| i.pointer.delta());
+            // Block chart interaction when ANY egui widget/window is using the pointer
+            let egui_wants_pointer = ctx.wants_pointer_input() || ctx.is_using_pointer();
             let layer_id_at_pointer = ctx.layer_id_at(pointer.hover_pos().unwrap_or_default());
-            let pointer_over_window = layer_id_at_pointer
+            let pointer_over_window = egui_wants_pointer || layer_id_at_pointer
                 .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
                 .unwrap_or(false);
 
