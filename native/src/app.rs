@@ -3726,6 +3726,9 @@ pub struct TyphooNApp {
     /// Counter to avoid calling ctx.request_repaint in a tight loop.
     frame_count: u64,
 
+    /// Tab being dragged (for drag-and-drop reordering).
+    dragging_tab: Option<usize>,
+
     // ── async broker ─────────────────────────────────────────────────────
     /// Tokio runtime handle for spawning async tasks.
     #[allow(dead_code)]
@@ -4091,6 +4094,7 @@ impl TyphooNApp {
             log,
             crosshair: None,
             frame_count: 0,
+            dragging_tab: None,
             rt_handle: rt,
             broker_tx,
             broker_rx,
@@ -7225,49 +7229,119 @@ impl eframe::App for TyphooNApp {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let mut switch_to: Option<usize> = None;
                 let mut close_tab: Option<usize> = None;
+                let mut drop_target: Option<usize> = None;
+                let pointer_pos = ctx.input(|i| i.pointer.hover_pos());
+                let pointer_released = ctx.input(|i| i.pointer.primary_released());
+
+                // Collect tab rects for drag detection
+                let mut tab_rects: Vec<egui::Rect> = Vec::new();
+
                 for (idx, chart) in self.charts.iter().enumerate() {
                     let active = idx == self.active_tab;
+                    let is_dragging_this = self.dragging_tab == Some(idx);
                     let label = format!("{} [{}]", chart.symbol, chart.timeframe.label());
-                    // WebKit: .chart-tab — #0a0a0a bg, active gets #1a1a2e + green bottom border
-                    let tab_bg = if active { BG_BUTTON } else { egui::Color32::from_rgb(10, 10, 10) };
+
+                    // Tab colours
+                    let tab_bg = if is_dragging_this { egui::Color32::from_rgb(20, 50, 80) }
+                                 else if active { BG_BUTTON }
+                                 else { egui::Color32::from_rgb(10, 10, 10) };
                     let tab_text = if active { egui::Color32::WHITE } else { egui::Color32::from_rgb(136, 136, 136) };
 
-                    let resp = ui.horizontal(|ui| {
-                        // Background for tab
-                        let tab_rect = egui::Rect::from_min_size(
-                            ui.cursor().min,
-                            egui::vec2(label.len() as f32 * 7.5 + 30.0, 24.0),
-                        );
-                        ui.painter().rect_filled(tab_rect, 0.0, tab_bg);
-                        if active {
-                            // Green bottom border (WebKit: border-bottom: 2px solid var(--success))
-                            ui.painter().line_segment(
-                                [egui::pos2(tab_rect.left(), tab_rect.bottom()), egui::pos2(tab_rect.right(), tab_rect.bottom())],
-                                egui::Stroke::new(2.0, egui::Color32::from_rgb(76, 175, 80)),
-                            );
-                        }
-                        // Right border separator
-                        ui.painter().line_segment(
-                            [egui::pos2(tab_rect.right(), tab_rect.top()), egui::pos2(tab_rect.right(), tab_rect.bottom())],
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 34, 34)),
-                        );
+                    let tab_w = label.len() as f32 * 6.5 + 28.0;
 
-                        ui.add_space(6.0);
-                        if ui.add(egui::Label::new(egui::RichText::new(&label).color(tab_text).small().strong()).sense(egui::Sense::click())).clicked() {
-                            switch_to = Some(idx);
-                        }
-                        if self.charts.len() > 1 {
-                            let close_color = egui::Color32::from_rgb(85, 85, 85);
-                            if ui.add(egui::Label::new(egui::RichText::new("×").color(close_color)).sense(egui::Sense::click())).clicked() {
-                                close_tab = Some(idx);
+                    // Allocate space for this tab
+                    let (tab_rect, tab_resp) = ui.allocate_exact_size(
+                        egui::vec2(tab_w, 24.0),
+                        egui::Sense::click_and_drag(),
+                    );
+                    tab_rects.push(tab_rect);
+
+                    // Draw tab background
+                    ui.painter().rect_filled(tab_rect, 0.0, tab_bg);
+
+                    // Active tab: green bottom border
+                    if active {
+                        ui.painter().line_segment(
+                            [egui::pos2(tab_rect.left(), tab_rect.bottom()), egui::pos2(tab_rect.right(), tab_rect.bottom())],
+                            egui::Stroke::new(2.0, egui::Color32::from_rgb(76, 175, 80)),
+                        );
+                    }
+
+                    // Right border separator
+                    ui.painter().line_segment(
+                        [egui::pos2(tab_rect.right(), tab_rect.top()), egui::pos2(tab_rect.right(), tab_rect.bottom())],
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 34, 34)),
+                    );
+
+                    // Draw drag indicator (green left/right border when hovering during drag)
+                    if let Some(drag_src) = self.dragging_tab {
+                        if drag_src != idx {
+                            if let Some(pos) = pointer_pos {
+                                if tab_rect.contains(pos) {
+                                    let mid = tab_rect.center().x;
+                                    let side = if pos.x < mid { tab_rect.left() } else { tab_rect.right() };
+                                    ui.painter().line_segment(
+                                        [egui::pos2(side, tab_rect.top()), egui::pos2(side, tab_rect.bottom())],
+                                        egui::Stroke::new(2.0, egui::Color32::from_rgb(76, 175, 80)),
+                                    );
+                                }
                             }
                         }
-                        ui.add_space(6.0);
-                    });
-                    let _ = resp;
+                    }
+
+                    // Tab label text
+                    let text_pos = egui::pos2(tab_rect.left() + 6.0, tab_rect.center().y);
+                    ui.painter().text(
+                        text_pos, egui::Align2::LEFT_CENTER, &label,
+                        egui::FontId::monospace(10.0), tab_text,
+                    );
+
+                    // Close button (×) — right side of tab
+                    if self.charts.len() > 1 {
+                        let close_rect = egui::Rect::from_min_size(
+                            egui::pos2(tab_rect.right() - 14.0, tab_rect.top() + 4.0),
+                            egui::vec2(12.0, 16.0),
+                        );
+                        let close_hovered = pointer_pos.map(|p| close_rect.contains(p)).unwrap_or(false);
+                        let close_col = if close_hovered { egui::Color32::from_rgb(255, 80, 80) } else { egui::Color32::from_rgb(85, 85, 85) };
+                        ui.painter().text(
+                            close_rect.center(), egui::Align2::CENTER_CENTER, "×",
+                            egui::FontId::monospace(11.0), close_col,
+                        );
+                        if tab_resp.clicked() && close_hovered {
+                            close_tab = Some(idx);
+                        } else if tab_resp.clicked() {
+                            switch_to = Some(idx);
+                        }
+                    } else if tab_resp.clicked() {
+                        switch_to = Some(idx);
+                    }
+
+                    // Start drag
+                    if tab_resp.dragged() && self.dragging_tab.is_none() {
+                        self.dragging_tab = Some(idx);
+                    }
                 }
+
+                // Handle drop on release
+                if pointer_released {
+                    if let Some(drag_src) = self.dragging_tab {
+                        if let Some(pos) = pointer_pos {
+                            for (idx, rect) in tab_rects.iter().enumerate() {
+                                if rect.contains(pos) && idx != drag_src {
+                                    let mid = rect.center().x;
+                                    let target = if pos.x < mid { idx } else { idx };
+                                    drop_target = Some(target);
+                                    break;
+                                }
+                            }
+                        }
+                        self.dragging_tab = None;
+                    }
+                }
+
                 // + button (WebKit: .tab-add)
-                if ui.add(egui::Label::new(egui::RichText::new("+").color(egui::Color32::from_rgb(85, 85, 85)).size(16.0)).sense(egui::Sense::click())).clicked() {
+                if ui.add(egui::Label::new(egui::RichText::new("+").color(egui::Color32::from_rgb(85, 85, 85)).size(14.0)).sense(egui::Sense::click())).clicked() {
                     let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
                     let mut new_chart = ChartState::new(&self.symbol_input, tf);
                     if let Some(ref cache) = self.cache.clone() {
@@ -7276,7 +7350,8 @@ impl eframe::App for TyphooNApp {
                     self.charts.push(new_chart);
                     self.active_tab = self.charts.len() - 1;
                 }
-                // Chart type indicator
+
+                // Chart type indicator (right-aligned)
                 if let Some(c) = self.charts.get(self.active_tab) {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(egui::RichText::new(c.chart_type.label()).color(AXIS_TEXT).small());
@@ -7291,6 +7366,17 @@ impl eframe::App for TyphooNApp {
                     self.charts.remove(idx);
                     if self.active_tab >= self.charts.len() {
                         self.active_tab = self.charts.len().saturating_sub(1);
+                    }
+                }
+                if let Some(target) = drop_target {
+                    if let Some(drag_src) = self.dragging_tab.or(Some(self.active_tab)) {
+                        if drag_src < self.charts.len() && target < self.charts.len() && drag_src != target {
+                            let chart = self.charts.remove(drag_src);
+                            let insert_at = if target > drag_src { target } else { target };
+                            let insert_at = insert_at.min(self.charts.len());
+                            self.charts.insert(insert_at, chart);
+                            self.active_tab = insert_at;
+                        }
                     }
                 }
             });
