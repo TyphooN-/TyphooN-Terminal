@@ -434,6 +434,9 @@ struct ChartState {
     auto_fib_levels: Vec<(f64, String, bool)>,
     /// Auto Fibonacci swing: (swing_high_price, swing_low_price, swing_high_idx, swing_low_idx).
     auto_fib_swing: Option<(f64, f64, usize, usize)>,
+    /// MultiKAMA: KAMA values from higher timeframes projected onto this chart's x-axis.
+    /// Each entry: (timeframe_label, Vec of (bar_index_in_this_chart, kama_value))
+    multi_kama: Vec<(String, Vec<(usize, f64)>)>,
     /// Detected harmonic patterns.
     harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
@@ -522,6 +525,7 @@ impl ChartState {
             demand_zones: Vec::new(),
             auto_fib_levels: Vec::new(),
             auto_fib_swing: None,
+            multi_kama: Vec::new(),
             harmonics: Vec::new(),
             drawings: Vec::new(),
             visible_bars: 200,
@@ -592,6 +596,8 @@ impl ChartState {
                 }).collect();
                 self.view_offset = self.bars.len().saturating_sub(1);
                 self.compute_indicators();
+                // MultiKAMA: load higher TF bars and compute KAMA on each
+                self.compute_multi_kama(cache);
                 log.push_back(LogEntry::info(format!(
                     "Loaded {} bars for {} [{}]",
                     self.bars.len(), self.symbol, self.timeframe.label()
@@ -699,6 +705,69 @@ impl ChartState {
     /// Compute Auto Fibonacci levels from fractal swing points.
     /// Mirrors AutoFibonacci.mqh: finds most significant recent swing high/low
     /// and computes retracement (0-100%) + extension (127.2-423.6%) levels.
+    /// Compute MultiKAMA: load bars from higher timeframes and compute KAMA(10,2,30) on each.
+    /// Projects KAMA values onto this chart's x-axis by matching timestamps.
+    fn compute_multi_kama(&mut self, cache: &SqliteCache) {
+        self.multi_kama.clear();
+        if self.bars.is_empty() { return; }
+
+        // Extract base symbol (strip timeframe suffix from symbol)
+        let base_sym = {
+            let parts: Vec<&str> = self.symbol.split(':').collect();
+            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
+            if is_tf && parts.len() > 1 { parts[..parts.len()-1].join(":") } else { self.symbol.clone() }
+        };
+
+        let higher_tfs = [
+            ("H1", "1Hour"), ("H4", "4Hour"), ("D1", "1Day"), ("W1", "1Week"), ("MN1", "1Month"),
+        ];
+
+        // Prefixes to try
+        let prefixes = ["mt5:", "default:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
+
+        for (tf_label, tf_suffix) in &higher_tfs {
+            // Skip if this is the same TF as the chart
+            if self.timeframe.cache_suffix() == *tf_suffix { continue; }
+
+            // Try to load bars from cache
+            let mut htf_bars: Option<Vec<Bar>> = None;
+            for prefix in &prefixes {
+                let key = format!("{}{}:{}", prefix, base_sym, tf_suffix);
+                if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                    htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                        ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                    }).collect());
+                    break;
+                }
+            }
+
+            if let Some(htf) = htf_bars {
+                if htf.len() < 12 { continue; }
+                // Compute KAMA(10,2,30) on higher TF bars
+                let kama_vals = compute_kama(&htf, 10, 2, 30);
+
+                // Map higher TF KAMA values onto this chart's bar indices by timestamp
+                // For each of our bars, find the most recent HTF bar that's <= our timestamp
+                let mut projected: Vec<(usize, f64)> = Vec::new();
+                let mut htf_idx = 0;
+                for (i, bar) in self.bars.iter().enumerate() {
+                    while htf_idx + 1 < htf.len() && htf[htf_idx + 1].ts_ms <= bar.ts_ms {
+                        htf_idx += 1;
+                    }
+                    if htf_idx < kama_vals.len() {
+                        if let Some(k) = kama_vals[htf_idx] {
+                            projected.push((i, k));
+                        }
+                    }
+                }
+
+                if !projected.is_empty() {
+                    self.multi_kama.push((tf_label.to_string(), projected));
+                }
+            }
+        }
+    }
+
     fn compute_auto_fibonacci(&mut self) {
         self.auto_fib_levels.clear();
         self.auto_fib_swing = None;
@@ -2104,6 +2173,28 @@ fn draw_chart(
     if flags.sma200 { draw_indicator_line(painter, chart_rect, bars, &chart.sma200, start_idx, bar_w, &price_to_y, SMA200_COL, 1.5); }
     if flags.sma100 { draw_indicator_line(painter, chart_rect, bars, &chart.sma100, start_idx, bar_w, &price_to_y, SMA100_COL, 1.5); }
     if flags.kama   { draw_indicator_line(painter, chart_rect, bars, &chart.kama,   start_idx, bar_w, &price_to_y, KAMA_COL,   1.5); }
+    // MultiKAMA: higher TF KAMAs drawn in white (matching MultiKAMA.mqh — all clrWhite, width 2)
+    if flags.kama && !chart.multi_kama.is_empty() {
+        for (_tf_label, projected) in &chart.multi_kama {
+            let mut prev: Option<egui::Pos2> = None;
+            for &(bar_idx, kama_val) in projected {
+                if bar_idx >= start_idx && bar_idx < end_idx {
+                    let rel = bar_idx - start_idx;
+                    let x = chart_rect.left() + (rel as f32 + 0.5) * bar_w;
+                    let y = price_to_y(kama_val);
+                    if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                        let pt = egui::pos2(x, y);
+                        if let Some(p) = prev {
+                            painter.line_segment([p, pt], egui::Stroke::new(2.0, KAMA_COL));
+                        }
+                        prev = Some(pt);
+                    } else {
+                        prev = None;
+                    }
+                }
+            }
+        }
+    }
     if flags.ema21  { draw_indicator_line(painter, chart_rect, bars, &chart.ema21,  start_idx, bar_w, &price_to_y, EMA_COL,    1.5); }
     if flags.wma    { draw_indicator_line(painter, chart_rect, bars, &chart.wma,    start_idx, bar_w, &price_to_y, WMA_COL,    1.0); }
     if flags.hma    { draw_indicator_line(painter, chart_rect, bars, &chart.hma,    start_idx, bar_w, &price_to_y, HMA_COL,    1.5); }
@@ -2471,6 +2562,36 @@ fn draw_chart(
                     );
                 }
             }
+        }
+    }
+
+    // ── FakeCandle (ghost next bar — matching FakeCandle.mqh) ──────────────
+    // Draws a semi-transparent outline where the next candle would appear
+    if let Some(last) = bars.last() {
+        let next_x = chart_rect.left() + (bars.len() as f32 + 0.5) * bar_w;
+        if next_x < chart_rect.right() - 10.0 {
+            let ghost_close = last.close;
+            let ghost_open = last.close;
+            let ghost_high = last.close + (last.high - last.low) * 0.3;
+            let ghost_low = last.close - (last.high - last.low) * 0.3;
+            let y_open = price_to_y(ghost_open);
+            let y_high = price_to_y(ghost_high);
+            let y_low = price_to_y(ghost_low);
+            let y_close = price_to_y(ghost_close);
+            let ghost_col = egui::Color32::from_rgba_premultiplied(100, 100, 120, 80);
+            // Wick
+            painter.line_segment(
+                [egui::pos2(next_x, y_high), egui::pos2(next_x, y_low)],
+                egui::Stroke::new(1.0, ghost_col),
+            );
+            // Body outline
+            let body_top = y_open.min(y_close);
+            let body_h = (y_open - y_close).abs().max(2.0);
+            let body_rect = egui::Rect::from_min_size(
+                egui::pos2(next_x - half_body, body_top),
+                egui::vec2(candle_w, body_h),
+            );
+            painter.rect_stroke(body_rect, 0.0, egui::Stroke::new(1.0, ghost_col), egui::StrokeKind::Outside);
         }
     }
 
