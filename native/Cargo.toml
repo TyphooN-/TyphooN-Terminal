@@ -12,11 +12,11 @@ path = "src/main.rs"
 # Engine (shared core library)
 typhoon-engine = { path = "../engine" }
 
-# Native GPU UI
+# Native GPU UI — latest stable egui ecosystem
 eframe = { version = "0.33", default-features = true, features = ["wgpu"] }
 egui = "0.33"
 egui_plot = "0.34"
-wgpu = "27"  # Match eframe 0.33's internal wgpu version (was 24 — caused naga duplicate)
+wgpu = "27"  # Pinned to match eframe 0.33's internal wgpu — will bump to 29 when eframe 0.34 releases
 
 # Async runtime (shared with engine)
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
@@ -28,7 +28,7 @@ reqwest = { version = "0.13", features = ["json"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Native file dialog
-rfd = "0.17"  # Updated from 0.15
+rfd = "0.17"
 
 # Serialization for session persistence
 serde = { version = "1", features = ["derive"] }
