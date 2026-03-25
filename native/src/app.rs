@@ -4108,7 +4108,7 @@ impl TyphooNApp {
             show_atr_proj: true,        // NNFX exit
             show_prev_levels: true,     // NNFX support/resistance
             show_pivots: false,
-            show_fractals: true,        // NNFX pattern
+            show_fractals: false,       // Bill Williams — separate from NNFX
             show_harmonics: false,
             show_supply_demand: true,   // NNFX zones
             show_ehlers_ss: false,
@@ -4249,7 +4249,7 @@ impl TyphooNApp {
         v.selection.bg_fill                 = egui::Color32::from_rgb(15, 52, 96);      // --bg-input (selection)
         v.window_stroke                     = egui::Stroke::new(1.0, egui::Color32::from_rgb(51, 51, 51));   // --border: #333
         v.window_shadow                     = egui::Shadow { offset: [2, 4], blur: 8, spread: 0, color: egui::Color32::from_rgba_premultiplied(0, 0, 0, 160) };
-        v.window_corner_radius              = egui::CornerRadius::same(4);
+        v.window_corner_radius              = egui::CornerRadius::same(2);
         v.menu_corner_radius                = egui::CornerRadius::same(0);              // menus have no radius in old CSS
         // Separator styling
         v.widgets.noninteractive.bg_stroke  = egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 34, 34));  // #222
@@ -4395,10 +4395,10 @@ impl TyphooNApp {
             }
             // DARWIN-specific
             "DARWINS"       => self.show_darwin_portfolio = true,
-            "DRAWDOWN"      => self.show_darwin_portfolio = true,
-            "REBALANCE"     => self.show_symbol_overlap = true,
+            "DRAWDOWN"      => { self.darwin_view = 0; self.show_darwin_portfolio = true; } // Portfolio Summary with per-DARWIN DD%
+            "REBALANCE"     => { self.darwin_view = 18; self.show_darwin_portfolio = true; } // Optimal Allocation view
             "DARWIN_TRADES" => { self.log.push_back(LogEntry::info("DARWIN trade markers: open DARWIN Accounts for deal history")); self.show_darwin_accounts = true; }
-            "DSCORE"        => { self.log.push_back(LogEntry::info("D-Score: open DARWIN Accounts for per-account analytics")); self.show_darwin_accounts = true; }
+            "DSCORE"        => { self.show_var_mult = true; }
             // Drawing tools
             "DRAW_HLINE"     => self.draw_mode = DrawMode::PlacingHLine,
             "DRAW_TRENDLINE" => self.draw_mode = DrawMode::PlacingTrendP1,
@@ -4417,11 +4417,11 @@ impl TyphooNApp {
             // Aliases
             "EQUITY"         => self.show_darwin_portfolio = true,
             "CALC"           => self.show_risk_calc = true,
-            "TRADESTATS"     => self.show_darwin_accounts = true,
-            "PERF"           => self.show_seasonals = true,
-            "COMPARE"        => self.show_correlation = true,
-            "SPREAD"         => self.show_symbol_overlap = true,
-            "HEATMAP"        => self.show_seasonals = true,
+            "TRADESTATS"     => { self.darwin_view = 0; self.show_darwin_portfolio = true; } // Portfolio Summary
+            "PERF"           => { self.darwin_view = 14; self.show_darwin_portfolio = true; } // Seasonals
+            "COMPARE"        => { self.darwin_view = 3; self.show_darwin_portfolio = true; } // Correlation Matrix
+            "SPREAD"         => { self.darwin_view = 4; self.show_darwin_portfolio = true; } // Symbol Exposure
+            "HEATMAP"        => { self.darwin_view = 14; self.show_darwin_portfolio = true; } // Seasonals
             "PROFILE"        => self.show_darwin_accounts = true,
             "SIGNAL"         => self.show_indicators_panel = true,
             "DASHBOARD"      => self.show_cache_stats = true,
@@ -4443,8 +4443,7 @@ impl TyphooNApp {
                 self.show_better_volume = true;
                 self.show_prev_levels = true;
                 self.show_supply_demand = true;
-                self.show_fractals = true;
-                self.log.push_back(LogEntry::info("NNFX preset: SMA200 + KAMA + Fisher + ATR Proj + Better Volume + Prev Levels + S/D Zones + Fractals"));
+                self.log.push_back(LogEntry::info("NNFX preset: SMA200 + KAMA + Fisher + ATR Proj + Better Volume + Prev Levels + S/D Zones"));
             }
             "RESET_IND" => {
                 self.show_sma200 = false; self.show_sma100 = false; self.show_kama = false;
@@ -4939,14 +4938,17 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_atr_proj, "ATR Projection(14)");
                     ui.checkbox(&mut self.show_prev_levels, "Previous Candle Levels (D/W)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (Classic)");
+                    ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
+                    ui.add_space(10.0);
+                    ui.heading("Pattern Recognition");
+                    ui.separator();
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
                     ui.checkbox(&mut self.show_harmonics,     "Harmonic Patterns (Carney XABCD)");
-                    ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
                     ui.add_space(10.0);
                     ui.heading("Sub-Pane Indicators");
                     ui.separator();
                     ui.checkbox(&mut self.show_rsi,            "RSI(14)");
-                    ui.checkbox(&mut self.show_fisher,         "Fisher Transform(10)");
+                    ui.checkbox(&mut self.show_fisher,         "Fisher Transform(32)");
                     ui.checkbox(&mut self.show_macd,           "MACD(12,26,9)");
                     ui.checkbox(&mut self.show_stochastic,     "Stochastic(14,3,3)");
                     ui.checkbox(&mut self.show_adx,            "ADX(14)");
@@ -6998,9 +7000,11 @@ impl eframe::App for TyphooNApp {
                 ..style.spacing.scroll
             };
             // Widget rounding — WebKit: border-radius 2px for buttons, 0 for inputs
-            style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(2);
-            style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(2);
-            style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(2);
+            // Square buttons/widgets matching old WebKit (border-radius: 2px for buttons, 0 for inputs)
+            style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(1);
+            style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(1);
+            style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(1);
+            style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(0);
             ctx.set_style(style);
         }
 
@@ -7227,9 +7231,11 @@ impl eframe::App for TyphooNApp {
                     ui.checkbox(&mut self.show_atr_proj, "ATR Projection");
                     ui.checkbox(&mut self.show_prev_levels, "Prev Candle Levels (D/W)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (P/R1/R2/S1/S2)");
+                    ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
+                    ui.separator();
+                    ui.label(egui::RichText::new("Pattern Recognition").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
                     ui.checkbox(&mut self.show_harmonics,     "Harmonic Patterns (Carney)");
-                    ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
                     ui.separator();
                     ui.label(egui::RichText::new("Ehlers (Overlay)").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_ehlers_ss,       "Super Smoother(10)");
