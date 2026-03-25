@@ -3775,6 +3775,8 @@ pub struct TyphooNApp {
     command_open: bool,
     /// Raw user input in the command palette.
     command_input: String,
+    /// Currently highlighted command in console (arrow key navigation).
+    console_selected: usize,
 
     // ── indicator overlay toggles ────────────────────────────────────────
     show_sma200: bool,
@@ -4334,6 +4336,7 @@ impl TyphooNApp {
             mtf_focused: None,
             command_open: false,
             command_input: String::new(),
+            console_selected: 0,
             // ── NNFX default preset (matching old WebKit defaults) ──
             show_sma200: true,
             show_sma100: false,
@@ -9743,13 +9746,43 @@ impl eframe::App for TyphooNApp {
                             .text_color(egui::Color32::from_rgb(76, 175, 80)),
                     );
                     input_resp.request_focus();
+
+                    // Arrow key navigation
+                    let cmd_count = palette_commands.len();
+                    if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && cmd_count > 0 {
+                        self.console_selected = (self.console_selected + 1).min(cmd_count.saturating_sub(1));
+                        // Autocomplete: put selected command name into input
+                        if let Some(cmd) = palette_commands.get(self.console_selected) {
+                            self.command_input = cmd.name.to_string();
+                        }
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && cmd_count > 0 {
+                        self.console_selected = self.console_selected.saturating_sub(1);
+                        if let Some(cmd) = palette_commands.get(self.console_selected) {
+                            self.command_input = cmd.name.to_string();
+                        }
+                    }
+                    // Reset selection when input changes (user types)
+                    if input_resp.changed() {
+                        self.console_selected = 0;
+                    }
+
                     ui.separator();
 
                     let mut execute: Option<String> = None;
                     egui::ScrollArea::vertical().max_height(console_height - 52.0).show(ui, |ui| {
-                        for cmd in &palette_commands {
+                        for (i, cmd) in palette_commands.iter().enumerate() {
+                            let is_selected = i == self.console_selected;
+                            let row_bg = if is_selected { egui::Color32::from_rgb(15, 52, 96) } else { egui::Color32::TRANSPARENT };
+                            let name_col = if is_selected { egui::Color32::WHITE } else { egui::Color32::from_rgb(136, 255, 255) };
+
                             let row = ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(cmd.name).color(egui::Color32::from_rgb(136, 255, 255)).monospace().strong().size(13.0));
+                                // Selected row background
+                                let rect = ui.available_rect_before_wrap();
+                                let row_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), 20.0));
+                                ui.painter().rect_filled(row_rect, 0.0, row_bg);
+
+                                ui.label(egui::RichText::new(cmd.name).color(name_col).monospace().strong().size(13.0));
                                 ui.add_space(12.0);
                                 ui.label(egui::RichText::new(cmd.desc).color(egui::Color32::from_rgb(136, 136, 136)).size(11.0));
                             });
@@ -9759,8 +9792,9 @@ impl eframe::App for TyphooNApp {
                         }
                     });
 
-                    if ctx.input(|i| i.key_pressed(egui::Key::Enter)) && !self.command_input.is_empty() {
-                        execute = palette_commands.first().map(|c| c.name.to_string());
+                    // Enter executes the selected command
+                    if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        execute = palette_commands.get(self.console_selected).map(|c| c.name.to_string());
                     }
                     if let Some(cmd_name) = execute {
                         self.command_open = false;
