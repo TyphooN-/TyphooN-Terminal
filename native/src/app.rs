@@ -5740,6 +5740,44 @@ impl TyphooNApp {
                                                     }
                                                 });
                                             }
+                                            // Rebalance suggestions (VaR reduction via decorrelation)
+                                            ui.add_space(10.0);
+                                            ui.heading("Rebalance Suggestions");
+                                            ui.separator();
+                                            let prices = std::collections::HashMap::new();
+                                            if let Ok(rebal) = darwin::compute_rebalance_suggestions(&conn, &prices) {
+                                                egui::Grid::new("rebal_summary").striped(true).num_columns(2).show(ui, |ui| {
+                                                    ui.label("Portfolio VaR 95%:"); ui.label(format!("{:.2}%", rebal.current_portfolio_var_95));
+                                                    ui.end_row();
+                                                    ui.label("Portfolio Sharpe:"); ui.label(format!("{:.3}", rebal.current_sharpe));
+                                                    ui.end_row();
+                                                });
+                                                if !rebal.high_correlation_pairs.is_empty() {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("High Correlation Pairs").color(DOWN));
+                                                    for pair in &rebal.high_correlation_pairs {
+                                                        ui.label(format!("{}:{} ↔ {}:{} = {:.4}", pair.darwin_a, pair.symbol_a, pair.darwin_b, pair.symbol_b, pair.correlation));
+                                                    }
+                                                }
+                                                if !rebal.suggestions.is_empty() {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("Rebalance Actions").strong());
+                                                    egui::Grid::new("rebal_actions").striped(true).num_columns(5).show(ui, |ui| {
+                                                        ui.strong("Action"); ui.strong("DARWIN"); ui.strong("Symbol"); ui.strong("Current→Target"); ui.strong("VaR Impact");
+                                                        ui.end_row();
+                                                        for s in &rebal.suggestions {
+                                                            let ac = match s.action.as_str() { "REDUCE" => DOWN, "INCREASE" => UP, _ => AXIS_TEXT };
+                                                            ui.label(egui::RichText::new(&s.action).color(ac));
+                                                            ui.label(&s.darwin_ticker);
+                                                            ui.label(&s.symbol);
+                                                            ui.label(format!("{:.2} → {:.2}", s.current_volume, s.suggested_volume));
+                                                            let vc = if s.impact_var_pct < 0.0 { UP } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("{:+.2}%", s.impact_var_pct)).color(vc));
+                                                            ui.end_row();
+                                                        }
+                                                    });
+                                                }
+                                            }
                                         }
                                         19 => { // What-If
                                             ui.label(egui::RichText::new("What-If: Close Symbol").strong());
