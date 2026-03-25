@@ -4693,23 +4693,29 @@ impl TyphooNApp {
 
     fn dark_visuals() -> egui::Visuals {
         let mut v = egui::Visuals::dark();
-        // Exact WebKit CSS color mapping
-        v.panel_fill                        = egui::Color32::from_rgb(0, 0, 0);         // body bg: #000
-        v.window_fill                       = egui::Color32::from_rgb(17, 17, 34);      // .menu-dropdown: #111122
+        // ── TOTAL AESTHETIC OVERHAUL: square, compact, dark like Godel Terminal ──
+        v.panel_fill                        = egui::Color32::from_rgb(0, 0, 0);
+        v.window_fill                       = egui::Color32::from_rgb(10, 10, 18);      // very dark blue-black
         v.extreme_bg_color                  = egui::Color32::from_rgb(0, 0, 0);
-        v.faint_bg_color                    = egui::Color32::from_rgb(10, 10, 20);      // --bg-dark: #0a0a14
-        v.widgets.noninteractive.bg_fill    = egui::Color32::from_rgb(10, 10, 20);      // --bg-dark
-        v.widgets.noninteractive.fg_stroke  = egui::Stroke::new(1.0, egui::Color32::from_rgb(224, 224, 224)); // --text-primary: #e0e0e0
-        v.widgets.inactive.bg_fill          = egui::Color32::from_rgb(15, 52, 96);      // --bg-input: #0f3460
-        v.widgets.hovered.bg_fill           = egui::Color32::from_rgb(22, 33, 62);      // --bg-hover: #16213e
-        v.widgets.active.bg_fill            = egui::Color32::from_rgb(15, 52, 96);      // --bg-input (active)
-        v.selection.bg_fill                 = egui::Color32::from_rgb(15, 52, 96);      // --bg-input (selection)
-        v.window_stroke                     = egui::Stroke::new(1.0, egui::Color32::from_rgb(51, 51, 51));   // --border: #333
-        v.window_shadow                     = egui::Shadow { offset: [2, 4], blur: 8, spread: 0, color: egui::Color32::from_rgba_premultiplied(0, 0, 0, 160) };
-        v.window_corner_radius              = egui::CornerRadius::same(2);
-        v.menu_corner_radius                = egui::CornerRadius::same(0);              // menus have no radius in old CSS
-        // Separator styling
-        v.widgets.noninteractive.bg_stroke  = egui::Stroke::new(1.0, egui::Color32::from_rgb(34, 34, 34));  // #222
+        v.faint_bg_color                    = egui::Color32::from_rgb(8, 8, 14);
+        // Widget colors — dark blue inputs, minimal contrast
+        v.widgets.noninteractive.bg_fill    = egui::Color32::from_rgb(8, 8, 14);
+        v.widgets.noninteractive.fg_stroke  = egui::Stroke::new(1.0, egui::Color32::from_rgb(180, 180, 190));
+        v.widgets.noninteractive.bg_stroke  = egui::Stroke::new(0.5, egui::Color32::from_rgb(30, 30, 40));
+        v.widgets.inactive.bg_fill          = egui::Color32::from_rgb(15, 20, 35);      // dark blue input bg
+        v.widgets.inactive.bg_stroke        = egui::Stroke::new(0.5, egui::Color32::from_rgb(40, 45, 60));
+        v.widgets.hovered.bg_fill           = egui::Color32::from_rgb(20, 30, 55);
+        v.widgets.hovered.bg_stroke         = egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 70, 100));
+        v.widgets.active.bg_fill            = egui::Color32::from_rgb(15, 40, 80);
+        v.selection.bg_fill                 = egui::Color32::from_rgb(15, 40, 80);
+        v.selection.stroke                  = egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 140, 255));
+        // Windows — SQUARE corners, thin border, minimal shadow
+        v.window_stroke                     = egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 42, 54));
+        v.window_shadow                     = egui::Shadow { offset: [1, 2], blur: 4, spread: 0, color: egui::Color32::from_rgba_premultiplied(0, 0, 0, 120) };
+        v.window_corner_radius              = egui::CornerRadius::same(0);  // SQUARE
+        v.menu_corner_radius                = egui::CornerRadius::same(0);  // SQUARE
+        // Separator
+        v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(0);
         v
     }
 
@@ -8198,28 +8204,31 @@ impl eframe::App for TyphooNApp {
         // ── Global font/spacing to match old WebKit (Consolas 11px) ──────
         if self.frame_count == 1 {
             let mut style = (*ctx.style()).clone();
-            // Font sizes matching WebKit CSS: body 11px, small 10px, heading 13px
-            // All monospace to match Consolas throughout
+            // ── AESTHETIC: MarketWizardry.org + Godel Terminal + old WebKit ──
+            // Monospace everything, compact, square, green accents
             style.text_styles.insert(egui::TextStyle::Small, egui::FontId::new(10.0, egui::FontFamily::Monospace));
             style.text_styles.insert(egui::TextStyle::Body, egui::FontId::new(11.0, egui::FontFamily::Monospace));
             style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::new(11.0, egui::FontFamily::Monospace));
-            style.text_styles.insert(egui::TextStyle::Button, egui::FontId::new(11.0, egui::FontFamily::Monospace));
-            style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::new(13.0, egui::FontFamily::Monospace));
-            // Compact spacing (matching WebKit's tight layout)
-            style.spacing.item_spacing = egui::vec2(4.0, 2.0);
-            style.spacing.button_padding = egui::vec2(6.0, 3.0);
-            style.spacing.interact_size = egui::vec2(20.0, 16.0);
-            style.spacing.indent = 12.0;
+            style.text_styles.insert(egui::TextStyle::Button, egui::FontId::new(10.0, egui::FontFamily::Monospace));
+            style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::new(12.0, egui::FontFamily::Monospace));
+            // Ultra-compact spacing (tighter than WebKit)
+            style.spacing.item_spacing = egui::vec2(3.0, 1.0);
+            style.spacing.button_padding = egui::vec2(4.0, 1.0);
+            style.spacing.interact_size = egui::vec2(16.0, 14.0);
+            style.spacing.indent = 8.0;
             style.spacing.scroll = egui::style::ScrollStyle {
-                bar_width: 6.0,       // thin scrollbars like WebKit
+                bar_width: 4.0,
                 ..style.spacing.scroll
             };
-            // Widget rounding — WebKit: border-radius 2px for buttons, 0 for inputs
-            // Square buttons/widgets matching old WebKit (border-radius: 2px for buttons, 0 for inputs)
-            style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(1);
-            style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(1);
-            style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(1);
+            // ALL SQUARE — zero corner radius (MarketWizardry.org aesthetic)
+            style.visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(0);
+            style.visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(0);
+            style.visuals.widgets.active.corner_radius = egui::CornerRadius::same(0);
             style.visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(0);
+            // Thin widget borders
+            style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(0.5, egui::Color32::from_rgb(35, 40, 55));
+            style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 65, 90));
+            style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(0.0, egui::Color32::TRANSPARENT);
             ctx.set_style(style);
         }
 
