@@ -44,7 +44,8 @@ const AXIS_TEXT: egui::Color32 = egui::Color32::from_rgb(140, 140, 160); // #8c8
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(76, 175, 80);
 const FISHER_POS: egui::Color32 = egui::Color32::from_rgb(0, 255, 0);     // #00ff00 (MT5 bright green)
 const FISHER_NEG: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);    // #ff0000 (MT5 bright red)
-const FISHER_SIG: egui::Color32 = egui::Color32::from_rgb(180, 180, 60); // yellow-gray signal line
+#[allow(dead_code)]
+const FISHER_SIG: egui::Color32 = egui::Color32::from_rgb(169, 169, 169); // clrDarkGray (MT5 signal)
 const RSI_LINE: egui::Color32 = egui::Color32::from_rgb(200, 180, 60);   // #c8b43c (mustard yellow)
 const MACD_LINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff
 const MACD_SIG_COL: egui::Color32 = egui::Color32::from_rgb(255, 130, 48);   // #ff8230 (orange)
@@ -2959,54 +2960,21 @@ fn draw_fisher_pane(
         rect.top() + frac as f32 * rect.height()
     };
 
-    // Zero line
+    // Zero line (thin dotted)
     let zero_y = val_to_y(0.0);
-    painter.line_segment([egui::pos2(rect.left(), zero_y), egui::pos2(rect.right(), zero_y)], egui::Stroke::new(0.5, GRID));
-
-    // Histogram bars — MT5 style: green when fisher > signal, red when fisher < signal
-    let hist_w = (bar_w * 0.7).max(1.5);
-    for (rel_idx, _) in bars.iter().enumerate() {
-        let abs_idx = start_idx + rel_idx;
-        if abs_idx >= fisher.len() { continue; }
-        if let Some(f_val) = fisher[abs_idx] {
-            let sig_val = if abs_idx < signal.len() { signal[abs_idx] } else { None };
-            let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
-            let y = val_to_y(f_val);
-            // Color based on fisher vs signal (MT5 parity)
-            let color = match sig_val {
-                Some(s) if f_val > s => FISHER_POS,
-                Some(_) => FISHER_NEG,
-                None => if f_val >= 0.0 { FISHER_POS } else { FISHER_NEG },
-            };
-            let (top, bottom) = if f_val >= 0.0 { (y, zero_y) } else { (zero_y, y) };
-            painter.rect_filled(
-                egui::Rect::from_min_max(egui::pos2(x - hist_w / 2.0, top), egui::pos2(x + hist_w / 2.0, bottom)),
-                0.0,
-                color,
-            );
-        }
+    let dot_len = 3.0_f32;
+    let dot_gap = 3.0_f32;
+    let mut gx = rect.left();
+    while gx < rect.right() {
+        let end = (gx + dot_len).min(rect.right());
+        painter.line_segment(
+            [egui::pos2(gx, zero_y), egui::pos2(end, zero_y)],
+            egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 60)),
+        );
+        gx += dot_len + dot_gap;
     }
 
-    // Fisher value line — colored segments (MT5: green when Fisher > Signal, red when < Signal)
-    for (rel_idx, _) in bars.iter().enumerate() {
-        let abs_idx = start_idx + rel_idx;
-        if abs_idx + 1 >= fisher.len() || rel_idx + 1 >= bars.len() { continue; }
-        if let (Some(f0), Some(f1)) = (fisher[abs_idx], fisher[abs_idx + 1]) {
-            let sig = if abs_idx < signal.len() { signal[abs_idx] } else { None };
-            let color = match sig {
-                Some(s) if f0 > s => FISHER_POS,
-                Some(_) => FISHER_NEG,
-                None => if f0 >= 0.0 { FISHER_POS } else { FISHER_NEG },
-            };
-            let x0 = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
-            let x1 = rect.left() + (rel_idx as f32 + 1.5) * bar_w;
-            let y0 = val_to_y(f0).clamp(rect.top(), rect.bottom());
-            let y1 = val_to_y(f1).clamp(rect.top(), rect.bottom());
-            painter.line_segment([egui::pos2(x0, y0), egui::pos2(x1, y1)], egui::Stroke::new(2.0, color));
-        }
-    }
-
-    // Signal line (MT5: clrDarkGray, width 1)
+    // Signal line FIRST (behind Fisher — MT5: clrDarkGray/orange, width 1)
     let mut sig_points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
     for (rel_idx, _) in bars.iter().enumerate() {
         let abs_idx = start_idx + rel_idx;
@@ -3018,7 +2986,28 @@ fn draw_fisher_pane(
         }
     }
     if sig_points.len() > 1 {
-        painter.add(egui::Shape::line(sig_points, egui::Stroke::new(1.0, FISHER_SIG)));
+        painter.add(egui::Shape::line(sig_points, egui::Stroke::new(1.0, egui::Color32::from_rgb(169, 169, 169)))); // clrDarkGray signal (MT5 buffer 3)
+    }
+
+    // Fisher line — colored segments per bar (MT5 exact: green when Fisher > Signal, red when < Signal)
+    // NO histogram bars — just the line (matching MT5 screenshot exactly)
+    for (rel_idx, _) in bars.iter().enumerate() {
+        let abs_idx = start_idx + rel_idx;
+        if abs_idx + 1 >= fisher.len() || rel_idx + 1 >= bars.len() { continue; }
+        if let (Some(f0), Some(f1)) = (fisher[abs_idx], fisher[abs_idx + 1]) {
+            let sig = if abs_idx < signal.len() { signal[abs_idx] } else { None };
+            // MT5: clrMediumSeaGreen when Fisher > Signal, clrOrangeRed when Fisher < Signal
+            let color = match sig {
+                Some(s) if f0 > s => FISHER_POS,  // green
+                Some(_) => FISHER_NEG,             // red
+                None => if f0 >= 0.0 { FISHER_POS } else { FISHER_NEG },
+            };
+            let x0 = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+            let x1 = rect.left() + (rel_idx as f32 + 1.5) * bar_w;
+            let y0 = val_to_y(f0).clamp(rect.top(), rect.bottom());
+            let y1 = val_to_y(f1).clamp(rect.top(), rect.bottom());
+            painter.line_segment([egui::pos2(x0, y0), egui::pos2(x1, y1)], egui::Stroke::new(2.0, color));
+        }
     }
 
     // Label with current values (MT5 style: "Ehlers Fisher transform (32) -2.037 -2.068")
@@ -4703,6 +4692,29 @@ impl TyphooNApp {
                 "volume_pane": self.show_volume_pane,
             },
             "mtf_enabled": self.mtf_enabled,
+            "mtf_cols": self.mtf_cols,
+            "right_tab": match self.right_tab {
+                RightTab::Trading => "trading",
+                RightTab::Positions => "positions",
+                RightTab::Orders => "orders",
+                RightTab::Watchlist => "watchlist",
+                RightTab::Risk => "risk",
+            },
+            "darwin_view": self.darwin_view,
+            "finnhub_key": self.finnhub_key,
+            "broker_api_key": self.broker_api_key,
+            "broker_paper": self.broker_paper,
+            "sl_enabled": self.sl_enabled,
+            "tp_enabled": self.tp_enabled,
+            "windows": {
+                "settings": self.show_settings,
+                "darwin_accounts": self.show_darwin_accounts,
+                "darwin_portfolio": self.show_darwin_portfolio,
+                "risk_calc": self.show_risk_calc,
+                "backtest": self.show_backtest,
+                "news": self.show_news,
+                "indicators_panel": self.show_indicators_panel,
+            },
             "drawings": self.charts.get(0).map(|c| {
                 c.drawings.iter().filter_map(|d| match d {
                     Drawing::HLine { price, .. } => Some(serde_json::json!({"type": "hline", "price": price})),
@@ -4805,6 +4817,35 @@ impl TyphooNApp {
                             self.alerts.push((p, l.to_string()));
                         }
                     }
+                }
+                // Restore MTF cols
+                if let Some(cols) = v["mtf_cols"].as_u64() { self.mtf_cols = cols as usize; }
+                // Restore right panel tab
+                self.right_tab = match v["right_tab"].as_str() {
+                    Some("positions") => RightTab::Positions,
+                    Some("orders") => RightTab::Orders,
+                    Some("watchlist") => RightTab::Watchlist,
+                    Some("risk") => RightTab::Risk,
+                    _ => RightTab::Trading,
+                };
+                // Restore DARWIN view
+                if let Some(dv) = v["darwin_view"].as_u64() { self.darwin_view = dv as usize; }
+                // Restore API keys
+                if let Some(fk) = v["finnhub_key"].as_str() { self.finnhub_key = fk.to_string(); }
+                if let Some(ak) = v["broker_api_key"].as_str() { self.broker_api_key = ak.to_string(); }
+                if let Some(bp) = v["broker_paper"].as_bool() { self.broker_paper = bp; }
+                // Restore SL/TP state
+                if let Some(sl) = v["sl_enabled"].as_bool() { self.sl_enabled = sl; }
+                if let Some(tp) = v["tp_enabled"].as_bool() { self.tp_enabled = tp; }
+                // Restore window visibility
+                if let Some(w) = v.get("windows") {
+                    if let Some(b) = w["settings"].as_bool() { self.show_settings = b; }
+                    if let Some(b) = w["darwin_accounts"].as_bool() { self.show_darwin_accounts = b; }
+                    if let Some(b) = w["darwin_portfolio"].as_bool() { self.show_darwin_portfolio = b; }
+                    if let Some(b) = w["risk_calc"].as_bool() { self.show_risk_calc = b; }
+                    if let Some(b) = w["backtest"].as_bool() { self.show_backtest = b; }
+                    if let Some(b) = w["news"].as_bool() { self.show_news = b; }
+                    if let Some(b) = w["indicators_panel"].as_bool() { self.show_indicators_panel = b; }
                 }
                 self.log.push_back(LogEntry::info("Session restored"));
             }
@@ -9613,6 +9654,11 @@ impl eframe::App for TyphooNApp {
         }
 
         // Request continuous repainting for real-time tick updates
+        // Auto-save session every 60 seconds (240 frames at 250ms repaint)
+        if self.frame_count % 240 == 0 && self.frame_count > 0 {
+            self.save_session();
+        }
+
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
     }
 }
