@@ -10017,11 +10017,17 @@ impl eframe::App for TyphooNApp {
             self.save_session();
         }
 
-        // Repaint strategy: fast for charts, slower when DB windows are open.
-        // egui automatically repaints on user interaction (mouse, keyboard).
-        // We only need periodic repaints for live data updates.
-        let repaint_ms = 500; // 2 FPS base — egui adds instant repaints on interaction
-        ctx.request_repaint_after(std::time::Duration::from_millis(repaint_ms));
+        // Repaint strategy:
+        // - egui auto-repaints on ANY user interaction (mouse move, click, scroll, key)
+        // - We set a slow idle repaint for background updates (live data, time)
+        // - Charts stay responsive because mouse events trigger instant repaints
+        // - Floating windows with DB queries only update on idle repaints
+        let any_heavy_window = self.show_darwin_portfolio || self.show_darwin_accounts
+            || self.show_var_mult || self.show_montecarlo || self.show_stress_test
+            || self.show_correlation || self.show_seasonals || self.show_symbol_overlap
+            || self.show_sec || self.show_insider;
+        let idle_ms = if any_heavy_window { 2000 } else { 500 };
+        ctx.request_repaint_after(std::time::Duration::from_millis(idle_ms));
     }
 }
 
