@@ -3545,11 +3545,10 @@ struct WatchlistRow {
     volume: f64,
 }
 
-/// Whether the bottom panel is showing log or volume.
+/// Bottom panel mode.
 #[derive(PartialEq)]
 enum BottomTab {
     Log,
-    Volume,
 }
 
 /// Right panel section tabs (matching old WebKit layout).
@@ -3634,6 +3633,7 @@ enum BrokerCmd {
     GetAnalyst { symbol: String, finnhub_key: String },
     /// Fetch orderbook (Level 2).
     GetOrderbook { symbol: String },
+    // Crypto backfill: needs Kraken REST API in engine/src/core/kraken.rs
 }
 
 /// Messages sent from async broker task → UI.
@@ -4219,6 +4219,7 @@ impl TyphooNApp {
                             }
                         }
                     }
+                    // CryptoBackfill: needs Kraken REST OHLCV API in engine
                 }
             }
         });
@@ -6686,9 +6687,40 @@ impl TyphooNApp {
                 .open(&mut self.show_calendar)
                 .default_size([500.0, 400.0])
                 .show(ctx, |ui| {
-                    ui.heading("Economic Calendar");
+                    let sym = self.charts.get(self.active_tab)
+                        .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                        .unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Economic Calendar").strong());
+                        if ui.button("Fetch Earnings").clicked() && !sym.is_empty() {
+                            // Use Finnhub or AlphaVantage for earnings data
+                            self.log.push_back(LogEntry::info(format!("Earnings calendar for {}: set AV_KEY or FINNHUB_KEY in Settings", sym)));
+                        }
+                    });
                     ui.separator();
-                    ui.label(egui::RichText::new("GDP, CPI, NFP, FOMC, earnings — requires data feed.").color(AXIS_TEXT));
+                    // Key economic events (static reference — updated via data feeds when connected)
+                    ui.label(egui::RichText::new("Key Events").strong());
+                    let events = [
+                        ("FOMC Rate Decision", "8 meetings/year", "Fed funds rate"),
+                        ("Non-Farm Payrolls", "Monthly (1st Friday)", "US employment"),
+                        ("CPI / Core CPI", "Monthly", "Inflation gauge"),
+                        ("GDP (Advance/Final)", "Quarterly", "Economic growth"),
+                        ("ISM Manufacturing", "Monthly (1st business day)", "Factory activity"),
+                        ("Retail Sales", "Monthly", "Consumer spending"),
+                        ("Jobless Claims", "Weekly (Thursday)", "Employment health"),
+                    ];
+                    egui::Grid::new("econ_cal").striped(true).num_columns(3).show(ui, |ui| {
+                        ui.strong("Event"); ui.strong("Frequency"); ui.strong("Measures");
+                        ui.end_row();
+                        for (event, freq, desc) in &events {
+                            ui.label(*event);
+                            ui.label(egui::RichText::new(*freq).color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new(*desc).color(AXIS_TEXT).small());
+                            ui.end_row();
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Live data: connect Finnhub or AlphaVantage API key in Settings.").color(AXIS_TEXT).small());
                 });
         }
 
@@ -6856,7 +6888,7 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (2013-Now)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
-                            self.log.push_back(LogEntry::info("Kraken backfill ALL: requires async Kraken API connection"));
+                            self.log.push_back(LogEntry::info("Kraken OHLCV backfill: engine/src/core/kraken.rs needs Kraken REST API implementation"));
                         }
                     });
                     ui.add_space(4.0);
@@ -6866,7 +6898,7 @@ impl TyphooNApp {
                         if ui.add(egui::Button::new("Backfill").fill(BTN_BLUE)).clicked() {
                             let sym = self.backfill_symbol.trim().to_string();
                             if !sym.is_empty() {
-                                self.log.push_back(LogEntry::info(format!("Backfill {}: requires Kraken API", sym)));
+                                self.log.push_back(LogEntry::info(format!("Kraken backfill {}: engine needs Kraken REST API", sym)));
                             }
                         }
                     });
@@ -8505,7 +8537,7 @@ impl eframe::App for TyphooNApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Log, "Log");
-                    ui.selectable_value(&mut self.bottom_tab, BottomTab::Volume, "Volume");
+                    // Volume tab removed — BetterVolume sub-pane is more useful
                 });
                 ui.separator();
                 match self.bottom_tab {
@@ -8522,33 +8554,7 @@ impl eframe::App for TyphooNApp {
                                 }
                             });
                     }
-                    BottomTab::Volume => {
-                        if let Some(chart) = self.charts.first() {
-                            let (si, ei) = chart.visible_range();
-                            let bars = &chart.bars[si..ei];
-                            if !bars.is_empty() {
-                                let max_vol = bars.iter().map(|b| b.volume).fold(0.0_f64, f64::max);
-                                let avail   = ui.available_size();
-                                let (rect, _) = ui.allocate_exact_size(avail, egui::Sense::hover());
-                                let painter  = ui.painter_at(rect);
-                                painter.rect_filled(rect, 0.0, BG);
-                                let bar_w = (rect.width() / bars.len() as f32).max(1.0);
-                                for (i, b) in bars.iter().enumerate() {
-                                    let x     = rect.left() + i as f32 * bar_w;
-                                    let h     = if max_vol > 0.0 { (b.volume / max_vol) as f32 * rect.height() } else { 0.0 };
-                                    let color = if b.close >= b.open { UP } else { DOWN };
-                                    painter.rect_filled(
-                                        egui::Rect::from_min_size(
-                                            egui::pos2(x, rect.bottom() - h),
-                                            egui::vec2(bar_w.max(1.0) - 0.5, h),
-                                        ),
-                                        0.0,
-                                        color,
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    // Volume tab removed — BetterVolume sub-pane is more useful
                 }
             });
 
@@ -9301,11 +9307,17 @@ impl eframe::App for TyphooNApp {
 
                     let is_focused = self.mtf_focused == Some(idx);
 
-                    // Only apply zoom/pan to the focused cell
-                    if is_focused && !hover_over_window {
+                    // Zoom/pan only the focused cell when pointer is inside it
+                    let ptr_in_cell = ctx.input(|i| i.pointer.hover_pos().map(|p| cell_rect.contains(p)).unwrap_or(false));
+                    if is_focused && ptr_in_cell {
                         let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
                         if scroll != 0.0 {
                             Self::handle_zoom(chart, scroll);
+                        }
+                        // Also handle drag pan for focused cell
+                        let drag = ctx.input(|i| i.pointer.delta());
+                        if ctx.input(|i| i.pointer.primary_down()) && drag.x.abs() > 0.5 {
+                            Self::handle_pan_h(chart, -drag.x, cell_rect.width());
                         }
                     }
 
