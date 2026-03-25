@@ -5304,10 +5304,14 @@ impl TyphooNApp {
     }
 
     fn draw_floating_windows(&mut self, ctx: &egui::Context) {
-        // Performance: gate HEAVY DB queries to every 8th frame (~2s at 4 FPS).
-        // Windows ALWAYS render their full body (no flicker).
-        // Only the per-account detail loops and portfolio sub-queries are gated.
+        // Performance: gate ALL DB queries to every 8th frame (~2s at 4 FPS).
+        // On non-db frames, self.cache is temporarily set to None so all
+        // `if let Some(ref cache) = self.cache` blocks are skipped.
+        // Windows render their chrome but DB-querying content is empty.
         let db_ok = self.frame_count % 8 == 0 || self.frame_count < 8;
+        let real_cache = if !db_ok { self.cache.take() } else { None };
+        // After this block, self.cache is None on non-db frames
+        // (restored at the end of draw_floating_windows)
 
         // Settings
         if self.show_settings {
@@ -8233,6 +8237,11 @@ impl TyphooNApp {
                         )));
                     }
                 });
+        }
+
+        // Restore cache after non-db frame (was temporarily taken to skip DB queries)
+        if let Some(c) = real_cache {
+            self.cache = Some(c);
         }
     }
 }
