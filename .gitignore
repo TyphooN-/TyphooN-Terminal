@@ -12,3 +12,4 @@ Cargo.lock
 *.bak
 *.tmp
 *.orig
+.venv
