@@ -298,7 +298,8 @@ const EHLERS_EBSW_COL: egui::Color32 = egui::Color32::from_rgb(0, 200, 180);
 const EHLERS_CYBER_COL: egui::Color32 = egui::Color32::from_rgb(200, 100, 255);
 const EHLERS_CG_COL: egui::Color32 = egui::Color32::from_rgb(255, 180, 0);
 const EHLERS_ROOF_COL: egui::Color32 = egui::Color32::from_rgb(100, 255, 100);
-const ATR_PROJ_COL: egui::Color32 = egui::Color32::from_rgb(255, 200, 50);
+#[allow(dead_code)]
+const ATR_PROJ_COL: egui::Color32 = egui::Color32::from_rgb(255, 255, 0); // clrYellow (MT5)
 // BetterVolume colors — exact MT5 BetterVolume.mqh values
 const BVOL_CLIMAX_UP: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);      // clrRed — bullish climax
 const BVOL_CLIMAX_DN: egui::Color32 = egui::Color32::from_rgb(255, 255, 255);  // clrWhite — bearish climax
@@ -2173,9 +2174,18 @@ fn draw_chart(
     if flags.sma200 { draw_indicator_line(painter, chart_rect, bars, &chart.sma200, start_idx, bar_w, &price_to_y, SMA200_COL, 1.5); }
     if flags.sma100 { draw_indicator_line(painter, chart_rect, bars, &chart.sma100, start_idx, bar_w, &price_to_y, SMA100_COL, 1.5); }
     if flags.kama   { draw_indicator_line(painter, chart_rect, bars, &chart.kama,   start_idx, bar_w, &price_to_y, KAMA_COL,   1.5); }
-    // MultiKAMA: higher TF KAMAs drawn in white (matching MultiKAMA.mqh — all clrWhite, width 2)
+    // MultiKAMA: higher TF KAMAs (MT5: clrWhite for KAMA, but visually distinguished)
+    // MQL4 mode uses white for all; MTF_MA overlay uses magenta for higher TFs
     if flags.kama && !chart.multi_kama.is_empty() {
-        for (_tf_label, projected) in &chart.multi_kama {
+        let htf_colors = [
+            egui::Color32::from_rgb(255, 255, 255),   // H1 — white
+            egui::Color32::from_rgb(255, 0, 255),     // H4 — magenta (clrMagenta)
+            egui::Color32::from_rgb(255, 0, 255),     // D1 — magenta
+            egui::Color32::from_rgb(255, 0, 255),     // W1 — magenta
+            egui::Color32::from_rgb(255, 0, 255),     // MN1 — magenta
+        ];
+        for (tf_idx, (_tf_label, projected)) in chart.multi_kama.iter().enumerate() {
+            let color = htf_colors.get(tf_idx).copied().unwrap_or(egui::Color32::from_rgb(255, 0, 255));
             let mut prev: Option<egui::Pos2> = None;
             for &(bar_idx, kama_val) in projected {
                 if bar_idx >= start_idx && bar_idx < end_idx {
@@ -2185,7 +2195,7 @@ fn draw_chart(
                     if y >= chart_rect.top() && y <= chart_rect.bottom() {
                         let pt = egui::pos2(x, y);
                         if let Some(p) = prev {
-                            painter.line_segment([p, pt], egui::Stroke::new(2.0, KAMA_COL));
+                            painter.line_segment([p, pt], egui::Stroke::new(2.0, color));
                         }
                         prev = Some(pt);
                     } else {
@@ -2200,9 +2210,41 @@ fn draw_chart(
     if flags.hma    { draw_indicator_line(painter, chart_rect, bars, &chart.hma,    start_idx, bar_w, &price_to_y, HMA_COL,    1.5); }
 
     // ATR Projection bands
+    // ATR Projection — yellow dotted HORIZONTAL lines (matching ATR_Projection.mqh: STYLE_DOT, clrYellow, width 2)
     if flags.atr_proj {
-        draw_indicator_line(painter, chart_rect, bars, &chart.atr_proj_upper, start_idx, bar_w, &price_to_y, ATR_PROJ_COL, 1.0);
-        draw_indicator_line(painter, chart_rect, bars, &chart.atr_proj_lower, start_idx, bar_w, &price_to_y, ATR_PROJ_COL, 1.0);
+        // Draw horizontal dotted lines at the LAST bar's Open ± ATR value
+        if let Some(last_bar) = bars.last() {
+            let last_abs = start_idx + bars.len() - 1;
+            if let Some(Some(atr_val)) = chart.atr.get(last_abs) {
+                let upper_price = last_bar.open + atr_val;
+                let lower_price = last_bar.open - atr_val;
+                let atr_yellow = egui::Color32::from_rgb(255, 255, 0); // clrYellow
+                for price in [upper_price, lower_price] {
+                    let y = price_to_y(price);
+                    if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                        // Dotted horizontal line across entire chart width
+                        let mut dx = chart_rect.left();
+                        while dx < chart_rect.right() {
+                            let end = (dx + 3.0).min(chart_rect.right());
+                            painter.line_segment(
+                                [egui::pos2(dx, y), egui::pos2(end, y)],
+                                egui::Stroke::new(2.0, atr_yellow),
+                            );
+                            dx += 6.0;
+                        }
+                        // Label
+                        let label = if price > last_bar.open { "ATR Hi" } else { "ATR Lo" };
+                        painter.text(
+                            egui::pos2(chart_rect.left() + 4.0, y - 10.0),
+                            egui::Align2::LEFT_BOTTOM,
+                            &format!("{} {}", label, format_price(price)),
+                            egui::FontId::monospace(8.0),
+                            atr_yellow,
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // Parabolic SAR dots
