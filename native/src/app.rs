@@ -6744,15 +6744,35 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── ~ (tilde) → Quake-style command palette ─────────────────────────
-        // Use raw events to catch backtick even when text widgets have focus.
-        // Also check for the ` character in text input events as fallback.
-        let open_palette = ctx.input(|i| {
-            i.key_pressed(egui::Key::Backtick)
-            || i.events.iter().any(|e| matches!(e, egui::Event::Text(t) if t == "`" || t == "~"))
+        // Must consume the event to prevent ` from appearing in text fields.
+        let open_palette = ctx.input_mut(|i| {
+            let mut found = false;
+            // Check for backtick key press
+            if i.key_pressed(egui::Key::Backtick) {
+                found = true;
+            }
+            // Also check raw events for ` or ~ text
+            i.events.retain(|e| {
+                if matches!(e, egui::Event::Text(t) if t == "`" || t == "~") {
+                    found = true;
+                    false // consume it
+                } else if matches!(e, egui::Event::Key { key: egui::Key::Backtick, pressed: true, .. }) {
+                    found = true;
+                    false // consume it
+                } else {
+                    true // keep
+                }
+            });
+            found
         });
         if open_palette {
             self.command_open = !self.command_open;
-            if self.command_open { self.command_input.clear(); }
+            if self.command_open {
+                self.command_input.clear();
+            } else {
+                // Strip any trailing ` or ~ from input that might have leaked
+                self.command_input = self.command_input.trim_matches(|c| c == '`' || c == '~').to_string();
+            }
         }
 
         // ── Esc → close palette ──────────────────────────────────────────────
