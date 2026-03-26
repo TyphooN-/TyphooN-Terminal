@@ -895,8 +895,24 @@ impl ChartState {
                 }
 
                 self.harmonics = detect_harmonic_patterns(&self.bars, &self.fractal_up, &self.fractal_down); // CPU (complex pattern matching)
-                let (sz, dz) = compute_supply_demand_zones(&self.bars); // CPU (impulse detection)
-                self.supply_zones = sz; self.demand_zones = dz;
+
+                // Supply/Demand Zones — GPU (parallel impulse detection)
+                if let Some(data) = gpu.compute_sd_zones_gpu(14) {
+                    let n = self.bars.len();
+                    let mut supply = Vec::new();
+                    let mut demand = Vec::new();
+                    for i in 0..n {
+                        let zone_type = data.get(i * 3).copied().unwrap_or(0.0);
+                        let zone_high = data.get(i * 3 + 1).copied().unwrap_or(0.0);
+                        let zone_low = data.get(i * 3 + 2).copied().unwrap_or(0.0);
+                        if zone_type > 0.5 { demand.push((i, zone_high as f64, zone_low as f64, 1u8)); }
+                        else if zone_type < -0.5 { supply.push((i, zone_high as f64, zone_low as f64, 1u8)); }
+                    }
+                    self.supply_zones = supply; self.demand_zones = demand;
+                } else {
+                    let (sz, dz) = compute_supply_demand_zones(&self.bars);
+                    self.supply_zones = sz; self.demand_zones = dz;
+                }
                 self.compute_auto_fibonacci(); // CPU (fractal-based swing detection)
 
                 // Ehlers Super Smoother — GPU
@@ -6105,7 +6121,24 @@ impl TyphooNApp {
                 "backtest": self.show_backtest,
                 "news": self.show_news,
                 "indicators_panel": self.show_indicators_panel,
+                "screener": self.show_screener,
+                "optimizer": self.show_optimizer,
+                "sec": self.show_sec,
+                "insider": self.show_insider,
+                "fundamentals": self.show_fundamentals,
+                "order_flow": self.show_order_flow,
+                "bookmap": self.show_bookmap,
+                "journal": self.show_journal,
+                "var_mult": self.show_var_mult,
+                "montecarlo": self.show_montecarlo,
+                "earnings_calendar": self.show_earnings_calendar,
             },
+            "journal": self.journal_entries.iter().map(|e| serde_json::json!({
+                "timestamp": e.timestamp, "symbol": e.symbol, "side": e.side,
+                "qty": e.qty, "entry_price": e.entry_price,
+                "exit_price": e.exit_price, "pnl": e.pnl,
+                "strategy": e.strategy, "notes": e.notes,
+            })).collect::<Vec<_>>(),
             "drawings": self.charts.get(0).map(|c| {
                 c.drawings.iter().filter_map(|d| match d {
                     Drawing::HLine { price, .. } => Some(serde_json::json!({"type": "hline", "price": price})),
@@ -6246,6 +6279,34 @@ impl TyphooNApp {
                     if let Some(b) = w["backtest"].as_bool() { self.show_backtest = b; }
                     if let Some(b) = w["news"].as_bool() { self.show_news = b; }
                     if let Some(b) = w["indicators_panel"].as_bool() { self.show_indicators_panel = b; }
+                    if let Some(b) = w["screener"].as_bool() { self.show_screener = b; }
+                    if let Some(b) = w["optimizer"].as_bool() { self.show_optimizer = b; }
+                    if let Some(b) = w["sec"].as_bool() { self.show_sec = b; }
+                    if let Some(b) = w["insider"].as_bool() { self.show_insider = b; }
+                    if let Some(b) = w["fundamentals"].as_bool() { self.show_fundamentals = b; }
+                    if let Some(b) = w["order_flow"].as_bool() { self.show_order_flow = b; }
+                    if let Some(b) = w["bookmap"].as_bool() { self.show_bookmap = b; }
+                    if let Some(b) = w["journal"].as_bool() { self.show_journal = b; }
+                    if let Some(b) = w["var_mult"].as_bool() { self.show_var_mult = b; }
+                    if let Some(b) = w["montecarlo"].as_bool() { self.show_montecarlo = b; }
+                    if let Some(b) = w["earnings_calendar"].as_bool() { self.show_earnings_calendar = b; }
+                }
+                // Restore journal entries
+                if let Some(journal) = v["journal"].as_array() {
+                    for entry in journal {
+                        self.journal_entries.push(JournalEntry {
+                            timestamp: entry["timestamp"].as_str().unwrap_or("").to_string(),
+                            symbol: entry["symbol"].as_str().unwrap_or("").to_string(),
+                            side: entry["side"].as_str().unwrap_or("BUY").to_string(),
+                            qty: entry["qty"].as_f64().unwrap_or(1.0),
+                            entry_price: entry["entry_price"].as_f64().unwrap_or(0.0),
+                            exit_price: entry["exit_price"].as_f64(),
+                            pnl: entry["pnl"].as_f64(),
+                            strategy: entry["strategy"].as_str().unwrap_or("").to_string(),
+                            notes: entry["notes"].as_str().unwrap_or("").to_string(),
+                            screenshot_path: None,
+                        });
+                    }
                 }
                 self.log.push_back(LogEntry::info("Session restored"));
             }

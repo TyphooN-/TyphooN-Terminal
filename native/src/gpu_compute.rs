@@ -75,6 +75,7 @@ pub struct GpuCompute {
     ehlers_ebsw_pipeline: wgpu::ComputePipeline,
     ehlers_mama_pipeline: wgpu::ComputePipeline,
     hma_pipeline: wgpu::ComputePipeline,
+    sd_zones_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuCompute {
@@ -190,6 +191,7 @@ impl GpuCompute {
         let ehlers_ebsw_pipeline = make_pipeline("ehlers_ebsw_pipeline", EHLERS_EBSW_SHADER);
         let ehlers_mama_pipeline = make_pipeline("ehlers_mama_pipeline", EHLERS_MAMA_SHADER);
         let hma_pipeline = make_pipeline("hma_pipeline", HMA_SHADER);
+        let sd_zones_pipeline = make_pipeline("sd_zones_pipeline", SUPPLY_DEMAND_SHADER);
 
         Self {
             device,
@@ -229,6 +231,7 @@ impl GpuCompute {
             ehlers_ebsw_pipeline,
             ehlers_mama_pipeline,
             hma_pipeline,
+            sd_zones_pipeline,
             bind_group_layout,
             readback_buffer: None,
         }
@@ -521,6 +524,11 @@ impl GpuCompute {
     /// Compute Fractals on GPU. Returns [up_price, down_price] × bar_count. Parallel. Requires OHLC.
     pub fn compute_fractals_gpu(&self) -> Option<Vec<f32>> {
         self.dispatch_ohlc_indicator(&self.fractals_pipeline, 0, 2)
+    }
+
+    /// Compute Supply/Demand zones on GPU. Returns [type, high, low] × bar_count. Parallel.
+    pub fn compute_sd_zones_gpu(&self, lookback: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.sd_zones_pipeline, lookback, 3)
     }
 
     /// Compute HMA on GPU (WMA composition: 2*WMA(n/2) - WMA(n), then WMA(sqrt(n))).
@@ -2465,6 +2473,63 @@ fn main() {
         output[i * 2u + 1u] = fama_v;
         prev_phase = phase;
         prev_i1 = i1;
+    }
+}
+"#;
+
+const SUPPLY_DEMAND_SHADER: &str = r#"
+// Supply/Demand Zone Detection — parallel per-bar
+// Detects impulse moves (large candles > 2× average range) and marks zones.
+// Output: [zone_type, zone_high, zone_low] per bar (3 floats)
+// zone_type: 0=none, 1=demand(bullish impulse), -1=supply(bearish impulse)
+struct Params { period: u32, bar_count: u32, }  // period = ATR lookback for avg range
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h,l,c] interleaved
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    let base = i * 3u;
+
+    if (i < params.period) {
+        output[base] = 0.0; output[base + 1u] = 0.0; output[base + 2u] = 0.0;
+        return;
+    }
+
+    let h = bars[i * 3u];
+    let l = bars[i * 3u + 1u];
+    let c = bars[i * 3u + 2u];
+    let prev_c = bars[(i - 1u) * 3u + 2u];
+    let range = h - l;
+
+    // Average range over lookback period
+    var avg_range: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        let idx = i - j;
+        avg_range = avg_range + bars[idx * 3u] - bars[idx * 3u + 1u];
+    }
+    avg_range = avg_range / f32(params.period);
+
+    // Impulse detection: range > 2× average AND strong close
+    let threshold = avg_range * 2.0;
+    let body = abs(c - prev_c);
+
+    if (range > threshold && body > avg_range) {
+        if (c > prev_c) {
+            // Demand zone (bullish impulse): zone at the base of the candle
+            output[base] = 1.0;
+            output[base + 1u] = l + range * 0.3;  // zone top
+            output[base + 2u] = l;                  // zone bottom
+        } else {
+            // Supply zone (bearish impulse): zone at the top of the candle
+            output[base] = -1.0;
+            output[base + 1u] = h;                  // zone top
+            output[base + 2u] = h - range * 0.3;   // zone bottom
+        }
+    } else {
+        output[base] = 0.0; output[base + 1u] = 0.0; output[base + 2u] = 0.0;
     }
 }
 "#;
