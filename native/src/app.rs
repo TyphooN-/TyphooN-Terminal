@@ -4004,6 +4004,10 @@ const COMMANDS: &[Command] = &[
     Command { name: "DRAW_HLINE",    desc: "Draw horizontal line" },
     Command { name: "DRAW_TRENDLINE",desc: "Draw trendline (2 clicks)" },
     Command { name: "DRAW_FIBO",     desc: "Draw Fibonacci retracement" },
+    Command { name: "DRAW_VLINE",    desc: "Draw vertical line" },
+    Command { name: "DRAW_RECT",     desc: "Draw rectangle zone" },
+    Command { name: "DRAW_RAY",      desc: "Draw ray (extends right)" },
+    Command { name: "DRAW_CHANNEL",  desc: "Draw parallel channel" },
     Command { name: "CLEAR_DRAWINGS",desc: "Clear all drawings on chart" },
     // Timeframes (direct switch)
     Command { name: "M1",            desc: "Switch to 1-minute timeframe" },
@@ -5892,6 +5896,10 @@ impl TyphooNApp {
             "DRAW_HLINE"     => self.draw_mode = DrawMode::PlacingHLine,
             "DRAW_TRENDLINE" => self.draw_mode = DrawMode::PlacingTrendP1,
             "DRAW_FIBO"      => self.draw_mode = DrawMode::PlacingFiboP1,
+            "DRAW_VLINE"     => self.draw_mode = DrawMode::PlacingVLine,
+            "DRAW_RECT"      => self.draw_mode = DrawMode::PlacingRectP1,
+            "DRAW_RAY"       => self.draw_mode = DrawMode::PlacingRayP1,
+            "DRAW_CHANNEL"   => self.draw_mode = DrawMode::PlacingChannelP1,
             "CLEAR_DRAWINGS" => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); } }
             // Timeframe shortcuts
             "M1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M1); }
