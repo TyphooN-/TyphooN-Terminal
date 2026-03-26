@@ -3829,6 +3829,7 @@ struct AccountDetailCache {
     equity_snapshots: Vec<darwin::FloatingEquitySnapshot>,
     benchmark: Option<darwin::BenchmarkComparison>,
     sector_classification: Vec<(String, String)>,
+    rolling_var: Vec<darwin::RollingVaR>,
 }
 
 /// Background-computed data — populated by background thread, read by render thread.
@@ -5238,6 +5239,7 @@ impl TyphooNApp {
                                         if !daily.is_empty() {
                                             det.var_stats = Some(darwin::compute_var(&daily));
                                             det.monthly_returns = darwin::get_monthly_returns(&daily);
+                                            det.rolling_var = darwin::get_rolling_var(&daily, 30);
                                         }
                                     }
                                 } // release conn
@@ -6377,6 +6379,19 @@ impl TyphooNApp {
                                 .show(ui, |plot_ui| { plot_ui.line(line); });
                         }
 
+                        // ── Rolling 30d VaR (moving average line) ──
+                        if det.rolling_var.len() > 5 {
+                            let var_pts: PlotPoints = PlotPoints::new(
+                                det.rolling_var.iter().enumerate().map(|(i, rv)| [i as f64, rv.var_95.abs()]).collect()
+                            );
+                            let var_line = Line::new("VaR 95%", var_pts).color(chart_red).width(1.2);
+                            Plot::new(format!("rvar_{}", det.ticker))
+                                .height(50.0)
+                                .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                .show_axes([false, true])
+                                .show(ui, |plot_ui| { plot_ui.line(var_line); });
+                        }
+
                         // ── Monthly Returns bar chart ──
                         if !det.monthly_returns.is_empty() {
                             let bars: Vec<PlotBar> = det.monthly_returns.iter().rev().take(18).collect::<Vec<_>>()
@@ -7282,7 +7297,13 @@ impl TyphooNApp {
                                                             ui.end_row();
                                                         }
                                                     });
+                                                } else {
+                                                    ui.add_space(5.0);
+                                                    ui.label(egui::RichText::new("No rebalance actions needed — current allocation is within tolerance.").color(egui::Color32::from_rgb(46, 204, 113)));
+                                                    ui.label(egui::RichText::new("Rebalance suggestions appear when position sizes deviate significantly from optimal weights, or when high-correlation overlaps can be reduced.").color(AXIS_TEXT).small());
                                                 }
+                                            } else {
+                                                ui.label(egui::RichText::new("Rebalance data not yet computed. Wait for background thread to finish.").color(AXIS_TEXT));
                                             }
                                         }
                                         20 => { // VaR Simulator — suggest lot size changes to hit target VaR
