@@ -4058,6 +4058,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "DSCORE",        desc: "D-Score estimation components" },
     Command { name: "DARWIN_BROWSER", desc: "Browse DARWIN FTP universe (50K DARWINs)" },
     Command { name: "DARWIN_SCAN",    desc: "Scan FTP for top DARWINs by Sharpe" },
+    Command { name: "DARWINEXOUTLIERS", desc: "Darwinex symbol outlier analysis (VaR, spread, swap, ATR)" },
     Command { name: "GPU_SCAN",       desc: "GPU-accelerated DARWIN universe scan (50K DARWINs)" },
     // Drawing tools
     Command { name: "DRAW_HLINE",    desc: "Draw horizontal line" },
@@ -4554,6 +4555,9 @@ pub struct TyphooNApp {
     show_volume_profile: bool,
     show_order_flow: bool,
     show_bookmap: bool,
+    show_darwinex_outliers: bool,
+    darwinex_outliers: Vec<typhoon_engine::core::var::OutlierResult>,
+    darwinex_sector_stats: Vec<typhoon_engine::core::var::SectorStats>,
     show_journal: bool,
     journal_entries: Vec<JournalEntry>,
     show_var_mult: bool,
@@ -5416,6 +5420,9 @@ impl TyphooNApp {
             show_volume_profile: false,
             show_order_flow: false,
             show_bookmap: false,
+            show_darwinex_outliers: false,
+            darwinex_outliers: Vec::new(),
+            darwinex_sector_stats: Vec::new(),
             show_journal: false,
             journal_entries: Vec::new(),
             show_var_mult: false,
@@ -5943,6 +5950,41 @@ impl TyphooNApp {
             "DARWIN_TRADES" => { self.log.push_back(LogEntry::info("DARWIN trade markers: open DARWIN Accounts for deal history")); self.show_darwin_accounts = true; }
             "DSCORE"        => { self.show_var_mult = true; }
             "DARWIN_BROWSER" => { self.show_darwin_browser = true; }
+            "DARWINEXOUTLIERS" => {
+                // Read specs from cache, run outlier detection
+                if let Some(ref cache) = self.cache {
+                    if let Some(conn) = cache.try_connection() {
+                        // Get all symbols with their specs from cache
+                        use typhoon_engine::core::var;
+                        let mut data: Vec<(String, String, f64)> = Vec::new();
+                        // Read from __SPECS__ key or from fundamentals
+                        // Use detailed_stats from bg cache (symbol, bar_count, last_ts)
+                        // Or build from fundamentals + cache stats
+                        let fund = &self.bg.all_fundamentals;
+                        for f in fund {
+                            let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
+                            // Use market cap as the metric for outlier detection
+                            if let Some(mc) = f.market_cap {
+                                if mc > 0.0 {
+                                    data.push((f.symbol.clone(), sector, mc));
+                                }
+                            }
+                        }
+                        if data.len() >= 10 {
+                            let (outliers, stats) = var::detect_outliers(&data, 1.5);
+                            self.log.push_back(LogEntry::info(format!(
+                                "Outlier analysis: {} outliers across {} sectors from {} symbols",
+                                outliers.len(), stats.len(), data.len()
+                            )));
+                            self.darwinex_outliers = outliers;
+                            self.darwinex_sector_stats = stats;
+                            self.show_darwinex_outliers = true;
+                        } else {
+                            self.log.push_back(LogEntry::warn("Need 10+ symbols with fundamentals data. Run EVSCRAPE first."));
+                        }
+                    }
+                }
+            }
             "DARWIN_SCAN" => {
                 if self.darwin_ftp_dir.is_empty() {
                     self.log.push_back(LogEntry::warn("Set Darwinex FTP Dir in Settings first"));
@@ -6396,6 +6438,7 @@ impl TyphooNApp {
         self.show_volume_profile = false;
         self.show_order_flow = false;
         self.show_bookmap = false;
+        self.show_darwinex_outliers = false;
         self.show_journal = false;
         self.show_var_mult = false;
         self.show_margin_monitor = false;
@@ -9784,6 +9827,101 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Load chart data first.").color(bm_dim));
                         }
                     }
+                });
+        }
+
+        // Darwinex Outliers
+        if self.show_darwinex_outliers {
+            egui::Window::new("Darwinex Outliers")
+                .open(&mut self.show_darwinex_outliers)
+                .default_size([800.0, 550.0])
+                .show(ctx, |ui| {
+                    let ol_high = egui::Color32::from_rgb(231, 76, 60);
+                    let ol_med = egui::Color32::from_rgb(241, 196, 15);
+                    let ol_green = egui::Color32::from_rgb(46, 204, 113);
+                    let ol_cyan = egui::Color32::from_rgb(26, 188, 156);
+                    let ol_dim = egui::Color32::from_rgb(100, 100, 120);
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Outlier Analysis — {} outliers, {} sectors", self.darwinex_outliers.len(), self.darwinex_sector_stats.len())).strong());
+                        if ui.small_button("Refresh").clicked() {
+                            // Re-run via command
+                            if let Some(ref cache) = self.cache {
+                                if let Some(_conn) = cache.try_connection() {
+                                    let mut data: Vec<(String, String, f64)> = Vec::new();
+                                    for f in &self.bg.all_fundamentals {
+                                        let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
+                                        if let Some(mc) = f.market_cap { if mc > 0.0 { data.push((f.symbol.clone(), sector, mc)); } }
+                                    }
+                                    if data.len() >= 10 {
+                                        let (o, s) = typhoon_engine::core::var::detect_outliers(&data, 1.5);
+                                        self.darwinex_outliers = o; self.darwinex_sector_stats = s;
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    ui.separator();
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // Sector summary
+                        if !self.darwinex_sector_stats.is_empty() {
+                            ui.label(egui::RichText::new("Sector Statistics").small().strong());
+                            egui::Grid::new("sector_stats_grid").striped(true).num_columns(6).min_col_width(60.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Sector").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Count").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Median").color(ol_dim).small());
+                                ui.label(egui::RichText::new("IQR").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Bounds").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Outliers").color(ol_dim).small());
+                                ui.end_row();
+                                for s in &self.darwinex_sector_stats {
+                                    ui.label(egui::RichText::new(&s.sector).small().color(ol_cyan));
+                                    ui.label(format!("{}", s.count));
+                                    ui.label(typhoon_engine::core::fundamentals::format_large_number(s.median));
+                                    ui.label(typhoon_engine::core::fundamentals::format_large_number(s.iqr));
+                                    ui.label(egui::RichText::new(format!("{} – {}",
+                                        typhoon_engine::core::fundamentals::format_large_number(s.lower_bound),
+                                        typhoon_engine::core::fundamentals::format_large_number(s.upper_bound)
+                                    )).color(ol_dim).small());
+                                    let oc = if s.outlier_count > 3 { ol_high } else if s.outlier_count > 0 { ol_med } else { ol_green };
+                                    ui.label(egui::RichText::new(format!("{}", s.outlier_count)).color(oc));
+                                    ui.end_row();
+                                }
+                            });
+                            ui.add_space(8.0);
+                        }
+
+                        // Outlier table
+                        if !self.darwinex_outliers.is_empty() {
+                            ui.label(egui::RichText::new("Outliers (sorted by |z-score|)").small().strong());
+                            egui::Grid::new("outliers_grid").striped(true).num_columns(7).min_col_width(50.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Symbol").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Sector").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Value").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Median").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Z-Score").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Tier").color(ol_dim).small());
+                                ui.label(egui::RichText::new("Dir").color(ol_dim).small());
+                                ui.end_row();
+                                for o in &self.darwinex_outliers {
+                                    ui.label(egui::RichText::new(&o.symbol).strong().color(ol_cyan));
+                                    ui.label(egui::RichText::new(&o.sector).small());
+                                    ui.label(typhoon_engine::core::fundamentals::format_large_number(o.metric));
+                                    ui.label(typhoon_engine::core::fundamentals::format_large_number(o.sector_median));
+                                    let zc = if o.z_score.abs() > 3.0 { ol_high } else if o.z_score.abs() > 2.0 { ol_med } else { ol_dim };
+                                    ui.label(egui::RichText::new(format!("{:.2}", o.z_score)).color(zc));
+                                    let tc = match o.tier.as_str() { "EXTREME" => ol_high, "HIGH" => ol_med, _ => ol_dim };
+                                    ui.label(egui::RichText::new(&o.tier).color(tc).small());
+                                    let dc = if o.direction == "high" { ol_green } else { ol_high };
+                                    ui.label(egui::RichText::new(&o.direction).color(dc).small());
+                                    ui.end_row();
+                                }
+                            });
+                        } else {
+                            ui.label(egui::RichText::new("No outliers detected. Run EVSCRAPE first, then DARWINEXOUTLIERS.").color(ol_dim));
+                        }
+                    });
                 });
         }
 
