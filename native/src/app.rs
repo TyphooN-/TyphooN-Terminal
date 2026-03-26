@@ -26,9 +26,13 @@ use typhoon_engine::core::backtest;
 use typhoon_engine::core::risk;
 use typhoon_engine::core::margin;
 use typhoon_engine::core::sec_filing;
+use typhoon_engine::core::fundamentals;
+use typhoon_engine::core::darwin_ftp;
 use typhoon_engine::core::keyring;
 use typhoon_engine::broker::alpaca::{Bar as EngineBar, AlpacaBroker, AccountInfo, PositionInfo, OrderInfo};
 use tokio::sync::mpsc;
+
+use crate::gpu_compute;
 
 // ─── colours ────────────────────────────────────────────────────────────────
 const BG: egui::Color32 = egui::Color32::from_rgb(0, 0, 0);
@@ -586,6 +590,46 @@ impl ChartState {
 
         // Default fallback
         format!("mt5:{}:{}", sym, tf)
+    }
+
+    /// Fast cache key without any DB probing. Used by try_load to avoid blocking.
+    fn default_cache_key(&self) -> String {
+        let tf = self.timeframe.cache_suffix();
+        let sym = {
+            let parts: Vec<&str> = self.symbol.split(':').collect();
+            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
+            if is_tf && parts.len() > 1 {
+                parts[..parts.len()-1].join(":")
+            } else {
+                self.symbol.clone()
+            }
+        };
+        format!("mt5:{}:{}", sym, tf)
+    }
+
+    /// Try to load bars without blocking. Returns false if lock is contended.
+    /// Use this from the UI thread render loop to avoid freezing.
+    fn try_load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>) -> bool {
+        // Use the default key pattern directly — avoid find_cache_key which does blocking probes
+        let key = self.default_cache_key();
+        match cache.try_get_bars_raw(&key) {
+            Ok(Some(raw)) => {
+                self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                    ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                }).collect();
+                self.view_offset = self.bars.len().saturating_sub(1);
+                self.compute_indicators();
+                // Skip compute_multi_kama — it does blocking DB reads for HTF bars
+                // MultiKAMA will be computed when user explicitly switches to this chart tab
+                log.push_back(LogEntry::info(format!(
+                    "Loaded {} bars for {} [{}]",
+                    self.bars.len(), self.symbol, self.timeframe.label()
+                )));
+                true
+            }
+            Ok(None) => false, // lock contended or no data — try again next frame
+            Err(_) => false,
+        }
     }
 
     /// Load bars from the shared cache, re-compute indicators.
@@ -3637,7 +3681,12 @@ const COMMANDS: &[Command] = &[
     Command { name: "CALENDAR",      desc: "Economic calendar" },
     Command { name: "SEC",           desc: "SEC filings (10-K, 10-Q, 8-K)" },
     Command { name: "INSIDER",       desc: "Insider trades (Form 4)" },
-    Command { name: "FUNDAMENTALS",  desc: "Company fundamentals" },
+    Command { name: "FUNDAMENTALS",  desc: "Fundamentals viewer (EV, ratios, profile)" },
+    Command { name: "EV",            desc: "Enterprise Value scanner (all symbols)" },
+    Command { name: "EARNINGS",      desc: "Upcoming earnings calendar" },
+    Command { name: "DIVIDENDS",     desc: "Upcoming dividend calendar" },
+    Command { name: "EVSCRAPE",      desc: "Scrape fundamentals for all MT5 symbols" },
+    Command { name: "MT5SYNC",       desc: "Sync bar data from MT5 BarCacheWriter databases" },
     Command { name: "ANALYST",       desc: "Analyst ratings & targets" },
     Command { name: "HOLDERS",       desc: "Institutional holders" },
     // Analysis
@@ -3663,6 +3712,9 @@ const COMMANDS: &[Command] = &[
     Command { name: "REBALANCE",     desc: "VaR reduction via decorrelation" },
     Command { name: "DARWIN_TRADES", desc: "Toggle deal history markers on chart" },
     Command { name: "DSCORE",        desc: "D-Score estimation components" },
+    Command { name: "DARWIN_BROWSER", desc: "Browse DARWIN FTP universe (50K DARWINs)" },
+    Command { name: "DARWIN_SCAN",    desc: "Scan FTP for top DARWINs by Sharpe" },
+    Command { name: "GPU_SCAN",       desc: "GPU-accelerated DARWIN universe scan (50K DARWINs)" },
     // Drawing tools
     Command { name: "DRAW_HLINE",    desc: "Draw horizontal line" },
     Command { name: "DRAW_TRENDLINE",desc: "Draw trendline (2 clicks)" },
@@ -3748,9 +3800,40 @@ struct WatchlistRow {
     volume: f64,
 }
 
+/// Cached per-account analytics (computed in background thread).
+#[derive(Default, Clone)]
+struct AccountDetailCache {
+    ticker: String,
+    summary: Option<darwin::DarwinAccountSummary>,
+    var_stats: Option<darwin::VaRResult>,
+    monthly_returns: Vec<darwin::MonthlyReturn>,
+    streaks: Option<darwin::StreakAnalysis>,
+    hourly_pnl: Vec<darwin::HourlyPnL>,
+    equity_curve: Vec<(String, f64)>,
+    pnl_by_symbol: Vec<(String, f64, f64, f64, i64)>,
+    day_of_week: Vec<darwin::DayOfWeekPnL>,
+    hold_time: Option<darwin::HoldTimeStats>,
+    kelly: Option<darwin::KellyResult>,
+    cost_analysis: Option<darwin::CostAnalysis>,
+    dscore: Option<darwin::DScoreEstimate>,
+    slippage: Option<darwin::SlippageStats>,
+    mae_mfe: Option<darwin::MAEMFEResult>,
+    sizing_efficiency: Vec<darwin::SizingEfficiency>,
+    symbol_rotation: Vec<darwin::SymbolActivity>,
+    open_positions: Vec<darwin::DarwinOpenPosition>,
+    pyramiding: Vec<darwin::PyramidingAnalysis>,
+    bursts: Vec<darwin::TradingBurst>,
+    autocorrelation: Option<darwin::AutocorrelationResult>,
+    recent_deals: Vec<darwin::DarwinDeal>,
+    closed_positions: Vec<darwin::DarwinPosition>,
+    equity_snapshots: Vec<darwin::FloatingEquitySnapshot>,
+    benchmark: Option<darwin::BenchmarkComparison>,
+    sector_classification: Vec<(String, String)>,
+}
+
 /// Background-computed data — populated by background thread, read by render thread.
 /// This eliminates SQLite queries from the render loop.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct BgDarwinData {
     portfolio: Option<darwin::PortfolioSummary>,
     accounts: Vec<darwin::DarwinAccount>,
@@ -3772,6 +3855,43 @@ struct BgDarwinData {
     monte_carlo: Option<darwin::MonteCarloResult>,
     stress_tests: Vec<darwin::StressTestResult>,
     margin_call_sim: Option<darwin::MarginCallSimulation>,
+
+    // ── NEW fields: per-account details (DARWIN Accounts window) ──
+    account_details: Vec<AccountDetailCache>,
+
+    // ── NEW fields: DARWIN Portfolio views that were doing direct DB queries ──
+    rolling_var: Vec<darwin::RollingVaR>,
+    drawdown_dashboard: Option<darwin::CombinedDrawdownDashboard>,
+    exposure_treemap: Option<darwin::TreemapNode>,
+    timing_divergences: Vec<darwin::TimingDivergence>,
+    var_forecast: Option<darwin::VaRForecast>,
+    conditional_var: Vec<darwin::ConditionalVaR>,
+    market_regime: Option<darwin::MarketRegime>,
+    regime_performance: Vec<darwin::RegimePerformance>,
+    tail_risk: Option<darwin::TailRiskMetrics>,
+    seasonal_analysis: Vec<darwin::SeasonalPattern>,
+    sector_exposure: Vec<darwin::SectorExposure>,
+    liquidity_risk: Vec<darwin::LiquidityRisk>,
+    floating_equity: Option<darwin::FloatingEquityDashboard>,
+    tax_lots: Vec<(String, darwin::TaxSummary)>,
+
+    // ── VaR Multiplier window ──
+    var_multipliers: Vec<darwin::DarwinVaRMultiplier>,
+    per_darwin_var: Vec<(String, darwin::VaRResult)>,
+
+    // ── Symbol Overlap window ──
+    symbol_overlaps: Vec<darwin::SymbolOverlap>,
+
+    // ── SEC / Insider ──
+    insider_trades: std::collections::HashMap<String, Vec<sec_filing::InsiderTrade>>,
+
+    // ── DARWIN risk alerts ──
+    darwin_alerts: Vec<darwin::AlertCondition>,
+
+    // ── Fundamentals (cached from background thread) ──
+    all_fundamentals: Vec<fundamentals::Fundamentals>,
+    upcoming_earnings: Vec<(String, String, String)>,
+    upcoming_dividends: Vec<(String, String, String, Option<f64>)>,
 }
 
 /// Bottom panel mode.
@@ -3864,6 +3984,19 @@ enum BrokerCmd {
     GetOrderbook { symbol: String },
     /// Crypto backfill via Kraken public OHLC API.
     KrakenBackfill { symbol: String, timeframes: Vec<String>, db_path: std::path::PathBuf },
+    /// Import all DARWIN XLSX files from a directory (non-blocking).
+    /// Ticker is derived from filename: e.g. "THA.xlsx" → "THA", "THB_history.xlsx" → "THB".
+    DarwinImportAll { dir: PathBuf, db_path: PathBuf },
+    /// Sync bar data from MT5 BarCacheWriter databases into main cache.
+    Mt5Sync { sources: Vec<String>, target: PathBuf },
+    /// Scrape fundamentals for all MT5 stock symbols (non-blocking).
+    FundamentalsScrape { db_path: PathBuf },
+    /// Scrape fundamentals for a single ticker.
+    FundamentalsScrapeOne { ticker: String, db_path: PathBuf },
+    /// Scan DARWIN FTP universe (non-blocking, heavy I/O).
+    DarwinFtpScan { ftp_dir: String, min_days: usize },
+    /// Scan DARWIN FTP and compute stats on GPU.
+    DarwinGpuScan { ftp_dir: String, min_days: usize },
 }
 
 /// Messages sent from async broker task → UI.
@@ -3882,11 +4015,21 @@ enum BrokerMsg {
     MarketClock(String),
     /// Generic JSON results for various API calls.
     JsonResult(String, String), // (label, formatted text)
+    /// Fundamentals scrape progress update.
+    FundamentalsProgress(String),
+    /// DARWIN FTP scan results.
+    DarwinFtpScanResult(Vec<darwin_ftp::DarwinFtpSummary>),
+    /// Raw return data ready for GPU upload (ticker, daily_returns_f32).
+    DarwinFtpReturns(Vec<(String, Vec<f32>)>),
 }
 
 pub struct TyphooNApp {
     /// Shared cache handle — opened once at startup.
     cache: Option<Arc<SqliteCache>>,
+    /// Receiver for async cache open (delivered on first frame).
+    cache_rx: Option<std::sync::mpsc::Receiver<Arc<SqliteCache>>>,
+    /// Whether initial chart load has been done after cache arrived.
+    cache_loaded: bool,
     /// Cache open error (shown in log if set).
     cache_err: Option<String>,
 
@@ -3951,6 +4094,17 @@ pub struct TyphooNApp {
 
     /// DARWIN XLSX import ticker input.
     darwin_import_ticker: String,
+    /// Directory containing DARWIN XLSX files for auto-import.
+    /// Files are named by ticker: "THA.xlsx", "THB.xlsx", etc.
+    darwin_xlsx_dir: String,
+
+    /// MT5 BarCacheWriter database paths (up to 4 sources).
+    /// Each path points to a `typhoon_mt5_cache.db` in an MT5 Wine prefix or native install.
+    /// Data is synced from these sources into the main cache on startup and on demand.
+    mt5_db_paths: [String; 4],
+
+    /// Darwinex FTP data directory (contains DARWIN CSV files for correlation scanning).
+    darwin_ftp_dir: String,
 
     /// Broker connection fields (Alpaca).
     broker_api_key: String,
@@ -4046,6 +4200,23 @@ pub struct TyphooNApp {
     show_alerts: bool,
     show_order_entry: bool,
     show_crypto_backfill: bool,
+    // DARWIN FTP browser
+    /// DARWIN FTP browser window visibility.
+    show_darwin_browser: bool,
+    /// Cached FTP scan results (from broker channel).
+    ftp_scan_results: Vec<darwin_ftp::DarwinFtpSummary>,
+    /// DARWIN FTP detail: ticker being viewed.
+    ftp_detail_ticker: String,
+    /// DARWIN FTP detail: availability data.
+    ftp_detail_avail: Option<darwin_ftp::DarwinDataAvailability>,
+    /// DARWIN FTP detail: return summary.
+    ftp_detail_summary: Option<darwin_ftp::DarwinFtpSummary>,
+    /// DARWIN FTP detail: daily returns for equity curve plot.
+    ftp_detail_returns: Vec<darwin_ftp::ReturnPoint>,
+    // Fundamentals windows
+    show_ev_scanner: bool,
+    show_earnings_calendar: bool,
+    show_dividend_calendar: bool,
     /// Crypto backfill single symbol input.
     backfill_symbol: String,
     /// SEC filing type filters [Form 4, 13F, DEF 14A, S-1, 10-K, 10-Q, 8-K].
@@ -4119,148 +4290,81 @@ pub struct TyphooNApp {
     /// Which DARWIN view is selected in the portfolio dropdown.
     darwin_view: usize,
     /// Frame number when DARWIN windows last queried the DB.
-    /// Background-computed DARWIN data. Updated every few seconds by a spawned task.
-    /// Render thread reads from this — NEVER queries SQLite directly in draw_floating_windows.
-    bg_darwin: std::sync::Arc<std::sync::Mutex<BgDarwinData>>,
-    /// Signal to trigger background DARWIN refresh.
-    bg_darwin_trigger: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Latest background-computed data. Updated by draining bg_rx each frame.
+    bg: BgDarwinData,
+    /// Receiver for background data snapshots.
+    bg_rx: std::sync::mpsc::Receiver<BgDarwinData>,
+
+    /// GPU DARWIN analytics engine (compute shaders for batch stats/correlation).
+    gpu_darwin: Option<gpu_compute::GpuDarwinAnalytics>,
 }
 
 impl TyphooNApp {
     pub fn new(_cc: &eframe::CreationContext<'_>, rt_handle: tokio::runtime::Handle) -> Self {
-        let mut log: VecDeque<LogEntry> = VecDeque::new();
+        let log: VecDeque<LogEntry> = VecDeque::new();
 
-        // ── open SQLite cache ────────────────────────────────────────────────
-        let db_path = {
-            let mut p = dirs_home();
-            p.push("cache");
-            p.push("typhoon_cache.db");
-            p
-        };
+        // ── SQLite cache opened ASYNCHRONOUSLY ────────────────────────────
+        // On a 3.9 GB database, SqliteCache::open() + PRAGMA setup can take 10+ seconds.
+        // We defer it: window appears immediately, cache arrives via channel on first frame.
+        // The shared_cache is an Arc<RwLock> so the background thread can pick it up later.
+        let shared_cache: Arc<std::sync::RwLock<Option<Arc<SqliteCache>>>> = Arc::new(std::sync::RwLock::new(None));
+        let (cache_tx, cache_rx) = std::sync::mpsc::sync_channel::<Arc<SqliteCache>>(1);
+        {
+            let shared = shared_cache.clone();
+            std::thread::spawn(move || {
+                let mut db_path = dirs_home();
+                db_path.push("cache");
+                db_path.push("typhoon_cache.db");
+                tracing::info!("Cache-open thread: opening {}...", db_path.display());
+                match SqliteCache::open(&db_path) {
+                    Ok(c) => {
+                        tracing::info!("Cache-open thread: opened OK");
+                        let arc = Arc::new(c);
+                        // Publish to both: RwLock for background thread, channel for UI
+                        if let Ok(mut guard) = shared.write() {
+                            *guard = Some(arc.clone());
+                            tracing::info!("Cache-open thread: published to RwLock");
+                        }
+                        let _ = cache_tx.send(arc);
+                        tracing::info!("Cache-open thread: sent to UI channel");
+                    }
+                    Err(e) => {
+                        tracing::error!("Cache-open thread: FAILED: {e}");
+                    }
+                }
+            });
+        }
 
-        let (cache, cache_err) = match SqliteCache::open(&db_path) {
-            Ok(c) => {
-                log.push_back(LogEntry::info(format!("Cache opened: {}", db_path.display())));
-                (Some(Arc::new(c)), None)
-            }
-            Err(e) => {
-                let msg = format!("Cannot open cache at {}: {e}", db_path.display());
-                log.push_back(LogEntry::err(&msg));
-                (None, Some(msg))
-            }
-        };
+        // Cache starts as None — filled on first frame when cache_rx delivers
+        let cache: Option<Arc<SqliteCache>> = None;
+        let cache_err: Option<String> = None;
 
-        // ── build default chart set (all timeframes for MTF grid up to 9) ────
+        // ── build default chart set (empty — bars load after cache arrives) ──
         let default_tfs = [Timeframe::H4, Timeframe::D1, Timeframe::H1, Timeframe::W1, Timeframe::M15, Timeframe::M30, Timeframe::M5, Timeframe::M1, Timeframe::MN1];
-        let mut charts: Vec<ChartState> = default_tfs
+        let charts: Vec<ChartState> = default_tfs
             .iter()
             .map(|&tf| ChartState::new("CC", tf))
             .collect();
 
-        // ── load bars into all charts ────────────────────────────────────────
-        if let Some(ref c) = cache {
-            for chart in &mut charts {
-                chart.load(c, &mut log);
-            }
-        }
-
-        // ── load watchlist from cache keys ───────────────────────────────────
-        let watchlist_symbols = if let Some(ref c) = cache {
-            match c.detailed_stats() {
-                Ok(stats) => stats.into_iter().map(|(k, count, _)| (k, count)).collect(),
-                Err(_) => Vec::new(),
-            }
-        } else {
-            Vec::new()
-        };
-
-        // ── build rich watchlist rows (TradingView-style) ────────────────────
-        let mut watchlist_rows: Vec<WatchlistRow> = Vec::new();
-        // Deduplicate: group by base symbol, prefer D1 timeframe for last price
-        if let Some(ref c) = cache {
-            // Collect unique base symbols from cache keys
-            let mut seen_symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for (key, _) in &watchlist_symbols {
-                // Parse cache key: "mt5:CC:4Hour" or "CC:4Hour"
-                let parts: Vec<&str> = key.split(':').collect();
-                let base_sym = if parts.len() >= 3 {
-                    // Try to get "BTCUSD" from "mt5:CC:4Hour" or "CC"
-                    let sym_part = if parts[0] == "mt5" && parts.len() >= 4 {
-                        format!("{}:{}", parts[1], parts[2])
-                    } else if parts.len() >= 2 {
-                        format!("{}:{}", parts[0], parts[1])
-                    } else {
-                        key.clone()
-                    };
-                    sym_part
-                } else {
-                    key.clone()
-                };
-
-                if seen_symbols.contains(&base_sym) { continue; }
-                seen_symbols.insert(base_sym.clone());
-
-                // Try to load last 2 bars from D1, then H4, then any available TF
-                let mut row: Option<WatchlistRow> = None;
-                for tf_suffix in &["1Day", "4Hour", "1Hour", "1Week"] {
-                    let try_key = if key.starts_with("mt5:") {
-                        format!("mt5:{}:{}", base_sym, tf_suffix)
-                    } else {
-                        format!("{}:{}", base_sym, tf_suffix)
-                    };
-                    if let Ok(Some(raw)) = c.get_bars_raw(&try_key) {
-                        let n = raw.len();
-                        if n >= 2 {
-                            let last = &raw[n - 1];
-                            let prev = &raw[n - 2];
-                            let change = last.4 - prev.4; // close - prev_close
-                            let change_pct = if prev.4 != 0.0 { change / prev.4 * 100.0 } else { 0.0 };
-                            // Extract display name from base_sym
-                            let display = base_sym.split(':').last().unwrap_or(&base_sym).to_string();
-                            row = Some(WatchlistRow {
-                                symbol: display,
-                                cache_key: try_key,
-                                last: last.4,  // close
-                                prev_close: prev.4,
-                                change,
-                                change_pct,
-                                volume: last.5, // volume
-                            });
-                            break;
-                        } else if n == 1 {
-                            let last = &raw[0];
-                            let display = base_sym.split(':').last().unwrap_or(&base_sym).to_string();
-                            row = Some(WatchlistRow {
-                                symbol: display,
-                                cache_key: try_key,
-                                last: last.4,
-                                prev_close: last.1, // open as fallback
-                                change: last.4 - last.1,
-                                change_pct: if last.1 != 0.0 { (last.4 - last.1) / last.1 * 100.0 } else { 0.0 },
-                                volume: last.5,
-                            });
-                            break;
-                        }
-                    }
-                }
-                if let Some(r) = row {
-                    watchlist_rows.push(r);
-                }
-            }
-            // Sort by symbol name
-            watchlist_rows.sort_by(|a, b| a.symbol.cmp(&b.symbol));
-        }
+        let watchlist_symbols: Vec<(String, i64)> = Vec::new();
+        let watchlist_rows: Vec<WatchlistRow> = Vec::new();
 
         // Create async broker channels
         let (broker_tx, _broker_cmd_rx) = mpsc::unbounded_channel::<BrokerCmd>();
         let (broker_msg_tx, broker_rx) = mpsc::unbounded_channel::<BrokerMsg>();
 
+        // Flag: true while DARWIN XLSX import is running — background thread skips DB queries
+        let importing_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
         // Spawn broker message processor
         let broker_msg_tx_clone = broker_msg_tx.clone();
+        let importing_flag_broker = importing_flag.clone();
+        let importing_flag_bg = importing_flag.clone();
         let rt = rt_handle.clone();
         rt_handle.spawn(async move {
             let mut cmd_rx = _broker_cmd_rx;
             let mut broker: Option<AlpacaBroker> = None;
+            let importing_flag = importing_flag_broker;
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
                     BrokerCmd::Connect { api_key, secret, paper } => {
@@ -4458,6 +4562,247 @@ impl TyphooNApp {
                             }
                         }
                     }
+                    BrokerCmd::DarwinImportAll { dir, db_path } => {
+                        // Spawn a dedicated thread so we don't block the broker command loop
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let importing = importing_flag.clone();
+                        std::thread::spawn(move || {
+                            importing.store(true, std::sync::atomic::Ordering::Relaxed);
+                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("DARWIN XLSX scan: {}...", dir.display())));
+                            match std::fs::read_dir(&dir) {
+                                Ok(entries) => {
+                                    let mut xlsx_files: Vec<std::path::PathBuf> = entries
+                                        .filter_map(|e| e.ok())
+                                        .map(|e| e.path())
+                                        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("xlsx"))
+                                        .collect();
+                                    xlsx_files.sort();
+                                    if xlsx_files.is_empty() {
+                                        let _ = msg_tx.send(BrokerMsg::Error(format!("No .xlsx files found in {}", dir.display())));
+                                    } else {
+                                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Found {} XLSX files", xlsx_files.len())));
+                                        if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                            if let Ok(conn) = cache.connection() {
+                                                let _ = darwin::create_darwin_tables(&conn);
+                                                let mut total_deals = 0usize;
+                                                let mut total_positions = 0usize;
+                                                let mut imported = 0usize;
+                                                for path in &xlsx_files {
+                                                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                                                    let ticker = stem.split(&['_', '-', ' '][..]).next().unwrap_or(stem).to_uppercase();
+                                                    if ticker.is_empty() { continue; }
+                                                    match darwin::import_darwin_xlsx(&conn, &path.display().to_string(), &ticker) {
+                                                        Ok((name, deals, positions)) => {
+                                                            total_deals += deals;
+                                                            total_positions += positions;
+                                                            imported += 1;
+                                                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                                                "Imported {}: {} deals, {} positions ({})",
+                                                                name, deals, positions, path.file_name().unwrap_or_default().to_string_lossy()
+                                                            )));
+                                                        }
+                                                        Err(e) => {
+                                                            let _ = msg_tx.send(BrokerMsg::Error(format!(
+                                                                "Import {} failed: {}", path.file_name().unwrap_or_default().to_string_lossy(), e
+                                                            )));
+                                                        }
+                                                    }
+                                                }
+                                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                                    "DARWIN import complete: {}/{} files, {} deals, {} positions",
+                                                    imported, xlsx_files.len(), total_deals, total_positions
+                                                )));
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = msg_tx.send(BrokerMsg::Error(format!("Cannot read dir {}: {}", dir.display(), e)));
+                                }
+                            }
+                            importing.store(false, std::sync::atomic::Ordering::Relaxed);
+                        });
+                    }
+                    BrokerCmd::FundamentalsScrape { db_path } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        std::thread::spawn(move || {
+                            let rt = tokio::runtime::Builder::new_current_thread()
+                                .enable_all().build().unwrap();
+                            rt.block_on(async {
+                                match typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                    Ok(cache) => {
+                                        if let Ok(conn) = cache.connection() {
+                                            let _ = fundamentals::create_fundamentals_tables(&conn);
+                                            let tickers = fundamentals::extract_stock_tickers_from_cache(&conn).unwrap_or_default();
+                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Fundamentals scrape: {} stock tickers found", tickers.len())));
+                                            let client = reqwest::Client::builder()
+                                                .user_agent("TyphooN-Terminal/1.0")
+                                                .build().unwrap_or_default();
+                                            let mut ok = 0usize;
+                                            let mut fail = 0usize;
+                                            for ticker in &tickers {
+                                                match fundamentals::scrape_ticker(&client, &conn, ticker).await {
+                                                    Ok(_f) => {
+                                                        ok += 1;
+                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK ({}/{})", ticker, ok, tickers.len())));
+                                                    }
+                                                    Err(e) => {
+                                                        fail += 1;
+                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: FAIL — {} ({}/{})", ticker, e, ok + fail, tickers.len())));
+                                                    }
+                                                }
+                                                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                                            }
+                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Fundamentals scrape complete: {} OK, {} failed out of {}", ok, fail, tickers.len())));
+                                        } else {
+                                            let _ = msg_tx.send(BrokerMsg::Error("Fundamentals: could not get DB connection".into()));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = msg_tx.send(BrokerMsg::Error(format!("Fundamentals: could not open cache: {}", e)));
+                                    }
+                                }
+                            });
+                        });
+                    }
+                    BrokerCmd::FundamentalsScrapeOne { ticker, db_path } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        std::thread::spawn(move || {
+                            let rt = tokio::runtime::Builder::new_current_thread()
+                                .enable_all().build().unwrap();
+                            rt.block_on(async {
+                                match typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                    Ok(cache) => {
+                                        if let Ok(conn) = cache.connection() {
+                                            let _ = fundamentals::create_fundamentals_tables(&conn);
+                                            let client = reqwest::Client::builder()
+                                                .user_agent("TyphooN-Terminal/1.0")
+                                                .build().unwrap_or_default();
+                                            match fundamentals::scrape_ticker(&client, &conn, &ticker).await {
+                                                Ok(_f) => {
+                                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK", ticker)));
+                                                }
+                                                Err(e) => {
+                                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: FAIL — {}", ticker, e)));
+                                                }
+                                            }
+                                        } else {
+                                            let _ = msg_tx.send(BrokerMsg::Error("Fundamentals: could not get DB connection".into()));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = msg_tx.send(BrokerMsg::Error(format!("Fundamentals: could not open cache: {}", e)));
+                                    }
+                                }
+                            });
+                        });
+                    }
+                    BrokerCmd::Mt5Sync { sources, target } => {
+                        // Spawn dedicated thread for MT5 sync (heavy I/O)
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        std::thread::spawn(move || {
+                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("MT5 sync: {} sources → {}", sources.len(), target.display())));
+                            let target_cache = match typhoon_engine::core::cache::SqliteCache::open(&target) {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    let _ = msg_tx.send(BrokerMsg::Error(format!("Cannot open target cache: {e}")));
+                                    return;
+                                }
+                            };
+                            let mut total_keys = 0usize;
+                            let mut total_synced = 0usize;
+                            for src_path in &sources {
+                                let src = std::path::PathBuf::from(src_path);
+                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Syncing from {}...", src.display())));
+                                match typhoon_engine::core::cache::SqliteCache::open(&src) {
+                                    Ok(src_cache) => {
+                                        // Get all keys from source
+                                        match src_cache.all_keys() {
+                                            Ok(keys) => {
+                                                total_keys += keys.len();
+                                                for key in &keys {
+                                                    // Copy raw compressed binary from source to target
+                                                    match src_cache.get_raw_blob(key) {
+                                                        Ok(Some((blob, ts, count))) => {
+                                                            if let Err(e) = target_cache.put_raw_blob(key, &blob, ts, count) {
+                                                                let _ = msg_tx.send(BrokerMsg::Error(format!("Sync {} failed: {e}", key)));
+                                                            } else {
+                                                                total_synced += 1;
+                                                            }
+                                                        }
+                                                        Ok(None) => {}
+                                                        Err(e) => {
+                                                            let _ = msg_tx.send(BrokerMsg::Error(format!("Read {} failed: {e}", key)));
+                                                        }
+                                                    }
+                                                }
+                                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("  {} keys synced from {}", keys.len(), src.file_name().unwrap_or_default().to_string_lossy())));
+                                            }
+                                            Err(e) => {
+                                                let _ = msg_tx.send(BrokerMsg::Error(format!("List keys failed: {e}")));
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = msg_tx.send(BrokerMsg::Error(format!("Cannot open {}: {e}", src.display())));
+                                    }
+                                }
+                            }
+                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                "MT5 sync complete: {}/{} keys from {} sources",
+                                total_synced, total_keys, sources.len()
+                            )));
+                        });
+                    }
+                    BrokerCmd::DarwinFtpScan { ftp_dir, min_days } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        std::thread::spawn(move || {
+                            let _ = msg_tx.send(BrokerMsg::OrderResult("DARWIN FTP scan started...".into()));
+                            let ftp_path = std::path::Path::new(&ftp_dir);
+                            match darwin_ftp::scan_universe(ftp_path, min_days, Some(&|done, total| {
+                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("FTP scan: {}/{} DARWINs...", done, total)));
+                            })) {
+                                Ok(results) => {
+                                    let count = results.len();
+                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!("FTP scan complete: {} DARWINs with {}+ days", count, min_days)));
+                                    let _ = msg_tx.send(BrokerMsg::DarwinFtpScanResult(results));
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("FTP scan failed: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::DarwinGpuScan { ftp_dir, min_days } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        std::thread::spawn(move || {
+                            let _ = msg_tx.send(BrokerMsg::OrderResult("GPU scan: reading FTP return files...".into()));
+                            let ftp_path = std::path::Path::new(&ftp_dir);
+                            match darwin_ftp::list_all_darwins(ftp_path) {
+                                Ok(tickers) => {
+                                    let mut all_returns: Vec<(String, Vec<f32>)> = Vec::new();
+                                    let total = tickers.len();
+                                    for (i, ticker) in tickers.iter().enumerate() {
+                                        if i % 5000 == 0 {
+                                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("GPU scan: reading {}/{}...", i, total)));
+                                        }
+                                        let return_path = ftp_path.join(ticker).join("RETURN");
+                                        if !return_path.is_file() { continue; }
+                                        if let Ok(returns) = darwin_ftp::read_return_file(ftp_path, ticker) {
+                                            if returns.len() >= min_days {
+                                                let daily = darwin_ftp::compute_daily_returns_from_ftp(&returns);
+                                                let daily_f32: Vec<f32> = daily.iter().map(|&r| r as f32).collect();
+                                                if !daily_f32.is_empty() {
+                                                    all_returns.push((ticker.clone(), daily_f32));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!("GPU scan: {} DARWINs read, sending to GPU...", all_returns.len())));
+                                    let _ = msg_tx.send(BrokerMsg::DarwinFtpReturns(all_returns));
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("GPU scan failed: {}", e))); }
+                            }
+                        });
+                    }
                     BrokerCmd::KrakenBackfill { symbol, timeframes, db_path } => {
                         use typhoon_engine::core::kraken;
                         let client = reqwest::Client::builder()
@@ -4510,6 +4855,8 @@ impl TyphooNApp {
 
         let mut app = Self {
             cache,
+            cache_rx: Some(cache_rx),
+            cache_loaded: false,
             cache_err,
             symbol_input: "CC".to_string(),
             charts,
@@ -4557,6 +4904,14 @@ impl TyphooNApp {
             show_better_volume: true,   // NNFX volume
             draw_mode: DrawMode::None,
             darwin_import_ticker: String::new(),
+            darwin_xlsx_dir: String::new(),
+            mt5_db_paths: [
+                "/home/typhoon/.mt5_7/drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon_mt5_cache.db".into(),
+                "/home/typhoon/.mt5_10/drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon_mt5_cache.db".into(),
+                "/home/typhoon/.mt5_11/drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon_mt5_cache.db".into(),
+                String::new(),
+            ],
+            darwin_ftp_dir: String::new(),
             broker_api_key: String::new(),
             broker_secret: String::new(),
             broker_paper: true,
@@ -4625,6 +4980,15 @@ impl TyphooNApp {
             show_alerts: false,
             show_order_entry: false,
             show_crypto_backfill: false,
+            show_darwin_browser: false,
+            ftp_scan_results: Vec::new(),
+            ftp_detail_ticker: String::new(),
+            ftp_detail_avail: None,
+            ftp_detail_summary: None,
+            ftp_detail_returns: Vec::new(),
+            show_ev_scanner: false,
+            show_earnings_calendar: false,
+            show_dividend_calendar: false,
             backfill_symbol: String::new(),
             sec_filters: [true; 7],
             alerts: Vec::new(),
@@ -4658,44 +5022,124 @@ impl TyphooNApp {
             tp_enabled: false,
             recent_fills: Vec::new(),
             darwin_view: 0,
-            bg_darwin: std::sync::Arc::new(std::sync::Mutex::new(BgDarwinData::default())),
-            bg_darwin_trigger: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            bg: BgDarwinData::default(),
+            bg_rx: {
+                // Channel created here; tx passed to background thread below
+                let (_placeholder_tx, rx) = std::sync::mpsc::sync_channel(1);
+                rx
+            },
+            gpu_darwin: None,
         };
 
-        // Spawn background DARWIN data refresh thread
+        // Spawn background DARWIN data refresh thread (mpsc channel, capacity 1)
         {
-            let bg_data = app.bg_darwin.clone();
-            let trigger = app.bg_darwin_trigger.clone();
-            let cache_arc = app.cache.clone();
+            let (bg_tx, bg_rx) = std::sync::mpsc::channel::<BgDarwinData>();
+            app.bg_rx = bg_rx;
+            let shared_cache_bg = shared_cache.clone();
             std::thread::spawn(move || {
+                let importing_flag_bg = importing_flag_bg;
+                let mut full_refresh_done = false;
+                let mut last_full_refresh = std::time::Instant::now() - std::time::Duration::from_secs(999);
+                const FULL_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    std::thread::sleep(std::time::Duration::from_secs(3));
 
+                    // Skip DB queries while DARWIN import is running (avoid WAL contention on large DB)
+                    if importing_flag_bg.load(std::sync::atomic::Ordering::Relaxed) {
+                        continue;
+                    }
+
+                    // Read cache from shared RwLock (populated async by cache-open thread)
+                    let cache_arc = shared_cache_bg.read().ok().and_then(|g| g.clone());
+                    if cache_arc.is_none() {
+                        tracing::info!("BG thread: cache not yet available, waiting...");
+                        continue;
+                    }
                     if let Some(ref cache) = cache_arc {
+                        let phase_start = std::time::Instant::now();
+                        tracing::info!("BG thread: cache available, running queries...");
                         let mut data = BgDarwinData::default();
 
-                        // Phase 1: quick queries (release conn quickly)
+                        // Phase 1a: ONLY list accounts (no table creation, no scans)
+                        // Table creation moved to Phase 1b — even IF NOT EXISTS can be slow on 3.9GB DB
+                        if let Ok(conn) = cache.connection() {
+                            let t = std::time::Instant::now();
+                            data.accounts = darwin::list_darwin_accounts(&conn).unwrap_or_default();
+                            tracing::info!("BG: list_accounts {}ms (n={})", t.elapsed().as_millis(), data.accounts.len());
+                        }
+                        tracing::info!("BG: Phase 1a done in {}ms", phase_start.elapsed().as_millis());
+                        let _ = bg_tx.send(data.clone());
+
+                        // Phase 1b: table creation + SEC data + cache stats
                         if let Ok(conn) = cache.connection() {
                             let _ = darwin::create_darwin_tables(&conn);
-                            data.portfolio = darwin::get_portfolio_summary(&conn).ok();
-                            data.accounts = darwin::list_darwin_accounts(&conn).unwrap_or_default();
-                            data.cache_stats = cache.stats().ok();
-                            data.detailed_stats = cache.detailed_stats().unwrap_or_default();
                             let _ = sec_filing::create_sec_tables(&conn);
+                            let _ = fundamentals::create_fundamentals_tables(&conn);
                             data.sec_filings = sec_filing::get_recent_filings(&conn, None, 100).unwrap_or_default();
                             data.sec_alerts = sec_filing::get_filing_alerts(&conn, false).unwrap_or_default();
+                        }
+                        data.cache_stats = cache.stats().ok();
+                        tracing::info!("BG: Phase 1b done in {}ms", phase_start.elapsed().as_millis());
+                        let _ = bg_tx.send(data.clone());
+
+                        if let Ok(conn) = cache.connection() {
+                            let t = std::time::Instant::now();
+                            data.portfolio = darwin::get_portfolio_summary(&conn).ok();
+                            tracing::info!("BG: portfolio_summary {}ms", t.elapsed().as_millis());
+                            let t = std::time::Instant::now();
                             data.daily_returns = darwin::get_portfolio_daily_returns(&conn).unwrap_or_default();
+                            tracing::info!("BG: daily_returns {}ms (n={})", t.elapsed().as_millis(), data.daily_returns.len());
                             data.correlations = darwin::get_darwin_correlations(&conn).unwrap_or_default();
                             data.exposure = darwin::get_portfolio_exposure(&conn).unwrap_or_default();
-                            data.equity_curve = darwin::get_portfolio_equity_curve(&conn).unwrap_or_default();
                             data.open_positions = darwin::get_portfolio_open_positions(&conn).unwrap_or_default();
+                        }
+                        tracing::info!("BG: Phase 1b done in {}ms", phase_start.elapsed().as_millis());
+                        let _ = bg_tx.send(data.clone());
+
+                        // Phase 1c: heavier queries — release conn between each to avoid blocking UI
+                        {
+                            let t = std::time::Instant::now();
+                            data.detailed_stats = cache.detailed_stats().unwrap_or_default();
+                            tracing::info!("BG: detailed_stats {}ms (n={})", t.elapsed().as_millis(), data.detailed_stats.len());
+                        }
+                        if let Ok(conn) = cache.connection() {
+                            data.equity_curve = darwin::get_portfolio_equity_curve(&conn).unwrap_or_default();
                             data.trade_overlaps = darwin::get_trade_overlaps(&conn).unwrap_or_default();
-                        } // conn released here — render thread can use SQLite
+                            data.symbol_overlaps = darwin::get_symbol_overlap(&conn).unwrap_or_default();
+                        } // release conn
+                        if let Ok(conn) = cache.connection() {
+                            data.sector_exposure = darwin::get_sector_exposure(&conn).unwrap_or_default();
+                            data.liquidity_risk = darwin::get_liquidity_risk(&conn).unwrap_or_default();
+                            data.exposure_treemap = darwin::get_exposure_treemap(&conn).ok();
+                            data.timing_divergences = darwin::get_timing_divergences(&conn).unwrap_or_default();
+                            data.regime_performance = darwin::get_regime_performance(&conn).unwrap_or_default();
+                        } // release conn
+                        if let Ok(conn) = cache.connection() {
+                            data.all_fundamentals = fundamentals::get_all_fundamentals(&conn).unwrap_or_default();
+                            data.upcoming_earnings = fundamentals::get_upcoming_earnings(&conn, 50).unwrap_or_default();
+                            data.upcoming_dividends = fundamentals::get_upcoming_dividends(&conn, 50).unwrap_or_default();
+                        } // release conn
+                        tracing::info!("BG: Phase 1c done in {}ms", phase_start.elapsed().as_millis());
+                        let _ = bg_tx.send(data.clone());
+
+                        // Phases 2-8: expensive computation — only on first run or every 5 minutes
+                        let need_full_refresh = !full_refresh_done || last_full_refresh.elapsed() >= FULL_REFRESH_INTERVAL;
+                        if !need_full_refresh {
+                            // Lightweight refresh only — skip expensive phases
+                            let _ = bg_tx.send(data);
+                            continue;
+                        }
 
                         // Phase 2: pure computation (no DB, no lock contention)
                         if !data.daily_returns.is_empty() {
                             data.var_stats = Some(darwin::compute_var(&data.daily_returns));
                             data.monte_carlo = Some(darwin::monte_carlo_var(&data.daily_returns, 252, 1000));
+                            data.rolling_var = darwin::get_rolling_var(&data.daily_returns, 30);
+                            data.var_forecast = Some(darwin::forecast_var(&data.daily_returns, 6.5));
+                            data.conditional_var = darwin::compute_conditional_var(&data.daily_returns);
+                            data.market_regime = Some(darwin::detect_market_regime(&data.daily_returns));
+                            data.tail_risk = Some(darwin::compute_tail_risk(&data.daily_returns));
+                            data.seasonal_analysis = darwin::get_seasonal_analysis(&data.daily_returns);
                         }
 
                         // Phase 3: heavy DB queries (one at a time, releasing conn between each)
@@ -4712,29 +5156,147 @@ impl TyphooNApp {
                         if let Ok(conn) = cache.connection() {
                             data.margin_call_sim = darwin::simulate_margin_call(&conn).ok();
                         }
-
-                        // Swap into shared state (brief lock)
-                        if let Ok(mut locked) = bg_data.lock() {
-                            *locked = data;
+                        if let Ok(conn) = cache.connection() {
+                            data.drawdown_dashboard = darwin::get_combined_drawdown_dashboard(&conn, 5).ok();
                         }
-                    }
+                        if let Ok(conn) = cache.connection() {
+                            data.var_multipliers = darwin::compute_var_multipliers(&conn).unwrap_or_default();
+                        }
+                        if let Ok(conn) = cache.connection() {
+                            let prices = std::collections::HashMap::new();
+                            data.floating_equity = darwin::compute_floating_equity(&conn, &prices).ok();
+                        }
 
-                    trigger.store(false, std::sync::atomic::Ordering::Relaxed);
+                        // Phase 4: per-DARWIN VaR (for VaR Multiplier window)
+                        if let Ok(conn) = cache.connection() {
+                            let mut per_var = Vec::new();
+                            for acct in &data.accounts {
+                                if let Ok(daily) = darwin::get_daily_returns(&conn, &acct.darwin_ticker) {
+                                    if !daily.is_empty() {
+                                        per_var.push((acct.darwin_ticker.clone(), darwin::compute_var(&daily)));
+                                    }
+                                }
+                            }
+                            data.per_darwin_var = per_var;
+                        }
+
+                        // Phase 5: per-account detailed analytics (DARWIN Accounts window)
+                        // Release conn between each account to let UI thread acquire for chart loading
+                        {
+                            let mut details = Vec::new();
+                            for acct in &data.accounts {
+                                let ticker = &acct.darwin_ticker;
+                                let t = std::time::Instant::now();
+                                let mut det = AccountDetailCache {
+                                    ticker: ticker.clone(),
+                                    ..Default::default()
+                                };
+                                if let Ok(conn) = cache.connection() {
+                                    det.summary = darwin::get_darwin_summary(&conn, ticker).ok();
+                                    det.streaks = darwin::get_streak_analysis(&conn, ticker).ok();
+                                    det.hourly_pnl = darwin::get_hourly_pnl(&conn, ticker).unwrap_or_default();
+                                    det.equity_curve = darwin::get_darwin_equity_curve(&conn, ticker).unwrap_or_default();
+                                    det.pnl_by_symbol = darwin::get_darwin_pnl_by_symbol(&conn, ticker).unwrap_or_default();
+                                } // release conn — let UI thread load charts
+                                if let Ok(conn) = cache.connection() {
+                                    det.day_of_week = darwin::get_day_of_week_pnl(&conn, ticker).unwrap_or_default();
+                                    det.hold_time = darwin::get_hold_time_stats(&conn, ticker).ok();
+                                    det.kelly = darwin::compute_kelly(&conn, ticker).ok();
+                                    det.cost_analysis = darwin::get_cost_analysis(&conn, ticker).ok();
+                                    det.dscore = darwin::estimate_dscore(&conn, ticker).ok();
+                                    det.slippage = darwin::analyze_slippage(&conn, ticker).ok();
+                                    det.mae_mfe = darwin::estimate_mae_mfe(&conn, ticker).ok();
+                                } // release conn
+                                if let Ok(conn) = cache.connection() {
+                                    det.sizing_efficiency = darwin::get_sizing_efficiency(&conn, ticker).unwrap_or_default();
+                                    det.symbol_rotation = darwin::get_symbol_rotation(&conn, ticker).unwrap_or_default();
+                                    det.open_positions = darwin::get_darwin_open_positions(&conn, ticker).unwrap_or_default();
+                                    det.pyramiding = darwin::analyze_pyramiding(&conn, ticker).unwrap_or_default();
+                                    det.bursts = darwin::detect_trading_bursts(&conn, ticker).unwrap_or_default();
+                                    det.autocorrelation = darwin::compute_trade_autocorrelation(&conn, ticker).ok();
+                                    det.recent_deals = darwin::get_darwin_deals(&conn, ticker, None, Some(20)).unwrap_or_default();
+                                    det.closed_positions = darwin::get_darwin_positions(&conn, ticker, None, Some(20)).unwrap_or_default();
+                                    det.equity_snapshots = darwin::get_equity_history(&conn, ticker, 10).unwrap_or_default();
+                                    det.benchmark = darwin::compare_to_benchmark(&conn, ticker, &data.daily_returns).ok();
+                                    if let Some(ref summary) = det.summary {
+                                        let _ = darwin::record_equity_snapshot(&conn, ticker, summary.final_balance, 0.0, 0);
+                                    }
+                                    det.sector_classification = det.pnl_by_symbol.iter().take(10)
+                                        .map(|(sym, _, _, _, _)| (sym.clone(), darwin::classify_sector(sym).to_string()))
+                                        .collect();
+                                } // release conn
+                                if let Ok(conn) = cache.connection() {
+                                    if let Ok(daily) = darwin::get_daily_returns(&conn, ticker) {
+                                        if !daily.is_empty() {
+                                            det.var_stats = Some(darwin::compute_var(&daily));
+                                            det.monthly_returns = darwin::get_monthly_returns(&daily);
+                                        }
+                                    }
+                                } // release conn
+                                tracing::info!("BG: account {} detail {}ms", ticker, t.elapsed().as_millis());
+                                details.push(det);
+                                // Send incrementally after each account so UI updates progressively
+                                data.account_details = details.clone();
+                                let _ = bg_tx.send(data.clone());
+                            }
+                            data.account_details = details;
+                        }
+
+                        // Phase 6: tax lots per account
+                        if let Ok(conn) = cache.connection() {
+                            let mut tax = Vec::new();
+                            for acct in &data.accounts {
+                                if let Ok(t) = darwin::compute_tax_lots(&conn, &acct.darwin_ticker, 2026) {
+                                    tax.push((acct.darwin_ticker.clone(), t));
+                                }
+                            }
+                            data.tax_lots = tax;
+                        }
+
+                        // Phase 7: DARWIN risk alerts
+                        if let Ok(conn) = cache.connection() {
+                            data.darwin_alerts = darwin::check_alerts(&conn).unwrap_or_default();
+                        }
+
+                        // Phase 8: SEC insider trades for portfolio symbols
+                        if let Ok(conn) = cache.connection() {
+                            let mut insider_map = std::collections::HashMap::new();
+                            // Gather all symbols from exposure
+                            let syms: Vec<String> = data.exposure.iter().map(|e| e.symbol.clone()).collect();
+                            for sym in &syms {
+                                if let Ok(trades) = sec_filing::get_insider_trades(&conn, Some(sym), 90) {
+                                    if !trades.is_empty() {
+                                        insider_map.insert(sym.clone(), trades);
+                                    }
+                                }
+                            }
+                            data.insider_trades = insider_map;
+                        }
+
+                        // Mark full refresh complete
+                        full_refresh_done = true;
+                        last_full_refresh = std::time::Instant::now();
+                        tracing::info!("BG: full refresh complete in {}ms — next in {}s",
+                            phase_start.elapsed().as_millis(), FULL_REFRESH_INTERVAL.as_secs());
+
+                        // Send to UI thread (non-blocking — drops if channel full)
+                        let _ = bg_tx.send(data);
+                    }
                 }
             });
         }
 
-        app.load_session();
-
-        // Load credentials from system keyring (libsecret/Keychain)
-        if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_API_KEY) { app.broker_api_key = v; }
-        if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_SECRET) { app.broker_secret = v; }
-        if let Ok(Some(v)) = keyring::load(keyring::keys::FINNHUB_KEY) { app.finnhub_key = v; }
-        if let Ok(Some(v)) = keyring::load(keyring::keys::TT_USERNAME) { app.tt_username = v; }
-        if let Ok(Some(v)) = keyring::load(keyring::keys::TT_PASSWORD) { app.tt_password = v; }
-        if !app.broker_api_key.is_empty() {
-            app.log.push_back(LogEntry::info("Credentials loaded from system keyring"));
+        // Initialize GPU compute from eframe's wgpu device (available when renderer = Wgpu)
+        if let Some(ref render_state) = _cc.wgpu_render_state {
+            app.gpu_darwin = Some(gpu_compute::GpuDarwinAnalytics::new(
+                Arc::new(render_state.device.clone()),
+                Arc::new(render_state.queue.clone()),
+            ));
+            app.log.push_back(LogEntry::info("GPU DARWIN analytics initialized"));
         }
+
+        // Session load, credentials, and DARWIN auto-import are deferred to update()
+        // after the async cache open completes (see cache_loaded flag in update()).
         app
     }
 
@@ -4870,6 +5432,30 @@ impl TyphooNApp {
             "SEC"           => self.show_sec = true,
             "INSIDER"       => self.show_insider = true,
             "FUNDAMENTALS"  => self.show_fundamentals = true,
+            "EV"            => self.show_ev_scanner = true,
+            "EARNINGS"      => self.show_earnings_calendar = true,
+            "DIVIDENDS"     => self.show_dividend_calendar = true,
+            "EVSCRAPE"      => {
+                let mut db_path = dirs_home();
+                db_path.push("cache");
+                db_path.push("typhoon_cache.db");
+                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path });
+                self.log.push_back(LogEntry::info("Fundamentals scrape started for all MT5 symbols..."));
+            }
+            "MT5SYNC"       => {
+                let paths: Vec<String> = self.mt5_db_paths.iter()
+                    .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
+                    .cloned().collect();
+                if paths.is_empty() {
+                    self.log.push_back(LogEntry::warn("No valid MT5 database paths configured — set them in Settings"));
+                } else {
+                    let mut db_path = dirs_home();
+                    db_path.push("cache");
+                    db_path.push("typhoon_cache.db");
+                    let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths.clone(), target: db_path });
+                    self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", paths.len())));
+                }
+            }
             "ANALYST"       => self.show_analyst = true,
             "HOLDERS"       => self.show_holders = true,
             "CORRELATION"   => self.show_correlation = true,
@@ -4914,6 +5500,25 @@ impl TyphooNApp {
             "REBALANCE"     => { self.darwin_view = 18; self.show_darwin_portfolio = true; } // Optimal Allocation view
             "DARWIN_TRADES" => { self.log.push_back(LogEntry::info("DARWIN trade markers: open DARWIN Accounts for deal history")); self.show_darwin_accounts = true; }
             "DSCORE"        => { self.show_var_mult = true; }
+            "DARWIN_BROWSER" => { self.show_darwin_browser = true; }
+            "DARWIN_SCAN" => {
+                if self.darwin_ftp_dir.is_empty() {
+                    self.log.push_back(LogEntry::warn("Set Darwinex FTP Dir in Settings first"));
+                } else {
+                    let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                    self.log.push_back(LogEntry::info("DARWIN FTP universe scan started (min 90 trading days)..."));
+                }
+            }
+            "GPU_SCAN" => {
+                if self.darwin_ftp_dir.is_empty() {
+                    self.log.push_back(LogEntry::warn("Set Darwinex FTP Dir in Settings first"));
+                } else if self.gpu_darwin.is_none() {
+                    self.log.push_back(LogEntry::warn("GPU not available"));
+                } else {
+                    let _ = self.broker_tx.send(BrokerCmd::DarwinGpuScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                    self.log.push_back(LogEntry::info("GPU DARWIN scan started..."));
+                }
+            }
             // Drawing tools
             "DRAW_HLINE"     => self.draw_mode = DrawMode::PlacingHLine,
             "DRAW_TRENDLINE" => self.draw_mode = DrawMode::PlacingTrendP1,
@@ -5084,6 +5689,9 @@ impl TyphooNApp {
                 RightTab::Risk => "risk",
             },
             "darwin_view": self.darwin_view,
+            "darwin_xlsx_dir": self.darwin_xlsx_dir,
+            "mt5_db_paths": self.mt5_db_paths,
+            "darwin_ftp_dir": self.darwin_ftp_dir,
             "finnhub_key": self.finnhub_key,
             "broker_api_key": self.broker_api_key,
             "broker_secret": self.broker_secret,
@@ -5152,9 +5760,9 @@ impl TyphooNApp {
                             chart.chart_type = ct;
                             self.charts.push(chart);
                         }
-                        // Reload all charts from cache
+                        // Load only the active chart — others load lazily on tab switch
                         if let Some(ref cache) = self.cache {
-                            for chart in &mut self.charts {
+                            if let Some(chart) = self.charts.get_mut(self.active_tab) {
                                 chart.load(cache, &mut self.log);
                             }
                         }
@@ -5215,6 +5823,13 @@ impl TyphooNApp {
                 };
                 // Restore DARWIN view
                 if let Some(dv) = v["darwin_view"].as_u64() { self.darwin_view = dv as usize; }
+                if let Some(dir) = v["darwin_xlsx_dir"].as_str() { self.darwin_xlsx_dir = dir.to_string(); }
+                if let Some(paths) = v["mt5_db_paths"].as_array() {
+                    for (i, p) in paths.iter().enumerate().take(4) {
+                        if let Some(s) = p.as_str() { self.mt5_db_paths[i] = s.to_string(); }
+                    }
+                }
+                if let Some(ftp) = v["darwin_ftp_dir"].as_str() { self.darwin_ftp_dir = ftp.to_string(); }
                 // Restore API keys
                 if let Some(fk) = v["finnhub_key"].as_str() { self.finnhub_key = fk.to_string(); }
                 if let Some(ak) = v["broker_api_key"].as_str() { self.broker_api_key = ak.to_string(); }
@@ -5300,6 +5915,10 @@ impl TyphooNApp {
         self.show_alerts = false;
         self.show_order_entry = false;
         self.show_crypto_backfill = false;
+        self.show_darwin_browser = false;
+        self.show_ev_scanner = false;
+        self.show_earnings_calendar = false;
+        self.show_dividend_calendar = false;
     }
 
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
@@ -5334,14 +5953,6 @@ impl TyphooNApp {
     }
 
     fn draw_floating_windows(&mut self, ctx: &egui::Context) {
-        // Performance: gate ALL DB queries to every 8th frame (~2s at 4 FPS).
-        // On non-db frames, self.cache is temporarily set to None so all
-        // `if let Some(ref cache) = self.cache` blocks are skipped.
-        // Windows render their chrome but DB-querying content is empty.
-        let db_ok = self.frame_count % 8 == 0 || self.frame_count < 8;
-        let real_cache = if !db_ok { self.cache.take() } else { None };
-        // After this block, self.cache is None on non-db frames
-        // (restored at the end of draw_floating_windows)
 
         // Settings
         if self.show_settings {
@@ -5417,21 +6028,99 @@ impl TyphooNApp {
                     ui.heading("Data Sources");
                     ui.separator();
                     ui.label("SQLite cache: ~/.config/typhoon-terminal/cache/typhoon_cache.db");
-                    if let Ok(bg) = self.bg_darwin.try_lock() {
-                        if let Some((rows, kv, size)) = bg.cache_stats {
-                            ui.label(format!("Bar entries: {}  |  KV entries: {}  |  DB size: {} KB", rows, kv, size / 1024));
-                        }
+                    if let Some((rows, kv, size)) = self.bg.cache_stats {
+                        ui.label(format!("Bar entries: {}  |  KV entries: {}  |  DB size: {} KB", rows, kv, size / 1024));
                     }
-                    ui.label("MT5: view-only data via BarCacheWriter EA → SQLite");
                     ui.label("Alpaca: REST API + WebSocket streaming");
                     ui.label("Finnhub: News, Analyst, Insider Sentiment, Short Interest");
                     ui.label("SEC EDGAR: Filing scraper + Form 4 insider trades");
+
+                    ui.add_space(10.0);
+                    ui.heading("MT5 BarCacheWriter Sources");
+                    ui.separator();
+                    ui.label(egui::RichText::new("Paths to typhoon_mt5_cache.db files written by BarCacheWriter EA.").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("Data is synced into the main cache on startup and on demand.").color(AXIS_TEXT).small());
+                    for i in 0..4 {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("MT5 #{}:", i + 1));
+                            ui.add(egui::TextEdit::singleline(&mut self.mt5_db_paths[i]).desired_width(400.0).hint_text("/path/to/typhoon_mt5_cache.db"));
+                            // Show status indicator
+                            if !self.mt5_db_paths[i].is_empty() {
+                                let exists = std::path::Path::new(&self.mt5_db_paths[i]).exists();
+                                let (icon, col) = if exists { ("\u{25CF}", UP) } else { ("\u{25CF}", DOWN) };
+                                ui.label(egui::RichText::new(icon).color(col));
+                            }
+                        });
+                    }
+                    if ui.button("Sync MT5 Data Now").clicked() {
+                        let paths: Vec<String> = self.mt5_db_paths.iter()
+                            .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
+                            .cloned().collect();
+                        if paths.is_empty() {
+                            self.log.push_back(LogEntry::warn("No valid MT5 database paths configured"));
+                        } else {
+                            let mut db_path = dirs_home();
+                            db_path.push("cache");
+                            db_path.push("typhoon_cache.db");
+                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths, target: db_path });
+                            self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", self.mt5_db_paths.iter().filter(|p| !p.is_empty()).count())));
+                        }
+                    }
 
                     ui.add_space(10.0);
                     ui.heading("Darwinex");
                     ui.separator();
                     ui.label("VaR corridor: 3.25% – 6.5%");
                     ui.label("Correlation limit: 0.95 / 45d");
+                    ui.label("Margin accounts: 100%");
+                    ui.add_space(5.0);
+                    ui.horizontal(|ui| {
+                        ui.label("FTP Dir:");
+                        ui.add(egui::TextEdit::singleline(&mut self.darwin_ftp_dir).desired_width(300.0).hint_text("/path/to/darwinex/ftp"));
+                        if ui.button("Browse").clicked() {
+                            if let Some(dir) = rfd::FileDialog::new()
+                                .set_title("Select Darwinex FTP Directory")
+                                .pick_folder()
+                            {
+                                self.darwin_ftp_dir = dir.display().to_string();
+                            }
+                        }
+                        if !self.darwin_ftp_dir.is_empty() {
+                            let exists = std::path::Path::new(&self.darwin_ftp_dir).is_dir();
+                            let (icon, col) = if exists { ("\u{25CF}", UP) } else { ("\u{25CF}", DOWN) };
+                            ui.label(egui::RichText::new(icon).color(col));
+                        }
+                    });
+                    ui.label(egui::RichText::new("Contains DARWIN CSV data for FTP scanner, D-Score, investor flow, price series.").color(AXIS_TEXT).small());
+
+                    ui.add_space(10.0);
+                    ui.heading("DARWIN XLSX Import");
+                    ui.separator();
+                    ui.label(egui::RichText::new("Directory containing DARWIN XLSX files (e.g. THA.xlsx, THB.xlsx)").color(AXIS_TEXT).small());
+                    ui.horizontal(|ui| {
+                        ui.label("XLSX Dir:");
+                        ui.add(egui::TextEdit::singleline(&mut self.darwin_xlsx_dir).desired_width(250.0).hint_text("/path/to/darwin/xlsx"));
+                        if ui.button("Browse").clicked() {
+                            if let Some(dir) = rfd::FileDialog::new()
+                                .set_title("Select DARWIN XLSX Directory")
+                                .pick_folder()
+                            {
+                                self.darwin_xlsx_dir = dir.display().to_string();
+                            }
+                        }
+                    });
+                    if !self.darwin_xlsx_dir.is_empty() {
+                        if ui.button("Import All XLSX Now").clicked() {
+                            let mut db_path = dirs_home();
+                            db_path.push("cache");
+                            db_path.push("typhoon_cache.db");
+                            let _ = self.broker_tx.send(BrokerCmd::DarwinImportAll {
+                                dir: PathBuf::from(&self.darwin_xlsx_dir),
+                                db_path,
+                            });
+                            self.log.push_back(LogEntry::info(format!("DARWIN XLSX import started from {}", self.darwin_xlsx_dir)));
+                        }
+                    }
                     ui.label("Margin accounts: 100%");
 
                     ui.add_space(10.0);
@@ -5591,7 +6280,7 @@ impl TyphooNApp {
                 });
         }
 
-        // DARWIN Accounts — wired to engine darwin.rs
+        // DARWIN Accounts — reads from self.bg (background-computed data)
         if self.show_darwin_accounts {
             egui::Window::new("DARWIN Accounts")
                 .open(&mut self.show_darwin_accounts)
@@ -5599,498 +6288,475 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("Account Overview");
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let _ = darwin::create_darwin_tables(&conn);
-                            match darwin::list_darwin_accounts(&conn) {
-                                Ok(accounts) if !accounts.is_empty() => {
-                                    egui::Grid::new("darwin_acct_grid").striped(true).num_columns(6).show(ui, |ui| {
-                                        ui.strong("DARWIN"); ui.strong("MT5"); ui.strong("Deals"); ui.strong("Positions"); ui.strong("Balance"); ui.strong("P&L");
+                    // If bg data hasn't arrived yet but cache is available, show a quick count
+                    if self.bg.accounts.is_empty() && self.cache.is_some() {
+                        ui.label(egui::RichText::new("Loading DARWIN account data...").color(AXIS_TEXT));
+                        ui.label(egui::RichText::new("Background thread is computing analytics. This takes ~30-60s on first load.").color(AXIS_TEXT).small());
+                    }
+                    if !self.bg.accounts.is_empty() {
+                        egui::Grid::new("darwin_acct_grid").striped(true).num_columns(6).show(ui, |ui| {
+                            ui.strong("DARWIN"); ui.strong("MT5"); ui.strong("Deals"); ui.strong("Positions"); ui.strong("Balance"); ui.strong("P&L");
+                            ui.end_row();
+                            // Show from account_details if available, otherwise from accounts (basic info)
+                            if !self.bg.account_details.is_empty() {
+                                for det in &self.bg.account_details {
+                                    if let Some(ref summary) = det.summary {
+                                        let acct = self.bg.accounts.iter().find(|a| a.darwin_ticker == det.ticker);
+                                        ui.label(&det.ticker);
+                                        ui.label(acct.map(|a| a.mt5_account.as_str()).unwrap_or(""));
+                                        ui.label(format!("{}", summary.win_count + summary.loss_count));
+                                        ui.label(format!("{}", acct.map(|a| a.position_count).unwrap_or(0)));
+                                        ui.label(format!("${:.2}", summary.final_balance));
+                                        let pnl_color = if summary.total_profit >= 0.0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("${:.2}", summary.total_profit)).color(pnl_color));
                                         ui.end_row();
-                                        for acct in &accounts {
-                                            if let Ok(summary) = darwin::get_darwin_summary(&conn, &acct.darwin_ticker) {
-                                                ui.label(&acct.darwin_ticker);
-                                                ui.label(&acct.mt5_account);
-                                                ui.label(format!("{}", summary.win_count + summary.loss_count));
-                                                ui.label(format!("{}", acct.position_count));
-                                                ui.label(format!("${:.2}", summary.final_balance));
-                                                let pnl_color = if summary.total_profit >= 0.0 { UP } else { DOWN };
-                                                ui.label(egui::RichText::new(format!("${:.2}", summary.total_profit)).color(pnl_color));
+                                    }
+                                }
+                            } else {
+                                // Fallback: show basic account info while bg computes details
+                                for acct in &self.bg.accounts {
+                                    ui.label(&acct.darwin_ticker);
+                                    ui.label(&acct.mt5_account);
+                                    ui.label(format!("{}", acct.deal_count));
+                                    ui.label(format!("{}", acct.position_count));
+                                    ui.label(format!("${:.0}", acct.initial_balance));
+                                    ui.label(egui::RichText::new("computing...").color(AXIS_TEXT));
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                        ui.add_space(10.0);
+                        // Per-account details (expandable) — reads from bg.account_details
+                        for det in &self.bg.account_details {
+                            if let Some(ref summary) = det.summary {
+                            ui.collapsing(format!("{} — Details", det.ticker), |ui| {
+                                egui::Grid::new(format!("det_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                    ui.label("Win Rate:"); ui.label(format!("{:.1}%", summary.win_rate * 100.0));
+                                    ui.end_row();
+                                    ui.label("Profit Factor:"); ui.label(format!("{:.2}", summary.profit_factor));
+                                    ui.end_row();
+                                    ui.label("Max Drawdown:"); ui.label(format!("{:.2}%", summary.max_drawdown_pct));
+                                    ui.end_row();
+                                    ui.label("Total Commission:"); ui.label(format!("${:.2}", summary.total_commission));
+                                    ui.end_row();
+                                    ui.label("Total Swap:"); ui.label(format!("${:.2}", summary.total_swap));
+                                    ui.end_row();
+                                    ui.label("Symbols Traded:"); ui.label(format!("{}", summary.symbols_traded.len()));
+                                    ui.end_row();
+                                });
+                                // VaR stats
+                                if let Some(ref var_stats) = det.var_stats {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Risk Metrics").strong());
+                                    egui::Grid::new(format!("var_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                        ui.label("VaR 95%:"); ui.label(format!("${:.2}", var_stats.var_95));
+                                        ui.end_row();
+                                        ui.label("VaR 99%:"); ui.label(format!("${:.2}", var_stats.var_99));
+                                        ui.end_row();
+                                        ui.label("Sharpe:"); ui.label(format!("{:.3}", var_stats.sharpe));
+                                        ui.end_row();
+                                        ui.label("Sortino:"); ui.label(format!("{:.3}", var_stats.sortino));
+                                        ui.end_row();
+                                        ui.label("Daily Vol:"); ui.label(format!("{:.4}", var_stats.daily_vol));
+                                        ui.end_row();
+                                        ui.label("Best Day:"); ui.label(format!("${:.2}", var_stats.best_day));
+                                        ui.end_row();
+                                        ui.label("Worst Day:"); ui.label(format!("${:.2}", var_stats.worst_day));
+                                        ui.end_row();
+                                    });
+                                    // Monthly returns
+                                    if !det.monthly_returns.is_empty() {
+                                        ui.add_space(5.0);
+                                        ui.label(egui::RichText::new("Monthly Returns").strong());
+                                        egui::Grid::new(format!("mo_{}", det.ticker)).striped(true).num_columns(3).show(ui, |ui| {
+                                            ui.strong("Period"); ui.strong("P&L"); ui.strong("Return");
+                                            ui.end_row();
+                                            for m in det.monthly_returns.iter().rev().take(12) {
+                                                ui.label(format!("{}-{:02}", m.year, m.month));
+                                                let c = if m.pnl >= 0.0 { UP } else { DOWN };
+                                                ui.label(egui::RichText::new(format!("${:.2}", m.pnl)).color(c));
+                                                ui.label(egui::RichText::new(format!("{:.2}%", m.return_pct)).color(c));
                                                 ui.end_row();
                                             }
+                                        });
+                                    }
+                                }
+                                // Streak analysis
+                                if let Some(ref streaks) = det.streaks {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Streaks").strong());
+                                    egui::Grid::new(format!("str_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                        ui.label("Max Win Streak:"); ui.label(egui::RichText::new(format!("{}", streaks.max_win_streak)).color(UP));
+                                        ui.end_row();
+                                        ui.label("Max Loss Streak:"); ui.label(egui::RichText::new(format!("{}", streaks.max_loss_streak)).color(DOWN));
+                                        ui.end_row();
+                                        ui.label("Current Streak:");
+                                        let sc = if streaks.current_streak >= 0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("{}", streaks.current_streak)).color(sc));
+                                        ui.end_row();
+                                        ui.label("Avg Win Streak:"); ui.label(format!("{:.1}", streaks.avg_win_streak));
+                                        ui.end_row();
+                                        ui.label("Avg Loss Streak:"); ui.label(format!("{:.1}", streaks.avg_loss_streak));
+                                        ui.end_row();
+                                    });
+                                }
+                                // Hourly P&L
+                                if !det.hourly_pnl.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Hourly P&L").strong());
+                                    egui::Grid::new(format!("hr_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                        ui.strong("Hour"); ui.strong("P&L"); ui.strong("Trades"); ui.strong("Win%");
+                                        ui.end_row();
+                                        for h in &det.hourly_pnl {
+                                            ui.label(format!("{:02}:00", h.hour));
+                                            let c = if h.total_pnl >= 0.0 { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("${:.2}", h.total_pnl)).color(c));
+                                            ui.label(format!("{}", h.trade_count));
+                                            let wr = if h.trade_count > 0 { h.win_count as f64 / h.trade_count as f64 * 100.0 } else { 0.0 };
+                                            ui.label(format!("{:.0}%", wr));
+                                            ui.end_row();
                                         }
                                     });
-                                    ui.add_space(10.0);
-                                    // Per-account details (expandable)
-                                    // Performance: only query per-account details on db_ok frames
-                                    if db_ok { for acct in &accounts {
-                                        if let Ok(summary) = darwin::get_darwin_summary(&conn, &acct.darwin_ticker) {
-                                            ui.collapsing(format!("{} — Details", acct.darwin_ticker), |ui| {
-                                                egui::Grid::new(format!("det_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                                    ui.label("Win Rate:"); ui.label(format!("{:.1}%", summary.win_rate * 100.0));
-                                                    ui.end_row();
-                                                    ui.label("Profit Factor:"); ui.label(format!("{:.2}", summary.profit_factor));
-                                                    ui.end_row();
-                                                    ui.label("Max Drawdown:"); ui.label(format!("{:.2}%", summary.max_drawdown_pct));
-                                                    ui.end_row();
-                                                    ui.label("Total Commission:"); ui.label(format!("${:.2}", summary.total_commission));
-                                                    ui.end_row();
-                                                    ui.label("Total Swap:"); ui.label(format!("${:.2}", summary.total_swap));
-                                                    ui.end_row();
-                                                    ui.label("Symbols Traded:"); ui.label(format!("{}", summary.symbols_traded.len()));
-                                                    ui.end_row();
-                                                });
-                                                // VaR stats
-                                                if let Ok(daily) = darwin::get_daily_returns(&conn, &acct.darwin_ticker) {
-                                                    if !daily.is_empty() {
-                                                        let var_stats = darwin::compute_var(&daily);
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Risk Metrics").strong());
-                                                        egui::Grid::new(format!("var_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                                            ui.label("VaR 95%:"); ui.label(format!("${:.2}", var_stats.var_95));
-                                                            ui.end_row();
-                                                            ui.label("VaR 99%:"); ui.label(format!("${:.2}", var_stats.var_99));
-                                                            ui.end_row();
-                                                            ui.label("Sharpe:"); ui.label(format!("{:.3}", var_stats.sharpe));
-                                                            ui.end_row();
-                                                            ui.label("Sortino:"); ui.label(format!("{:.3}", var_stats.sortino));
-                                                            ui.end_row();
-                                                            ui.label("Daily Vol:"); ui.label(format!("{:.4}", var_stats.daily_vol));
-                                                            ui.end_row();
-                                                            ui.label("Best Day:"); ui.label(format!("${:.2}", var_stats.best_day));
-                                                            ui.end_row();
-                                                            ui.label("Worst Day:"); ui.label(format!("${:.2}", var_stats.worst_day));
-                                                            ui.end_row();
-                                                        });
-                                                        // Monthly returns
-                                                        let monthly = darwin::get_monthly_returns(&daily);
-                                                        if !monthly.is_empty() {
-                                                            ui.add_space(5.0);
-                                                            ui.label(egui::RichText::new("Monthly Returns").strong());
-                                                            egui::Grid::new(format!("mo_{}", acct.darwin_ticker)).striped(true).num_columns(3).show(ui, |ui| {
-                                                                ui.strong("Period"); ui.strong("P&L"); ui.strong("Return");
-                                                                ui.end_row();
-                                                                for m in monthly.iter().rev().take(12) {
-                                                                    ui.label(format!("{}-{:02}", m.year, m.month));
-                                                                    let c = if m.pnl >= 0.0 { UP } else { DOWN };
-                                                                    ui.label(egui::RichText::new(format!("${:.2}", m.pnl)).color(c));
-                                                                    ui.label(egui::RichText::new(format!("{:.2}%", m.return_pct)).color(c));
-                                                                    ui.end_row();
-                                                                }
-                                                            });
-                                                        }
-                                                    }
-                                                }
-                                                // Streak analysis
-                                                if let Ok(streaks) = darwin::get_streak_analysis(&conn, &acct.darwin_ticker) {
-                                                    ui.add_space(5.0);
-                                                    ui.label(egui::RichText::new("Streaks").strong());
-                                                    egui::Grid::new(format!("str_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                                        ui.label("Max Win Streak:"); ui.label(egui::RichText::new(format!("{}", streaks.max_win_streak)).color(UP));
-                                                        ui.end_row();
-                                                        ui.label("Max Loss Streak:"); ui.label(egui::RichText::new(format!("{}", streaks.max_loss_streak)).color(DOWN));
-                                                        ui.end_row();
-                                                        ui.label("Current Streak:");
-                                                        let sc = if streaks.current_streak >= 0 { UP } else { DOWN };
-                                                        ui.label(egui::RichText::new(format!("{}", streaks.current_streak)).color(sc));
-                                                        ui.end_row();
-                                                        ui.label("Avg Win Streak:"); ui.label(format!("{:.1}", streaks.avg_win_streak));
-                                                        ui.end_row();
-                                                        ui.label("Avg Loss Streak:"); ui.label(format!("{:.1}", streaks.avg_loss_streak));
-                                                        ui.end_row();
-                                                    });
-                                                }
-                                                // Hourly P&L
-                                                if let Ok(hourly) = darwin::get_hourly_pnl(&conn, &acct.darwin_ticker) {
-                                                    if !hourly.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Hourly P&L").strong());
-                                                        egui::Grid::new(format!("hr_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                                            ui.strong("Hour"); ui.strong("P&L"); ui.strong("Trades"); ui.strong("Win%");
-                                                            ui.end_row();
-                                                            for h in &hourly {
-                                                                ui.label(format!("{:02}:00", h.hour));
-                                                                let c = if h.total_pnl >= 0.0 { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(format!("${:.2}", h.total_pnl)).color(c));
-                                                                ui.label(format!("{}", h.trade_count));
-                                                                let wr = if h.trade_count > 0 { h.win_count as f64 / h.trade_count as f64 * 100.0 } else { 0.0 };
-                                                                ui.label(format!("{:.0}%", wr));
-                                                                ui.end_row();
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                                // Per-DARWIN equity curve
-                                                if let Ok(eq) = darwin::get_darwin_equity_curve(&conn, &acct.darwin_ticker) {
-                                                    if eq.len() > 2 {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Equity Curve").strong());
-                                                        let points: PlotPoints = PlotPoints::new(
-                                                            eq.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
-                                                        );
-                                                        let line = Line::new("Equity", points).color(ACCENT);
-                                                        Plot::new(format!("eq_{}", acct.darwin_ticker))
-                                                            .height(120.0)
-                                                            .allow_drag(false)
-                                                            .allow_zoom(false)
-                                                            .show(ui, |plot_ui| { plot_ui.line(line); });
-                                                    }
-                                                }
-                                                // P&L by Symbol
-                                                if let Ok(pnl_sym) = darwin::get_darwin_pnl_by_symbol(&conn, &acct.darwin_ticker) {
-                                                    if !pnl_sym.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("P&L by Symbol").strong());
-                                                        egui::Grid::new(format!("sym_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                                            ui.strong("Symbol"); ui.strong("P&L"); ui.strong("Comm"); ui.strong("Trades");
-                                                            ui.end_row();
-                                                            for (sym, pnl, comm, _swap, count) in &pnl_sym {
-                                                                ui.label(sym);
-                                                                let c = if *pnl >= 0.0 { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(format!("${:.2}", pnl)).color(c));
-                                                                ui.label(format!("${:.2}", comm));
-                                                                ui.label(format!("{}", count));
-                                                                ui.end_row();
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                                // Day of Week P&L
-                                                if let Ok(dow) = darwin::get_day_of_week_pnl(&conn, &acct.darwin_ticker) {
-                                                    if !dow.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Day of Week").strong());
-                                                        egui::Grid::new(format!("dow_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                                            ui.strong("Day"); ui.strong("P&L"); ui.strong("Win%"); ui.strong("Trades");
-                                                            ui.end_row();
-                                                            for d in &dow {
-                                                                ui.label(&d.day);
-                                                                let c = if d.total_pnl >= 0.0 { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(format!("${:.2}", d.total_pnl)).color(c));
-                                                                ui.label(format!("{:.0}%", d.win_rate));
-                                                                ui.label(format!("{}", d.trade_count));
-                                                                ui.end_row();
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                                // Hold Time Stats
-                                                if let Ok(ht) = darwin::get_hold_time_stats(&conn, &acct.darwin_ticker) {
-                                                    ui.add_space(5.0);
-                                                    ui.label(egui::RichText::new("Hold Time").strong());
-                                                    ui.label(format!("Avg: {:.1}h  Med: {:.1}h  Min: {:.1}h  Max: {:.1}h", ht.avg_hold_hours, ht.median_hold_hours, ht.min_hold_hours, ht.max_hold_hours));
-                                                    if !ht.buckets.is_empty() {
-                                                        egui::Grid::new(format!("ht_{}", acct.darwin_ticker)).striped(true).num_columns(3).show(ui, |ui| {
-                                                            ui.strong("Bucket"); ui.strong("Trades"); ui.strong("Avg P&L");
-                                                            ui.end_row();
-                                                            for (label, count, avg_pnl) in &ht.buckets {
-                                                                ui.label(label);
-                                                                ui.label(format!("{}", count));
-                                                                let c = if *avg_pnl >= 0.0 { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(format!("${:.2}", avg_pnl)).color(c));
-                                                                ui.end_row();
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                                // Kelly Criterion
-                                                if let Ok(kelly) = darwin::compute_kelly(&conn, &acct.darwin_ticker) {
-                                                    ui.add_space(5.0);
-                                                    ui.label(egui::RichText::new("Kelly Criterion").strong());
-                                                    egui::Grid::new(format!("kelly_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                                        ui.label("Win Rate:"); ui.label(format!("{:.1}%", kelly.win_rate * 100.0)); ui.end_row();
-                                                        ui.label("Avg Win:"); ui.label(egui::RichText::new(format!("${:.2}", kelly.avg_win)).color(UP)); ui.end_row();
-                                                        ui.label("Avg Loss:"); ui.label(egui::RichText::new(format!("${:.2}", kelly.avg_loss)).color(DOWN)); ui.end_row();
-                                                        ui.label("Kelly %:"); ui.label(format!("{:.1}%", kelly.kelly_fraction * 100.0)); ui.end_row();
-                                                        ui.label("Half Kelly:"); ui.label(format!("{:.1}%", kelly.half_kelly * 100.0)); ui.end_row();
-                                                        ui.label("Optimal Risk:"); ui.label(format!("{:.1}%", kelly.optimal_risk_pct)); ui.end_row();
-                                                    });
-                                                }
-                                                // Cost Analysis
-                                                if let Ok(costs) = darwin::get_cost_analysis(&conn, &acct.darwin_ticker) {
-                                                    ui.add_space(5.0);
-                                                    ui.label(egui::RichText::new("Cost Analysis").strong());
-                                                    egui::Grid::new(format!("cost_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                                        ui.label("Total Commission:"); ui.label(egui::RichText::new(format!("${:.2}", costs.total_commission)).color(DOWN)); ui.end_row();
-                                                        ui.label("Total Swap:"); ui.label(format!("${:.2}", costs.total_swap)); ui.end_row();
-                                                        ui.label("Comm % of Equity:"); ui.label(format!("{:.2}%", costs.commission_pct_of_equity)); ui.end_row();
-                                                        ui.label("Avg Comm/Trade:"); ui.label(format!("${:.2}", costs.avg_commission_per_trade)); ui.end_row();
-                                                    });
-                                                }
-                                                // D-Score Estimate
-                                                if let Ok(ds) = darwin::estimate_dscore(&conn, &acct.darwin_ticker) {
-                                                    ui.add_space(5.0);
-                                                    ui.label(egui::RichText::new("D-Score Estimate").strong());
-                                                    egui::Grid::new(format!("ds_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                                        ui.label("Experience:"); ui.label(format!("{:.1}/10", ds.experience)); ui.end_row();
-                                                        ui.label("Risk Mgmt:"); ui.label(format!("{:.1}/10", ds.risk_mgmt)); ui.end_row();
-                                                        ui.label("Performance:"); ui.label(format!("{:.1}/10", ds.performance)); ui.end_row();
-                                                        ui.label("Market Timing:"); ui.label(format!("{:.1}/10", ds.market_timing)); ui.end_row();
-                                                        ui.label("Capacity:"); ui.label(format!("{:.1}/10", ds.capacity)); ui.end_row();
-                                                        ui.label("Scalability:"); ui.label(format!("{:.1}/10", ds.scalability)); ui.end_row();
-                                                        ui.label("Total D-Score:"); ui.label(egui::RichText::new(format!("{:.1}", ds.total_dscore)).strong()); ui.end_row();
-                                                    });
-                                                }
-                                                // Slippage Analysis
-                                                if let Ok(slip) = darwin::analyze_slippage(&conn, &acct.darwin_ticker) {
-                                                    ui.add_space(5.0);
-                                                    ui.label(egui::RichText::new("Slippage").strong());
-                                                    ui.label(format!("Avg: {:.4}%  Total cost: ${:.2}  Worst: {:.4}%", slip.avg_slippage_pct, slip.total_slippage_cost, slip.worst_slippage));
-                                                }
-                                                // MAE/MFE
-                                                if let Ok(mae) = darwin::estimate_mae_mfe(&conn, &acct.darwin_ticker) {
-                                                    ui.add_space(5.0);
-                                                    ui.label(egui::RichText::new("MAE / MFE").strong());
-                                                    ui.label(format!("Avg MAE: {:.2}%  Avg MFE: {:.2}%  Ratio: {:.2}", mae.avg_mae_pct, mae.avg_mfe_pct, mae.mae_mfe_ratio));
-                                                }
-                                                // Sizing Efficiency
-                                                if let Ok(sizing) = darwin::get_sizing_efficiency(&conn, &acct.darwin_ticker) {
-                                                    if !sizing.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Sizing Efficiency").strong());
-                                                        egui::Grid::new(format!("sz_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                                            ui.strong("Quartile"); ui.strong("Avg Vol"); ui.strong("Win%"); ui.strong("P&L");
-                                                            ui.end_row();
-                                                            for s in &sizing {
-                                                                ui.label(&s.quartile);
-                                                                ui.label(format!("{:.2}", s.avg_volume));
-                                                                ui.label(format!("{:.0}%", s.win_rate));
-                                                                let c = if s.total_pnl >= 0.0 { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(format!("${:.0}", s.total_pnl)).color(c));
-                                                                ui.end_row();
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                                // Symbol Rotation
-                                                if let Ok(rot) = darwin::get_symbol_rotation(&conn, &acct.darwin_ticker) {
-                                                    if !rot.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Symbol Rotation").strong());
-                                                        egui::Grid::new(format!("rot_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                                            ui.strong("Symbol"); ui.strong("Trades"); ui.strong("P&L"); ui.strong("Active");
-                                                            ui.end_row();
-                                                            for r in &rot {
-                                                                ui.label(&r.symbol);
-                                                                ui.label(format!("{}", r.trade_count));
-                                                                let c = if r.total_pnl >= 0.0 { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(format!("${:.0}", r.total_pnl)).color(c));
-                                                                ui.label(format!("{} mo", r.active_months));
-                                                                ui.end_row();
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                                // Open Positions (per-DARWIN)
-                                                if let Ok(pos) = darwin::get_darwin_open_positions(&conn, &acct.darwin_ticker) {
-                                                    if !pos.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new(format!("Open Positions ({})", pos.len())).strong());
-                                                        egui::Grid::new(format!("pos_{}", acct.darwin_ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                                            ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Price");
-                                                            ui.end_row();
-                                                            for p in &pos {
-                                                                ui.label(&p.symbol);
-                                                                let sc = if p.side == "buy" { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(&p.side).color(sc));
-                                                                ui.label(format!("{:.2}", p.total_volume));
-                                                                ui.label(format_price(p.avg_price));
-                                                                ui.end_row();
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                                // Pyramiding Analysis
-                                                if let Ok(pyra) = darwin::analyze_pyramiding(&conn, &acct.darwin_ticker) {
-                                                    if !pyra.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Pyramiding").strong());
-                                                        for p in &pyra {
-                                                            let c = if p.final_pnl >= 0.0 { UP } else { DOWN };
-                                                            ui.label(egui::RichText::new(format!("{}: {} adds ({}h avg), {} win/{} loss → ${:.0} [{}]",
-                                                                p.symbol, p.total_adds, p.avg_add_interval_hours as i64,
-                                                                p.adds_in_profit, p.adds_in_loss, p.final_pnl, p.strategy)).color(c).small());
-                                                        }
-                                                    }
-                                                }
-                                                // Trading Bursts
-                                                if let Ok(bursts) = darwin::detect_trading_bursts(&conn, &acct.darwin_ticker) {
-                                                    if !bursts.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Trading Bursts").strong());
-                                                        for b in bursts.iter().take(5) {
-                                                            let c = if b.total_pnl >= 0.0 { UP } else { DOWN };
-                                                            ui.label(egui::RichText::new(format!("{} → {}: {} trades ({:.1}/day) ${:.0}",
-                                                                b.start_date, b.end_date, b.trade_count, b.avg_trades_per_day, b.total_pnl)).color(c).small());
-                                                        }
-                                                    }
-                                                }
-                                                // Trade Autocorrelation
-                                                if let Ok(ac) = darwin::compute_trade_autocorrelation(&conn, &acct.darwin_ticker) {
-                                                    ui.add_space(5.0);
-                                                    ui.label(egui::RichText::new("Autocorrelation").strong());
-                                                    ui.label(format!("Lag1: {:.4}  Lag2: {:.4}  Lag3: {:.4}  Lag5: {:.4}", ac.lag1, ac.lag2, ac.lag3, ac.lag5));
-                                                    let rc = if ac.is_random { UP } else { egui::Color32::from_rgb(255, 200, 50) };
-                                                    ui.label(egui::RichText::new(&ac.interpretation).color(rc).small());
-                                                }
-                                                // Recent Deals (last 20)
-                                                if let Ok(deals) = darwin::get_darwin_deals(&conn, &acct.darwin_ticker, None, Some(20)) {
-                                                    if !deals.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new(format!("Recent Deals ({})", deals.len())).strong());
-                                                        egui::Grid::new(format!("deals_{}", acct.darwin_ticker)).striped(true).num_columns(5).show(ui, |ui| {
-                                                            ui.strong("Time"); ui.strong("Symbol"); ui.strong("Type"); ui.strong("Vol"); ui.strong("P&L");
-                                                            ui.end_row();
-                                                            for d in deals.iter().take(20) {
-                                                                ui.label(egui::RichText::new(&d.time).small());
-                                                                ui.label(egui::RichText::new(&d.symbol).small());
-                                                                let tc = if d.deal_type == "buy" { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(&d.deal_type).color(tc).small());
-                                                                ui.label(egui::RichText::new(format!("{:.2}", d.volume)).small());
-                                                                let pc = if d.profit >= 0.0 { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(format!("${:.2}", d.profit)).color(pc).small());
-                                                                ui.end_row();
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                                // Closed Positions (last 20)
-                                                if let Ok(positions) = darwin::get_darwin_positions(&conn, &acct.darwin_ticker, None, Some(20)) {
-                                                    if !positions.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new(format!("Recent Positions ({})", positions.len())).strong());
-                                                        egui::Grid::new(format!("cpos_{}", acct.darwin_ticker)).striped(true).num_columns(5).show(ui, |ui| {
-                                                            ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("P&L"); ui.strong("Comm");
-                                                            ui.end_row();
-                                                            for p in positions.iter().take(20) {
-                                                                ui.label(egui::RichText::new(&p.symbol).small());
-                                                                let sc = if p.pos_type == "buy" { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(&p.pos_type).color(sc).small());
-                                                                ui.label(egui::RichText::new(format!("{:.2}", p.volume)).small());
-                                                                let pc = if p.profit >= 0.0 { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(format!("${:.2}", p.profit)).color(pc).small());
-                                                                ui.label(egui::RichText::new(format!("${:.2}", p.commission)).small());
-                                                                ui.end_row();
-                                                            }
-                                                        });
-                                                    }
-                                                }
-                                                // Equity Snapshot History
-                                                if let Ok(snapshots) = darwin::get_equity_history(&conn, &acct.darwin_ticker, 10) {
-                                                    if !snapshots.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Equity Snapshots").strong());
-                                                        for snap in &snapshots {
-                                                            ui.label(egui::RichText::new(format!("Bal: ${:.0}  Unreal: ${:.0}  Float: ${:.0}  Pos: {}",
-                                                                snap.closed_balance, snap.unrealized_pnl, snap.floating_equity, snap.open_position_count)).small());
-                                                        }
-                                                    }
-                                                }
-                                                // Benchmark Comparison (using portfolio as benchmark)
-                                                if let Ok(port_daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                                    if let Ok(darwin_daily) = darwin::get_daily_returns(&conn, &acct.darwin_ticker) {
-                                                        if let Ok(bench) = darwin::compare_to_benchmark(&conn, &acct.darwin_ticker, &port_daily) {
-                                                            ui.add_space(5.0);
-                                                            ui.label(egui::RichText::new("vs Portfolio Benchmark").strong());
-                                                            egui::Grid::new(format!("bench_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                                                ui.label("Alpha:"); let ac = if bench.alpha >= 0.0 { UP } else { DOWN };
-                                                                ui.label(egui::RichText::new(format!("{:.4}", bench.alpha)).color(ac)); ui.end_row();
-                                                                ui.label("Beta:"); ui.label(format!("{:.4}", bench.beta)); ui.end_row();
-                                                                ui.label("Info Ratio:"); ui.label(format!("{:.3}", bench.information_ratio)); ui.end_row();
-                                                                ui.label("DARWIN Return:"); ui.label(format!("{:.2}%", bench.darwin_return)); ui.end_row();
-                                                                ui.label("Benchmark Return:"); ui.label(format!("{:.2}%", bench.benchmark_return)); ui.end_row();
-                                                            });
-                                                        }
-                                                        // Also compute full VaR
-                                                        if !darwin_daily.is_empty() {
-                                                            let full_var = darwin::compute_var_full(&darwin_daily);
-                                                            // (full_var is same type as compute_var — already shown above)
-                                                            let _ = full_var; // used for completeness
-                                                        }
-                                                    }
-                                                }
-                                                // Record equity snapshot (if we have data)
-                                                if let Ok(summary) = darwin::get_darwin_summary(&conn, &acct.darwin_ticker) {
-                                                    let _ = darwin::record_equity_snapshot(&conn, &acct.darwin_ticker, summary.final_balance, 0.0, 0);
-                                                }
-                                                // Sector classification (show sector for each symbol)
-                                                if let Ok(pnl_sym) = darwin::get_darwin_pnl_by_symbol(&conn, &acct.darwin_ticker) {
-                                                    if !pnl_sym.is_empty() {
-                                                        ui.add_space(5.0);
-                                                        ui.label(egui::RichText::new("Sector Classification").strong());
-                                                        for (sym, _, _, _, _) in pnl_sym.iter().take(10) {
-                                                            let sector = darwin::classify_sector(sym);
-                                                            ui.label(egui::RichText::new(format!("{}: {}", sym, sector)).small());
-                                                        }
-                                                    }
-                                                }
-                                            });
+                                }
+                                // Per-DARWIN equity curve
+                                if det.equity_curve.len() > 2 {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Equity Curve").strong());
+                                    let points: PlotPoints = PlotPoints::new(
+                                        det.equity_curve.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
+                                    );
+                                    let line = Line::new("Equity", points).color(ACCENT);
+                                    Plot::new(format!("eq_{}", det.ticker))
+                                        .height(120.0)
+                                        .allow_drag(false)
+                                        .allow_zoom(false)
+                                        .show(ui, |plot_ui| { plot_ui.line(line); });
+                                }
+                                // P&L by Symbol
+                                if !det.pnl_by_symbol.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("P&L by Symbol").strong());
+                                    egui::Grid::new(format!("sym_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                        ui.strong("Symbol"); ui.strong("P&L"); ui.strong("Comm"); ui.strong("Trades");
+                                        ui.end_row();
+                                        for (sym, pnl, comm, _swap, count) in &det.pnl_by_symbol {
+                                            ui.label(sym);
+                                            let c = if *pnl >= 0.0 { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("${:.2}", pnl)).color(c));
+                                            ui.label(format!("${:.2}", comm));
+                                            ui.label(format!("{}", count));
+                                            ui.end_row();
                                         }
-                                    } } // close for acct + if db_ok
+                                    });
                                 }
-                                Ok(_) => {
-                                    ui.label(egui::RichText::new("No DARWIN accounts imported yet.").color(AXIS_TEXT));
-                                    ui.label(egui::RichText::new("Export MT5 Trade History as XLSX, then import here.").color(AXIS_TEXT).small());
+                                // Day of Week P&L
+                                if !det.day_of_week.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Day of Week").strong());
+                                    egui::Grid::new(format!("dow_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                        ui.strong("Day"); ui.strong("P&L"); ui.strong("Win%"); ui.strong("Trades");
+                                        ui.end_row();
+                                        for d in &det.day_of_week {
+                                            ui.label(&d.day);
+                                            let c = if d.total_pnl >= 0.0 { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("${:.2}", d.total_pnl)).color(c));
+                                            ui.label(format!("{:.0}%", d.win_rate));
+                                            ui.label(format!("{}", d.trade_count));
+                                            ui.end_row();
+                                        }
+                                    });
                                 }
-                                Err(e) => {
-                                    ui.label(egui::RichText::new(format!("Error: {}", e)).color(egui::Color32::from_rgb(255, 80, 80)));
-                                }
-                            }
-                            // ── Tax Summary (current year) ──────────────
-                            ui.add_space(10.0);
-                            ui.separator();
-                            ui.heading("Tax Summary (2026)");
-                            if let Ok(accounts) = darwin::list_darwin_accounts(&conn) {
-                                for acct in &accounts {
-                                    if let Ok(tax) = darwin::compute_tax_lots(&conn, &acct.darwin_ticker, 2026) {
-                                        ui.label(egui::RichText::new(&acct.darwin_ticker).strong());
-                                        egui::Grid::new(format!("tax_{}", acct.darwin_ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                            ui.label("Short-term gains:"); ui.label(egui::RichText::new(format!("${:.2}", tax.short_term_gains)).color(UP)); ui.end_row();
-                                            ui.label("Short-term losses:"); ui.label(egui::RichText::new(format!("${:.2}", tax.short_term_losses)).color(DOWN)); ui.end_row();
-                                            ui.label("Long-term gains:"); ui.label(egui::RichText::new(format!("${:.2}", tax.long_term_gains)).color(UP)); ui.end_row();
-                                            ui.label("Long-term losses:"); ui.label(egui::RichText::new(format!("${:.2}", tax.long_term_losses)).color(DOWN)); ui.end_row();
-                                            let net_c = if tax.total_net >= 0.0 { UP } else { DOWN };
-                                            ui.label("Net Total:"); ui.label(egui::RichText::new(format!("${:.2}", tax.total_net)).color(net_c).strong()); ui.end_row();
+                                // Hold Time Stats
+                                if let Some(ref ht) = det.hold_time {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Hold Time").strong());
+                                    ui.label(format!("Avg: {:.1}h  Med: {:.1}h  Min: {:.1}h  Max: {:.1}h", ht.avg_hold_hours, ht.median_hold_hours, ht.min_hold_hours, ht.max_hold_hours));
+                                    if !ht.buckets.is_empty() {
+                                        egui::Grid::new(format!("ht_{}", det.ticker)).striped(true).num_columns(3).show(ui, |ui| {
+                                            ui.strong("Bucket"); ui.strong("Trades"); ui.strong("Avg P&L");
+                                            ui.end_row();
+                                            for (label, count, avg_pnl) in &ht.buckets {
+                                                ui.label(label);
+                                                ui.label(format!("{}", count));
+                                                let c = if *avg_pnl >= 0.0 { UP } else { DOWN };
+                                                ui.label(egui::RichText::new(format!("${:.2}", avg_pnl)).color(c));
+                                                ui.end_row();
+                                            }
                                         });
-                                        ui.add_space(4.0);
                                     }
                                 }
-                            }
-
-                            // ── XLSX Import section ──────────────────
-                            ui.add_space(10.0);
-                            ui.separator();
-                            ui.heading("Import DARWIN XLSX");
-                            ui.horizontal(|ui| {
-                                ui.label("DARWIN Ticker:");
-                                ui.add(egui::TextEdit::singleline(&mut self.darwin_import_ticker).desired_width(80.0));
+                                // Kelly Criterion
+                                if let Some(ref kelly) = det.kelly {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Kelly Criterion").strong());
+                                    egui::Grid::new(format!("kelly_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                        ui.label("Win Rate:"); ui.label(format!("{:.1}%", kelly.win_rate * 100.0)); ui.end_row();
+                                        ui.label("Avg Win:"); ui.label(egui::RichText::new(format!("${:.2}", kelly.avg_win)).color(UP)); ui.end_row();
+                                        ui.label("Avg Loss:"); ui.label(egui::RichText::new(format!("${:.2}", kelly.avg_loss)).color(DOWN)); ui.end_row();
+                                        ui.label("Kelly %:"); ui.label(format!("{:.1}%", kelly.kelly_fraction * 100.0)); ui.end_row();
+                                        ui.label("Half Kelly:"); ui.label(format!("{:.1}%", kelly.half_kelly * 100.0)); ui.end_row();
+                                        ui.label("Optimal Risk:"); ui.label(format!("{:.1}%", kelly.optimal_risk_pct)); ui.end_row();
+                                    });
+                                }
+                                // Cost Analysis
+                                if let Some(ref costs) = det.cost_analysis {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Cost Analysis").strong());
+                                    egui::Grid::new(format!("cost_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                        ui.label("Total Commission:"); ui.label(egui::RichText::new(format!("${:.2}", costs.total_commission)).color(DOWN)); ui.end_row();
+                                        ui.label("Total Swap:"); ui.label(format!("${:.2}", costs.total_swap)); ui.end_row();
+                                        ui.label("Comm % of Equity:"); ui.label(format!("{:.2}%", costs.commission_pct_of_equity)); ui.end_row();
+                                        ui.label("Avg Comm/Trade:"); ui.label(format!("${:.2}", costs.avg_commission_per_trade)); ui.end_row();
+                                    });
+                                }
+                                // D-Score Estimate
+                                if let Some(ref ds) = det.dscore {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("D-Score Estimate").strong());
+                                    egui::Grid::new(format!("ds_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                        ui.label("Experience:"); ui.label(format!("{:.1}/10", ds.experience)); ui.end_row();
+                                        ui.label("Risk Mgmt:"); ui.label(format!("{:.1}/10", ds.risk_mgmt)); ui.end_row();
+                                        ui.label("Performance:"); ui.label(format!("{:.1}/10", ds.performance)); ui.end_row();
+                                        ui.label("Market Timing:"); ui.label(format!("{:.1}/10", ds.market_timing)); ui.end_row();
+                                        ui.label("Capacity:"); ui.label(format!("{:.1}/10", ds.capacity)); ui.end_row();
+                                        ui.label("Scalability:"); ui.label(format!("{:.1}/10", ds.scalability)); ui.end_row();
+                                        ui.label("Total D-Score:"); ui.label(egui::RichText::new(format!("{:.1}", ds.total_dscore)).strong()); ui.end_row();
+                                    });
+                                }
+                                // Slippage Analysis
+                                if let Some(ref slip) = det.slippage {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Slippage").strong());
+                                    ui.label(format!("Avg: {:.4}%  Total cost: ${:.2}  Worst: {:.4}%", slip.avg_slippage_pct, slip.total_slippage_cost, slip.worst_slippage));
+                                }
+                                // MAE/MFE
+                                if let Some(ref mae) = det.mae_mfe {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("MAE / MFE").strong());
+                                    ui.label(format!("Avg MAE: {:.2}%  Avg MFE: {:.2}%  Ratio: {:.2}", mae.avg_mae_pct, mae.avg_mfe_pct, mae.mae_mfe_ratio));
+                                }
+                                // Sizing Efficiency
+                                if !det.sizing_efficiency.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Sizing Efficiency").strong());
+                                    egui::Grid::new(format!("sz_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                        ui.strong("Quartile"); ui.strong("Avg Vol"); ui.strong("Win%"); ui.strong("P&L");
+                                        ui.end_row();
+                                        for s in &det.sizing_efficiency {
+                                            ui.label(&s.quartile);
+                                            ui.label(format!("{:.2}", s.avg_volume));
+                                            ui.label(format!("{:.0}%", s.win_rate));
+                                            let c = if s.total_pnl >= 0.0 { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("${:.0}", s.total_pnl)).color(c));
+                                            ui.end_row();
+                                        }
+                                    });
+                                }
+                                // Symbol Rotation
+                                if !det.symbol_rotation.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Symbol Rotation").strong());
+                                    egui::Grid::new(format!("rot_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                        ui.strong("Symbol"); ui.strong("Trades"); ui.strong("P&L"); ui.strong("Active");
+                                        ui.end_row();
+                                        for r in &det.symbol_rotation {
+                                            ui.label(&r.symbol);
+                                            ui.label(format!("{}", r.trade_count));
+                                            let c = if r.total_pnl >= 0.0 { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("${:.0}", r.total_pnl)).color(c));
+                                            ui.label(format!("{} mo", r.active_months));
+                                            ui.end_row();
+                                        }
+                                    });
+                                }
+                                // Open Positions (per-DARWIN)
+                                if !det.open_positions.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new(format!("Open Positions ({})", det.open_positions.len())).strong());
+                                    egui::Grid::new(format!("pos_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                        ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Price");
+                                        ui.end_row();
+                                        for p in &det.open_positions {
+                                            ui.label(&p.symbol);
+                                            let sc = if p.side == "buy" { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(&p.side).color(sc));
+                                            ui.label(format!("{:.2}", p.total_volume));
+                                            ui.label(format_price(p.avg_price));
+                                            ui.end_row();
+                                        }
+                                    });
+                                }
+                                // Pyramiding Analysis
+                                if !det.pyramiding.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Pyramiding").strong());
+                                    for p in &det.pyramiding {
+                                        let c = if p.final_pnl >= 0.0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("{}: {} adds ({}h avg), {} win/{} loss → ${:.0} [{}]",
+                                            p.symbol, p.total_adds, p.avg_add_interval_hours as i64,
+                                            p.adds_in_profit, p.adds_in_loss, p.final_pnl, p.strategy)).color(c).small());
+                                    }
+                                }
+                                // Trading Bursts
+                                if !det.bursts.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Trading Bursts").strong());
+                                    for b in det.bursts.iter().take(5) {
+                                        let c = if b.total_pnl >= 0.0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("{} → {}: {} trades ({:.1}/day) ${:.0}",
+                                            b.start_date, b.end_date, b.trade_count, b.avg_trades_per_day, b.total_pnl)).color(c).small());
+                                    }
+                                }
+                                // Trade Autocorrelation
+                                if let Some(ref ac) = det.autocorrelation {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Autocorrelation").strong());
+                                    ui.label(format!("Lag1: {:.4}  Lag2: {:.4}  Lag3: {:.4}  Lag5: {:.4}", ac.lag1, ac.lag2, ac.lag3, ac.lag5));
+                                    let rc = if ac.is_random { UP } else { egui::Color32::from_rgb(255, 200, 50) };
+                                    ui.label(egui::RichText::new(&ac.interpretation).color(rc).small());
+                                }
+                                // Recent Deals (last 20)
+                                if !det.recent_deals.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new(format!("Recent Deals ({})", det.recent_deals.len())).strong());
+                                    egui::Grid::new(format!("deals_{}", det.ticker)).striped(true).num_columns(5).show(ui, |ui| {
+                                        ui.strong("Time"); ui.strong("Symbol"); ui.strong("Type"); ui.strong("Vol"); ui.strong("P&L");
+                                        ui.end_row();
+                                        for d in det.recent_deals.iter().take(20) {
+                                            ui.label(egui::RichText::new(&d.time).small());
+                                            ui.label(egui::RichText::new(&d.symbol).small());
+                                            let tc = if d.deal_type == "buy" { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(&d.deal_type).color(tc).small());
+                                            ui.label(egui::RichText::new(format!("{:.2}", d.volume)).small());
+                                            let pc = if d.profit >= 0.0 { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("${:.2}", d.profit)).color(pc).small());
+                                            ui.end_row();
+                                        }
+                                    });
+                                }
+                                // Closed Positions (last 20)
+                                if !det.closed_positions.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new(format!("Recent Positions ({})", det.closed_positions.len())).strong());
+                                    egui::Grid::new(format!("cpos_{}", det.ticker)).striped(true).num_columns(5).show(ui, |ui| {
+                                        ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("P&L"); ui.strong("Comm");
+                                        ui.end_row();
+                                        for p in det.closed_positions.iter().take(20) {
+                                            ui.label(egui::RichText::new(&p.symbol).small());
+                                            let sc = if p.pos_type == "buy" { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(&p.pos_type).color(sc).small());
+                                            ui.label(egui::RichText::new(format!("{:.2}", p.volume)).small());
+                                            let pc = if p.profit >= 0.0 { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("${:.2}", p.profit)).color(pc).small());
+                                            ui.label(egui::RichText::new(format!("${:.2}", p.commission)).small());
+                                            ui.end_row();
+                                        }
+                                    });
+                                }
+                                // Equity Snapshot History
+                                if !det.equity_snapshots.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Equity Snapshots").strong());
+                                    for snap in &det.equity_snapshots {
+                                        ui.label(egui::RichText::new(format!("Bal: ${:.0}  Unreal: ${:.0}  Float: ${:.0}  Pos: {}",
+                                            snap.closed_balance, snap.unrealized_pnl, snap.floating_equity, snap.open_position_count)).small());
+                                    }
+                                }
+                                // Benchmark Comparison
+                                if let Some(ref bench) = det.benchmark {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("vs Portfolio Benchmark").strong());
+                                    egui::Grid::new(format!("bench_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                                        ui.label("Alpha:"); let ac = if bench.alpha >= 0.0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("{:.4}", bench.alpha)).color(ac)); ui.end_row();
+                                        ui.label("Beta:"); ui.label(format!("{:.4}", bench.beta)); ui.end_row();
+                                        ui.label("Info Ratio:"); ui.label(format!("{:.3}", bench.information_ratio)); ui.end_row();
+                                        ui.label("DARWIN Return:"); ui.label(format!("{:.2}%", bench.darwin_return)); ui.end_row();
+                                        ui.label("Benchmark Return:"); ui.label(format!("{:.2}%", bench.benchmark_return)); ui.end_row();
+                                    });
+                                }
+                                // Sector classification
+                                if !det.sector_classification.is_empty() {
+                                    ui.add_space(5.0);
+                                    ui.label(egui::RichText::new("Sector Classification").strong());
+                                    for (sym, sector) in &det.sector_classification {
+                                        ui.label(egui::RichText::new(format!("{}: {}", sym, sector)).small());
+                                    }
+                                }
                             });
-                            if ui.button("Select XLSX File & Import…").clicked() {
-                                let ticker = self.darwin_import_ticker.trim().to_string();
-                                if ticker.is_empty() {
-                                    self.log.push_back(LogEntry::warn("Enter a DARWIN ticker name first (e.g. THA, THB)"));
-                                } else if let Some(path) = rfd::FileDialog::new()
-                                    .add_filter("Excel", &["xlsx"])
-                                    .set_title("Select MT5 Trade History XLSX")
-                                    .pick_file()
-                                {
-                                    match darwin::import_darwin_xlsx(&conn, &path.display().to_string(), &ticker) {
-                                        Ok((name, deals, positions)) => {
-                                            self.log.push_back(LogEntry::info(format!(
-                                                "DARWIN {} imported: {} deals, {} positions from {}",
-                                                name, deals, positions, path.display()
-                                            )));
-                                        }
-                                        Err(e) => {
-                                            self.log.push_back(LogEntry::err(format!("XLSX import failed: {}", e)));
-                                        }
-                                    }
-                                }
                             }
-                            // ── Daily Risk Report ──────────────────────
-                            ui.add_space(10.0);
-                            ui.separator();
-                            if ui.button("Generate Daily Risk Report").clicked() {
+                        }
+                    } else {
+                        ui.label(egui::RichText::new("No DARWIN accounts imported yet.").color(AXIS_TEXT));
+                        ui.label(egui::RichText::new("Export MT5 Trade History as XLSX, then import here.").color(AXIS_TEXT).small());
+                    }
+                    // ── Tax Summary (current year) — from bg cache ──────────────
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.heading("Tax Summary (2026)");
+                    for (ticker, tax) in &self.bg.tax_lots {
+                        ui.label(egui::RichText::new(ticker).strong());
+                        egui::Grid::new(format!("tax_{}", ticker)).striped(true).num_columns(2).show(ui, |ui| {
+                            ui.label("Short-term gains:"); ui.label(egui::RichText::new(format!("${:.2}", tax.short_term_gains)).color(UP)); ui.end_row();
+                            ui.label("Short-term losses:"); ui.label(egui::RichText::new(format!("${:.2}", tax.short_term_losses)).color(DOWN)); ui.end_row();
+                            ui.label("Long-term gains:"); ui.label(egui::RichText::new(format!("${:.2}", tax.long_term_gains)).color(UP)); ui.end_row();
+                            ui.label("Long-term losses:"); ui.label(egui::RichText::new(format!("${:.2}", tax.long_term_losses)).color(DOWN)); ui.end_row();
+                            let net_c = if tax.total_net >= 0.0 { UP } else { DOWN };
+                            ui.label("Net Total:"); ui.label(egui::RichText::new(format!("${:.2}", tax.total_net)).color(net_c).strong()); ui.end_row();
+                        });
+                        ui.add_space(4.0);
+                    }
+
+                    // ── Floating Equity Dashboard — from bg cache ─────────────────
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.heading("Floating Equity");
+                    if let Some(ref float_eq) = self.bg.floating_equity {
+                        egui::Grid::new("float_eq").striped(true).num_columns(4).show(ui, |ui| {
+                            ui.strong("DARWIN"); ui.strong("Closed Bal"); ui.strong("Unreal P&L"); ui.strong("Float Eq");
+                            ui.end_row();
+                            for d in &float_eq.darwins {
+                                ui.label(&d.darwin_ticker);
+                                ui.label(format!("${:.0}", d.closed_balance));
+                                let uc = if d.unrealized_pnl >= 0.0 { UP } else { DOWN };
+                                ui.label(egui::RichText::new(format!("${:.0}", d.unrealized_pnl)).color(uc));
+                                ui.label(format!("${:.0}", d.floating_equity));
+                                ui.end_row();
+                            }
+                            ui.label(egui::RichText::new("COMBINED").strong());
+                            ui.label(format!("${:.0}", float_eq.combined_closed_balance));
+                            let cc = if float_eq.combined_unrealized_pnl >= 0.0 { UP } else { DOWN };
+                            ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_unrealized_pnl)).color(cc));
+                            ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_floating_equity)).strong());
+                            ui.end_row();
+                        });
+                    }
+
+                    // ── XLSX Import section (async via broker channel) ──────────────────
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.heading("Import DARWIN XLSX");
+                    if self.darwin_xlsx_dir.is_empty() {
+                        ui.label(egui::RichText::new("Set DARWIN XLSX directory in Settings to enable auto-import.").color(AXIS_TEXT));
+                    } else {
+                        ui.label(egui::RichText::new(format!("Dir: {}", self.darwin_xlsx_dir)).color(AXIS_TEXT).small());
+                        if ui.button("Import All XLSX Now").clicked() {
+                            let mut db_path = dirs_home();
+                            db_path.push("cache");
+                            db_path.push("typhoon_cache.db");
+                            let _ = self.broker_tx.send(BrokerCmd::DarwinImportAll {
+                                dir: PathBuf::from(&self.darwin_xlsx_dir),
+                                db_path,
+                            });
+                            self.log.push_back(LogEntry::info(format!("DARWIN XLSX import started from {}", self.darwin_xlsx_dir)));
+                        }
+                    }
+                    // ── Daily Risk Report (button-triggered) ──────────────────────
+                    ui.add_space(10.0);
+                    ui.separator();
+                    if ui.button("Generate Daily Risk Report").clicked() {
+                        if let Some(ref cache) = self.cache {
+                            if let Some(conn) = cache.try_connection() {
                                 match darwin::generate_daily_report(&conn) {
                                     Ok(report) => {
                                         self.log.push_back(LogEntry::info(format!(
@@ -6111,38 +6777,16 @@ impl TyphooNApp {
                                     Err(e) => { self.log.push_back(LogEntry::err(format!("Report error: {}", e))); }
                                 }
                             }
+                        }
+                    }
 
-                            // ── Floating Equity Dashboard ─────────────────
-                            ui.add_space(10.0);
-                            ui.separator();
-                            ui.heading("Floating Equity");
-                            let prices = std::collections::HashMap::new(); // empty — uses closed balance as fallback
-                            if let Ok(float_eq) = darwin::compute_floating_equity(&conn, &prices) {
-                                egui::Grid::new("float_eq").striped(true).num_columns(4).show(ui, |ui| {
-                                    ui.strong("DARWIN"); ui.strong("Closed Bal"); ui.strong("Unreal P&L"); ui.strong("Float Eq");
-                                    ui.end_row();
-                                    for d in &float_eq.darwins {
-                                        ui.label(&d.darwin_ticker);
-                                        ui.label(format!("${:.0}", d.closed_balance));
-                                        let uc = if d.unrealized_pnl >= 0.0 { UP } else { DOWN };
-                                        ui.label(egui::RichText::new(format!("${:.0}", d.unrealized_pnl)).color(uc));
-                                        ui.label(format!("${:.0}", d.floating_equity));
-                                        ui.end_row();
-                                    }
-                                    ui.label(egui::RichText::new("COMBINED").strong());
-                                    ui.label(format!("${:.0}", float_eq.combined_closed_balance));
-                                    let cc = if float_eq.combined_unrealized_pnl >= 0.0 { UP } else { DOWN };
-                                    ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_unrealized_pnl)).color(cc));
-                                    ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_floating_equity)).strong());
-                                    ui.end_row();
-                                });
-                            }
-
-                            // ── Export & FTP ──────────────────────────────
-                            ui.add_space(10.0);
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                if ui.button("Export Radar TXT").clicked() {
+                    // ── Export & FTP (button-triggered) ──────────────────────────────
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("Export Radar TXT").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Some(conn) = cache.try_connection() {
                                     let mut out = dirs_home();
                                     out.push("export");
                                     let _ = std::fs::create_dir_all(&out);
@@ -6151,83 +6795,53 @@ impl TyphooNApp {
                                         Err(e) => self.log.push_back(LogEntry::err(format!("Export failed: {}", e))),
                                     }
                                 }
-                            });
-
-                            // ── FTP Scanner (needs Darwinex FTP path) ─────
-                            ui.add_space(5.0);
-                            ui.label(egui::RichText::new("Darwinex FTP Scanner").small().strong());
-                            ui.label(egui::RichText::new("Set DARWIN_FTP_PATH env var to enable FTP-based features:").color(AXIS_TEXT).small());
-                            ui.label(egui::RichText::new("  find_low_correlation_darwins, scan_darwin_ftp,").color(AXIS_TEXT).small());
-                            ui.label(egui::RichText::new("  get_darwin_price_series, get_dscore_components, get_investor_flow").color(AXIS_TEXT).small());
-                            if let Ok(ftp) = std::env::var("DARWIN_FTP_PATH") {
-                                if ui.button("Scan FTP for Low-Correlation DARWINs").clicked() {
-                                    match darwin::find_low_correlation_darwins(&conn, &ftp, 10) {
-                                        Ok(candidates) => {
-                                            for c in &candidates {
-                                                self.log.push_back(LogEntry::info(format!(
-                                                    "Candidate {}: corr {:.4}, return {:.2}%, DD {:.2}%, Sharpe {:.3}",
-                                                    c.ticker, c.avg_correlation, c.return_pct, c.max_drawdown, c.sharpe
-                                                )));
-                                            }
-                                        }
-                                        Err(e) => self.log.push_back(LogEntry::err(format!("FTP scan: {}", e))),
-                                    }
-                                }
-                                if ui.button("Scan FTP for DARWINs (min 90d, >5% return, <30% DD)").clicked() {
-                                    match darwin::scan_darwin_ftp(&ftp, 90, 5.0, 30.0, 50) {
-                                        Ok(candidates) => {
-                                            self.log.push_back(LogEntry::info(format!("FTP scan: {} candidates found", candidates.len())));
-                                        }
-                                        Err(e) => self.log.push_back(LogEntry::err(format!("FTP scan: {}", e))),
-                                    }
-                                }
-                                // Per-DARWIN FTP data
-                                if let Ok(accounts) = darwin::list_darwin_accounts(&conn) {
-                                    for acct in accounts.iter().take(3) {
-                                        if let Ok(components) = darwin::get_dscore_components(&ftp, &acct.darwin_ticker) {
-                                            self.log.push_back(LogEntry::info(format!(
-                                                "D-Score {}: Exp {:?}, Risk {:?}, Perf {:?}",
-                                                components.ticker, components.experience, components.risk_stability, components.performance
-                                            )));
-                                        }
-                                        if let Ok(flow) = darwin::get_investor_flow(&ftp, &acct.darwin_ticker) {
-                                            if let Some(last) = flow.last() {
-                                                self.log.push_back(LogEntry::info(format!(
-                                                    "Investor flow {}: {} investors, ${:.0} AUM",
-                                                    acct.darwin_ticker, last.investors, last.aum
-                                                )));
-                                            }
-                                        }
-                                        if let Ok(prices) = darwin::get_darwin_price_series(&ftp, &acct.darwin_ticker, "D1") {
-                                            self.log.push_back(LogEntry::info(format!(
-                                                "Price series {}: {} bars", acct.darwin_ticker, prices.len()
-                                            )));
-                                        }
-                                    }
-                                }
                             }
+                        }
+                    });
 
-                            // ── Delete Account ───────────────────────────
-                            ui.add_space(10.0);
-                            ui.separator();
-                            ui.label(egui::RichText::new("Delete Account").color(DOWN));
-                            ui.horizontal(|ui| {
-                                ui.label("Ticker:");
-                                ui.add(egui::TextEdit::singleline(&mut self.darwin_import_ticker).desired_width(80.0));
-                                if ui.button(egui::RichText::new("Delete").color(BTN_RED_TEXT)).clicked() {
-                                    let ticker = self.darwin_import_ticker.trim().to_string();
-                                    if !ticker.is_empty() {
+                    // ── FTP Scanner (button-triggered) ─────
+                    ui.add_space(5.0);
+                    ui.label(egui::RichText::new("Darwinex FTP Scanner").small().strong());
+                    ui.label(egui::RichText::new("Set FTP Dir in Settings to enable FTP-based features:").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("  find_low_correlation_darwins, scan_darwin_ftp,").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("  get_darwin_price_series, get_dscore_components, get_investor_flow").color(AXIS_TEXT).small());
+                    let ftp_available = !self.darwin_ftp_dir.is_empty(); // Don't stat() NAS path every frame
+                    if ftp_available {
+                        if ui.button("Scan FTP for Low-Correlation DARWINs").clicked() {
+                            // Runs via DARWIN_SCAN command — non-blocking
+                            let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                            self.log.push_back(LogEntry::info("FTP low-correlation scan started (async)..."));
+                        }
+                        if ui.button("Scan FTP for DARWINs (min 90d, >5% return, <30% DD)").clicked() {
+                            let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                            self.log.push_back(LogEntry::info("FTP universe scan started (async)..."));
+                        }
+                        ui.label(egui::RichText::new("Use DARWIN_BROWSER for detailed analysis.").color(AXIS_TEXT).small());
+                    } else {
+                        ui.label(egui::RichText::new("Set FTP Dir in Settings to enable scanning.").color(AXIS_TEXT).small());
+                    }
+
+                    // ── Delete Account (button-triggered) ───────────────────────────
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.label(egui::RichText::new("Delete Account").color(DOWN));
+                    ui.horizontal(|ui| {
+                        ui.label("Ticker:");
+                        ui.add(egui::TextEdit::singleline(&mut self.darwin_import_ticker).desired_width(80.0));
+                        if ui.button(egui::RichText::new("Delete").color(BTN_RED_TEXT)).clicked() {
+                            let ticker = self.darwin_import_ticker.trim().to_string();
+                            if !ticker.is_empty() {
+                                if let Some(ref cache) = self.cache {
+                                    if let Some(conn) = cache.try_connection() {
                                         match darwin::delete_darwin_account(&conn, &ticker) {
                                             Ok(()) => { self.log.push_back(LogEntry::info(format!("Deleted DARWIN account: {}", ticker))); }
                                             Err(e) => { self.log.push_back(LogEntry::err(format!("Delete failed: {}", e))); }
                                         }
                                     }
                                 }
-                            });
+                            }
                         }
-                    } else {
-                        ui.label(egui::RichText::new("Cache not available").color(egui::Color32::from_rgb(255, 80, 80)));
-                    }
+                    });
                 });
         }
 
@@ -6258,28 +6872,13 @@ impl TyphooNApp {
                             });
                     });
                     ui.separator();
-                    // Use background-computed DARWIN data (minimal DB queries in render)
-                    let bg = self.bg_darwin.try_lock().ok();
-                    let portfolio_ref = bg.as_ref().and_then(|d| d.portfolio.as_ref());
-                    let bg_daily = bg.as_ref().map(|d| &d.daily_returns);
-                    let bg_var = bg.as_ref().and_then(|d| d.var_stats.as_ref());
-                    let bg_corrs = bg.as_ref().map(|d| &d.correlations);
-                    let bg_exposure = bg.as_ref().map(|d| &d.exposure);
-                    let bg_eq_curve = bg.as_ref().map(|d| &d.equity_curve);
-                    let bg_positions = bg.as_ref().map(|d| &d.open_positions);
-                    let bg_overlaps = bg.as_ref().map(|d| &d.trade_overlaps);
-                    let bg_alloc = bg.as_ref().map(|d| &d.optimal_allocation);
-                    let bg_rebal = bg.as_ref().and_then(|d| d.rebalance.as_ref());
-                    let bg_mc = bg.as_ref().and_then(|d| d.monte_carlo.as_ref());
-                    let bg_stress = bg.as_ref().map(|d| &d.stress_tests);
-                    let bg_margin = bg.as_ref().and_then(|d| d.margin_call_sim.as_ref());
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let dv = self.darwin_view;
-                            egui::ScrollArea::vertical().show(ui, |ui| {
-                            match portfolio_ref {
-                                Some(portfolio) if !portfolio.accounts.is_empty() => {
-                                    match dv {
+                    // Read directly from self.bg (background-computed data, no DB queries)
+                    {
+                        let dv = self.darwin_view;
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                        match self.bg.portfolio.as_ref() {
+                            Some(portfolio) if !portfolio.accounts.is_empty() => {
+                                match dv {
                                         0 => { // Portfolio Summary
                                             egui::Grid::new("port_summary").striped(true).num_columns(2).show(ui, |ui| {
                                                 ui.label("Accounts:"); ui.label(format!("{}", portfolio.accounts.len()));
@@ -6319,8 +6918,8 @@ impl TyphooNApp {
                                             });
                                         }
                                         1 => { // Portfolio VaR (from bg cache)
-                                            if let Some(daily) = bg_daily { if !daily.is_empty() {
-                                                if let Some(vs) = bg_var {
+                                            { let daily = &self.bg.daily_returns; if !daily.is_empty() {
+                                                if let Some(ref vs) = self.bg.var_stats {
                                                     egui::Grid::new("port_var").striped(true).num_columns(4).show(ui, |ui| {
                                                         ui.label("VaR 95%:"); ui.label(format!("${:.2}", vs.var_95));
                                                         ui.label("Sharpe:"); ui.label(format!("{:.3}", vs.sharpe));
@@ -6344,8 +6943,8 @@ impl TyphooNApp {
                                                         ui.label("Trading Days:"); ui.label(format!("{}", vs.trading_days));
                                                         ui.end_row();
                                                     });
-                                                    // Rolling VaR (30-day window)
-                                                    let rolling = darwin::get_rolling_var(&daily, 30);
+                                                    // Rolling VaR (30-day window) — from bg cache
+                                                    let rolling = &self.bg.rolling_var;
                                                     if rolling.len() > 5 {
                                                         ui.add_space(10.0);
                                                         ui.label(egui::RichText::new("Rolling 30d VaR").strong());
@@ -6356,8 +6955,8 @@ impl TyphooNApp {
                                                         Plot::new("rolling_var_plot").height(120.0).allow_drag(false).allow_zoom(false)
                                                             .show(ui, |plot_ui| { plot_ui.line(line); });
                                                     }
-                                                    // Combined drawdown dashboard
-                                                    if let Ok(dd) = darwin::get_combined_drawdown_dashboard(&conn, 5) {
+                                                    // Combined drawdown dashboard — from bg cache
+                                                    if let Some(ref dd) = self.bg.drawdown_dashboard {
                                                         ui.add_space(10.0);
                                                         ui.label(egui::RichText::new("Drawdown Dashboard").strong());
                                                         egui::Grid::new("dd_dash").striped(true).num_columns(4).show(ui, |ui| {
@@ -6379,10 +6978,10 @@ impl TyphooNApp {
                                                         });
                                                     }
                                                 } // if let Some(vs)
-                                            } } // if !daily.is_empty() + if let Some(daily)
+                                            } } // if !daily.is_empty()
                                         }
                                         2 => { // Equity Curve (from bg cache)
-                                            if let Some(eq_curve) = bg_eq_curve {
+                                            { let eq_curve = &self.bg.equity_curve;
                                                 if eq_curve.len() > 2 {
                                                     let points: PlotPoints = PlotPoints::new(
                                                         eq_curve.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
@@ -6394,7 +6993,7 @@ impl TyphooNApp {
                                             }
                                         }
                                         3 => { // Correlation Matrix (from bg cache)
-                                            if let Some(corrs) = bg_corrs {
+                                            { let corrs = &self.bg.correlations; if !corrs.is_empty() {
                                                 egui::Grid::new("corr_grid").striped(true).num_columns(3).show(ui, |ui| {
                                                     ui.strong("DARWIN A"); ui.strong("DARWIN B"); ui.strong("Correlation");
                                                     ui.end_row();
@@ -6407,10 +7006,10 @@ impl TyphooNApp {
                                                         ui.end_row();
                                                     }
                                                 });
-                                            }
+                                            } }
                                         }
                                         4 => { // Symbol Exposure (from bg cache)
-                                            if let Some(exposure) = bg_exposure {
+                                            { let exposure = &self.bg.exposure; if !exposure.is_empty() {
                                                 egui::Grid::new("exp_grid").striped(true).num_columns(5).show(ui, |ui| {
                                                     ui.strong("Symbol"); ui.strong("Long $"); ui.strong("Short $"); ui.strong("Net $"); ui.strong("DARWINs");
                                                     ui.end_row();
@@ -6424,12 +7023,12 @@ impl TyphooNApp {
                                                         ui.end_row();
                                                     }
                                                 });
-                                            }
-                                            // Exposure Treemap (flattened)
+                                            } }
+                                            // Exposure Treemap (flattened) — from bg cache
                                             ui.add_space(10.0);
                                             ui.heading("Exposure by Sector");
                                             ui.separator();
-                                            if let Ok(tree) = darwin::get_exposure_treemap(&conn) {
+                                            if let Some(ref tree) = self.bg.exposure_treemap {
                                                 for child in &tree.children {
                                                     let sector_c = if child.color_value > 0.0 { UP } else if child.color_value < 0.0 { DOWN } else { AXIS_TEXT };
                                                     ui.label(egui::RichText::new(format!("{}: ${:.0}", child.name, child.value)).color(sector_c).strong());
@@ -6441,7 +7040,7 @@ impl TyphooNApp {
                                             }
                                         }
                                         5 => { // Combined Positions (from bg cache)
-                                            if let Some(positions) = bg_positions {
+                                            { let positions = &self.bg.open_positions;
                                                 if positions.is_empty() {
                                                     ui.label(egui::RichText::new("No open positions.").color(AXIS_TEXT));
                                                 } else {
@@ -6463,7 +7062,7 @@ impl TyphooNApp {
                                             }
                                         }
                                         6 => { // Trade Overlaps (from bg cache)
-                                            if let Some(overlaps) = bg_overlaps {
+                                            { let overlaps = &self.bg.trade_overlaps;
                                                 if overlaps.is_empty() {
                                                     ui.label("No trade overlaps found.");
                                                 } else {
@@ -6481,8 +7080,8 @@ impl TyphooNApp {
                                                 }
                                             }
                                         }
-                                        7 => { // Combined Equity (same as view 2 but with per-DARWIN overlaid)
-                                            if let Ok(eq_curve) = darwin::get_portfolio_equity_curve(&conn) {
+                                        7 => { // Combined Equity — from bg cache
+                                            { let eq_curve = &self.bg.equity_curve;
                                                 if eq_curve.len() > 2 {
                                                     let points: PlotPoints = PlotPoints::new(
                                                         eq_curve.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
@@ -6494,7 +7093,7 @@ impl TyphooNApp {
                                             }
                                         }
                                         8 => { // Monte Carlo (from bg cache)
-                                            if let Some(mc) = bg_mc {
+                                            if let Some(ref mc) = self.bg.monte_carlo {
                                                     egui::Grid::new("mc_grid").striped(true).num_columns(2).show(ui, |ui| {
                                                         ui.label("Simulations:"); ui.label(format!("{}", mc.simulations));
                                                         ui.end_row();
@@ -6516,7 +7115,7 @@ impl TyphooNApp {
                                             }
                                         }
                                         9 => { // Stress Test (from bg cache)
-                                            let results = bg_stress; if let Some(results) = results {
+                                            { let results = &self.bg.stress_tests; if !results.is_empty() {
                                                 egui::Grid::new("stress_grid").striped(true).num_columns(4).show(ui, |ui| {
                                                     ui.strong("Scenario"); ui.strong("Market Drop"); ui.strong("Portfolio Impact"); ui.strong("Impact %");
                                                     ui.end_row();
@@ -6528,24 +7127,23 @@ impl TyphooNApp {
                                                         ui.end_row();
                                                     }
                                                 });
-                                            }
-                                            // Also show timing divergences
+                                            } }
+                                            // Timing divergences — from bg cache
                                             ui.add_space(10.0);
                                             ui.heading("Timing Divergences");
                                             ui.separator();
-                                            if let Ok(divs) = darwin::get_timing_divergences(&conn) {
+                                            { let divs = &self.bg.timing_divergences;
                                                 if divs.is_empty() {
                                                     ui.label("No timing divergences found.");
                                                 } else {
-                                                    for d in &divs {
+                                                    for d in divs {
                                                         ui.label(egui::RichText::new(format!("{}: spread {:.1}h, price {:.2}%", d.symbol, d.time_spread_hours, d.price_spread_pct)).small());
                                                     }
                                                 }
                                             }
                                         }
-                                        10 => { // VaR Forecast
-                                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                                let forecast = darwin::forecast_var(&daily, 6.5); // 6.5% VaR threshold
+                                        10 => { // VaR Forecast — from bg cache
+                                            if let Some(ref forecast) = self.bg.var_forecast {
                                                     egui::Grid::new("var_fc").striped(true).num_columns(2).show(ui, |ui| {
                                                         ui.label("Current VaR 95%:"); ui.label(format!("{:.2}%", forecast.current_var_95));
                                                         ui.end_row();
@@ -6564,13 +7162,12 @@ impl TyphooNApp {
                                                     });
                                             }
                                         }
-                                        11 => { // Conditional VaR
-                                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                                let cvar = darwin::compute_conditional_var(&daily);
+                                        11 => { // Conditional VaR — from bg cache
+                                            { let cvar = &self.bg.conditional_var; if !cvar.is_empty() {
                                                 egui::Grid::new("cvar_grid").striped(true).num_columns(4).show(ui, |ui| {
                                                     ui.strong("Regime"); ui.strong("VaR 95%"); ui.strong("VaR 99%"); ui.strong("Days"); ui.strong("Sharpe");
                                                     ui.end_row();
-                                                    for cv in &cvar {
+                                                    for cv in cvar {
                                                         ui.label(&cv.regime);
                                                         ui.label(format!("{:.2}%", cv.var_95));
                                                         ui.label(format!("{:.2}%", cv.var_99));
@@ -6579,11 +7176,10 @@ impl TyphooNApp {
                                                         ui.end_row();
                                                     }
                                                 });
-                                            }
+                                            } }
                                         }
-                                        12 => { // Market Regime
-                                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                                let regime = darwin::detect_market_regime(&daily);
+                                        12 => { // Market Regime — from bg cache
+                                            if let Some(ref regime) = self.bg.market_regime {
                                                 egui::Grid::new("regime_grid").striped(true).num_columns(2).show(ui, |ui| {
                                                     ui.label("Current Regime:"); ui.label(egui::RichText::new(&regime.current_regime).strong());
                                                     ui.end_row();
@@ -6596,15 +7192,15 @@ impl TyphooNApp {
                                                     ui.label("Vol Percentile:"); ui.label(format!("{:.1}%", regime.vol_percentile));
                                                     ui.end_row();
                                                 });
-                                                // Per-regime performance
-                                                if let Ok(rp) = darwin::get_regime_performance(&conn) {
+                                                // Per-regime performance — from bg cache
+                                                { let rp = &self.bg.regime_performance; if !rp.is_empty() {
                                                     ui.add_space(10.0);
                                                     ui.heading("Performance by Regime");
                                                     ui.separator();
                                                     egui::Grid::new("rp_grid").striped(true).num_columns(5).show(ui, |ui| {
                                                         ui.strong("DARWIN"); ui.strong("Low Vol"); ui.strong("Med Vol"); ui.strong("High Vol"); ui.strong("Best");
                                                         ui.end_row();
-                                                        for r in &rp {
+                                                        for r in rp {
                                                             ui.label(&r.darwin_ticker);
                                                             ui.label(format!("{:.3}", r.low_vol_sharpe));
                                                             ui.label(format!("{:.3}", r.medium_vol_sharpe));
@@ -6613,12 +7209,11 @@ impl TyphooNApp {
                                                             ui.end_row();
                                                         }
                                                     });
-                                                }
+                                                } }
                                             }
                                         }
-                                        13 => { // Tail Risk
-                                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                                let tail = darwin::compute_tail_risk(&daily);
+                                        13 => { // Tail Risk — from bg cache
+                                            if let Some(ref tail) = self.bg.tail_risk {
                                                 egui::Grid::new("tail_grid").striped(true).num_columns(2).show(ui, |ui| {
                                                     ui.label("Skewness:"); ui.label(format!("{:.4}", tail.skewness));
                                                     ui.end_row();
@@ -6640,13 +7235,12 @@ impl TyphooNApp {
                                                 });
                                             }
                                         }
-                                        14 => { // Seasonals
-                                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                                let seasonal = darwin::get_seasonal_analysis(&daily);
+                                        14 => { // Seasonals — from bg cache
+                                            { let seasonal = &self.bg.seasonal_analysis; if !seasonal.is_empty() {
                                                 egui::Grid::new("seasonal_grid").striped(true).num_columns(4).show(ui, |ui| {
                                                     ui.strong("Month"); ui.strong("Avg Return"); ui.strong("Win%"); ui.strong("Median");
                                                     ui.end_row();
-                                                    for s in &seasonal {
+                                                    for s in seasonal {
                                                         ui.label(&s.month_name);
                                                         let c = if s.avg_return_pct >= 0.0 { UP } else { DOWN };
                                                         ui.label(egui::RichText::new(format!("{:.2}%", s.avg_return_pct)).color(c));
@@ -6655,14 +7249,14 @@ impl TyphooNApp {
                                                         ui.end_row();
                                                     }
                                                 });
-                                            }
+                                            } }
                                         }
-                                        15 => { // Sector Exposure
-                                            if let Ok(sectors) = darwin::get_sector_exposure(&conn) {
+                                        15 => { // Sector Exposure — from bg cache
+                                            { let sectors = &self.bg.sector_exposure; if !sectors.is_empty() {
                                                 egui::Grid::new("sector_grid").striped(true).num_columns(5).show(ui, |ui| {
                                                     ui.strong("Sector"); ui.strong("Long $"); ui.strong("Short $"); ui.strong("Net $"); ui.strong("Symbols");
                                                     ui.end_row();
-                                                    for se in &sectors {
+                                                    for se in sectors {
                                                         ui.label(&se.sector);
                                                         ui.label(format!("{:.0}", se.long_notional));
                                                         ui.label(format!("{:.0}", se.short_notional));
@@ -6672,14 +7266,14 @@ impl TyphooNApp {
                                                         ui.end_row();
                                                     }
                                                 });
-                                            }
+                                            } }
                                         }
-                                        16 => { // Liquidity Risk
-                                            if let Ok(liq) = darwin::get_liquidity_risk(&conn) {
+                                        16 => { // Liquidity Risk — from bg cache
+                                            { let liq = &self.bg.liquidity_risk; if !liq.is_empty() {
                                                 egui::Grid::new("liq_grid").striped(true).num_columns(4).show(ui, |ui| {
                                                     ui.strong("Symbol"); ui.strong("Volume"); ui.strong("Notional"); ui.strong("Conc%"); ui.strong("Risk");
                                                     ui.end_row();
-                                                    for l in &liq {
+                                                    for l in liq {
                                                         ui.label(&l.symbol);
                                                         ui.label(format!("{:.0}", l.position_volume));
                                                         ui.label(format!("${:.0}", l.notional));
@@ -6693,10 +7287,10 @@ impl TyphooNApp {
                                                         ui.end_row();
                                                     }
                                                 });
-                                            }
+                                            } }
                                         }
                                         17 => { // Margin Call Sim (from bg cache)
-                                            if let Some(sim) = bg_margin {
+                                            if let Some(ref sim) = self.bg.margin_call_sim {
                                                 egui::Grid::new("mc_sim").striped(true).num_columns(2).show(ui, |ui| {
                                                     ui.label("Current Equity:"); ui.label(format!("${:.2}", sim.current_equity));
                                                     ui.end_row();
@@ -6722,7 +7316,7 @@ impl TyphooNApp {
                                             }
                                         }
                                         18 => { // Optimal Allocation (from bg cache)
-                                            if let Some(alloc) = bg_alloc { if !alloc.is_empty() {
+                                            { let alloc = &self.bg.optimal_allocation; if !alloc.is_empty() {
                                                 egui::Grid::new("alloc_grid").striped(true).num_columns(4).show(ui, |ui| {
                                                     ui.strong("DARWIN"); ui.strong("Current %"); ui.strong("Optimal %"); ui.strong("Sharpe Contr.");
                                                     ui.end_row();
@@ -6739,7 +7333,7 @@ impl TyphooNApp {
                                             ui.add_space(10.0);
                                             ui.heading("Rebalance Suggestions");
                                             ui.separator();
-                                            if let Some(rebal) = bg_rebal {
+                                            if let Some(ref rebal) = self.bg.rebalance {
                                                 egui::Grid::new("rebal_summary").striped(true).num_columns(2).show(ui, |ui| {
                                                     ui.label("Portfolio VaR 95%:"); ui.label(format!("{:.2}%", rebal.current_portfolio_var_95));
                                                     ui.end_row();
@@ -6773,19 +7367,22 @@ impl TyphooNApp {
                                                 }
                                             }
                                         }
-                                        19 => { // What-If
+                                        19 => { // What-If (button-triggered, uses cache)
                                             ui.label(egui::RichText::new("What-If: Close Symbol").strong());
                                             ui.label("Click a symbol to see VaR impact of closing:");
                                             ui.add_space(4.0);
-                                            if let Ok(exposure) = darwin::get_portfolio_exposure(&conn) {
-                                                for e in exposure.iter() {
-                                                    if ui.button(format!("Close {} (${:.0} net)", e.symbol, e.net_notional)).clicked() {
-                                                        if let Ok(result) = darwin::what_if_close_symbol(&conn, &e.symbol) {
-                                                            self.log.push_back(LogEntry::info(format!(
-                                                                "What-If close {}: VaR {:.2}% → {:.2}% ({:+.2}%), notional ${:.0} → ${:.0}",
-                                                                e.symbol, result.current_portfolio_var, result.new_portfolio_var,
-                                                                result.var_change_pct, result.current_notional, result.new_notional
-                                                            )));
+                                            // Read exposure from bg cache for display; button click does one-shot DB query
+                                            for e in self.bg.exposure.iter() {
+                                                if ui.button(format!("Close {} (${:.0} net)", e.symbol, e.net_notional)).clicked() {
+                                                    if let Some(ref cache) = self.cache {
+                                                        if let Some(conn) = cache.try_connection() {
+                                                            if let Ok(result) = darwin::what_if_close_symbol(&conn, &e.symbol) {
+                                                                self.log.push_back(LogEntry::info(format!(
+                                                                    "What-If close {}: VaR {:.2}% → {:.2}% ({:+.2}%), notional ${:.0} → ${:.0}",
+                                                                    e.symbol, result.current_portfolio_var, result.new_portfolio_var,
+                                                                    result.var_change_pct, result.current_notional, result.new_notional
+                                                                )));
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -6806,7 +7403,6 @@ impl TyphooNApp {
                             });
                             ui.add_space(10.0);
                             ui.label(egui::RichText::new("VaR corridor: 3.25% – 6.5%  |  Correlation limit: 0.95 / 45d").color(AXIS_TEXT));
-                        }
                     }
                 });
         }
@@ -7011,8 +7607,8 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("Screener");
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(details) = cache.detailed_stats() {
+                    { let details = &self.bg.detailed_stats;
+                        if !details.is_empty() {
                             ui.label(format!("{} cached symbols", details.len()));
                             ui.add_space(5.0);
                             egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
@@ -7020,11 +7616,11 @@ impl TyphooNApp {
                                     ui.strong("Symbol / Key"); ui.strong("Bars"); ui.strong("Action");
                                     ui.end_row();
                                     let mut load_key: Option<String> = None;
-                                    for (key, count, _size) in &details {
+                                    for (key, count, _size) in details {
                                         ui.label(egui::RichText::new(key).monospace());
                                         ui.label(format!("{}", count));
                                         if ui.small_button("Load").clicked() {
-                                            load_key = Some(key.clone());
+                                            load_key = Some(key.to_string());
                                         }
                                         ui.end_row();
                                     }
@@ -7218,81 +7814,76 @@ impl TyphooNApp {
                     });
                     ui.separator();
 
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let _ = sec_filing::create_sec_tables(&conn);
+                    // Filings table — from bg cache
+                    egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
+                        let filings = &self.bg.sec_filings;
+                        if filings.is_empty() {
+                            ui.label(egui::RichText::new("No filings in database. Run SEC scraper to populate.").color(AXIS_TEXT));
+                        } else {
+                            egui::Grid::new("sec_filings_grid").striped(true).num_columns(6).show(ui, |ui| {
+                                ui.strong("Date"); ui.strong("Symbol"); ui.strong("Type"); ui.strong("Category"); ui.strong("Company"); ui.strong("Score");
+                                ui.end_row();
+                                let filter_types: Vec<&str> = vec!["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
+                                for f in filings {
+                                    // Apply filter
+                                    let pass = self.sec_filters.iter().enumerate().any(|(i, &enabled)| {
+                                        enabled && f.form_type.contains(filter_types.get(i).unwrap_or(&""))
+                                    }) || self.sec_filters.iter().all(|&v| v); // show all if all checked
+                                    if !pass { continue; }
 
-                            // Filings table
-                            egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
-                                if let Ok(filings) = sec_filing::get_recent_filings(&conn, None, 100) {
-                                    if filings.is_empty() {
-                                        ui.label(egui::RichText::new("No filings in database. Run SEC scraper to populate.").color(AXIS_TEXT));
-                                    } else {
-                                        egui::Grid::new("sec_filings_grid").striped(true).num_columns(6).show(ui, |ui| {
-                                            ui.strong("Date"); ui.strong("Symbol"); ui.strong("Type"); ui.strong("Category"); ui.strong("Company"); ui.strong("Score");
-                                            ui.end_row();
-                                            let filter_types: Vec<&str> = vec!["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
-                                            for f in &filings {
-                                                // Apply filter
-                                                let pass = self.sec_filters.iter().enumerate().any(|(i, &enabled)| {
-                                                    enabled && f.form_type.contains(filter_types.get(i).unwrap_or(&""))
-                                                }) || self.sec_filters.iter().all(|&v| v); // show all if all checked
-                                                if !pass { continue; }
-
-                                                ui.label(egui::RichText::new(&f.filing_date).small());
-                                                ui.label(egui::RichText::new(&f.ticker).small().strong());
-                                                // Type badge with color
-                                                let type_col = match f.form_type.as_str() {
-                                                    "4" => egui::Color32::from_rgb(255, 200, 50),
-                                                    "10-K" | "10-Q" => egui::Color32::from_rgb(100, 200, 255),
-                                                    "8-K" => egui::Color32::from_rgb(255, 130, 60),
-                                                    "S-1" => egui::Color32::from_rgb(200, 100, 255),
-                                                    _ => AXIS_TEXT,
-                                                };
-                                                ui.label(egui::RichText::new(&f.form_type).color(type_col).small());
-                                                ui.label(egui::RichText::new(&f.category).color(AXIS_TEXT).small());
-                                                ui.label(egui::RichText::new(&f.company_name).small());
-                                                let score_col = if f.importance_score >= 80 { DOWN }
-                                                    else if f.importance_score >= 50 { egui::Color32::from_rgb(255, 200, 50) }
-                                                    else { AXIS_TEXT };
-                                                ui.label(egui::RichText::new(format!("{}", f.importance_score)).color(score_col).small());
-                                                ui.end_row();
-                                            }
-                                        });
-                                    }
+                                    ui.label(egui::RichText::new(&f.filing_date).small());
+                                    ui.label(egui::RichText::new(&f.ticker).small().strong());
+                                    let type_col = match f.form_type.as_str() {
+                                        "4" => egui::Color32::from_rgb(255, 200, 50),
+                                        "10-K" | "10-Q" => egui::Color32::from_rgb(100, 200, 255),
+                                        "8-K" => egui::Color32::from_rgb(255, 130, 60),
+                                        "S-1" => egui::Color32::from_rgb(200, 100, 255),
+                                        _ => AXIS_TEXT,
+                                    };
+                                    ui.label(egui::RichText::new(&f.form_type).color(type_col).small());
+                                    ui.label(egui::RichText::new(&f.category).color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(&f.company_name).small());
+                                    let score_col = if f.importance_score >= 80 { DOWN }
+                                        else if f.importance_score >= 50 { egui::Color32::from_rgb(255, 200, 50) }
+                                        else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(format!("{}", f.importance_score)).color(score_col).small());
+                                    ui.end_row();
                                 }
                             });
+                        }
+                    });
 
-                            // Filing Alerts
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new("Filing Alerts").strong());
-                            ui.separator();
-                            if let Ok(alerts) = sec_filing::get_filing_alerts(&conn, false) {
-                                if alerts.is_empty() {
-                                    ui.label(egui::RichText::new("No active alerts.").color(AXIS_TEXT));
-                                } else {
-                                    let mut dismiss_id: Option<i64> = None;
-                                    for alert in &alerts {
-                                        let color = if alert.importance >= 80 { DOWN }
-                                                    else if alert.importance >= 50 { egui::Color32::from_rgb(255, 160, 40) }
-                                                    else { AXIS_TEXT };
-                                        let severity = if alert.importance >= 80 { "High" }
-                                                       else if alert.importance >= 50 { "Medium" }
-                                                       else { "Low" };
-                                        // Show importance score (computed via compute_importance internally)
-                                        let _score = sec_filing::compute_importance(&alert.alert_type, false, false);
-                                        ui.horizontal(|ui| {
-                                            ui.label(egui::RichText::new("\u{2588}").color(color));
-                                            ui.label(egui::RichText::new(severity).color(color).small());
-                                            ui.label(egui::RichText::new(&alert.alert_type).color(egui::Color32::WHITE).small().strong());
-                                            ui.label(egui::RichText::new(&alert.ticker).small().strong());
-                                            ui.label(egui::RichText::new(&alert.message).color(AXIS_TEXT).small());
-                                            if ui.small_button("Dismiss").clicked() {
-                                                dismiss_id = Some(alert.id);
-                                            }
-                                        });
+                    // Filing Alerts — from bg cache (dismiss button uses one-shot DB)
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("Filing Alerts").strong());
+                    ui.separator();
+                    { let alerts = &self.bg.sec_alerts;
+                        if alerts.is_empty() {
+                            ui.label(egui::RichText::new("No active alerts.").color(AXIS_TEXT));
+                        } else {
+                            let mut dismiss_id: Option<i64> = None;
+                            for alert in alerts {
+                                let color = if alert.importance >= 80 { DOWN }
+                                            else if alert.importance >= 50 { egui::Color32::from_rgb(255, 160, 40) }
+                                            else { AXIS_TEXT };
+                                let severity = if alert.importance >= 80 { "High" }
+                                               else if alert.importance >= 50 { "Medium" }
+                                               else { "Low" };
+                                let _score = sec_filing::compute_importance(&alert.alert_type, false, false);
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("\u{2588}").color(color));
+                                    ui.label(egui::RichText::new(severity).color(color).small());
+                                    ui.label(egui::RichText::new(&alert.alert_type).color(egui::Color32::WHITE).small().strong());
+                                    ui.label(egui::RichText::new(&alert.ticker).small().strong());
+                                    ui.label(egui::RichText::new(&alert.message).color(AXIS_TEXT).small());
+                                    if ui.small_button("Dismiss").clicked() {
+                                        dismiss_id = Some(alert.id);
                                     }
-                                    if let Some(id) = dismiss_id {
+                                });
+                            }
+                            if let Some(id) = dismiss_id {
+                                if let Some(ref cache) = self.cache {
+                                    if let Some(conn) = cache.try_connection() {
                                         let _ = sec_filing::dismiss_alert(&conn, id, "dismissed from GUI");
                                     }
                                 }
@@ -7302,7 +7893,7 @@ impl TyphooNApp {
                 });
         }
 
-        // Insider Trades (SEC Form 4) — wired to engine sec_filing.rs
+        // Insider Trades (SEC Form 4) — reads from bg cache
         if self.show_insider {
             egui::Window::new("Insider Trades (Form 4)")
                 .open(&mut self.show_insider)
@@ -7314,36 +7905,31 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new(&sym).strong().monospace());
                     });
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let _ = sec_filing::create_sec_tables(&conn);
-                            // Extract ticker from cache key (e.g. "mt5:CC:SLV:4Hour" → "SLV")
-                            let ticker = sym.split(':').rev().nth(1).or_else(|| sym.split(':').last()).unwrap_or(&sym);
-                            if let Ok(trades) = sec_filing::get_insider_trades(&conn, Some(ticker), 90) {
-                                if trades.is_empty() {
-                                    ui.label(egui::RichText::new(format!("No insider trades for {} (last 90 days)", ticker)).color(AXIS_TEXT));
-                                } else {
-                                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                                        egui::Grid::new("insider_grid").striped(true).num_columns(6).show(ui, |ui| {
-                                            ui.strong("Date"); ui.strong("Insider"); ui.strong("Title"); ui.strong("Type"); ui.strong("Shares"); ui.strong("Value");
-                                            ui.end_row();
-                                            for t in &trades {
-                                                ui.label(egui::RichText::new(&t.transaction_date).small());
-                                                ui.label(egui::RichText::new(&t.insider_name).small().strong());
-                                                ui.label(egui::RichText::new(&t.insider_title).color(AXIS_TEXT).small());
-                                                let type_col = if t.transaction_type.contains("Buy") || t.transaction_type.contains("Acquisition") { UP } else { DOWN };
-                                                ui.label(egui::RichText::new(&t.transaction_type).color(type_col).small());
-                                                ui.label(egui::RichText::new(format!("{:.0}", t.shares)).small());
-                                                ui.label(egui::RichText::new(format!("${:.0}", t.aggregate_value)).small());
-                                                ui.end_row();
-                                            }
-                                        });
-                                    });
-                                }
-                            }
+                    let ticker = sym.split(':').rev().nth(1).or_else(|| sym.split(':').last()).unwrap_or(&sym);
+                    let trades = self.bg.insider_trades.get(ticker);
+                    if let Some(trades) = trades {
+                        if trades.is_empty() {
+                            ui.label(egui::RichText::new(format!("No insider trades for {} (last 90 days)", ticker)).color(AXIS_TEXT));
+                        } else {
+                            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                                egui::Grid::new("insider_grid").striped(true).num_columns(6).show(ui, |ui| {
+                                    ui.strong("Date"); ui.strong("Insider"); ui.strong("Title"); ui.strong("Type"); ui.strong("Shares"); ui.strong("Value");
+                                    ui.end_row();
+                                    for t in trades {
+                                        ui.label(egui::RichText::new(&t.transaction_date).small());
+                                        ui.label(egui::RichText::new(&t.insider_name).small().strong());
+                                        ui.label(egui::RichText::new(&t.insider_title).color(AXIS_TEXT).small());
+                                        let type_col = if t.transaction_type.contains("Buy") || t.transaction_type.contains("Acquisition") { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(&t.transaction_type).color(type_col).small());
+                                        ui.label(egui::RichText::new(format!("{:.0}", t.shares)).small());
+                                        ui.label(egui::RichText::new(format!("${:.0}", t.aggregate_value)).small());
+                                        ui.end_row();
+                                    }
+                                });
+                            });
                         }
                     } else {
-                        ui.label(egui::RichText::new("No cache available.").color(AXIS_TEXT));
+                        ui.label(egui::RichText::new(format!("No insider trades for {} (last 90 days)", ticker)).color(AXIS_TEXT));
                     }
                 });
         }
@@ -7394,9 +7980,9 @@ impl TyphooNApp {
                         ui.strong("Status");
                         ui.end_row();
                         // Show cached crypto symbols if available
-                        if let Some(ref cache) = self.cache {
-                            if let Ok(stats) = cache.detailed_stats() {
-                                for (key, count, _) in &stats {
+                        {
+                            let stats = &self.bg.detailed_stats;
+                                for (key, count, _) in stats {
                                     if key.starts_with("CC:") || key.starts_with("KRAKEN:") {
                                         let parts: Vec<&str> = key.rsplitn(2, ':').collect();
                                         let (tf_part, sym_part) = if parts.len() == 2 { (parts[0], parts[1]) } else { ("—", key.as_str()) };
@@ -7408,31 +7994,254 @@ impl TyphooNApp {
                                         ui.end_row();
                                     }
                                 }
-                            }
                         }
                     });
                 });
         }
 
-        // Fundamentals
+        // Fundamentals Viewer
         if self.show_fundamentals {
             egui::Window::new("Fundamentals")
                 .open(&mut self.show_fundamentals)
-                .default_size([500.0, 400.0])
+                .default_size([600.0, 550.0])
                 .show(ctx, |ui| {
-                    let ticker = self.charts.get(self.active_tab)
-                        .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
-                        .unwrap_or_default();
+                    let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
+                    let ticker = sym.split(':').rev().nth(1).or_else(|| sym.split(':').last()).unwrap_or(&sym).to_string();
+                    let found = self.bg.all_fundamentals.iter().find(|f| f.symbol == ticker).cloned();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Fundamentals: {}", ticker)).strong());
-                        if ui.button("Fetch").clicked() && !ticker.is_empty() {
-                            let _ = self.broker_tx.send(BrokerCmd::GetFundamentals { ticker: ticker.clone() });
-                            self.log.push_back(LogEntry::info(format!("Fetching fundamentals for {}...", ticker)));
+                        if ui.add(egui::Button::new("Scrape / Refresh").fill(BTN_BLUE)).clicked() && !ticker.is_empty() {
+                            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                            let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrapeOne { ticker: ticker.clone(), db_path });
+                            self.log.push_back(LogEntry::info(format!("Scraping fundamentals for {}...", ticker)));
                         }
                     });
                     ui.separator();
-                    ui.label(egui::RichText::new("Income statement, balance sheet, cash flow via SEC EDGAR.").color(AXIS_TEXT).small());
-                    ui.label(egui::RichText::new("Results appear in the log panel below.").color(AXIS_TEXT).small());
+                    if let Some(f) = found {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            // Company info
+                            ui.label(egui::RichText::new(if f.company_name.is_empty() { "—" } else { &f.company_name }).strong());
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(if f.sector.is_empty() { "—" } else { &f.sector }).color(ACCENT).small());
+                                ui.label(egui::RichText::new(" / ").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(if f.industry.is_empty() { "—" } else { &f.industry }).color(AXIS_TEXT).small());
+                            });
+                            ui.add_space(4.0);
+
+                            // Valuation grid
+                            ui.label(egui::RichText::new("Valuation").small().strong());
+                            egui::Grid::new("fund_val").striped(true).num_columns(4).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Market Cap").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.market_cap.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
+                                ui.label(egui::RichText::new("Enterprise Value").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.enterprise_value.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
+                                ui.end_row();
+                                ui.label(egui::RichText::new("Total Debt").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.total_debt.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
+                                ui.label(egui::RichText::new("Cash").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.cash_and_equivalents.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
+                                ui.end_row();
+                                ui.label(egui::RichText::new("MCap/EV%").color(AXIS_TEXT).small());
+                                let mcev = f.mcap_ev_ratio.unwrap_or(0.0);
+                                let mcev_col = if mcev >= 100.0 { UP } else if mcev < 80.0 { DOWN } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(format!("{:.1}%", mcev)).color(mcev_col).small());
+                                ui.label(egui::RichText::new("Stock Price").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.stock_price.map(|v| format!("${:.2}", v)).unwrap_or_else(|| "—".into())).small());
+                                ui.end_row();
+                                ui.label(egui::RichText::new("Shares Out").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.shares_outstanding.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
+                                ui.end_row();
+                            });
+                            ui.add_space(4.0);
+
+                            // Ratios grid
+                            ui.label(egui::RichText::new("Ratios").small().strong());
+                            egui::Grid::new("fund_ratios").striped(true).num_columns(4).show(ui, |ui| {
+                                let pe = f.pe_ratio.unwrap_or(0.0);
+                                let pe_col = if pe > 50.0 || pe < 0.0 { DOWN } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new("P/E").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.pe_ratio.map(|v| format!("{:.1}", v)).unwrap_or_else(|| "—".into())).color(pe_col).small());
+                                ui.label(egui::RichText::new("Forward P/E").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.forward_pe.map(|v| format!("{:.1}", v)).unwrap_or_else(|| "—".into())).small());
+                                ui.end_row();
+                                ui.label(egui::RichText::new("PEG").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.peg_ratio.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "—".into())).small());
+                                ui.label(egui::RichText::new("P/B").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.price_to_book.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "—".into())).small());
+                                ui.end_row();
+                                ui.label(egui::RichText::new("P/S").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.price_to_sales.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "—".into())).small());
+                                ui.label(egui::RichText::new("EV/EBITDA").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.ev_to_ebitda.map(|v| format!("{:.1}", v)).unwrap_or_else(|| "—".into())).small());
+                                ui.end_row();
+                            });
+                            ui.add_space(4.0);
+
+                            // Profitability grid
+                            ui.label(egui::RichText::new("Profitability & Risk").small().strong());
+                            egui::Grid::new("fund_prof").striped(true).num_columns(4).show(ui, |ui| {
+                                let margin_col = |v: f64| if v >= 0.0 { UP } else { DOWN };
+                                ui.label(egui::RichText::new("Profit Margin").color(AXIS_TEXT).small());
+                                let pm = f.profit_margin.unwrap_or(0.0);
+                                ui.label(egui::RichText::new(f.profit_margin.map(|v| format!("{:.1}%", v * 100.0)).unwrap_or_else(|| "—".into())).color(margin_col(pm)).small());
+                                ui.label(egui::RichText::new("Operating Margin").color(AXIS_TEXT).small());
+                                let om = f.operating_margin.unwrap_or(0.0);
+                                ui.label(egui::RichText::new(f.operating_margin.map(|v| format!("{:.1}%", v * 100.0)).unwrap_or_else(|| "—".into())).color(margin_col(om)).small());
+                                ui.end_row();
+                                ui.label(egui::RichText::new("ROE").color(AXIS_TEXT).small());
+                                let roe = f.roe.unwrap_or(0.0);
+                                ui.label(egui::RichText::new(f.roe.map(|v| format!("{:.1}%", v * 100.0)).unwrap_or_else(|| "—".into())).color(margin_col(roe)).small());
+                                ui.label(egui::RichText::new("ROA").color(AXIS_TEXT).small());
+                                let roa = f.roa.unwrap_or(0.0);
+                                ui.label(egui::RichText::new(f.roa.map(|v| format!("{:.1}%", v * 100.0)).unwrap_or_else(|| "—".into())).color(margin_col(roa)).small());
+                                ui.end_row();
+                                ui.label(egui::RichText::new("Beta").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.beta.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "—".into())).small());
+                                ui.label(egui::RichText::new("Short Ratio").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.short_ratio.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "—".into())).small());
+                                ui.end_row();
+                                ui.label(egui::RichText::new("Short % Float").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.short_percent_of_float.map(|v| format!("{:.1}%", v * 100.0)).unwrap_or_else(|| "—".into())).small());
+                                ui.end_row();
+                            });
+                            ui.add_space(4.0);
+
+                            // Earnings
+                            ui.label(egui::RichText::new("Earnings").small().strong());
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("Next:").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.next_earnings_date.as_deref().unwrap_or("—")).small());
+                                ui.label(egui::RichText::new("  Prev:").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(f.previous_earnings_date.as_deref().unwrap_or("—")).small());
+                            });
+
+                            // Dividends
+                            ui.label(egui::RichText::new("Dividends").small().strong());
+                            if f.is_dividend_stock {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Yield:").color(AXIS_TEXT).small());
+                                    let dy = f.dividend_yield.unwrap_or(0.0);
+                                    let dy_col = if dy > 4.0 { UP } else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(format!("{:.2}%", dy)).color(dy_col).small());
+                                    ui.label(egui::RichText::new("  Ex-Div:").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(f.next_ex_dividend_date.as_deref().unwrap_or("—")).small());
+                                    ui.label(egui::RichText::new("  Payment:").color(AXIS_TEXT).small());
+                                    ui.label(egui::RichText::new(f.next_dividend_payment_date.as_deref().unwrap_or("—")).small());
+                                });
+                            } else {
+                                ui.label(egui::RichText::new("Not a dividend stock").color(AXIS_TEXT).small());
+                            }
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new(format!("Last updated: {}", if f.last_updated.is_empty() { "never" } else { &f.last_updated })).color(AXIS_TEXT).small());
+                        });
+                    } else {
+                        ui.label(egui::RichText::new("No fundamentals data. Run EVSCRAPE command or click Scrape/Refresh.").color(AXIS_TEXT));
+                    }
+                });
+        }
+
+        // EV Scanner
+        if self.show_ev_scanner {
+            egui::Window::new("Enterprise Value Scanner")
+                .open(&mut self.show_ev_scanner)
+                .default_size([900.0, 500.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(egui::RichText::new("Scrape All").color(egui::Color32::WHITE)).fill(BTN_GREEN)).clicked() {
+                            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                            let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path });
+                            self.log.push_back(LogEntry::info("Fundamentals scrape started for all MT5 symbols..."));
+                        }
+                        ui.label(egui::RichText::new(format!("{} symbols", self.bg.all_fundamentals.len())).color(AXIS_TEXT).small());
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::Grid::new("ev_scanner_grid").striped(true).num_columns(9).show(ui, |ui| {
+                            ui.strong("Symbol"); ui.strong("Company"); ui.strong("EV"); ui.strong("MCap");
+                            ui.strong("MCap/EV%"); ui.strong("P/E"); ui.strong("Earnings"); ui.strong("Dividend"); ui.strong("Sector");
+                            ui.end_row();
+                            for f in &self.bg.all_fundamentals {
+                                ui.label(egui::RichText::new(&f.symbol).small().strong().monospace());
+                                ui.label(egui::RichText::new(if f.company_name.is_empty() { "—" } else { &f.company_name }).small());
+                                ui.label(egui::RichText::new(f.enterprise_value.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
+                                ui.label(egui::RichText::new(f.market_cap.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
+                                let mcev = f.mcap_ev_ratio.unwrap_or(0.0);
+                                let mcev_col = if mcev >= 100.0 { UP } else if mcev < 80.0 { DOWN } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(format!("{:.1}%", mcev)).color(mcev_col).small());
+                                let pe = f.pe_ratio.unwrap_or(0.0);
+                                let pe_col = if pe > 50.0 || pe < 0.0 { DOWN } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(f.pe_ratio.map(|v| format!("{:.1}", v)).unwrap_or_else(|| "—".into())).color(pe_col).small());
+                                ui.label(egui::RichText::new(f.next_earnings_date.as_deref().unwrap_or("—")).color(AXIS_TEXT).small());
+                                if f.is_dividend_stock {
+                                    let dy = f.dividend_yield.unwrap_or(0.0);
+                                    let dy_col = if dy > 4.0 { UP } else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(format!("{:.2}%", dy)).color(dy_col).small());
+                                } else {
+                                    ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
+                                }
+                                ui.label(egui::RichText::new(if f.sector.is_empty() { "—" } else { &f.sector }).color(AXIS_TEXT).small());
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+        }
+
+        // Earnings Calendar
+        if self.show_earnings_calendar {
+            egui::Window::new("Earnings Calendar")
+                .open(&mut self.show_earnings_calendar)
+                .default_size([500.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(format!("{} upcoming earnings", self.bg.upcoming_earnings.len())).color(AXIS_TEXT).small());
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::Grid::new("earnings_cal_grid").striped(true).num_columns(3).show(ui, |ui| {
+                            ui.strong("Date"); ui.strong("Symbol"); ui.strong("Company");
+                            ui.end_row();
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            for (sym, company, date) in &self.bg.upcoming_earnings {
+                                let days_away = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok().and_then(|d| {
+                                    chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d").ok().map(|t| (d - t).num_days())
+                                });
+                                let date_col = match days_away {
+                                    Some(d) if d <= 3 => DOWN,
+                                    Some(d) if d <= 7 => SMA200_COL,
+                                    _ => AXIS_TEXT,
+                                };
+                                ui.label(egui::RichText::new(date).color(date_col).small());
+                                ui.label(egui::RichText::new(sym).small().strong().monospace());
+                                ui.label(egui::RichText::new(company).small());
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+        }
+
+        // Dividend Calendar
+        if self.show_dividend_calendar {
+            egui::Window::new("Dividend Calendar")
+                .open(&mut self.show_dividend_calendar)
+                .default_size([500.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(format!("{} upcoming dividends", self.bg.upcoming_dividends.len())).color(AXIS_TEXT).small());
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::Grid::new("div_cal_grid").striped(true).num_columns(4).show(ui, |ui| {
+                            ui.strong("Ex-Div Date"); ui.strong("Symbol"); ui.strong("Company"); ui.strong("Yield%");
+                            ui.end_row();
+                            for (sym, company, date, yld) in &self.bg.upcoming_dividends {
+                                ui.label(egui::RichText::new(date).color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(sym).small().strong().monospace());
+                                ui.label(egui::RichText::new(company).small());
+                                let y = yld.unwrap_or(0.0);
+                                let y_col = if y > 4.0 { UP } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(format!("{:.2}%", y)).color(y_col).small());
+                                ui.end_row();
+                            }
+                        });
+                    });
                 });
         }
 
@@ -7483,7 +8292,7 @@ impl TyphooNApp {
                 });
         }
 
-        // Symbol Overlap — wired to darwin.rs exposure
+        // Symbol Overlap — reads from bg cache
         if self.show_symbol_overlap {
             egui::Window::new("Symbol Overlap")
                 .open(&mut self.show_symbol_overlap)
@@ -7491,45 +8300,37 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("Cross-DARWIN Symbol Overlap");
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let _ = darwin::create_darwin_tables(&conn);
-                            if let Ok(overlaps) = darwin::get_symbol_overlap(&conn) {
-                                if overlaps.is_empty() {
-                                    ui.label("No overlapping symbols across DARWINs.");
-                                } else {
-                                    ui.label(egui::RichText::new(format!("{} overlapping symbols", overlaps.len())).strong());
-                                    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                                        egui::Grid::new("overlap_grid").striped(true).num_columns(6).show(ui, |ui| {
-                                            ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Notional"); ui.strong("Risk"); ui.strong("DARWINs");
-                                            ui.end_row();
-                                            for o in overlaps.iter() {
-                                                ui.label(&o.symbol);
-                                                let side_c = if o.side == "buy" { UP } else { DOWN };
-                                                ui.label(egui::RichText::new(&o.side).color(side_c));
-                                                ui.label(format!("{:.2}", o.total_volume));
-                                                ui.label(format!("${:.0}", o.total_notional));
-                                                let risk_c = match o.correlation_risk.as_str() {
-                                                    "HIGH" => DOWN,
-                                                    "MEDIUM" => egui::Color32::from_rgb(255, 200, 50),
-                                                    _ => UP,
-                                                };
-                                                ui.label(egui::RichText::new(&o.correlation_risk).color(risk_c));
-                                                ui.label(o.darwins.join(", "));
-                                                ui.end_row();
-                                            }
-                                        });
-                                    });
+                    let overlaps = &self.bg.symbol_overlaps;
+                    if overlaps.is_empty() {
+                        ui.label("No overlapping symbols across DARWINs.");
+                    } else {
+                        ui.label(egui::RichText::new(format!("{} overlapping symbols", overlaps.len())).strong());
+                        egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                            egui::Grid::new("overlap_grid").striped(true).num_columns(6).show(ui, |ui| {
+                                ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Notional"); ui.strong("Risk"); ui.strong("DARWINs");
+                                ui.end_row();
+                                for o in overlaps.iter() {
+                                    ui.label(&o.symbol);
+                                    let side_c = if o.side == "buy" { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(&o.side).color(side_c));
+                                    ui.label(format!("{:.2}", o.total_volume));
+                                    ui.label(format!("${:.0}", o.total_notional));
+                                    let risk_c = match o.correlation_risk.as_str() {
+                                        "HIGH" => DOWN,
+                                        "MEDIUM" => egui::Color32::from_rgb(255, 200, 50),
+                                        _ => UP,
+                                    };
+                                    ui.label(egui::RichText::new(&o.correlation_risk).color(risk_c));
+                                    ui.label(o.darwins.join(", "));
+                                    ui.end_row();
                                 }
-                            } else {
-                                ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
-                            }
-                        }
+                            });
+                        });
                     }
                 });
         }
 
-        // Correlation Matrix — wired to darwin.rs correlations
+        // Correlation Matrix — reads from bg cache
         if self.show_correlation {
             egui::Window::new("Correlation Matrix")
                 .open(&mut self.show_correlation)
@@ -7537,35 +8338,29 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("DARWIN Correlation Matrix");
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let _ = darwin::create_darwin_tables(&conn);
-                            if let Ok(corrs) = darwin::get_darwin_correlations(&conn) {
-                                if corrs.is_empty() {
-                                    ui.label(egui::RichText::new("Need 2+ DARWINs imported for correlation.").color(AXIS_TEXT));
-                                } else {
-                                    let high_corr: Vec<_> = corrs.iter().filter(|c| c.correlation.abs() > 0.7).collect();
-                                    if !high_corr.is_empty() {
-                                        ui.label(egui::RichText::new(format!("{} high-correlation pairs (>0.7)", high_corr.len())).color(egui::Color32::from_rgb(255, 200, 50)));
-                                    }
-                                    egui::Grid::new("corr_matrix").striped(true).num_columns(3).show(ui, |ui| {
-                                        ui.strong("DARWIN A"); ui.strong("DARWIN B"); ui.strong("Correlation");
-                                        ui.end_row();
-                                        for c in corrs.iter() {
-                                            ui.label(&c.darwin_a);
-                                            ui.label(&c.darwin_b);
-                                            let color = if c.correlation.abs() > 0.95 { egui::Color32::from_rgb(255, 40, 40) }
-                                                        else if c.correlation.abs() > 0.7 { egui::Color32::from_rgb(255, 200, 50) }
-                                                        else { UP };
-                                            ui.label(egui::RichText::new(format!("{:.4}", c.correlation)).color(color));
-                                            ui.end_row();
-                                        }
-                                    });
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Darwinex limit: 0.95 correlation / 45d").color(AXIS_TEXT));
-                                }
-                            }
+                    let corrs = &self.bg.correlations;
+                    if corrs.is_empty() {
+                        ui.label(egui::RichText::new("Need 2+ DARWINs imported for correlation.").color(AXIS_TEXT));
+                    } else {
+                        let high_corr: Vec<_> = corrs.iter().filter(|c| c.correlation.abs() > 0.7).collect();
+                        if !high_corr.is_empty() {
+                            ui.label(egui::RichText::new(format!("{} high-correlation pairs (>0.7)", high_corr.len())).color(egui::Color32::from_rgb(255, 200, 50)));
                         }
+                        egui::Grid::new("corr_matrix").striped(true).num_columns(3).show(ui, |ui| {
+                            ui.strong("DARWIN A"); ui.strong("DARWIN B"); ui.strong("Correlation");
+                            ui.end_row();
+                            for c in corrs.iter() {
+                                ui.label(&c.darwin_a);
+                                ui.label(&c.darwin_b);
+                                let color = if c.correlation.abs() > 0.95 { egui::Color32::from_rgb(255, 40, 40) }
+                                            else if c.correlation.abs() > 0.7 { egui::Color32::from_rgb(255, 200, 50) }
+                                            else { UP };
+                                ui.label(egui::RichText::new(format!("{:.4}", c.correlation)).color(color));
+                                ui.end_row();
+                            }
+                        });
+                        ui.add_space(5.0);
+                        ui.label(egui::RichText::new("Darwinex limit: 0.95 correlation / 45d").color(AXIS_TEXT));
                     }
                 });
         }
@@ -7618,7 +8413,7 @@ impl TyphooNApp {
                 });
         }
 
-        // Monte Carlo — simulation using DARWIN daily returns or bar data
+        // Monte Carlo — reads from bg cache
         if self.show_montecarlo {
             egui::Window::new("Monte Carlo VaR")
                 .open(&mut self.show_montecarlo)
@@ -7626,47 +8421,39 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("Monte Carlo Simulation");
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let _ = darwin::create_darwin_tables(&conn);
-                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                if daily.len() > 30 {
-                                    let var_stats = darwin::compute_var(&daily);
-                                    egui::Grid::new("mc_grid").striped(true).num_columns(2).show(ui, |ui| {
-                                        ui.label("Trading Days:"); ui.label(format!("{}", var_stats.trading_days));
-                                        ui.end_row();
-                                        ui.label("VaR 95% (daily):"); ui.label(format!("${:.2}", var_stats.var_95));
-                                        ui.end_row();
-                                        ui.label("VaR 99% (daily):"); ui.label(format!("${:.2}", var_stats.var_99));
-                                        ui.end_row();
-                                        ui.label("CVaR 95%:"); ui.label(format!("${:.2}", var_stats.cvar_95));
-                                        ui.end_row();
-                                        ui.label("CVaR 99%:"); ui.label(format!("${:.2}", var_stats.cvar_99));
-                                        ui.end_row();
-                                        ui.label("Daily Volatility:"); ui.label(format!("{:.4}", var_stats.daily_vol));
-                                        ui.end_row();
-                                        ui.label("Annualized Vol:"); ui.label(format!("{:.4}", var_stats.annualized_vol));
-                                        ui.end_row();
-                                        ui.label("Sharpe Ratio:"); ui.label(format!("{:.3}", var_stats.sharpe));
-                                        ui.end_row();
-                                        ui.label("Sortino Ratio:"); ui.label(format!("{:.3}", var_stats.sortino));
-                                        ui.end_row();
-                                        ui.label("Calmar Ratio:"); ui.label(format!("{:.3}", var_stats.calmar));
-                                        ui.end_row();
-                                        ui.label("Max Drawdown:"); ui.label(format!("{:.2}%", var_stats.max_drawdown_pct));
-                                        ui.end_row();
-                                        ui.label("Avg Daily P&L:"); ui.label(format!("${:.2}", var_stats.avg_daily_pnl));
-                                        ui.end_row();
-                                        ui.label("Best Day:"); ui.label(egui::RichText::new(format!("${:.2}", var_stats.best_day)).color(UP));
-                                        ui.end_row();
-                                        ui.label("Worst Day:"); ui.label(egui::RichText::new(format!("${:.2}", var_stats.worst_day)).color(DOWN));
-                                        ui.end_row();
-                                    });
-                                } else {
-                                    ui.label(egui::RichText::new("Need 30+ daily returns for Monte Carlo. Import DARWIN data.").color(AXIS_TEXT));
-                                }
-                            }
-                        }
+                    if let Some(ref var_stats) = self.bg.var_stats {
+                        egui::Grid::new("mc_grid").striped(true).num_columns(2).show(ui, |ui| {
+                            ui.label("Trading Days:"); ui.label(format!("{}", var_stats.trading_days));
+                            ui.end_row();
+                            ui.label("VaR 95% (daily):"); ui.label(format!("${:.2}", var_stats.var_95));
+                            ui.end_row();
+                            ui.label("VaR 99% (daily):"); ui.label(format!("${:.2}", var_stats.var_99));
+                            ui.end_row();
+                            ui.label("CVaR 95%:"); ui.label(format!("${:.2}", var_stats.cvar_95));
+                            ui.end_row();
+                            ui.label("CVaR 99%:"); ui.label(format!("${:.2}", var_stats.cvar_99));
+                            ui.end_row();
+                            ui.label("Daily Volatility:"); ui.label(format!("{:.4}", var_stats.daily_vol));
+                            ui.end_row();
+                            ui.label("Annualized Vol:"); ui.label(format!("{:.4}", var_stats.annualized_vol));
+                            ui.end_row();
+                            ui.label("Sharpe Ratio:"); ui.label(format!("{:.3}", var_stats.sharpe));
+                            ui.end_row();
+                            ui.label("Sortino Ratio:"); ui.label(format!("{:.3}", var_stats.sortino));
+                            ui.end_row();
+                            ui.label("Calmar Ratio:"); ui.label(format!("{:.3}", var_stats.calmar));
+                            ui.end_row();
+                            ui.label("Max Drawdown:"); ui.label(format!("{:.2}%", var_stats.max_drawdown_pct));
+                            ui.end_row();
+                            ui.label("Avg Daily P&L:"); ui.label(format!("${:.2}", var_stats.avg_daily_pnl));
+                            ui.end_row();
+                            ui.label("Best Day:"); ui.label(egui::RichText::new(format!("${:.2}", var_stats.best_day)).color(UP));
+                            ui.end_row();
+                            ui.label("Worst Day:"); ui.label(egui::RichText::new(format!("${:.2}", var_stats.worst_day)).color(DOWN));
+                            ui.end_row();
+                        });
+                    } else {
+                        ui.label(egui::RichText::new("Need 30+ daily returns for Monte Carlo. Import DARWIN data.").color(AXIS_TEXT));
                     }
                 });
         }
@@ -7679,42 +8466,37 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("Portfolio Stress Test");
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let _ = darwin::create_darwin_tables(&conn);
-                            if let Ok(portfolio) = darwin::get_portfolio_summary(&conn) {
-                                if !portfolio.accounts.is_empty() {
-                                    let equity = portfolio.total_final_balance;
-                                    ui.label(format!("Current portfolio equity: ${:.2}", equity));
-                                    ui.add_space(10.0);
-                                    let scenarios = [
-                                        ("2008 GFC", -56.8),
-                                        ("COVID Mar 2020", -33.9),
-                                        ("2022 Bear Market", -25.4),
-                                        ("Flash Crash 2010", -9.0),
-                                        ("Brexit Vote 2016", -5.3),
-                                        ("10% Correction", -10.0),
-                                        ("20% Bear", -20.0),
-                                        ("50% Crash", -50.0),
-                                    ];
-                                    egui::Grid::new("stress_grid").striped(true).num_columns(3).show(ui, |ui| {
-                                        ui.strong("Scenario"); ui.strong("Drawdown"); ui.strong("Equity After");
-                                        ui.end_row();
-                                        for (name, dd_pct) in &scenarios {
-                                            let after = equity * (1.0 + dd_pct / 100.0);
-                                            let loss = equity - after;
-                                            ui.label(*name);
-                                            ui.label(egui::RichText::new(format!("{:.1}%", dd_pct)).color(DOWN));
-                                            ui.label(egui::RichText::new(format!("${:.2} (−${:.2})", after, loss)).color(DOWN));
-                                            ui.end_row();
-                                        }
-                                    });
-                                    ui.add_space(5.0);
-                                    ui.label(format!("Max historical DD: {:.2}%", portfolio.combined_max_drawdown_pct));
-                                } else {
-                                    ui.label(egui::RichText::new("Import DARWIN data for stress testing.").color(AXIS_TEXT));
+                    if let Some(ref portfolio) = self.bg.portfolio {
+                        if !portfolio.accounts.is_empty() {
+                            let equity = portfolio.total_final_balance;
+                            ui.label(format!("Current portfolio equity: ${:.2}", equity));
+                            ui.add_space(10.0);
+                            let scenarios = [
+                                ("2008 GFC", -56.8),
+                                ("COVID Mar 2020", -33.9),
+                                ("2022 Bear Market", -25.4),
+                                ("Flash Crash 2010", -9.0),
+                                ("Brexit Vote 2016", -5.3),
+                                ("10% Correction", -10.0),
+                                ("20% Bear", -20.0),
+                                ("50% Crash", -50.0),
+                            ];
+                            egui::Grid::new("stress_grid").striped(true).num_columns(3).show(ui, |ui| {
+                                ui.strong("Scenario"); ui.strong("Drawdown"); ui.strong("Equity After");
+                                ui.end_row();
+                                for (name, dd_pct) in &scenarios {
+                                    let after = equity * (1.0 + dd_pct / 100.0);
+                                    let loss = equity - after;
+                                    ui.label(*name);
+                                    ui.label(egui::RichText::new(format!("{:.1}%", dd_pct)).color(DOWN));
+                                    ui.label(egui::RichText::new(format!("${:.2} (−${:.2})", after, loss)).color(DOWN));
+                                    ui.end_row();
                                 }
-                            }
+                            });
+                            ui.add_space(5.0);
+                            ui.label(format!("Max historical DD: {:.2}%", portfolio.combined_max_drawdown_pct));
+                        } else {
+                            ui.label(egui::RichText::new("Import DARWIN data for stress testing.").color(AXIS_TEXT));
                         }
                     }
                 });
@@ -7849,7 +8631,7 @@ impl TyphooNApp {
                 });
         }
 
-        // VaR Multiplier — wired to DARWIN VaR data
+        // VaR Multiplier — reads from bg cache
         if self.show_var_mult {
             egui::Window::new("VaR Multiplier")
                 .open(&mut self.show_var_mult)
@@ -7857,58 +8639,45 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("Darwinex VaR Corridor");
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            let _ = darwin::create_darwin_tables(&conn);
-                            if let Ok(accounts) = darwin::list_darwin_accounts(&conn) {
-                                if !accounts.is_empty() {
-                                    egui::Grid::new("var_per_darwin").striped(true).num_columns(5).show(ui, |ui| {
-                                        ui.strong("DARWIN"); ui.strong("VaR 95%"); ui.strong("Vol"); ui.strong("Sharpe"); ui.strong("Status");
-                                        ui.end_row();
-                                        for acct in &accounts {
-                                            if let Ok(daily) = darwin::get_daily_returns(&conn, &acct.darwin_ticker) {
-                                                if !daily.is_empty() {
-                                                    let vs = darwin::compute_var(&daily);
-                                                    ui.label(&acct.darwin_ticker);
-                                                    ui.label(format!("${:.2}", vs.var_95));
-                                                    ui.label(format!("{:.4}", vs.annualized_vol));
-                                                    ui.label(format!("{:.3}", vs.sharpe));
-                                                    // VaR corridor status
-                                                    let var_pct = vs.annualized_vol * 100.0;
-                                                    let status = if var_pct >= 3.25 && var_pct <= 6.5 { ("IN", UP) }
-                                                                 else if var_pct < 3.25 { ("LOW", egui::Color32::from_rgb(255, 200, 50)) }
-                                                                 else { ("HIGH", DOWN) };
-                                                    ui.label(egui::RichText::new(status.0).color(status.1).strong());
-                                                    ui.end_row();
-                                                }
-                                            }
-                                        }
-                                    });
-                                    // VaR Multipliers (Darwinex-style)
-                                    ui.add_space(10.0);
-                                    ui.heading("VaR Multipliers");
-                                    ui.separator();
-                                    if let Ok(mults) = darwin::compute_var_multipliers(&conn) {
-                                        egui::Grid::new("var_mult_grid").striped(true).num_columns(5).show(ui, |ui| {
-                                            ui.strong("DARWIN"); ui.strong("Monthly VaR"); ui.strong("Multiplier"); ui.strong("Corridor"); ui.strong("45d VaR");
-                                            ui.end_row();
-                                            for m in &mults {
-                                                ui.label(&m.darwin_ticker);
-                                                ui.label(format!("{:.2}%", m.monthly_var));
-                                                let mc = if m.multiplier >= 1.5 { UP } else if m.multiplier >= 0.8 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
-                                                ui.label(egui::RichText::new(format!("{:.2}x", m.multiplier)).color(mc));
-                                                let cc = if m.in_corridor { UP } else { DOWN };
-                                                ui.label(egui::RichText::new(&m.corridor_position).color(cc));
-                                                ui.label(format!("{:.2}%", m.var_45d));
-                                                ui.end_row();
-                                            }
-                                        });
-                                    }
-                                } else {
-                                    ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
-                                }
+                    if !self.bg.per_darwin_var.is_empty() {
+                        egui::Grid::new("var_per_darwin").striped(true).num_columns(5).show(ui, |ui| {
+                            ui.strong("DARWIN"); ui.strong("VaR 95%"); ui.strong("Vol"); ui.strong("Sharpe"); ui.strong("Status");
+                            ui.end_row();
+                            for (ticker, vs) in &self.bg.per_darwin_var {
+                                ui.label(ticker);
+                                ui.label(format!("${:.2}", vs.var_95));
+                                ui.label(format!("{:.4}", vs.annualized_vol));
+                                ui.label(format!("{:.3}", vs.sharpe));
+                                let var_pct = vs.annualized_vol * 100.0;
+                                let status = if var_pct >= 3.25 && var_pct <= 6.5 { ("IN", UP) }
+                                             else if var_pct < 3.25 { ("LOW", egui::Color32::from_rgb(255, 200, 50)) }
+                                             else { ("HIGH", DOWN) };
+                                ui.label(egui::RichText::new(status.0).color(status.1).strong());
+                                ui.end_row();
                             }
+                        });
+                        // VaR Multipliers (from bg cache)
+                        ui.add_space(10.0);
+                        ui.heading("VaR Multipliers");
+                        ui.separator();
+                        if !self.bg.var_multipliers.is_empty() {
+                            egui::Grid::new("var_mult_grid").striped(true).num_columns(5).show(ui, |ui| {
+                                ui.strong("DARWIN"); ui.strong("Monthly VaR"); ui.strong("Multiplier"); ui.strong("Corridor"); ui.strong("45d VaR");
+                                ui.end_row();
+                                for m in &self.bg.var_multipliers {
+                                    ui.label(&m.darwin_ticker);
+                                    ui.label(format!("{:.2}%", m.monthly_var));
+                                    let mc = if m.multiplier >= 1.5 { UP } else if m.multiplier >= 0.8 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
+                                    ui.label(egui::RichText::new(format!("{:.2}x", m.multiplier)).color(mc));
+                                    let cc = if m.in_corridor { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(&m.corridor_position).color(cc));
+                                    ui.label(format!("{:.2}%", m.var_45d));
+                                    ui.end_row();
+                                }
+                            });
                         }
+                    } else {
+                        ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
                     }
                     ui.add_space(10.0);
                     ui.separator();
@@ -7970,30 +8739,29 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("SQLite Cache");
                     ui.separator();
-                    if let Some(ref cache) = self.cache {
-                        if let Ok((rows, kv, size)) = cache.stats() {
-                            ui.label(format!("Bar entries: {}", rows));
-                            ui.label(format!("KV entries: {}", kv));
-                            ui.label(format!("DB size: {} KB", size / 1024));
-                        }
-                        ui.add_space(10.0);
-                        if let Ok(details) = cache.detailed_stats() {
-                            ui.heading("Cached Symbols");
-                            ui.separator();
-                            egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
-                                egui::Grid::new("cache_detail").striped(true).num_columns(3).show(ui, |ui| {
-                                    ui.strong("Key"); ui.strong("Bars"); ui.strong("Size (KB)");
+                    if let Some((rows, kv, size)) = self.bg.cache_stats {
+                        ui.label(format!("Bar entries: {}", rows));
+                        ui.label(format!("KV entries: {}", kv));
+                        ui.label(format!("DB size: {} KB", size / 1024));
+                    }
+                    ui.add_space(10.0);
+                    if !self.bg.detailed_stats.is_empty() {
+                        ui.heading("Cached Symbols");
+                        ui.separator();
+                        egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
+                            egui::Grid::new("cache_detail").striped(true).num_columns(3).show(ui, |ui| {
+                                ui.strong("Key"); ui.strong("Bars"); ui.strong("Size (KB)");
+                                ui.end_row();
+                                for (key, count, size) in &self.bg.detailed_stats {
+                                    ui.label(key);
+                                    ui.label(format!("{}", count));
+                                    ui.label(format!("{}", size / 1024));
                                     ui.end_row();
-                                    for (key, count, size) in &details {
-                                        ui.label(key);
-                                        ui.label(format!("{}", count));
-                                        ui.label(format!("{}", size / 1024));
-                                        ui.end_row();
-                                    }
-                                });
+                                }
                             });
-                        }
-                    } else {
+                        });
+                    }
+                    if self.cache.is_none() {
                         ui.label(egui::RichText::new("Cache not available").color(egui::Color32::from_rgb(255, 80, 80)));
                     }
                 });
@@ -8170,15 +8938,11 @@ impl TyphooNApp {
                     ui.add_space(10.0);
                     ui.label(egui::RichText::new("DARWIN Risk Alerts").strong());
                     ui.separator();
-                    let darwin_alerts = self.cache.as_ref().and_then(|c| c.connection().ok()).and_then(|conn| {
-                        let _ = darwin::create_darwin_tables(&conn);
-                        darwin::check_alerts(&conn).ok()
-                    });
-                    if let Some(alerts) = darwin_alerts {
+                    { let alerts = &self.bg.darwin_alerts;
                         if alerts.is_empty() {
                             ui.label(egui::RichText::new("No risk alerts — all clear.").color(UP));
                         } else {
-                            for alert in &alerts {
+                            for alert in alerts {
                                 let color = match alert.severity.as_str() {
                                     "CRITICAL" => DOWN,
                                     "WARNING" => egui::Color32::from_rgb(255, 200, 50),
@@ -8273,10 +9037,187 @@ impl TyphooNApp {
                 });
         }
 
-        // Restore cache after non-db frame (was temporarily taken to skip DB queries)
-        if let Some(c) = real_cache {
-            self.cache = Some(c);
+        // DARWIN FTP Browser
+        if self.show_darwin_browser {
+            egui::Window::new("DARWIN Browser")
+                .open(&mut self.show_darwin_browser)
+                .default_size([950.0, 600.0])
+                .show(ctx, |ui| {
+                    // Top bar: scan button + stats
+                    ui.horizontal(|ui| {
+                        if ui.button("Scan Universe").clicked() && !self.darwin_ftp_dir.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                            self.log.push_back(LogEntry::info("Scanning DARWIN FTP universe..."));
+                        }
+                        if ui.add_enabled(
+                            !self.darwin_ftp_dir.is_empty() && self.gpu_darwin.is_some(),
+                            egui::Button::new("GPU Scan"),
+                        ).clicked() {
+                            let _ = self.broker_tx.send(BrokerCmd::DarwinGpuScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                            self.log.push_back(LogEntry::info("GPU DARWIN scan started (reading FTP → GPU compute)..."));
+                        }
+                        ui.label(format!("{} DARWINs loaded", self.ftp_scan_results.len()));
+                        ui.separator();
+                        // Ticker lookup
+                        ui.label("Lookup:");
+                        ui.add(egui::TextEdit::singleline(&mut self.ftp_detail_ticker).desired_width(60.0).hint_text("HAKR"));
+                        if ui.button("View").clicked() && !self.ftp_detail_ticker.is_empty() && !self.darwin_ftp_dir.is_empty() {
+                            let ticker = self.ftp_detail_ticker.trim().to_uppercase();
+                            self.ftp_detail_ticker = ticker.clone();
+                            let ftp = std::path::Path::new(&self.darwin_ftp_dir);
+                            self.ftp_detail_avail = Some(darwin_ftp::check_availability(ftp, &ticker));
+                            if let Ok(returns) = darwin_ftp::read_return_file(ftp, &ticker) {
+                                self.ftp_detail_summary = Some(darwin_ftp::compute_return_summary(&ticker, &returns));
+                                self.ftp_detail_returns = returns;
+                            } else {
+                                self.ftp_detail_summary = None;
+                                self.ftp_detail_returns.clear();
+                            }
+                        }
+                    });
+                    ui.separator();
+
+                    // Two-panel layout: left = table, right = detail
+                    let avail_width = ui.available_width();
+                    ui.horizontal(|ui| {
+                        // Left panel: scan results table
+                        ui.vertical(|ui| {
+                            ui.set_width(avail_width * 0.55);
+                            ui.heading("Universe (sorted by Sharpe)");
+                            if self.ftp_scan_results.is_empty() {
+                                ui.label(egui::RichText::new("Click 'Scan Universe' to load DARWINs from FTP.").color(AXIS_TEXT));
+                                if self.darwin_ftp_dir.is_empty() {
+                                    ui.label(egui::RichText::new("Set FTP Dir in Settings first.").color(DOWN));
+                                }
+                            } else {
+                                egui::ScrollArea::vertical().max_height(500.0).show(ui, |ui| {
+                                    egui::Grid::new("ftp_universe").striped(true).num_columns(7).show(ui, |ui| {
+                                        ui.strong("DARWIN"); ui.strong("Days"); ui.strong("Return%"); ui.strong("MaxDD%"); ui.strong("Sharpe"); ui.strong("Sortino"); ui.strong("Price");
+                                        ui.end_row();
+                                        for s in self.ftp_scan_results.iter().take(500) {
+                                            let ret_c = if s.total_return_pct >= 0.0 { UP } else { DOWN };
+                                            // Clickable ticker
+                                            if ui.add(egui::Label::new(egui::RichText::new(&s.ticker).strong().color(ACCENT)).sense(egui::Sense::click())).clicked() {
+                                                self.ftp_detail_ticker = s.ticker.clone();
+                                                let ftp = std::path::Path::new(&self.darwin_ftp_dir);
+                                                self.ftp_detail_avail = Some(darwin_ftp::check_availability(ftp, &s.ticker));
+                                                if let Ok(returns) = darwin_ftp::read_return_file(ftp, &s.ticker) {
+                                                    self.ftp_detail_summary = Some(darwin_ftp::compute_return_summary(&s.ticker, &returns));
+                                                    self.ftp_detail_returns = returns;
+                                                }
+                                            }
+                                            ui.label(format!("{}", s.trading_days));
+                                            ui.label(egui::RichText::new(format!("{:.1}%", s.total_return_pct)).color(ret_c));
+                                            ui.label(egui::RichText::new(format!("{:.1}%", s.max_drawdown_pct)).color(DOWN));
+                                            let sharpe_c = if s.sharpe >= 1.0 { UP } else if s.sharpe >= 0.0 { AXIS_TEXT } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("{:.2}", s.sharpe)).color(sharpe_c));
+                                            ui.label(format!("{:.2}", s.sortino));
+                                            ui.label(format!("{:.1}", s.last_quote));
+                                            ui.end_row();
+                                        }
+                                    });
+                                });
+                            }
+                        });
+
+                        ui.separator();
+
+                        // Right panel: detail view
+                        ui.vertical(|ui| {
+                            ui.set_width(avail_width * 0.42);
+                            if let Some(ref summary) = self.ftp_detail_summary {
+                                ui.heading(format!("DARWIN {}", summary.ticker));
+                                ui.separator();
+                                egui::Grid::new("ftp_detail").striped(true).num_columns(2).show(ui, |ui| {
+                                    ui.label("Trading Days:"); ui.label(format!("{}", summary.trading_days)); ui.end_row();
+                                    let ret_c = if summary.total_return_pct >= 0.0 { UP } else { DOWN };
+                                    ui.label("Total Return:"); ui.label(egui::RichText::new(format!("{:.2}%", summary.total_return_pct)).color(ret_c)); ui.end_row();
+                                    ui.label("Max Drawdown:"); ui.label(egui::RichText::new(format!("{:.2}%", summary.max_drawdown_pct)).color(DOWN)); ui.end_row();
+                                    ui.label("Sharpe Ratio:"); ui.label(format!("{:.3}", summary.sharpe)); ui.end_row();
+                                    ui.label("Sortino Ratio:"); ui.label(format!("{:.3}", summary.sortino)); ui.end_row();
+                                    ui.label("Daily Vol:"); ui.label(format!("{:.4}", summary.daily_vol)); ui.end_row();
+                                    ui.label("Best Day:"); ui.label(egui::RichText::new(format!("{:.2}%", summary.best_day_pct)).color(UP)); ui.end_row();
+                                    ui.label("Worst Day:"); ui.label(egui::RichText::new(format!("{:.2}%", summary.worst_day_pct)).color(DOWN)); ui.end_row();
+                                    ui.label("DARWIN Price:"); ui.label(format!("{:.2}", summary.last_quote)); ui.end_row();
+                                    ui.label("Experience:"); ui.label(format!("{:.1}", summary.experience_score)); ui.end_row();
+                                    ui.label("Risk Stability:"); ui.label(format!("{:.1}", summary.risk_stability_score)); ui.end_row();
+                                    ui.label("Performance:"); ui.label(format!("{:.1}", summary.performance_score)); ui.end_row();
+                                });
+
+                                // Equity curve plot
+                                if self.ftp_detail_returns.len() > 5 {
+                                    ui.add_space(10.0);
+                                    ui.label(egui::RichText::new("Equity Curve").strong());
+                                    let points: PlotPoints = PlotPoints::new(
+                                        self.ftp_detail_returns.iter().enumerate()
+                                            .filter_map(|(i, r)| r.cumulative_returns.last().map(|v| [i as f64, *v * 100.0]))
+                                            .collect()
+                                    );
+                                    let line = Line::new("Equity", points).color(ACCENT);
+                                    Plot::new("ftp_equity_plot")
+                                        .height(180.0)
+                                        .allow_drag(false)
+                                        .allow_zoom(false)
+                                        .show(ui, |plot_ui| { plot_ui.line(line); });
+                                }
+
+                                // Data availability
+                                if let Some(ref avail) = self.ftp_detail_avail {
+                                    ui.add_space(10.0);
+                                    ui.label(egui::RichText::new("Data Available").strong());
+                                    ui.horizontal_wrapped(|ui| {
+                                        let show = |ui: &mut egui::Ui, name: &str, has: bool| {
+                                            let c = if has { UP } else { egui::Color32::from_rgb(60, 60, 60) };
+                                            ui.label(egui::RichText::new(name).color(c).small());
+                                        };
+                                        show(ui, "RETURN", avail.has_return);
+                                        show(ui, "TRADES", avail.has_trades);
+                                        show(ui, "POSITIONS", avail.has_positions);
+                                        show(ui, "EXPERIENCE", avail.has_experience);
+                                        show(ui, "RISK", avail.has_risk_stability);
+                                        show(ui, "PERF", avail.has_performance);
+                                        show(ui, "SCALE", avail.has_scalability);
+                                        show(ui, "CORR", avail.has_market_correlation);
+                                        show(ui, "BADGES", avail.has_badges);
+                                        show(ui, "QUOTES", avail.has_quotes);
+                                        show(ui, "VAR10", avail.has_former_var10);
+                                    });
+                                    if !avail.quote_months.is_empty() {
+                                        ui.label(egui::RichText::new(format!("Quotes: {} months ({} → {})",
+                                            avail.quote_months.len(),
+                                            avail.quote_months.first().unwrap_or(&String::new()),
+                                            avail.quote_months.last().unwrap_or(&String::new())
+                                        )).color(AXIS_TEXT).small());
+                                    }
+                                    ui.label(egui::RichText::new(format!("D-Score: {} days", avail.dscore_days)).color(AXIS_TEXT).small());
+                                }
+
+                                // Correlation with our DARWINs
+                                if !self.bg.accounts.is_empty() && !self.darwin_ftp_dir.is_empty() {
+                                    ui.add_space(10.0);
+                                    ui.label(egui::RichText::new("Correlation with Portfolio").strong());
+                                    let ftp = std::path::Path::new(&self.darwin_ftp_dir);
+                                    for acct in &self.bg.accounts {
+                                        match darwin_ftp::compute_correlation(ftp, &summary.ticker, &acct.darwin_ticker) {
+                                            Ok(corr) => {
+                                                let c = if corr.abs() > 0.7 { DOWN } else if corr.abs() > 0.4 { egui::Color32::from_rgb(255, 200, 50) } else { UP };
+                                                ui.label(egui::RichText::new(format!("vs {}: {:.4}", acct.darwin_ticker, corr)).color(c).small());
+                                            }
+                                            Err(_) => {
+                                                ui.label(egui::RichText::new(format!("vs {}: N/A", acct.darwin_ticker)).color(AXIS_TEXT).small());
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                ui.heading("DARWIN Detail");
+                                ui.label(egui::RichText::new("Enter a ticker and click View, or click a ticker in the table.").color(AXIS_TEXT));
+                            }
+                        });
+                    });
+                });
         }
+
     }
 }
 
@@ -8299,6 +9240,63 @@ impl eframe::App for TyphooNApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
         ctx.set_visuals(Self::dark_visuals());
+
+        // ── Receive async cache open result ──────────────────────────────
+        if self.cache.is_none() {
+            if let Some(ref rx) = self.cache_rx {
+                if let Ok(c) = rx.try_recv() {
+                    self.log.push_back(LogEntry::info("Cache opened"));
+                    self.cache = Some(c);
+                    self.cache_rx = None; // done, drop receiver
+                }
+            }
+        }
+        // Load active chart once cache arrives
+        if !self.cache_loaded && self.cache.is_some() {
+            self.cache_loaded = true;
+            // Load session (rebuilds chart tabs from saved state)
+            self.load_session();
+            // Ensure active chart has bars
+            if let Some(cache) = self.cache.clone() {
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    if chart.bars.is_empty() {
+                        chart.load(&cache, &mut self.log);
+                    }
+                }
+            }
+            {
+                // Load credentials from system keyring
+                if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_API_KEY) { self.broker_api_key = v; }
+                if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_SECRET) { self.broker_secret = v; }
+                if let Ok(Some(v)) = keyring::load(keyring::keys::FINNHUB_KEY) { self.finnhub_key = v; }
+                if let Ok(Some(v)) = keyring::load(keyring::keys::TT_USERNAME) { self.tt_username = v; }
+                if let Ok(Some(v)) = keyring::load(keyring::keys::TT_PASSWORD) { self.tt_password = v; }
+                if !self.broker_api_key.is_empty() {
+                    self.log.push_back(LogEntry::info("Credentials loaded from system keyring"));
+                }
+                // Auto-import DARWIN XLSX if needed
+                if !self.darwin_xlsx_dir.is_empty() {
+                    let dir = std::path::PathBuf::from(&self.darwin_xlsx_dir);
+                    if dir.is_dir() {
+                        let has_accounts = self.cache.as_ref().and_then(|c| {
+                            c.connection().ok().and_then(|conn| {
+                                let _ = darwin::create_darwin_tables(&conn);
+                                darwin::list_darwin_accounts(&conn).ok()
+                            })
+                        }).map(|a| !a.is_empty()).unwrap_or(false);
+                        if !has_accounts {
+                            let mut db_path = dirs_home();
+                            db_path.push("cache");
+                            db_path.push("typhoon_cache.db");
+                            let _ = self.broker_tx.send(BrokerCmd::DarwinImportAll { dir, db_path });
+                            self.log.push_back(LogEntry::info(format!("Auto-importing DARWIN XLSX from {}", self.darwin_xlsx_dir)));
+                        } else {
+                            self.log.push_back(LogEntry::info("DARWIN data already imported (use Import button to reimport)"));
+                        }
+                    }
+                }
+            }
+        }
 
         // ── Global font/spacing to match old WebKit (Consolas 11px) ──────
         if self.frame_count == 1 {
@@ -8329,6 +9327,11 @@ impl eframe::App for TyphooNApp {
             style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 65, 90));
             style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(0.0, egui::Color32::TRANSPARENT);
             ctx.set_style(style);
+        }
+
+        // ── drain background DARWIN data ─────────────────────────────────
+        while let Ok(data) = self.bg_rx.try_recv() {
+            self.bg = data;
         }
 
         // ── poll async broker messages ───────────────────────────────────
@@ -8373,6 +9376,53 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::JsonResult(label, text) => {
                     self.log.push_back(LogEntry::info(format!("{}:\n{}", label, text)));
+                }
+                BrokerMsg::FundamentalsProgress(msg) => {
+                    self.log.push_back(LogEntry::info(msg));
+                }
+                BrokerMsg::DarwinFtpScanResult(results) => {
+                    self.log.push_back(LogEntry::info(format!("DARWIN FTP: {} results loaded", results.len())));
+                    self.ftp_scan_results = results;
+                }
+                BrokerMsg::DarwinFtpReturns(returns_data) => {
+                    self.log.push_back(LogEntry::info(format!("GPU: uploading {} DARWINs to VRAM...", returns_data.len())));
+                    if let Some(ref mut gpu) = self.gpu_darwin {
+                        let max_days = returns_data.iter().map(|(_, r)| r.len()).max().unwrap_or(0) as u32;
+                        let tickers: Vec<String> = returns_data.iter().map(|(t, _)| t.clone()).collect();
+                        let series: Vec<Vec<f32>> = returns_data.into_iter().map(|(_, r)| r).collect();
+                        gpu.upload_returns(&series, max_days);
+                        gpu.compute_stats();
+                        if let Some(stats) = gpu.readback_stats() {
+                            self.log.push_back(LogEntry::info(format!("GPU: {} DARWIN stats computed", stats.len())));
+                            self.ftp_scan_results.clear();
+                            for (i, s) in stats.iter().enumerate() {
+                                if i < tickers.len() {
+                                    self.ftp_scan_results.push(darwin_ftp::DarwinFtpSummary {
+                                        ticker: tickers[i].clone(),
+                                        trading_days: 0,
+                                        total_return_pct: s.total_return as f64 * 100.0,
+                                        max_drawdown_pct: s.max_drawdown as f64 * 100.0,
+                                        sharpe: s.sharpe as f64,
+                                        sortino: s.sortino as f64,
+                                        daily_vol: s.variance.sqrt() as f64,
+                                        best_day_pct: s.best_day as f64 * 100.0,
+                                        worst_day_pct: s.worst_day as f64 * 100.0,
+                                        last_quote: 0.0,
+                                        has_dscore: false,
+                                        has_quotes: false,
+                                        has_former_var10: false,
+                                        experience_score: 0.0,
+                                        risk_stability_score: 0.0,
+                                        performance_score: 0.0,
+                                    });
+                                }
+                            }
+                            self.ftp_scan_results.sort_by(|a, b| b.sharpe.partial_cmp(&a.sharpe).unwrap_or(std::cmp::Ordering::Equal));
+                            self.log.push_back(LogEntry::info(format!("GPU scan complete: {} DARWINs ranked by Sharpe", self.ftp_scan_results.len())));
+                        }
+                    } else {
+                        self.log.push_back(LogEntry::warn("GPU not available — cannot compute stats"));
+                    }
                 }
             }
         }
@@ -8435,7 +9485,19 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── crosshair from pointer ───────────────────────────────────────────
-        self.crosshair = ctx.input(|i| i.pointer.hover_pos());
+        // Suppress crosshair when pointer is over a floating window (dragging, resizing, scrolling)
+        let pointer_over_ui = ctx.wants_pointer_input() || ctx.is_using_pointer() || ctx.dragged_id().is_some();
+        let pointer_over_floating = if !pointer_over_ui {
+            let hp = ctx.input(|i| i.pointer.hover_pos().unwrap_or_default());
+            ctx.layer_id_at(hp)
+                .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
+                .unwrap_or(false)
+        } else { true };
+        self.crosshair = if pointer_over_floating {
+            None
+        } else {
+            ctx.input(|i| i.pointer.hover_pos())
+        };
 
         // ── keyboard shortcuts ───────────────────────────────────────────────
         if !self.command_open {
@@ -8993,6 +10055,14 @@ impl eframe::App for TyphooNApp {
                 // Apply deferred actions
                 if let Some(idx) = switch_to {
                     self.active_tab = idx;
+                    // Lazy-load chart bars on first tab switch
+                    if let Some(chart) = self.charts.get_mut(idx) {
+                        if chart.bars.is_empty() {
+                            if let Some(ref cache) = self.cache {
+                                chart.load(cache, &mut self.log);
+                            }
+                        }
+                    }
                 }
                 if let Some(idx) = close_tab {
                     self.charts.remove(idx);
@@ -9349,28 +10419,23 @@ impl eframe::App for TyphooNApp {
                         RightTab::Positions => {
                             ui.add_space(4.0);
                             let mut has_positions = false;
-                            // DARWIN positions
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let _ = darwin::create_darwin_tables(&conn);
-                                    if let Ok(positions) = darwin::get_portfolio_open_positions(&conn) {
-                                        if !positions.is_empty() {
-                                            has_positions = true;
-                                            for pos in positions.iter() {
-                                                let side_c = if pos.side == "buy" { UP } else { DOWN };
-                                                ui.horizontal(|ui| {
-                                                    ui.label(egui::RichText::new(&pos.symbol).small().strong());
-                                                    let side_label = if pos.side == "buy" { "L" } else { "S" };
-                                                    ui.label(egui::RichText::new(side_label).color(side_c).small());
-                                                    ui.label(egui::RichText::new(format!("{:.2}", pos.total_volume)).small());
-                                                    let pl_c = if pos.notional >= 0.0 { UP } else { DOWN };
-                                                    ui.label(egui::RichText::new(format!("${:.0}", pos.notional)).color(pl_c).small());
-                                                });
-                                                let darwins: Vec<String> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.clone()).collect();
-                                                ui.label(egui::RichText::new(darwins.join(", ")).color(AXIS_TEXT).small());
-                                                ui.separator();
-                                            }
-                                        }
+                            // DARWIN positions — from bg cache
+                            { let positions = &self.bg.open_positions;
+                                if !positions.is_empty() {
+                                    has_positions = true;
+                                    for pos in positions.iter() {
+                                        let side_c = if pos.side == "buy" { UP } else { DOWN };
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(&pos.symbol).small().strong());
+                                            let side_label = if pos.side == "buy" { "L" } else { "S" };
+                                            ui.label(egui::RichText::new(side_label).color(side_c).small());
+                                            ui.label(egui::RichText::new(format!("{:.2}", pos.total_volume)).small());
+                                            let pl_c = if pos.notional >= 0.0 { UP } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("${:.0}", pos.notional)).color(pl_c).small());
+                                        });
+                                        let darwins: Vec<String> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.clone()).collect();
+                                        ui.label(egui::RichText::new(darwins.join(", ")).color(AXIS_TEXT).small());
+                                        ui.separator();
                                     }
                                 }
                             }
@@ -9544,49 +10609,41 @@ impl eframe::App for TyphooNApp {
                                 });
                                 ui.add_space(5.0);
                             }
-                            // DARWIN portfolio data
-                            if let Some(ref cache) = self.cache {
-                                if let Ok(conn) = cache.connection() {
-                                    let _ = darwin::create_darwin_tables(&conn);
-                                    if let Ok(portfolio) = darwin::get_portfolio_summary(&conn) {
-                                        if !portfolio.accounts.is_empty() {
-                                            egui::Grid::new("risk_grid").striped(true).num_columns(2).show(ui, |ui| {
-                                                ui.label(egui::RichText::new("Accounts").color(AXIS_TEXT).small());
-                                                ui.label(egui::RichText::new(format!("{}", portfolio.accounts.len())).small());
-                                                ui.end_row();
-                                                ui.label(egui::RichText::new("Equity").color(AXIS_TEXT).small());
-                                                ui.label(egui::RichText::new(format!("${:.0}", portfolio.total_final_balance)).small());
-                                                ui.end_row();
-                                                let pnl_c = if portfolio.total_net_pnl >= 0.0 { UP } else { DOWN };
-                                                ui.label(egui::RichText::new("Net P&L").color(AXIS_TEXT).small());
-                                                ui.label(egui::RichText::new(format!("${:.0}", portfolio.total_net_pnl)).color(pnl_c).small());
-                                                ui.end_row();
-                                                ui.label(egui::RichText::new("Max DD").color(AXIS_TEXT).small());
-                                                ui.label(egui::RichText::new(format!("{:.1}%", portfolio.combined_max_drawdown_pct)).small());
-                                                ui.end_row();
-                                                ui.label(egui::RichText::new("Deals").color(AXIS_TEXT).small());
-                                                ui.label(egui::RichText::new(format!("{}", portfolio.total_deals)).small());
-                                                ui.end_row();
-                                            });
-                                            // VaR
-                                            if let Ok(daily) = darwin::get_portfolio_daily_returns(&conn) {
-                                                if !daily.is_empty() {
-                                                    let vs = darwin::compute_var(&daily);
-                                                    ui.add_space(4.0);
-                                                    egui::Grid::new("risk_var").striped(true).num_columns(2).show(ui, |ui| {
-                                                        ui.label(egui::RichText::new("VaR 95%").color(AXIS_TEXT).small());
-                                                        ui.label(egui::RichText::new(format!("${:.0}", vs.var_95)).small());
-                                                        ui.end_row();
-                                                        ui.label(egui::RichText::new("Sharpe").color(AXIS_TEXT).small());
-                                                        ui.label(egui::RichText::new(format!("{:.3}", vs.sharpe)).small());
-                                                        ui.end_row();
-                                                    });
-                                                }
-                                            }
-                                        } else {
-                                            ui.label(egui::RichText::new("Import DARWIN data").color(AXIS_TEXT).small());
-                                        }
+                            // DARWIN portfolio data — from bg cache
+                            if let Some(ref portfolio) = self.bg.portfolio {
+                                if !portfolio.accounts.is_empty() {
+                                    egui::Grid::new("risk_grid").striped(true).num_columns(2).show(ui, |ui| {
+                                        ui.label(egui::RichText::new("Accounts").color(AXIS_TEXT).small());
+                                        ui.label(egui::RichText::new(format!("{}", portfolio.accounts.len())).small());
+                                        ui.end_row();
+                                        ui.label(egui::RichText::new("Equity").color(AXIS_TEXT).small());
+                                        ui.label(egui::RichText::new(format!("${:.0}", portfolio.total_final_balance)).small());
+                                        ui.end_row();
+                                        let pnl_c = if portfolio.total_net_pnl >= 0.0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new("Net P&L").color(AXIS_TEXT).small());
+                                        ui.label(egui::RichText::new(format!("${:.0}", portfolio.total_net_pnl)).color(pnl_c).small());
+                                        ui.end_row();
+                                        ui.label(egui::RichText::new("Max DD").color(AXIS_TEXT).small());
+                                        ui.label(egui::RichText::new(format!("{:.1}%", portfolio.combined_max_drawdown_pct)).small());
+                                        ui.end_row();
+                                        ui.label(egui::RichText::new("Deals").color(AXIS_TEXT).small());
+                                        ui.label(egui::RichText::new(format!("{}", portfolio.total_deals)).small());
+                                        ui.end_row();
+                                    });
+                                    // VaR — from bg cache
+                                    if let Some(ref vs) = self.bg.var_stats {
+                                        ui.add_space(4.0);
+                                        egui::Grid::new("risk_var").striped(true).num_columns(2).show(ui, |ui| {
+                                            ui.label(egui::RichText::new("VaR 95%").color(AXIS_TEXT).small());
+                                            ui.label(egui::RichText::new(format!("${:.0}", vs.var_95)).small());
+                                            ui.end_row();
+                                            ui.label(egui::RichText::new("Sharpe").color(AXIS_TEXT).small());
+                                            ui.label(egui::RichText::new(format!("{:.3}", vs.sharpe)).small());
+                                            ui.end_row();
+                                        });
                                     }
+                                } else {
+                                    ui.label(egui::RichText::new("Import DARWIN data").color(AXIS_TEXT).small());
                                 }
                             }
                             ui.add_space(6.0);
@@ -9601,7 +10658,7 @@ impl eframe::App for TyphooNApp {
 
         // ── floating windows ─────────────────────────────────────────────────
         // Always call draw_floating_windows so close buttons work.
-        // Performance optimization is inside: heavy content gated by db_ok flag.
+        // Performance: all DARWIN data reads from self.bg (background-computed).
         self.draw_floating_windows(ctx);
 
         // ── central panel (chart area) ────────────────────────────────────────
@@ -9778,6 +10835,19 @@ impl eframe::App for TyphooNApp {
                     ctx.input(|i| i.pointer.interact_pos())
                 } else { None };
 
+                // Lazy-load bars for MTF grid charts — non-blocking (skip if Mutex contended)
+                if let Some(ref cache) = self.cache {
+                    for chart in self.charts.iter_mut().take(total) {
+                        if chart.bars.is_empty() {
+                            if chart.try_load(cache, &mut self.log) {
+                                break; // loaded one, continue next frame
+                            } else {
+                                break; // lock contended, try next frame
+                            }
+                        }
+                    }
+                }
+
                 for (idx, chart) in self.charts.iter_mut().take(total).enumerate() {
                     let col = idx % cols;
                     let row = idx / cols;
@@ -9798,7 +10868,8 @@ impl eframe::App for TyphooNApp {
                     }
 
                     // Auto-focus on hover, confirm on click
-                    let ptr_in_cell = ctx.input(|i| i.pointer.hover_pos().map(|p| cell_rect.contains(p)).unwrap_or(false));
+                    // Skip chart interaction when pointer is over a floating window
+                    let ptr_in_cell = !pointer_over_floating && ctx.input(|i| i.pointer.hover_pos().map(|p| cell_rect.contains(p)).unwrap_or(false));
                     if ptr_in_cell {
                         // Auto-set focus when hovering (no click required for zoom)
                         self.mtf_focused = Some(idx);
@@ -10152,11 +11223,14 @@ impl eframe::App for TyphooNApp {
         // - We set a slow idle repaint for background updates (live data, time)
         // - Charts stay responsive because mouse events trigger instant repaints
         // - Floating windows with DB queries only update on idle repaints
+        // Fast repaint during startup until bg data arrives, then slow idle
+        let startup_loading = self.bg.portfolio.is_none() && self.cache.is_some();
         let any_heavy_window = self.show_darwin_portfolio || self.show_darwin_accounts
             || self.show_var_mult || self.show_montecarlo || self.show_stress_test
             || self.show_correlation || self.show_seasonals || self.show_symbol_overlap
             || self.show_sec || self.show_insider;
-        let idle_ms = if any_heavy_window { 2000 } else { 500 };
+        let idle_ms = if startup_loading || !self.cache_loaded { 100 }
+            else if any_heavy_window { 2000 } else { 500 };
         ctx.request_repaint_after(std::time::Duration::from_millis(idle_ms));
     }
 }

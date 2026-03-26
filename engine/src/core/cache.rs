@@ -411,8 +411,9 @@ impl SqliteCache {
     /// Keys are "symbol:timeframe" format (e.g., "AAPL:1Hour").
     pub fn detailed_stats(&self) -> Result<Vec<(String, i64, i64)>, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        // Use bar_count instead of LENGTH(data) — avoids reading blob headers on 3.9GB DB
         let mut stmt = conn.prepare(
-            "SELECT key, LENGTH(data) as size, timestamp FROM bar_cache ORDER BY key"
+            "SELECT key, bar_count, timestamp FROM bar_cache ORDER BY key"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
         let rows = stmt.query_map([], |row| {
             Ok((
@@ -724,6 +725,45 @@ impl SqliteCache {
         self.conn.lock().map_err(|e| format!("Lock failed: {e}"))
     }
 
+    /// Try to get a lock without blocking. Returns None if the lock is held.
+    /// Use this from the UI thread to avoid freezing when the bg thread holds the lock.
+    pub fn try_connection(&self) -> Option<std::sync::MutexGuard<'_, Connection>> {
+        self.conn.try_lock().ok()
+    }
+
+    /// Non-blocking version of get_bars_raw. Returns Ok(None) if lock is contended.
+    pub fn try_get_bars_raw(&self, key: &str) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
+        let conn = match self.conn.try_lock() {
+            Ok(c) => c,
+            Err(_) => return Ok(None), // lock contended — skip this frame
+        };
+        let mut stmt = conn.prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
+            .map_err(|e| format!("Prepare failed: {e}"))?;
+        let row: Option<Vec<u8>> = stmt.query_row(params![key], |r| r.get(0)).ok();
+        match row {
+            None => Ok(None),
+            Some(compressed) => {
+                let decompressed = zstd::decode_all(compressed.as_slice())
+                    .map_err(|e| format!("Decompress failed: {e}"))?;
+                if decompressed.len() >= 4 && &decompressed[0..4] == BAR_BINARY_MAGIC {
+                    Ok(Some(unpack_bars_raw(&decompressed)?))
+                } else {
+                    let text = String::from_utf8_lossy(&decompressed);
+                    let bars: Vec<serde_json::Value> = serde_json::from_str(&text)
+                        .map_err(|e| format!("JSON parse failed: {e}"))?;
+                    let result = bars.iter().filter_map(|b| {
+                        Some((
+                            chrono::DateTime::parse_from_rfc3339(b["timestamp"].as_str()?).ok()?.timestamp_millis(),
+                            b["open"].as_f64()?, b["high"].as_f64()?, b["low"].as_f64()?,
+                            b["close"].as_f64()?, b["volume"].as_f64().unwrap_or(0.0),
+                        ))
+                    }).collect();
+                    Ok(Some(result))
+                }
+            }
+        }
+    }
+
     /// List all kv_cache keys matching a prefix (e.g., "cred:" returns all credential keys).
     /// LIKE wildcards in the prefix are escaped to prevent overly broad matches.
     pub fn list_kv_keys(&self, prefix: &str) -> Result<Vec<String>, String> {
@@ -769,6 +809,47 @@ impl SqliteCache {
             "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
             params![key, data, timestamp, bar_count],
         ).map_err(|e| format!("SQLite insert failed: {e}"))?;
+        Ok(())
+    }
+
+    /// List all keys in bar_cache.
+    pub fn all_keys(&self) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare("SELECT key FROM bar_cache")
+            .map_err(|e| format!("Prepare failed: {e}"))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Query failed: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Collect failed: {e}"))
+    }
+
+    /// Get the raw compressed blob, timestamp, and bar_count for a key.
+    /// Used for zero-copy sync between databases.
+    pub fn get_raw_blob(&self, key: &str) -> Result<Option<(Vec<u8>, i64, i64)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
+            .map_err(|e| format!("Prepare failed: {e}"))?;
+        let result = stmt.query_row(params![key], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        });
+        match result {
+            Ok(r) => Ok(Some(r)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Query failed: {e}")),
+        }
+    }
+
+    /// Put a raw compressed blob (zero-copy from another database).
+    /// Overwrites if the source timestamp is newer.
+    pub fn put_raw_blob(&self, key: &str, blob: &[u8], ts: i64, bar_count: i64) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        conn.execute(
+            "INSERT INTO bar_cache (key, data, timestamp, bar_count)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(key) DO UPDATE SET data=excluded.data, timestamp=excluded.timestamp, bar_count=excluded.bar_count
+             WHERE excluded.timestamp > bar_cache.timestamp",
+            params![key, blob, ts, bar_count],
+        ).map_err(|e| format!("Insert failed: {e}"))?;
         Ok(())
     }
 

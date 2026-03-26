@@ -4246,15 +4246,18 @@ pub fn compute_rebalance_suggestions(
 
     // 3. Symbol-level correlation across DARWINs (open positions)
     // Include profit info: (darwin, symbol, side, notional, avg_price, in_profit)
+    // When no live prices are provided, assume all positions are actionable
+    // (rebalance based on correlation risk, not profit state)
+    let no_live_prices = prices.is_empty();
     let mut all_open: Vec<(String, String, String, f64, f64, bool)> = Vec::new();
     for acct in &accounts {
         let positions = get_darwin_open_positions(conn, &acct.darwin_ticker)?;
         for pos in &positions {
-            let current_price = prices.get(&pos.symbol).copied().unwrap_or(pos.avg_price);
-            let in_profit = if pos.side == "buy" {
-                current_price > pos.avg_price
+            let in_profit = if no_live_prices {
+                true // No live prices → treat all as actionable for correlation-based suggestions
             } else {
-                current_price < pos.avg_price
+                let current_price = prices.get(&pos.symbol).copied().unwrap_or(pos.avg_price);
+                if pos.side == "buy" { current_price > pos.avg_price } else { current_price < pos.avg_price }
             };
             all_open.push((acct.darwin_ticker.clone(), pos.symbol.clone(), pos.side.clone(), pos.notional, pos.avg_price, in_profit));
         }

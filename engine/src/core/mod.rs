@@ -3,6 +3,8 @@ pub mod bar_builder;
 pub mod kraken;
 pub mod cache;
 pub mod darwin;
+pub mod darwin_ftp;
+pub mod fundamentals;
 pub mod lan_sync;
 pub mod margin;
 pub mod position;
