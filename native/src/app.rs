@@ -6450,38 +6450,35 @@ impl TyphooNApp {
                             }
                         }
 
-                        // ── Day of Week + Hourly P&L side by side ──
-                        ui.horizontal(|ui| {
-                            // Day of Week bars
-                            if !det.day_of_week.is_empty() {
-                                let bars: Vec<PlotBar> = det.day_of_week.iter().enumerate().map(|(i, d)| {
-                                    let c = if d.total_pnl >= 0.0 { chart_green } else { chart_red };
-                                    PlotBar::new(i as f64, d.total_pnl).width(0.7).fill(c).name(&d.day)
-                                }).collect();
-                                let chart = BarChart::new("Day of Week", bars);
-                                Plot::new(format!("dow_{}", det.ticker))
-                                    .height(70.0).width(200.0)
-                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
-                                    .show_axes([false, true])
-                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
-                            }
-                            // Hourly P&L bars
-                            if !det.hourly_pnl.is_empty() {
-                                let bars: Vec<PlotBar> = det.hourly_pnl.iter().map(|h| {
-                                    let c = if h.total_pnl >= 0.0 { chart_green } else { chart_red };
-                                    PlotBar::new(h.hour as f64, h.total_pnl).width(0.7).fill(c).name(format!("{:02}:00", h.hour))
-                                }).collect();
-                                let chart = BarChart::new("Hourly P&L", bars);
-                                Plot::new(format!("hr_{}", det.ticker))
-                                    .height(70.0).width(350.0)
-                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
-                                    .show_axes([false, true])
-                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
-                            }
-                        });
-
                         // ── Collapsible advanced details ──
                         ui.collapsing(format!("{} Advanced", det.ticker), |ui| {
+                            // ── Day of Week + Hourly P&L side by side ──
+                            ui.horizontal(|ui| {
+                                if !det.day_of_week.is_empty() {
+                                    let bars: Vec<PlotBar> = det.day_of_week.iter().enumerate().map(|(i, d)| {
+                                        let c = if d.total_pnl >= 0.0 { chart_green } else { chart_red };
+                                        PlotBar::new(i as f64, d.total_pnl).width(0.7).fill(c).name(&d.day)
+                                    }).collect();
+                                    let chart = BarChart::new("Day of Week", bars);
+                                    Plot::new(format!("dow_{}", det.ticker))
+                                        .height(80.0).width(250.0)
+                                        .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                        .show_axes([false, true])
+                                        .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+                                }
+                                if !det.hourly_pnl.is_empty() {
+                                    let bars: Vec<PlotBar> = det.hourly_pnl.iter().map(|h| {
+                                        let c = if h.total_pnl >= 0.0 { chart_green } else { chart_red };
+                                        PlotBar::new(h.hour as f64, h.total_pnl).width(0.7).fill(c).name(format!("{:02}:00", h.hour))
+                                    }).collect();
+                                    let chart = BarChart::new("Hourly P&L", bars);
+                                    Plot::new(format!("hr_{}", det.ticker))
+                                        .height(80.0).width(400.0)
+                                        .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                        .show_axes([false, true])
+                                        .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+                                }
+                            });
                             // D-Score radar (compact grid)
                             if let Some(ref ds) = det.dscore {
                                 egui::Grid::new(format!("ds_{}", det.ticker)).num_columns(6).show(ui, |ui| {
