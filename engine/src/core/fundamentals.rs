@@ -258,17 +258,60 @@ pub async fn fetch_ev_from_sec(
 /// Yahoo Finance quoteSummary modules we need.
 const YAHOO_MODULES: &str = "financialData,defaultKeyStatistics,calendarEvents,summaryProfile,summaryDetail,earningsHistory,institutionOwnership,incomeStatementHistoryQuarterly,cashflowStatementHistoryQuarterly,price";
 
-/// Fetch comprehensive fundamentals from Yahoo Finance v8 API.
+/// Yahoo Finance session with crumb authentication.
+/// Yahoo requires a crumb token (CSRF) obtained from a cookie-authenticated session.
+pub struct YahooSession {
+    client: reqwest::Client,
+    crumb: String,
+}
+
+impl YahooSession {
+    /// Create a new authenticated Yahoo Finance session.
+    /// Fetches cookies from yahoo.com, then obtains a crumb token.
+    pub async fn new() -> Result<Self, String> {
+        // Build a cookie-jar client
+        let client = reqwest::Client::builder()
+            .cookie_store(true)
+            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .build()
+            .map_err(|e| format!("Failed to build Yahoo client: {e}"))?;
+
+        // Step 1: Hit finance.yahoo.com to get session cookies
+        let _ = client.get("https://finance.yahoo.com/quote/AAPL/")
+            .send().await
+            .map_err(|e| format!("Yahoo cookie fetch failed: {e}"))?;
+
+        // Step 2: Fetch crumb using the session cookies
+        let crumb_resp = client.get("https://query2.finance.yahoo.com/v1/test/getcrumb")
+            .send().await
+            .map_err(|e| format!("Yahoo crumb fetch failed: {e}"))?;
+
+        if !crumb_resp.status().is_success() {
+            return Err(format!("Yahoo crumb returned {}", crumb_resp.status()));
+        }
+
+        let crumb = crumb_resp.text().await
+            .map_err(|e| format!("Yahoo crumb parse failed: {e}"))?;
+
+        if crumb.is_empty() || crumb.len() > 50 {
+            return Err(format!("Invalid Yahoo crumb: {:?}", &crumb[..crumb.len().min(100)]));
+        }
+
+        tracing::info!("Yahoo session established (crumb: {}...)", &crumb[..crumb.len().min(6)]);
+        Ok(Self { client, crumb })
+    }
+}
+
+/// Fetch comprehensive fundamentals from Yahoo Finance quoteSummary API.
 pub async fn fetch_yahoo_fundamentals(
-    client: &reqwest::Client,
+    session: &YahooSession,
     ticker: &str,
 ) -> Result<serde_json::Value, String> {
-    // Yahoo Finance v8 quoteSummary endpoint
     let url = format!(
-        "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}"
+        "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}&crumb={}",
+        session.crumb
     );
-    let resp = client.get(&url)
-        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
+    let resp = session.client.get(&url)
         .send().await
         .map_err(|e| format!("Yahoo fetch failed for {ticker}: {e}"))?;
 
@@ -796,19 +839,19 @@ pub fn get_institutional_holders(conn: &Connection, symbol: &str) -> Result<Vec<
 
 /// Scrape fundamentals for a single ticker (Yahoo + optionally SEC XBRL for EV).
 pub async fn scrape_ticker(
-    client: &reqwest::Client,
+    session: &YahooSession,
     conn: &Connection,
     ticker: &str,
 ) -> Result<Fundamentals, String> {
     // 1. Yahoo Finance (primary source for everything)
-    let yahoo = fetch_yahoo_fundamentals(client, ticker).await?;
+    let yahoo = fetch_yahoo_fundamentals(session, ticker).await?;
     let mut fund = parse_yahoo_data(ticker, &yahoo);
 
     // 2. SEC XBRL for more accurate EV components (optional, may fail for non-US)
-    if let Ok(cik) = lookup_cik(client, ticker).await {
+    if let Ok(cik) = lookup_cik(&session.client, ticker).await {
         fund.cik = Some(cik.clone());
         tokio::time::sleep(std::time::Duration::from_millis(SEC_RATE_LIMIT_MS)).await;
-        if let Ok((sec_debt, sec_cash)) = fetch_ev_from_sec(client, &cik).await {
+        if let Ok((sec_debt, sec_cash)) = fetch_ev_from_sec(&session.client, &cik).await {
             // Prefer SEC XBRL values over Yahoo for EV accuracy
             if let Some(d) = sec_debt { fund.total_debt = Some(d); }
             if let Some(c) = sec_cash { fund.cash_and_equivalents = Some(c); }
@@ -839,7 +882,7 @@ pub async fn scrape_ticker(
 /// Batch scrape fundamentals for multiple tickers.
 /// Skips currency pairs (contains '/') and tickers that were updated within `skip_if_recent_hours`.
 pub async fn scrape_batch(
-    client: &reqwest::Client,
+    session: &YahooSession,
     conn: &Connection,
     tickers: &[String],
     skip_if_recent_hours: u64,
@@ -883,7 +926,7 @@ pub async fn scrape_batch(
         // Rate limit
         tokio::time::sleep(std::time::Duration::from_millis(YAHOO_RATE_LIMIT_MS)).await;
 
-        match scrape_ticker(client, conn, &ticker).await {
+        match scrape_ticker(session, conn, &ticker).await {
             Ok(_fund) => {
                 let r = ScrapeResult {
                     symbol: ticker.clone(),

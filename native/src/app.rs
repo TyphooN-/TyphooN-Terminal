@@ -4635,13 +4635,17 @@ impl TyphooNApp {
                                             let _ = fundamentals::create_fundamentals_tables(&conn);
                                             let tickers = fundamentals::extract_stock_tickers_from_cache(&conn).unwrap_or_default();
                                             let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Fundamentals scrape: {} stock tickers found", tickers.len())));
-                                            let client = reqwest::Client::builder()
-                                                .user_agent("TyphooN-Terminal/1.0")
-                                                .build().unwrap_or_default();
+                                            let session = match fundamentals::YahooSession::new().await {
+                                                Ok(s) => s,
+                                                Err(e) => {
+                                                    let _ = msg_tx.send(BrokerMsg::Error(format!("Yahoo auth failed: {}", e)));
+                                                    return;
+                                                }
+                                            };
                                             let mut ok = 0usize;
                                             let mut fail = 0usize;
                                             for ticker in &tickers {
-                                                match fundamentals::scrape_ticker(&client, &conn, ticker).await {
+                                                match fundamentals::scrape_ticker(&session, &conn, ticker).await {
                                                     Ok(_f) => {
                                                         ok += 1;
                                                         let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK ({}/{})", ticker, ok, tickers.len())));
@@ -4675,10 +4679,14 @@ impl TyphooNApp {
                                     Ok(cache) => {
                                         if let Ok(conn) = cache.connection() {
                                             let _ = fundamentals::create_fundamentals_tables(&conn);
-                                            let client = reqwest::Client::builder()
-                                                .user_agent("TyphooN-Terminal/1.0")
-                                                .build().unwrap_or_default();
-                                            match fundamentals::scrape_ticker(&client, &conn, &ticker).await {
+                                            let session = match fundamentals::YahooSession::new().await {
+                                                Ok(s) => s,
+                                                Err(e) => {
+                                                    let _ = msg_tx.send(BrokerMsg::Error(format!("Yahoo auth failed: {}", e)));
+                                                    return;
+                                                }
+                                            };
+                                            match fundamentals::scrape_ticker(&session, &conn, &ticker).await {
                                                 Ok(_f) => {
                                                     let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK", ticker)));
                                                 }
