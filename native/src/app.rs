@@ -891,14 +891,45 @@ impl ChartState {
                     self.ehlers_decycler = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_decycler = ehlers_decycler(&self.bars, 20); }
 
-                // Remaining Ehlers — CPU (complex IIR filters, will port to GPU in next phase)
-                self.ehlers_itl = ehlers_instantaneous_trendline(&self.bars);
-                let (mama, fama) = ehlers_mama_fama(&self.bars, 0.5, 0.05);
-                self.ehlers_mama = mama; self.ehlers_fama = fama;
-                self.ehlers_ebsw = ehlers_even_better_sinewave(&self.bars, 40);
-                self.ehlers_cyber = ehlers_cyber_cycle(&self.bars);
-                self.ehlers_cg = ehlers_cg_oscillator(&self.bars, 10);
-                self.ehlers_roof = ehlers_roofing_filter(&self.bars, 10, 48);
+                // Ehlers ITL — GPU
+                if let Some(data) = gpu.compute_ehlers_itl_gpu() {
+                    self.ehlers_itl = data.iter().map(|&v| Some(v as f64)).collect();
+                } else { self.ehlers_itl = ehlers_instantaneous_trendline(&self.bars); }
+
+                // Ehlers MAMA/FAMA — GPU (2 outputs)
+                if let Some(data) = gpu.compute_ehlers_mama_gpu() {
+                    let n = self.bars.len();
+                    let mut mama = Vec::with_capacity(n);
+                    let mut fama = Vec::with_capacity(n);
+                    for i in 0..n {
+                        mama.push(Some(data.get(i * 2).copied().unwrap_or(0.0) as f64));
+                        fama.push(Some(data.get(i * 2 + 1).copied().unwrap_or(0.0) as f64));
+                    }
+                    self.ehlers_mama = mama; self.ehlers_fama = fama;
+                } else {
+                    let (m, f) = ehlers_mama_fama(&self.bars, 0.5, 0.05);
+                    self.ehlers_mama = m; self.ehlers_fama = f;
+                }
+
+                // Ehlers EBSW — GPU
+                if let Some(data) = gpu.compute_ehlers_ebsw_gpu(40) {
+                    self.ehlers_ebsw = data.iter().map(|&v| Some(v as f64)).collect();
+                } else { self.ehlers_ebsw = ehlers_even_better_sinewave(&self.bars, 40); }
+
+                // Ehlers Cyber Cycle — GPU
+                if let Some(data) = gpu.compute_ehlers_cyber_gpu() {
+                    self.ehlers_cyber = data.iter().map(|&v| Some(v as f64)).collect();
+                } else { self.ehlers_cyber = ehlers_cyber_cycle(&self.bars); }
+
+                // Ehlers CG Oscillator — GPU (parallel)
+                if let Some(data) = gpu.compute_ehlers_cg_gpu(10) {
+                    self.ehlers_cg = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.ehlers_cg = ehlers_cg_oscillator(&self.bars, 10); }
+
+                // Ehlers Roofing Filter — GPU
+                if let Some(data) = gpu.compute_ehlers_roof_gpu(10, 48) {
+                    self.ehlers_roof = data.iter().map(|&v| Some(v as f64)).collect();
+                } else { self.ehlers_roof = ehlers_roofing_filter(&self.bars, 10, 48); }
                 return;
             }
         }

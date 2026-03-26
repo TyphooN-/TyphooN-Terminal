@@ -68,6 +68,12 @@ pub struct GpuCompute {
     ehlers_ss_pipeline: wgpu::ComputePipeline,
     ehlers_dec_pipeline: wgpu::ComputePipeline,
     fractals_pipeline: wgpu::ComputePipeline,
+    ehlers_itl_pipeline: wgpu::ComputePipeline,
+    ehlers_cyber_pipeline: wgpu::ComputePipeline,
+    ehlers_cg_pipeline: wgpu::ComputePipeline,
+    ehlers_roof_pipeline: wgpu::ComputePipeline,
+    ehlers_ebsw_pipeline: wgpu::ComputePipeline,
+    ehlers_mama_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuCompute {
@@ -176,6 +182,12 @@ impl GpuCompute {
         let ehlers_ss_pipeline = make_pipeline("ehlers_ss_pipeline", EHLERS_SUPERSMOOTHER_SHADER);
         let ehlers_dec_pipeline = make_pipeline("ehlers_dec_pipeline", EHLERS_DECYCLER_SHADER);
         let fractals_pipeline = make_pipeline("fractals_pipeline", FRACTALS_SHADER);
+        let ehlers_itl_pipeline = make_pipeline("ehlers_itl_pipeline", EHLERS_ITL_SHADER);
+        let ehlers_cyber_pipeline = make_pipeline("ehlers_cyber_pipeline", EHLERS_CYBER_SHADER);
+        let ehlers_cg_pipeline = make_pipeline("ehlers_cg_pipeline", EHLERS_CG_SHADER);
+        let ehlers_roof_pipeline = make_pipeline("ehlers_roof_pipeline", EHLERS_ROOF_SHADER);
+        let ehlers_ebsw_pipeline = make_pipeline("ehlers_ebsw_pipeline", EHLERS_EBSW_SHADER);
+        let ehlers_mama_pipeline = make_pipeline("ehlers_mama_pipeline", EHLERS_MAMA_SHADER);
 
         Self {
             device,
@@ -208,6 +220,12 @@ impl GpuCompute {
             ehlers_ss_pipeline,
             ehlers_dec_pipeline,
             fractals_pipeline,
+            ehlers_itl_pipeline,
+            ehlers_cyber_pipeline,
+            ehlers_cg_pipeline,
+            ehlers_roof_pipeline,
+            ehlers_ebsw_pipeline,
+            ehlers_mama_pipeline,
             bind_group_layout,
             readback_buffer: None,
         }
@@ -500,6 +518,79 @@ impl GpuCompute {
     /// Compute Fractals on GPU. Returns [up_price, down_price] × bar_count. Parallel. Requires OHLC.
     pub fn compute_fractals_gpu(&self) -> Option<Vec<f32>> {
         self.dispatch_ohlc_indicator(&self.fractals_pipeline, 0, 2)
+    }
+
+    /// Compute Ehlers Instantaneous Trendline on GPU.
+    pub fn compute_ehlers_itl_gpu(&self) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.ehlers_itl_pipeline, 0, false)
+    }
+
+    /// Compute Ehlers Cyber Cycle on GPU.
+    pub fn compute_ehlers_cyber_gpu(&self) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.ehlers_cyber_pipeline, 0, false)
+    }
+
+    /// Compute Ehlers CG Oscillator on GPU. Parallel per-bar.
+    pub fn compute_ehlers_cg_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.ehlers_cg_pipeline, period, true)
+    }
+
+    /// Compute Ehlers Roofing Filter on GPU. Packs lp_period and hp_period into single u32.
+    pub fn compute_ehlers_roof_gpu(&self, lp_period: u32, hp_period: u32) -> Option<Vec<f32>> {
+        let packed = lp_period | (hp_period << 16);
+        self.dispatch_indicator(&self.ehlers_roof_pipeline, packed, false)
+    }
+
+    /// Compute Ehlers Even Better Sinewave on GPU.
+    pub fn compute_ehlers_ebsw_gpu(&self, duration: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.ehlers_ebsw_pipeline, duration, false)
+    }
+
+    /// Compute Ehlers MAMA/FAMA on GPU. Returns [mama, fama] × bar_count.
+    pub fn compute_ehlers_mama_gpu(&self) -> Option<Vec<f32>> {
+        // MAMA outputs 2 values per bar — need larger readback buffer
+        if self.bar_count == 0 { return None; }
+        let bar_buf = self.bar_buffer.as_ref()?;
+        let rb_buf = self.readback_buffer.as_ref()?;
+        let out_size = (self.bar_count as u64) * 2 * 4;
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mama_out"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let params = [0u32, self.bar_count];
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mama_params"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mama_bg"), layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("mama_pass"), timestamp_writes: None });
+            pass.set_pipeline(&self.ehlers_mama_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        let read_size = out_size.min(rb_buf.size());
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
     }
 
     /// Compute RSI on GPU. Returns f32 per bar.
@@ -2085,6 +2176,218 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let is_down = l < bars[(i - 2u) * 3u + 1u] && l < bars[(i - 1u) * 3u + 1u]
                && l < bars[(i + 1u) * 3u + 1u] && l < bars[(i + 2u) * 3u + 1u];
     output[base + 1u] = select(0.0, l, is_down);
+}
+"#;
+
+const EHLERS_ITL_SHADER: &str = r#"
+// Ehlers Instantaneous Trendline — sequential IIR
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    for (var i: u32 = 0u; i < min(7u, params.bar_count); i = i + 1u) { output[i] = bars[i]; }
+    for (var i: u32 = 7u; i < params.bar_count; i = i + 1u) {
+        var itl = (bars[i] + 2.0 * bars[i - 1u] + bars[i - 2u]) / 4.0 * 0.5 + output[i - 1u] * 0.5;
+        itl = (2.0 * itl + output[i - 1u] + output[i - 2u] + output[i - 3u]) / 5.0;
+        output[i] = itl;
+    }
+}
+"#;
+
+const EHLERS_CYBER_SHADER: &str = r#"
+// Ehlers Cyber Cycle — sequential 2nd-order bandpass
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let alpha: f32 = 0.07;
+    let c1: f32 = (1.0 - 0.5 * alpha) * (1.0 - 0.5 * alpha);
+    let c2: f32 = 1.0 - alpha;
+
+    // Smooth
+    for (var i: u32 = 0u; i < min(3u, params.bar_count); i = i + 1u) { output[i] = 0.0; }
+    for (var i: u32 = 3u; i < params.bar_count; i = i + 1u) {
+        let smooth = (bars[i] + 2.0 * bars[i - 1u] + bars[i - 2u]) / 4.0;
+        let prev_smooth = (bars[i - 1u] + 2.0 * bars[i - 2u] + bars[i - 3u]) / 4.0;
+        let prev2_smooth = (bars[i - 2u] + 2.0 * bars[i - 3u] + bars[max(i, 4u) - 4u]) / 4.0;
+        output[i] = c1 * (smooth - 2.0 * prev_smooth + prev2_smooth) + 2.0 * c2 * output[i - 1u] - c2 * c2 * output[max(i, 2u) - 2u];
+    }
+}
+"#;
+
+const EHLERS_CG_SHADER: &str = r#"
+// Ehlers Center of Gravity Oscillator — parallel per-bar
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count || i < params.period - 1u) { output[i] = 0.0; return; }
+    var num: f32 = 0.0;
+    var den: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        let p = bars[i - j];
+        num = num + f32(j + 1u) * p;
+        den = den + p;
+    }
+    output[i] = select(-num / den + f32(params.period + 1u) / 2.0, 0.0, abs(den) < 0.000001);
+}
+"#;
+
+const EHLERS_ROOF_SHADER: &str = r#"
+// Ehlers Roofing Filter — sequential (highpass + super smoother)
+// period field repurposed: low 16 bits = lp_period, high 16 bits = hp_period
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let lp_period = params.period & 0xFFFFu;
+    let hp_period = params.period >> 16u;
+    let pi: f32 = 3.14159265;
+
+    if (params.bar_count < 3u) { return; }
+
+    // Highpass filter
+    let alpha1 = cos(2.0 * pi / f32(max(hp_period, 2u)));
+    let a1 = select(1.0 / max(alpha1 + sqrt(max(alpha1 * alpha1 - 1.0, 0.0)), 0.001), 0.5, abs(alpha1) < 0.000001);
+    let hp_coeff = (1.0 - a1 / 2.0) * (1.0 - a1 / 2.0);
+    let hp_c2 = 2.0 * (1.0 - a1);
+    let hp_c3 = (1.0 - a1) * (1.0 - a1);
+
+    // Super smoother coefficients
+    let a = exp(-1.414 * pi / f32(max(lp_period, 1u)));
+    let b = 2.0 * a * cos(1.414 * pi / f32(max(lp_period, 1u)));
+    let ss_c1 = 1.0 - b + a * a;
+
+    // Two-pass: highpass then super smooth
+    output[0] = 0.0; output[1] = 0.0;
+    var hp_prev1: f32 = 0.0;
+    var hp_prev2: f32 = 0.0;
+    var filt_prev1: f32 = 0.0;
+    var filt_prev2: f32 = 0.0;
+
+    for (var i: u32 = 2u; i < params.bar_count; i = i + 1u) {
+        let hp = hp_coeff * (bars[i] - 2.0 * bars[i - 1u] + bars[i - 2u]) + hp_c2 * hp_prev1 - hp_c3 * hp_prev2;
+        let filt = ss_c1 * (hp + hp_prev1) / 2.0 + b * filt_prev1 - a * a * filt_prev2;
+        output[i] = filt;
+        hp_prev2 = hp_prev1; hp_prev1 = hp;
+        filt_prev2 = filt_prev1; filt_prev1 = filt;
+    }
+}
+"#;
+
+const EHLERS_EBSW_SHADER: &str = r#"
+// Ehlers Even Better Sinewave — sequential (highpass + super smooth + atan)
+struct Params { period: u32, bar_count: u32, }  // period = duration (e.g., 40)
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let pi: f32 = 3.14159265;
+    let duration = f32(max(params.period, 4u));
+    if (params.bar_count < 5u) { return; }
+
+    // Highpass coefficients
+    let alpha1 = cos(2.0 * pi / (duration * 1.414));
+    let a1 = select(1.0 / max(alpha1 + sqrt(max(alpha1 * alpha1 - 1.0, 0.0)), 0.001), 0.5, abs(alpha1) < 0.000001);
+    let hp_coeff = (1.0 - a1 / 2.0) * (1.0 - a1 / 2.0);
+
+    // Super smoother coefficients (period/4)
+    let ss_period = max(duration / 4.0, 1.0);
+    let a = exp(-1.414 * pi / ss_period);
+    let b = 2.0 * a * cos(1.414 * pi / ss_period);
+    let c1 = 1.0 - b + a * a;
+
+    var hp_prev1: f32 = 0.0; var hp_prev2: f32 = 0.0;
+    var filt_prev1: f32 = 0.0; var filt_prev2: f32 = 0.0;
+    output[0] = 0.0; output[1] = 0.0;
+
+    for (var i: u32 = 2u; i < params.bar_count; i = i + 1u) {
+        // Highpass
+        let hp = hp_coeff * (bars[i] - 2.0 * bars[i - 1u] + bars[i - 2u])
+            + 2.0 * (1.0 - a1) * hp_prev1 - (1.0 - a1) * (1.0 - a1) * hp_prev2;
+        // Super smooth
+        let filt = c1 * (hp + hp_prev1) / 2.0 + b * filt_prev1 - a * a * filt_prev2;
+        // Sinewave = atan(filt / filt_prev) normalized
+        var wave: f32 = 0.0;
+        if (abs(filt_prev1) > 0.000001) {
+            wave = clamp(atan2(filt, filt_prev1) / (pi / 2.0), -1.0, 1.0);
+        }
+        output[i] = wave;
+        hp_prev2 = hp_prev1; hp_prev1 = hp;
+        filt_prev2 = filt_prev1; filt_prev1 = filt;
+    }
+}
+"#;
+
+const EHLERS_MAMA_SHADER: &str = r#"
+// Ehlers MAMA/FAMA — sequential (adaptive moving average pair)
+// Output: [mama, fama] per bar = 2 floats per bar
+struct Params { period: u32, bar_count: u32, }  // period unused
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;  // [mama, fama] interleaved
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let fast_limit: f32 = 0.5;
+    let slow_limit: f32 = 0.05;
+    let pi: f32 = 3.14159265;
+    if (params.bar_count < 7u) { return; }
+
+    // Smoothed price
+    var smooth: array<f32, 7>;
+    for (var i: u32 = 0u; i < 7u; i = i + 1u) { smooth[i] = bars[i]; }
+
+    var mama_v: f32 = bars[0];
+    var fama_v: f32 = bars[0];
+    var prev_phase: f32 = 0.0;
+    var prev_i1: f32 = 0.0;
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i < 6u) {
+            output[i * 2u] = bars[i];
+            output[i * 2u + 1u] = bars[i];
+            continue;
+        }
+
+        // 4-bar WMA smooth
+        let s = (4.0 * bars[i] + 3.0 * bars[i - 1u] + 2.0 * bars[i - 2u] + bars[i - 3u]) / 10.0;
+        let s2 = (4.0 * bars[i - 2u] + 3.0 * bars[i - 3u] + 2.0 * bars[i - 4u] + bars[i - 5u]) / 10.0;
+        let s4 = (4.0 * bars[i - 4u] + 3.0 * bars[i - 5u] + 2.0 * bars[max(i, 6u) - 6u] + bars[max(i, 7u) - 7u.min(i)]) / 10.0;
+
+        // Hilbert discriminator
+        let det = 0.0962 * s + 0.5769 * s2 - 0.5769 * s4 - 0.0962 * (4.0 * bars[max(i, 6u) - 6u] + 3.0 * bars[max(i, 7u) - 7u.min(i)] + 2.0 * bars[max(i, 8u) - 8u.min(i)] + bars[max(i, 9u) - 9u.min(i)]) / 10.0;
+        let i1 = bars[i - 3u];
+
+        // Phase
+        var phase: f32 = 0.0;
+        if (abs(i1) > 0.000001) { phase = atan2(det, i1) * 180.0 / pi; }
+        let delta_phase = max(prev_phase - phase, 1.0);
+        let alpha = max(fast_limit / delta_phase, slow_limit);
+
+        mama_v = alpha * s + (1.0 - alpha) * mama_v;
+        fama_v = 0.5 * alpha * mama_v + (1.0 - 0.5 * alpha) * fama_v;
+
+        output[i * 2u] = mama_v;
+        output[i * 2u + 1u] = fama_v;
+        prev_phase = phase;
+        prev_i1 = i1;
+    }
 }
 "#;
 
