@@ -183,6 +183,23 @@ struct LogEntry {
     msg: String,
 }
 
+/// Indicator-based alert condition.
+#[derive(Clone)]
+struct IndicatorAlert {
+    symbol: String,
+    timeframe: String,
+    indicator: String,     // "RSI", "MACD", "Price", "Fisher", etc.
+    condition: String,     // "crosses_above", "crosses_below", "greater_than", "less_than"
+    threshold: f64,
+    active: bool,
+    triggered: bool,
+    last_value: Option<f64>,
+    created_at: String,
+}
+
+const ALERT_INDICATORS: &[&str] = &["Price", "RSI", "Fisher", "MACD", "ATR", "ADX", "Stochastic %K", "CCI", "Volume"];
+const ALERT_CONDITIONS: &[&str] = &["crosses above", "crosses below", "greater than", "less than"];
+
 /// Trade Journal entry for tracking live/paper trades with notes.
 #[derive(Clone)]
 struct JournalEntry {
@@ -4059,6 +4076,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "DARWIN_BROWSER", desc: "Browse DARWIN FTP universe (50K DARWINs)" },
     Command { name: "DARWIN_SCAN",    desc: "Scan FTP for top DARWINs by Sharpe" },
     Command { name: "DARWINEXOUTLIERS", desc: "Darwinex symbol outlier analysis (VaR, spread, swap, ATR)" },
+    Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
     Command { name: "GPU_SCAN",       desc: "GPU-accelerated DARWIN universe scan (50K DARWINs)" },
     // Drawing tools
     Command { name: "DRAW_HLINE",    desc: "Draw horizontal line" },
@@ -4595,6 +4613,13 @@ pub struct TyphooNApp {
     /// Price alerts.
     alerts: Vec<(f64, String)>,
     alert_price_input: String,
+    // Indicator-based alert engine
+    indicator_alerts: Vec<IndicatorAlert>,
+    show_alert_builder: bool,
+    alert_symbol: String,
+    alert_indicator: usize,     // index into ALERT_INDICATORS
+    alert_condition: usize,     // 0=crosses above, 1=crosses below, 2=greater than, 3=less than
+    alert_threshold: String,
     alert_label_input: String,
 
     /// Order entry form.
@@ -5448,6 +5473,12 @@ impl TyphooNApp {
             sec_filters: [true; 7],
             alerts: Vec::new(),
             alert_price_input: String::new(),
+            indicator_alerts: Vec::new(),
+            show_alert_builder: false,
+            alert_symbol: String::new(),
+            alert_indicator: 0,
+            alert_condition: 0,
+            alert_threshold: "70".to_string(),
             alert_label_input: String::new(),
             order_symbol: String::new(),
             order_qty: "1.0".to_string(),
@@ -5950,6 +5981,10 @@ impl TyphooNApp {
             "DARWIN_TRADES" => { self.log.push_back(LogEntry::info("DARWIN trade markers: open DARWIN Accounts for deal history")); self.show_darwin_accounts = true; }
             "DSCORE"        => { self.show_var_mult = true; }
             "DARWIN_BROWSER" => { self.show_darwin_browser = true; }
+            "ALERTS" => {
+                self.show_alert_builder = true;
+                self.alert_symbol = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
+            }
             "DARWINEXOUTLIERS" => {
                 // Read specs from cache, run outlier detection
                 if let Some(ref cache) = self.cache {
@@ -9830,6 +9865,145 @@ impl TyphooNApp {
                 });
         }
 
+        // Alert Builder + Alert Checker
+        if self.show_alert_builder {
+            egui::Window::new("Alert Builder")
+                .open(&mut self.show_alert_builder)
+                .default_size([600.0, 400.0])
+                .show(ctx, |ui| {
+                    let al_green = egui::Color32::from_rgb(46, 204, 113);
+                    let al_red = egui::Color32::from_rgb(231, 76, 60);
+                    let al_gold = egui::Color32::from_rgb(241, 196, 15);
+                    let al_cyan = egui::Color32::from_rgb(26, 188, 156);
+                    let al_dim = egui::Color32::from_rgb(100, 100, 120);
+
+                    // New alert form
+                    ui.label(egui::RichText::new("Create Alert").strong());
+                    ui.horizontal(|ui| {
+                        ui.label("Symbol:");
+                        ui.add(egui::TextEdit::singleline(&mut self.alert_symbol).desired_width(80.0));
+                        ui.label("Indicator:");
+                        egui::ComboBox::from_id_salt("alert_ind")
+                            .selected_text(ALERT_INDICATORS[self.alert_indicator])
+                            .width(100.0)
+                            .show_ui(ui, |ui| {
+                                for (i, name) in ALERT_INDICATORS.iter().enumerate() {
+                                    ui.selectable_value(&mut self.alert_indicator, i, *name);
+                                }
+                            });
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Condition:");
+                        egui::ComboBox::from_id_salt("alert_cond")
+                            .selected_text(ALERT_CONDITIONS[self.alert_condition])
+                            .width(130.0)
+                            .show_ui(ui, |ui| {
+                                for (i, name) in ALERT_CONDITIONS.iter().enumerate() {
+                                    ui.selectable_value(&mut self.alert_condition, i, *name);
+                                }
+                            });
+                        ui.label("Threshold:");
+                        ui.add(egui::TextEdit::singleline(&mut self.alert_threshold).desired_width(80.0));
+                        if ui.button(egui::RichText::new("+ Add").color(al_green)).clicked() {
+                            if let Ok(thresh) = self.alert_threshold.parse::<f64>() {
+                                let tf = self.charts.get(self.active_tab).map(|c| c.timeframe.label().to_string()).unwrap_or("H4".into());
+                                self.indicator_alerts.push(IndicatorAlert {
+                                    symbol: self.alert_symbol.clone(),
+                                    timeframe: tf,
+                                    indicator: ALERT_INDICATORS[self.alert_indicator].to_string(),
+                                    condition: ALERT_CONDITIONS[self.alert_condition].to_string(),
+                                    threshold: thresh,
+                                    active: true,
+                                    triggered: false,
+                                    last_value: None,
+                                    created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string(),
+                                });
+                                self.log.push_back(LogEntry::info(format!(
+                                    "Alert: {} {} {} {}",
+                                    self.alert_symbol, ALERT_INDICATORS[self.alert_indicator],
+                                    ALERT_CONDITIONS[self.alert_condition], thresh
+                                )));
+                            }
+                        }
+                    });
+                    ui.separator();
+
+                    // Active alerts list
+                    ui.label(egui::RichText::new(format!("Active Alerts ({})", self.indicator_alerts.len())).strong());
+                    let mut remove_idx: Option<usize> = None;
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for (idx, alert) in self.indicator_alerts.iter_mut().enumerate() {
+                            ui.horizontal(|ui| {
+                                let status_c = if alert.triggered { al_red } else if alert.active { al_green } else { al_dim };
+                                let status_t = if alert.triggered { "TRIGGERED" } else if alert.active { "ACTIVE" } else { "OFF" };
+                                ui.label(egui::RichText::new(status_t).color(status_c).small().strong());
+                                ui.label(egui::RichText::new(&alert.symbol).color(al_cyan).small().strong());
+                                ui.label(egui::RichText::new(format!("{} {} {:.2}", alert.indicator, alert.condition, alert.threshold)).small());
+                                ui.label(egui::RichText::new(&alert.timeframe).color(al_dim).small());
+                                if let Some(v) = alert.last_value {
+                                    ui.label(egui::RichText::new(format!("= {:.2}", v)).color(al_gold).small());
+                                }
+                                ui.checkbox(&mut alert.active, "");
+                                if alert.triggered {
+                                    if ui.small_button("Reset").clicked() { alert.triggered = false; }
+                                }
+                                if ui.small_button("x").clicked() { remove_idx = Some(idx); }
+                            });
+                        }
+                    });
+                    if let Some(idx) = remove_idx { self.indicator_alerts.remove(idx); }
+                });
+        }
+
+        // Check indicator alerts against current chart data (every frame, cheap)
+        {
+            let chart_data: Option<(&str, &str, f64, f64, f64, f64, f64)> = self.charts.get(self.active_tab).and_then(|c| {
+                let n = c.bars.len();
+                if n < 2 { return None; }
+                let close = c.bars[n-1].close;
+                let rsi = c.rsi.get(n-1).and_then(|v| *v).unwrap_or(50.0);
+                let fisher = c.fisher.get(n-1).and_then(|v| *v).unwrap_or(0.0);
+                let adx = c.adx.get(n-1).and_then(|v| *v).unwrap_or(0.0);
+                let atr = c.atr.get(n-1).and_then(|v| *v).unwrap_or(0.0);
+                Some((&*c.symbol, c.timeframe.label(), close, rsi, fisher, adx, atr))
+            });
+
+            if let Some((sym, tf, close, rsi, fisher, adx, atr)) = chart_data {
+                for alert in self.indicator_alerts.iter_mut() {
+                    if !alert.active || alert.triggered { continue; }
+                    // Only check if symbol matches current chart
+                    if !sym.contains(&alert.symbol) { continue; }
+
+                    let current_val = match alert.indicator.as_str() {
+                        "Price" => close,
+                        "RSI" => rsi,
+                        "Fisher" => fisher,
+                        "ADX" => adx,
+                        "ATR" => atr,
+                        _ => continue,
+                    };
+
+                    let prev_val = alert.last_value.unwrap_or(current_val);
+                    let triggered = match alert.condition.as_str() {
+                        "crosses above" => prev_val <= alert.threshold && current_val > alert.threshold,
+                        "crosses below" => prev_val >= alert.threshold && current_val < alert.threshold,
+                        "greater than" => current_val > alert.threshold,
+                        "less than" => current_val < alert.threshold,
+                        _ => false,
+                    };
+
+                    alert.last_value = Some(current_val);
+                    if triggered {
+                        alert.triggered = true;
+                        self.log.push_back(LogEntry::warn(format!(
+                            "ALERT: {} {} {} {} (value: {:.2})",
+                            alert.symbol, alert.indicator, alert.condition, alert.threshold, current_val
+                        )));
+                    }
+                }
+            }
+        }
+
         // Darwinex Outliers
         if self.show_darwinex_outliers {
             egui::Window::new("Darwinex Outliers")
@@ -10707,6 +10881,14 @@ impl eframe::App for TyphooNApp {
                     db_path.push("typhoon_cache.db");
                     let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
                     self.log.push_back(LogEntry::info("SEC EDGAR scrape started..."));
+                }
+                // Auto EVSCRAPE on startup (fundamentals, skips if updated <24h)
+                {
+                    let mut db_path = dirs_home();
+                    db_path.push("cache");
+                    db_path.push("typhoon_cache.db");
+                    let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path });
+                    self.log.push_back(LogEntry::info("Fundamentals scrape started for all MT5 symbols..."));
                 }
             }
         }
