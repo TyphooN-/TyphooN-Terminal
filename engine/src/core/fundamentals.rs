@@ -1003,12 +1003,21 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
 
             let sym_upper = sym.to_uppercase();
 
-            // Skip forex (6-char pairs like EURUSD, GBPJPY)
-            if sym_upper.len() == 6 && forex_suffixes.iter().any(|s| sym_upper.ends_with(s)) {
+            // Skip forex (pairs like EURUSD, GBPJPY, NZDUSD — any length ending in currency code)
+            if forex_suffixes.iter().any(|s| sym_upper.ends_with(s) && sym_upper.len() >= 5 && sym_upper.len() <= 7) {
                 continue;
             }
-            // Skip crypto (any symbol ending in USD/USDT that starts with crypto name)
-            if crypto_patterns.iter().any(|c| sym_upper.starts_with(c) && (sym_upper.ends_with("USD") || sym_upper.ends_with("USDT"))) {
+            // Skip symbols starting with currency code + another currency (AUDCAD, NZDCHF, etc.)
+            let forex_prefixes = ["AUD", "CAD", "CHF", "EUR", "GBP", "JPY", "NZD", "USD", "SEK", "NOK", "TRY", "MXN", "ZAR", "PLN", "HKD", "SGD", "CZK", "HUF"];
+            if forex_prefixes.iter().any(|p| sym_upper.starts_with(p) && sym_upper.len() >= 6 && sym_upper.len() <= 7
+                && forex_suffixes.iter().any(|s| sym_upper.ends_with(s))) {
+                continue;
+            }
+            // Skip crypto — exact match or with USD/USDT suffix
+            if crypto_patterns.iter().any(|c| {
+                sym_upper == *c
+                || sym_upper.starts_with(c) && (sym_upper.ends_with("USD") || sym_upper.ends_with("USDT") || sym_upper.ends_with("BTC") || sym_upper.ends_with("ETH"))
+            }) {
                 continue;
             }
             // Skip futures contracts (contain _M, _H, _U, _Z suffixes or known roots with underscore)
