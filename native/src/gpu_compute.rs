@@ -76,6 +76,8 @@ pub struct GpuCompute {
     ehlers_mama_pipeline: wgpu::ComputePipeline,
     hma_pipeline: wgpu::ComputePipeline,
     sd_zones_pipeline: wgpu::ComputePipeline,
+    atr_proj_pipeline: wgpu::ComputePipeline,
+    better_vol_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuCompute {
@@ -192,6 +194,8 @@ impl GpuCompute {
         let ehlers_mama_pipeline = make_pipeline("ehlers_mama_pipeline", EHLERS_MAMA_SHADER);
         let hma_pipeline = make_pipeline("hma_pipeline", HMA_SHADER);
         let sd_zones_pipeline = make_pipeline("sd_zones_pipeline", SUPPLY_DEMAND_SHADER);
+        let atr_proj_pipeline = make_pipeline("atr_proj_pipeline", ATR_PROJECTION_SHADER);
+        let better_vol_pipeline = make_pipeline("better_vol_pipeline", BETTER_VOLUME_SHADER);
 
         Self {
             device,
@@ -232,6 +236,8 @@ impl GpuCompute {
             ehlers_mama_pipeline,
             hma_pipeline,
             sd_zones_pipeline,
+            atr_proj_pipeline,
+            better_vol_pipeline,
             bind_group_layout,
             readback_buffer: None,
         }
@@ -524,6 +530,70 @@ impl GpuCompute {
     /// Compute Fractals on GPU. Returns [up_price, down_price] × bar_count. Parallel. Requires OHLC.
     pub fn compute_fractals_gpu(&self) -> Option<Vec<f32>> {
         self.dispatch_ohlc_indicator(&self.fractals_pipeline, 0, 2)
+    }
+
+    /// Compute ATR Projection on GPU. Needs custom [open, atr] interleaved buffer.
+    /// Returns [upper, lower] × bar_count.
+    pub fn compute_atr_projection_gpu(&self, opens: &[f32], atrs: &[f32]) -> Option<Vec<f32>> {
+        if self.bar_count == 0 || opens.len() != atrs.len() { return None; }
+        let rb_buf = self.readback_buffer.as_ref()?;
+        let n = opens.len() as u32;
+
+        // Create interleaved [open, atr] buffer
+        let mut interleaved = Vec::with_capacity(n as usize * 2);
+        for i in 0..n as usize { interleaved.push(opens[i]); interleaved.push(atrs[i]); }
+
+        let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("atr_proj_in"), size: (n as u64) * 8,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&input_buf, 0, bytemuck_cast_slice(&interleaved));
+
+        let out_size = (n as u64) * 8; // 2 floats per bar
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("atr_proj_out"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let params = [0u32, n];
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("atr_proj_params"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("atr_proj_bg"), layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: input_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("atr_proj_pass"), timestamp_writes: None });
+            pass.set_pipeline(&self.atr_proj_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups((n + 255) / 256, 1, 1);
+        }
+        let read_size = out_size.min(rb_buf.size());
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
+    }
+
+    /// Compute BetterVolume classification on GPU from OHLC. Parallel.
+    /// Returns f32 per bar: 0=normal, 1=climax_up, 2=climax_down, 3=high, 4=low, 5=churn
+    pub fn compute_better_volume_gpu(&self, lookback: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.better_vol_pipeline, lookback, 1)
     }
 
     /// Compute Supply/Demand zones on GPU. Returns [type, high, low] × bar_count. Parallel.
@@ -2530,6 +2600,76 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     } else {
         output[base] = 0.0; output[base + 1u] = 0.0; output[base + 2u] = 0.0;
+    }
+}
+"#;
+
+const ATR_PROJECTION_SHADER: &str = r#"
+// ATR Projection — parallel per-bar: open ± ATR
+// Input binding 0: [open, atr] interleaved (2 floats per bar)
+// Output: [upper, lower] per bar (2 floats)
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [open0, atr0, open1, atr1, ...]
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    let open_val = bars[i * 2u];
+    let atr_val = bars[i * 2u + 1u];
+    if (atr_val > 0.0) {
+        output[i * 2u] = open_val + atr_val;
+        output[i * 2u + 1u] = open_val - atr_val;
+    } else {
+        output[i * 2u] = 0.0;
+        output[i * 2u + 1u] = 0.0;
+    }
+}
+"#;
+
+const BETTER_VOLUME_SHADER: &str = r#"
+// BetterVolume classification — parallel per-bar
+// Input: [high, low, close, open, volume] per bar = 5 floats (uses OHLC + volume)
+// Output: classification u32 as f32: 0=normal, 1=climax_up, 2=climax_down, 3=high_vol, 4=low_vol, 5=churn
+struct Params { period: u32, bar_count: u32, }  // period = lookback for averages (20)
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h,l,c] interleaved (3 per bar)
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count || i < params.period) { output[i] = 0.0; return; }
+
+    // Compute average range over lookback
+    var avg_range: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        let idx = i - j - 1u;
+        avg_range = avg_range + bars[idx * 3u] - bars[idx * 3u + 1u];
+    }
+    avg_range = avg_range / f32(params.period);
+
+    let h = bars[i * 3u];
+    let l = bars[i * 3u + 1u];
+    let c = bars[i * 3u + 2u];
+    let range = h - l;
+    let range_ratio = select(range / avg_range, 1.0, avg_range < 0.000001);
+
+    // Use range as volume proxy (we don't have separate volume buffer in OHLC layout)
+    // Classification based on range ratios
+    let prev_c = bars[(i - 1u) * 3u + 2u];
+    let is_up = c >= prev_c;
+
+    if (range_ratio > 2.0) {
+        output[i] = select(2.0, 1.0, is_up);  // climax up/down
+    } else if (range_ratio < 0.4) {
+        output[i] = 4.0;  // low range (proxy for low volume)
+    } else if (range_ratio > 1.5) {
+        output[i] = 3.0;  // high range
+    } else {
+        output[i] = 0.0;  // normal
     }
 }
 "#;

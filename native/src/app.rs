@@ -861,8 +861,35 @@ impl ChartState {
                 } else { self.psar = compute_parabolic_sar(&self.bars, 0.02, 0.2); }
                 let (au, al) = compute_atr_projection(&self.bars, &self.atr);
                 self.atr_proj_upper = au; self.atr_proj_lower = al;
-                self.better_vol_type = compute_better_volume(&self.bars); // CPU (classification logic)
-                let (pdh, pdl, pwh, pwl) = compute_prev_candle_levels(&self.bars); // CPU (time boundaries)
+                // ATR Projection — GPU (parallel: open ± ATR)
+                {
+                    let opens: Vec<f32> = self.bars.iter().map(|b| b.open as f32).collect();
+                    let atrs: Vec<f32> = self.atr.iter().map(|v| v.unwrap_or(0.0) as f32).collect();
+                    if let Some(data) = gpu.compute_atr_projection_gpu(&opens, &atrs) {
+                        let n = self.bars.len();
+                        let mut au = Vec::with_capacity(n);
+                        let mut al = Vec::with_capacity(n);
+                        for i in 0..n {
+                            let u = data.get(i * 2).copied().unwrap_or(0.0);
+                            let l = data.get(i * 2 + 1).copied().unwrap_or(0.0);
+                            if u == 0.0 { au.push(None); al.push(None); }
+                            else { au.push(Some(u as f64)); al.push(Some(l as f64)); }
+                        }
+                        self.atr_proj_upper = au; self.atr_proj_lower = al;
+                    } else {
+                        let (au, al) = compute_atr_projection(&self.bars, &self.atr);
+                        self.atr_proj_upper = au; self.atr_proj_lower = al;
+                    }
+                }
+
+                // BetterVolume — GPU (parallel classification)
+                if let Some(data) = gpu.compute_better_volume_gpu(20) {
+                    self.better_vol_type = data.iter().map(|&v| v as u8).collect();
+                } else {
+                    self.better_vol_type = compute_better_volume(&self.bars);
+                }
+
+                let (pdh, pdl, pwh, pwl) = compute_prev_candle_levels(&self.bars); // CPU (time boundaries — requires timestamp parsing)
                 self.prev_daily_high = pdh; self.prev_daily_low = pdl;
                 self.prev_weekly_high = pwh; self.prev_weekly_low = pwl;
                 if let (Some(h), Some(l)) = (pdh, pdl) {
