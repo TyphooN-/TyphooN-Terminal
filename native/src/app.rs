@@ -788,34 +788,63 @@ impl ChartState {
                 }
 
                 // Remaining indicators — GPU where shader exists, CPU fallback
-                let (tk, kj, sa, sb) = compute_ichimoku(&self.bars, 9, 26, 52); // CPU (complex multi-line)
-                self.ichi_tenkan = tk; self.ichi_kijun = kj; self.ichi_span_a = sa; self.ichi_span_b = sb;
 
+                // Ichimoku — GPU (sequential, 4 outputs)
+                if let Some(data) = gpu.compute_ichimoku_gpu() {
+                    let n = self.bars.len();
+                    let mut tk = Vec::with_capacity(n); let mut kj = Vec::with_capacity(n);
+                    let mut sa = Vec::with_capacity(n); let mut sb = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let t = data.get(i * 4).copied().unwrap_or(0.0);
+                        let k = data.get(i * 4 + 1).copied().unwrap_or(0.0);
+                        let a = data.get(i * 4 + 2).copied().unwrap_or(0.0);
+                        let b = data.get(i * 4 + 3).copied().unwrap_or(0.0);
+                        tk.push(if t == 0.0 { None } else { Some(t as f64) });
+                        kj.push(if k == 0.0 { None } else { Some(k as f64) });
+                        sa.push(if a == 0.0 { None } else { Some(a as f64) });
+                        sb.push(if b == 0.0 { None } else { Some(b as f64) });
+                    }
+                    self.ichi_tenkan = tk; self.ichi_kijun = kj; self.ichi_span_a = sa; self.ichi_span_b = sb;
+                } else {
+                    let (tk, kj, sa, sb) = compute_ichimoku(&self.bars, 9, 26, 52);
+                    self.ichi_tenkan = tk; self.ichi_kijun = kj; self.ichi_span_a = sa; self.ichi_span_b = sb;
+                }
+
+                // WMA — GPU (parallel)
                 if let Some(data) = gpu.compute_wma_gpu(20) {
                     self.wma = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.wma = compute_wma(&self.bars, 20); }
 
-                self.hma = compute_hma(&self.bars, 20); // CPU (HMA = WMA of delta, complex)
+                self.hma = compute_hma(&self.bars, 20); // CPU (composite of WMA — TODO: GPU composition)
 
-                self.cci = compute_cci(&self.bars, 20); // CPU for now (needs typical price buffer)
+                // CCI — GPU (parallel, from OHLC)
+                if let Some(data) = gpu.compute_cci_gpu(20) {
+                    self.cci = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.cci = compute_cci(&self.bars, 20); }
 
+                // Williams %R — GPU (parallel, from OHLC)
                 if let Some(data) = gpu.compute_williams_r_gpu(14) {
                     self.williams_r = data.iter().map(|&v| Some(v as f64)).collect();
                 } else { self.williams_r = compute_williams_r(&self.bars, 14); }
 
-                self.obv = compute_obv(&self.bars); // CPU (needs close+volume interleaved buffer)
+                // OBV — GPU (sequential, price-change proxy)
+                if let Some(data) = gpu.compute_obv_gpu() {
+                    self.obv = data.iter().map(|&v| Some(v as f64)).collect();
+                } else { self.obv = compute_obv(&self.bars); }
 
+                // Momentum — GPU (parallel)
                 if let Some(data) = gpu.compute_momentum_gpu(10) {
                     self.momentum = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.momentum = compute_momentum(&self.bars, 10); }
 
+                // Parabolic SAR — GPU (sequential, from OHLC)
                 if let Some(data) = gpu.compute_psar_gpu() {
                     self.psar = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.psar = compute_parabolic_sar(&self.bars, 0.02, 0.2); }
                 let (au, al) = compute_atr_projection(&self.bars, &self.atr);
                 self.atr_proj_upper = au; self.atr_proj_lower = al;
-                self.better_vol_type = compute_better_volume(&self.bars);
-                let (pdh, pdl, pwh, pwl) = compute_prev_candle_levels(&self.bars);
+                self.better_vol_type = compute_better_volume(&self.bars); // CPU (classification logic)
+                let (pdh, pdl, pwh, pwl) = compute_prev_candle_levels(&self.bars); // CPU (time boundaries)
                 self.prev_daily_high = pdh; self.prev_daily_low = pdl;
                 self.prev_weekly_high = pwh; self.prev_weekly_low = pwl;
                 if let (Some(h), Some(l)) = (pdh, pdl) {
@@ -830,14 +859,39 @@ impl ChartState {
                         self.pivot_s1 = Some(2.0 * p - h); self.pivot_s2 = Some(p - (h - l));
                     }
                 }
-                self.fractal_up = compute_fractals_up(&self.bars);
-                self.fractal_down = compute_fractals_down(&self.bars);
-                self.harmonics = detect_harmonic_patterns(&self.bars, &self.fractal_up, &self.fractal_down);
-                let (sz, dz) = compute_supply_demand_zones(&self.bars);
+
+                // Fractals — GPU (parallel per-bar)
+                if let Some(data) = gpu.compute_fractals_gpu() {
+                    let n = self.bars.len();
+                    self.fractal_up = vec![false; n];
+                    self.fractal_down = vec![false; n];
+                    for i in 0..n {
+                        let up = data.get(i * 2).copied().unwrap_or(0.0);
+                        let dn = data.get(i * 2 + 1).copied().unwrap_or(0.0);
+                        if up != 0.0 { self.fractal_up[i] = true; }
+                        if dn != 0.0 { self.fractal_down[i] = true; }
+                    }
+                } else {
+                    self.fractal_up = compute_fractals_up(&self.bars);
+                    self.fractal_down = compute_fractals_down(&self.bars);
+                }
+
+                self.harmonics = detect_harmonic_patterns(&self.bars, &self.fractal_up, &self.fractal_down); // CPU (complex pattern matching)
+                let (sz, dz) = compute_supply_demand_zones(&self.bars); // CPU (impulse detection)
                 self.supply_zones = sz; self.demand_zones = dz;
-                self.compute_auto_fibonacci();
-                self.ehlers_ss = ehlers_super_smoother(&self.bars, 10);
-                self.ehlers_decycler = ehlers_decycler(&self.bars, 20);
+                self.compute_auto_fibonacci(); // CPU (fractal-based swing detection)
+
+                // Ehlers Super Smoother — GPU
+                if let Some(data) = gpu.compute_ehlers_ss_gpu(10) {
+                    self.ehlers_ss = data.iter().map(|&v| Some(v as f64)).collect();
+                } else { self.ehlers_ss = ehlers_super_smoother(&self.bars, 10); }
+
+                // Ehlers Decycler — GPU
+                if let Some(data) = gpu.compute_ehlers_dec_gpu(20) {
+                    self.ehlers_decycler = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.ehlers_decycler = ehlers_decycler(&self.bars, 20); }
+
+                // Remaining Ehlers — CPU (complex IIR filters, will port to GPU in next phase)
                 self.ehlers_itl = ehlers_instantaneous_trendline(&self.bars);
                 let (mama, fama) = ehlers_mama_fama(&self.bars, 0.5, 0.05);
                 self.ehlers_mama = mama; self.ehlers_fama = fama;

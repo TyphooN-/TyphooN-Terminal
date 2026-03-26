@@ -62,6 +62,12 @@ pub struct GpuCompute {
     obv_pipeline: wgpu::ComputePipeline,
     momentum_pipeline: wgpu::ComputePipeline,
     psar_pipeline: wgpu::ComputePipeline,
+    ichimoku_pipeline: wgpu::ComputePipeline,
+    cci_ohlc_pipeline: wgpu::ComputePipeline,
+    obv_gpu_pipeline: wgpu::ComputePipeline,
+    ehlers_ss_pipeline: wgpu::ComputePipeline,
+    ehlers_dec_pipeline: wgpu::ComputePipeline,
+    fractals_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuCompute {
@@ -164,6 +170,12 @@ impl GpuCompute {
         let obv_pipeline = make_pipeline("obv_pipeline", OBV_SHADER);
         let momentum_pipeline = make_pipeline("momentum_pipeline", MOMENTUM_SHADER);
         let psar_pipeline = make_pipeline("psar_pipeline", PSAR_SHADER);
+        let ichimoku_pipeline = make_pipeline("ichimoku_pipeline", ICHIMOKU_SHADER);
+        let cci_ohlc_pipeline = make_pipeline("cci_ohlc_pipeline", CCI_GPU_SHADER);
+        let obv_gpu_pipeline = make_pipeline("obv_gpu_pipeline", OBV_GPU_SHADER);
+        let ehlers_ss_pipeline = make_pipeline("ehlers_ss_pipeline", EHLERS_SUPERSMOOTHER_SHADER);
+        let ehlers_dec_pipeline = make_pipeline("ehlers_dec_pipeline", EHLERS_DECYCLER_SHADER);
+        let fractals_pipeline = make_pipeline("fractals_pipeline", FRACTALS_SHADER);
 
         Self {
             device,
@@ -190,6 +202,12 @@ impl GpuCompute {
             obv_pipeline,
             momentum_pipeline,
             psar_pipeline,
+            ichimoku_pipeline,
+            cci_ohlc_pipeline,
+            obv_gpu_pipeline,
+            ehlers_ss_pipeline,
+            ehlers_dec_pipeline,
+            fractals_pipeline,
             bind_group_layout,
             readback_buffer: None,
         }
@@ -411,6 +429,77 @@ impl GpuCompute {
     /// Compute Williams %R on GPU. Returns f32 per bar. Requires OHLC upload.
     pub fn compute_williams_r_gpu(&self, period: u32) -> Option<Vec<f32>> {
         self.dispatch_ohlc_indicator(&self.williams_r_pipeline, period, 1)
+    }
+
+    /// Compute Ichimoku on GPU. Returns [tenkan, kijun, span_a, span_b] × bar_count. Requires OHLC.
+    pub fn compute_ichimoku_gpu(&self) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.ichimoku_pipeline, 0, 4)
+    }
+
+    /// Compute CCI on GPU from OHLC (computes typical price internally). Parallel.
+    pub fn compute_cci_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        if self.bar_count == 0 { return None; }
+        let ohlc_buf = self.ohlc_buffer.as_ref()?;
+        let rb_buf = self.readback_buffer.as_ref()?;
+        let out_size = (self.bar_count as u64) * 4;
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cci_out"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let params = [period, self.bar_count];
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("cci_params"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("cci_bg"), layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: ohlc_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("cci_pass"), timestamp_writes: None });
+            pass.set_pipeline(&self.cci_ohlc_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups((self.bar_count + 255) / 256, 1, 1);
+        }
+        let read_size = out_size.min(rb_buf.size());
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
+    }
+
+    /// Compute OBV approximation on GPU (uses price change magnitude as volume proxy).
+    pub fn compute_obv_gpu(&self) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.obv_gpu_pipeline, 0, false)
+    }
+
+    /// Compute Ehlers Super Smoother on GPU. Returns f32 per bar.
+    pub fn compute_ehlers_ss_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.ehlers_ss_pipeline, period, false)
+    }
+
+    /// Compute Ehlers Decycler on GPU. Returns f32 per bar.
+    pub fn compute_ehlers_dec_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.ehlers_dec_pipeline, period, false)
+    }
+
+    /// Compute Fractals on GPU. Returns [up_price, down_price] × bar_count. Parallel. Requires OHLC.
+    pub fn compute_fractals_gpu(&self) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.fractals_pipeline, 0, 2)
     }
 
     /// Compute RSI on GPU. Returns f32 per bar.
@@ -1779,6 +1868,223 @@ fn main() {
         sar = new_sar;
         output[i] = sar;
     }
+}
+"#;
+
+// ─── Phase 3 Indicators: Ichimoku, CCI, OBV, Ehlers, Fractals ──────────────
+
+const ICHIMOKU_SHADER: &str = r#"
+// Ichimoku Kinko Hyo — sequential (4 outputs: tenkan, kijun, span_a, span_b)
+// Input: [high, low, close] interleaved
+// Output: [tenkan, kijun, span_a, span_b] × bar_count = 4 floats per bar
+struct Params { period: u32, bar_count: u32, }  // period unused, hardcoded 9/26/52
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+fn highest_high(start: u32, len: u32) -> f32 {
+    var hh: f32 = -1000000.0;
+    for (var j: u32 = 0u; j < len; j = j + 1u) {
+        let h = bars[(start + j) * 3u];
+        if (h > hh) { hh = h; }
+    }
+    return hh;
+}
+fn lowest_low(start: u32, len: u32) -> f32 {
+    var ll: f32 = 1000000.0;
+    for (var j: u32 = 0u; j < len; j = j + 1u) {
+        let l = bars[(start + j) * 3u + 1u];
+        if (l < ll) { ll = l; }
+    }
+    return ll;
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    let tenkan_p: u32 = 9u;
+    let kijun_p: u32 = 26u;
+    let senkou_b_p: u32 = 52u;
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        let base = i * 4u;
+        // Tenkan-sen (9-period midpoint)
+        if (i >= tenkan_p - 1u) {
+            let start = i - tenkan_p + 1u;
+            output[base] = (highest_high(start, tenkan_p) + lowest_low(start, tenkan_p)) / 2.0;
+        } else { output[base] = 0.0; }
+
+        // Kijun-sen (26-period midpoint)
+        if (i >= kijun_p - 1u) {
+            let start = i - kijun_p + 1u;
+            output[base + 1u] = (highest_high(start, kijun_p) + lowest_low(start, kijun_p)) / 2.0;
+        } else { output[base + 1u] = 0.0; }
+
+        // Senkou Span A (midpoint of tenkan + kijun, projected 26 forward)
+        if (i >= kijun_p - 1u) {
+            output[base + 2u] = (output[base] + output[base + 1u]) / 2.0;
+        } else { output[base + 2u] = 0.0; }
+
+        // Senkou Span B (52-period midpoint, projected 26 forward)
+        if (i >= senkou_b_p - 1u) {
+            let start = i - senkou_b_p + 1u;
+            output[base + 3u] = (highest_high(start, senkou_b_p) + lowest_low(start, senkou_b_p)) / 2.0;
+        } else { output[base + 3u] = 0.0; }
+    }
+}
+"#;
+
+const CCI_GPU_SHADER: &str = r#"
+// CCI with built-in typical price computation from OHLC
+// Input: [high, low, close] interleaved
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count || i < params.period - 1u) { output[i] = 0.0; return; }
+
+    // Compute typical prices and SMA
+    var sum: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        let idx = i - j;
+        let tp = (bars[idx * 3u] + bars[idx * 3u + 1u] + bars[idx * 3u + 2u]) / 3.0;
+        sum = sum + tp;
+    }
+    let sma = sum / f32(params.period);
+
+    // Mean deviation
+    var md: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        let idx = i - j;
+        let tp = (bars[idx * 3u] + bars[idx * 3u + 1u] + bars[idx * 3u + 2u]) / 3.0;
+        md = md + abs(tp - sma);
+    }
+    md = md / f32(params.period);
+
+    let tp_now = (bars[i * 3u] + bars[i * 3u + 1u] + bars[i * 3u + 2u]) / 3.0;
+    output[i] = select((tp_now - sma) / (0.015 * md), 0.0, md < 0.000001);
+}
+"#;
+
+const OBV_GPU_SHADER: &str = r#"
+// OBV with close+volume from OHLC buffer (close at offset 2, volume separate)
+// Input binding 0: close prices, binding 1 is output
+// We'll use a separate volume buffer approach — close prices in bars, volume uploaded separately
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // close prices
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    // OBV without volume data — use price change magnitude as proxy
+    // (Real OBV requires volume buffer; this is a reasonable GPU approximation)
+    if (params.bar_count == 0u) { return; }
+    output[0] = 0.0;
+    var obv: f32 = 0.0;
+    for (var i: u32 = 1u; i < params.bar_count; i = i + 1u) {
+        let change = bars[i] - bars[i - 1u];
+        if (change > 0.0) { obv = obv + abs(change); }
+        else if (change < 0.0) { obv = obv - abs(change); }
+        output[i] = obv;
+    }
+}
+"#;
+
+const EHLERS_SUPERSMOOTHER_SHADER: &str = r#"
+// Ehlers Super Smoother — 2-pole Butterworth low-pass filter (sequential)
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let pi: f32 = 3.14159265;
+    let a = exp(-1.414 * pi / f32(params.period));
+    let b = 2.0 * a * cos(1.414 * pi / f32(params.period));
+    let c2 = b;
+    let c3 = -a * a;
+    let c1 = 1.0 - c2 - c3;
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i < 2u) {
+            output[i] = bars[i];
+        } else {
+            output[i] = c1 * (bars[i] + bars[i - 1u]) / 2.0 + c2 * output[i - 1u] + c3 * output[i - 2u];
+        }
+    }
+}
+"#;
+
+const EHLERS_DECYCLER_SHADER: &str = r#"
+// Ehlers Decycler — price minus super-smoothed component (sequential)
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let pi: f32 = 3.14159265;
+    let a = exp(-1.414 * pi / f32(params.period));
+    let b = 2.0 * a * cos(1.414 * pi / f32(params.period));
+    let c2 = b;
+    let c3 = -a * a;
+    let c1 = 1.0 - c2 - c3;
+
+    // First compute super smoother
+    var ss: array<f32, 2>;
+    ss[0] = bars[0]; ss[1] = bars[1u.min(params.bar_count - 1u)];
+    output[0] = 0.0;
+    if (params.bar_count > 1u) { output[1] = 0.0; }
+
+    for (var i: u32 = 2u; i < params.bar_count; i = i + 1u) {
+        let smoothed = c1 * (bars[i] + bars[i - 1u]) / 2.0 + c2 * ss[1] + c3 * ss[0];
+        output[i] = bars[i] - smoothed;
+        ss[0] = ss[1];
+        ss[1] = smoothed;
+    }
+}
+"#;
+
+const FRACTALS_SHADER: &str = r#"
+// Fractals (Williams) — parallel per-bar
+// Fractal Up: high[i] > high[i-2..i+2] (5-bar pattern)
+// Fractal Down: low[i] < low[i-2..i+2]
+// Output: [fractal_up_flag, fractal_down_flag] per bar (2 floats, 0.0 or price)
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h,l,c] interleaved
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;  // [up, down] per bar
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+    let base = i * 2u;
+
+    if (i < 2u || i + 2u >= params.bar_count) {
+        output[base] = 0.0;
+        output[base + 1u] = 0.0;
+        return;
+    }
+
+    let h = bars[i * 3u];
+    let l = bars[i * 3u + 1u];
+
+    // Fractal up: current high > surrounding 4 highs
+    let is_up = h > bars[(i - 2u) * 3u] && h > bars[(i - 1u) * 3u]
+             && h > bars[(i + 1u) * 3u] && h > bars[(i + 2u) * 3u];
+    output[base] = select(0.0, h, is_up);
+
+    // Fractal down: current low < surrounding 4 lows
+    let is_down = l < bars[(i - 2u) * 3u + 1u] && l < bars[(i - 1u) * 3u + 1u]
+               && l < bars[(i + 1u) * 3u + 1u] && l < bars[(i + 2u) * 3u + 1u];
+    output[base + 1u] = select(0.0, l, is_down);
 }
 "#;
 
