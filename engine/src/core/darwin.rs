@@ -1975,11 +1975,95 @@ pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir:
 
     // Write specs snapshot for radar tracking
     let timestamp = chrono::Utc::now().format("%Y.%m.%d").to_string();
-    let output_path = dir.join(format!("SymbolsExport-Darwinex-Live-All-{}.json", timestamp));
-    std::fs::write(&output_path, &specs)
-        .map_err(|e| format!("Write failed: {e}"))?;
 
-    Ok(format!("{{\"exported\":\"{}\",\"size\":{}}}", output_path.display(), specs.len()))
+    // Parse the CSV specs and write in darwinex-radar compatible format
+    // BarCacheWriter stores: Symbol,SectorName,IndustryName,TradeMode,SwapLong,SwapShort,Spread,
+    //   VolumeMin,VolumeMax,VolumeStep,ContractSize,TickSize,TickValue,Digits,MarginInitial,
+    //   MarginMaintenance,BaseCurrency,QuoteCurrency,Description
+    let lines: Vec<&str> = specs.lines().collect();
+
+    // Categorize symbols and write per-category CSV files for radar
+    let mut stocks = Vec::new();
+    let mut cfd = Vec::new();
+    let mut crypto = Vec::new();
+    let mut futures = Vec::new();
+
+    // Header line (first line is the column header from BarCacheWriter)
+    let header = lines.first().copied().unwrap_or("");
+
+    for line in lines.iter().skip(1) {
+        if line.trim().is_empty() { continue; }
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() < 4 { continue; }
+        let symbol = fields[0].trim();
+        let sector = if fields.len() > 1 { fields[1].trim() } else { "" };
+
+        // Classify by sector/symbol pattern
+        if sector.contains("Crypto") || symbol.ends_with("USD") && (symbol.starts_with("BTC") || symbol.starts_with("ETH") || symbol.starts_with("SOL") || symbol.starts_with("DOGE") || symbol.starts_with("XRP")) {
+            crypto.push(*line);
+        } else if symbol.contains('_') || symbol.starts_with("6") {
+            futures.push(*line);
+        } else if sector.is_empty() || sector == "Unknown" || sector == "Forex" || symbol.len() == 6 {
+            cfd.push(*line);
+        } else {
+            stocks.push(*line);
+        }
+    }
+
+    // Write semicolon-delimited CSVs in darwinex-radar format
+    // Convert comma-separated to semicolon-separated
+    let to_semicolon = |lines: &[&str]| -> String {
+        let mut out = String::new();
+        // Write header: Symbol;TradeMode;SwapLong;SwapShort;Spread (minimum radar columns)
+        out.push_str("Symbol;TradeMode;SwapLong;SwapShort;Spread;SectorName;IndustryName;VolumeMin;VolumeMax;ContractSize;MarginInitial\n");
+        for line in lines {
+            let f: Vec<&str> = line.split(',').collect();
+            if f.len() >= 7 {
+                // Reorder: Symbol(0), TradeMode(3), SwapLong(4), SwapShort(5), Spread(6), Sector(1), Industry(2), VolMin(7), VolMax(8), Contract(10), Margin(14)
+                out.push_str(&format!("{};{};{};{};{};{};{};{};{};{};{}\n",
+                    f[0].trim(), f.get(3).unwrap_or(&"").trim(), f.get(4).unwrap_or(&"").trim(),
+                    f.get(5).unwrap_or(&"").trim(), f.get(6).unwrap_or(&"").trim(),
+                    f.get(1).unwrap_or(&"").trim(), f.get(2).unwrap_or(&"").trim(),
+                    f.get(7).unwrap_or(&"").trim(), f.get(8).unwrap_or(&"").trim(),
+                    f.get(10).unwrap_or(&"").trim(), f.get(14).unwrap_or(&"").trim(),
+                ));
+            }
+        }
+        out
+    };
+
+    let mut exported = Vec::new();
+    if !stocks.is_empty() {
+        let path = dir.join(format!("SymbolsExport-Darwinex-Live-Stocks-{}.csv", timestamp));
+        std::fs::write(&path, to_semicolon(&stocks))
+            .map_err(|e| format!("Write stocks failed: {e}"))?;
+        exported.push(format!("stocks:{}", stocks.len()));
+    }
+    if !cfd.is_empty() {
+        let path = dir.join(format!("SymbolsExport-Darwinex-Live-CFD-{}.csv", timestamp));
+        std::fs::write(&path, to_semicolon(&cfd))
+            .map_err(|e| format!("Write CFD failed: {e}"))?;
+        exported.push(format!("cfd:{}", cfd.len()));
+    }
+    if !crypto.is_empty() {
+        let path = dir.join(format!("SymbolsExport-Darwinex-Live-Crypto-{}.csv", timestamp));
+        std::fs::write(&path, to_semicolon(&crypto))
+            .map_err(|e| format!("Write crypto failed: {e}"))?;
+        exported.push(format!("crypto:{}", crypto.len()));
+    }
+    if !futures.is_empty() {
+        let path = dir.join(format!("SymbolsExport-Darwinex-Live-Futures-{}.csv", timestamp));
+        std::fs::write(&path, to_semicolon(&futures))
+            .map_err(|e| format!("Write futures failed: {e}"))?;
+        exported.push(format!("futures:{}", futures.len()));
+    }
+
+    // Also write raw specs for debugging
+    let raw_path = dir.join(format!("SymbolsExport-Darwinex-Live-All-{}.csv", timestamp));
+    std::fs::write(&raw_path, &specs)
+        .map_err(|e| format!("Write raw failed: {e}"))?;
+
+    Ok(format!("Exported {} ({} total symbols)", exported.join(", "), lines.len() - 1))
 }
 
 // ── FTP Quote / Price Series ────────────────────────────────────────
