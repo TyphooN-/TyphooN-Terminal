@@ -3873,7 +3873,6 @@ struct BgDarwinData {
     sector_exposure: Vec<darwin::SectorExposure>,
     liquidity_risk: Vec<darwin::LiquidityRisk>,
     floating_equity: Option<darwin::FloatingEquityDashboard>,
-    tax_lots: Vec<(String, darwin::TaxSummary)>,
 
     // ── VaR Multiplier window ──
     var_multipliers: Vec<darwin::DarwinVaRMultiplier>,
@@ -5251,18 +5250,7 @@ impl TyphooNApp {
                             data.account_details = details;
                         }
 
-                        // Phase 6: tax lots per account
-                        if let Ok(conn) = cache.connection() {
-                            let mut tax = Vec::new();
-                            for acct in &data.accounts {
-                                if let Ok(t) = darwin::compute_tax_lots(&conn, &acct.darwin_ticker, 2026) {
-                                    tax.push((acct.darwin_ticker.clone(), t));
-                                }
-                            }
-                            data.tax_lots = tax;
-                        }
-
-                        // Phase 7: DARWIN risk alerts
+                        // Phase 6: DARWIN risk alerts
                         if let Ok(conn) = cache.connection() {
                             data.darwin_alerts = darwin::check_alerts(&conn).unwrap_or_default();
                         }
@@ -6699,23 +6687,6 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new("No DARWIN accounts imported yet.").color(AXIS_TEXT));
                         ui.label(egui::RichText::new("Export MT5 Trade History as XLSX, then import here.").color(AXIS_TEXT).small());
                     }
-                    // ── Tax Summary (current year) — from bg cache ──────────────
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.heading("Tax Summary (2026)");
-                    for (ticker, tax) in &self.bg.tax_lots {
-                        ui.label(egui::RichText::new(ticker).strong());
-                        egui::Grid::new(format!("tax_{}", ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                            ui.label("Short-term gains:"); ui.label(egui::RichText::new(format!("${:.2}", tax.short_term_gains)).color(UP)); ui.end_row();
-                            ui.label("Short-term losses:"); ui.label(egui::RichText::new(format!("${:.2}", tax.short_term_losses)).color(DOWN)); ui.end_row();
-                            ui.label("Long-term gains:"); ui.label(egui::RichText::new(format!("${:.2}", tax.long_term_gains)).color(UP)); ui.end_row();
-                            ui.label("Long-term losses:"); ui.label(egui::RichText::new(format!("${:.2}", tax.long_term_losses)).color(DOWN)); ui.end_row();
-                            let net_c = if tax.total_net >= 0.0 { UP } else { DOWN };
-                            ui.label("Net Total:"); ui.label(egui::RichText::new(format!("${:.2}", tax.total_net)).color(net_c).strong()); ui.end_row();
-                        });
-                        ui.add_space(4.0);
-                    }
-
                     // ── Floating Equity Dashboard — from bg cache ─────────────────
                     ui.add_space(10.0);
                     ui.separator();
