@@ -8702,7 +8702,7 @@ impl TyphooNApp {
         if self.show_sec {
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
-                .default_size([750.0, 550.0])
+                .default_size([800.0, 600.0])
                 .show(ctx, |ui| {
                     let sec_high = egui::Color32::from_rgb(231, 76, 60);
                     let sec_med = egui::Color32::from_rgb(241, 196, 15);
@@ -8712,7 +8712,7 @@ impl TyphooNApp {
                     let sec_purple = egui::Color32::from_rgb(200, 100, 255);
                     let sec_orange = egui::Color32::from_rgb(255, 130, 60);
 
-                    // Header with filter + scrape button
+                    // ── Header: filter + scrape ──
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Filter:").color(AXIS_TEXT).small());
                         let labels = ["Form 4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
@@ -8730,32 +8730,108 @@ impl TyphooNApp {
                     });
                     ui.separator();
 
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                    // ── High-priority alerts first (attention-grabbing) ──
-                    {
-                        let alerts = &self.bg.sec_alerts;
-                        let high_alerts: Vec<_> = alerts.iter().filter(|a| a.importance >= 70).collect();
-                        if !high_alerts.is_empty() {
-                            ui.label(egui::RichText::new(format!("Alerts ({})", high_alerts.len())).strong().color(sec_high));
-                            let mut dismiss_id: Option<i64> = None;
-                            // Group alerts by ticker
-                            let mut by_ticker: std::collections::BTreeMap<&str, Vec<_>> = std::collections::BTreeMap::new();
-                            for a in &high_alerts {
-                                by_ticker.entry(&a.ticker).or_default().push(*a);
+                    // ── TOP HALF: Recent Filings table (always visible, scrollable) ──
+                    let filings = &self.bg.sec_filings;
+                    let filter_types: Vec<&str> = vec!["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
+                    let mut seen = std::collections::HashSet::new();
+                    let mut deduped = Vec::new();
+                    for f in filings {
+                        let key = format!("{}:{}:{}", f.filing_date, f.ticker, f.form_type);
+                        if seen.insert(key) {
+                            let pass = self.sec_filters.iter().enumerate().any(|(i, &enabled)| {
+                                enabled && f.form_type.contains(filter_types.get(i).unwrap_or(&""))
+                            }) || self.sec_filters.iter().all(|&v| v);
+                            if pass { deduped.push(f); }
+                        }
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Recent Filings ({})", deduped.len())).small().strong());
+                        ui.label(egui::RichText::new("all portfolio symbols via SEC EDGAR").color(sec_low).small());
+                    });
+
+                    egui::ScrollArea::vertical().id_salt("sec_filings_scroll").max_height(200.0).show(ui, |ui| {
+                        if deduped.is_empty() {
+                            ui.label(egui::RichText::new("No filings. Click Scrape Now.").color(sec_low));
+                        } else {
+                            egui::Grid::new("sec_filings_grid").striped(true).num_columns(5).min_col_width(55.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Date").color(sec_low).small());
+                                ui.label(egui::RichText::new("Symbol").color(sec_low).small());
+                                ui.label(egui::RichText::new("Type").color(sec_low).small());
+                                ui.label(egui::RichText::new("Company").color(sec_low).small());
+                                ui.label(egui::RichText::new("Score").color(sec_low).small());
+                                ui.end_row();
+                                for f in deduped.iter().take(100) {
+                                    ui.label(egui::RichText::new(&f.filing_date).small());
+                                    ui.label(egui::RichText::new(&f.ticker).small().strong().color(sec_cyan));
+                                    let type_col = match f.form_type.as_str() {
+                                        "4" => sec_med, "10-K" | "10-Q" => sec_blue,
+                                        "8-K" => sec_orange, "S-1" => sec_purple, _ => AXIS_TEXT,
+                                    };
+                                    ui.label(egui::RichText::new(&f.form_type).color(type_col).small());
+                                    ui.label(egui::RichText::new(&f.company_name).small());
+                                    let sc = if f.importance_score >= 80 { sec_high } else if f.importance_score >= 50 { sec_med } else { sec_low };
+                                    ui.label(egui::RichText::new(format!("{}", f.importance_score)).color(sc));
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    });
+
+                    ui.separator();
+
+                    // ── BOTTOM HALF: Filing Alerts (scrollable) ──
+                    let alerts = &self.bg.sec_alerts;
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Filing Alerts ({})", alerts.len())).small().strong());
+                        // Dismiss All button
+                        if !alerts.is_empty() {
+                            if ui.small_button(egui::RichText::new("Dismiss All").color(sec_low)).clicked() {
+                                if let Some(ref cache) = self.cache {
+                                    if let Some(conn) = cache.try_connection() {
+                                        for a in alerts { let _ = sec_filing::dismiss_alert(&conn, a.id, "dismiss all from GUI"); }
+                                    }
+                                }
                             }
+                        }
+                    });
+
+                    egui::ScrollArea::vertical().id_salt("sec_alerts_scroll").show(ui, |ui| {
+                        if alerts.is_empty() {
+                            ui.label(egui::RichText::new("No active alerts.").color(sec_low));
+                        } else {
+                            let mut dismiss_id: Option<i64> = None;
+                            // Group by ticker, show badges inline
+                            let mut by_ticker: std::collections::BTreeMap<&str, Vec<_>> = std::collections::BTreeMap::new();
+                            for a in alerts { by_ticker.entry(&a.ticker).or_default().push(a); }
+
                             for (ticker, ticker_alerts) in &by_ticker {
-                                ui.horizontal(|ui| {
+                                ui.horizontal_wrapped(|ui| {
                                     ui.label(egui::RichText::new(*ticker).strong().color(sec_cyan));
                                     for a in ticker_alerts {
-                                        let color = if a.importance >= 80 { sec_high } else { sec_med };
-                                        let badge = match a.alert_type.as_str() {
-                                            t if t.contains("TENDER") => "TENDER",
-                                            t if t.contains("ACTIVIST") => "ACTIVIST",
-                                            t if t.contains("DILUTION") => "DILUTION",
-                                            t if t.contains("RESTATEMENT") => "RESTATE",
-                                            _ => &a.alert_type,
+                                        let color = match a.alert_type.as_str() {
+                                            t if t.contains("TENDER") => sec_high,
+                                            t if t.contains("DELISTING") => sec_high,
+                                            t if t.contains("RESTATEMENT") => sec_orange,
+                                            t if t.contains("ACTIVIST") => sec_purple,
+                                            t if t.contains("DILUTION") => sec_med,
+                                            t if t.contains("LATE") => sec_orange,
+                                            t if t.contains("AMENDED") => sec_blue,
+                                            t if t.contains("SEC_INQUIRY") => sec_low,
+                                            _ => sec_low,
                                         };
-                                        if ui.small_button(egui::RichText::new(badge).color(color)).clicked() {
+                                        let badge = match a.alert_type.as_str() {
+                                            t if t.contains("TENDER_OFFER") => "TENDER",
+                                            t if t.contains("DELISTING_RISK") => "DELIST",
+                                            t if t.contains("RESTATEMENT") => "RESTATE",
+                                            t if t.contains("ACTIVE_DILUTION") => "DILUTION",
+                                            t if t.contains("ACTIVIST") => "ACTIVIST",
+                                            t if t.contains("AMENDED_EVENT") => "AMENDED",
+                                            t if t.contains("LATE_FILING") => "LATE",
+                                            t if t.contains("SEC_INQUIRY") => "INQUIRY",
+                                            other => other,
+                                        };
+                                        if ui.small_button(egui::RichText::new(badge).color(color).small()).clicked() {
                                             dismiss_id = Some(a.id);
                                         }
                                     }
@@ -8768,88 +8844,8 @@ impl TyphooNApp {
                                     }
                                 }
                             }
-                            ui.separator();
                         }
-
-                        // Lower-priority alerts (collapsible)
-                        let low_alerts: Vec<_> = alerts.iter().filter(|a| a.importance < 70).collect();
-                        if !low_alerts.is_empty() {
-                            ui.collapsing(format!("Low Priority Alerts ({})", low_alerts.len()), |ui| {
-                                let mut dismiss_id: Option<i64> = None;
-                                for a in &low_alerts {
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(&a.ticker).small().strong());
-                                        ui.label(egui::RichText::new(&a.alert_type).color(sec_low).small());
-                                        ui.label(egui::RichText::new(&a.message).color(sec_low).small());
-                                        if ui.small_button("x").clicked() { dismiss_id = Some(a.id); }
-                                    });
-                                }
-                                if let Some(id) = dismiss_id {
-                                    if let Some(ref cache) = self.cache {
-                                        if let Some(conn) = cache.try_connection() {
-                                            let _ = sec_filing::dismiss_alert(&conn, id, "dismissed from GUI");
-                                        }
-                                    }
-                                }
-                            });
-                        }
-
-                        if alerts.is_empty() {
-                            ui.label(egui::RichText::new("No active alerts.").color(sec_low));
-                        }
-                    }
-
-                    // ── Recent Filings (deduplicated, grouped by date) ──
-                    ui.add_space(4.0);
-                    let filings = &self.bg.sec_filings;
-                    if !filings.is_empty() {
-                        ui.label(egui::RichText::new(format!("Recent Filings ({})", filings.len())).strong());
-                        let filter_types: Vec<&str> = vec!["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
-
-                        // Deduplicate: key = (date, symbol, type)
-                        let mut seen = std::collections::HashSet::new();
-                        let mut deduped = Vec::new();
-                        for f in filings {
-                            let key = format!("{}:{}:{}", f.filing_date, f.ticker, f.form_type);
-                            if seen.insert(key) {
-                                let pass = self.sec_filters.iter().enumerate().any(|(i, &enabled)| {
-                                    enabled && f.form_type.contains(filter_types.get(i).unwrap_or(&""))
-                                }) || self.sec_filters.iter().all(|&v| v);
-                                if pass { deduped.push(f); }
-                            }
-                        }
-
-                        egui::Grid::new("sec_filings_grid").striped(true).num_columns(5).min_col_width(50.0).show(ui, |ui| {
-                            ui.label(egui::RichText::new("Date").color(sec_low).small());
-                            ui.label(egui::RichText::new("Symbol").color(sec_low).small());
-                            ui.label(egui::RichText::new("Type").color(sec_low).small());
-                            ui.label(egui::RichText::new("Company").color(sec_low).small());
-                            ui.label(egui::RichText::new("Score").color(sec_low).small());
-                            ui.end_row();
-
-                            for f in deduped.iter().take(50) {
-                                ui.label(egui::RichText::new(&f.filing_date).small());
-                                ui.label(egui::RichText::new(&f.ticker).small().strong().color(sec_cyan));
-                                let type_col = match f.form_type.as_str() {
-                                    "4" => sec_med,
-                                    "10-K" | "10-Q" => sec_blue,
-                                    "8-K" => sec_orange,
-                                    "S-1" => sec_purple,
-                                    _ => AXIS_TEXT,
-                                };
-                                ui.label(egui::RichText::new(&f.form_type).color(type_col).small());
-                                ui.label(egui::RichText::new(&f.company_name).small());
-                                let score_col = if f.importance_score >= 80 { sec_high }
-                                    else if f.importance_score >= 50 { sec_med }
-                                    else { sec_low };
-                                ui.label(egui::RichText::new(format!("{}", f.importance_score)).color(score_col));
-                                ui.end_row();
-                            }
-                        });
-                    } else {
-                        ui.label(egui::RichText::new("No filings. Run SEC scraper to populate.").color(sec_low));
-                    }
-                    }); // ScrollArea
+                    });
                 });
         }
 
