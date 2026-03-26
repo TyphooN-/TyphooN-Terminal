@@ -1040,9 +1040,21 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
             if sym_upper.len() < 1 {
                 continue;
             }
-            // Skip XNG (natural gas CFD, not a stock)
-            if sym_upper == "XNGUSD" || sym_upper == "XNG" || sym_upper == "XAGUSD" || sym_upper == "XAUUSD" {
+            // Skip CFDs, metals, indices, and non-Yahoo symbols
+            let skip_exact = ["XNGUSD", "XNG", "XAGUSD", "XAUUSD", "XPDUSD", "XPTUSD",
+                "AUS200", "NI225", "SP500", "STOXX50E", "GDAXI", "SPA35", "FCHI40",
+                "FTSE100", "DAX40", "CAC40", "NIKKEI", "HSI", "KOSPI", "MASI",
+                "US30", "US500", "US2000", "USTEC", "JP225", "UK100", "DE40", "FR40",
+                "EU50", "HK50", "CN50", "PAPER", "TPL"];
+            if skip_exact.iter().any(|&s| sym_upper == s) {
                 continue;
+            }
+            // Skip symbols with digits in them (likely indices: AUS200, NI225, etc.)
+            if sym_upper.len() > 3 && sym_upper.chars().any(|c| c.is_ascii_digit()) && !sym_upper.chars().all(|c| c.is_ascii_uppercase()) {
+                // Has mixed letters+digits and is longer than 3 chars — likely an index
+                let letter_count = sym_upper.chars().filter(|c| c.is_ascii_alphabetic()).count();
+                let digit_count = sym_upper.chars().filter(|c| c.is_ascii_digit()).count();
+                if digit_count >= 2 && letter_count >= 2 { continue; } // e.g., AUS200, NI225, SP500
             }
 
             symbols.insert(sym_upper);

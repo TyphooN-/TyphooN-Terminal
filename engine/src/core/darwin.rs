@@ -1941,26 +1941,27 @@ pub fn scan_darwin_ftp(
 /// Export symbol radar data in MarketWizardry format.
 /// Reads MT5 specs from SQLite and generates the .txt report.
 pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir: &str) -> Result<String, String> {
-    // This reads the __SPECS__ key from kv_cache to get current symbol data
-    // and compares with previous snapshots if available
-    let specs_json: Option<String> = {
-        let mut stmt = cache_conn.prepare(
-            "SELECT value FROM kv_cache WHERE key LIKE '%__SPECS__%' LIMIT 1"
-        ).map_err(|e| format!("Prepare failed: {e}"))?;
-
-        match stmt.query_row([], |row| {
-            let data: Vec<u8> = row.get(0)?;
-            Ok(data)
-        }) {
-            Ok(compressed) => {
-                let decompressed = zstd::decode_all(compressed.as_slice())
-                    .map_err(|e| format!("Decompress failed: {e}"))?;
-                Some(String::from_utf8(decompressed)
-                    .map_err(|e| format!("UTF-8 failed: {e}"))?)
+    // Read __SPECS__ from bar_cache (BarCacheWriter) or kv_cache (legacy)
+    let try_table = |table: &str| -> Option<String> {
+        let col = if table == "bar_cache" { "data" } else { "value" };
+        let sql = format!("SELECT {} FROM {} WHERE key LIKE '%__SPECS__%' LIMIT 1", col, table);
+        let mut stmt = cache_conn.prepare(&sql).ok()?;
+        let result = stmt.query_row([], |row| {
+            row.get::<_, Vec<u8>>(0).or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))
+        });
+        match result {
+            Ok(data) => {
+                // Try zstd decompress, fall back to raw UTF-8
+                if let Ok(d) = zstd::decode_all(data.as_slice()) {
+                    String::from_utf8(d).ok()
+                } else {
+                    String::from_utf8(data).ok()
+                }
             }
             Err(_) => None,
         }
     };
+    let specs_json: Option<String> = try_table("bar_cache").or_else(|| try_table("kv_cache"));
 
     if specs_json.is_none() {
         return Err("No MT5 specs data found in cache. Run MT5 sync first.".into());

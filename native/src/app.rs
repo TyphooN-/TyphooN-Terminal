@@ -6570,13 +6570,19 @@ impl TyphooNApp {
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
 
     fn handle_zoom(chart: &mut ChartState, delta: f32) {
-        // Progressive zoom: small per-pixel factor so smooth scrolling feels natural.
-        // delta is in pixels (smooth_scroll_delta), typically ±15-120 per gesture.
-        // We want ~5% zoom per "notch" (15px), so factor = 1 - delta * 0.003
-        let pct = (delta * 0.003).clamp(-0.15, 0.15); // cap at 15% per frame
+        // TradingView-style zoom: scroll up = zoom in (fewer bars), scroll down = zoom out
+        // Progressive factor: ~5% per notch (15px), capped at 15% per frame
+        let pct = (delta * 0.003).clamp(-0.15, 0.15);
         let factor = 1.0 - pct;
-        let new_vis = ((chart.visible_bars as f32 * factor) as usize)
+        let old_vis = chart.visible_bars;
+        let new_vis = ((old_vis as f32 * factor) as usize)
             .clamp(10, chart.bars.len().max(10));
+        // Anchor zoom to the right side (latest bars stay in view) — TradingView behavior
+        // When zooming in: view_offset moves right (toward latest)
+        // When zooming out: view_offset moves left (toward oldest)
+        let delta_bars = new_vis as isize - old_vis as isize;
+        chart.view_offset = (chart.view_offset as isize + delta_bars / 2)
+            .clamp(new_vis as isize - 1, chart.bars.len() as isize - 1) as usize;
         chart.visible_bars = new_vis;
     }
 
