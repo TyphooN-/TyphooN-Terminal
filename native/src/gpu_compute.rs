@@ -74,6 +74,7 @@ pub struct GpuCompute {
     ehlers_roof_pipeline: wgpu::ComputePipeline,
     ehlers_ebsw_pipeline: wgpu::ComputePipeline,
     ehlers_mama_pipeline: wgpu::ComputePipeline,
+    hma_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuCompute {
@@ -188,6 +189,7 @@ impl GpuCompute {
         let ehlers_roof_pipeline = make_pipeline("ehlers_roof_pipeline", EHLERS_ROOF_SHADER);
         let ehlers_ebsw_pipeline = make_pipeline("ehlers_ebsw_pipeline", EHLERS_EBSW_SHADER);
         let ehlers_mama_pipeline = make_pipeline("ehlers_mama_pipeline", EHLERS_MAMA_SHADER);
+        let hma_pipeline = make_pipeline("hma_pipeline", HMA_SHADER);
 
         Self {
             device,
@@ -226,6 +228,7 @@ impl GpuCompute {
             ehlers_roof_pipeline,
             ehlers_ebsw_pipeline,
             ehlers_mama_pipeline,
+            hma_pipeline,
             bind_group_layout,
             readback_buffer: None,
         }
@@ -518,6 +521,11 @@ impl GpuCompute {
     /// Compute Fractals on GPU. Returns [up_price, down_price] × bar_count. Parallel. Requires OHLC.
     pub fn compute_fractals_gpu(&self) -> Option<Vec<f32>> {
         self.dispatch_ohlc_indicator(&self.fractals_pipeline, 0, 2)
+    }
+
+    /// Compute HMA on GPU (WMA composition: 2*WMA(n/2) - WMA(n), then WMA(sqrt(n))).
+    pub fn compute_hma_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.hma_pipeline, period, false)
     }
 
     /// Compute Ehlers Instantaneous Trendline on GPU.
@@ -2176,6 +2184,76 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let is_down = l < bars[(i - 2u) * 3u + 1u] && l < bars[(i - 1u) * 3u + 1u]
                && l < bars[(i + 1u) * 3u + 1u] && l < bars[(i + 2u) * 3u + 1u];
     output[base + 1u] = select(0.0, l, is_down);
+}
+"#;
+
+const HMA_SHADER: &str = r#"
+// Hull Moving Average — sequential (WMA composition: WMA(2*WMA(n/2) - WMA(n), sqrt(n)))
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+fn wma_at(data: ptr<storage, array<f32>, read>, idx: u32, period: u32) -> f32 {
+    if (idx < period - 1u) { return 0.0; }
+    var weighted_sum: f32 = 0.0;
+    var weight_total: f32 = 0.0;
+    for (var j: u32 = 0u; j < period; j = j + 1u) {
+        let w = f32(period - j);
+        weighted_sum = weighted_sum + (*data)[idx - j] * w;
+        weight_total = weight_total + w;
+    }
+    return weighted_sum / weight_total;
+}
+
+@compute @workgroup_size(1)
+fn main() {
+    let n = params.period;
+    let half_n = n / 2u;
+    let sqrt_n = u32(sqrt(f32(n)));
+
+    // Step 1: Compute 2*WMA(n/2) - WMA(n) into output as temp buffer
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        let wma_half = wma_at(&bars, i, max(half_n, 1u));
+        let wma_full = wma_at(&bars, i, n);
+        if (wma_half == 0.0 || wma_full == 0.0) {
+            output[i] = 0.0;
+        } else {
+            output[i] = 2.0 * wma_half - wma_full;
+        }
+    }
+
+    // Step 2: WMA of the delta series with period sqrt(n)
+    // Need to read from output (which is the delta), but output is read_write
+    // So we do a second pass reading from output
+    // We'll store final values from the end backwards to avoid overwriting
+    // Actually, compute in reverse into a rolling window
+    var temp: array<f32, 256>;  // max period sqrt(200) < 15, but allocate safety margin
+    let sq = min(sqrt_n, 255u);
+
+    // Copy delta values we need for the rolling WMA
+    for (var i: u32 = 0u; i < min(params.bar_count, 256u); i = i + 1u) {
+        temp[i] = output[i];
+    }
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i >= 256u) { temp[i % 256u] = output[i]; }  // ring buffer for large datasets
+        if (i < n - 1u || output[i] == 0.0) {
+            output[i] = 0.0;
+            continue;
+        }
+        // WMA of delta[i-sq+1..i] with period sq
+        var ws: f32 = 0.0;
+        var wt: f32 = 0.0;
+        for (var j: u32 = 0u; j < min(sq, i + 1u); j = j + 1u) {
+            let w = f32(sq - j);
+            let idx = i - j;
+            let val = select(temp[idx % 256u], temp[idx], idx < 256u);
+            ws = ws + val * w;
+            wt = wt + w;
+        }
+        output[i] = select(ws / wt, 0.0, wt < 0.000001);
+    }
 }
 "#;
 
