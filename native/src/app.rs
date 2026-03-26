@@ -4540,6 +4540,7 @@ pub struct TyphooNApp {
     show_news: bool,
     show_calendar: bool,
     show_sec: bool,
+    sec_selected_filing: Option<usize>,  // index into bg.sec_filings for detail view
     show_insider: bool,
     show_fundamentals: bool,
     show_analyst: bool,
@@ -5400,6 +5401,7 @@ impl TyphooNApp {
             show_news: false,
             show_calendar: false,
             show_sec: false,
+            sec_selected_filing: None,
             show_insider: false,
             show_fundamentals: false,
             show_analyst: false,
@@ -8754,27 +8756,62 @@ impl TyphooNApp {
                         if deduped.is_empty() {
                             ui.label(egui::RichText::new("No filings. Click Scrape Now.").color(sec_low));
                         } else {
-                            egui::Grid::new("sec_filings_grid").striped(true).num_columns(5).min_col_width(55.0).show(ui, |ui| {
+                            // Clickable filing rows
+                            egui::Grid::new("sec_filings_grid").striped(true).num_columns(6).min_col_width(45.0).show(ui, |ui| {
                                 ui.label(egui::RichText::new("Date").color(sec_low).small());
                                 ui.label(egui::RichText::new("Symbol").color(sec_low).small());
                                 ui.label(egui::RichText::new("Type").color(sec_low).small());
+                                ui.label(egui::RichText::new("Category").color(sec_low).small());
                                 ui.label(egui::RichText::new("Company").color(sec_low).small());
-                                ui.label(egui::RichText::new("Score").color(sec_low).small());
+                                ui.label(egui::RichText::new("Accession #").color(sec_low).small());
                                 ui.end_row();
-                                for f in deduped.iter().take(100) {
-                                    ui.label(egui::RichText::new(&f.filing_date).small());
-                                    ui.label(egui::RichText::new(&f.ticker).small().strong().color(sec_cyan));
-                                    let type_col = match f.form_type.as_str() {
-                                        "4" => sec_med, "10-K" | "10-Q" => sec_blue,
-                                        "8-K" => sec_orange, "S-1" => sec_purple, _ => AXIS_TEXT,
-                                    };
-                                    ui.label(egui::RichText::new(&f.form_type).color(type_col).small());
-                                    ui.label(egui::RichText::new(&f.company_name).small());
-                                    let sc = if f.importance_score >= 80 { sec_high } else if f.importance_score >= 50 { sec_med } else { sec_low };
-                                    ui.label(egui::RichText::new(format!("{}", f.importance_score)).color(sc));
+                                for (idx, f) in deduped.iter().take(100).enumerate() {
+                                    let sel = self.sec_selected_filing == Some(idx);
+                                    let rc = if sel { egui::Color32::WHITE } else { egui::Color32::from_rgb(180, 180, 190) };
+                                    if ui.add(egui::Label::new(egui::RichText::new(&f.filing_date).small().color(rc)).sense(egui::Sense::click())).clicked() { self.sec_selected_filing = Some(idx); }
+                                    if ui.add(egui::Label::new(egui::RichText::new(&f.ticker).small().strong().color(if sel { egui::Color32::WHITE } else { sec_cyan })).sense(egui::Sense::click())).clicked() { self.sec_selected_filing = Some(idx); }
+                                    let tc = match f.form_type.as_str() { "4" => sec_med, "10-K"|"10-Q" => sec_blue, "8-K" => sec_orange, "S-1"|"13F"|"DEF 14A" => sec_purple, _ => AXIS_TEXT };
+                                    ui.label(egui::RichText::new(&f.form_type).color(tc).small());
+                                    let cc = match f.category.as_str() { c if c.contains("INSIDER") => sec_med, c if c.contains("DILUTION") => sec_high, c if c.contains("RESTATE") => sec_orange, _ => sec_low };
+                                    ui.label(egui::RichText::new(&f.category).color(cc).small());
+                                    ui.label(egui::RichText::new(&f.company_name).small().color(rc));
+                                    ui.label(egui::RichText::new(&f.accession_number).color(sec_low).small().monospace());
                                     ui.end_row();
                                 }
                             });
+
+                            // ── Filing Detail Panel (in-window) ──
+                            if let Some(sel) = self.sec_selected_filing {
+                                if let Some(f) = deduped.get(sel) {
+                                    ui.separator();
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(format!("{} — {} {}", f.ticker, f.form_type, f.filing_date)).strong().color(sec_cyan));
+                                        if ui.small_button("x").clicked() { self.sec_selected_filing = None; }
+                                    });
+                                    egui::Grid::new("sec_detail").num_columns(2).min_col_width(100.0).show(ui, |ui| {
+                                        ui.label(egui::RichText::new("Company:").color(sec_low).small()); ui.label(&f.company_name); ui.end_row();
+                                        ui.label(egui::RichText::new("Form Type:").color(sec_low).small()); ui.label(&f.form_type); ui.end_row();
+                                        ui.label(egui::RichText::new("Category:").color(sec_low).small()); ui.label(&f.category); ui.end_row();
+                                        ui.label(egui::RichText::new("Accession #:").color(sec_low).small()); ui.label(egui::RichText::new(&f.accession_number).monospace()); ui.end_row();
+                                        ui.label(egui::RichText::new("Filing Date:").color(sec_low).small()); ui.label(&f.filing_date); ui.end_row();
+                                        ui.label(egui::RichText::new("Importance:").color(sec_low).small());
+                                        let sc = if f.importance_score >= 80 { sec_high } else if f.importance_score >= 50 { sec_med } else { sec_low };
+                                        ui.label(egui::RichText::new(format!("{}/100", f.importance_score)).color(sc)); ui.end_row();
+                                        if !f.url.is_empty() {
+                                            ui.label(egui::RichText::new("EDGAR URL:").color(sec_low).small());
+                                            ui.label(egui::RichText::new(&f.url).small().color(sec_blue)); ui.end_row();
+                                        }
+                                        if !f.summary.is_empty() {
+                                            ui.label(egui::RichText::new("Summary:").color(sec_low).small());
+                                            ui.label(egui::RichText::new(&f.summary).small()); ui.end_row();
+                                        }
+                                        if f.insider_flag {
+                                            ui.label(egui::RichText::new("Insider:").color(sec_low).small());
+                                            ui.label(egui::RichText::new("Yes — insider transaction").color(sec_med)); ui.end_row();
+                                        }
+                                    });
+                                }
+                            }
                         }
                     });
 
