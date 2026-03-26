@@ -1,0 +1,13 @@
+[Unit]
+Description=MT5 BarCacheWriter RAM Cache (/dev/shm)
+# Start after local filesystems are mounted
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/typhoon/git/TyphooN-Terminal/scripts/mt5-cache-shm.sh start
+ExecStop=/home/typhoon/git/TyphooN-Terminal/scripts/mt5-cache-shm.sh stop
+
+[Install]
+WantedBy=default.target
