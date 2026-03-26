@@ -6859,8 +6859,9 @@ impl TyphooNApp {
                             }
                         });
 
-                        // ── Equity Curve (prominent) ──
+                        // ── Equity Curve ──
                         if det.equity_curve.len() > 2 {
+                            ui.label(egui::RichText::new("Equity").color(chart_cyan).small());
                             let points: PlotPoints = PlotPoints::new(
                                 det.equity_curve.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
                             );
@@ -6872,8 +6873,9 @@ impl TyphooNApp {
                                 .show(ui, |plot_ui| { plot_ui.line(line); });
                         }
 
-                        // ── Rolling 30d VaR (moving average line) ──
+                        // ── Rolling 30d VaR ──
                         if det.rolling_var.len() > 5 {
+                            ui.label(egui::RichText::new("Rolling 30d VaR").color(chart_red).small());
                             let var_pts: PlotPoints = PlotPoints::new(
                                 det.rolling_var.iter().enumerate().map(|(i, rv)| [i as f64, rv.var_95.abs()]).collect()
                             );
@@ -6885,21 +6887,21 @@ impl TyphooNApp {
                                 .show(ui, |plot_ui| { plot_ui.line(var_line); });
                         }
 
-                        // ── Monthly Returns bar chart ──
+                        // ── Cumulative Monthly P&L ──
                         if !det.monthly_returns.is_empty() {
-                            let bars: Vec<PlotBar> = det.monthly_returns.iter().rev().take(18).collect::<Vec<_>>()
-                                .iter().rev().enumerate().map(|(i, m)| {
-                                    let c = if m.pnl >= 0.0 { chart_green } else { chart_red };
-                                    PlotBar::new(i as f64, m.pnl).width(0.7).fill(c).name(format!("{}-{:02}", m.year, m.month))
-                                }).collect();
-                            if !bars.is_empty() {
-                                let chart = BarChart::new("Monthly P&L", bars);
-                                Plot::new(format!("mo_{}", det.ticker))
-                                    .height(80.0)
-                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
-                                    .show_axes([false, true])
-                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
-                            }
+                            ui.label(egui::RichText::new("Cumulative Monthly P&L").color(dim).small());
+                            let monthly: Vec<&darwin::MonthlyReturn> = det.monthly_returns.iter().rev().take(24).collect::<Vec<_>>().into_iter().rev().collect();
+                            let mut cum = 0.0_f64;
+                            let pts: PlotPoints = PlotPoints::new(
+                                monthly.iter().enumerate().map(|(i, m)| { cum += m.pnl; [i as f64, cum] }).collect()
+                            );
+                            let c = if cum >= 0.0 { chart_green } else { chart_red };
+                            let line = Line::new("Cumulative P&L", pts).color(c).width(1.2);
+                            Plot::new(format!("cumpnl_{}", det.ticker))
+                                .height(50.0)
+                                .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                .show_axes([false, true])
+                                .show(ui, |plot_ui| { plot_ui.line(line); });
                         }
 
                         // ── Compact metrics row ──
@@ -6926,22 +6928,6 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new(format!("Now:{}", streaks.current_streak)).color(sc).small());
                             }
                         });
-
-                        // ── P&L by Symbol bar chart ──
-                        if !det.pnl_by_symbol.is_empty() {
-                            let bars: Vec<PlotBar> = det.pnl_by_symbol.iter().enumerate().map(|(i, (sym, pnl, _, _, _))| {
-                                let c = if *pnl >= 0.0 { chart_green } else { chart_red };
-                                PlotBar::new(i as f64, *pnl).width(0.7).fill(c).name(sym)
-                            }).collect();
-                            if !bars.is_empty() {
-                                let chart = BarChart::new("P&L by Symbol", bars);
-                                Plot::new(format!("sym_{}", det.ticker))
-                                    .height(80.0)
-                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
-                                    .show_axes([false, true])
-                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
-                            }
-                        }
 
                         // ── Collapsible advanced details ──
                         ui.collapsing(format!("{} Advanced", det.ticker), |ui| {
