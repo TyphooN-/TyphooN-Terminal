@@ -2266,68 +2266,63 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 "#;
 
 const HMA_SHADER: &str = r#"
-// Hull Moving Average — sequential (WMA composition: WMA(2*WMA(n/2) - WMA(n), sqrt(n)))
+// Hull Moving Average — sequential (WMA composition: 2*WMA(n/2) - WMA(n), then WMA(sqrt(n)))
+// All WMA computations inlined (WGSL can't pass storage pointers to functions)
 struct Params { period: u32, bar_count: u32, }
 @group(0) @binding(0) var<storage, read> bars: array<f32>;
 @group(0) @binding(1) var<storage, read_write> output: array<f32>;
 @group(0) @binding(2) var<uniform> params: Params;
 
-fn wma_at(data: ptr<storage, array<f32>, read>, idx: u32, period: u32) -> f32 {
-    if (idx < period - 1u) { return 0.0; }
-    var weighted_sum: f32 = 0.0;
-    var weight_total: f32 = 0.0;
-    for (var j: u32 = 0u; j < period; j = j + 1u) {
-        let w = f32(period - j);
-        weighted_sum = weighted_sum + (*data)[idx - j] * w;
-        weight_total = weight_total + w;
-    }
-    return weighted_sum / weight_total;
-}
-
 @compute @workgroup_size(1)
 fn main() {
     let n = params.period;
-    let half_n = n / 2u;
-    let sqrt_n = u32(sqrt(f32(n)));
+    let half_n = max(n / 2u, 1u);
+    let sqrt_n = max(u32(sqrt(f32(n))), 1u);
 
-    // Step 1: Compute 2*WMA(n/2) - WMA(n) into output as temp buffer
+    // Step 1: Compute delta = 2*WMA(n/2) - WMA(n) into output
     for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
-        let wma_half = wma_at(&bars, i, max(half_n, 1u));
-        let wma_full = wma_at(&bars, i, n);
-        if (wma_half == 0.0 || wma_full == 0.0) {
-            output[i] = 0.0;
-        } else {
-            output[i] = 2.0 * wma_half - wma_full;
+        if (i < n - 1u) { output[i] = 0.0; continue; }
+
+        // Inline WMA(half_n) on bars
+        var ws_half: f32 = 0.0;
+        var wt_half: f32 = 0.0;
+        for (var j: u32 = 0u; j < half_n; j = j + 1u) {
+            let w = f32(half_n - j);
+            ws_half = ws_half + bars[i - j] * w;
+            wt_half = wt_half + w;
         }
+        let wma_half = ws_half / wt_half;
+
+        // Inline WMA(n) on bars
+        var ws_full: f32 = 0.0;
+        var wt_full: f32 = 0.0;
+        for (var j: u32 = 0u; j < n; j = j + 1u) {
+            let w = f32(n - j);
+            ws_full = ws_full + bars[i - j] * w;
+            wt_full = wt_full + w;
+        }
+        let wma_full = ws_full / wt_full;
+
+        output[i] = 2.0 * wma_half - wma_full;
     }
 
-    // Step 2: WMA of the delta series with period sqrt(n)
-    // Need to read from output (which is the delta), but output is read_write
-    // So we do a second pass reading from output
-    // We'll store final values from the end backwards to avoid overwriting
-    // Actually, compute in reverse into a rolling window
-    var temp: array<f32, 256>;  // max period sqrt(200) < 15, but allocate safety margin
-    let sq = min(sqrt_n, 255u);
-
-    // Copy delta values we need for the rolling WMA
-    for (var i: u32 = 0u; i < min(params.bar_count, 256u); i = i + 1u) {
+    // Step 2: WMA(sqrt_n) of the delta series (stored in output)
+    // Copy delta to temp array first (can't read and write same buffer safely)
+    var temp: array<f32, 512>;
+    let copy_len = min(params.bar_count, 512u);
+    for (var i: u32 = 0u; i < copy_len; i = i + 1u) {
         temp[i] = output[i];
     }
 
     for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
-        if (i >= 256u) { temp[i % 256u] = output[i]; }  // ring buffer for large datasets
-        if (i < n - 1u || output[i] == 0.0) {
-            output[i] = 0.0;
-            continue;
-        }
-        // WMA of delta[i-sq+1..i] with period sq
+        if (i < n - 1u + sqrt_n - 1u) { output[i] = 0.0; continue; }
+        if (i >= 512u) { output[i] = 0.0; continue; }  // safety bound
+
         var ws: f32 = 0.0;
         var wt: f32 = 0.0;
-        for (var j: u32 = 0u; j < min(sq, i + 1u); j = j + 1u) {
-            let w = f32(sq - j);
-            let idx = i - j;
-            let val = select(temp[idx % 256u], temp[idx], idx < 256u);
-            ws = ws + val * w;
+        for (var j: u32 = 0u; j < sqrt_n; j = j + 1u) {
+            let w = f32(sqrt_n - j);
+            ws = ws + temp[i - j] * w;
             wt = wt + w;
         }
         output[i] = select(ws / wt, 0.0, wt < 0.000001);
