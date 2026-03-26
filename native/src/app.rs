@@ -8632,6 +8632,66 @@ impl TyphooNApp {
                             }
                         }
 
+                        // ── Optimization Heatmap (Fast × Slow, colored by Sharpe) ──
+                        if self.gpu_opt_results.len() > 4 && self.gpu_opt_combos.len() == self.gpu_opt_results.len() {
+                            ui.label(egui::RichText::new("Parameter Heatmap (Fast × Slow → Sharpe)").small().strong());
+                            // Build grid: x=fast, y=slow, color=sharpe
+                            let mut fast_set: Vec<u32> = self.gpu_opt_combos.iter().map(|c| c.sma_fast).collect();
+                            fast_set.sort(); fast_set.dedup();
+                            let mut slow_set: Vec<u32> = self.gpu_opt_combos.iter().map(|c| c.sma_slow).collect();
+                            slow_set.sort(); slow_set.dedup();
+
+                            if fast_set.len() > 1 && slow_set.len() > 1 {
+                                let cols = fast_set.len();
+                                let rows = slow_set.len();
+                                let avail_w = ui.available_width().min(500.0);
+                                let h = (rows as f32 * 14.0).min(200.0);
+                                let cell_w = avail_w / cols as f32;
+                                let cell_h = h / rows as f32;
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w, h), egui::Sense::hover());
+                                let painter = ui.painter_at(rect);
+                                painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(10, 10, 20));
+
+                                // Find max sharpe for color scaling
+                                let max_sharpe = self.gpu_opt_results.iter().map(|r| r.sharpe).fold(0.0_f32, f32::max).max(0.01);
+                                let min_sharpe = self.gpu_opt_results.iter().map(|r| r.sharpe).fold(f32::MAX, f32::min);
+
+                                // Map each combo to grid cell
+                                for (i, (combo, result)) in self.gpu_opt_combos.iter().zip(self.gpu_opt_results.iter()).enumerate() {
+                                    let col = fast_set.iter().position(|&f| f == combo.sma_fast).unwrap_or(0);
+                                    let row = slow_set.iter().position(|&s| s == combo.sma_slow).unwrap_or(0);
+                                    let x = rect.left() + col as f32 * cell_w;
+                                    let y = rect.top() + row as f32 * cell_h;
+
+                                    // Color: red (negative) → black (zero) → green (positive)
+                                    let norm = if max_sharpe > min_sharpe { (result.sharpe - min_sharpe) / (max_sharpe - min_sharpe) } else { 0.5 };
+                                    let color = if result.sharpe > 0.0 {
+                                        egui::Color32::from_rgb(0, (norm * 200.0) as u8, (norm * 60.0) as u8)
+                                    } else {
+                                        egui::Color32::from_rgb(((1.0 - norm) * 200.0) as u8, 0, 0)
+                                    };
+                                    painter.rect_filled(
+                                        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w - 1.0, cell_h - 1.0)),
+                                        0.0, color,
+                                    );
+                                    let _ = i; // suppress unused
+                                }
+
+                                // Axis labels
+                                for (i, &f) in fast_set.iter().enumerate() {
+                                    let x = rect.left() + i as f32 * cell_w + cell_w / 2.0;
+                                    painter.text(egui::pos2(x, rect.bottom() + 2.0), egui::Align2::CENTER_TOP,
+                                        format!("{}", f), egui::FontId::monospace(8.0), opt_dim);
+                                }
+                                for (i, &s) in slow_set.iter().enumerate() {
+                                    let y = rect.top() + i as f32 * cell_h + cell_h / 2.0;
+                                    painter.text(egui::pos2(rect.left() - 2.0, y), egui::Align2::RIGHT_CENTER,
+                                        format!("{}", s), egui::FontId::monospace(8.0), opt_dim);
+                                }
+                                ui.add_space(14.0); // space for x-axis labels
+                            }
+                        }
+
                         egui::ScrollArea::vertical().max_height(350.0).show(ui, |ui| {
                             egui::Grid::new("gpu_opt_grid").striped(true).num_columns(11).min_col_width(45.0).show(ui, |ui| {
                                 ui.label(egui::RichText::new("Fast").color(opt_dim).small());
