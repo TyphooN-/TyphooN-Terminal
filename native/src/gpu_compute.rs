@@ -2215,7 +2215,7 @@ fn main() {
 
     // First compute super smoother
     var ss: array<f32, 2>;
-    ss[0] = bars[0]; ss[1] = bars[1u.min(params.bar_count - 1u)];
+    ss[0] = bars[0]; ss[1] = bars[min(1u, params.bar_count - 1u)];
     output[0] = 0.0;
     if (params.bar_count > 1u) { output[1] = 0.0; }
 
@@ -2369,10 +2369,10 @@ fn main() {
     // Smooth
     for (var i: u32 = 0u; i < min(3u, params.bar_count); i = i + 1u) { output[i] = 0.0; }
     for (var i: u32 = 3u; i < params.bar_count; i = i + 1u) {
-        let smooth = (bars[i] + 2.0 * bars[i - 1u] + bars[i - 2u]) / 4.0;
-        let prev_smooth = (bars[i - 1u] + 2.0 * bars[i - 2u] + bars[i - 3u]) / 4.0;
-        let prev2_smooth = (bars[i - 2u] + 2.0 * bars[i - 3u] + bars[max(i, 4u) - 4u]) / 4.0;
-        output[i] = c1 * (smooth - 2.0 * prev_smooth + prev2_smooth) + 2.0 * c2 * output[i - 1u] - c2 * c2 * output[max(i, 2u) - 2u];
+        let sm_cur = (bars[i] + 2.0 * bars[i - 1u] + bars[i - 2u]) / 4.0;
+        let sm_prev = (bars[i - 1u] + 2.0 * bars[i - 2u] + bars[i - 3u]) / 4.0;
+        let sm_prev2 = (bars[i - 2u] + 2.0 * bars[i - 3u] + bars[max(i, 4u) - 4u]) / 4.0;
+        output[i] = c1 * (sm_cur - 2.0 * sm_prev + sm_prev2) + 2.0 * c2 * output[i - 1u] - c2 * c2 * output[max(i, 2u) - 2u];
     }
 }
 "#;
@@ -2506,8 +2506,8 @@ fn main() {
     if (params.bar_count < 7u) { return; }
 
     // Smoothed price
-    var smooth: array<f32, 7>;
-    for (var i: u32 = 0u; i < 7u; i = i + 1u) { smooth[i] = bars[i]; }
+    var sm_arr: array<f32, 7>;
+    for (var i: u32 = 0u; i < 7u; i = i + 1u) { sm_arr[i] = bars[i]; }
 
     var mama_v: f32 = bars[0];
     var fama_v: f32 = bars[0];
@@ -2524,10 +2524,10 @@ fn main() {
         // 4-bar WMA smooth
         let s = (4.0 * bars[i] + 3.0 * bars[i - 1u] + 2.0 * bars[i - 2u] + bars[i - 3u]) / 10.0;
         let s2 = (4.0 * bars[i - 2u] + 3.0 * bars[i - 3u] + 2.0 * bars[i - 4u] + bars[i - 5u]) / 10.0;
-        let s4 = (4.0 * bars[i - 4u] + 3.0 * bars[i - 5u] + 2.0 * bars[max(i, 6u) - 6u] + bars[max(i, 7u) - 7u.min(i)]) / 10.0;
+        let s4 = (4.0 * bars[i - 4u] + 3.0 * bars[i - 5u] + 2.0 * bars[max(i, 6u) - 6u] + bars[max(i, 7u) - min(7u, i)]) / 10.0;
 
         // Hilbert discriminator
-        let det = 0.0962 * s + 0.5769 * s2 - 0.5769 * s4 - 0.0962 * (4.0 * bars[max(i, 6u) - 6u] + 3.0 * bars[max(i, 7u) - 7u.min(i)] + 2.0 * bars[max(i, 8u) - 8u.min(i)] + bars[max(i, 9u) - 9u.min(i)]) / 10.0;
+        let det = 0.0962 * s + 0.5769 * s2 - 0.5769 * s4 - 0.0962 * (4.0 * bars[max(i, 6u) - 6u] + 3.0 * bars[max(i, 7u) - min(7u, i)] + 2.0 * bars[max(i, 8u) - min(8u, i)] + bars[max(i, 9u) - min(9u, i)]) / 10.0;
         let i1 = bars[i - 3u];
 
         // Phase
