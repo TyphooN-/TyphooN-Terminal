@@ -6835,7 +6835,7 @@ impl TyphooNApp {
         if self.show_indicators_panel {
             egui::Window::new("Indicators")
                 .open(&mut self.show_indicators_panel)
-                .default_size([250.0, 350.0])
+                .default_size([450.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("Overlay Indicators");
                     ui.separator();
@@ -9018,6 +9018,21 @@ impl TyphooNApp {
                             if alerts.is_empty() {
                                 ui.label(egui::RichText::new("No active alerts.").color(sec_low));
                             } else {
+                                // Alert type explanations for user understanding
+                                let explain = |t: &str| -> &str {
+                                    match t {
+                                        t if t.contains("TENDER") => "Acquisition bid filed — potential buyout at premium to market price",
+                                        t if t.contains("DELIST") => "Delisting risk — stock may be removed from exchange, position closure forced",
+                                        t if t.contains("RESTATE") => "Financial restatement — prior earnings were incorrect, credibility risk",
+                                        t if t.contains("DILUTION") => "Share dilution — new shares being issued, existing shares worth less",
+                                        t if t.contains("ACTIVIST") => "Activist investor — 5%+ position taken, potential corporate changes",
+                                        t if t.contains("AMENDED") => "Material event amended — updated disclosure on significant corporate event",
+                                        t if t.contains("LATE") => "Late filing — company missed SEC deadline, potential compliance issues",
+                                        t if t.contains("INQUIRY") => "SEC inquiry — regulatory correspondence, potential investigation",
+                                        _ => "SEC filing alert",
+                                    }
+                                };
+
                                 let mut dismiss_id: Option<i64> = None;
                                 let mut by_ticker: std::collections::BTreeMap<&str, Vec<_>> = std::collections::BTreeMap::new();
                                 for a in alerts { by_ticker.entry(&a.ticker).or_default().push(a); }
@@ -9038,9 +9053,17 @@ impl TyphooNApp {
                                                 t if t.contains("LATE") => "LATE", t if t.contains("INQUIRY") => "INQUIRY",
                                                 other => other,
                                             };
-                                            if ui.small_button(egui::RichText::new(badge).color(color).small()).clicked() { dismiss_id = Some(a.id); }
+                                            let resp = ui.small_button(egui::RichText::new(badge).color(color).small());
+                                            if resp.clicked() { dismiss_id = Some(a.id); }
+                                            resp.on_hover_text(explain(&a.alert_type));
                                         }
                                     });
+                                    // Show explanation for first alert of each ticker
+                                    if let Some(first) = ticker_alerts.first() {
+                                        if !first.message.is_empty() {
+                                            ui.label(egui::RichText::new(format!("  {}", first.message)).color(sec_low).small());
+                                        }
+                                    }
                                 }
                                 if let Some(id) = dismiss_id {
                                     if let Some(ref cache) = self.cache {
@@ -10611,7 +10634,7 @@ impl TyphooNApp {
         if self.show_data_window {
             egui::Window::new("Data Window")
                 .open(&mut self.show_data_window)
-                .default_size([280.0, 400.0])
+                .default_size([400.0, 500.0])
                 .show(ctx, |ui| {
                     if let Some(chart) = self.charts.get(self.active_tab) {
                         let (si, ei) = chart.visible_range();
@@ -10665,7 +10688,7 @@ impl TyphooNApp {
         if self.show_alerts {
             egui::Window::new("Price Alerts")
                 .open(&mut self.show_alerts)
-                .default_size([350.0, 300.0])
+                .default_size([500.0, 350.0])
                 .show(ctx, |ui| {
                     ui.heading("Alerts");
                     ui.separator();
@@ -11347,6 +11370,20 @@ impl eframe::App for TyphooNApp {
                     }
                 }
             }
+            // Ctrl+1..9 = jump to tab by number
+            for digit in 1..=9_u32 {
+                let key = match digit {
+                    1 => egui::Key::Num1, 2 => egui::Key::Num2, 3 => egui::Key::Num3,
+                    4 => egui::Key::Num4, 5 => egui::Key::Num5, 6 => egui::Key::Num6,
+                    7 => egui::Key::Num7, 8 => egui::Key::Num8, 9 => egui::Key::Num9,
+                    _ => continue,
+                };
+                if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(key)) {
+                    let idx = (digit - 1) as usize;
+                    if idx < self.charts.len() { self.active_tab = idx; }
+                }
+            }
+
             // Ctrl+Tab / Ctrl+Shift+Tab = cycle tabs
             if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Tab)) {
                 if ctx.input(|i| i.modifiers.shift) {
