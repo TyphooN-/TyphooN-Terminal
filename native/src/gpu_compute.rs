@@ -1551,3 +1551,594 @@ fn main() {
     output[0] = 0.0; output[1] = 0.0; output[2] = 0.0;
 }
 "#;
+
+// ─── GPU Backtest / Strategy Optimizer Engine ─────────────────────────────────
+
+/// Result of a single parameter combination backtest.
+#[derive(Debug, Clone, Default)]
+pub struct BacktestResult {
+    pub net_pnl: f32,
+    pub max_drawdown: f32,
+    pub sharpe: f32,
+    pub sortino: f32,
+    pub win_rate: f32,
+    pub profit_factor: f32,
+    pub trade_count: u32,
+    pub avg_hold_bars: f32,
+    pub robustness_score: f32,
+}
+
+/// A parameter combination to test.
+#[derive(Debug, Clone)]
+pub struct ParamCombo {
+    pub sma_fast: u32,
+    pub sma_slow: u32,
+    pub rsi_period: u32,
+    pub rsi_overbought: f32,
+    pub rsi_oversold: f32,
+    pub atr_period: u32,
+    pub atr_sl_mult: f32,
+    pub atr_tp_mult: f32,
+}
+
+/// GPU-accelerated strategy backtester.
+/// Tests thousands of parameter combinations in parallel.
+pub struct GpuBacktester {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    /// Bar data: [close] per bar
+    bar_buffer: Option<wgpu::Buffer>,
+    /// OHLC: [high, low, close] × 3 per bar
+    ohlc_buffer: Option<wgpu::Buffer>,
+    /// Pre-computed indicators for each param combo
+    /// Flat: [indicator_values_for_combo_0, indicator_values_for_combo_1, ...]
+    indicator_buffer: Option<wgpu::Buffer>,
+    /// Parameter combinations: packed struct per combo
+    params_buffer: Option<wgpu::Buffer>,
+    /// Output: BacktestResult per combo (9 floats × combo_count)
+    results_buffer: Option<wgpu::Buffer>,
+    /// Staging for readback
+    staging_buffer: Option<wgpu::Buffer>,
+    bar_count: u32,
+    combo_count: u32,
+    eval_pipeline: wgpu::ComputePipeline,
+    robustness_pipeline: wgpu::ComputePipeline,
+    monte_carlo_pipeline: wgpu::ComputePipeline,
+    eval_bgl: wgpu::BindGroupLayout,
+}
+
+impl GpuBacktester {
+    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
+        // Bind group layout: bars (read), ohlc (read), params (read), results (read_write), uniforms
+        let eval_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("backtest_eval_bgl"),
+            entries: &[
+                // 0: close prices
+                wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // 1: OHLC data [h,l,c interleaved]
+                wgpu::BindGroupLayoutEntry { binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // 2: parameter combos
+                wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // 3: results output
+                wgpu::BindGroupLayoutEntry { binding: 3, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // 4: uniforms [bar_count, combo_count]
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("backtest_layout"), bind_group_layouts: &[&eval_bgl], push_constant_ranges: &[],
+        });
+
+        let eval_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("backtest_eval"), source: wgpu::ShaderSource::Wgsl(BACKTEST_EVAL_SHADER.into()),
+        });
+        let robustness_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("robustness"), source: wgpu::ShaderSource::Wgsl(ROBUSTNESS_SHADER.into()),
+        });
+        let mc_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("monte_carlo"), source: wgpu::ShaderSource::Wgsl(MONTE_CARLO_SHADER.into()),
+        });
+
+        let eval_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("eval_pipeline"), layout: Some(&layout), module: &eval_shader,
+            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+        });
+        let robustness_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("robustness_pipeline"), layout: Some(&layout), module: &robustness_shader,
+            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+        });
+        let monte_carlo_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("mc_pipeline"), layout: Some(&layout), module: &mc_shader,
+            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+        });
+
+        Self {
+            device, queue, bar_buffer: None, ohlc_buffer: None,
+            indicator_buffer: None, params_buffer: None, results_buffer: None,
+            staging_buffer: None, bar_count: 0, combo_count: 0,
+            eval_pipeline, robustness_pipeline, monte_carlo_pipeline,
+            eval_bgl,
+        }
+    }
+
+    /// Upload bar data and parameter grid to GPU.
+    pub fn upload(&mut self, closes: &[f32], highs: &[f32], lows: &[f32], combos: &[ParamCombo]) {
+        let n = closes.len() as u32;
+        let nc = combos.len() as u32;
+        self.bar_count = n;
+        self.combo_count = nc;
+
+        // Close prices
+        self.bar_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bt_closes"), size: (n as u64) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        }));
+        self.queue.write_buffer(self.bar_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(closes));
+
+        // OHLC interleaved
+        let mut ohlc = Vec::with_capacity(n as usize * 3);
+        for i in 0..n as usize {
+            ohlc.push(highs[i]); ohlc.push(lows[i]); ohlc.push(closes[i]);
+        }
+        self.ohlc_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bt_ohlc"), size: (n as u64) * 12,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        }));
+        self.queue.write_buffer(self.ohlc_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(&ohlc));
+
+        // Pack param combos: 8 u32/f32 per combo
+        let mut packed = Vec::with_capacity(nc as usize * 8);
+        for c in combos {
+            packed.push(f32::from_bits(c.sma_fast));
+            packed.push(f32::from_bits(c.sma_slow));
+            packed.push(f32::from_bits(c.rsi_period));
+            packed.push(c.rsi_overbought);
+            packed.push(c.rsi_oversold);
+            packed.push(f32::from_bits(c.atr_period));
+            packed.push(c.atr_sl_mult);
+            packed.push(c.atr_tp_mult);
+        }
+        self.params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bt_params"), size: (nc as u64) * 32,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        }));
+        self.queue.write_buffer(self.params_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(&packed));
+
+        // Results: 9 floats per combo
+        let results_size = (nc as u64) * 36;
+        self.results_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bt_results"), size: results_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        }));
+        self.staging_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bt_staging"), size: results_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        }));
+    }
+
+    /// Run backtest evaluation: one GPU thread per parameter combination.
+    pub fn evaluate(&self) -> Option<Vec<BacktestResult>> {
+        let (Some(bar_buf), Some(ohlc_buf), Some(params_buf), Some(results_buf), Some(staging)) =
+            (&self.bar_buffer, &self.ohlc_buffer, &self.params_buffer, &self.results_buffer, &self.staging_buffer)
+        else { return None; };
+
+        let uniforms = [self.bar_count, self.combo_count];
+        let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bt_uniforms"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&uniform_buf, 0, bytemuck_cast_slice(&uniforms));
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bt_bg"), layout: &self.eval_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: ohlc_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: results_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: uniform_buf.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("bt_eval_pass"), timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.eval_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups((self.combo_count + 255) / 256, 1, 1);
+        }
+        let result_size = (self.combo_count as u64) * 36;
+        encoder.copy_buffer_to_buffer(results_buf, 0, staging, 0, result_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Readback
+        let slice = staging.slice(0..result_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let floats = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        staging.unmap();
+
+        let mut results = Vec::with_capacity(self.combo_count as usize);
+        for i in 0..self.combo_count as usize {
+            let b = i * 9;
+            if b + 8 < floats.len() {
+                results.push(BacktestResult {
+                    net_pnl: floats[b],
+                    max_drawdown: floats[b + 1],
+                    sharpe: floats[b + 2],
+                    sortino: floats[b + 3],
+                    win_rate: floats[b + 4],
+                    profit_factor: floats[b + 5],
+                    trade_count: floats[b + 6] as u32,
+                    avg_hold_bars: floats[b + 7],
+                    robustness_score: floats[b + 8],
+                });
+            }
+        }
+        Some(results)
+    }
+}
+
+// ─── Backtest WGSL Shaders ───────────────────────────────────────────────────
+
+/// Strategy evaluation shader — one thread per parameter combination.
+/// Each thread walks all bars, computes SMA crossover + RSI filter + ATR stop.
+const BACKTEST_EVAL_SHADER: &str = r#"
+struct Params {
+    bar_count: u32,
+    combo_count: u32,
+}
+
+struct Combo {
+    sma_fast: u32,
+    sma_slow: u32,
+    rsi_period: u32,
+    rsi_overbought: f32,
+    rsi_oversold: f32,
+    atr_period: u32,
+    atr_sl_mult: f32,
+    atr_tp_mult: f32,
+}
+
+@group(0) @binding(0) var<storage, read> closes: array<f32>;
+@group(0) @binding(1) var<storage, read> ohlc: array<f32>;  // [h,l,c] × bar_count
+@group(0) @binding(2) var<storage, read> combos: array<f32>;  // 8 floats per combo
+@group(0) @binding(3) var<storage, read_write> results: array<f32>;  // 9 floats per combo
+@group(0) @binding(4) var<uniform> params: Params;
+
+// Compute SMA at bar index for given period
+fn sma_at(idx: u32, period: u32) -> f32 {
+    if (idx < period - 1u) { return 0.0; }
+    var sum: f32 = 0.0;
+    for (var j: u32 = 0u; j < period; j = j + 1u) {
+        sum = sum + closes[idx - j];
+    }
+    return sum / f32(period);
+}
+
+// Compute ATR at bar index
+fn atr_at(idx: u32, period: u32) -> f32 {
+    if (idx < period + 1u) { return 0.0; }
+    var atr: f32 = 0.0;
+    // Simple average of TR over last `period` bars
+    for (var j: u32 = 0u; j < period; j = j + 1u) {
+        let i = idx - j;
+        let h = ohlc[i * 3u];
+        let l = ohlc[i * 3u + 1u];
+        let prev_c = ohlc[(i - 1u) * 3u + 2u];
+        let tr = max(h - l, max(abs(h - prev_c), abs(l - prev_c)));
+        atr = atr + tr;
+    }
+    return atr / f32(period);
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let combo_idx = id.x;
+    if (combo_idx >= params.combo_count) { return; }
+
+    // Unpack parameters
+    let base = combo_idx * 8u;
+    let sma_fast = bitcast<u32>(combos[base]);
+    let sma_slow = bitcast<u32>(combos[base + 1u]);
+    let rsi_period = bitcast<u32>(combos[base + 2u]);
+    let rsi_ob = combos[base + 3u];
+    let rsi_os = combos[base + 4u];
+    let atr_period = bitcast<u32>(combos[base + 5u]);
+    let atr_sl_mult = combos[base + 6u];
+    let atr_tp_mult = combos[base + 7u];
+
+    let lookback = max(sma_slow, max(rsi_period + 1u, atr_period + 1u));
+
+    // State
+    var equity: f32 = 100000.0;
+    var peak: f32 = equity;
+    var max_dd: f32 = 0.0;
+    var in_trade: bool = false;
+    var trade_dir: i32 = 0;  // 1=long, -1=short
+    var entry_price: f32 = 0.0;
+    var stop_loss: f32 = 0.0;
+    var take_profit: f32 = 0.0;
+    var wins: u32 = 0u;
+    var losses: u32 = 0u;
+    var total_profit: f32 = 0.0;
+    var total_loss: f32 = 0.0;
+    var total_hold: u32 = 0u;
+    var trade_start: u32 = 0u;
+    var daily_pnl_sum: f32 = 0.0;
+    var daily_pnl_sq: f32 = 0.0;
+    var daily_pnl_down: f32 = 0.0;
+    var prev_equity: f32 = equity;
+
+    // RSI state (running)
+    var avg_gain: f32 = 0.0;
+    var avg_loss: f32 = 0.0;
+    var rsi_ready: bool = false;
+    var rsi_val: f32 = 50.0;
+
+    // Seed RSI
+    if (rsi_period > 0u && lookback < params.bar_count) {
+        for (var i: u32 = 1u; i <= rsi_period; i = i + 1u) {
+            let chg = closes[i] - closes[i - 1u];
+            if (chg > 0.0) { avg_gain = avg_gain + chg; }
+            else { avg_loss = avg_loss - chg; }
+        }
+        avg_gain = avg_gain / f32(rsi_period);
+        avg_loss = avg_loss / f32(rsi_period);
+        rsi_ready = true;
+    }
+
+    // Walk bars
+    for (var i: u32 = lookback; i < params.bar_count; i = i + 1u) {
+        let close = closes[i];
+        let prev_close = closes[i - 1u];
+        let high = ohlc[i * 3u];
+        let low = ohlc[i * 3u + 1u];
+
+        // Update RSI
+        if (rsi_ready && i > rsi_period) {
+            let chg = close - prev_close;
+            let gain = max(chg, 0.0);
+            let loss = max(-chg, 0.0);
+            avg_gain = (avg_gain * f32(rsi_period - 1u) + gain) / f32(rsi_period);
+            avg_loss = (avg_loss * f32(rsi_period - 1u) + loss) / f32(rsi_period);
+            let rs = select(avg_gain / avg_loss, 100.0, avg_loss < 0.000001);
+            rsi_val = 100.0 - 100.0 / (1.0 + rs);
+        }
+
+        // SMA values
+        let fast_sma = sma_at(i, sma_fast);
+        let slow_sma = sma_at(i, sma_slow);
+        let prev_fast = sma_at(i - 1u, sma_fast);
+        let prev_slow = sma_at(i - 1u, sma_slow);
+        let atr = atr_at(i, atr_period);
+
+        // Check SL/TP if in trade
+        if (in_trade) {
+            var pnl: f32 = 0.0;
+            var closed: bool = false;
+
+            if (trade_dir == 1) {
+                // Long: check stop loss (low touches SL) or take profit (high touches TP)
+                if (low <= stop_loss) { pnl = stop_loss - entry_price; closed = true; }
+                else if (take_profit > 0.0 && high >= take_profit) { pnl = take_profit - entry_price; closed = true; }
+            } else {
+                // Short
+                if (high >= stop_loss) { pnl = entry_price - stop_loss; closed = true; }
+                else if (take_profit > 0.0 && low <= take_profit) { pnl = entry_price - take_profit; closed = true; }
+            }
+
+            if (closed) {
+                equity = equity + pnl;
+                if (pnl > 0.0) { wins = wins + 1u; total_profit = total_profit + pnl; }
+                else { losses = losses + 1u; total_loss = total_loss - pnl; }
+                total_hold = total_hold + (i - trade_start);
+                in_trade = false;
+            }
+        }
+
+        // Entry signals (SMA crossover + RSI filter)
+        if (!in_trade && fast_sma > 0.0 && slow_sma > 0.0 && atr > 0.0) {
+            // Long: fast crosses above slow, RSI not overbought
+            if (prev_fast <= prev_slow && fast_sma > slow_sma && rsi_val < rsi_ob) {
+                in_trade = true;
+                trade_dir = 1;
+                entry_price = close;
+                stop_loss = close - atr * atr_sl_mult;
+                take_profit = close + atr * atr_tp_mult;
+                trade_start = i;
+            }
+            // Short: fast crosses below slow, RSI not oversold
+            else if (prev_fast >= prev_slow && fast_sma < slow_sma && rsi_val > rsi_os) {
+                in_trade = true;
+                trade_dir = -1;
+                entry_price = close;
+                stop_loss = close + atr * atr_sl_mult;
+                take_profit = close - atr * atr_tp_mult;
+                trade_start = i;
+            }
+        }
+
+        // Track drawdown and daily PnL
+        if (equity > peak) { peak = equity; }
+        if (peak > 0.0) {
+            let dd = (peak - equity) / peak;
+            if (dd > max_dd) { max_dd = dd; }
+        }
+        let daily_ret = (equity - prev_equity) / max(prev_equity, 0.01);
+        daily_pnl_sum = daily_pnl_sum + daily_ret;
+        daily_pnl_sq = daily_pnl_sq + daily_ret * daily_ret;
+        if (daily_ret < 0.0) { daily_pnl_down = daily_pnl_down + daily_ret * daily_ret; }
+        prev_equity = equity;
+    }
+
+    // Close any open trade at last bar
+    if (in_trade) {
+        let last_close = closes[params.bar_count - 1u];
+        var pnl: f32 = 0.0;
+        if (trade_dir == 1) { pnl = last_close - entry_price; }
+        else { pnl = entry_price - last_close; }
+        equity = equity + pnl;
+        if (pnl > 0.0) { wins = wins + 1u; } else { losses = losses + 1u; }
+    }
+
+    // Compute metrics
+    let trades = wins + losses;
+    let net_pnl = equity - 100000.0;
+    let n_f = f32(params.bar_count - lookback);
+    let mean_ret = daily_pnl_sum / max(n_f, 1.0);
+    let variance = daily_pnl_sq / max(n_f, 1.0) - mean_ret * mean_ret;
+    let std_dev = sqrt(max(variance, 0.0));
+    let down_dev = sqrt(daily_pnl_down / max(n_f, 1.0));
+    let ann_mean = mean_ret * 252.0;
+    let ann_vol = std_dev * 15.8745;
+    let ann_down = down_dev * 15.8745;
+    let sharpe = select(ann_mean / ann_vol, 0.0, ann_vol < 0.000001);
+    let sortino = select(ann_mean / ann_down, 0.0, ann_down < 0.000001);
+    let win_rate = select(f32(wins) / f32(trades), 0.0, trades == 0u);
+    let pf = select(total_profit / max(total_loss, 0.01), 0.0, trades == 0u);
+    let avg_hold = select(f32(total_hold) / f32(trades), 0.0, trades == 0u);
+
+    // Write results: [net_pnl, max_dd, sharpe, sortino, win_rate, pf, trades, avg_hold, 0(robustness)]
+    let out = combo_idx * 9u;
+    results[out] = net_pnl;
+    results[out + 1u] = max_dd;
+    results[out + 2u] = sharpe;
+    results[out + 3u] = sortino;
+    results[out + 4u] = win_rate;
+    results[out + 5u] = pf;
+    results[out + 6u] = f32(trades);
+    results[out + 7u] = avg_hold;
+    results[out + 8u] = 0.0;  // robustness filled by second pass
+}
+"#;
+
+/// Robustness scoring shader — checks neighbor stability.
+/// For each combo, compares its Sharpe to its neighbors (±1 on each param).
+/// Score = 1.0 - normalized variance among neighbors.
+const ROBUSTNESS_SHADER: &str = r#"
+struct Params {
+    bar_count: u32,
+    combo_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> closes: array<f32>;       // unused but needed for layout
+@group(0) @binding(1) var<storage, read> ohlc: array<f32>;         // unused
+@group(0) @binding(2) var<storage, read> combos: array<f32>;       // param combos
+@group(0) @binding(3) var<storage, read_write> results: array<f32>; // update robustness field
+@group(0) @binding(4) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if (idx >= params.combo_count) { return; }
+
+    let out = idx * 9u;
+    let my_sharpe = results[out + 2u];
+
+    // Compare with neighbors (simple: ±1 index as proxy for ±1 on each param)
+    var sum: f32 = my_sharpe;
+    var sum_sq: f32 = my_sharpe * my_sharpe;
+    var count: f32 = 1.0;
+
+    if (idx > 0u) {
+        let neighbor_sharpe = results[(idx - 1u) * 9u + 2u];
+        sum = sum + neighbor_sharpe;
+        sum_sq = sum_sq + neighbor_sharpe * neighbor_sharpe;
+        count = count + 1.0;
+    }
+    if (idx + 1u < params.combo_count) {
+        let neighbor_sharpe = results[(idx + 1u) * 9u + 2u];
+        sum = sum + neighbor_sharpe;
+        sum_sq = sum_sq + neighbor_sharpe * neighbor_sharpe;
+        count = count + 1.0;
+    }
+
+    let mean = sum / count;
+    let variance = sum_sq / count - mean * mean;
+    // Robustness: low variance among neighbors = high score
+    let robustness = select(1.0 / (1.0 + sqrt(max(variance, 0.0)) * 10.0), 0.0, my_sharpe < 0.0);
+    results[out + 8u] = robustness;
+}
+"#;
+
+/// GPU Monte Carlo VaR shader — parallel random walk simulations.
+/// Each thread runs one simulation: samples from historical returns,
+/// projects equity forward, records final value.
+const MONTE_CARLO_SHADER: &str = r#"
+struct Params {
+    bar_count: u32,
+    combo_count: u32,  // repurposed: simulation_count
+}
+
+@group(0) @binding(0) var<storage, read> closes: array<f32>;       // repurposed: daily returns
+@group(0) @binding(1) var<storage, read> ohlc: array<f32>;         // unused
+@group(0) @binding(2) var<storage, read> combos: array<f32>;       // repurposed: [days_forward, starting_equity, 0...]
+@group(0) @binding(3) var<storage, read_write> results: array<f32>; // final equity per simulation
+@group(0) @binding(4) var<uniform> params: Params;
+
+// PCG hash for GPU-side pseudo-random number generation
+fn pcg_hash(input: u32) -> u32 {
+    var state = input * 747796405u + 2891336453u;
+    var word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+fn rand_f32(seed: ptr<function, u32>) -> f32 {
+    *seed = pcg_hash(*seed);
+    return f32(*seed) / 4294967295.0;
+}
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let sim_idx = id.x;
+    if (sim_idx >= params.combo_count) { return; }
+
+    let n_returns = params.bar_count;
+    let days_forward = bitcast<u32>(combos[0]);
+    let starting_equity = combos[1];
+
+    var seed: u32 = sim_idx * 1234567u + 42u;
+    var equity: f32 = starting_equity;
+    var peak: f32 = equity;
+    var max_dd: f32 = 0.0;
+
+    // Random walk: sample from historical returns
+    for (var d: u32 = 0u; d < days_forward; d = d + 1u) {
+        // Pick a random historical return
+        let r_idx = u32(rand_f32(&seed) * f32(n_returns - 1u));
+        let daily_ret = closes[min(r_idx, n_returns - 1u)];
+        equity = equity * (1.0 + daily_ret);
+
+        if (equity > peak) { peak = equity; }
+        let dd = (peak - equity) / max(peak, 0.01);
+        if (dd > max_dd) { max_dd = dd; }
+    }
+
+    // Output: [final_equity, max_drawdown, ...] per simulation
+    // Pack into 9-float result slots (reusing BacktestResult layout)
+    let out = sim_idx * 9u;
+    results[out] = equity - starting_equity;  // net PnL
+    results[out + 1u] = max_dd;               // max drawdown
+    results[out + 2u] = (equity - starting_equity) / starting_equity * 100.0;  // return %
+    results[out + 3u] = equity;               // final equity
+    // Remaining slots zeroed
+    results[out + 4u] = 0.0;
+    results[out + 5u] = 0.0;
+    results[out + 6u] = 0.0;
+    results[out + 7u] = 0.0;
+    results[out + 8u] = 0.0;
+}
+"#;
