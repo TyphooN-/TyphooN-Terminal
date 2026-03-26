@@ -12,6 +12,14 @@ use std::sync::Arc;
 use wgpu;
 
 /// Manages GPU compute pipelines and buffers for indicator computation.
+/// Indicator type selector for generic dispatch.
+pub enum Indicator {
+    Sma,
+    Ema,
+    Rsi,
+    Kama,
+}
+
 pub struct GpuCompute {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -346,6 +354,17 @@ impl GpuCompute {
     }
 
     // ─── Public indicator compute methods ───
+
+    /// Generic public dispatch for SMA/EMA/RSI/KAMA using close prices.
+    pub fn dispatch_indicator_pub(&self, indicator: &Indicator, period: u32, parallel: bool) -> Option<Vec<f32>> {
+        let pipeline = match indicator {
+            Indicator::Sma => &self.sma_pipeline,
+            Indicator::Ema => &self.ema_pipeline,
+            Indicator::Rsi => &self.rsi_pipeline,
+            Indicator::Kama => &self.kama_pipeline,
+        };
+        self.dispatch_indicator(pipeline, period, parallel)
+    }
 
     /// Compute RSI on GPU. Returns f32 per bar.
     pub fn compute_rsi_gpu(&self, period: u32) -> Option<Vec<f32>> {

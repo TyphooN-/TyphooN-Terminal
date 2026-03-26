@@ -609,7 +609,7 @@ impl ChartState {
 
     /// Try to load bars without blocking. Returns false if lock is contended.
     /// Use this from the UI thread render loop to avoid freezing.
-    fn try_load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>) -> bool {
+    fn try_load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>, gpu: Option<&mut gpu_compute::GpuCompute>) -> bool {
         // Use the default key pattern directly — avoid find_cache_key which does blocking probes
         let key = self.default_cache_key();
         match cache.try_get_bars_raw(&key) {
@@ -618,7 +618,7 @@ impl ChartState {
                     ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                 }).collect();
                 self.view_offset = self.bars.len().saturating_sub(1);
-                self.compute_indicators();
+                self.compute_indicators_gpu(gpu);
                 // Skip compute_multi_kama — it does blocking DB reads for HTF bars
                 // MultiKAMA will be computed when user explicitly switches to this chart tab
                 log.push_back(LogEntry::info(format!(
@@ -633,7 +633,7 @@ impl ChartState {
     }
 
     /// Load bars from the shared cache, re-compute indicators.
-    fn load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>) {
+    fn load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>, gpu: Option<&mut gpu_compute::GpuCompute>) {
         let key = self.find_cache_key(cache);
         match cache.get_bars_raw(&key) {
             Ok(Some(raw)) => {
@@ -641,7 +641,7 @@ impl ChartState {
                     ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                 }).collect();
                 self.view_offset = self.bars.len().saturating_sub(1);
-                self.compute_indicators();
+                self.compute_indicators_gpu(gpu);
                 // MultiKAMA: load higher TF bars and compute KAMA on each
                 self.compute_multi_kama(cache);
                 log.push_back(LogEntry::info(format!(
@@ -664,6 +664,178 @@ impl ChartState {
     }
 
     fn compute_indicators(&mut self) {
+        self.compute_indicators_gpu(None);
+    }
+
+    fn compute_indicators_gpu(&mut self, gpu: Option<&mut gpu_compute::GpuCompute>) {
+        let n = self.bars.len();
+
+        // ── GPU path: upload bars to VRAM, compute on GPU, read back ──
+        if let Some(gpu) = gpu {
+            if n > 0 {
+                let closes: Vec<f32> = self.bars.iter().map(|b| b.close as f32).collect();
+                let highs: Vec<f32> = self.bars.iter().map(|b| b.high as f32).collect();
+                let lows: Vec<f32> = self.bars.iter().map(|b| b.low as f32).collect();
+                gpu.upload_bars_full(&closes, &highs, &lows);
+
+                // SMA — parallel GPU
+                if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Sma, 200, true) {
+                    self.sma200 = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.sma200 = compute_sma(&self.bars, 200); }
+
+                if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Sma, 100, true) {
+                    self.sma100 = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.sma100 = compute_sma(&self.bars, 100); }
+
+                // KAMA — sequential GPU
+                if let Some(data) = gpu.compute_kama_gpu(10) {
+                    self.kama = data.iter().enumerate().map(|(i, &v)| if i < 10 { None } else { Some(v as f64) }).collect();
+                } else { self.kama = compute_kama(&self.bars, 10, 2, 30); }
+
+                // EMA — sequential GPU
+                if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Ema, 21, false) {
+                    self.ema21 = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.ema21 = compute_ema(&self.bars, 21); }
+
+                // Bollinger — parallel GPU
+                if let Some(data) = gpu.compute_bollinger_gpu(20) {
+                    let mut mid = Vec::with_capacity(n);
+                    let mut upper = Vec::with_capacity(n);
+                    let mut lower = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let m = data.get(i * 3).copied().unwrap_or(0.0);
+                        let u = data.get(i * 3 + 1).copied().unwrap_or(0.0);
+                        let l = data.get(i * 3 + 2).copied().unwrap_or(0.0);
+                        if m == 0.0 { mid.push(None); upper.push(None); lower.push(None); }
+                        else { mid.push(Some(m as f64)); upper.push(Some(u as f64)); lower.push(Some(l as f64)); }
+                    }
+                    self.bb_mid = mid; self.bb_upper = upper; self.bb_lower = lower;
+                } else {
+                    let (m, u, l) = compute_bollinger(&self.bars, 20, 2.0);
+                    self.bb_mid = m; self.bb_upper = u; self.bb_lower = l;
+                }
+
+                // RSI — sequential GPU
+                if let Some(data) = gpu.compute_rsi_gpu(14) {
+                    self.rsi = data.iter().map(|&v| Some(v as f64)).collect();
+                } else { self.rsi = compute_rsi(&self.bars, 14); }
+
+                // Fisher — sequential GPU (uses midpoints)
+                if let Some(data) = gpu.compute_fisher_gpu(32) {
+                    let mut f = Vec::with_capacity(n);
+                    let mut fs = Vec::with_capacity(n);
+                    for i in 0..n {
+                        let fv = data.get(i * 2).copied().unwrap_or(0.0);
+                        let sv = data.get(i * 2 + 1).copied().unwrap_or(0.0);
+                        if fv == 0.0 && sv == 0.0 { f.push(None); fs.push(None); }
+                        else { f.push(Some(fv as f64)); fs.push(Some(sv as f64)); }
+                    }
+                    self.fisher = f; self.fisher_signal = fs;
+                } else {
+                    let (f, fs) = compute_fisher(&self.bars, 32);
+                    self.fisher = f; self.fisher_signal = fs;
+                }
+
+                // ATR — sequential GPU (uses OHLC)
+                if let Some(data) = gpu.compute_atr_gpu(14) {
+                    self.atr = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.atr = compute_atr(&self.bars, 14); }
+
+                // MACD — sequential GPU
+                if let Some(data) = gpu.compute_macd_gpu() {
+                    let mut ml = Vec::with_capacity(n);
+                    let mut ms = Vec::with_capacity(n);
+                    let mut mh = Vec::with_capacity(n);
+                    for i in 0..n {
+                        ml.push(Some(data.get(i * 3).copied().unwrap_or(0.0) as f64));
+                        ms.push(Some(data.get(i * 3 + 1).copied().unwrap_or(0.0) as f64));
+                        mh.push(Some(data.get(i * 3 + 2).copied().unwrap_or(0.0) as f64));
+                    }
+                    self.macd_line = ml; self.macd_signal = ms; self.macd_hist = mh;
+                } else {
+                    let (ml, ms, mh) = compute_macd(&self.bars, 12, 26, 9);
+                    self.macd_line = ml; self.macd_signal = ms; self.macd_hist = mh;
+                }
+
+                // Stochastic — sequential GPU (uses OHLC)
+                if let Some(data) = gpu.compute_stochastic_gpu(14) {
+                    let mut sk = Vec::with_capacity(n);
+                    let mut sd = Vec::with_capacity(n);
+                    for i in 0..n {
+                        sk.push(Some(data.get(i * 2).copied().unwrap_or(50.0) as f64));
+                        sd.push(Some(data.get(i * 2 + 1).copied().unwrap_or(50.0) as f64));
+                    }
+                    self.stoch_k = sk; self.stoch_d = sd;
+                } else {
+                    let (sk, sd) = compute_stochastic(&self.bars, 14, 3, 3);
+                    self.stoch_k = sk; self.stoch_d = sd;
+                }
+
+                // ADX — sequential GPU (uses OHLC)
+                if let Some(data) = gpu.compute_adx_gpu(14) {
+                    let mut adx = Vec::with_capacity(n);
+                    let mut dip = Vec::with_capacity(n);
+                    let mut dim = Vec::with_capacity(n);
+                    for i in 0..n {
+                        adx.push(Some(data.get(i * 3).copied().unwrap_or(0.0) as f64));
+                        dip.push(Some(data.get(i * 3 + 1).copied().unwrap_or(0.0) as f64));
+                        dim.push(Some(data.get(i * 3 + 2).copied().unwrap_or(0.0) as f64));
+                    }
+                    self.adx = adx; self.di_plus = dip; self.di_minus = dim;
+                } else {
+                    let (adx, dip, dim) = compute_adx(&self.bars, 14);
+                    self.adx = adx; self.di_plus = dip; self.di_minus = dim;
+                }
+
+                // Remaining indicators — CPU only (no GPU shader yet)
+                // These will be migrated to GPU in future phases
+                let (tk, kj, sa, sb) = compute_ichimoku(&self.bars, 9, 26, 52);
+                self.ichi_tenkan = tk; self.ichi_kijun = kj; self.ichi_span_a = sa; self.ichi_span_b = sb;
+                self.wma = compute_wma(&self.bars, 20);
+                self.hma = compute_hma(&self.bars, 20);
+                self.cci = compute_cci(&self.bars, 20);
+                self.williams_r = compute_williams_r(&self.bars, 14);
+                self.obv = compute_obv(&self.bars);
+                self.momentum = compute_momentum(&self.bars, 10);
+                self.psar = compute_parabolic_sar(&self.bars, 0.02, 0.2);
+                let (au, al) = compute_atr_projection(&self.bars, &self.atr);
+                self.atr_proj_upper = au; self.atr_proj_lower = al;
+                self.better_vol_type = compute_better_volume(&self.bars);
+                let (pdh, pdl, pwh, pwl) = compute_prev_candle_levels(&self.bars);
+                self.prev_daily_high = pdh; self.prev_daily_low = pdl;
+                self.prev_weekly_high = pwh; self.prev_weekly_low = pwl;
+                if let (Some(h), Some(l)) = (pdh, pdl) {
+                    let prev_close = self.bars.iter().rev().find(|b| {
+                        let day = b.ts_ms / 86_400_000;
+                        let last_day = self.bars.last().map(|lb| lb.ts_ms / 86_400_000).unwrap_or(0);
+                        day < last_day
+                    }).map(|b| b.close);
+                    if let Some(c) = prev_close {
+                        let p = (h + l + c) / 3.0;
+                        self.pivot_p = Some(p); self.pivot_r1 = Some(2.0 * p - l); self.pivot_r2 = Some(p + (h - l));
+                        self.pivot_s1 = Some(2.0 * p - h); self.pivot_s2 = Some(p - (h - l));
+                    }
+                }
+                self.fractal_up = compute_fractals_up(&self.bars);
+                self.fractal_down = compute_fractals_down(&self.bars);
+                self.harmonics = detect_harmonic_patterns(&self.bars, &self.fractal_up, &self.fractal_down);
+                let (sz, dz) = compute_supply_demand_zones(&self.bars);
+                self.supply_zones = sz; self.demand_zones = dz;
+                self.compute_auto_fibonacci();
+                self.ehlers_ss = ehlers_super_smoother(&self.bars, 10);
+                self.ehlers_decycler = ehlers_decycler(&self.bars, 20);
+                self.ehlers_itl = ehlers_instantaneous_trendline(&self.bars);
+                let (mama, fama) = ehlers_mama_fama(&self.bars, 0.5, 0.05);
+                self.ehlers_mama = mama; self.ehlers_fama = fama;
+                self.ehlers_ebsw = ehlers_even_better_sinewave(&self.bars, 40);
+                self.ehlers_cyber = ehlers_cyber_cycle(&self.bars);
+                self.ehlers_cg = ehlers_cg_oscillator(&self.bars, 10);
+                self.ehlers_roof = ehlers_roofing_filter(&self.bars, 10, 48);
+                return;
+            }
+        }
+
+        // ── CPU fallback path (no GPU available) ──
         self.sma200 = compute_sma(&self.bars, 200);
         self.sma100 = compute_sma(&self.bars, 100);
         self.kama   = compute_kama(&self.bars, 10, 2, 30);
@@ -4297,6 +4469,7 @@ pub struct TyphooNApp {
 
     /// GPU DARWIN analytics engine (compute shaders for batch stats/correlation).
     gpu_darwin: Option<gpu_compute::GpuDarwinAnalytics>,
+    gpu_indicators: Option<gpu_compute::GpuCompute>,
 }
 
 impl TyphooNApp {
@@ -5062,6 +5235,7 @@ impl TyphooNApp {
                 rx
             },
             gpu_darwin: None,
+            gpu_indicators: None,
         };
 
         // Spawn background DARWIN data refresh thread (mpsc channel, capacity 1)
@@ -5312,11 +5486,11 @@ impl TyphooNApp {
 
         // Initialize GPU compute from eframe's wgpu device (available when renderer = Wgpu)
         if let Some(ref render_state) = _cc.wgpu_render_state {
-            app.gpu_darwin = Some(gpu_compute::GpuDarwinAnalytics::new(
-                Arc::new(render_state.device.clone()),
-                Arc::new(render_state.queue.clone()),
-            ));
-            app.log.push_back(LogEntry::info("GPU DARWIN analytics initialized"));
+            let device = Arc::new(render_state.device.clone());
+            let queue = Arc::new(render_state.queue.clone());
+            app.gpu_darwin = Some(gpu_compute::GpuDarwinAnalytics::new(device.clone(), queue.clone()));
+            app.gpu_indicators = Some(gpu_compute::GpuCompute::new(device, queue));
+            app.log.push_back(LogEntry::info("GPU compute initialized (indicators + DARWIN analytics)"));
         }
 
         // Session load, credentials, and DARWIN auto-import are deferred to update()
@@ -5360,7 +5534,7 @@ impl TyphooNApp {
             let mut chart = ChartState::new(symbol, tf);
             chart.chart_type = chart_type;
             let cache_ref = Arc::as_ref(cache);
-            chart.load(cache_ref, &mut self.log);
+            { let mut gpu = self.gpu_indicators.take(); chart.load(cache_ref, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
             if let Some(target) = self.charts.get_mut(self.active_tab) {
                 *target = chart;
             }
@@ -5382,7 +5556,7 @@ impl TyphooNApp {
             let tf_idx = self.charts.len() % all_tfs.len();
             let mut chart = ChartState::new(&sym, all_tfs[tf_idx]);
             if let Some(ref cache) = self.cache {
-                chart.load(cache, &mut self.log);
+                { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
             }
             self.charts.push(chart);
         }
@@ -5435,7 +5609,7 @@ impl TyphooNApp {
             "RELOAD" => {
                 if let Some(ref cache) = self.cache.clone() {
                     for chart in &mut self.charts {
-                        chart.load(Arc::as_ref(cache), &mut self.log);
+                        { let mut gpu = self.gpu_indicators.take(); chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                     }
                 }
             }
@@ -5505,7 +5679,7 @@ impl TyphooNApp {
                 let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
                 let mut new_chart = ChartState::new(&self.symbol_input, tf);
                 if let Some(ref cache) = self.cache.clone() {
-                    new_chart.load(Arc::as_ref(cache), &mut self.log);
+                    { let mut gpu = self.gpu_indicators.take(); new_chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                 }
                 self.charts.push(new_chart);
                 self.active_tab = self.charts.len() - 1;
@@ -5787,7 +5961,7 @@ impl TyphooNApp {
                         // Load only the active chart — others load lazily on tab switch
                         if let Some(ref cache) = self.cache {
                             if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                                chart.load(cache, &mut self.log);
+                                { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                             }
                         }
                     }
@@ -9368,7 +9542,7 @@ impl eframe::App for TyphooNApp {
             if let Some(cache) = self.cache.clone() {
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
                     if chart.bars.is_empty() {
-                        chart.load(&cache, &mut self.log);
+                        { let mut gpu = self.gpu_indicators.take(); chart.load(&cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                     }
                 }
             }
@@ -9624,7 +9798,7 @@ impl eframe::App for TyphooNApp {
                 let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
                 let mut new_chart = ChartState::new(&self.symbol_input, tf);
                 if let Some(ref cache) = self.cache.clone() {
-                    new_chart.load(Arc::as_ref(cache), &mut self.log);
+                    { let mut gpu = self.gpu_indicators.take(); new_chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                 }
                 self.charts.push(new_chart);
                 self.active_tab = self.charts.len() - 1;
@@ -10147,7 +10321,7 @@ impl eframe::App for TyphooNApp {
                     let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
                     let mut new_chart = ChartState::new(&self.symbol_input, tf);
                     if let Some(ref cache) = self.cache.clone() {
-                        new_chart.load(Arc::as_ref(cache), &mut self.log);
+                        { let mut gpu = self.gpu_indicators.take(); new_chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                     }
                     self.charts.push(new_chart);
                     self.active_tab = self.charts.len() - 1;
@@ -10167,7 +10341,7 @@ impl eframe::App for TyphooNApp {
                     if let Some(chart) = self.charts.get_mut(idx) {
                         if chart.bars.is_empty() {
                             if let Some(ref cache) = self.cache {
-                                chart.load(cache, &mut self.log);
+                                { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                             }
                         }
                     }
@@ -10947,7 +11121,8 @@ impl eframe::App for TyphooNApp {
                 if let Some(ref cache) = self.cache {
                     for chart in self.charts.iter_mut().take(total) {
                         if chart.bars.is_empty() {
-                            if chart.try_load(cache, &mut self.log) {
+                            let loaded = { let mut gpu = self.gpu_indicators.take(); let r = chart.try_load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; r };
+                            if loaded {
                                 break; // loaded one, continue next frame
                             } else {
                                 break; // lock contended, try next frame
