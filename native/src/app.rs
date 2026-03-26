@@ -14,7 +14,7 @@
 //! - Bottom panel: log messages
 
 use eframe::egui;
-use egui_plot::{Line, PlotPoints, Plot};
+use egui_plot::{Line, PlotPoints, Plot, Bar as PlotBar, BarChart};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -6281,490 +6281,328 @@ impl TyphooNApp {
         if self.show_darwin_accounts {
             egui::Window::new("DARWIN Accounts")
                 .open(&mut self.show_darwin_accounts)
-                .default_size([700.0, 500.0])
+                .default_size([800.0, 600.0])
                 .show(ctx, |ui| {
-                    ui.heading("Account Overview");
-                    ui.separator();
-                    // If bg data hasn't arrived yet but cache is available, show a quick count
+                    // Soft palette for charts
+                    let chart_green = egui::Color32::from_rgb(46, 204, 113);
+                    let chart_red = egui::Color32::from_rgb(231, 76, 60);
+                    let _chart_blue = egui::Color32::from_rgb(52, 152, 219);
+                    let chart_gold = egui::Color32::from_rgb(241, 196, 15);
+                    let chart_purple = egui::Color32::from_rgb(155, 89, 182);
+                    let chart_cyan = egui::Color32::from_rgb(26, 188, 156);
+                    let dim = egui::Color32::from_rgb(100, 100, 120);
+
                     if self.bg.accounts.is_empty() && self.cache.is_some() {
                         ui.label(egui::RichText::new("Loading DARWIN account data...").color(AXIS_TEXT));
-                        ui.label(egui::RichText::new("Background thread is computing analytics. This takes ~30-60s on first load.").color(AXIS_TEXT).small());
+                        return;
                     }
-                    if !self.bg.accounts.is_empty() {
-                        egui::Grid::new("darwin_acct_grid").striped(true).num_columns(6).show(ui, |ui| {
-                            ui.strong("DARWIN"); ui.strong("MT5"); ui.strong("Deals"); ui.strong("Positions"); ui.strong("Balance"); ui.strong("P&L");
-                            ui.end_row();
-                            // Show from account_details if available, otherwise from accounts (basic info)
-                            if !self.bg.account_details.is_empty() {
-                                for det in &self.bg.account_details {
-                                    if let Some(ref summary) = det.summary {
-                                        let acct = self.bg.accounts.iter().find(|a| a.darwin_ticker == det.ticker);
-                                        ui.label(&det.ticker);
-                                        ui.label(acct.map(|a| a.mt5_account.as_str()).unwrap_or(""));
-                                        ui.label(format!("{}", summary.win_count + summary.loss_count));
-                                        ui.label(format!("{}", acct.map(|a| a.position_count).unwrap_or(0)));
-                                        ui.label(format!("${:.2}", summary.final_balance));
-                                        let pnl_color = if summary.total_profit >= 0.0 { UP } else { DOWN };
-                                        ui.label(egui::RichText::new(format!("${:.2}", summary.total_profit)).color(pnl_color));
-                                        ui.end_row();
-                                    }
-                                }
-                            } else {
-                                // Fallback: show basic account info while bg computes details
-                                for acct in &self.bg.accounts {
-                                    ui.label(&acct.darwin_ticker);
-                                    ui.label(&acct.mt5_account);
-                                    ui.label(format!("{}", acct.deal_count));
-                                    ui.label(format!("{}", acct.position_count));
-                                    ui.label(format!("${:.0}", acct.initial_balance));
-                                    ui.label(egui::RichText::new("computing...").color(AXIS_TEXT));
+                    if self.bg.accounts.is_empty() { return; }
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    // ── Compact overview table ──────────────────────────────────
+                    egui::Grid::new("darwin_overview").striped(true).num_columns(8).min_col_width(55.0).show(ui, |ui| {
+                        ui.label(egui::RichText::new("DARWIN").color(dim).small());
+                        ui.label(egui::RichText::new("MT5").color(dim).small());
+                        ui.label(egui::RichText::new("Deals").color(dim).small());
+                        ui.label(egui::RichText::new("Pos").color(dim).small());
+                        ui.label(egui::RichText::new("Balance").color(dim).small());
+                        ui.label(egui::RichText::new("P&L").color(dim).small());
+                        ui.label(egui::RichText::new("Win%").color(dim).small());
+                        ui.label(egui::RichText::new("PF").color(dim).small());
+                        ui.end_row();
+                        if !self.bg.account_details.is_empty() {
+                            for det in &self.bg.account_details {
+                                if let Some(ref s) = det.summary {
+                                    let acct = self.bg.accounts.iter().find(|a| a.darwin_ticker == det.ticker);
+                                    ui.label(egui::RichText::new(&det.ticker).strong().color(chart_cyan));
+                                    ui.label(egui::RichText::new(acct.map(|a| a.mt5_account.as_str()).unwrap_or("")).small());
+                                    ui.label(format!("{}", s.win_count + s.loss_count));
+                                    ui.label(format!("{}", acct.map(|a| a.position_count).unwrap_or(0)));
+                                    ui.label(format!("${:.0}", s.final_balance));
+                                    let pc = if s.total_profit >= 0.0 { chart_green } else { chart_red };
+                                    ui.label(egui::RichText::new(format!("${:.0}", s.total_profit)).color(pc));
+                                    let wc = if s.win_rate >= 0.5 { chart_green } else { chart_red };
+                                    ui.label(egui::RichText::new(format!("{:.1}%", s.win_rate * 100.0)).color(wc));
+                                    ui.label(format!("{:.2}", s.profit_factor));
                                     ui.end_row();
                                 }
                             }
-                        });
-                        ui.add_space(10.0);
-                        // Per-account details (expandable) — reads from bg.account_details
-                        for det in &self.bg.account_details {
-                            if let Some(ref summary) = det.summary {
-                            ui.collapsing(format!("{} — Details", det.ticker), |ui| {
-                                egui::Grid::new(format!("det_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                    ui.label("Win Rate:"); ui.label(format!("{:.1}%", summary.win_rate * 100.0));
-                                    ui.end_row();
-                                    ui.label("Profit Factor:"); ui.label(format!("{:.2}", summary.profit_factor));
-                                    ui.end_row();
-                                    ui.label("Max Drawdown:"); ui.label(format!("{:.2}%", summary.max_drawdown_pct));
-                                    ui.end_row();
-                                    ui.label("Total Commission:"); ui.label(format!("${:.2}", summary.total_commission));
-                                    ui.end_row();
-                                    ui.label("Total Swap:"); ui.label(format!("${:.2}", summary.total_swap));
-                                    ui.end_row();
-                                    ui.label("Symbols Traded:"); ui.label(format!("{}", summary.symbols_traded.len()));
-                                    ui.end_row();
-                                });
-                                // VaR stats
-                                if let Some(ref var_stats) = det.var_stats {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Risk Metrics").strong());
-                                    egui::Grid::new(format!("var_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                        ui.label("VaR 95%:"); ui.label(format!("${:.2}", var_stats.var_95));
-                                        ui.end_row();
-                                        ui.label("VaR 99%:"); ui.label(format!("${:.2}", var_stats.var_99));
-                                        ui.end_row();
-                                        ui.label("Sharpe:"); ui.label(format!("{:.3}", var_stats.sharpe));
-                                        ui.end_row();
-                                        ui.label("Sortino:"); ui.label(format!("{:.3}", var_stats.sortino));
-                                        ui.end_row();
-                                        ui.label("Daily Vol:"); ui.label(format!("{:.4}", var_stats.daily_vol));
-                                        ui.end_row();
-                                        ui.label("Best Day:"); ui.label(format!("${:.2}", var_stats.best_day));
-                                        ui.end_row();
-                                        ui.label("Worst Day:"); ui.label(format!("${:.2}", var_stats.worst_day));
-                                        ui.end_row();
-                                    });
-                                    // Monthly returns
-                                    if !det.monthly_returns.is_empty() {
-                                        ui.add_space(5.0);
-                                        ui.label(egui::RichText::new("Monthly Returns").strong());
-                                        egui::Grid::new(format!("mo_{}", det.ticker)).striped(true).num_columns(3).show(ui, |ui| {
-                                            ui.strong("Period"); ui.strong("P&L"); ui.strong("Return");
-                                            ui.end_row();
-                                            for m in det.monthly_returns.iter().rev().take(12) {
-                                                ui.label(format!("{}-{:02}", m.year, m.month));
-                                                let c = if m.pnl >= 0.0 { UP } else { DOWN };
-                                                ui.label(egui::RichText::new(format!("${:.2}", m.pnl)).color(c));
-                                                ui.label(egui::RichText::new(format!("{:.2}%", m.return_pct)).color(c));
-                                                ui.end_row();
-                                            }
-                                        });
-                                    }
-                                }
-                                // Streak analysis
-                                if let Some(ref streaks) = det.streaks {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Streaks").strong());
-                                    egui::Grid::new(format!("str_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                        ui.label("Max Win Streak:"); ui.label(egui::RichText::new(format!("{}", streaks.max_win_streak)).color(UP));
-                                        ui.end_row();
-                                        ui.label("Max Loss Streak:"); ui.label(egui::RichText::new(format!("{}", streaks.max_loss_streak)).color(DOWN));
-                                        ui.end_row();
-                                        ui.label("Current Streak:");
-                                        let sc = if streaks.current_streak >= 0 { UP } else { DOWN };
-                                        ui.label(egui::RichText::new(format!("{}", streaks.current_streak)).color(sc));
-                                        ui.end_row();
-                                        ui.label("Avg Win Streak:"); ui.label(format!("{:.1}", streaks.avg_win_streak));
-                                        ui.end_row();
-                                        ui.label("Avg Loss Streak:"); ui.label(format!("{:.1}", streaks.avg_loss_streak));
-                                        ui.end_row();
-                                    });
-                                }
-                                // Hourly P&L
-                                if !det.hourly_pnl.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Hourly P&L").strong());
-                                    egui::Grid::new(format!("hr_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                        ui.strong("Hour"); ui.strong("P&L"); ui.strong("Trades"); ui.strong("Win%");
-                                        ui.end_row();
-                                        for h in &det.hourly_pnl {
-                                            ui.label(format!("{:02}:00", h.hour));
-                                            let c = if h.total_pnl >= 0.0 { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(format!("${:.2}", h.total_pnl)).color(c));
-                                            ui.label(format!("{}", h.trade_count));
-                                            let wr = if h.trade_count > 0 { h.win_count as f64 / h.trade_count as f64 * 100.0 } else { 0.0 };
-                                            ui.label(format!("{:.0}%", wr));
-                                            ui.end_row();
-                                        }
-                                    });
-                                }
-                                // Per-DARWIN equity curve
-                                if det.equity_curve.len() > 2 {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Equity Curve").strong());
-                                    let points: PlotPoints = PlotPoints::new(
-                                        det.equity_curve.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
-                                    );
-                                    let line = Line::new("Equity", points).color(ACCENT);
-                                    Plot::new(format!("eq_{}", det.ticker))
-                                        .height(120.0)
-                                        .allow_drag(false)
-                                        .allow_zoom(false)
-                                        .show(ui, |plot_ui| { plot_ui.line(line); });
-                                }
-                                // P&L by Symbol
-                                if !det.pnl_by_symbol.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("P&L by Symbol").strong());
-                                    egui::Grid::new(format!("sym_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                        ui.strong("Symbol"); ui.strong("P&L"); ui.strong("Comm"); ui.strong("Trades");
-                                        ui.end_row();
-                                        for (sym, pnl, comm, _swap, count) in &det.pnl_by_symbol {
-                                            ui.label(sym);
-                                            let c = if *pnl >= 0.0 { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(format!("${:.2}", pnl)).color(c));
-                                            ui.label(format!("${:.2}", comm));
-                                            ui.label(format!("{}", count));
-                                            ui.end_row();
-                                        }
-                                    });
-                                }
-                                // Day of Week P&L
-                                if !det.day_of_week.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Day of Week").strong());
-                                    egui::Grid::new(format!("dow_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                        ui.strong("Day"); ui.strong("P&L"); ui.strong("Win%"); ui.strong("Trades");
-                                        ui.end_row();
-                                        for d in &det.day_of_week {
-                                            ui.label(&d.day);
-                                            let c = if d.total_pnl >= 0.0 { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(format!("${:.2}", d.total_pnl)).color(c));
-                                            ui.label(format!("{:.0}%", d.win_rate));
-                                            ui.label(format!("{}", d.trade_count));
-                                            ui.end_row();
-                                        }
-                                    });
-                                }
-                                // Hold Time Stats
-                                if let Some(ref ht) = det.hold_time {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Hold Time").strong());
-                                    ui.label(format!("Avg: {:.1}h  Med: {:.1}h  Min: {:.1}h  Max: {:.1}h", ht.avg_hold_hours, ht.median_hold_hours, ht.min_hold_hours, ht.max_hold_hours));
-                                    if !ht.buckets.is_empty() {
-                                        egui::Grid::new(format!("ht_{}", det.ticker)).striped(true).num_columns(3).show(ui, |ui| {
-                                            ui.strong("Bucket"); ui.strong("Trades"); ui.strong("Avg P&L");
-                                            ui.end_row();
-                                            for (label, count, avg_pnl) in &ht.buckets {
-                                                ui.label(label);
-                                                ui.label(format!("{}", count));
-                                                let c = if *avg_pnl >= 0.0 { UP } else { DOWN };
-                                                ui.label(egui::RichText::new(format!("${:.2}", avg_pnl)).color(c));
-                                                ui.end_row();
-                                            }
-                                        });
-                                    }
-                                }
-                                // Kelly Criterion
-                                if let Some(ref kelly) = det.kelly {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Kelly Criterion").strong());
-                                    egui::Grid::new(format!("kelly_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                        ui.label("Win Rate:"); ui.label(format!("{:.1}%", kelly.win_rate * 100.0)); ui.end_row();
-                                        ui.label("Avg Win:"); ui.label(egui::RichText::new(format!("${:.2}", kelly.avg_win)).color(UP)); ui.end_row();
-                                        ui.label("Avg Loss:"); ui.label(egui::RichText::new(format!("${:.2}", kelly.avg_loss)).color(DOWN)); ui.end_row();
-                                        ui.label("Kelly %:"); ui.label(format!("{:.1}%", kelly.kelly_fraction * 100.0)); ui.end_row();
-                                        ui.label("Half Kelly:"); ui.label(format!("{:.1}%", kelly.half_kelly * 100.0)); ui.end_row();
-                                        ui.label("Optimal Risk:"); ui.label(format!("{:.1}%", kelly.optimal_risk_pct)); ui.end_row();
-                                    });
-                                }
-                                // Cost Analysis
-                                if let Some(ref costs) = det.cost_analysis {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Cost Analysis").strong());
-                                    egui::Grid::new(format!("cost_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                        ui.label("Total Commission:"); ui.label(egui::RichText::new(format!("${:.2}", costs.total_commission)).color(DOWN)); ui.end_row();
-                                        ui.label("Total Swap:"); ui.label(format!("${:.2}", costs.total_swap)); ui.end_row();
-                                        ui.label("Comm % of Equity:"); ui.label(format!("{:.2}%", costs.commission_pct_of_equity)); ui.end_row();
-                                        ui.label("Avg Comm/Trade:"); ui.label(format!("${:.2}", costs.avg_commission_per_trade)); ui.end_row();
-                                    });
-                                }
-                                // D-Score Estimate
-                                if let Some(ref ds) = det.dscore {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("D-Score Estimate").strong());
-                                    egui::Grid::new(format!("ds_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                        ui.label("Experience:"); ui.label(format!("{:.1}/10", ds.experience)); ui.end_row();
-                                        ui.label("Risk Mgmt:"); ui.label(format!("{:.1}/10", ds.risk_mgmt)); ui.end_row();
-                                        ui.label("Performance:"); ui.label(format!("{:.1}/10", ds.performance)); ui.end_row();
-                                        ui.label("Market Timing:"); ui.label(format!("{:.1}/10", ds.market_timing)); ui.end_row();
-                                        ui.label("Capacity:"); ui.label(format!("{:.1}/10", ds.capacity)); ui.end_row();
-                                        ui.label("Scalability:"); ui.label(format!("{:.1}/10", ds.scalability)); ui.end_row();
-                                        ui.label("Total D-Score:"); ui.label(egui::RichText::new(format!("{:.1}", ds.total_dscore)).strong()); ui.end_row();
-                                    });
-                                }
-                                // Slippage Analysis
-                                if let Some(ref slip) = det.slippage {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Slippage").strong());
-                                    ui.label(format!("Avg: {:.4}%  Total cost: ${:.2}  Worst: {:.4}%", slip.avg_slippage_pct, slip.total_slippage_cost, slip.worst_slippage));
-                                }
-                                // MAE/MFE
-                                if let Some(ref mae) = det.mae_mfe {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("MAE / MFE").strong());
-                                    ui.label(format!("Avg MAE: {:.2}%  Avg MFE: {:.2}%  Ratio: {:.2}", mae.avg_mae_pct, mae.avg_mfe_pct, mae.mae_mfe_ratio));
-                                }
-                                // Sizing Efficiency
-                                if !det.sizing_efficiency.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Sizing Efficiency").strong());
-                                    egui::Grid::new(format!("sz_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                        ui.strong("Quartile"); ui.strong("Avg Vol"); ui.strong("Win%"); ui.strong("P&L");
-                                        ui.end_row();
-                                        for s in &det.sizing_efficiency {
-                                            ui.label(&s.quartile);
-                                            ui.label(format!("{:.2}", s.avg_volume));
-                                            ui.label(format!("{:.0}%", s.win_rate));
-                                            let c = if s.total_pnl >= 0.0 { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(format!("${:.0}", s.total_pnl)).color(c));
-                                            ui.end_row();
-                                        }
-                                    });
-                                }
-                                // Symbol Rotation
-                                if !det.symbol_rotation.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Symbol Rotation").strong());
-                                    egui::Grid::new(format!("rot_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                        ui.strong("Symbol"); ui.strong("Trades"); ui.strong("P&L"); ui.strong("Active");
-                                        ui.end_row();
-                                        for r in &det.symbol_rotation {
-                                            ui.label(&r.symbol);
-                                            ui.label(format!("{}", r.trade_count));
-                                            let c = if r.total_pnl >= 0.0 { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(format!("${:.0}", r.total_pnl)).color(c));
-                                            ui.label(format!("{} mo", r.active_months));
-                                            ui.end_row();
-                                        }
-                                    });
-                                }
-                                // Open Positions (per-DARWIN)
-                                if !det.open_positions.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new(format!("Open Positions ({})", det.open_positions.len())).strong());
-                                    egui::Grid::new(format!("pos_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
-                                        ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("Price");
-                                        ui.end_row();
-                                        for p in &det.open_positions {
-                                            ui.label(&p.symbol);
-                                            let sc = if p.side == "buy" { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(&p.side).color(sc));
-                                            ui.label(format!("{:.2}", p.total_volume));
-                                            ui.label(format_price(p.avg_price));
-                                            ui.end_row();
-                                        }
-                                    });
-                                }
-                                // Pyramiding Analysis
-                                if !det.pyramiding.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Pyramiding").strong());
-                                    for p in &det.pyramiding {
-                                        let c = if p.final_pnl >= 0.0 { UP } else { DOWN };
-                                        ui.label(egui::RichText::new(format!("{}: {} adds ({}h avg), {} win/{} loss → ${:.0} [{}]",
-                                            p.symbol, p.total_adds, p.avg_add_interval_hours as i64,
-                                            p.adds_in_profit, p.adds_in_loss, p.final_pnl, p.strategy)).color(c).small());
-                                    }
-                                }
-                                // Trading Bursts
-                                if !det.bursts.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Trading Bursts").strong());
-                                    for b in det.bursts.iter().take(5) {
-                                        let c = if b.total_pnl >= 0.0 { UP } else { DOWN };
-                                        ui.label(egui::RichText::new(format!("{} → {}: {} trades ({:.1}/day) ${:.0}",
-                                            b.start_date, b.end_date, b.trade_count, b.avg_trades_per_day, b.total_pnl)).color(c).small());
-                                    }
-                                }
-                                // Trade Autocorrelation
-                                if let Some(ref ac) = det.autocorrelation {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Autocorrelation").strong());
-                                    ui.label(format!("Lag1: {:.4}  Lag2: {:.4}  Lag3: {:.4}  Lag5: {:.4}", ac.lag1, ac.lag2, ac.lag3, ac.lag5));
-                                    let rc = if ac.is_random { UP } else { egui::Color32::from_rgb(255, 200, 50) };
-                                    ui.label(egui::RichText::new(&ac.interpretation).color(rc).small());
-                                }
-                                // Recent Deals (last 20)
-                                if !det.recent_deals.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new(format!("Recent Deals ({})", det.recent_deals.len())).strong());
-                                    egui::Grid::new(format!("deals_{}", det.ticker)).striped(true).num_columns(5).show(ui, |ui| {
-                                        ui.strong("Time"); ui.strong("Symbol"); ui.strong("Type"); ui.strong("Vol"); ui.strong("P&L");
-                                        ui.end_row();
-                                        for d in det.recent_deals.iter().take(20) {
-                                            ui.label(egui::RichText::new(&d.time).small());
-                                            ui.label(egui::RichText::new(&d.symbol).small());
-                                            let tc = if d.deal_type == "buy" { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(&d.deal_type).color(tc).small());
-                                            ui.label(egui::RichText::new(format!("{:.2}", d.volume)).small());
-                                            let pc = if d.profit >= 0.0 { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(format!("${:.2}", d.profit)).color(pc).small());
-                                            ui.end_row();
-                                        }
-                                    });
-                                }
-                                // Closed Positions (last 20)
-                                if !det.closed_positions.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new(format!("Recent Positions ({})", det.closed_positions.len())).strong());
-                                    egui::Grid::new(format!("cpos_{}", det.ticker)).striped(true).num_columns(5).show(ui, |ui| {
-                                        ui.strong("Symbol"); ui.strong("Side"); ui.strong("Volume"); ui.strong("P&L"); ui.strong("Comm");
-                                        ui.end_row();
-                                        for p in det.closed_positions.iter().take(20) {
-                                            ui.label(egui::RichText::new(&p.symbol).small());
-                                            let sc = if p.pos_type == "buy" { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(&p.pos_type).color(sc).small());
-                                            ui.label(egui::RichText::new(format!("{:.2}", p.volume)).small());
-                                            let pc = if p.profit >= 0.0 { UP } else { DOWN };
-                                            ui.label(egui::RichText::new(format!("${:.2}", p.profit)).color(pc).small());
-                                            ui.label(egui::RichText::new(format!("${:.2}", p.commission)).small());
-                                            ui.end_row();
-                                        }
-                                    });
-                                }
-                                // Equity Snapshot History
-                                if !det.equity_snapshots.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Equity Snapshots").strong());
-                                    for snap in &det.equity_snapshots {
-                                        ui.label(egui::RichText::new(format!("Bal: ${:.0}  Unreal: ${:.0}  Float: ${:.0}  Pos: {}",
-                                            snap.closed_balance, snap.unrealized_pnl, snap.floating_equity, snap.open_position_count)).small());
-                                    }
-                                }
-                                // Benchmark Comparison
-                                if let Some(ref bench) = det.benchmark {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("vs Portfolio Benchmark").strong());
-                                    egui::Grid::new(format!("bench_{}", det.ticker)).striped(true).num_columns(2).show(ui, |ui| {
-                                        ui.label("Alpha:"); let ac = if bench.alpha >= 0.0 { UP } else { DOWN };
-                                        ui.label(egui::RichText::new(format!("{:.4}", bench.alpha)).color(ac)); ui.end_row();
-                                        ui.label("Beta:"); ui.label(format!("{:.4}", bench.beta)); ui.end_row();
-                                        ui.label("Info Ratio:"); ui.label(format!("{:.3}", bench.information_ratio)); ui.end_row();
-                                        ui.label("DARWIN Return:"); ui.label(format!("{:.2}%", bench.darwin_return)); ui.end_row();
-                                        ui.label("Benchmark Return:"); ui.label(format!("{:.2}%", bench.benchmark_return)); ui.end_row();
-                                    });
-                                }
-                                // Sector classification
-                                if !det.sector_classification.is_empty() {
-                                    ui.add_space(5.0);
-                                    ui.label(egui::RichText::new("Sector Classification").strong());
-                                    for (sym, sector) in &det.sector_classification {
-                                        ui.label(egui::RichText::new(format!("{}: {}", sym, sector)).small());
-                                    }
-                                }
-                            });
-                            }
-                        }
-                    } else {
-                        ui.label(egui::RichText::new("No DARWIN accounts imported yet.").color(AXIS_TEXT));
-                        ui.label(egui::RichText::new("Export MT5 Trade History as XLSX, then import here.").color(AXIS_TEXT).small());
-                    }
-                    // ── Floating Equity Dashboard — from bg cache ─────────────────
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.heading("Floating Equity");
-                    if let Some(ref float_eq) = self.bg.floating_equity {
-                        egui::Grid::new("float_eq").striped(true).num_columns(4).show(ui, |ui| {
-                            ui.strong("DARWIN"); ui.strong("Closed Bal"); ui.strong("Unreal P&L"); ui.strong("Float Eq");
-                            ui.end_row();
-                            for d in &float_eq.darwins {
-                                ui.label(&d.darwin_ticker);
-                                ui.label(format!("${:.0}", d.closed_balance));
-                                let uc = if d.unrealized_pnl >= 0.0 { UP } else { DOWN };
-                                ui.label(egui::RichText::new(format!("${:.0}", d.unrealized_pnl)).color(uc));
-                                ui.label(format!("${:.0}", d.floating_equity));
+                        } else {
+                            for acct in &self.bg.accounts {
+                                ui.label(egui::RichText::new(&acct.darwin_ticker).strong().color(chart_cyan));
+                                ui.label(egui::RichText::new(&acct.mt5_account).small());
+                                ui.label(format!("{}", acct.deal_count));
+                                ui.label(format!("{}", acct.position_count));
+                                ui.label(format!("${:.0}", acct.initial_balance));
+                                ui.label(egui::RichText::new("...").color(dim));
+                                ui.label(""); ui.label("");
                                 ui.end_row();
                             }
-                            ui.label(egui::RichText::new("COMBINED").strong());
-                            ui.label(format!("${:.0}", float_eq.combined_closed_balance));
-                            let cc = if float_eq.combined_unrealized_pnl >= 0.0 { UP } else { DOWN };
-                            ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_unrealized_pnl)).color(cc));
-                            ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_floating_equity)).strong());
+                        }
+                    });
+
+                    // ── Per-account detail cards with charts ─────────────────────
+                    for det in &self.bg.account_details {
+                        if det.summary.is_none() { continue; }
+                        let summary = det.summary.as_ref().unwrap();
+                        ui.add_space(6.0);
+                        ui.separator();
+
+                        // ── Account header with key metrics inline ──
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(&det.ticker).heading().color(chart_cyan));
+                            ui.add_space(10.0);
+                            let pc = if summary.total_profit >= 0.0 { chart_green } else { chart_red };
+                            ui.label(egui::RichText::new(format!("${:.0}", summary.total_profit)).color(pc).strong());
+                            ui.label(egui::RichText::new(format!("DD {:.1}%", summary.max_drawdown_pct)).color(chart_red).small());
+                            if let Some(ref var) = det.var_stats {
+                                ui.label(egui::RichText::new(format!("Sharpe {:.2}", var.sharpe)).color(chart_gold).small());
+                                ui.label(egui::RichText::new(format!("Sortino {:.2}", var.sortino)).color(chart_gold).small());
+                            }
+                            if let Some(ref ds) = det.dscore {
+                                ui.label(egui::RichText::new(format!("D-Score {:.1}", ds.total_dscore)).color(chart_purple).small());
+                            }
+                        });
+
+                        // ── Equity Curve (prominent) ──
+                        if det.equity_curve.len() > 2 {
+                            let points: PlotPoints = PlotPoints::new(
+                                det.equity_curve.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
+                            );
+                            let line = Line::new("Equity", points).color(chart_cyan).width(1.5);
+                            Plot::new(format!("eq_{}", det.ticker))
+                                .height(100.0)
+                                .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                .show_axes([false, true])
+                                .show(ui, |plot_ui| { plot_ui.line(line); });
+                        }
+
+                        // ── Monthly Returns bar chart ──
+                        if !det.monthly_returns.is_empty() {
+                            let bars: Vec<PlotBar> = det.monthly_returns.iter().rev().take(18).collect::<Vec<_>>()
+                                .iter().rev().enumerate().map(|(i, m)| {
+                                    let c = if m.pnl >= 0.0 { chart_green } else { chart_red };
+                                    PlotBar::new(i as f64, m.pnl).width(0.7).fill(c).name(format!("{}-{:02}", m.year, m.month))
+                                }).collect();
+                            if !bars.is_empty() {
+                                let chart = BarChart::new("Monthly P&L", bars);
+                                Plot::new(format!("mo_{}", det.ticker))
+                                    .height(80.0)
+                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                    .show_axes([false, true])
+                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+                            }
+                        }
+
+                        // ── Compact metrics row ──
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 12.0;
+                            if let Some(ref var) = det.var_stats {
+                                ui.label(egui::RichText::new(format!("VaR95 ${:.0}", var.var_95)).color(chart_red).small());
+                                ui.label(egui::RichText::new(format!("Best ${:.0}", var.best_day)).color(chart_green).small());
+                                ui.label(egui::RichText::new(format!("Worst ${:.0}", var.worst_day)).color(chart_red).small());
+                                ui.label(egui::RichText::new(format!("Vol {:.3}", var.daily_vol)).color(dim).small());
+                            }
+                            if let Some(ref kelly) = det.kelly {
+                                ui.label(egui::RichText::new(format!("Kelly {:.1}%", kelly.half_kelly * 100.0)).color(chart_purple).small());
+                            }
+                            if let Some(ref ht) = det.hold_time {
+                                ui.label(egui::RichText::new(format!("Hold {:.0}h", ht.avg_hold_hours)).color(dim).small());
+                            }
+                            if let Some(ref costs) = det.cost_analysis {
+                                ui.label(egui::RichText::new(format!("Comm ${:.0}", costs.total_commission)).color(dim).small());
+                            }
+                            if let Some(ref streaks) = det.streaks {
+                                ui.label(egui::RichText::new(format!("W{}/L{}", streaks.max_win_streak, streaks.max_loss_streak)).color(dim).small());
+                                let sc = if streaks.current_streak >= 0 { chart_green } else { chart_red };
+                                ui.label(egui::RichText::new(format!("Now:{}", streaks.current_streak)).color(sc).small());
+                            }
+                        });
+
+                        // ── P&L by Symbol bar chart ──
+                        if !det.pnl_by_symbol.is_empty() {
+                            let bars: Vec<PlotBar> = det.pnl_by_symbol.iter().enumerate().map(|(i, (sym, pnl, _, _, _))| {
+                                let c = if *pnl >= 0.0 { chart_green } else { chart_red };
+                                PlotBar::new(i as f64, *pnl).width(0.7).fill(c).name(sym)
+                            }).collect();
+                            if !bars.is_empty() {
+                                let chart = BarChart::new("P&L by Symbol", bars);
+                                Plot::new(format!("sym_{}", det.ticker))
+                                    .height(80.0)
+                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                    .show_axes([false, true])
+                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+                            }
+                        }
+
+                        // ── Day of Week + Hourly P&L side by side ──
+                        ui.horizontal(|ui| {
+                            // Day of Week bars
+                            if !det.day_of_week.is_empty() {
+                                let bars: Vec<PlotBar> = det.day_of_week.iter().enumerate().map(|(i, d)| {
+                                    let c = if d.total_pnl >= 0.0 { chart_green } else { chart_red };
+                                    PlotBar::new(i as f64, d.total_pnl).width(0.7).fill(c).name(&d.day)
+                                }).collect();
+                                let chart = BarChart::new("Day of Week", bars);
+                                Plot::new(format!("dow_{}", det.ticker))
+                                    .height(70.0).width(200.0)
+                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                    .show_axes([false, true])
+                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+                            }
+                            // Hourly P&L bars
+                            if !det.hourly_pnl.is_empty() {
+                                let bars: Vec<PlotBar> = det.hourly_pnl.iter().map(|h| {
+                                    let c = if h.total_pnl >= 0.0 { chart_green } else { chart_red };
+                                    PlotBar::new(h.hour as f64, h.total_pnl).width(0.7).fill(c).name(format!("{:02}:00", h.hour))
+                                }).collect();
+                                let chart = BarChart::new("Hourly P&L", bars);
+                                Plot::new(format!("hr_{}", det.ticker))
+                                    .height(70.0).width(350.0)
+                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                    .show_axes([false, true])
+                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+                            }
+                        });
+
+                        // ── Collapsible advanced details ──
+                        ui.collapsing(format!("{} Advanced", det.ticker), |ui| {
+                            // D-Score radar (compact grid)
+                            if let Some(ref ds) = det.dscore {
+                                egui::Grid::new(format!("ds_{}", det.ticker)).num_columns(6).show(ui, |ui| {
+                                    let scores = [("Exp", ds.experience), ("Risk", ds.risk_mgmt), ("Perf", ds.performance),
+                                                   ("Timing", ds.market_timing), ("Cap", ds.capacity), ("Scale", ds.scalability)];
+                                    for (label, _) in &scores { ui.label(egui::RichText::new(*label).color(dim).small()); }
+                                    ui.end_row();
+                                    for (_, val) in &scores {
+                                        let c = if *val >= 7.0 { chart_green } else if *val >= 4.0 { chart_gold } else { chart_red };
+                                        ui.label(egui::RichText::new(format!("{:.1}", val)).color(c).strong());
+                                    }
+                                    ui.end_row();
+                                });
+                            }
+                            // Benchmark
+                            if let Some(ref bench) = det.benchmark {
+                                ui.horizontal(|ui| {
+                                    let ac = if bench.alpha >= 0.0 { chart_green } else { chart_red };
+                                    ui.label(egui::RichText::new(format!("Alpha: {:.4}", bench.alpha)).color(ac).small());
+                                    ui.label(egui::RichText::new(format!("Beta: {:.3}  IR: {:.3}", bench.beta, bench.information_ratio)).color(dim).small());
+                                });
+                            }
+                            // MAE/MFE + Slippage
+                            ui.horizontal(|ui| {
+                                if let Some(ref mae) = det.mae_mfe {
+                                    ui.label(egui::RichText::new(format!("MAE {:.2}%  MFE {:.2}%  Ratio {:.2}", mae.avg_mae_pct, mae.avg_mfe_pct, mae.mae_mfe_ratio)).color(dim).small());
+                                }
+                                if let Some(ref slip) = det.slippage {
+                                    ui.label(egui::RichText::new(format!("Slip {:.4}% (${:.0})", slip.avg_slippage_pct, slip.total_slippage_cost)).color(dim).small());
+                                }
+                            });
+                            // Autocorrelation
+                            if let Some(ref ac) = det.autocorrelation {
+                                let rc = if ac.is_random { chart_green } else { chart_gold };
+                                ui.label(egui::RichText::new(format!("Autocorr L1:{:.3} L2:{:.3} L3:{:.3} — {}", ac.lag1, ac.lag2, ac.lag3, ac.interpretation)).color(rc).small());
+                            }
+                            // Hold Time buckets as bar chart
+                            if let Some(ref ht) = det.hold_time {
+                                if !ht.buckets.is_empty() {
+                                    let bars: Vec<PlotBar> = ht.buckets.iter().enumerate().map(|(i, (_, _, avg_pnl))| {
+                                        let c = if *avg_pnl >= 0.0 { chart_green } else { chart_red };
+                                        PlotBar::new(i as f64, *avg_pnl).width(0.7).fill(c)
+                                    }).collect();
+                                    let chart = BarChart::new("Hold Time Avg P&L", bars);
+                                    Plot::new(format!("ht_{}", det.ticker))
+                                        .height(60.0)
+                                        .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                        .show_axes([false, true])
+                                        .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+                                }
+                            }
+                            // Open Positions
+                            if !det.open_positions.is_empty() {
+                                ui.label(egui::RichText::new(format!("Open Positions ({})", det.open_positions.len())).small().strong());
+                                for p in &det.open_positions {
+                                    let sc = if p.side == "buy" { chart_green } else { chart_red };
+                                    ui.label(egui::RichText::new(format!("  {} {} {:.2} @ {}", p.symbol, p.side, p.total_volume, format_price(p.avg_price))).color(sc).small());
+                                }
+                            }
+                            // Recent Deals (compact)
+                            if !det.recent_deals.is_empty() {
+                                ui.label(egui::RichText::new(format!("Recent Deals ({})", det.recent_deals.len())).small().strong());
+                                egui::Grid::new(format!("deals_{}", det.ticker)).striped(true).num_columns(5).show(ui, |ui| {
+                                    for d in det.recent_deals.iter().take(10) {
+                                        ui.label(egui::RichText::new(&d.time).color(dim).small());
+                                        ui.label(egui::RichText::new(&d.symbol).small());
+                                        let tc = if d.deal_type == "buy" { chart_green } else { chart_red };
+                                        ui.label(egui::RichText::new(&d.deal_type).color(tc).small());
+                                        ui.label(egui::RichText::new(format!("{:.2}", d.volume)).color(dim).small());
+                                        let pc = if d.profit >= 0.0 { chart_green } else { chart_red };
+                                        ui.label(egui::RichText::new(format!("${:.0}", d.profit)).color(pc).small());
+                                        ui.end_row();
+                                    }
+                                });
+                            }
+                        });
+                    } // end for det
+
+                    // ── Floating Equity (compact) ─────────────────────────────────
+                    if let Some(ref float_eq) = self.bg.floating_equity {
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Floating Equity").strong());
+                            ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_floating_equity)).color(chart_gold).strong());
+                        });
+                        egui::Grid::new("float_eq").striped(true).num_columns(4).min_col_width(70.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("DARWIN").color(dim).small());
+                            ui.label(egui::RichText::new("Closed").color(dim).small());
+                            ui.label(egui::RichText::new("Unreal").color(dim).small());
+                            ui.label(egui::RichText::new("Float").color(dim).small());
                             ui.end_row();
+                            for d in &float_eq.darwins {
+                                ui.label(egui::RichText::new(&d.darwin_ticker).small());
+                                ui.label(egui::RichText::new(format!("${:.0}", d.closed_balance)).small());
+                                let uc = if d.unrealized_pnl >= 0.0 { chart_green } else { chart_red };
+                                ui.label(egui::RichText::new(format!("${:.0}", d.unrealized_pnl)).color(uc).small());
+                                ui.label(egui::RichText::new(format!("${:.0}", d.floating_equity)).small());
+                                ui.end_row();
+                            }
                         });
                     }
 
-                    // ── XLSX Import section (async via broker channel) ──────────────────
-                    ui.add_space(10.0);
+                    // ── Import / Tools (compact) ──────────────────────────────────
+                    ui.add_space(6.0);
                     ui.separator();
-                    ui.heading("Import DARWIN XLSX");
-                    if self.darwin_xlsx_dir.is_empty() {
-                        ui.label(egui::RichText::new("Set DARWIN XLSX directory in Settings to enable auto-import.").color(AXIS_TEXT));
-                    } else {
-                        ui.label(egui::RichText::new(format!("Dir: {}", self.darwin_xlsx_dir)).color(AXIS_TEXT).small());
-                        if ui.button("Import All XLSX Now").clicked() {
-                            let mut db_path = dirs_home();
-                            db_path.push("cache");
-                            db_path.push("typhoon_cache.db");
-                            let _ = self.broker_tx.send(BrokerCmd::DarwinImportAll {
-                                dir: PathBuf::from(&self.darwin_xlsx_dir),
-                                db_path,
-                            });
-                            self.log.push_back(LogEntry::info(format!("DARWIN XLSX import started from {}", self.darwin_xlsx_dir)));
+                    ui.horizontal(|ui| {
+                        if !self.darwin_xlsx_dir.is_empty() {
+                            if ui.small_button("Import All XLSX Now").clicked() {
+                                let mut db_path = dirs_home();
+                                db_path.push("cache");
+                                db_path.push("typhoon_cache.db");
+                                let _ = self.broker_tx.send(BrokerCmd::DarwinImportAll {
+                                    dir: PathBuf::from(&self.darwin_xlsx_dir),
+                                    db_path,
+                                });
+                                self.log.push_back(LogEntry::info(format!("DARWIN XLSX import started from {}", self.darwin_xlsx_dir)));
+                            }
                         }
-                    }
-                    // ── Daily Risk Report (button-triggered) ──────────────────────
-                    ui.add_space(10.0);
-                    ui.separator();
-                    if ui.button("Generate Daily Risk Report").clicked() {
-                        if let Some(ref cache) = self.cache {
-                            if let Some(conn) = cache.try_connection() {
-                                match darwin::generate_daily_report(&conn) {
-                                    Ok(report) => {
-                                        self.log.push_back(LogEntry::info(format!(
-                                            "Daily Report {}: Equity ${:.0}, P&L ${:.2} ({:.2}%), VaR95 {:.2}%, DD {:.2}%, {} positions, ${:.0} notional",
-                                            report.date, report.portfolio_equity, report.daily_pnl,
-                                            report.daily_return_pct, report.current_var_95,
-                                            report.current_drawdown_pct, report.open_position_count, report.total_notional
-                                        )));
-                                        if !report.top_gainers.is_empty() {
-                                            let gainers: Vec<String> = report.top_gainers.iter().map(|(s, p)| format!("{} +${:.0}", s, p)).collect();
-                                            self.log.push_back(LogEntry::info(format!("Top gainers: {}", gainers.join(", "))));
+                        if ui.small_button("Daily Risk Report").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Some(conn) = cache.try_connection() {
+                                    match darwin::generate_daily_report(&conn) {
+                                        Ok(report) => {
+                                            self.log.push_back(LogEntry::info(format!(
+                                                "Daily Report {}: Equity ${:.0}, P&L ${:.2} ({:.2}%), VaR95 {:.2}%, DD {:.2}%",
+                                                report.date, report.portfolio_equity, report.daily_pnl,
+                                                report.daily_return_pct, report.current_var_95, report.current_drawdown_pct
+                                            )));
                                         }
-                                        if !report.top_losers.is_empty() {
-                                            let losers: Vec<String> = report.top_losers.iter().map(|(s, p)| format!("{} ${:.0}", s, p)).collect();
-                                            self.log.push_back(LogEntry::info(format!("Top losers: {}", losers.join(", "))));
-                                        }
+                                        Err(e) => { self.log.push_back(LogEntry::err(format!("Report error: {}", e))); }
                                     }
-                                    Err(e) => { self.log.push_back(LogEntry::err(format!("Report error: {}", e))); }
                                 }
                             }
                         }
-                    }
-
-                    // ── Export & FTP (button-triggered) ──────────────────────────────
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button("Export Radar TXT").clicked() {
+                        if ui.small_button("Export Radar TXT").clicked() {
                             if let Some(ref cache) = self.cache {
                                 if let Some(conn) = cache.try_connection() {
                                     let mut out = dirs_home();
@@ -6777,38 +6615,20 @@ impl TyphooNApp {
                                 }
                             }
                         }
+                        let ftp_available = !self.darwin_ftp_dir.is_empty();
+                        if ftp_available {
+                            if ui.small_button("FTP Scan").clicked() {
+                                let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                                self.log.push_back(LogEntry::info("FTP scan started (async)..."));
+                            }
+                        }
                     });
 
-                    // ── FTP Scanner (button-triggered) ─────
-                    ui.add_space(5.0);
-                    ui.label(egui::RichText::new("Darwinex FTP Scanner").small().strong());
-                    ui.label(egui::RichText::new("Set FTP Dir in Settings to enable FTP-based features:").color(AXIS_TEXT).small());
-                    ui.label(egui::RichText::new("  find_low_correlation_darwins, scan_darwin_ftp,").color(AXIS_TEXT).small());
-                    ui.label(egui::RichText::new("  get_darwin_price_series, get_dscore_components, get_investor_flow").color(AXIS_TEXT).small());
-                    let ftp_available = !self.darwin_ftp_dir.is_empty(); // Don't stat() NAS path every frame
-                    if ftp_available {
-                        if ui.button("Scan FTP for Low-Correlation DARWINs").clicked() {
-                            // Runs via DARWIN_SCAN command — non-blocking
-                            let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
-                            self.log.push_back(LogEntry::info("FTP low-correlation scan started (async)..."));
-                        }
-                        if ui.button("Scan FTP for DARWINs (min 90d, >5% return, <30% DD)").clicked() {
-                            let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
-                            self.log.push_back(LogEntry::info("FTP universe scan started (async)..."));
-                        }
-                        ui.label(egui::RichText::new("Use DARWIN_BROWSER for detailed analysis.").color(AXIS_TEXT).small());
-                    } else {
-                        ui.label(egui::RichText::new("Set FTP Dir in Settings to enable scanning.").color(AXIS_TEXT).small());
-                    }
-
-                    // ── Delete Account (button-triggered) ───────────────────────────
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.label(egui::RichText::new("Delete Account").color(DOWN));
+                    // ── Delete Account (compact) ──
                     ui.horizontal(|ui| {
-                        ui.label("Ticker:");
-                        ui.add(egui::TextEdit::singleline(&mut self.darwin_import_ticker).desired_width(80.0));
-                        if ui.button(egui::RichText::new("Delete").color(BTN_RED_TEXT)).clicked() {
+                        ui.label(egui::RichText::new("Delete:").color(dim).small());
+                        ui.add(egui::TextEdit::singleline(&mut self.darwin_import_ticker).desired_width(60.0));
+                        if ui.small_button(egui::RichText::new("Delete").color(chart_red)).clicked() {
                             let ticker = self.darwin_import_ticker.trim().to_string();
                             if !ticker.is_empty() {
                                 if let Some(ref cache) = self.cache {
@@ -6822,6 +6642,7 @@ impl TyphooNApp {
                             }
                         }
                     });
+                    }); // ScrollArea
                 });
         }
 
