@@ -15,22 +15,33 @@ use wgpu;
 pub struct GpuCompute {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
-    /// Bar data in VRAM: [timestamp, open, high, low, close, volume] × bar_count
+    /// Bar data in VRAM: close prices (f32 per bar) for simple indicators
     bar_buffer: Option<wgpu::Buffer>,
+    /// OHLC data in VRAM: [high, low, close] interleaved (3 × f32 per bar) for ATR/Stoch/ADX
+    ohlc_buffer: Option<wgpu::Buffer>,
+    /// Midpoint data in VRAM: (high+low)/2 per bar for Fisher Transform
+    mid_buffer: Option<wgpu::Buffer>,
     /// Number of bars currently in GPU buffer.
     bar_count: u32,
     /// SMA output buffer (one f32 per bar).
     sma_buffer: Option<wgpu::Buffer>,
     /// EMA output buffer.
     ema_buffer: Option<wgpu::Buffer>,
-    /// Compute pipeline for SMA.
-    sma_pipeline: wgpu::ComputePipeline,
-    /// Compute pipeline for EMA.
-    ema_pipeline: wgpu::ComputePipeline,
     /// Bind group layout for indicator shaders.
     bind_group_layout: wgpu::BindGroupLayout,
     /// Staging buffer for CPU readback.
     readback_buffer: Option<wgpu::Buffer>,
+    // ─── Compute pipelines ───
+    sma_pipeline: wgpu::ComputePipeline,
+    ema_pipeline: wgpu::ComputePipeline,
+    rsi_pipeline: wgpu::ComputePipeline,
+    kama_pipeline: wgpu::ComputePipeline,
+    atr_pipeline: wgpu::ComputePipeline,
+    bollinger_pipeline: wgpu::ComputePipeline,
+    macd_pipeline: wgpu::ComputePipeline,
+    fisher_pipeline: wgpu::ComputePipeline,
+    stochastic_pipeline: wgpu::ComputePipeline,
+    adx_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuCompute {
@@ -109,61 +120,313 @@ impl GpuCompute {
             cache: None,
         });
 
+        // Create all indicator pipelines using same bind group layout
+        let make_pipeline = |label: &str, source: &str| -> wgpu::ComputePipeline {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label), source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(label), layout: Some(&pipeline_layout), module: &shader,
+                entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+            })
+        };
+        let rsi_pipeline = make_pipeline("rsi_pipeline", RSI_SHADER);
+        let kama_pipeline = make_pipeline("kama_pipeline", KAMA_SHADER);
+        let atr_pipeline = make_pipeline("atr_pipeline", ATR_SHADER);
+        let bollinger_pipeline = make_pipeline("bollinger_pipeline", BOLLINGER_SHADER);
+        let macd_pipeline = make_pipeline("macd_pipeline", MACD_SHADER);
+        let fisher_pipeline = make_pipeline("fisher_pipeline", FISHER_SHADER);
+        let stochastic_pipeline = make_pipeline("stochastic_pipeline", STOCHASTIC_SHADER);
+        let adx_pipeline = make_pipeline("adx_pipeline", ADX_SHADER);
+
         Self {
             device,
             queue,
             bar_buffer: None,
+            ohlc_buffer: None,
+            mid_buffer: None,
             bar_count: 0,
             sma_buffer: None,
             ema_buffer: None,
             sma_pipeline,
             ema_pipeline,
+            rsi_pipeline,
+            kama_pipeline,
+            atr_pipeline,
+            bollinger_pipeline,
+            macd_pipeline,
+            fisher_pipeline,
+            stochastic_pipeline,
+            adx_pipeline,
             bind_group_layout,
             readback_buffer: None,
         }
     }
 
     /// Upload bar data to VRAM. Called once per symbol/timeframe load.
-    /// Data format: [close_0, close_1, ..., close_n] as f32 array.
+    /// `closes`: close prices (f32 per bar) — used by SMA, EMA, RSI, KAMA, Bollinger, MACD
+    /// `highs`, `lows`: used by ATR, Stochastic, ADX, Fisher
     pub fn upload_bars(&mut self, closes: &[f32]) {
+        self.upload_bars_full(closes, &[], &[]);
+    }
+
+    /// Upload full OHLC data to VRAM.
+    pub fn upload_bars_full(&mut self, closes: &[f32], highs: &[f32], lows: &[f32]) {
         let bar_count = closes.len() as u32;
         self.bar_count = bar_count;
 
-        // Create bar buffer in VRAM
+        // Close prices buffer (used by most indicators)
         self.bar_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bar_data"),
-            size: (bar_count as u64) * 4, // f32 per bar
+            size: (bar_count as u64) * 4,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
-
-        // Upload close prices
         if let Some(ref buf) = self.bar_buffer {
             self.queue.write_buffer(buf, 0, bytemuck_cast_slice(closes));
         }
 
-        // Create output buffers
+        // OHLC interleaved buffer [h0,l0,c0, h1,l1,c1, ...] for ATR/Stoch/ADX
+        if highs.len() == closes.len() && lows.len() == closes.len() {
+            let mut ohlc = Vec::with_capacity(bar_count as usize * 3);
+            for i in 0..bar_count as usize {
+                ohlc.push(highs[i]);
+                ohlc.push(lows[i]);
+                ohlc.push(closes[i]);
+            }
+            self.ohlc_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("ohlc_data"),
+                size: (bar_count as u64) * 12, // 3 × f32 per bar
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            if let Some(ref buf) = self.ohlc_buffer {
+                self.queue.write_buffer(buf, 0, bytemuck_cast_slice(&ohlc));
+            }
+
+            // Midpoints (high+low)/2 for Fisher Transform
+            let mids: Vec<f32> = (0..bar_count as usize).map(|i| (highs[i] + lows[i]) / 2.0).collect();
+            self.mid_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("mid_data"),
+                size: (bar_count as u64) * 4,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            if let Some(ref buf) = self.mid_buffer {
+                self.queue.write_buffer(buf, 0, bytemuck_cast_slice(&mids));
+            }
+        }
+
+        // Output buffers (reusable — allocate max size needed)
         let out_size = (bar_count as u64) * 4;
+        let out_size_3x = (bar_count as u64) * 12; // for Bollinger, MACD, ADX (3 outputs per bar)
         self.sma_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("sma_output"),
-            size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
+            label: Some("sma_output"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
         }));
         self.ema_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ema_output"),
-            size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
+            label: Some("ema_output"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
         }));
 
-        // Readback staging buffer
+        // Readback staging buffer (large enough for 3x output)
         self.readback_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"),
-            size: out_size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+            label: Some("readback"), size: out_size_3x,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         }));
+    }
+
+    /// Generic dispatch: run a compute pipeline with close prices as input, return f32 per bar.
+    fn dispatch_indicator(&self, pipeline: &wgpu::ComputePipeline, period: u32, parallel: bool) -> Option<Vec<f32>> {
+        if self.bar_count == 0 { return None; }
+        let bar_buf = self.bar_buffer.as_ref()?;
+        let rb_buf = self.readback_buffer.as_ref()?;
+
+        let out_size = (self.bar_count as u64) * 4;
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ind_out"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+
+        let params = [period, self.bar_count];
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ind_params"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ind_bg"), layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("ind_pass"), timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            if parallel {
+                pass.dispatch_workgroups((self.bar_count + 255) / 256, 1, 1);
+            } else {
+                pass.dispatch_workgroups(1, 1, 1);
+            }
+        }
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, out_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = rb_buf.slice(0..out_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
+    }
+
+    /// Generic dispatch with OHLC input (for ATR, Stochastic, ADX)
+    fn dispatch_ohlc_indicator(&self, pipeline: &wgpu::ComputePipeline, period: u32, out_per_bar: u32) -> Option<Vec<f32>> {
+        if self.bar_count == 0 { return None; }
+        let ohlc_buf = self.ohlc_buffer.as_ref()?;
+        let rb_buf = self.readback_buffer.as_ref()?;
+
+        let out_size = (self.bar_count as u64) * (out_per_bar as u64) * 4;
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ohlc_ind_out"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+
+        let params = [period, self.bar_count];
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ohlc_ind_params"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ohlc_ind_bg"), layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: ohlc_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("ohlc_ind_pass"), timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1); // sequential for these indicators
+        }
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, out_size.min(rb_buf.size()));
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let read_size = out_size.min(rb_buf.size());
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
+    }
+
+    // ─── Public indicator compute methods ───
+
+    /// Compute RSI on GPU. Returns f32 per bar.
+    pub fn compute_rsi_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.rsi_pipeline, period, false)
+    }
+
+    /// Compute KAMA on GPU. Returns f32 per bar.
+    pub fn compute_kama_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.kama_pipeline, period, false)
+    }
+
+    /// Compute Bollinger Bands on GPU. Returns [mid, upper, lower] × bar_count.
+    pub fn compute_bollinger_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.bollinger_pipeline, period, true)
+    }
+
+    /// Compute MACD on GPU. Returns [macd, signal, histogram] × bar_count.
+    pub fn compute_macd_gpu(&self) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.macd_pipeline, 0, false)
+    }
+
+    /// Compute ATR on GPU. Returns f32 per bar. Requires OHLC upload.
+    pub fn compute_atr_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.atr_pipeline, period, 1)
+    }
+
+    /// Compute Fisher Transform on GPU. Returns [fisher, trigger] × bar_count.
+    pub fn compute_fisher_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        if self.bar_count == 0 { return None; }
+        let mid_buf = self.mid_buffer.as_ref()?;
+        let rb_buf = self.readback_buffer.as_ref()?;
+
+        let out_size = (self.bar_count as u64) * 2 * 4;
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("fisher_out"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let params = [period, self.bar_count];
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("fisher_params"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("fisher_bg"), layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: mid_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fisher_pass"), timestamp_writes: None });
+            pass.set_pipeline(&self.fisher_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        let read_size = out_size.min(rb_buf.size());
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
+    }
+
+    /// Compute Stochastic on GPU. Returns [%K, %D] × bar_count. Requires OHLC upload.
+    pub fn compute_stochastic_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.stochastic_pipeline, period, 2)
+    }
+
+    /// Compute ADX on GPU. Returns [adx, +DI, -DI] × bar_count. Requires OHLC upload.
+    pub fn compute_adx_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.adx_pipeline, period, 3)
     }
 
     /// Dispatch SMA compute shader. Results stay in VRAM.
@@ -859,5 +1122,413 @@ fn main() {
         ema = bars[i] * k + ema * (1.0 - k);
         output[i] = ema;
     }
+}
+"#;
+
+// ─── Additional Indicator Shaders ────────────────────────────────────────────
+
+const RSI_SHADER: &str = r#"
+// RSI Compute Shader — sequential (running average of gains/losses)
+struct Params {
+    period: u32,
+    bar_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> bars: array<f32>;   // close prices
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    if (params.bar_count <= params.period) { return; }
+
+    // Initial average gain/loss over first `period` changes
+    var avg_gain: f32 = 0.0;
+    var avg_loss: f32 = 0.0;
+    for (var i: u32 = 1u; i <= params.period; i = i + 1u) {
+        let change = bars[i] - bars[i - 1u];
+        if (change > 0.0) { avg_gain = avg_gain + change; }
+        else { avg_loss = avg_loss - change; }
+        output[i - 1u] = 50.0;
+    }
+    avg_gain = avg_gain / f32(params.period);
+    avg_loss = avg_loss / f32(params.period);
+
+    let rs = select(avg_gain / avg_loss, 100.0, avg_loss < 0.000001);
+    output[params.period] = 100.0 - 100.0 / (1.0 + rs);
+
+    // Smoothed RSI
+    for (var i: u32 = params.period + 1u; i < params.bar_count; i = i + 1u) {
+        let change = bars[i] - bars[i - 1u];
+        let gain = select(change, 0.0, change < 0.0);
+        let loss = select(-change, 0.0, change > 0.0);
+        avg_gain = (avg_gain * f32(params.period - 1u) + gain) / f32(params.period);
+        avg_loss = (avg_loss * f32(params.period - 1u) + loss) / f32(params.period);
+        let rs2 = select(avg_gain / avg_loss, 100.0, avg_loss < 0.000001);
+        output[i] = 100.0 - 100.0 / (1.0 + rs2);
+    }
+}
+"#;
+
+const KAMA_SHADER: &str = r#"
+// KAMA (Kaufman Adaptive Moving Average) Compute Shader — sequential
+// KAMA adapts its smoothing constant based on market efficiency ratio
+struct Params {
+    period: u32,       // efficiency ratio lookback (e.g., 10)
+    bar_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> bars: array<f32>;   // close prices
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let fast_sc: f32 = 2.0 / 3.0;   // fast period = 2
+    let slow_sc: f32 = 2.0 / 31.0;  // slow period = 30
+
+    // Seed KAMA with first close
+    var kama: f32 = bars[0];
+    output[0] = kama;
+    for (var i: u32 = 1u; i < params.period; i = i + 1u) {
+        output[i] = bars[i];
+        kama = bars[i];
+    }
+
+    // Compute KAMA
+    for (var i: u32 = params.period; i < params.bar_count; i = i + 1u) {
+        // Direction: absolute price change over period
+        let direction = abs(bars[i] - bars[i - params.period]);
+        // Volatility: sum of absolute bar-to-bar changes over period
+        var volatility: f32 = 0.0;
+        for (var j: u32 = i - params.period + 1u; j <= i; j = j + 1u) {
+            volatility = volatility + abs(bars[j] - bars[j - 1u]);
+        }
+        // Efficiency Ratio
+        let er = select(direction / volatility, 0.0, volatility < 0.000001);
+        // Smoothing Constant = (ER × (fast_sc - slow_sc) + slow_sc)²
+        let sc = er * (fast_sc - slow_sc) + slow_sc;
+        let sc2 = sc * sc;
+        // KAMA
+        kama = kama + sc2 * (bars[i] - kama);
+        output[i] = kama;
+    }
+}
+"#;
+
+const ATR_SHADER: &str = r#"
+// ATR Compute Shader — sequential (smoothed True Range)
+// Input: interleaved [high, low, close] per bar = 3 floats per bar
+struct Params {
+    period: u32,
+    bar_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h0,l0,c0, h1,l1,c1, ...]
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    if (params.bar_count < 2u) { return; }
+    output[0] = bars[0] - bars[1];  // first TR = high - low
+
+    // Compute True Range for all bars
+    var atr_sum: f32 = bars[0] - bars[1]; // first bar TR
+    for (var i: u32 = 1u; i < params.bar_count; i = i + 1u) {
+        let h = bars[i * 3u];
+        let l = bars[i * 3u + 1u];
+        let prev_c = bars[(i - 1u) * 3u + 2u];
+        let tr1 = h - l;
+        let tr2 = abs(h - prev_c);
+        let tr3 = abs(l - prev_c);
+        let tr = max(tr1, max(tr2, tr3));
+
+        if (i < params.period) {
+            atr_sum = atr_sum + tr;
+            output[i] = 0.0;
+        } else if (i == params.period) {
+            atr_sum = atr_sum + tr;
+            output[i] = atr_sum / f32(params.period);
+        } else {
+            // Smoothed ATR
+            output[i] = (output[i - 1u] * f32(params.period - 1u) + tr) / f32(params.period);
+        }
+    }
+}
+"#;
+
+const BOLLINGER_SHADER: &str = r#"
+// Bollinger Bands Compute Shader — parallel per-bar
+// Each thread computes SMA + stddev for its lookback window
+// Output: [middle, upper, lower] per bar = 3 floats per bar
+struct Params {
+    period: u32,
+    bar_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;  // [mid0, up0, lo0, mid1, ...]
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { return; }
+
+    if (i < params.period - 1u) {
+        output[i * 3u] = 0.0;
+        output[i * 3u + 1u] = 0.0;
+        output[i * 3u + 2u] = 0.0;
+        return;
+    }
+
+    // SMA
+    var sum: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        sum = sum + bars[i - j];
+    }
+    let sma = sum / f32(params.period);
+
+    // Standard deviation
+    var var_sum: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        let d = bars[i - j] - sma;
+        var_sum = var_sum + d * d;
+    }
+    let std = sqrt(var_sum / f32(params.period));
+
+    output[i * 3u] = sma;
+    output[i * 3u + 1u] = sma + 2.0 * std;
+    output[i * 3u + 2u] = sma - 2.0 * std;
+}
+"#;
+
+const MACD_SHADER: &str = r#"
+// MACD Compute Shader — sequential (two EMAs + signal EMA)
+// Output: [macd_line, signal, histogram] per bar = 3 floats per bar
+struct Params {
+    period: u32,       // unused (fast=12, slow=26, signal=9 hardcoded)
+    bar_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;  // [macd0, sig0, hist0, ...]
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let k_fast: f32 = 2.0 / 13.0;  // EMA(12)
+    let k_slow: f32 = 2.0 / 27.0;  // EMA(26)
+    let k_sig: f32 = 2.0 / 10.0;   // EMA(9) of MACD
+
+    // Seed EMAs
+    var ema_fast: f32 = bars[0];
+    var ema_slow: f32 = bars[0];
+    var signal: f32 = 0.0;
+    var macd_started: bool = false;
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i == 0u) {
+            ema_fast = bars[0]; ema_slow = bars[0];
+        } else {
+            ema_fast = bars[i] * k_fast + ema_fast * (1.0 - k_fast);
+            ema_slow = bars[i] * k_slow + ema_slow * (1.0 - k_slow);
+        }
+        let macd_line = ema_fast - ema_slow;
+
+        if (i >= 26u && !macd_started) {
+            signal = macd_line;
+            macd_started = true;
+        } else if (macd_started) {
+            signal = macd_line * k_sig + signal * (1.0 - k_sig);
+        }
+
+        let hist = macd_line - signal;
+        output[i * 3u] = macd_line;
+        output[i * 3u + 1u] = signal;
+        output[i * 3u + 2u] = hist;
+    }
+}
+"#;
+
+const FISHER_SHADER: &str = r#"
+// Fisher Transform Compute Shader — sequential
+// Ehlers Fisher Transform of normalized price
+struct Params {
+    period: u32,
+    bar_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // (high+low)/2 midpoints
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;  // [fisher, trigger] per bar
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    var fish: f32 = 0.0;
+    var prev_fish: f32 = 0.0;
+    var val: f32 = 0.0;
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i < params.period) {
+            output[i * 2u] = 0.0;
+            output[i * 2u + 1u] = 0.0;
+            continue;
+        }
+
+        // Find highest high and lowest low in period
+        var highest: f32 = -1000000.0;
+        var lowest: f32 = 1000000.0;
+        for (var j: u32 = i - params.period + 1u; j <= i; j = j + 1u) {
+            if (bars[j] > highest) { highest = bars[j]; }
+            if (bars[j] < lowest) { lowest = bars[j]; }
+        }
+
+        // Normalize to -1..+1 range
+        let range = highest - lowest;
+        var raw: f32 = 0.0;
+        if (range > 0.000001) {
+            raw = 2.0 * (bars[i] - lowest) / range - 1.0;
+        }
+        // Clamp to (-0.999, 0.999)
+        raw = max(-0.999, min(0.999, raw));
+        // Smooth
+        val = 0.33 * raw + 0.67 * val;
+        val = max(-0.999, min(0.999, val));
+
+        // Fisher transform
+        prev_fish = fish;
+        fish = 0.5 * log((1.0 + val) / (1.0 - val));
+
+        output[i * 2u] = fish;
+        output[i * 2u + 1u] = prev_fish;  // trigger = previous fisher
+    }
+}
+"#;
+
+const STOCHASTIC_SHADER: &str = r#"
+// Stochastic Oscillator — parallel per-bar for %K, then sequential for %D
+// Input: [high, low, close] interleaved (3 floats per bar)
+// Output: [k, d] per bar (2 floats per bar)
+struct Params {
+    period: u32,       // %K period (e.g., 14)
+    bar_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h0,l0,c0, h1,l1,c1, ...]
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;  // [k0,d0, k1,d1, ...]
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let d_period: u32 = 3u;  // %D smoothing period
+
+    // Compute raw %K
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i < params.period - 1u) {
+            output[i * 2u] = 50.0;
+            output[i * 2u + 1u] = 50.0;
+            continue;
+        }
+        var highest: f32 = -1000000.0;
+        var lowest: f32 = 1000000.0;
+        for (var j: u32 = i - params.period + 1u; j <= i; j = j + 1u) {
+            let h = bars[j * 3u];
+            let l = bars[j * 3u + 1u];
+            if (h > highest) { highest = h; }
+            if (l < lowest) { lowest = l; }
+        }
+        let close = bars[i * 3u + 2u];
+        let range = highest - lowest;
+        let k = select((close - lowest) / range * 100.0, 50.0, range < 0.000001);
+        output[i * 2u] = k;
+    }
+
+    // Compute %D (3-period SMA of %K)
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i < params.period + d_period - 2u) {
+            output[i * 2u + 1u] = output[i * 2u];
+            continue;
+        }
+        var sum: f32 = 0.0;
+        for (var j: u32 = 0u; j < d_period; j = j + 1u) {
+            sum = sum + output[(i - j) * 2u];
+        }
+        output[i * 2u + 1u] = sum / f32(d_period);
+    }
+}
+"#;
+
+const ADX_SHADER: &str = r#"
+// ADX (Average Directional Index) Compute Shader — sequential
+// Input: [high, low, close] interleaved (3 floats per bar)
+// Output: [adx, plus_di, minus_di] per bar (3 floats per bar)
+struct Params {
+    period: u32,       // ADX period (e.g., 14)
+    bar_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h0,l0,c0, ...]
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;  // [adx,+di,-di, ...]
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    if (params.bar_count < 2u) { return; }
+
+    var smooth_plus_dm: f32 = 0.0;
+    var smooth_minus_dm: f32 = 0.0;
+    var smooth_tr: f32 = 0.0;
+    var smooth_dx: f32 = 0.0;
+    let p = f32(params.period);
+
+    for (var i: u32 = 1u; i < params.bar_count; i = i + 1u) {
+        let h = bars[i * 3u];
+        let l = bars[i * 3u + 1u];
+        let prev_h = bars[(i - 1u) * 3u];
+        let prev_l = bars[(i - 1u) * 3u + 1u];
+        let prev_c = bars[(i - 1u) * 3u + 2u];
+
+        // True Range
+        let tr = max(h - l, max(abs(h - prev_c), abs(l - prev_c)));
+
+        // Directional Movement
+        let up_move = h - prev_h;
+        let down_move = prev_l - l;
+        var plus_dm: f32 = 0.0;
+        var minus_dm: f32 = 0.0;
+        if (up_move > down_move && up_move > 0.0) { plus_dm = up_move; }
+        if (down_move > up_move && down_move > 0.0) { minus_dm = down_move; }
+
+        if (i <= params.period) {
+            smooth_plus_dm = smooth_plus_dm + plus_dm;
+            smooth_minus_dm = smooth_minus_dm + minus_dm;
+            smooth_tr = smooth_tr + tr;
+            output[i * 3u] = 0.0;
+            output[i * 3u + 1u] = 0.0;
+            output[i * 3u + 2u] = 0.0;
+        } else {
+            smooth_plus_dm = smooth_plus_dm - smooth_plus_dm / p + plus_dm;
+            smooth_minus_dm = smooth_minus_dm - smooth_minus_dm / p + minus_dm;
+            smooth_tr = smooth_tr - smooth_tr / p + tr;
+
+            let plus_di = select(100.0 * smooth_plus_dm / smooth_tr, 0.0, smooth_tr < 0.000001);
+            let minus_di = select(100.0 * smooth_minus_dm / smooth_tr, 0.0, smooth_tr < 0.000001);
+            let di_sum = plus_di + minus_di;
+            let dx = select(100.0 * abs(plus_di - minus_di) / di_sum, 0.0, di_sum < 0.000001);
+
+            if (i == params.period + 1u) {
+                smooth_dx = dx;
+            } else {
+                smooth_dx = (smooth_dx * (p - 1.0) + dx) / p;
+            }
+
+            output[i * 3u] = smooth_dx;
+            output[i * 3u + 1u] = plus_di;
+            output[i * 3u + 2u] = minus_di;
+        }
+    }
+    output[0] = 0.0; output[1] = 0.0; output[2] = 0.0;
 }
 "#;
