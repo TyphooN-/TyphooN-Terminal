@@ -8775,8 +8775,15 @@ impl TyphooNApp {
                                         let sc = if f.importance_score >= 80 { sec_high } else if f.importance_score >= 50 { sec_med } else { sec_low };
                                         ui.label(egui::RichText::new("Importance").color(sec_low)); ui.label(egui::RichText::new(format!("{}/100", f.importance_score)).color(sc).strong()); ui.end_row();
                                         if !f.url.is_empty() {
-                                            ui.label(egui::RichText::new("EDGAR URL").color(sec_low));
-                                            ui.label(egui::RichText::new(&f.url).small().color(sec_blue).monospace()); ui.end_row();
+                                            ui.label(egui::RichText::new("EDGAR").color(sec_low));
+                                            ui.horizontal(|ui| {
+                                                if ui.add(egui::Label::new(egui::RichText::new(&f.url).small().color(sec_blue).underline()).sense(egui::Sense::click())).clicked() {
+                                                    let _ = std::process::Command::new("xdg-open").arg(&f.url).spawn();
+                                                }
+                                                if ui.small_button("Open in Browser").clicked() {
+                                                    let _ = std::process::Command::new("xdg-open").arg(&f.url).spawn();
+                                                }
+                                            }); ui.end_row();
                                         }
                                         if !f.summary.is_empty() {
                                             ui.label(egui::RichText::new("Summary").color(sec_low));
