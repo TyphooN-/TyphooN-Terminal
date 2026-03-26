@@ -4282,6 +4282,12 @@ enum BrokerCmd {
     DarwinFtpScan { ftp_dir: String, min_days: usize },
     /// Scan DARWIN FTP and compute stats on GPU.
     DarwinGpuScan { ftp_dir: String, min_days: usize },
+    /// Connect to tastytrade broker.
+    TastytradeConnect { username: String, password: String, sandbox: bool },
+    /// Get tastytrade positions.
+    TastytradePositions,
+    /// Get tastytrade option chain.
+    TastytradeOptionChain { symbol: String },
 }
 
 /// Messages sent from async broker task → UI.
@@ -5174,6 +5180,44 @@ impl TyphooNApp {
                         let _ = broker_msg_tx_clone.send(BrokerMsg::SecScrapeResult(
                             format!("Kraken backfill complete: {} {} bars across {} timeframes", symbol, total_bars, timeframes.len())
                         ));
+                    }
+                    BrokerCmd::TastytradeConnect { username, password, sandbox } => {
+                        use typhoon_engine::broker::tastytrade::TastytradeBroker;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let mut broker = TastytradeBroker::new(sandbox);
+                        match broker.login(&username, &password).await {
+                            Ok(session) => {
+                                let acct = broker.account_number().unwrap_or("none").to_string();
+                                let _ = msg_tx.send(BrokerMsg::Connected(format!(
+                                    "tastytrade {} — account {} (token: {}...)",
+                                    if sandbox { "Sandbox" } else { "Production" },
+                                    acct,
+                                    &session.session_token[..session.session_token.len().min(8)]
+                                )));
+                                // Fetch initial positions
+                                if let Ok(positions) = broker.get_positions().await {
+                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                        "tastytrade: {} open positions", positions.len()
+                                    )));
+                                    for p in &positions {
+                                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                            "  {} {} {} {:.0} @ ${:.2}",
+                                            p.symbol, p.instrument_type, p.quantity_direction, p.quantity, p.average_open_price
+                                        )));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = msg_tx.send(BrokerMsg::Error(format!("tastytrade login failed: {}", e)));
+                            }
+                        }
+                    }
+                    BrokerCmd::TastytradePositions => {
+                        // Would need stored broker reference — for now just log
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("tastytrade: use Connect first".into()));
+                    }
+                    BrokerCmd::TastytradeOptionChain { symbol } => {
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("tastytrade option chain for {} — connect first", symbol)));
                     }
                 }
             }
@@ -6524,11 +6568,15 @@ impl TyphooNApp {
                         if self.tt_username.is_empty() || self.tt_password.is_empty() {
                             self.log.push_back(LogEntry::warn("Enter tastytrade username and password"));
                         } else {
+                            let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
+                                username: self.tt_username.clone(),
+                                password: self.tt_password.clone(),
+                                sandbox: self.tt_sandbox,
+                            });
                             self.log.push_back(LogEntry::info(format!(
-                                "tastytrade {} — session auth via REST API (broker module needed in engine)",
+                                "tastytrade {} — connecting...",
                                 if self.tt_sandbox { "Sandbox" } else { "Production" }
                             )));
-                            // tastytrade broker implementation pending in engine/src/broker/tastytrade.rs
                         }
                     }
                     ui.add_space(10.0);
@@ -8254,6 +8302,71 @@ impl TyphooNApp {
                                             self.gpu_opt_combos = sorted_combos;
                                             self.log.push_back(LogEntry::info(format!(
                                                 "GPU Optimizer: {} combos tested in {:.1}ms ({:.0} combos/sec)",
+                                                combo_count, elapsed.as_secs_f64() * 1000.0,
+                                                combo_count as f64 / elapsed.as_secs_f64()
+                                            )));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // NNFX GPU optimizer button (Fisher + KAMA + ATR + ADX)
+                        if gpu_available {
+                            if ui.button(egui::RichText::new("Run NNFX Optimizer").color(egui::Color32::from_rgb(155, 89, 182)).strong()).clicked() && n_bars > 50 {
+                                if let Some(chart) = self.charts.get(self.active_tab) {
+                                    let closes: Vec<f32> = chart.bars.iter().map(|b| b.close as f32).collect();
+                                    let highs: Vec<f32> = chart.bars.iter().map(|b| b.high as f32).collect();
+                                    let lows: Vec<f32> = chart.bars.iter().map(|b| b.low as f32).collect();
+
+                                    // NNFX parameter grid
+                                    let mut nnfx_combos = Vec::new();
+                                    for kama_p in (5..=20).step_by(3) {
+                                        for fisher_p in (10..=40).step_by(5) {
+                                            for adx_thresh in [20.0_f32, 25.0, 30.0] {
+                                                for sl_mult in [1.0_f32, 1.5, 2.0, 2.5] {
+                                                    for tp_mult in [1.5_f32, 2.0, 3.0, 4.0] {
+                                                        nnfx_combos.push(gpu_compute::NnfxParamCombo {
+                                                            kama_period: kama_p,
+                                                            fisher_period: fisher_p,
+                                                            atr_period: 14,
+                                                            adx_period: 14,
+                                                            adx_threshold: adx_thresh,
+                                                            atr_sl_mult: sl_mult,
+                                                            atr_tp_mult: tp_mult,
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let combo_count = nnfx_combos.len();
+                                    if let Some(ref mut bt) = self.gpu_backtester {
+                                        let t = std::time::Instant::now();
+                                        if let Some(results) = bt.evaluate_nnfx(&closes, &highs, &lows, &nnfx_combos) {
+                                            let elapsed = t.elapsed();
+                                            // Sort by Sharpe
+                                            let mut indexed: Vec<(usize, f32)> = results.iter().enumerate().map(|(i, r)| (i, r.sharpe)).collect();
+                                            indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+                                            self.gpu_opt_results = indexed.iter().map(|(i, _)| results[*i].clone()).collect();
+                                            // Map NNFX combos to ParamCombo format for display
+                                            self.gpu_opt_combos = indexed.iter().map(|(i, _)| {
+                                                let nc = &nnfx_combos[*i];
+                                                gpu_compute::ParamCombo {
+                                                    sma_fast: nc.kama_period, // display as "KAMA" in Fast column
+                                                    sma_slow: nc.fisher_period, // display as "Fisher" in Slow column
+                                                    rsi_period: nc.adx_period,
+                                                    rsi_overbought: nc.adx_threshold,
+                                                    rsi_oversold: 0.0,
+                                                    atr_period: nc.atr_period,
+                                                    atr_sl_mult: nc.atr_sl_mult,
+                                                    atr_tp_mult: nc.atr_tp_mult,
+                                                }
+                                            }).collect();
+
+                                            self.log.push_back(LogEntry::info(format!(
+                                                "NNFX Optimizer: {} combos tested in {:.1}ms ({:.0}/sec) — Fisher+KAMA+ATR+ADX",
                                                 combo_count, elapsed.as_secs_f64() * 1000.0,
                                                 combo_count as f64 / elapsed.as_secs_f64()
                                             )));
