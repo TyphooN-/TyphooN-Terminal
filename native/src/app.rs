@@ -4642,22 +4642,47 @@ impl TyphooNApp {
                                                     return;
                                                 }
                                             };
+                                            // Skip tickers updated within 24 hours
+                                            let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24))
+                                                .format("%Y-%m-%dT%H:%M:%SZ").to_string();
                                             let mut ok = 0usize;
                                             let mut fail = 0usize;
+                                            let mut skipped = 0usize;
+                                            let mut consecutive_fail = 0usize;
                                             for ticker in &tickers {
+                                                // Skip if recently updated (within 24h)
+                                                if let Ok(Some(existing)) = fundamentals::get_fundamentals(&conn, ticker) {
+                                                    if existing.last_updated >= cutoff {
+                                                        skipped += 1;
+                                                        continue;
+                                                    }
+                                                }
+                                                // Abort if 10 consecutive failures (likely auth issue)
+                                                if consecutive_fail >= 10 {
+                                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                                        "Aborting: {} consecutive failures. {} OK, {} failed, {} skipped (cached) out of {}",
+                                                        consecutive_fail, ok, fail, skipped, tickers.len()
+                                                    )));
+                                                    break;
+                                                }
                                                 match fundamentals::scrape_ticker(&session, &conn, ticker).await {
                                                     Ok(_f) => {
                                                         ok += 1;
-                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK ({}/{})", ticker, ok, tickers.len())));
+                                                        consecutive_fail = 0;
+                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK ({}/{})", ticker, ok + skipped, tickers.len())));
                                                     }
                                                     Err(e) => {
                                                         fail += 1;
-                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: FAIL — {} ({}/{})", ticker, e, ok + fail, tickers.len())));
+                                                        consecutive_fail += 1;
+                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: FAIL — {} ({}/{})", ticker, e, ok + fail + skipped, tickers.len())));
                                                     }
                                                 }
                                                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                                             }
-                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Fundamentals scrape complete: {} OK, {} failed out of {}", ok, fail, tickers.len())));
+                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                                "Fundamentals scrape complete: {} OK, {} failed, {} skipped (cached <24h) out of {}",
+                                                ok, fail, skipped, tickers.len()
+                                            )));
                                         } else {
                                             let _ = msg_tx.send(BrokerMsg::Error("Fundamentals: could not get DB connection".into()));
                                         }
