@@ -183,6 +183,21 @@ struct LogEntry {
     msg: String,
 }
 
+/// Trade Journal entry for tracking live/paper trades with notes.
+#[derive(Clone)]
+struct JournalEntry {
+    timestamp: String,
+    symbol: String,
+    side: String,      // "BUY" or "SELL"
+    qty: f64,
+    entry_price: f64,
+    exit_price: Option<f64>,
+    pnl: Option<f64>,
+    strategy: String,
+    notes: String,
+    screenshot_path: Option<String>,
+}
+
 impl LogEntry {
     fn info(msg: impl Into<String>) -> Self { Self { level: LogLevel::Info,  msg: msg.into() } }
     fn warn(msg: impl Into<String>) -> Self { Self { level: LogLevel::Warn,  msg: msg.into() } }
@@ -4004,6 +4019,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "DRAW_HLINE",    desc: "Draw horizontal line" },
     Command { name: "DRAW_TRENDLINE",desc: "Draw trendline (2 clicks)" },
     Command { name: "DRAW_FIBO",     desc: "Draw Fibonacci retracement" },
+    Command { name: "JOURNAL",       desc: "Trade Journal — log trades with notes" },
     Command { name: "DRAW_VLINE",    desc: "Draw vertical line" },
     Command { name: "DRAW_RECT",     desc: "Draw rectangle zone" },
     Command { name: "DRAW_RAY",      desc: "Draw ray (extends right)" },
@@ -4492,6 +4508,8 @@ pub struct TyphooNApp {
     show_volume_profile: bool,
     show_order_flow: bool,
     show_bookmap: bool,
+    show_journal: bool,
+    journal_entries: Vec<JournalEntry>,
     show_var_mult: bool,
     show_margin_monitor: bool,
     show_cache_stats: bool,
@@ -5350,6 +5368,8 @@ impl TyphooNApp {
             show_volume_profile: false,
             show_order_flow: false,
             show_bookmap: false,
+            show_journal: false,
+            journal_entries: Vec::new(),
             show_var_mult: false,
             show_margin_monitor: false,
             show_cache_stats: false,
@@ -5838,6 +5858,7 @@ impl TyphooNApp {
             "VOLUME_PROFILE"=> self.show_volume_profile = true,
             "ORDER_FLOW"    => self.show_order_flow = true,
             "BOOKMAP"       => self.show_bookmap = true,
+            "JOURNAL"       => self.show_journal = true,
             "CACHE_STATS"   => self.show_cache_stats = true,
             "HELP"          => self.show_help = true,
             "FULLSCREEN"    => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true)),
@@ -6282,6 +6303,7 @@ impl TyphooNApp {
         self.show_volume_profile = false;
         self.show_order_flow = false;
         self.show_bookmap = false;
+        self.show_journal = false;
         self.show_var_mult = false;
         self.show_margin_monitor = false;
         self.show_cache_stats = false;
@@ -9455,8 +9477,12 @@ impl TyphooNApp {
         if self.show_order_flow {
             egui::Window::new("Order Flow")
                 .open(&mut self.show_order_flow)
-                .default_size([400.0, 350.0])
+                .default_size([500.0, 450.0])
                 .show(ctx, |ui| {
+                    let of_green = egui::Color32::from_rgb(0, 200, 80);
+                    let of_red = egui::Color32::from_rgb(220, 50, 50);
+                    let of_dim = egui::Color32::from_rgb(80, 80, 100);
+
                     let sym = self.charts.get(self.active_tab)
                         .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
                         .unwrap_or_default();
@@ -9464,12 +9490,103 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new(format!("Order Flow: {}", sym)).strong());
                         if ui.button("Fetch L2").clicked() && !sym.is_empty() {
                             let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: sym.clone() });
-                            self.log.push_back(LogEntry::info(format!("Fetching orderbook for {}...", sym)));
                         }
                     });
                     ui.separator();
-                    ui.label(egui::RichText::new("Bid/ask delta, cumulative delta, footprint.").color(AXIS_TEXT));
-                    ui.label(egui::RichText::new("Connect broker + click Fetch L2 for live data.").color(AXIS_TEXT).small());
+
+                    if let Some(chart) = self.charts.get(self.active_tab) {
+                        let bars = &chart.bars;
+                        let n = bars.len();
+                        if n > 10 {
+                            let recent = &bars[n.saturating_sub(60)..];
+
+                            // Cumulative Delta (buying vs selling pressure proxy)
+                            ui.label(egui::RichText::new("Cumulative Delta (volume × direction)").small().strong());
+                            let mut cum_delta = Vec::with_capacity(recent.len());
+                            let mut running = 0.0_f64;
+                            for b in recent {
+                                let delta = if b.close >= b.open { b.volume } else { -b.volume };
+                                running += delta;
+                                cum_delta.push(running);
+                            }
+                            {
+                                let pts: PlotPoints = PlotPoints::new(
+                                    cum_delta.iter().enumerate().map(|(i, &d)| [i as f64, d]).collect()
+                                );
+                                let c = if *cum_delta.last().unwrap_or(&0.0) >= 0.0 { of_green } else { of_red };
+                                let line = Line::new("Cum Delta", pts).color(c).width(1.5);
+                                Plot::new("cum_delta_plot").height(100.0)
+                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                    .show_axes([false, true])
+                                    .show(ui, |plot_ui| { plot_ui.line(line); });
+                            }
+
+                            // Per-bar Delta bars
+                            ui.label(egui::RichText::new("Per-Bar Delta").small().strong());
+                            {
+                                let bars_plot: Vec<PlotBar> = recent.iter().enumerate().map(|(i, b)| {
+                                    let delta = if b.close >= b.open { b.volume } else { -b.volume };
+                                    let c = if delta >= 0.0 { of_green } else { of_red };
+                                    PlotBar::new(i as f64, delta).width(0.8).fill(c)
+                                }).collect();
+                                let chart = BarChart::new("Delta", bars_plot);
+                                Plot::new("delta_bars").height(80.0)
+                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                    .show_axes([false, true])
+                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+                            }
+
+                            // Footprint-style summary (price levels with buy/sell volume)
+                            ui.label(egui::RichText::new("Footprint Summary (last 20 bars)").small().strong());
+                            let last20 = &recent[recent.len().saturating_sub(20)..];
+                            let min_p = last20.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                            let max_p = last20.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                            let range = max_p - min_p;
+                            if range > 0.0 {
+                                let levels = 15_usize;
+                                let step = range / levels as f64;
+                                let mut buy_vol = vec![0.0_f64; levels];
+                                let mut sell_vol = vec![0.0_f64; levels];
+                                for b in last20 {
+                                    let mid_level = ((((b.high + b.low) / 2.0) - min_p) / step) as usize;
+                                    let idx = mid_level.min(levels - 1);
+                                    if b.close >= b.open { buy_vol[idx] += b.volume; }
+                                    else { sell_vol[idx] += b.volume; }
+                                }
+
+                                let max_vol = buy_vol.iter().chain(sell_vol.iter()).cloned().fold(0.0_f64, f64::max);
+                                let avail_w = ui.available_width();
+                                for i in (0..levels).rev() {
+                                    let price = min_p + (i as f64 + 0.5) * step;
+                                    let bv = buy_vol[i];
+                                    let sv = sell_vol[i];
+                                    let b_frac = if max_vol > 0.0 { (bv / max_vol) as f32 } else { 0.0 };
+                                    let s_frac = if max_vol > 0.0 { (sv / max_vol) as f32 } else { 0.0 };
+
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(format_price(price)).monospace().small().color(of_dim));
+                                        let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w - 80.0, 12.0), egui::Sense::hover());
+                                        let painter = ui.painter_at(rect);
+                                        let mid_x = rect.left() + rect.width() / 2.0;
+                                        // Buy bar (extends right from center)
+                                        painter.rect_filled(
+                                            egui::Rect::from_min_size(egui::pos2(mid_x, rect.top()), egui::vec2(b_frac * rect.width() / 2.0, 12.0)),
+                                            0.0, of_green);
+                                        // Sell bar (extends left from center)
+                                        painter.rect_filled(
+                                            egui::Rect::from_min_size(egui::pos2(mid_x - s_frac * rect.width() / 2.0, rect.top()), egui::vec2(s_frac * rect.width() / 2.0, 12.0)),
+                                            0.0, of_red);
+                                    });
+                                }
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Sells ←").color(of_red).small());
+                                    ui.label(egui::RichText::new("→ Buys").color(of_green).small());
+                                });
+                            }
+                        } else {
+                            ui.label(egui::RichText::new("Load chart data first.").color(of_dim));
+                        }
+                    }
                 });
         }
 
@@ -9564,6 +9681,104 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Load chart data first.").color(bm_dim));
                         }
                     }
+                });
+        }
+
+        // Trade Journal
+        if self.show_journal {
+            egui::Window::new("Trade Journal")
+                .open(&mut self.show_journal)
+                .default_size([700.0, 500.0])
+                .show(ctx, |ui| {
+                    let j_green = egui::Color32::from_rgb(46, 204, 113);
+                    let j_red = egui::Color32::from_rgb(231, 76, 60);
+                    let j_dim = egui::Color32::from_rgb(100, 100, 120);
+                    let j_cyan = egui::Color32::from_rgb(26, 188, 156);
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Trade Journal").strong());
+                        ui.label(egui::RichText::new(format!("{} entries", self.journal_entries.len())).color(j_dim).small());
+                        // Quick add from current chart
+                        if ui.small_button(egui::RichText::new("+ Add Trade").color(j_green)).clicked() {
+                            let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
+                            let price = self.charts.get(self.active_tab)
+                                .and_then(|c| c.bars.last().map(|b| b.close)).unwrap_or(0.0);
+                            self.journal_entries.push(JournalEntry {
+                                timestamp: chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string(),
+                                symbol: sym,
+                                side: "BUY".to_string(),
+                                qty: 1.0,
+                                entry_price: price,
+                                exit_price: None,
+                                pnl: None,
+                                strategy: "NNFX".to_string(),
+                                notes: String::new(),
+                                screenshot_path: None,
+                            });
+                        }
+                    });
+                    ui.separator();
+
+                    // Summary stats
+                    if !self.journal_entries.is_empty() {
+                        let total_pnl: f64 = self.journal_entries.iter().filter_map(|e| e.pnl).sum();
+                        let closed = self.journal_entries.iter().filter(|e| e.pnl.is_some()).count();
+                        let wins = self.journal_entries.iter().filter(|e| e.pnl.map(|p| p > 0.0).unwrap_or(false)).count();
+                        let wr = if closed > 0 { wins as f64 / closed as f64 * 100.0 } else { 0.0 };
+                        ui.horizontal(|ui| {
+                            let pc = if total_pnl >= 0.0 { j_green } else { j_red };
+                            ui.label(egui::RichText::new(format!("P&L: ${:.0}", total_pnl)).color(pc).strong());
+                            ui.label(egui::RichText::new(format!("Closed: {}", closed)).color(j_dim).small());
+                            let wc = if wr >= 50.0 { j_green } else { j_red };
+                            ui.label(egui::RichText::new(format!("Win: {:.0}%", wr)).color(wc).small());
+                            ui.label(egui::RichText::new(format!("Open: {}", self.journal_entries.len() - closed)).color(j_cyan).small());
+                        });
+                        ui.separator();
+                    }
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        let mut delete_idx: Option<usize> = None;
+                        for (idx, entry) in self.journal_entries.iter_mut().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(&entry.timestamp).color(j_dim).small());
+                                let side_c = if entry.side == "BUY" { j_green } else { j_red };
+                                ui.label(egui::RichText::new(&entry.side).color(side_c).small().strong());
+                                ui.label(egui::RichText::new(&entry.symbol).color(j_cyan).small().strong());
+                                ui.label(egui::RichText::new(format!("{:.2} @ {}", entry.qty, format_price(entry.entry_price))).small());
+                                if let Some(pnl) = entry.pnl {
+                                    let pc = if pnl >= 0.0 { j_green } else { j_red };
+                                    ui.label(egui::RichText::new(format!("${:.0}", pnl)).color(pc).small().strong());
+                                } else {
+                                    ui.label(egui::RichText::new("open").color(j_cyan).small());
+                                }
+                                ui.label(egui::RichText::new(&entry.strategy).color(j_dim).small());
+                                if ui.small_button("x").clicked() { delete_idx = Some(idx); }
+                            });
+                            // Editable notes
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("  Notes:").color(j_dim).small());
+                                ui.add(egui::TextEdit::singleline(&mut entry.notes).desired_width(400.0).hint_text("Trade notes..."));
+                            });
+                            // Close trade button
+                            if entry.exit_price.is_none() {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("  Exit:").color(j_dim).small());
+                                    let mut exit_str = entry.exit_price.map(|p| format!("{:.4}", p)).unwrap_or_default();
+                                    ui.add(egui::TextEdit::singleline(&mut exit_str).desired_width(80.0).hint_text("exit price"));
+                                    if let Ok(ep) = exit_str.parse::<f64>() {
+                                        entry.exit_price = Some(ep);
+                                        let pnl = if entry.side == "BUY" { (ep - entry.entry_price) * entry.qty }
+                                                  else { (entry.entry_price - ep) * entry.qty };
+                                        entry.pnl = Some(pnl);
+                                    }
+                                });
+                            }
+                            ui.add_space(2.0);
+                        }
+                        if let Some(idx) = delete_idx {
+                            self.journal_entries.remove(idx);
+                        }
+                    });
                 });
         }
 
