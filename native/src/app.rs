@@ -5049,6 +5049,8 @@ impl TyphooNApp {
                 let mut full_refresh_done = false;
                 let mut last_full_refresh = std::time::Instant::now() - std::time::Duration::from_secs(999);
                 const FULL_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
+                // Persist data across loops so lightweight refreshes keep expensive Phase 2-8 results
+                let mut data = BgDarwinData::default();
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(3));
 
@@ -5066,7 +5068,6 @@ impl TyphooNApp {
                     if let Some(ref cache) = cache_arc {
                         let phase_start = std::time::Instant::now();
                         tracing::info!("BG thread: cache available, running queries...");
-                        let mut data = BgDarwinData::default();
 
                         // Phase 1a: ONLY list accounts (no table creation, no scans)
                         // Table creation moved to Phase 1b — even IF NOT EXISTS can be slow on 3.9GB DB
@@ -5134,7 +5135,7 @@ impl TyphooNApp {
                         let need_full_refresh = !full_refresh_done || last_full_refresh.elapsed() >= FULL_REFRESH_INTERVAL;
                         if !need_full_refresh {
                             // Lightweight refresh only — skip expensive phases
-                            let _ = bg_tx.send(data);
+                            let _ = bg_tx.send(data.clone());
                             continue;
                         }
 
@@ -5288,7 +5289,7 @@ impl TyphooNApp {
                             phase_start.elapsed().as_millis(), FULL_REFRESH_INTERVAL.as_secs());
 
                         // Send to UI thread (non-blocking — drops if channel full)
-                        let _ = bg_tx.send(data);
+                        let _ = bg_tx.send(data.clone());
                     }
                 }
             });
