@@ -977,8 +977,19 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
     let mut symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Known non-stock patterns to skip
-    let skip_suffixes = ["USD", "JPY", "GBP", "EUR", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "HKD", "SGD", "TRY", "MXN", "ZAR", "PLN", "CZK", "HUF"];
-    let skip_prefixes = ["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD", "XNGUSD"];
+    let forex_suffixes = ["USD", "JPY", "GBP", "EUR", "CHF", "CAD", "AUD", "NZD", "SEK", "NOK", "HKD", "SGD", "TRY", "MXN", "ZAR", "PLN", "CZK", "HUF"];
+    // Crypto symbols (USD-denominated pairs)
+    let crypto_patterns = ["BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "LTC", "LINK", "AVAX", "DOT",
+        "UNI", "AAVE", "MATIC", "SHIB", "FIL", "ATOM", "NEAR", "APE", "SAND", "MANA",
+        "CRV", "COMP", "MKR", "SNX", "GRT", "BAT", "1INCH", "SUSHI", "YFI", "ENJ"];
+    // Futures contract suffixes (e.g., 6C_M, GC_M, CL_M, ES_M, NQ_M)
+    let futures_suffixes = ["_M", "_H", "_U", "_Z", "_F", "_G", "_J", "_K", "_N", "_Q", "_V", "_X"];
+    // Known futures root symbols
+    let futures_roots = ["6A", "6B", "6C", "6E", "6J", "6M", "6N", "6S", "6Z",
+        "GC", "SI", "HG", "PL", "PA", "CL", "NG", "HO", "RB", "BZ",
+        "ES", "NQ", "YM", "RTY", "EMD", "ZB", "ZN", "ZF", "ZT",
+        "ZC", "ZW", "ZS", "ZM", "ZL", "CT", "KC", "SB", "CC", "OJ",
+        "LE", "HE", "GF", "DX", "VX"];
 
     for key in &keys {
         // Parse "mt5:CC:SLV:4Hour" → parts = ["mt5", "CC", "SLV", "4Hour"]
@@ -993,15 +1004,35 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
             let sym_upper = sym.to_uppercase();
 
             // Skip forex (6-char pairs like EURUSD, GBPJPY)
-            if sym_upper.len() == 6 && skip_suffixes.iter().any(|s| sym_upper.ends_with(s)) {
+            if sym_upper.len() == 6 && forex_suffixes.iter().any(|s| sym_upper.ends_with(s)) {
                 continue;
             }
-            // Skip known crypto
-            if skip_prefixes.iter().any(|p| sym_upper.starts_with(p)) {
+            // Skip crypto (any symbol ending in USD/USDT that starts with crypto name)
+            if crypto_patterns.iter().any(|c| sym_upper.starts_with(c) && (sym_upper.ends_with("USD") || sym_upper.ends_with("USDT"))) {
                 continue;
             }
-            // Skip indices (start with #, or are known indices)
+            // Skip futures contracts (contain _M, _H, _U, _Z suffixes or known roots with underscore)
+            if futures_suffixes.iter().any(|s| sym_upper.ends_with(s)) {
+                continue;
+            }
+            // Skip known futures root symbols (exact match or with digits)
+            if futures_roots.iter().any(|r| sym_upper == *r || (sym_upper.starts_with(r) && sym_upper.len() <= r.len() + 2 && sym_upper[r.len()..].chars().all(|c| c.is_ascii_digit()))) {
+                continue;
+            }
+            // Skip indices (start with #, ., or are known index names)
             if sym.starts_with('#') || sym.starts_with('.') {
+                continue;
+            }
+            // Skip symbols with only digits (contract codes)
+            if sym_upper.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            // Skip very short symbols (likely not stocks)
+            if sym_upper.len() < 1 {
+                continue;
+            }
+            // Skip XNG (natural gas CFD, not a stock)
+            if sym_upper == "XNGUSD" || sym_upper == "XNG" || sym_upper == "XAGUSD" || sym_upper == "XAUUSD" {
                 continue;
             }
 
