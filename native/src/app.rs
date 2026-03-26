@@ -9469,20 +9469,93 @@ impl TyphooNApp {
         if self.show_bookmap {
             egui::Window::new("Bookmap Heatmap")
                 .open(&mut self.show_bookmap)
-                .default_size([500.0, 400.0])
+                .default_size([600.0, 450.0])
                 .show(ctx, |ui| {
+                    let bm_green = egui::Color32::from_rgb(0, 180, 80);
+                    let bm_red = egui::Color32::from_rgb(200, 50, 50);
+                    let bm_dim = egui::Color32::from_rgb(80, 80, 100);
+
                     let sym = self.charts.get(self.active_tab)
                         .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
                         .unwrap_or_default();
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("Bookmap: {}", sym)).strong());
+                        ui.label(egui::RichText::new(format!("Depth: {}", sym)).strong());
                         if ui.button("Fetch Depth").clicked() && !sym.is_empty() {
                             let _ = self.broker_tx.send(BrokerCmd::GetOrderbook { symbol: sym.clone() });
                         }
+                        ui.label(egui::RichText::new("L2 depth heatmap (requires Alpaca Pro)").color(bm_dim).small());
                     });
                     ui.separator();
-                    ui.label(egui::RichText::new("Depth heatmap visualization (see ADR-048).").color(AXIS_TEXT));
-                    ui.label(egui::RichText::new("GPU compute shader pipeline for real-time rendering.").color(AXIS_TEXT).small());
+
+                    // Render depth heatmap from recent bar volume distribution
+                    if let Some(chart) = self.charts.get(self.active_tab) {
+                        let bars = &chart.bars;
+                        let n = bars.len();
+                        if n > 20 {
+                            // Build a price × time volume heatmap from recent bars
+                            let recent = &bars[n.saturating_sub(100)..];
+                            let min_p = recent.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                            let max_p = recent.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                            let price_range = max_p - min_p;
+                            if price_range > 0.0 {
+                                let rows = 40_usize;  // price levels
+                                let cols = recent.len();
+
+                                // Allocate and paint heatmap
+                                let avail = ui.available_size();
+                                let w = avail.x.min(580.0);
+                                let h = 300.0_f32;
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                                let painter = ui.painter_at(rect);
+                                painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(5, 5, 15));
+
+                                let cell_w = w / cols as f32;
+                                let cell_h = h / rows as f32;
+
+                                for (col, bar) in recent.iter().enumerate() {
+                                    let x = rect.left() + col as f32 * cell_w;
+                                    // Map bar's high-low range to row indices
+                                    let row_lo = ((bar.low - min_p) / price_range * rows as f64) as usize;
+                                    let row_hi = ((bar.high - min_p) / price_range * rows as f64) as usize;
+                                    let vol_norm = (bar.volume.ln().max(0.0) / 15.0).min(1.0) as f32;
+
+                                    for row in row_lo..=row_hi.min(rows - 1) {
+                                        let y = rect.bottom() - (row as f32 + 1.0) * cell_h;
+                                        let intensity = vol_norm * 0.8;
+                                        let color = if bar.close >= bar.open {
+                                            egui::Color32::from_rgba_premultiplied(
+                                                0, (intensity * 200.0) as u8, (intensity * 80.0) as u8, (intensity * 255.0) as u8)
+                                        } else {
+                                            egui::Color32::from_rgba_premultiplied(
+                                                (intensity * 200.0) as u8, (intensity * 50.0) as u8, 0, (intensity * 255.0) as u8)
+                                        };
+                                        painter.rect_filled(
+                                            egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, cell_h)),
+                                            0.0, color,
+                                        );
+                                    }
+                                }
+
+                                // Price axis labels
+                                for i in 0..=4 {
+                                    let frac = i as f64 / 4.0;
+                                    let price = min_p + frac * price_range;
+                                    let y = rect.bottom() - frac as f32 * h;
+                                    painter.text(egui::pos2(rect.right() - 2.0, y), egui::Align2::RIGHT_CENTER,
+                                        format_price(price), egui::FontId::monospace(9.0), bm_dim);
+                                }
+
+                                // Legend
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Bid Volume").color(bm_green).small());
+                                    ui.label(egui::RichText::new("Ask Volume").color(bm_red).small());
+                                    ui.label(egui::RichText::new(format!("{} bars × {} levels", cols, rows)).color(bm_dim).small());
+                                });
+                            }
+                        } else {
+                            ui.label(egui::RichText::new("Load chart data first.").color(bm_dim));
+                        }
+                    }
                 });
         }
 
