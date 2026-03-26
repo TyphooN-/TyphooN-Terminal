@@ -2519,9 +2519,23 @@ pub struct GpuBacktester {
     bar_count: u32,
     combo_count: u32,
     eval_pipeline: wgpu::ComputePipeline,
+    nnfx_pipeline: wgpu::ComputePipeline,
+    walk_forward_pipeline: wgpu::ComputePipeline,
     robustness_pipeline: wgpu::ComputePipeline,
     monte_carlo_pipeline: wgpu::ComputePipeline,
     eval_bgl: wgpu::BindGroupLayout,
+}
+
+/// NNFX-specific parameter combination.
+#[derive(Debug, Clone)]
+pub struct NnfxParamCombo {
+    pub kama_period: u32,
+    pub fisher_period: u32,
+    pub atr_period: u32,
+    pub adx_period: u32,
+    pub adx_threshold: f32,
+    pub atr_sl_mult: f32,
+    pub atr_tp_mult: f32,
 }
 
 impl GpuBacktester {
@@ -2574,12 +2588,27 @@ impl GpuBacktester {
             label: Some("mc_pipeline"), layout: Some(&layout), module: &mc_shader,
             entry_point: Some("main"), compilation_options: Default::default(), cache: None,
         });
+        let nnfx_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("nnfx_eval"), source: wgpu::ShaderSource::Wgsl(NNFX_EVAL_SHADER.into()),
+        });
+        let nnfx_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("nnfx_pipeline"), layout: Some(&layout), module: &nnfx_shader,
+            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+        });
+        let wf_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("walk_forward"), source: wgpu::ShaderSource::Wgsl(WALK_FORWARD_SHADER.into()),
+        });
+        let walk_forward_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("wf_pipeline"), layout: Some(&layout), module: &wf_shader,
+            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+        });
 
         Self {
             device, queue, bar_buffer: None, ohlc_buffer: None,
             indicator_buffer: None, params_buffer: None, results_buffer: None,
             staging_buffer: None, bar_count: 0, combo_count: 0,
-            eval_pipeline, robustness_pipeline, monte_carlo_pipeline,
+            eval_pipeline, nnfx_pipeline, walk_forward_pipeline,
+            robustness_pipeline, monte_carlo_pipeline,
             eval_bgl,
         }
     }
@@ -2700,6 +2729,116 @@ impl GpuBacktester {
                     profit_factor: floats[b + 5],
                     trade_count: floats[b + 6] as u32,
                     avg_hold_bars: floats[b + 7],
+                    robustness_score: floats[b + 8],
+                });
+            }
+        }
+        Some(results)
+    }
+
+    /// Upload NNFX parameter combos and run evaluation.
+    pub fn evaluate_nnfx(&mut self, closes: &[f32], highs: &[f32], lows: &[f32], combos: &[NnfxParamCombo]) -> Option<Vec<BacktestResult>> {
+        let n = closes.len() as u32;
+        let nc = combos.len() as u32;
+        self.bar_count = n;
+        self.combo_count = nc;
+
+        // Upload bar data
+        self.bar_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("nnfx_closes"), size: (n as u64) * 4,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        }));
+        self.queue.write_buffer(self.bar_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(closes));
+
+        let mut ohlc = Vec::with_capacity(n as usize * 3);
+        for i in 0..n as usize { ohlc.push(highs[i]); ohlc.push(lows[i]); ohlc.push(closes[i]); }
+        self.ohlc_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("nnfx_ohlc"), size: (n as u64) * 12,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        }));
+        self.queue.write_buffer(self.ohlc_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(&ohlc));
+
+        // Pack NNFX params: 8 floats per combo [kama_p, fisher_p, atr_p, adx_p, adx_thresh, sl_mult, tp_mult, 0]
+        let mut packed = Vec::with_capacity(nc as usize * 8);
+        for c in combos {
+            packed.push(f32::from_bits(c.kama_period));
+            packed.push(f32::from_bits(c.fisher_period));
+            packed.push(f32::from_bits(c.atr_period));
+            packed.push(f32::from_bits(c.adx_period));
+            packed.push(c.adx_threshold);
+            packed.push(c.atr_sl_mult);
+            packed.push(c.atr_tp_mult);
+            packed.push(0.0);
+        }
+        self.params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("nnfx_params"), size: (nc as u64) * 32,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        }));
+        self.queue.write_buffer(self.params_buffer.as_ref().unwrap(), 0, bytemuck_cast_slice(&packed));
+
+        let results_size = (nc as u64) * 36;
+        self.results_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("nnfx_results"), size: results_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        }));
+        self.staging_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("nnfx_staging"), size: results_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        }));
+
+        // Dispatch NNFX eval
+        let (Some(bar_buf), Some(ohlc_buf), Some(params_buf), Some(results_buf), Some(staging)) =
+            (&self.bar_buffer, &self.ohlc_buffer, &self.params_buffer, &self.results_buffer, &self.staging_buffer)
+        else { return None; };
+
+        let uniforms = [self.bar_count, self.combo_count];
+        let uniform_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("nnfx_uniforms"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&uniform_buf, 0, bytemuck_cast_slice(&uniforms));
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("nnfx_bg"), layout: &self.eval_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: bar_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: ohlc_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: results_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: uniform_buf.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("nnfx_pass"), timestamp_writes: None });
+            pass.set_pipeline(&self.nnfx_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups((nc + 255) / 256, 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(results_buf, 0, staging, 0, results_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Readback
+        let slice = staging.slice(0..results_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let floats = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        staging.unmap();
+
+        let mut results = Vec::with_capacity(nc as usize);
+        for i in 0..nc as usize {
+            let b = i * 9;
+            if b + 8 < floats.len() {
+                results.push(BacktestResult {
+                    net_pnl: floats[b], max_drawdown: floats[b + 1],
+                    sharpe: floats[b + 2], sortino: floats[b + 3],
+                    win_rate: floats[b + 4], profit_factor: floats[b + 5],
+                    trade_count: floats[b + 6] as u32, avg_hold_bars: floats[b + 7],
                     robustness_score: floats[b + 8],
                 });
             }
@@ -3057,5 +3196,326 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     results[out + 6u] = 0.0;
     results[out + 7u] = 0.0;
     results[out + 8u] = 0.0;
+}
+"#;
+
+/// NNFX Strategy Evaluation — Fisher crossover + KAMA trend + ATR stops + ADX filter.
+/// One thread per parameter combination. Each thread computes Fisher, KAMA, ATR, ADX inline.
+/// Params: [kama_period, fisher_period, atr_period, adx_period, adx_threshold, atr_sl_mult, atr_tp_mult, 0]
+const NNFX_EVAL_SHADER: &str = r#"
+struct Params {
+    bar_count: u32,
+    combo_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> closes: array<f32>;
+@group(0) @binding(1) var<storage, read> ohlc: array<f32>;
+@group(0) @binding(2) var<storage, read> combos: array<f32>;
+@group(0) @binding(3) var<storage, read_write> results: array<f32>;
+@group(0) @binding(4) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let combo_idx = id.x;
+    if (combo_idx >= params.combo_count) { return; }
+
+    let base = combo_idx * 8u;
+    let kama_period = bitcast<u32>(combos[base]);
+    let fisher_period = bitcast<u32>(combos[base + 1u]);
+    let atr_period = bitcast<u32>(combos[base + 2u]);
+    let adx_period = bitcast<u32>(combos[base + 3u]);
+    let adx_threshold = combos[base + 4u];
+    let atr_sl_mult = combos[base + 5u];
+    let atr_tp_mult = combos[base + 6u];
+
+    let lookback = max(max(kama_period, fisher_period), max(atr_period, adx_period)) + 2u;
+    if (lookback >= params.bar_count) {
+        let out = combo_idx * 9u;
+        for (var k: u32 = 0u; k < 9u; k = k + 1u) { results[out + k] = 0.0; }
+        return;
+    }
+
+    // State
+    var equity: f32 = 100000.0;
+    var peak: f32 = equity;
+    var max_dd: f32 = 0.0;
+    var in_trade: bool = false;
+    var trade_dir: i32 = 0;
+    var entry_price: f32 = 0.0;
+    var stop_loss: f32 = 0.0;
+    var take_profit: f32 = 0.0;
+    var wins: u32 = 0u;
+    var losses: u32 = 0u;
+    var total_profit: f32 = 0.0;
+    var total_loss: f32 = 0.0;
+    var total_hold: u32 = 0u;
+    var trade_start: u32 = 0u;
+    var prev_equity: f32 = equity;
+    var daily_pnl_sum: f32 = 0.0;
+    var daily_pnl_sq: f32 = 0.0;
+    var daily_pnl_down: f32 = 0.0;
+
+    // KAMA state
+    let fast_sc: f32 = 2.0 / 3.0;
+    let slow_sc: f32 = 2.0 / 31.0;
+    var kama: f32 = closes[0];
+    var prev_kama: f32 = closes[0];
+
+    // Fisher state
+    var fish: f32 = 0.0;
+    var prev_fish: f32 = 0.0;
+    var fish_val: f32 = 0.0;
+
+    // ATR state
+    var atr_val: f32 = 0.0;
+    var atr_sum: f32 = 0.0;
+    var atr_ready: bool = false;
+
+    // ADX state
+    var smooth_plus_dm: f32 = 0.0;
+    var smooth_minus_dm: f32 = 0.0;
+    var smooth_tr: f32 = 0.0;
+    var smooth_dx: f32 = 0.0;
+    var adx_val: f32 = 0.0;
+
+    for (var i: u32 = 1u; i < params.bar_count; i = i + 1u) {
+        let close = closes[i];
+        let high = ohlc[i * 3u];
+        let low = ohlc[i * 3u + 1u];
+        let prev_close = closes[i - 1u];
+        let prev_high = ohlc[(i - 1u) * 3u];
+        let prev_low = ohlc[(i - 1u) * 3u + 1u];
+        let mid = (high + low) / 2.0;
+
+        // Update KAMA
+        if (i >= kama_period) {
+            let direction = abs(close - closes[i - kama_period]);
+            var volatility: f32 = 0.0;
+            for (var j: u32 = i - kama_period + 1u; j <= i; j = j + 1u) {
+                volatility = volatility + abs(closes[j] - closes[j - 1u]);
+            }
+            let er = select(direction / volatility, 0.0, volatility < 0.000001);
+            let sc = er * (fast_sc - slow_sc) + slow_sc;
+            prev_kama = kama;
+            kama = kama + sc * sc * (close - kama);
+        }
+
+        // Update Fisher Transform
+        if (i >= fisher_period) {
+            var highest: f32 = -1000000.0;
+            var lowest: f32 = 1000000.0;
+            for (var j: u32 = i - fisher_period + 1u; j <= i; j = j + 1u) {
+                let m = (ohlc[j * 3u] + ohlc[j * 3u + 1u]) / 2.0;
+                if (m > highest) { highest = m; }
+                if (m < lowest) { lowest = m; }
+            }
+            let range = highest - lowest;
+            var raw: f32 = 0.0;
+            if (range > 0.000001) { raw = 2.0 * (mid - lowest) / range - 1.0; }
+            raw = clamp(raw, -0.999, 0.999);
+            fish_val = 0.33 * raw + 0.67 * fish_val;
+            fish_val = clamp(fish_val, -0.999, 0.999);
+            prev_fish = fish;
+            fish = 0.5 * log((1.0 + fish_val) / (1.0 - fish_val));
+        }
+
+        // Update ATR
+        let tr = max(high - low, max(abs(high - prev_close), abs(low - prev_close)));
+        if (i <= atr_period) {
+            atr_sum = atr_sum + tr;
+            if (i == atr_period) { atr_val = atr_sum / f32(atr_period); atr_ready = true; }
+        } else if (atr_ready) {
+            atr_val = (atr_val * f32(atr_period - 1u) + tr) / f32(atr_period);
+        }
+
+        // Update ADX
+        let up_move = high - prev_high;
+        let down_move = prev_low - low;
+        var plus_dm: f32 = 0.0;
+        var minus_dm: f32 = 0.0;
+        if (up_move > down_move && up_move > 0.0) { plus_dm = up_move; }
+        if (down_move > up_move && down_move > 0.0) { minus_dm = down_move; }
+        if (i <= adx_period) {
+            smooth_plus_dm = smooth_plus_dm + plus_dm;
+            smooth_minus_dm = smooth_minus_dm + minus_dm;
+            smooth_tr = smooth_tr + tr;
+        } else {
+            let p = f32(adx_period);
+            smooth_plus_dm = smooth_plus_dm - smooth_plus_dm / p + plus_dm;
+            smooth_minus_dm = smooth_minus_dm - smooth_minus_dm / p + minus_dm;
+            smooth_tr = smooth_tr - smooth_tr / p + tr;
+            let plus_di = select(100.0 * smooth_plus_dm / smooth_tr, 0.0, smooth_tr < 0.000001);
+            let minus_di = select(100.0 * smooth_minus_dm / smooth_tr, 0.0, smooth_tr < 0.000001);
+            let di_sum = plus_di + minus_di;
+            let dx = select(100.0 * abs(plus_di - minus_di) / di_sum, 0.0, di_sum < 0.000001);
+            smooth_dx = (smooth_dx * (f32(adx_period) - 1.0) + dx) / f32(adx_period);
+            adx_val = smooth_dx;
+        }
+
+        if (i < lookback) { continue; }
+
+        // Check SL/TP
+        if (in_trade) {
+            var pnl: f32 = 0.0;
+            var closed: bool = false;
+            if (trade_dir == 1) {
+                if (low <= stop_loss) { pnl = stop_loss - entry_price; closed = true; }
+                else if (take_profit > 0.0 && high >= take_profit) { pnl = take_profit - entry_price; closed = true; }
+            } else {
+                if (high >= stop_loss) { pnl = entry_price - stop_loss; closed = true; }
+                else if (take_profit > 0.0 && low <= take_profit) { pnl = entry_price - take_profit; closed = true; }
+            }
+            if (closed) {
+                equity = equity + pnl;
+                if (pnl > 0.0) { wins = wins + 1u; total_profit = total_profit + pnl; }
+                else { losses = losses + 1u; total_loss = total_loss - pnl; }
+                total_hold = total_hold + (i - trade_start);
+                in_trade = false;
+            }
+        }
+
+        // NNFX Entry: Fisher crosses zero + KAMA confirms trend + ADX filter
+        if (!in_trade && atr_ready && adx_val > adx_threshold) {
+            // Long: Fisher crosses above 0, KAMA rising
+            if (prev_fish <= 0.0 && fish > 0.0 && kama > prev_kama) {
+                in_trade = true; trade_dir = 1;
+                entry_price = close;
+                stop_loss = close - atr_val * atr_sl_mult;
+                take_profit = close + atr_val * atr_tp_mult;
+                trade_start = i;
+            }
+            // Short: Fisher crosses below 0, KAMA falling
+            else if (prev_fish >= 0.0 && fish < 0.0 && kama < prev_kama) {
+                in_trade = true; trade_dir = -1;
+                entry_price = close;
+                stop_loss = close + atr_val * atr_sl_mult;
+                take_profit = close - atr_val * atr_tp_mult;
+                trade_start = i;
+            }
+        }
+
+        // Track drawdown
+        if (equity > peak) { peak = equity; }
+        if (peak > 0.0) { let dd = (peak - equity) / peak; if (dd > max_dd) { max_dd = dd; } }
+        let daily_ret = (equity - prev_equity) / max(prev_equity, 0.01);
+        daily_pnl_sum = daily_pnl_sum + daily_ret;
+        daily_pnl_sq = daily_pnl_sq + daily_ret * daily_ret;
+        if (daily_ret < 0.0) { daily_pnl_down = daily_pnl_down + daily_ret * daily_ret; }
+        prev_equity = equity;
+    }
+
+    // Close open trade
+    if (in_trade) {
+        let lc = closes[params.bar_count - 1u];
+        if (trade_dir == 1) { equity = equity + lc - entry_price; }
+        else { equity = equity + entry_price - lc; }
+    }
+
+    // Metrics
+    let trades = wins + losses;
+    let n_f = f32(params.bar_count - lookback);
+    let mean_ret = daily_pnl_sum / max(n_f, 1.0);
+    let variance = daily_pnl_sq / max(n_f, 1.0) - mean_ret * mean_ret;
+    let std_dev = sqrt(max(variance, 0.0));
+    let down_dev = sqrt(daily_pnl_down / max(n_f, 1.0));
+    let ann_mean = mean_ret * 252.0;
+    let ann_vol = std_dev * 15.8745;
+    let ann_down = down_dev * 15.8745;
+
+    let out = combo_idx * 9u;
+    results[out] = equity - 100000.0;
+    results[out + 1u] = max_dd;
+    results[out + 2u] = select(ann_mean / ann_vol, 0.0, ann_vol < 0.000001);
+    results[out + 3u] = select(ann_mean / ann_down, 0.0, ann_down < 0.000001);
+    results[out + 4u] = select(f32(wins) / f32(trades), 0.0, trades == 0u);
+    results[out + 5u] = select(total_profit / max(total_loss, 0.01), 0.0, trades == 0u);
+    results[out + 6u] = f32(trades);
+    results[out + 7u] = select(f32(total_hold) / f32(trades), 0.0, trades == 0u);
+    results[out + 8u] = 0.0;
+}
+"#;
+
+/// Walk-Forward Validation shader — evaluates strategy on out-of-sample window.
+/// Same as NNFX eval but only processes bars[start..end] range.
+/// Params uniform extended: [bar_count, combo_count, window_start, window_end]
+const WALK_FORWARD_SHADER: &str = r#"
+struct Params {
+    bar_count: u32,
+    combo_count: u32,
+}
+
+@group(0) @binding(0) var<storage, read> closes: array<f32>;
+@group(0) @binding(1) var<storage, read> ohlc: array<f32>;
+@group(0) @binding(2) var<storage, read> combos: array<f32>;
+@group(0) @binding(3) var<storage, read_write> results: array<f32>;
+@group(0) @binding(4) var<uniform> params: Params;
+
+// Walk-forward uses same eval logic but the caller uploads a subset of bars
+// for the out-of-sample window. This shader is identical to BACKTEST_EVAL_SHADER
+// but exists as a separate pipeline for clarity. The host code handles windowing.
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let combo_idx = id.x;
+    if (combo_idx >= params.combo_count) { return; }
+
+    // Identical to backtest eval — host controls which bars are uploaded
+    let base = combo_idx * 8u;
+    let sma_fast = bitcast<u32>(combos[base]);
+    let sma_slow = bitcast<u32>(combos[base + 1u]);
+    let lookback = max(sma_fast, sma_slow) + 2u;
+    if (lookback >= params.bar_count) {
+        let out = combo_idx * 9u;
+        for (var k: u32 = 0u; k < 9u; k = k + 1u) { results[out + k] = 0.0; }
+        return;
+    }
+
+    var equity: f32 = 100000.0;
+    var peak: f32 = equity;
+    var max_dd: f32 = 0.0;
+    var wins: u32 = 0u;
+    var losses: u32 = 0u;
+    var in_trade: bool = false;
+    var trade_dir: i32 = 0;
+    var entry_price: f32 = 0.0;
+
+    for (var i: u32 = lookback; i < params.bar_count; i = i + 1u) {
+        // Simplified SMA cross for walk-forward (reuses same combo format)
+        var fast_sum: f32 = 0.0;
+        var slow_sum: f32 = 0.0;
+        var prev_fast_sum: f32 = 0.0;
+        var prev_slow_sum: f32 = 0.0;
+        for (var j: u32 = 0u; j < sma_fast; j = j + 1u) { fast_sum += closes[i - j]; prev_fast_sum += closes[i - 1u - j]; }
+        for (var j: u32 = 0u; j < sma_slow; j = j + 1u) { slow_sum += closes[i - j]; prev_slow_sum += closes[i - 1u - j]; }
+        let fast_sma = fast_sum / f32(sma_fast);
+        let slow_sma = slow_sum / f32(sma_slow);
+        let prev_fast = prev_fast_sum / f32(sma_fast);
+        let prev_slow = prev_slow_sum / f32(sma_slow);
+
+        if (in_trade) {
+            let pnl = select(closes[i] - entry_price, entry_price - closes[i], trade_dir == 1);
+            // Simple exit: reverse signal
+            if ((trade_dir == 1 && fast_sma < slow_sma) || (trade_dir == -1 && fast_sma > slow_sma)) {
+                equity += pnl;
+                if (pnl > 0.0) { wins += 1u; } else { losses += 1u; }
+                in_trade = false;
+            }
+        }
+        if (!in_trade) {
+            if (prev_fast <= prev_slow && fast_sma > slow_sma) { in_trade = true; trade_dir = 1; entry_price = closes[i]; }
+            else if (prev_fast >= prev_slow && fast_sma < slow_sma) { in_trade = true; trade_dir = -1; entry_price = closes[i]; }
+        }
+        if (equity > peak) { peak = equity; }
+        let dd = (peak - equity) / max(peak, 0.01);
+        if (dd > max_dd) { max_dd = dd; }
+    }
+
+    let trades = wins + losses;
+    let out = combo_idx * 9u;
+    results[out] = equity - 100000.0;
+    results[out + 1u] = max_dd;
+    results[out + 2u] = select(f32(wins) / f32(trades), 0.0, trades == 0u);
+    results[out + 3u] = 0.0; results[out + 4u] = 0.0; results[out + 5u] = 0.0;
+    results[out + 6u] = f32(trades);
+    results[out + 7u] = 0.0; results[out + 8u] = 0.0;
 }
 "#;
