@@ -7260,26 +7260,89 @@ impl TyphooNApp {
                                                 ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
                                             }
                                         }
-                                        8 => { // Monte Carlo (from bg cache)
+                                        8 => { // Monte Carlo (from bg cache + GPU)
+                                            let mc_green = egui::Color32::from_rgb(46, 204, 113);
+                                            let mc_red = egui::Color32::from_rgb(231, 76, 60);
+                                            let mc_gold = egui::Color32::from_rgb(241, 196, 15);
+                                            let mc_dim = egui::Color32::from_rgb(100, 100, 120);
+
                                             if let Some(ref mc) = self.bg.monte_carlo {
-                                                    egui::Grid::new("mc_grid").striped(true).num_columns(2).show(ui, |ui| {
-                                                        ui.label("Simulations:"); ui.label(format!("{}", mc.simulations));
-                                                        ui.end_row();
-                                                        ui.label("Horizon (days):"); ui.label(format!("{}", mc.days_forward));
-                                                        ui.end_row();
-                                                        ui.label("VaR 95%:"); ui.label(egui::RichText::new(format!("{:.2}%", mc.var_95)).color(DOWN));
-                                                        ui.end_row();
-                                                        ui.label("VaR 99%:"); ui.label(egui::RichText::new(format!("{:.2}%", mc.var_99)).color(DOWN));
-                                                        ui.end_row();
-                                                        ui.label("Median:"); ui.label(format!("{:.2}%", mc.median_outcome));
-                                                        ui.end_row();
-                                                        ui.label("Best Case:"); ui.label(egui::RichText::new(format!("{:.2}%", mc.best_case)).color(UP));
-                                                        ui.end_row();
-                                                        ui.label("Worst Case:"); ui.label(egui::RichText::new(format!("{:.2}%", mc.worst_case)).color(DOWN));
-                                                        ui.end_row();
-                                                        ui.label("Prob of Loss:"); ui.label(format!("{:.1}%", mc.probability_of_loss * 100.0));
-                                                        ui.end_row();
-                                                    });
+                                                ui.label(egui::RichText::new("Monte Carlo Simulation").strong());
+
+                                                // Compact metrics in two columns
+                                                egui::Grid::new("mc_grid").striped(true).num_columns(4).show(ui, |ui| {
+                                                    ui.label(egui::RichText::new("Trading Days:").color(mc_dim).small());
+                                                    ui.label(format!("{}", mc.days_forward));
+                                                    ui.label(egui::RichText::new("Simulations:").color(mc_dim).small());
+                                                    ui.label(format!("{}", mc.simulations));
+                                                    ui.end_row();
+                                                    ui.label(egui::RichText::new("VaR 95%:").color(mc_dim).small());
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", mc.var_95)).color(mc_red));
+                                                    ui.label(egui::RichText::new("VaR 99%:").color(mc_dim).small());
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", mc.var_99)).color(mc_red));
+                                                    ui.end_row();
+                                                    ui.label(egui::RichText::new("Median:").color(mc_dim).small());
+                                                    let med_c = if mc.median_outcome >= 0.0 { mc_green } else { mc_red };
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", mc.median_outcome)).color(med_c));
+                                                    ui.label(egui::RichText::new("Prob Loss:").color(mc_dim).small());
+                                                    let pl_c = if mc.probability_of_loss > 0.5 { mc_red } else { mc_green };
+                                                    ui.label(egui::RichText::new(format!("{:.1}%", mc.probability_of_loss * 100.0)).color(pl_c));
+                                                    ui.end_row();
+                                                    ui.label(egui::RichText::new("Best Case:").color(mc_dim).small());
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", mc.best_case)).color(mc_green));
+                                                    ui.label(egui::RichText::new("Worst Case:").color(mc_dim).small());
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", mc.worst_case)).color(mc_red));
+                                                    ui.end_row();
+                                                });
+
+                                                // Outcome distribution as bar chart (if percentiles available)
+                                                if !mc.percentiles.is_empty() {
+                                                    ui.add_space(6.0);
+                                                    ui.label(egui::RichText::new("Outcome Distribution").small().strong());
+                                                    let bars: Vec<PlotBar> = mc.percentiles.iter().enumerate().map(|(i, (pct, val))| {
+                                                        let c = if *val >= 0.0 { mc_green } else { mc_red };
+                                                        PlotBar::new(i as f64, *val).width(0.8).fill(c).name(format!("{}th", pct))
+                                                    }).collect();
+                                                    let chart = BarChart::new("MC Distribution", bars);
+                                                    Plot::new("mc_dist").height(150.0)
+                                                        .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                        .show_axes([false, true])
+                                                        .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+                                                }
+
+                                                // VaR confidence band visualization
+                                                ui.add_space(6.0);
+                                                let w = ui.available_width();
+                                                let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::hover());
+                                                let painter = ui.painter_at(rect);
+                                                painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(20, 20, 35));
+                                                // Draw confidence bands
+                                                let scale = |v: f64| -> f32 { ((v + 50.0) / 100.0 * w as f64) as f32 + rect.left() };
+                                                // 99% band
+                                                let x99_lo = scale(mc.worst_case);
+                                                let x99_hi = scale(mc.best_case);
+                                                painter.rect_filled(egui::Rect::from_min_max(
+                                                    egui::pos2(x99_lo, rect.top()), egui::pos2(x99_hi, rect.bottom())),
+                                                    0.0, egui::Color32::from_rgba_premultiplied(100, 100, 180, 30));
+                                                // 95% band
+                                                let x95_lo = scale(mc.var_95);
+                                                let x95_hi = scale(mc.median_outcome * 2.0 - mc.var_95); // approx symmetric
+                                                painter.rect_filled(egui::Rect::from_min_max(
+                                                    egui::pos2(x95_lo, rect.top() + 5.0), egui::pos2(x95_hi, rect.bottom() - 5.0)),
+                                                    0.0, egui::Color32::from_rgba_premultiplied(100, 180, 100, 40));
+                                                // Median line
+                                                let x_med = scale(mc.median_outcome);
+                                                painter.vline(x_med, egui::Rangef::new(rect.top(), rect.bottom()), egui::Stroke::new(2.0, mc_gold));
+                                                // Zero line
+                                                let x_zero = scale(0.0);
+                                                painter.vline(x_zero, egui::Rangef::new(rect.top(), rect.bottom()), egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 60)));
+                                                // Labels
+                                                painter.text(egui::pos2(x_med + 3.0, rect.top() + 2.0), egui::Align2::LEFT_TOP,
+                                                    format!("Median {:.1}%", mc.median_outcome), egui::FontId::monospace(9.0), mc_gold);
+                                                painter.text(egui::pos2(x95_lo, rect.bottom() - 2.0), egui::Align2::LEFT_BOTTOM,
+                                                    format!("VaR95 {:.1}%", mc.var_95), egui::FontId::monospace(9.0), mc_red);
+                                            } else {
+                                                ui.label(egui::RichText::new("Need 30+ daily returns for Monte Carlo. Import DARWIN data.").color(AXIS_TEXT));
                                             }
                                         }
                                         9 => { // Stress Test (from bg cache)
@@ -7403,16 +7466,33 @@ impl TyphooNApp {
                                                 });
                                             }
                                         }
-                                        14 => { // Seasonals — from bg cache
+                                        14 => { // Seasonals — from bg cache (with bar chart)
                                             { let seasonal = &self.bg.seasonal_analysis; if !seasonal.is_empty() {
+                                                // Monthly returns bar chart
+                                                let bars: Vec<PlotBar> = seasonal.iter().enumerate().map(|(i, s)| {
+                                                    let c = if s.avg_return_pct >= 0.0 { egui::Color32::from_rgb(46, 204, 113) } else { egui::Color32::from_rgb(231, 76, 60) };
+                                                    PlotBar::new(i as f64, s.avg_return_pct as f64).width(0.7).fill(c).name(&s.month_name)
+                                                }).collect();
+                                                let chart = BarChart::new("Seasonal Returns", bars);
+                                                Plot::new("seasonal_bars").height(150.0)
+                                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                    .show_axes([false, true])
+                                                    .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
+
+                                                ui.add_space(4.0);
                                                 egui::Grid::new("seasonal_grid").striped(true).num_columns(4).show(ui, |ui| {
-                                                    ui.strong("Month"); ui.strong("Avg Return"); ui.strong("Win%"); ui.strong("Median");
+                                                    let dim = egui::Color32::from_rgb(100, 100, 120);
+                                                    ui.label(egui::RichText::new("Month").color(dim).small());
+                                                    ui.label(egui::RichText::new("Avg Return").color(dim).small());
+                                                    ui.label(egui::RichText::new("Win%").color(dim).small());
+                                                    ui.label(egui::RichText::new("Median").color(dim).small());
                                                     ui.end_row();
                                                     for s in seasonal {
                                                         ui.label(&s.month_name);
                                                         let c = if s.avg_return_pct >= 0.0 { UP } else { DOWN };
                                                         ui.label(egui::RichText::new(format!("{:.2}%", s.avg_return_pct)).color(c));
-                                                        ui.label(format!("{:.1}%", s.win_rate));
+                                                        let wc = if s.win_rate >= 50.0 { UP } else { DOWN };
+                                                        ui.label(egui::RichText::new(format!("{:.0}%", s.win_rate)).color(wc));
                                                         ui.label(format!("{:.2}%", s.median_return_pct));
                                                         ui.end_row();
                                                     }
