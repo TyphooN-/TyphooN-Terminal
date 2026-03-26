@@ -6654,11 +6654,12 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     // View selector dropdown (matching old WebKit 20+ views)
                     let views = [
-                        "Portfolio Summary", "Portfolio VaR", "Equity Curve", "Correlation Matrix",
-                        "Symbol Exposure", "Combined Positions", "Trade Overlaps", "Combined Equity",
+                        "Portfolio Summary", "Portfolio VaR", "Equity Curves", "Correlation Matrix",
+                        "Symbol Exposure", "Combined Positions", "Trade Overlaps", "Drawdown",
                         "Monte Carlo", "Stress Test", "VaR Forecast", "Conditional VaR",
                         "Market Regime", "Tail Risk", "Seasonals", "Sector Exposure",
                         "Liquidity Risk", "Margin Call Sim", "Optimal Allocation", "What-If",
+                        "VaR Simulator",
                     ];
                     let _prev_view = self.darwin_view;
                     ui.horizontal(|ui| {
@@ -6781,14 +6782,60 @@ impl TyphooNApp {
                                                 } // if let Some(vs)
                                             } } // if !daily.is_empty()
                                         }
-                                        2 => { // Equity Curve (from bg cache)
-                                            { let eq_curve = &self.bg.equity_curve;
-                                                if eq_curve.len() > 2 {
-                                                    let points: PlotPoints = PlotPoints::new(
-                                                        eq_curve.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
+                                        2 => { // Equity Curves — all DARWINs overlaid + combined
+                                            let darwin_colors = [
+                                                egui::Color32::from_rgb(26, 188, 156),   // teal
+                                                egui::Color32::from_rgb(52, 152, 219),   // blue
+                                                egui::Color32::from_rgb(241, 196, 15),   // gold
+                                                egui::Color32::from_rgb(155, 89, 182),   // purple
+                                                egui::Color32::from_rgb(230, 126, 34),   // orange
+                                                egui::Color32::from_rgb(231, 76, 60),    // coral
+                                                egui::Color32::from_rgb(46, 204, 113),   // emerald
+                                                egui::Color32::from_rgb(149, 165, 166),  // silver
+                                            ];
+                                            // Combined equity (thick white line)
+                                            ui.label(egui::RichText::new("Combined + Per-DARWIN Equity Curves").strong());
+                                            {
+                                                let eq_curve = &self.bg.equity_curve;
+                                                let details = &self.bg.account_details;
+                                                Plot::new("equity_overlay_plot")
+                                                    .height(300.0)
+                                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                    .legend(egui_plot::Legend::default())
+                                                    .show(ui, |plot_ui| {
+                                                        // Combined equity — bold white
+                                                        if eq_curve.len() > 2 {
+                                                            let pts: PlotPoints = PlotPoints::new(
+                                                                eq_curve.iter().enumerate().map(|(i, (_, b))| [i as f64, *b]).collect()
+                                                            );
+                                                            plot_ui.line(Line::new("Combined", pts).color(egui::Color32::WHITE).width(2.0));
+                                                        }
+                                                        // Per-DARWIN equity curves
+                                                        for (idx, det) in details.iter().enumerate() {
+                                                            if det.equity_curve.len() > 2 {
+                                                                let c = darwin_colors[idx % darwin_colors.len()];
+                                                                let pts: PlotPoints = PlotPoints::new(
+                                                                    det.equity_curve.iter().enumerate().map(|(i, (_, b))| [i as f64, *b]).collect()
+                                                                );
+                                                                plot_ui.line(Line::new(&det.ticker, pts).color(c).width(1.2));
+                                                            }
+                                                        }
+                                                    });
+                                            }
+                                            // Per-DARWIN individual equity curves (smaller, stacked)
+                                            ui.add_space(6.0);
+                                            ui.label(egui::RichText::new("Individual Equity Curves").small().strong());
+                                            for (idx, det) in self.bg.account_details.iter().enumerate() {
+                                                if det.equity_curve.len() > 2 {
+                                                    let c = darwin_colors[idx % darwin_colors.len()];
+                                                    let pts: PlotPoints = PlotPoints::new(
+                                                        det.equity_curve.iter().enumerate().map(|(i, (_, b))| [i as f64, *b]).collect()
                                                     );
-                                                    let line = Line::new("Equity", points).color(ACCENT);
-                                                    Plot::new("port_equity_plot").height(350.0).allow_drag(false).allow_zoom(false)
+                                                    let line = Line::new(&det.ticker, pts).color(c).width(1.5);
+                                                    Plot::new(format!("eq_ind_{}", det.ticker))
+                                                        .height(80.0)
+                                                        .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                        .show_axes([false, true])
                                                         .show(ui, |plot_ui| { plot_ui.line(line); });
                                                 }
                                             }
@@ -6881,16 +6928,86 @@ impl TyphooNApp {
                                                 }
                                             }
                                         }
-                                        7 => { // Combined Equity — from bg cache
-                                            { let eq_curve = &self.bg.equity_curve;
-                                                if eq_curve.len() > 2 {
-                                                    let points: PlotPoints = PlotPoints::new(
-                                                        eq_curve.iter().enumerate().map(|(i, (_, bal))| [i as f64, *bal]).collect()
-                                                    );
-                                                    let line = Line::new("Combined", points).color(ACCENT);
-                                                    Plot::new("combined_eq_plot").height(350.0).allow_drag(false).allow_zoom(false)
-                                                        .show(ui, |plot_ui| { plot_ui.line(line); });
+                                        7 => { // Drawdown — combined + per-DARWIN drawdown curves
+                                            let dd_colors = [
+                                                egui::Color32::from_rgb(26, 188, 156),
+                                                egui::Color32::from_rgb(52, 152, 219),
+                                                egui::Color32::from_rgb(241, 196, 15),
+                                                egui::Color32::from_rgb(155, 89, 182),
+                                                egui::Color32::from_rgb(230, 126, 34),
+                                                egui::Color32::from_rgb(231, 76, 60),
+                                                egui::Color32::from_rgb(46, 204, 113),
+                                                egui::Color32::from_rgb(149, 165, 166),
+                                            ];
+                                            if let Some(ref dd) = self.bg.drawdown_dashboard {
+                                                // Combined drawdown curve (all DARWINs overlaid)
+                                                ui.label(egui::RichText::new("Drawdown Curves (% from peak)").strong());
+                                                Plot::new("dd_overlay_plot")
+                                                    .height(250.0)
+                                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                    .legend(egui_plot::Legend::default())
+                                                    .show(ui, |plot_ui| {
+                                                        // Combined drawdown — bold red
+                                                        if dd.combined.drawdown_curve.len() > 2 {
+                                                            let pts: PlotPoints = PlotPoints::new(
+                                                                dd.combined.drawdown_curve.iter().enumerate().map(|(i, d)| [i as f64, -d.drawdown_pct]).collect()
+                                                            );
+                                                            plot_ui.line(Line::new("Combined", pts).color(egui::Color32::from_rgb(255, 60, 60)).width(2.0));
+                                                        }
+                                                        // Per-DARWIN drawdown curves
+                                                        for (idx, darwin_dd) in dd.darwins.iter().enumerate() {
+                                                            if darwin_dd.drawdown_curve.len() > 2 {
+                                                                let c = dd_colors[idx % dd_colors.len()];
+                                                                let pts: PlotPoints = PlotPoints::new(
+                                                                    darwin_dd.drawdown_curve.iter().enumerate().map(|(i, d)| [i as f64, -d.drawdown_pct]).collect()
+                                                                );
+                                                                plot_ui.line(Line::new(&darwin_dd.darwin_ticker, pts).color(c).width(1.2));
+                                                            }
+                                                        }
+                                                    });
+                                                // Drawdown summary table
+                                                ui.add_space(6.0);
+                                                egui::Grid::new("dd_summary").striped(true).num_columns(4).min_col_width(80.0).show(ui, |ui| {
+                                                    let dim = egui::Color32::from_rgb(100, 100, 120);
+                                                    ui.label(egui::RichText::new("DARWIN").color(dim).small());
+                                                    ui.label(egui::RichText::new("Max DD").color(dim).small());
+                                                    ui.label(egui::RichText::new("Date").color(dim).small());
+                                                    ui.label(egui::RichText::new("Current").color(dim).small());
+                                                    ui.end_row();
+                                                    for d in &dd.darwins {
+                                                        ui.label(egui::RichText::new(&d.darwin_ticker).strong());
+                                                        ui.label(egui::RichText::new(format!("{:.2}%", d.max_drawdown_pct)).color(DOWN));
+                                                        ui.label(egui::RichText::new(&d.max_dd_date).small());
+                                                        let cur_c = if d.current_drawdown_pct > 5.0 { DOWN } else { AXIS_TEXT };
+                                                        ui.label(egui::RichText::new(format!("{:.2}%", d.current_drawdown_pct)).color(cur_c));
+                                                        ui.end_row();
+                                                    }
+                                                    ui.label(egui::RichText::new("COMBINED").strong());
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", dd.combined.max_drawdown_pct)).color(DOWN).strong());
+                                                    ui.label(egui::RichText::new(&dd.combined.max_dd_date).small());
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", dd.combined.current_drawdown_pct)).strong());
+                                                    ui.end_row();
+                                                });
+                                                // Best/Worst days
+                                                if !dd.combined.best_days.is_empty() || !dd.combined.worst_days.is_empty() {
+                                                    ui.add_space(6.0);
+                                                    ui.horizontal(|ui| {
+                                                        ui.vertical(|ui| {
+                                                            ui.label(egui::RichText::new("Best Days").small().strong().color(UP));
+                                                            for d in dd.combined.best_days.iter().take(5) {
+                                                                ui.label(egui::RichText::new(format!("{} +${:.0} ({:+.2}%)", d.date, d.pnl, d.return_pct)).color(UP).small());
+                                                            }
+                                                        });
+                                                        ui.vertical(|ui| {
+                                                            ui.label(egui::RichText::new("Worst Days").small().strong().color(DOWN));
+                                                            for d in dd.combined.worst_days.iter().take(5) {
+                                                                ui.label(egui::RichText::new(format!("{} ${:.0} ({:.2}%)", d.date, d.pnl, d.return_pct)).color(DOWN).small());
+                                                            }
+                                                        });
+                                                    });
                                                 }
+                                            } else {
+                                                ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
                                             }
                                         }
                                         8 => { // Monte Carlo (from bg cache)
@@ -7166,6 +7283,153 @@ impl TyphooNApp {
                                                         }
                                                     });
                                                 }
+                                            }
+                                        }
+                                        20 => { // VaR Simulator — suggest lot size changes to hit target VaR
+                                            let sim_green = egui::Color32::from_rgb(46, 204, 113);
+                                            let sim_red = egui::Color32::from_rgb(231, 76, 60);
+                                            let sim_gold = egui::Color32::from_rgb(241, 196, 15);
+                                            let sim_dim = egui::Color32::from_rgb(100, 100, 120);
+                                            ui.label(egui::RichText::new("VaR Simulator").strong());
+                                            ui.label(egui::RichText::new("Adjust lot sizes to see how VaR changes. Target corridor: 3.25% – 6.5%").color(sim_dim).small());
+                                            ui.add_space(6.0);
+
+                                            // Current per-DARWIN VaR status
+                                            if !self.bg.per_darwin_var.is_empty() && !self.bg.var_multipliers.is_empty() {
+                                                // Show current state + suggestions
+                                                let portfolio_var = self.bg.var_stats.as_ref().map(|v| v.var_95).unwrap_or(0.0);
+                                                let portfolio_bal = self.bg.portfolio.as_ref().map(|p| p.total_final_balance).unwrap_or(100000.0);
+                                                let var_pct: f64 = if portfolio_bal > 0.0 { (portfolio_var / portfolio_bal * 100.0).abs() } else { 0.0 };
+
+                                                let var_status_color = if var_pct >= 3.25 && var_pct <= 6.5 { sim_green }
+                                                    else if var_pct < 3.25 { sim_gold }
+                                                    else { sim_red };
+                                                ui.horizontal(|ui| {
+                                                    ui.label(egui::RichText::new(format!("Current Portfolio VaR 95%: {:.2}%", var_pct)).color(var_status_color).strong());
+                                                    if var_pct < 3.25 {
+                                                        ui.label(egui::RichText::new("BELOW corridor — increase position sizes").color(sim_gold));
+                                                    } else if var_pct > 6.5 {
+                                                        ui.label(egui::RichText::new("ABOVE corridor — reduce position sizes").color(sim_red));
+                                                    } else {
+                                                        ui.label(egui::RichText::new("IN corridor").color(sim_green));
+                                                    }
+                                                });
+                                                ui.add_space(6.0);
+
+                                                // Per-DARWIN VaR breakdown with suggestions
+                                                ui.label(egui::RichText::new("Per-DARWIN Lot Size Suggestions").strong());
+                                                ui.label(egui::RichText::new("To move VaR toward corridor midpoint (4.875%):").color(sim_dim).small());
+                                                ui.add_space(4.0);
+
+                                                let target_mid = 4.875; // midpoint of 3.25-6.5
+                                                egui::Grid::new("var_sim_grid").striped(true).num_columns(7).min_col_width(65.0).show(ui, |ui| {
+                                                    ui.label(egui::RichText::new("DARWIN").color(sim_dim).small());
+                                                    ui.label(egui::RichText::new("VaR 95%").color(sim_dim).small());
+                                                    ui.label(egui::RichText::new("Monthly VaR%").color(sim_dim).small());
+                                                    ui.label(egui::RichText::new("Multiplier").color(sim_dim).small());
+                                                    ui.label(egui::RichText::new("Status").color(sim_dim).small());
+                                                    ui.label(egui::RichText::new("Suggestion").color(sim_dim).small());
+                                                    ui.label(egui::RichText::new("Action").color(sim_dim).small());
+                                                    ui.end_row();
+
+                                                    for vm in &self.bg.var_multipliers {
+                                                        let darwin_var = self.bg.per_darwin_var.iter()
+                                                            .find(|(t, _)| *t == vm.darwin_ticker)
+                                                            .map(|(_, v)| v);
+
+                                                        ui.label(egui::RichText::new(&vm.darwin_ticker).strong());
+
+                                                        // VaR 95% absolute
+                                                        if let Some(v) = darwin_var {
+                                                            ui.label(format!("${:.0}", v.var_95));
+                                                        } else { ui.label("—"); }
+
+                                                        // Monthly VaR %
+                                                        ui.label(format!("{:.2}%", vm.monthly_var));
+
+                                                        // Multiplier
+                                                        let mc = if vm.multiplier > 0.0 && vm.multiplier < 0.5 { sim_red }
+                                                            else if vm.multiplier >= 0.5 { sim_green }
+                                                            else { sim_dim };
+                                                        ui.label(egui::RichText::new(format!("{:.2}x", vm.multiplier)).color(mc));
+
+                                                        // Corridor status
+                                                        let in_corridor = vm.monthly_var >= 3.25 && vm.monthly_var <= 6.5;
+                                                        let sc = if in_corridor { sim_green } else if vm.monthly_var < 3.25 { sim_gold } else { sim_red };
+                                                        let status = if in_corridor { "IN" }
+                                                            else if vm.monthly_var < 3.25 { "LOW" }
+                                                            else { "HIGH" };
+                                                        ui.label(egui::RichText::new(status).color(sc).strong());
+
+                                                        // Suggestion: scale factor to move toward target
+                                                        if vm.monthly_var > 0.01 {
+                                                            let scale = target_mid / vm.monthly_var;
+                                                            let suggestion_c = if scale > 1.0 { sim_green } else { sim_red };
+                                                            ui.label(egui::RichText::new(format!("{:.1}x lots", scale)).color(suggestion_c));
+
+                                                            // Action text
+                                                            if (scale - 1.0).abs() < 0.1 {
+                                                                ui.label(egui::RichText::new("Hold steady").color(sim_dim).small());
+                                                            } else if scale > 1.0 {
+                                                                ui.label(egui::RichText::new(format!("Increase {:.0}%", (scale - 1.0) * 100.0)).color(sim_green).small());
+                                                            } else {
+                                                                ui.label(egui::RichText::new(format!("Reduce {:.0}%", (1.0 - scale) * 100.0)).color(sim_red).small());
+                                                            }
+                                                        } else {
+                                                            ui.label("—"); ui.label("—");
+                                                        }
+                                                        ui.end_row();
+                                                    }
+                                                });
+
+                                                // VaR impact visualization — bar chart
+                                                ui.add_space(8.0);
+                                                ui.label(egui::RichText::new("Monthly VaR % by DARWIN (target corridor shaded)").small().strong());
+                                                {
+                                                    let bars: Vec<PlotBar> = self.bg.var_multipliers.iter().enumerate().map(|(i, vm)| {
+                                                        let c = if vm.monthly_var >= 3.25 && vm.monthly_var <= 6.5 { sim_green }
+                                                            else if vm.monthly_var < 3.25 { sim_gold }
+                                                            else { sim_red };
+                                                        PlotBar::new(i as f64, vm.monthly_var).width(0.7).fill(c).name(&vm.darwin_ticker)
+                                                    }).collect();
+                                                    if !bars.is_empty() {
+                                                        let chart = BarChart::new("VaR %", bars);
+                                                        Plot::new("var_sim_bars")
+                                                            .height(120.0)
+                                                            .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                            .show_axes([false, true])
+                                                            .show(ui, |plot_ui| {
+                                                                plot_ui.bar_chart(chart);
+                                                                // Corridor lines
+                                                                let lo = Line::new("Low", PlotPoints::new(vec![[-0.5, 3.25], [10.0, 3.25]])).color(egui::Color32::from_rgba_premultiplied(241, 196, 15, 100)).width(1.0);
+                                                                let hi = Line::new("High", PlotPoints::new(vec![[-0.5, 6.5], [10.0, 6.5]])).color(egui::Color32::from_rgba_premultiplied(231, 76, 60, 100)).width(1.0);
+                                                                plot_ui.line(lo);
+                                                                plot_ui.line(hi);
+                                                            });
+                                                    }
+                                                }
+
+                                                // Portfolio-level suggestion
+                                                ui.add_space(6.0);
+                                                if var_pct < 3.25 {
+                                                    let scale = target_mid / var_pct.max(0.01);
+                                                    ui.label(egui::RichText::new(format!(
+                                                        "Portfolio: Increase all lot sizes by ~{:.0}% to reach corridor midpoint ({:.2}% → {:.2}%)",
+                                                        (scale - 1.0) * 100.0, var_pct, target_mid
+                                                    )).color(sim_gold));
+                                                } else if var_pct > 6.5 {
+                                                    let scale = target_mid / var_pct;
+                                                    ui.label(egui::RichText::new(format!(
+                                                        "Portfolio: Reduce all lot sizes by ~{:.0}% to reach corridor midpoint ({:.2}% → {:.2}%)",
+                                                        (1.0 - scale) * 100.0, var_pct, target_mid
+                                                    )).color(sim_red));
+                                                } else {
+                                                    ui.label(egui::RichText::new(format!(
+                                                        "Portfolio VaR {:.2}% is within corridor — maintain current sizing.", var_pct
+                                                    )).color(sim_green));
+                                                }
+                                            } else {
+                                                ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
                                             }
                                         }
                                         19 => { // What-If (button-triggered, uses cache)

@@ -267,34 +267,47 @@ pub struct YahooSession {
 
 impl YahooSession {
     /// Create a new authenticated Yahoo Finance session.
-    /// Fetches cookies from yahoo.com, then obtains a crumb token.
+    /// Uses consent-bypass flow to get cookies + crumb token.
     pub async fn new() -> Result<Self, String> {
-        // Build a cookie-jar client
+        // Build a cookie-jar client with redirect following
         let client = reqwest::Client::builder()
             .cookie_store(true)
-            .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
             .build()
             .map_err(|e| format!("Failed to build Yahoo client: {e}"))?;
 
-        // Step 1: Hit finance.yahoo.com to get session cookies
-        let _ = client.get("https://finance.yahoo.com/quote/AAPL/")
-            .send().await
-            .map_err(|e| format!("Yahoo cookie fetch failed: {e}"))?;
+        // Step 1: Accept consent / get session cookies via fc.yahoo.com
+        // This bypasses the EU consent wall that blocks the normal flow
+        let consent_url = "https://fc.yahoo.com";
+        let _ = client.get(consent_url).send().await;
 
-        // Step 2: Fetch crumb using the session cookies
+        // Step 2: Hit finance.yahoo.com to establish full session
+        let _ = client.get("https://finance.yahoo.com/")
+            .header("Accept", "text/html,application/xhtml+xml")
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .send().await
+            .map_err(|e| format!("Yahoo session fetch failed: {e}"))?;
+
+        // Step 3: Fetch crumb using the session cookies
         let crumb_resp = client.get("https://query2.finance.yahoo.com/v1/test/getcrumb")
+            .header("Accept", "text/plain")
             .send().await
             .map_err(|e| format!("Yahoo crumb fetch failed: {e}"))?;
 
-        if !crumb_resp.status().is_success() {
-            return Err(format!("Yahoo crumb returned {}", crumb_resp.status()));
+        let status = crumb_resp.status();
+        let crumb = crumb_resp.text().await
+            .map_err(|e| format!("Yahoo crumb read failed: {e}"))?;
+
+        if !status.is_success() {
+            // Fallback: try without crumb (some endpoints still work)
+            tracing::warn!("Yahoo crumb fetch returned {} — trying without crumb", status);
+            return Ok(Self { client, crumb: String::new() });
         }
 
-        let crumb = crumb_resp.text().await
-            .map_err(|e| format!("Yahoo crumb parse failed: {e}"))?;
-
-        if crumb.is_empty() || crumb.len() > 50 {
-            return Err(format!("Invalid Yahoo crumb: {:?}", &crumb[..crumb.len().min(100)]));
+        if crumb.is_empty() || crumb.contains('<') || crumb.len() > 50 {
+            tracing::warn!("Yahoo crumb looks invalid ({} bytes) — trying without crumb", crumb.len());
+            return Ok(Self { client, crumb: String::new() });
         }
 
         tracing::info!("Yahoo session established (crumb: {}...)", &crumb[..crumb.len().min(6)]);
@@ -307,11 +320,13 @@ pub async fn fetch_yahoo_fundamentals(
     session: &YahooSession,
     ticker: &str,
 ) -> Result<serde_json::Value, String> {
-    let url = format!(
-        "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}&crumb={}",
-        session.crumb
-    );
+    let url = if session.crumb.is_empty() {
+        format!("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}")
+    } else {
+        format!("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}&crumb={}", session.crumb)
+    };
     let resp = session.client.get(&url)
+        .header("Accept", "application/json")
         .send().await
         .map_err(|e| format!("Yahoo fetch failed for {ticker}: {e}"))?;
 
