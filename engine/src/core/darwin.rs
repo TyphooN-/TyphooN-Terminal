@@ -1989,7 +1989,7 @@ pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir:
     let mut futures = Vec::new();
 
     // Header line (first line is the column header from BarCacheWriter)
-    let header = lines.first().copied().unwrap_or("");
+    let _header = lines.first().copied().unwrap_or("");
 
     for line in lines.iter().skip(1) {
         if line.trim().is_empty() { continue; }

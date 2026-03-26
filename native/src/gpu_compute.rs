@@ -1628,11 +1628,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let d = bars[i - j] - sma;
         var_sum = var_sum + d * d;
     }
-    let std = sqrt(var_sum / f32(params.period));
+    let stdev = sqrt(var_sum / f32(params.period));
 
     output[i * 3u] = sma;
-    output[i * 3u + 1u] = sma + 2.0 * std;
-    output[i * 3u + 2u] = sma - 2.0 * std;
+    output[i * 3u + 1u] = sma + 2.0 * stdev;
+    output[i * 3u + 2u] = sma - 2.0 * stdev;
 }
 "#;
 

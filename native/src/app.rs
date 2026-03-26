@@ -195,6 +195,7 @@ struct JournalEntry {
     pnl: Option<f64>,
     strategy: String,
     notes: String,
+    #[allow(dead_code)]
     screenshot_path: Option<String>,
 }
 
