@@ -78,6 +78,65 @@ pub struct GpuCompute {
     sd_zones_pipeline: wgpu::ComputePipeline,
     atr_proj_pipeline: wgpu::ComputePipeline,
     better_vol_pipeline: wgpu::ComputePipeline,
+    anchored_vwap_pipeline: wgpu::ComputePipeline,
+}
+
+impl GpuCompute {
+    /// Compute Anchored VWAP from anchor bar to end. Needs close+volume interleaved buffer.
+    pub fn compute_anchored_vwap(&self, closes: &[f32], volumes: &[f32], anchor_bar: u32) -> Option<Vec<f32>> {
+        if closes.len() != volumes.len() || closes.is_empty() { return None; }
+        let rb_buf = self.readback_buffer.as_ref()?;
+        let n = closes.len() as u32;
+
+        let mut interleaved = Vec::with_capacity(n as usize * 2);
+        for i in 0..n as usize { interleaved.push(closes[i]); interleaved.push(volumes[i]); }
+
+        let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("avwap_in"), size: (n as u64) * 8,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&input_buf, 0, bytemuck_cast_slice(&interleaved));
+
+        let out_size = (n as u64) * 4;
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("avwap_out"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let params = [anchor_bar, n];
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("avwap_params"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("avwap_bg"), layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: input_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("avwap_pass"), timestamp_writes: None });
+            pass.set_pipeline(&self.anchored_vwap_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+        let read_size = out_size.min(rb_buf.size());
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
+    }
 }
 
 impl GpuCompute {
@@ -196,6 +255,7 @@ impl GpuCompute {
         let sd_zones_pipeline = make_pipeline("sd_zones_pipeline", SUPPLY_DEMAND_SHADER);
         let atr_proj_pipeline = make_pipeline("atr_proj_pipeline", ATR_PROJECTION_SHADER);
         let better_vol_pipeline = make_pipeline("better_vol_pipeline", BETTER_VOLUME_SHADER);
+        let anchored_vwap_pipeline = make_pipeline("anchored_vwap_pipeline", ANCHORED_VWAP_SHADER);
 
         Self {
             device,
@@ -238,6 +298,7 @@ impl GpuCompute {
             sd_zones_pipeline,
             atr_proj_pipeline,
             better_vol_pipeline,
+            anchored_vwap_pipeline,
             bind_group_layout,
             readback_buffer: None,
         }
@@ -2665,6 +2726,32 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         output[i] = 3.0;  // high range
     } else {
         output[i] = 0.0;  // normal
+    }
+}
+"#;
+
+const ANCHORED_VWAP_SHADER: &str = r#"
+// Anchored VWAP — sequential from anchor bar to end
+// Cumulative (price × volume) / cumulative volume from anchor point
+// Input: [close, volume] interleaved (2 per bar), anchor_bar in params.period
+struct Params { period: u32, bar_count: u32, }  // period = anchor bar index
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [close0, vol0, close1, vol1, ...]
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    let anchor = params.period;
+    var cum_pv: f32 = 0.0;
+    var cum_vol: f32 = 0.0;
+
+    for (var i: u32 = 0u; i < params.bar_count; i = i + 1u) {
+        if (i < anchor) { output[i] = 0.0; continue; }
+        let close = bars[i * 2u];
+        let vol = bars[i * 2u + 1u];
+        cum_pv = cum_pv + close * vol;
+        cum_vol = cum_vol + vol;
+        output[i] = select(cum_pv / cum_vol, close, cum_vol < 0.000001);
     }
 }
 "#;
