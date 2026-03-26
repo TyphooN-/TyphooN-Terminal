@@ -10542,6 +10542,27 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
+                // Auto MT5SYNC on startup if data dirs are configured
+                {
+                    let paths: Vec<String> = self.mt5_db_paths.iter()
+                        .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
+                        .cloned().collect();
+                    if !paths.is_empty() {
+                        let mut db_path = dirs_home();
+                        db_path.push("cache");
+                        db_path.push("typhoon_cache.db");
+                        let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths.clone(), target: db_path });
+                        self.log.push_back(LogEntry::info(format!("Auto MT5SYNC: {} sources", paths.len())));
+                    }
+                }
+                // Auto SEC scrape on startup
+                {
+                    let mut db_path = dirs_home();
+                    db_path.push("cache");
+                    db_path.push("typhoon_cache.db");
+                    let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
+                    self.log.push_back(LogEntry::info("SEC EDGAR scrape started..."));
+                }
             }
         }
 

@@ -830,7 +830,10 @@ impl SqliteCache {
         let mut stmt = conn.prepare("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let result = stmt.query_row(params![key], |row| {
-            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+            // Try BLOB first, fall back to TEXT→bytes for older BarCacheWriter schemas
+            let data: Vec<u8> = row.get::<_, Vec<u8>>(0)
+                .or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))?;
+            Ok((data, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
         });
         match result {
             Ok(r) => Ok(Some(r)),
