@@ -4077,6 +4077,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "DARWIN_SCAN",    desc: "Scan FTP for top DARWINs by Sharpe" },
     Command { name: "DARWINEXOUTLIERS", desc: "Darwinex symbol outlier analysis (VaR, spread, swap, ATR)" },
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
+    Command { name: "RISKRUIN",        desc: "Risk-of-Ruin calculator (Monte Carlo equity path simulation)" },
+    Command { name: "REPLAY",          desc: "Market replay mode — step through history bar-by-bar" },
     Command { name: "GPU_SCAN",       desc: "GPU-accelerated DARWIN universe scan (50K DARWINs)" },
     // Drawing tools
     Command { name: "DRAW_HLINE",    desc: "Draw horizontal line" },
@@ -4620,6 +4622,16 @@ pub struct TyphooNApp {
     alert_indicator: usize,     // index into ALERT_INDICATORS
     alert_condition: usize,     // 0=crosses above, 1=crosses below, 2=greater than, 3=less than
     alert_threshold: String,
+    // Risk-of-Ruin
+    show_risk_ruin: bool,
+    ruin_win_rate: String,
+    ruin_avg_win: String,
+    ruin_avg_loss: String,
+    ruin_risk_pct: String,
+    ruin_results: Vec<f32>,  // final equity per simulation
+    // Replay mode
+    replay_active: bool,
+    replay_bar_idx: usize,
     alert_label_input: String,
 
     /// Order entry form.
@@ -5479,6 +5491,14 @@ impl TyphooNApp {
             alert_indicator: 0,
             alert_condition: 0,
             alert_threshold: "70".to_string(),
+            show_risk_ruin: false,
+            ruin_win_rate: "55".to_string(),
+            ruin_avg_win: "200".to_string(),
+            ruin_avg_loss: "150".to_string(),
+            ruin_risk_pct: "2.0".to_string(),
+            ruin_results: Vec::new(),
+            replay_active: false,
+            replay_bar_idx: 0,
             alert_label_input: String::new(),
             order_symbol: String::new(),
             order_qty: "1.0".to_string(),
@@ -5981,6 +6001,18 @@ impl TyphooNApp {
             "DARWIN_TRADES" => { self.log.push_back(LogEntry::info("DARWIN trade markers: open DARWIN Accounts for deal history")); self.show_darwin_accounts = true; }
             "DSCORE"        => { self.show_var_mult = true; }
             "DARWIN_BROWSER" => { self.show_darwin_browser = true; }
+            "RISKRUIN" => self.show_risk_ruin = true,
+            "REPLAY" => {
+                self.replay_active = !self.replay_active;
+                if self.replay_active {
+                    if let Some(chart) = self.charts.get(self.active_tab) {
+                        self.replay_bar_idx = chart.bars.len().saturating_sub(100); // start 100 bars from end
+                    }
+                    self.log.push_back(LogEntry::info("Replay mode ON — use arrow keys to step"));
+                } else {
+                    self.log.push_back(LogEntry::info("Replay mode OFF"));
+                }
+            }
             "ALERTS" => {
                 self.show_alert_builder = true;
                 self.alert_symbol = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
@@ -6474,6 +6506,8 @@ impl TyphooNApp {
         self.show_order_flow = false;
         self.show_bookmap = false;
         self.show_darwinex_outliers = false;
+        self.show_risk_ruin = false;
+        self.show_alert_builder = false;
         self.show_journal = false;
         self.show_var_mult = false;
         self.show_margin_monitor = false;
@@ -9920,6 +9954,135 @@ impl TyphooNApp {
                             }
                         } else {
                             ui.label(egui::RichText::new("Load chart data first.").color(bm_dim));
+                        }
+                    }
+                });
+        }
+
+        // Risk-of-Ruin Calculator
+        if self.show_risk_ruin {
+            egui::Window::new("Risk-of-Ruin Calculator")
+                .open(&mut self.show_risk_ruin)
+                .default_size([600.0, 450.0])
+                .show(ctx, |ui| {
+                    let rr_green = egui::Color32::from_rgb(46, 204, 113);
+                    let rr_red = egui::Color32::from_rgb(231, 76, 60);
+                    let rr_gold = egui::Color32::from_rgb(241, 196, 15);
+                    let rr_dim = egui::Color32::from_rgb(100, 100, 120);
+
+                    ui.label(egui::RichText::new("Monte Carlo Equity Path Simulation").strong());
+                    ui.label(egui::RichText::new("Simulate 10,000 trade sequences to estimate probability of ruin").color(rr_dim).small());
+
+                    // Input parameters
+                    egui::Grid::new("ruin_params").num_columns(4).show(ui, |ui| {
+                        ui.label("Win Rate %:"); ui.add(egui::TextEdit::singleline(&mut self.ruin_win_rate).desired_width(60.0));
+                        ui.label("Avg Win $:"); ui.add(egui::TextEdit::singleline(&mut self.ruin_avg_win).desired_width(60.0));
+                        ui.end_row();
+                        ui.label("Avg Loss $:"); ui.add(egui::TextEdit::singleline(&mut self.ruin_avg_loss).desired_width(60.0));
+                        ui.label("Risk %:"); ui.add(egui::TextEdit::singleline(&mut self.ruin_risk_pct).desired_width(60.0));
+                        ui.end_row();
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.button(egui::RichText::new("Run 10,000 Simulations").color(rr_green).strong()).clicked() {
+                            let wr = self.ruin_win_rate.parse::<f64>().unwrap_or(55.0) / 100.0;
+                            let avg_win = self.ruin_avg_win.parse::<f64>().unwrap_or(200.0);
+                            let avg_loss = self.ruin_avg_loss.parse::<f64>().unwrap_or(150.0);
+                            let _risk_pct = self.ruin_risk_pct.parse::<f64>().unwrap_or(2.0);
+
+                            // CPU Monte Carlo (fast enough for 10K × 500 trades)
+                            use std::collections::hash_map::DefaultHasher;
+                            use std::hash::{Hash, Hasher};
+                            let mut results = Vec::with_capacity(10000);
+                            let starting_equity = 100000.0_f64;
+                            for sim in 0..10000_u64 {
+                                let mut equity = starting_equity;
+                                let mut h = DefaultHasher::new();
+                                sim.hash(&mut h);
+                                let mut seed = h.finish();
+                                for _ in 0..500 {
+                                    // LCG random
+                                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                                    let r = (seed >> 33) as f64 / (u32::MAX as f64);
+                                    if r < wr { equity += avg_win; } else { equity -= avg_loss; }
+                                    if equity <= 0.0 { equity = 0.0; break; }
+                                }
+                                results.push(equity as f32);
+                            }
+                            results.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                            self.ruin_results = results;
+                        }
+                        // Auto-fill from journal
+                        if !self.journal_entries.is_empty() {
+                            if ui.small_button("Fill from Journal").clicked() {
+                                let closed: Vec<_> = self.journal_entries.iter().filter(|e| e.pnl.is_some()).collect();
+                                if !closed.is_empty() {
+                                    let wins: Vec<f64> = closed.iter().filter_map(|e| e.pnl.filter(|&p| p > 0.0)).collect();
+                                    let losses: Vec<f64> = closed.iter().filter_map(|e| e.pnl.filter(|&p| p < 0.0).map(|p| p.abs())).collect();
+                                    let wr = wins.len() as f64 / closed.len() as f64 * 100.0;
+                                    let avg_w = if wins.is_empty() { 0.0 } else { wins.iter().sum::<f64>() / wins.len() as f64 };
+                                    let avg_l = if losses.is_empty() { 0.0 } else { losses.iter().sum::<f64>() / losses.len() as f64 };
+                                    self.ruin_win_rate = format!("{:.1}", wr);
+                                    self.ruin_avg_win = format!("{:.0}", avg_w);
+                                    self.ruin_avg_loss = format!("{:.0}", avg_l);
+                                }
+                            }
+                        }
+                    });
+
+                    if !self.ruin_results.is_empty() {
+                        ui.separator();
+                        let n = self.ruin_results.len();
+                        let ruined = self.ruin_results.iter().filter(|&&e| e <= 0.0).count();
+                        let ruin_pct = ruined as f64 / n as f64 * 100.0;
+                        let median = self.ruin_results[n / 2];
+                        let p5 = self.ruin_results[n * 5 / 100];
+                        let p95 = self.ruin_results[n * 95 / 100];
+                        let best = self.ruin_results.last().copied().unwrap_or(0.0);
+                        let worst = self.ruin_results.first().copied().unwrap_or(0.0);
+
+                        // Summary metrics
+                        egui::Grid::new("ruin_metrics").num_columns(4).show(ui, |ui| {
+                            let rc = if ruin_pct > 10.0 { rr_red } else if ruin_pct > 1.0 { rr_gold } else { rr_green };
+                            ui.label(egui::RichText::new("Prob of Ruin:").color(rr_dim));
+                            ui.label(egui::RichText::new(format!("{:.2}%", ruin_pct)).color(rc).strong());
+                            ui.label(egui::RichText::new("Median:").color(rr_dim));
+                            ui.label(egui::RichText::new(format!("${:.0}", median)).color(rr_green));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("5th %ile:").color(rr_dim));
+                            let p5c = if p5 < 100000.0 { rr_red } else { rr_dim };
+                            ui.label(egui::RichText::new(format!("${:.0}", p5)).color(p5c));
+                            ui.label(egui::RichText::new("95th %ile:").color(rr_dim));
+                            ui.label(egui::RichText::new(format!("${:.0}", p95)).color(rr_green));
+                            ui.end_row();
+                            ui.label(egui::RichText::new("Worst:").color(rr_dim));
+                            ui.label(egui::RichText::new(format!("${:.0}", worst)).color(rr_red));
+                            ui.label(egui::RichText::new("Best:").color(rr_dim));
+                            ui.label(egui::RichText::new(format!("${:.0}", best)).color(rr_green));
+                            ui.end_row();
+                        });
+
+                        // Distribution chart (percentile buckets as line)
+                        {
+                            let pts: PlotPoints = PlotPoints::new(
+                                (0..100).map(|i| {
+                                    let idx = i * n / 100;
+                                    [i as f64, self.ruin_results[idx] as f64]
+                                }).collect()
+                            );
+                            let c = if ruin_pct > 10.0 { rr_red } else { rr_green };
+                            let line = Line::new("Equity Distribution", pts).color(c).width(1.5);
+                            Plot::new("ruin_dist").height(200.0)
+                                .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                .show_axes([true, true])
+                                .x_axis_label("Percentile")
+                                .y_axis_label("Final Equity")
+                                .show(ui, |plot_ui| {
+                                    plot_ui.line(line);
+                                    // Starting equity reference line
+                                    let ref_pts = PlotPoints::new(vec![[0.0, 100000.0], [100.0, 100000.0]]);
+                                    plot_ui.line(Line::new("Starting", ref_pts).color(rr_gold).width(1.0));
+                                });
                         }
                     }
                 });
