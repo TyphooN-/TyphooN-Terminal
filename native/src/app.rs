@@ -787,17 +787,31 @@ impl ChartState {
                     self.adx = adx; self.di_plus = dip; self.di_minus = dim;
                 }
 
-                // Remaining indicators — CPU only (no GPU shader yet)
-                // These will be migrated to GPU in future phases
-                let (tk, kj, sa, sb) = compute_ichimoku(&self.bars, 9, 26, 52);
+                // Remaining indicators — GPU where shader exists, CPU fallback
+                let (tk, kj, sa, sb) = compute_ichimoku(&self.bars, 9, 26, 52); // CPU (complex multi-line)
                 self.ichi_tenkan = tk; self.ichi_kijun = kj; self.ichi_span_a = sa; self.ichi_span_b = sb;
-                self.wma = compute_wma(&self.bars, 20);
-                self.hma = compute_hma(&self.bars, 20);
-                self.cci = compute_cci(&self.bars, 20);
-                self.williams_r = compute_williams_r(&self.bars, 14);
-                self.obv = compute_obv(&self.bars);
-                self.momentum = compute_momentum(&self.bars, 10);
-                self.psar = compute_parabolic_sar(&self.bars, 0.02, 0.2);
+
+                if let Some(data) = gpu.compute_wma_gpu(20) {
+                    self.wma = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.wma = compute_wma(&self.bars, 20); }
+
+                self.hma = compute_hma(&self.bars, 20); // CPU (HMA = WMA of delta, complex)
+
+                self.cci = compute_cci(&self.bars, 20); // CPU for now (needs typical price buffer)
+
+                if let Some(data) = gpu.compute_williams_r_gpu(14) {
+                    self.williams_r = data.iter().map(|&v| Some(v as f64)).collect();
+                } else { self.williams_r = compute_williams_r(&self.bars, 14); }
+
+                self.obv = compute_obv(&self.bars); // CPU (needs close+volume interleaved buffer)
+
+                if let Some(data) = gpu.compute_momentum_gpu(10) {
+                    self.momentum = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.momentum = compute_momentum(&self.bars, 10); }
+
+                if let Some(data) = gpu.compute_psar_gpu() {
+                    self.psar = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.psar = compute_parabolic_sar(&self.bars, 0.02, 0.2); }
                 let (au, al) = compute_atr_projection(&self.bars, &self.atr);
                 self.atr_proj_upper = au; self.atr_proj_lower = al;
                 self.better_vol_type = compute_better_volume(&self.bars);

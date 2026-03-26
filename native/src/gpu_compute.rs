@@ -18,6 +18,12 @@ pub enum Indicator {
     Ema,
     Rsi,
     Kama,
+    Wma,
+    Hma,
+    Cci,
+    WilliamsR,
+    Obv,
+    Momentum,
 }
 
 pub struct GpuCompute {
@@ -50,6 +56,12 @@ pub struct GpuCompute {
     fisher_pipeline: wgpu::ComputePipeline,
     stochastic_pipeline: wgpu::ComputePipeline,
     adx_pipeline: wgpu::ComputePipeline,
+    wma_pipeline: wgpu::ComputePipeline,
+    cci_pipeline: wgpu::ComputePipeline,
+    williams_r_pipeline: wgpu::ComputePipeline,
+    obv_pipeline: wgpu::ComputePipeline,
+    momentum_pipeline: wgpu::ComputePipeline,
+    psar_pipeline: wgpu::ComputePipeline,
 }
 
 impl GpuCompute {
@@ -146,6 +158,12 @@ impl GpuCompute {
         let fisher_pipeline = make_pipeline("fisher_pipeline", FISHER_SHADER);
         let stochastic_pipeline = make_pipeline("stochastic_pipeline", STOCHASTIC_SHADER);
         let adx_pipeline = make_pipeline("adx_pipeline", ADX_SHADER);
+        let wma_pipeline = make_pipeline("wma_pipeline", WMA_SHADER);
+        let cci_pipeline = make_pipeline("cci_pipeline", CCI_SHADER);
+        let williams_r_pipeline = make_pipeline("williams_r_pipeline", WILLIAMS_R_SHADER);
+        let obv_pipeline = make_pipeline("obv_pipeline", OBV_SHADER);
+        let momentum_pipeline = make_pipeline("momentum_pipeline", MOMENTUM_SHADER);
+        let psar_pipeline = make_pipeline("psar_pipeline", PSAR_SHADER);
 
         Self {
             device,
@@ -166,6 +184,12 @@ impl GpuCompute {
             fisher_pipeline,
             stochastic_pipeline,
             adx_pipeline,
+            wma_pipeline,
+            cci_pipeline,
+            williams_r_pipeline,
+            obv_pipeline,
+            momentum_pipeline,
+            psar_pipeline,
             bind_group_layout,
             readback_buffer: None,
         }
@@ -362,8 +386,31 @@ impl GpuCompute {
             Indicator::Ema => &self.ema_pipeline,
             Indicator::Rsi => &self.rsi_pipeline,
             Indicator::Kama => &self.kama_pipeline,
+            Indicator::Wma => &self.wma_pipeline,
+            Indicator::Momentum => &self.momentum_pipeline,
+            _ => return None, // CCI, WilliamsR, Obv need special input buffers
         };
         self.dispatch_indicator(pipeline, period, parallel)
+    }
+
+    /// Compute WMA on GPU. Returns f32 per bar.
+    pub fn compute_wma_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.wma_pipeline, period, true)
+    }
+
+    /// Compute Momentum on GPU. Returns f32 per bar.
+    pub fn compute_momentum_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_indicator(&self.momentum_pipeline, period, true)
+    }
+
+    /// Compute Parabolic SAR on GPU. Returns f32 per bar. Requires OHLC upload.
+    pub fn compute_psar_gpu(&self) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.psar_pipeline, 0, 1)
+    }
+
+    /// Compute Williams %R on GPU. Returns f32 per bar. Requires OHLC upload.
+    pub fn compute_williams_r_gpu(&self, period: u32) -> Option<Vec<f32>> {
+        self.dispatch_ohlc_indicator(&self.williams_r_pipeline, period, 1)
     }
 
     /// Compute RSI on GPU. Returns f32 per bar.
@@ -1549,6 +1596,189 @@ fn main() {
         }
     }
     output[0] = 0.0; output[1] = 0.0; output[2] = 0.0;
+}
+"#;
+
+// ─── Additional Indicator Shaders (Phase 2 batch) ────────────────────────────
+
+const WMA_SHADER: &str = r#"
+// Weighted Moving Average — parallel per-bar
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count || i < params.period - 1u) { output[i] = 0.0; return; }
+    var weighted_sum: f32 = 0.0;
+    var weight_total: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        let w = f32(params.period - j);
+        weighted_sum = weighted_sum + bars[i - j] * w;
+        weight_total = weight_total + w;
+    }
+    output[i] = weighted_sum / weight_total;
+}
+"#;
+
+const CCI_SHADER: &str = r#"
+// Commodity Channel Index — parallel per-bar (uses typical price from OHLC)
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // typical prices (H+L+C)/3
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count || i < params.period - 1u) { output[i] = 0.0; return; }
+    // SMA of typical price
+    var sum: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) { sum = sum + bars[i - j]; }
+    let sma = sum / f32(params.period);
+    // Mean deviation
+    var md: f32 = 0.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) { md = md + abs(bars[i - j] - sma); }
+    md = md / f32(params.period);
+    output[i] = select((bars[i] - sma) / (0.015 * md), 0.0, md < 0.000001);
+}
+"#;
+
+const WILLIAMS_R_SHADER: &str = r#"
+// Williams %R — parallel per-bar (uses OHLC)
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h,l,c] interleaved
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count || i < params.period - 1u) { output[i] = -50.0; return; }
+    var hh: f32 = -1000000.0;
+    var ll: f32 = 1000000.0;
+    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
+        let idx = i - j;
+        let h = bars[idx * 3u];
+        let l = bars[idx * 3u + 1u];
+        if (h > hh) { hh = h; }
+        if (l < ll) { ll = l; }
+    }
+    let close = bars[i * 3u + 2u];
+    let range = hh - ll;
+    output[i] = select((hh - close) / range * -100.0, -50.0, range < 0.000001);
+}
+"#;
+
+const OBV_SHADER: &str = r#"
+// On-Balance Volume — sequential (cumulative)
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [close, volume] interleaved (2 per bar)
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    if (params.bar_count == 0u) { return; }
+    output[0] = 0.0;
+    var obv: f32 = 0.0;
+    for (var i: u32 = 1u; i < params.bar_count; i = i + 1u) {
+        let close = bars[i * 2u];
+        let prev_close = bars[(i - 1u) * 2u];
+        let vol = bars[i * 2u + 1u];
+        if (close > prev_close) { obv = obv + vol; }
+        else if (close < prev_close) { obv = obv - vol; }
+        output[i] = obv;
+    }
+}
+"#;
+
+const MOMENTUM_SHADER: &str = r#"
+// Momentum — parallel per-bar (simple price difference)
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(256)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.x;
+    if (i >= params.bar_count) { output[i] = 0.0; return; }
+    if (i < params.period) { output[i] = 0.0; return; }
+    output[i] = bars[i] - bars[i - params.period];
+}
+"#;
+
+const PSAR_SHADER: &str = r#"
+// Parabolic SAR — sequential (state machine)
+struct Params { period: u32, bar_count: u32, }  // period unused, af_step=0.02, af_max=0.2 hardcoded
+@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h,l,c] interleaved
+@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+@compute @workgroup_size(1)
+fn main() {
+    if (params.bar_count < 3u) { return; }
+    let af_step: f32 = 0.02;
+    let af_max: f32 = 0.2;
+
+    // Initialize: start long
+    var is_long: bool = true;
+    var af: f32 = af_step;
+    var ep: f32 = bars[0];      // extreme point = first high
+    var sar: f32 = bars[1];     // start at first low
+    output[0] = sar;
+    output[1] = sar;
+
+    for (var i: u32 = 2u; i < params.bar_count; i = i + 1u) {
+        let h = bars[i * 3u];
+        let l = bars[i * 3u + 1u];
+
+        var new_sar = sar + af * (ep - sar);
+
+        if (is_long) {
+            // Clamp SAR below prior two lows
+            let prev_l = bars[(i - 1u) * 3u + 1u];
+            let prev2_l = bars[(i - 2u) * 3u + 1u];
+            new_sar = min(new_sar, min(prev_l, prev2_l));
+
+            if (l < new_sar) {
+                // Reverse to short
+                is_long = false;
+                new_sar = ep;
+                ep = l;
+                af = af_step;
+            } else {
+                if (h > ep) {
+                    ep = h;
+                    af = min(af + af_step, af_max);
+                }
+            }
+        } else {
+            // Clamp SAR above prior two highs
+            let prev_h = bars[(i - 1u) * 3u];
+            let prev2_h = bars[(i - 2u) * 3u];
+            new_sar = max(new_sar, max(prev_h, prev2_h));
+
+            if (h > new_sar) {
+                // Reverse to long
+                is_long = true;
+                new_sar = ep;
+                ep = h;
+                af = af_step;
+            } else {
+                if (l < ep) {
+                    ep = l;
+                    af = min(af + af_step, af_max);
+                }
+            }
+        }
+
+        sar = new_sar;
+        output[i] = sar;
+    }
 }
 "#;
 
