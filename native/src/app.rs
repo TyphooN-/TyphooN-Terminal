@@ -8335,6 +8335,49 @@ impl TyphooNApp {
                                                     ui.end_row();
                                                 }
                                             });
+                                                // ── DARWIN Ranking — composite score ──
+                                                if !self.bg.account_details.is_empty() {
+                                                    ui.add_space(8.0);
+                                                    ui.label(egui::RichText::new("DARWIN Ranking (Composite Score)").strong());
+
+                                                    let mut rankings: Vec<(&str, f64, f64, f64, f64, f64)> = Vec::new(); // (ticker, sharpe, recovery, decay, composite, cagr)
+                                                    for det in &self.bg.account_details {
+                                                        let sharpe = det.var_stats.as_ref().map(|v| v.sharpe).unwrap_or(0.0);
+                                                        let rf = det.recovery_factor;
+                                                        let decay = det.dd_duration.0 as f64; // max DD duration (lower = better)
+                                                        let repl = det.ftp_summary.as_ref().map(|_| 1.0).unwrap_or(0.0); // has FTP data
+
+                                                        // Composite: higher = better
+                                                        // Sharpe (weight 40%) + Recovery Factor (30%) - DD Duration penalty (20%) + Data completeness (10%)
+                                                        let composite = sharpe * 0.4 + rf.min(5.0) / 5.0 * 0.3 - (decay / 200.0).min(1.0) * 0.2 + repl * 0.1;
+                                                        rankings.push((&det.ticker, sharpe, det.recovery_factor, det.dd_duration.0 as f64, composite * 100.0, det.cagr));
+                                                    }
+                                                    rankings.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal));
+
+                                                    egui::Grid::new("darwin_ranking").striped(true).num_columns(7).show(ui, |ui| {
+                                                        ui.label(egui::RichText::new("Rank").color(AXIS_TEXT).small().strong());
+                                                        ui.label(egui::RichText::new("DARWIN").color(AXIS_TEXT).small().strong());
+                                                        ui.label(egui::RichText::new("Score").color(AXIS_TEXT).small().strong());
+                                                        ui.label(egui::RichText::new("Sharpe").color(AXIS_TEXT).small().strong());
+                                                        ui.label(egui::RichText::new("CAGR").color(AXIS_TEXT).small().strong());
+                                                        ui.label(egui::RichText::new("Recovery").color(AXIS_TEXT).small().strong());
+                                                        ui.label(egui::RichText::new("Max DD Days").color(AXIS_TEXT).small().strong());
+                                                        ui.end_row();
+                                                        for (rank, (ticker, sharpe, rf, dd_days, score, cagr)) in rankings.iter().enumerate() {
+                                                            let rank_c = match rank { 0 => egui::Color32::from_rgb(255, 215, 0), 1 => egui::Color32::from_rgb(192, 192, 192), 2 => egui::Color32::from_rgb(205, 127, 50), _ => egui::Color32::WHITE };
+                                                            ui.label(egui::RichText::new(format!("#{}", rank + 1)).color(rank_c).small().strong());
+                                                            ui.label(egui::RichText::new(*ticker).small());
+                                                            let sc = if *score > 50.0 { UP } else if *score > 25.0 { egui::Color32::from_rgb(241, 196, 15) } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("{:.0}", score)).color(sc).small().strong());
+                                                            ui.label(egui::RichText::new(format!("{:.2}", sharpe)).small());
+                                                            let cc = if *cagr >= 0.0 { UP } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("{:.1}%", cagr)).color(cc).small());
+                                                            ui.label(egui::RichText::new(format!("{:.2}", rf)).small());
+                                                            ui.label(egui::RichText::new(format!("{:.0}", dd_days)).small());
+                                                            ui.end_row();
+                                                        }
+                                                    });
+                                                }
                                         }
                                         1 => { // Portfolio VaR (from bg cache)
                                             { let daily = &self.bg.daily_returns; if !daily.is_empty() {
@@ -8740,6 +8783,65 @@ impl TyphooNApp {
                                             }
                                         }
                                         3 => { // Correlation Matrix (from bg cache)
+                                            // ── Visual Correlation Heatmap ──
+                                            {
+                                                let tickers: Vec<&str> = self.bg.accounts.iter().map(|a| a.darwin_ticker.as_str()).collect();
+                                                let n = tickers.len();
+                                                if n >= 2 {
+                                                    ui.label(egui::RichText::new("Correlation Heatmap").strong());
+                                                    let cell_size = 40.0_f32;
+                                                    let label_w = 50.0_f32;
+
+                                                    // Header row
+                                                    ui.horizontal(|ui| {
+                                                        ui.add_space(label_w);
+                                                        for t in &tickers {
+                                                            ui.add_sized([cell_size, 14.0], egui::Label::new(
+                                                                egui::RichText::new(*t).small().monospace().color(AXIS_TEXT)
+                                                            ));
+                                                        }
+                                                    });
+
+                                                    // Matrix rows
+                                                    for (i, row_ticker) in tickers.iter().enumerate() {
+                                                        ui.horizontal(|ui| {
+                                                            ui.add_sized([label_w, cell_size], egui::Label::new(
+                                                                egui::RichText::new(*row_ticker).small().monospace().strong()
+                                                            ));
+                                                            for (j, col_ticker) in tickers.iter().enumerate() {
+                                                                let corr = if i == j { 1.0 } else {
+                                                                    self.bg.correlations.iter()
+                                                                        .find(|c| (c.darwin_a == *row_ticker && c.darwin_b == *col_ticker) ||
+                                                                                  (c.darwin_b == *row_ticker && c.darwin_a == *col_ticker))
+                                                                        .map(|c| c.correlation)
+                                                                        .unwrap_or(0.0)
+                                                                };
+
+                                                                // Color: red for high (>0.7), yellow for moderate, green for low, blue for negative
+                                                                let color = if corr > 0.95 { egui::Color32::from_rgb(231, 76, 60) }     // danger red
+                                                                    else if corr > 0.7 { egui::Color32::from_rgb(230, 126, 34) }         // orange
+                                                                    else if corr > 0.3 { egui::Color32::from_rgb(241, 196, 15) }         // yellow
+                                                                    else if corr > -0.3 { egui::Color32::from_rgb(46, 204, 113) }        // green
+                                                                    else { egui::Color32::from_rgb(52, 152, 219) };                       // blue (negative)
+
+                                                                let (rect, _) = ui.allocate_exact_size(egui::vec2(cell_size, cell_size), egui::Sense::hover());
+                                                                ui.painter().rect_filled(rect, 2.0, color);
+                                                                // Text overlay
+                                                                ui.painter().text(
+                                                                    rect.center(),
+                                                                    egui::Align2::CENTER_CENTER,
+                                                                    format!("{:.2}", corr),
+                                                                    egui::FontId::monospace(9.0),
+                                                                    egui::Color32::WHITE,
+                                                                );
+                                                            }
+                                                        });
+                                                    }
+                                                    ui.add_space(8.0);
+                                                    ui.separator();
+                                                }
+                                            }
+                                            // ── Text Correlation Table ──
                                             { let corrs = &self.bg.correlations; if !corrs.is_empty() {
                                                 egui::Grid::new("corr_grid").striped(true).num_columns(3).show(ui, |ui| {
                                                     ui.strong("DARWIN A"); ui.strong("DARWIN B"); ui.strong("Correlation");
@@ -9284,6 +9386,63 @@ impl TyphooNApp {
                                                             ui.end_row();
                                                         }
                                                     });
+                                                }
+                                                // ── Calendar P&L Heatmap (GitHub-style) ──
+                                                if !self.bg.daily_returns.is_empty() {
+                                                    ui.add_space(8.0);
+                                                    ui.label(egui::RichText::new("Daily P&L Calendar Heatmap").strong());
+
+                                                    // Group by year
+                                                    let mut by_year: std::collections::BTreeMap<i32, Vec<&darwin::DailyReturn>> = std::collections::BTreeMap::new();
+                                                    for d in &self.bg.daily_returns {
+                                                        if d.date.len() >= 4 {
+                                                            if let Ok(year) = d.date[..4].parse::<i32>() {
+                                                                by_year.entry(year).or_default().push(d);
+                                                            }
+                                                        }
+                                                    }
+
+                                                    let cell_size = 8.0_f32;
+                                                    let gap = 1.0_f32;
+
+                                                    for (year, days) in by_year.iter().rev().take(3) { // last 3 years
+                                                        ui.label(egui::RichText::new(format!("{}", year)).small().strong());
+                                                        let (rect, _) = ui.allocate_exact_size(
+                                                            egui::vec2(53.0 * (cell_size + gap), 7.0 * (cell_size + gap)),
+                                                            egui::Sense::hover(),
+                                                        );
+
+                                                        for day in days {
+                                                            // Parse date to get week_of_year and day_of_week
+                                                            if let Ok(date) = chrono::NaiveDate::parse_from_str(&day.date, "%Y-%m-%d") {
+                                                                use chrono::Datelike;
+                                                                let week = date.iso_week().week() as f32;
+                                                                let dow = date.weekday().num_days_from_monday() as f32;
+
+                                                                let x = rect.left() + week * (cell_size + gap);
+                                                                let y = rect.top() + dow * (cell_size + gap);
+
+                                                                let intensity = (day.return_pct.abs() as f32 / 2.0).min(1.0); // normalize, cap at 2%
+                                                                let color = if day.pnl >= 0.0 {
+                                                                    egui::Color32::from_rgb(
+                                                                        (20.0 + 30.0 * intensity) as u8,
+                                                                        (60.0 + 195.0 * intensity) as u8,
+                                                                        (20.0 + 30.0 * intensity) as u8,
+                                                                    )
+                                                                } else {
+                                                                    egui::Color32::from_rgb(
+                                                                        (60.0 + 195.0 * intensity) as u8,
+                                                                        (20.0 + 30.0 * intensity) as u8,
+                                                                        (20.0 + 30.0 * intensity) as u8,
+                                                                    )
+                                                                };
+
+                                                                let cell_rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_size, cell_size));
+                                                                ui.painter().rect_filled(cell_rect, 1.0, color);
+                                                            }
+                                                        }
+                                                        ui.add_space(4.0);
+                                                    }
                                                 }
                                             } else {
                                                 ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
