@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 const API_BASE: &str = "https://api.tastytrade.com";
-const SANDBOX_BASE: &str = "https://api.cert.tastytrade.com";
+const SANDBOX_BASE: &str = "https://api.cert.tastyworks.com";
 
 /// tastytrade broker client.
 pub struct TastytradeBroker {

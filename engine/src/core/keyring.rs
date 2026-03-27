@@ -47,4 +47,5 @@ pub mod keys {
     pub const FINNHUB_KEY: &str = "finnhub_api_key";
     pub const TT_USERNAME: &str = "tastytrade_username";
     pub const TT_PASSWORD: &str = "tastytrade_password";
+    pub const FRED_KEY: &str = "fred_api_key";
 }

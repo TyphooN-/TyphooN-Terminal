@@ -152,6 +152,21 @@ impl Timeframe {
         }
     }
 
+    /// Timeframe in minutes (used by ATR projection MTF).
+    fn minutes(self) -> u32 {
+        match self {
+            Timeframe::M1  => 1,
+            Timeframe::M5  => 5,
+            Timeframe::M15 => 15,
+            Timeframe::M30 => 30,
+            Timeframe::H1  => 60,
+            Timeframe::H4  => 240,
+            Timeframe::D1  => 1440,
+            Timeframe::W1  => 10080,
+            Timeframe::MN1 => 43200,
+        }
+    }
+
     /// Build the cache key suffix used by the MT5 XML import pipeline.
     fn cache_suffix(self) -> &'static str {
         match self {
@@ -421,6 +436,12 @@ struct ChartState {
     prev_daily_low: Option<f64>,
     prev_weekly_high: Option<f64>,
     prev_weekly_low: Option<f64>,
+    prev_h4_high: Option<f64>,
+    prev_h4_low: Option<f64>,
+    prev_h1_high: Option<f64>,
+    prev_h1_low: Option<f64>,
+    prev_monthly_high: Option<f64>,
+    prev_monthly_low: Option<f64>,
     /// WMA(20), HMA(20).
     wma: Vec<Option<f64>>,
     hma: Vec<Option<f64>>,
@@ -433,9 +454,14 @@ struct ChartState {
     momentum: Vec<Option<f64>>,
     /// Parabolic SAR(0.02, 0.2).
     psar: Vec<Option<f64>>,
-    /// ATR Projection (open ± ATR bands).
+    /// MTF SMA lines — (label, color_idx, projected_points) matching MTF_MA.mqh.
+    /// H1/200, H4/200, D1/200, W1/200, W1/100, MN1/100
+    mtf_sma: Vec<(String, Vec<(usize, f64)>)>,
+    /// ATR Projection (open ± ATR bands — legacy per-bar, kept for GPU path).
     atr_proj_upper: Vec<Option<f64>>,
     atr_proj_lower: Vec<Option<f64>>,
+    /// ATR Projection MTF levels (label, open, atr_value, start_bar_idx) — matches ATR_Projection.mqh.
+    atr_proj_levels: Vec<(&'static str, f64, f64, usize)>,
     /// Better Volume classification.
     better_vol_type: Vec<u8>, // 0=normal, 1=climax_up, 2=climax_dn, 3=high, 4=low, 5=churn
     /// Pivot points (computed from daily data).
@@ -539,6 +565,12 @@ impl ChartState {
             prev_daily_low: None,
             prev_weekly_high: None,
             prev_weekly_low: None,
+            prev_h4_high: None,
+            prev_h4_low: None,
+            prev_h1_high: None,
+            prev_h1_low: None,
+            prev_monthly_high: None,
+            prev_monthly_low: None,
             wma: Vec::new(),
             hma: Vec::new(),
             cci: Vec::new(),
@@ -546,8 +578,10 @@ impl ChartState {
             obv: Vec::new(),
             momentum: Vec::new(),
             psar: Vec::new(),
+            mtf_sma: Vec::new(),
             atr_proj_upper: Vec::new(),
             atr_proj_lower: Vec::new(),
+            atr_proj_levels: Vec::new(),
             better_vol_type: Vec::new(),
             pivot_p: None, pivot_r1: None, pivot_r2: None, pivot_s1: None, pivot_s2: None,
             fractal_up: Vec::new(),
@@ -702,7 +736,8 @@ impl ChartState {
                 }).collect();
                 self.view_offset = self.bars.len().saturating_sub(1);
                 self.compute_indicators_gpu(gpu);
-                // MultiKAMA: load higher TF bars and compute KAMA on each
+                // MTF indicators: load higher TF bars, compute, project onto chart
+                self.compute_mtf_sma(cache);
                 self.compute_multi_kama(cache);
                 log.push_back(LogEntry::info(format!(
                     "Loaded {} bars for {} [{}]",
@@ -927,6 +962,9 @@ impl ChartState {
                     }
                 }
 
+                // ATR Projection MTF levels (matching ATR_Projection.mqh)
+                self.atr_proj_levels = compute_atr_projection_levels(&self.bars, self.timeframe.minutes());
+
                 // BetterVolume — GPU (parallel classification)
                 if let Some(data) = gpu.compute_better_volume_gpu(20) {
                     self.better_vol_type = data.iter().map(|&v| v as u8).collect();
@@ -934,10 +972,13 @@ impl ChartState {
                     self.better_vol_type = compute_better_volume(&self.bars);
                 }
 
-                let (pdh, pdl, pwh, pwl) = compute_prev_candle_levels(&self.bars); // CPU (time boundaries — requires timestamp parsing)
-                self.prev_daily_high = pdh; self.prev_daily_low = pdl;
-                self.prev_weekly_high = pwh; self.prev_weekly_low = pwl;
-                if let (Some(h), Some(l)) = (pdh, pdl) {
+                let (h1, h4, d1, w1, mn1) = compute_prev_candle_levels(&self.bars);
+                self.prev_h1_high = h1.0; self.prev_h1_low = h1.1;
+                self.prev_h4_high = h4.0; self.prev_h4_low = h4.1;
+                self.prev_daily_high = d1.0; self.prev_daily_low = d1.1;
+                self.prev_weekly_high = w1.0; self.prev_weekly_low = w1.1;
+                self.prev_monthly_high = mn1.0; self.prev_monthly_low = mn1.1;
+                if let (Some(h), Some(l)) = (d1.0, d1.1) {
                     let prev_close = self.bars.iter().rev().find(|b| {
                         let day = b.ts_ms / 86_400_000;
                         let last_day = self.bars.last().map(|lb| lb.ts_ms / 86_400_000).unwrap_or(0);
@@ -1080,15 +1121,17 @@ impl ChartState {
         let (au, al) = compute_atr_projection(&self.bars, &self.atr);
         self.atr_proj_upper = au;
         self.atr_proj_lower = al;
+        self.atr_proj_levels = compute_atr_projection_levels(&self.bars, self.timeframe.minutes());
         self.better_vol_type = compute_better_volume(&self.bars);
         // Previous candle levels — find the second-to-last daily/weekly bar boundaries
-        let (pdh, pdl, pwh, pwl) = compute_prev_candle_levels(&self.bars);
-        self.prev_daily_high = pdh;
-        self.prev_daily_low = pdl;
-        self.prev_weekly_high = pwh;
-        self.prev_weekly_low = pwl;
+        let (h1, h4, d1, w1, mn1) = compute_prev_candle_levels(&self.bars);
+        self.prev_h1_high = h1.0; self.prev_h1_low = h1.1;
+        self.prev_h4_high = h4.0; self.prev_h4_low = h4.1;
+        self.prev_daily_high = d1.0; self.prev_daily_low = d1.1;
+        self.prev_weekly_high = w1.0; self.prev_weekly_low = w1.1;
+        self.prev_monthly_high = mn1.0; self.prev_monthly_low = mn1.1;
         // Pivot points from previous day
-        if let (Some(h), Some(l)) = (pdh, pdl) {
+        if let (Some(h), Some(l)) = (d1.0, d1.1) {
             let prev_close = self.bars.iter().rev().find(|b| {
                 let day = b.ts_ms / 86_400_000;
                 let last_day = self.bars.last().map(|lb| lb.ts_ms / 86_400_000).unwrap_or(0);
@@ -1130,6 +1173,71 @@ impl ChartState {
     /// and computes retracement (0-100%) + extension (127.2-423.6%) levels.
     /// Compute MultiKAMA: load bars from higher timeframes and compute KAMA(10,2,30) on each.
     /// Projects KAMA values onto this chart's x-axis by matching timestamps.
+    /// Compute MTF SMA lines matching MTF_MA.mqh behavior.
+    /// Loads HTF bars from cache, computes SMA on them, projects onto current chart.
+    /// Lines: H1/200, H4/200, D1/200, W1/200, W1/100, MN1/100
+    fn compute_mtf_sma(&mut self, cache: &SqliteCache) {
+        self.mtf_sma.clear();
+        if self.bars.is_empty() { return; }
+
+        let base_sym = {
+            let parts: Vec<&str> = self.symbol.split(':').collect();
+            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
+            if is_tf && parts.len() > 1 { parts[..parts.len()-1].join(":") } else { self.symbol.clone() }
+        };
+
+        // (label, tf_suffix, sma_period) — matching MTF_MA.mqh plotted lines
+        let mtf_lines: &[(&str, &str, usize)] = &[
+            ("H1 200",  "1Hour",  200),
+            ("H4 200",  "4Hour",  200),
+            ("D1 200",  "1Day",   200),
+            ("W1 200",  "1Week",  200),
+            ("W1 100",  "1Week",  100),
+            ("MN1 100", "1Month", 100),
+        ];
+
+        let prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
+
+        for &(label, tf_suffix, period) in mtf_lines {
+            // Skip if this is the same or lower TF as the chart
+            if self.timeframe.cache_suffix() == tf_suffix { continue; }
+
+            let mut htf_bars: Option<Vec<Bar>> = None;
+            for prefix in &prefixes {
+                let key = format!("{}{}:{}", prefix, base_sym, tf_suffix);
+                if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                    htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                        ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                    }).collect());
+                    break;
+                }
+            }
+
+            if let Some(htf) = htf_bars {
+                if htf.len() < period { continue; }
+                let sma_vals = compute_sma(&htf, period);
+
+                // Project HTF SMA onto current chart bars via timestamp matching
+                let mut projected: Vec<(usize, f64)> = Vec::new();
+                let mut htf_idx = 0;
+                for (i, bar) in self.bars.iter().enumerate() {
+                    while htf_idx + 1 < htf.len() && htf[htf_idx + 1].ts_ms <= bar.ts_ms {
+                        htf_idx += 1;
+                    }
+                    if htf_idx < sma_vals.len() {
+                        if let Some(v) = sma_vals[htf_idx] {
+                            projected.push((i, v));
+                        }
+                    }
+                }
+
+                if !projected.is_empty() {
+                    self.mtf_sma.push((label.to_string(), projected));
+                }
+            }
+        }
+    }
+
     fn compute_multi_kama(&mut self, cache: &SqliteCache) {
         self.multi_kama.clear();
         if self.bars.is_empty() { return; }
@@ -1355,13 +1463,16 @@ fn compute_rsi(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     out
 }
 
+/// Ehlers Fisher Transform — matches EhlersFisherTransform.mqh exactly.
+/// Smoothing: 0.5 * oscillator + 0.5 * prev_work (NOT 0.33/0.67)
+/// Fisher: 0.25 * ln((1+w)/(1-w)) + 0.5 * prev_fisher (recursive)
 fn compute_fisher(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
     let n = bars.len();
     let mut fisher = vec![None; n];
     let mut signal = vec![None; n];
     if n <= period { return (fisher, signal); }
 
-    let mut val = 0.0_f64;
+    let mut work = 0.0_f64;
     let mut prev_fisher = 0.0_f64;
 
     for i in period..n {
@@ -1372,9 +1483,10 @@ fn compute_fisher(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<
 
         let range = hi - lo;
         let raw = if range < f64::EPSILON { 0.0 } else { 2.0 * ((mid - lo) / range - 0.5) };
-        val = 0.33 * raw.clamp(-0.999, 0.999) + 0.67 * val;
-        let clamped = val.clamp(-0.999, 0.999);
-        let f = 0.5 * ((1.0 + clamped) / (1.0 - clamped)).ln();
+        // Smoothing: 0.5/0.5 (matching MT5 line 134)
+        work = (0.5 * raw + 0.5 * work).clamp(-0.999, 0.999);
+        // Fisher: 0.25 * ln(...) + 0.5 * prev (matching MT5 line 136)
+        let f = 0.25 * ((1.0 + work) / (1.0 - work)).ln() + 0.5 * prev_fisher;
 
         signal[i] = Some(prev_fisher);
         fisher[i] = Some(f);
@@ -1703,60 +1815,76 @@ fn compute_fractals_down(bars: &[Bar]) -> Vec<bool> {
     out
 }
 
-fn compute_prev_candle_levels(bars: &[Bar]) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
-    if bars.len() < 2 { return (None, None, None, None); }
+/// Previous candle levels for multiple timeframes — matches PreviousCandleLevels.mqh.
+/// Returns (H1, H4, D1, W1, MN1) previous candle high/low.
+#[allow(clippy::type_complexity)]
+fn compute_prev_candle_levels(bars: &[Bar]) -> (
+    (Option<f64>, Option<f64>), // H1
+    (Option<f64>, Option<f64>), // H4
+    (Option<f64>, Option<f64>), // D1
+    (Option<f64>, Option<f64>), // W1
+    (Option<f64>, Option<f64>), // MN1
+) {
+    if bars.len() < 2 { return ((None,None),(None,None),(None,None),(None,None),(None,None)); }
 
-    // Group bars by day
-    let mut daily_groups: Vec<(f64, f64)> = Vec::new(); // (high, low) per day
-    let mut current_day = -1_i64;
-    let mut day_hi = f64::MIN;
-    let mut day_lo = f64::MAX;
-
-    for bar in bars {
-        let day = bar.ts_ms / (86_400_000); // ms per day
-        if day != current_day {
-            if current_day >= 0 { daily_groups.push((day_hi, day_lo)); }
-            current_day = day;
-            day_hi = bar.high;
-            day_lo = bar.low;
-        } else {
-            day_hi = day_hi.max(bar.high);
-            day_lo = day_lo.min(bar.low);
+    fn group_prev(bars: &[Bar], period_ms: i64) -> (Option<f64>, Option<f64>) {
+        let mut groups: Vec<(f64, f64)> = Vec::new();
+        let mut current_period = -1_i64;
+        let mut hi = f64::MIN;
+        let mut lo = f64::MAX;
+        for bar in bars {
+            let p = bar.ts_ms / period_ms;
+            if p != current_period {
+                if current_period >= 0 { groups.push((hi, lo)); }
+                current_period = p;
+                hi = bar.high;
+                lo = bar.low;
+            } else {
+                hi = hi.max(bar.high);
+                lo = lo.min(bar.low);
+            }
         }
+        if current_period >= 0 { groups.push((hi, lo)); }
+        if groups.len() >= 2 {
+            let prev = &groups[groups.len() - 2];
+            (Some(prev.0), Some(prev.1))
+        } else { (None, None) }
     }
-    if current_day >= 0 { daily_groups.push((day_hi, day_lo)); }
 
-    let (pdh, pdl) = if daily_groups.len() >= 2 {
-        let prev = &daily_groups[daily_groups.len() - 2];
-        (Some(prev.0), Some(prev.1))
-    } else { (None, None) };
-
-    // Group by week (7 days)
-    let mut weekly_groups: Vec<(f64, f64)> = Vec::new();
-    let mut current_week = -1_i64;
-    let mut week_hi = f64::MIN;
-    let mut week_lo = f64::MAX;
-
-    for bar in bars {
-        let week = bar.ts_ms / (7 * 86_400_000);
-        if week != current_week {
-            if current_week >= 0 { weekly_groups.push((week_hi, week_lo)); }
-            current_week = week;
-            week_hi = bar.high;
-            week_lo = bar.low;
-        } else {
-            week_hi = week_hi.max(bar.high);
-            week_lo = week_lo.min(bar.low);
+    // Monthly: group by year-month
+    fn group_prev_monthly(bars: &[Bar]) -> (Option<f64>, Option<f64>) {
+        let mut groups: Vec<(f64, f64)> = Vec::new();
+        let mut cur_ym = 0i32;
+        let mut hi = f64::MIN;
+        let mut lo = f64::MAX;
+        for bar in bars {
+            let dt = chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0).unwrap_or_default();
+            use chrono::Datelike;
+            let ym = dt.year() * 100 + dt.month() as i32;
+            if ym != cur_ym {
+                if cur_ym > 0 { groups.push((hi, lo)); }
+                cur_ym = ym;
+                hi = bar.high;
+                lo = bar.low;
+            } else {
+                hi = hi.max(bar.high);
+                lo = lo.min(bar.low);
+            }
         }
+        if cur_ym > 0 { groups.push((hi, lo)); }
+        if groups.len() >= 2 {
+            let prev = &groups[groups.len() - 2];
+            (Some(prev.0), Some(prev.1))
+        } else { (None, None) }
     }
-    if current_week >= 0 { weekly_groups.push((week_hi, week_lo)); }
 
-    let (pwh, pwl) = if weekly_groups.len() >= 2 {
-        let prev = &weekly_groups[weekly_groups.len() - 2];
-        (Some(prev.0), Some(prev.1))
-    } else { (None, None) };
+    let h1 = group_prev(bars, 3_600_000);           // 1 hour
+    let h4 = group_prev(bars, 14_400_000);           // 4 hours
+    let d1 = group_prev(bars, 86_400_000);           // 1 day
+    let w1 = group_prev(bars, 7 * 86_400_000);       // 1 week
+    let mn1 = group_prev_monthly(bars);
 
-    (pdh, pdl, pwh, pwl)
+    (h1, h4, d1, w1, mn1)
 }
 
 fn compute_stochastic(bars: &[Bar], k_period: usize, k_smooth: usize, d_smooth: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
@@ -2052,6 +2180,154 @@ fn compute_parabolic_sar(bars: &[Bar], af_step: f64, af_max: f64) -> Vec<Option<
     out
 }
 
+/// ATR Projection — matches ATR_Projection.mqh behavior.
+/// For each higher timeframe (D1, W1, MN1, H4, H1, M15):
+///   find the current HTF period's open price and compute ATR(14) on HTF bars,
+///   then project lines at open ± ATR.
+/// Returns Vec of (label, open, atr_value, start_bar_idx) for each HTF level.
+fn compute_atr_projection_levels(bars: &[Bar], chart_tf_minutes: u32) -> Vec<(&'static str, f64, f64, usize)> {
+    if bars.is_empty() { return Vec::new(); }
+    let mut levels = Vec::new();
+    // HTF definitions: (label, period_minutes, lookback_bars_for_line_start, max_chart_tf)
+    // max_chart_tf: only show if chart timeframe <= this (matching MT5 _Period checks)
+    let htfs: &[(&str, u32, usize, u32)] = &[
+        ("M15",  15,       7,   60),      // show on M1..H1
+        ("H1",   60,       12,  240),     // show on M1..H4
+        ("H4",   240,      11,  1440),    // show on M1..D1
+        ("D1",   1440,     7,   10080),   // show on M1..W1
+        ("W1",   10080,    4,   u32::MAX),// show always
+        ("MN1",  43200,    2,   u32::MAX),// show always
+    ];
+
+    for &(label, htf_minutes, lookback, max_tf) in htfs {
+        if chart_tf_minutes > max_tf { continue; }
+        // Can only project HTFs >= chart timeframe
+        if htf_minutes < chart_tf_minutes { continue; }
+
+        // Find the current HTF period open: the open of the first bar that starts the current HTF candle
+        // Walk backward from the last bar to find where the HTF period boundary is
+        let last_ts = bars.last().unwrap().ts_ms;
+        let htf_secs = htf_minutes as i64 * 60;
+        // For monthly, align to start of month; for weekly, align to Monday 00:00 UTC
+        let current_htf_start = if htf_minutes >= 43200 {
+            // Monthly: start of current month
+            let dt = chrono::DateTime::from_timestamp(last_ts / 1000, 0).unwrap_or_default();
+            use chrono::Datelike;
+            chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .map(|ndt| ndt.and_utc().timestamp() * 1000)
+                .unwrap_or(last_ts)
+        } else if htf_minutes >= 10080 {
+            // Weekly: start of current week (Monday 00:00 UTC)
+            let dt = chrono::DateTime::from_timestamp(last_ts / 1000, 0).unwrap_or_default();
+            use chrono::Datelike;
+            let days_since_mon = dt.weekday().num_days_from_monday() as i64;
+            let mon = dt.date_naive() - chrono::Duration::days(days_since_mon);
+            mon.and_hms_opt(0, 0, 0)
+                .map(|ndt| ndt.and_utc().timestamp() * 1000)
+                .unwrap_or(last_ts)
+        } else {
+            // Standard: floor to HTF period
+            let ts_sec = last_ts / 1000;
+            (ts_sec / (htf_secs)) * htf_secs * 1000
+        };
+
+        // Find the bar at or after current_htf_start → that's the HTF candle open
+        let htf_open_bar = bars.iter().position(|b| b.ts_ms >= current_htf_start);
+        let htf_open = match htf_open_bar {
+            Some(idx) => bars[idx].open,
+            None => continue,
+        };
+
+        // Compute ATR(14) on aggregated HTF bars
+        // Aggregate chart bars into HTF OHLC candles, then compute ATR
+        let htf_bars = aggregate_bars_to_htf(bars, htf_minutes);
+        let atr_period = 14;
+        if htf_bars.len() < atr_period + 1 { continue; }
+        // Compute ATR on the HTF bars (last value)
+        let mut tr_vals = Vec::with_capacity(htf_bars.len());
+        for i in 0..htf_bars.len() {
+            let tr = if i == 0 {
+                htf_bars[i].high - htf_bars[i].low
+            } else {
+                let hl = htf_bars[i].high - htf_bars[i].low;
+                let hc = (htf_bars[i].high - htf_bars[i-1].close).abs();
+                let lc = (htf_bars[i].low - htf_bars[i-1].close).abs();
+                hl.max(hc).max(lc)
+            };
+            tr_vals.push(tr);
+        }
+        // Simple ATR: average of last `atr_period` TR values
+        let start = tr_vals.len().saturating_sub(atr_period);
+        let atr_val: f64 = tr_vals[start..].iter().sum::<f64>() / atr_period as f64;
+        if atr_val <= 0.0 { continue; }
+
+        // Start bar index for drawing the line (lookback HTF bars → find corresponding chart bar)
+        let start_idx = if lookback < htf_bars.len() {
+            let htf_start_bar = &htf_bars[htf_bars.len() - lookback - 1];
+            bars.iter().position(|b| b.ts_ms >= htf_start_bar.ts_ms).unwrap_or(0)
+        } else { 0 };
+
+        levels.push((label, htf_open, atr_val, start_idx));
+    }
+    levels
+}
+
+/// Aggregate chart-timeframe bars into higher-timeframe OHLC bars.
+fn aggregate_bars_to_htf(bars: &[Bar], htf_minutes: u32) -> Vec<Bar> {
+    if bars.is_empty() { return Vec::new(); }
+    let htf_ms = htf_minutes as i64 * 60 * 1000;
+    let mut result = Vec::new();
+    let mut current = Bar {
+        ts_ms: 0, open: 0.0, high: f64::NEG_INFINITY,
+        low: f64::INFINITY, close: 0.0, volume: 0.0,
+    };
+    let mut period_start = 0i64;
+
+    for bar in bars {
+        let bar_period = if htf_minutes >= 43200 {
+            // Monthly alignment
+            let dt = chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0).unwrap_or_default();
+            use chrono::Datelike;
+            chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .map(|ndt| ndt.and_utc().timestamp() * 1000)
+                .unwrap_or(bar.ts_ms)
+        } else if htf_minutes >= 10080 {
+            // Weekly alignment (Monday 00:00)
+            let dt = chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0).unwrap_or_default();
+            use chrono::Datelike;
+            let days_since_mon = dt.weekday().num_days_from_monday() as i64;
+            let mon = dt.date_naive() - chrono::Duration::days(days_since_mon);
+            mon.and_hms_opt(0, 0, 0)
+                .map(|ndt| ndt.and_utc().timestamp() * 1000)
+                .unwrap_or(bar.ts_ms)
+        } else {
+            (bar.ts_ms / htf_ms) * htf_ms
+        };
+
+        if bar_period != period_start {
+            if current.ts_ms > 0 {
+                result.push(current.clone());
+            }
+            period_start = bar_period;
+            current = Bar {
+                ts_ms: bar_period,
+                open: bar.open, high: bar.high, low: bar.low,
+                close: bar.close, volume: bar.volume,
+            };
+        } else {
+            if bar.high > current.high { current.high = bar.high; }
+            if bar.low < current.low { current.low = bar.low; }
+            current.close = bar.close;
+            current.volume += bar.volume;
+        }
+    }
+    if current.ts_ms > 0 { result.push(current); }
+    result
+}
+
+/// Legacy per-bar ATR projection (kept for GPU compute path compatibility).
 fn compute_atr_projection(bars: &[Bar], atr: &[Option<f64>]) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
     let n = bars.len();
     let mut upper = vec![None; n];
@@ -2597,6 +2873,42 @@ fn draw_chart(
     if flags.sma100 { draw_indicator_line(painter, chart_rect, bars, &chart.sma100, start_idx, bar_w, &price_to_y, SMA100_COL, 1.5); }
     if flags.kama   { draw_indicator_line(painter, chart_rect, bars, &chart.kama,   start_idx, bar_w, &price_to_y, KAMA_COL,   1.5); }
     // MultiKAMA: higher TF KAMAs (MT5: clrWhite for KAMA, but visually distinguished)
+    // MTF SMA lines (matching MTF_MA.mqh: H1/200, H4/200, D1/200, W1/200, W1/100, MN1/100)
+    if flags.sma200 && !chart.mtf_sma.is_empty() {
+        // Colors matching MTF_MA.mqh SetIndexStyle (lines 226-231)
+        let mtf_sma_colors: &[(&str, egui::Color32)] = &[
+            ("H1 200",  egui::Color32::from_rgb(255, 99, 71)),   // clrTomato
+            ("H4 200",  egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
+            ("D1 200",  egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
+            ("W1 200",  egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
+            ("W1 100",  egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
+            ("MN1 100", egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
+        ];
+        for (label, projected) in &chart.mtf_sma {
+            let color = mtf_sma_colors.iter()
+                .find(|(l, _)| l == label)
+                .map(|(_, c)| *c)
+                .unwrap_or(egui::Color32::from_rgb(200, 200, 200));
+            let mut prev: Option<egui::Pos2> = None;
+            for &(bar_idx, sma_val) in projected {
+                if bar_idx >= start_idx && bar_idx < end_idx {
+                    let rel = bar_idx - start_idx;
+                    let x = chart_rect.left() + (rel as f32 + 0.5) * bar_w;
+                    let y = price_to_y(sma_val);
+                    if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                        let pt = egui::pos2(x, y);
+                        if let Some(p) = prev {
+                            painter.line_segment([p, pt], egui::Stroke::new(2.0, color));
+                        }
+                        prev = Some(pt);
+                    } else {
+                        prev = None;
+                    }
+                }
+            }
+        }
+    }
+
     // MQL4 mode uses white for all; MTF_MA overlay uses magenta for higher TFs
     if flags.kama && !chart.multi_kama.is_empty() {
         let htf_colors = [
@@ -2631,39 +2943,41 @@ fn draw_chart(
     if flags.wma    { draw_indicator_line(painter, chart_rect, bars, &chart.wma,    start_idx, bar_w, &price_to_y, WMA_COL,    1.0); }
     if flags.hma    { draw_indicator_line(painter, chart_rect, bars, &chart.hma,    start_idx, bar_w, &price_to_y, HMA_COL,    1.5); }
 
-    // ATR Projection bands
-    // ATR Projection — yellow dotted HORIZONTAL lines (matching ATR_Projection.mqh: STYLE_DOT, clrYellow, width 2)
+    // ATR Projection — multi-timeframe horizontal lines (matching ATR_Projection.mqh)
+    // Each HTF draws upper/lower at HTF_open ± HTF_ATR(14), yellow dotted
     if flags.atr_proj {
-        // Draw horizontal dotted lines at the LAST bar's Open ± ATR value
-        if let Some(last_bar) = bars.last() {
-            let last_abs = start_idx + bars.len() - 1;
-            if let Some(Some(atr_val)) = chart.atr.get(last_abs) {
-                let upper_price = last_bar.open + atr_val;
-                let lower_price = last_bar.open - atr_val;
-                let atr_yellow = egui::Color32::from_rgb(255, 255, 0); // clrYellow
-                for price in [upper_price, lower_price] {
-                    let y = price_to_y(price);
-                    if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                        // Dotted horizontal line across entire chart width
-                        let mut dx = chart_rect.left();
-                        while dx < chart_rect.right() {
-                            let end = (dx + 3.0).min(chart_rect.right());
-                            painter.line_segment(
-                                [egui::pos2(dx, y), egui::pos2(end, y)],
-                                egui::Stroke::new(2.0, atr_yellow),
-                            );
-                            dx += 6.0;
-                        }
-                        // Label
-                        let label = if price > last_bar.open { "ATR Hi" } else { "ATR Lo" };
-                        painter.text(
-                            egui::pos2(chart_rect.left() + 4.0, y - 10.0),
-                            egui::Align2::LEFT_BOTTOM,
-                            &format!("{} {}", label, format_price(price)),
-                            egui::FontId::monospace(8.0),
-                            atr_yellow,
+        let atr_yellow = egui::Color32::from_rgb(255, 255, 0); // clrYellow
+        for &(label, htf_open, atr_val, line_start_idx) in &chart.atr_proj_levels {
+            let upper_price = htf_open + atr_val;
+            let lower_price = htf_open - atr_val;
+            // Determine x start from the line_start_idx
+            let x_start = if line_start_idx >= start_idx {
+                chart_rect.left() + ((line_start_idx - start_idx) as f32) * bar_w
+            } else {
+                chart_rect.left()
+            };
+            let x_end = chart_rect.right();
+            for (price, suffix) in [(upper_price, "Hi"), (lower_price, "Lo")] {
+                let y = price_to_y(price);
+                if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                    // Dotted horizontal line from x_start to x_end
+                    let mut dx = x_start;
+                    while dx < x_end {
+                        let end = (dx + 3.0).min(x_end);
+                        painter.line_segment(
+                            [egui::pos2(dx, y), egui::pos2(end, y)],
+                            egui::Stroke::new(2.0, atr_yellow),
                         );
+                        dx += 6.0;
                     }
+                    // Label: "ATR D1 Hi 1.2345"
+                    painter.text(
+                        egui::pos2(x_start.max(chart_rect.left()) + 4.0, y - 10.0),
+                        egui::Align2::LEFT_BOTTOM,
+                        &format!("ATR {} {} {}", label, suffix, format_price(price)),
+                        egui::FontId::monospace(8.0),
+                        atr_yellow,
+                    );
                 }
             }
         }
@@ -2695,11 +3009,18 @@ fn draw_chart(
 
     // ── previous candle levels ─────────────────────────────────────────────
     if flags.prev_levels {
+        // Matching PreviousCandleLevels.mqh — White for previous, per-TF colors
         let level_pairs = [
-            (chart.prev_daily_high, "D Hi", egui::Color32::WHITE),
-            (chart.prev_daily_low, "D Lo", egui::Color32::WHITE),
-            (chart.prev_weekly_high, "W Hi", egui::Color32::from_rgb(255, 100, 255)),
-            (chart.prev_weekly_low, "W Lo", egui::Color32::from_rgb(255, 100, 255)),
+            (chart.prev_h1_high,      "H1 Hi",  egui::Color32::from_rgb(180, 180, 180)),
+            (chart.prev_h1_low,       "H1 Lo",  egui::Color32::from_rgb(180, 180, 180)),
+            (chart.prev_h4_high,      "H4 Hi",  egui::Color32::from_rgb(200, 200, 200)),
+            (chart.prev_h4_low,       "H4 Lo",  egui::Color32::from_rgb(200, 200, 200)),
+            (chart.prev_daily_high,   "D Hi",   egui::Color32::WHITE),
+            (chart.prev_daily_low,    "D Lo",   egui::Color32::WHITE),
+            (chart.prev_weekly_high,  "W Hi",   egui::Color32::from_rgb(255, 0, 255)),   // Magenta
+            (chart.prev_weekly_low,   "W Lo",   egui::Color32::from_rgb(255, 0, 255)),
+            (chart.prev_monthly_high, "MN Hi",  egui::Color32::from_rgb(255, 0, 255)),
+            (chart.prev_monthly_low,  "MN Lo",  egui::Color32::from_rgb(255, 0, 255)),
         ];
         for (price_opt, label, color) in &level_pairs {
             if let Some(p) = price_opt {
@@ -4101,12 +4422,11 @@ const COMMANDS: &[Command] = &[
     Command { name: "DARWIN_TRADES", desc: "Toggle deal history markers on chart" },
     Command { name: "DSCORE",        desc: "D-Score estimation components" },
     Command { name: "DARWIN_BROWSER", desc: "Browse DARWIN FTP universe (50K DARWINs)" },
-    Command { name: "DARWIN_SCAN",    desc: "Scan FTP for top DARWINs by Sharpe" },
+    Command { name: "DARWINIA_SCAN",  desc: "DarwinIA universe scan — top DARWINs by Sharpe (GPU → CPU)" },
     Command { name: "DARWINEXOUTLIERS", desc: "Darwinex symbol outlier analysis (VaR, spread, swap, ATR)" },
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
     Command { name: "RISKRUIN",        desc: "Risk-of-Ruin calculator (Monte Carlo equity path simulation)" },
     Command { name: "REPLAY",          desc: "Market replay mode — step through history bar-by-bar" },
-    Command { name: "GPU_SCAN",       desc: "GPU-accelerated DARWIN universe scan (50K DARWINs)" },
     // Drawing tools
     Command { name: "DRAW_HLINE",    desc: "Draw horizontal line" },
     Command { name: "DRAW_TRENDLINE",desc: "Draw trendline (2 clicks)" },
@@ -4536,6 +4856,8 @@ pub struct TyphooNApp {
 
     /// Finnhub API key.
     finnhub_key: String,
+    /// FRED (Federal Reserve Economic Data) API key.
+    fred_key: String,
     /// Cached news articles (headline, source, datetime).
     news_articles: Vec<(String, String, String)>,
 
@@ -5391,20 +5713,30 @@ impl TyphooNApp {
                         let now_ms = chrono::Utc::now().timestamp_millis();
                         let mut total_bars = 0usize;
                         for tf in &timeframes {
-                            // Fetch last ~1000 bars worth of history
-                            let span_ms = match tf.as_str() {
-                                "1Min" => 60_000i64 * 1000,
-                                "5Min" => 300_000i64 * 1000,
-                                "15Min" => 900_000i64 * 1000,
-                                "30Min" => 1_800_000i64 * 1000,
-                                "1Hour" => 3_600_000i64 * 1000,
-                                "4Hour" => 14_400_000i64 * 1000,
-                                "1Day" => 86_400_000i64 * 1000,
-                                "1Week" => 604_800_000i64 * 1000,
-                                "1Month" => 2_592_000_000i64 * 1000,
-                                _ => 86_400_000i64 * 1000,
+                            // Full history backfill: go back to earliest possible data
+                            // BTC: 2013, ETH: 2016, most alts: 2017+
+                            // For lower TFs, Kraken only keeps ~1-2 years of 1Min/5Min
+                            let start = match tf.as_str() {
+                                "1Min"  => now_ms - 30i64 * 24 * 3600 * 1000,    // 30 days (Kraken 1Min limit)
+                                "5Min"  => now_ms - 90i64 * 24 * 3600 * 1000,    // 90 days
+                                "15Min" => now_ms - 365i64 * 24 * 3600 * 1000,   // 1 year
+                                "30Min" => now_ms - 2 * 365i64 * 24 * 3600 * 1000, // 2 years
+                                "1Hour" => now_ms - 5 * 365i64 * 24 * 3600 * 1000, // 5 years
+                                "4Hour" => now_ms - 10 * 365i64 * 24 * 3600 * 1000, // 10 years
+                                _       => {
+                                    // 1Day, 1Week, 1Month: go back to 2013 (BTC genesis era)
+                                    chrono::NaiveDate::from_ymd_opt(2013, 1, 1)
+                                        .and_then(|d| d.and_hms_opt(0, 0, 0))
+                                        .map(|ndt| ndt.and_utc().timestamp() * 1000)
+                                        .unwrap_or(now_ms - 13 * 365i64 * 24 * 3600 * 1000)
+                                }
                             };
-                            let start = now_ms - span_ms;
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                format!("Kraken {} {} fetching from {}...", symbol, tf,
+                                    chrono::DateTime::from_timestamp(start / 1000, 0)
+                                        .map(|dt| dt.format("%Y-%m-%d").to_string())
+                                        .unwrap_or_default())
+                            ));
                             match kraken::fetch_binance_klines(&client, &symbol, tf, start, now_ms).await {
                                 Ok(bars) => {
                                     let count = bars.len();
@@ -5597,6 +5929,7 @@ impl TyphooNApp {
             tt_password: String::new(),
             tt_sandbox: true,
             finnhub_key: String::new(),
+            fred_key: String::new(),
             news_articles: Vec::new(),
             sl_price: None,
             tp_price: None,
@@ -5773,16 +6106,14 @@ impl TyphooNApp {
                     }
                     if let Some(ref cache) = cache_arc {
                         let phase_start = std::time::Instant::now();
-                        tracing::info!("BG thread: cache available, running queries...");
+                        tracing::trace!("BG thread: lightweight refresh...");
 
                         // Phase 1a: ONLY list accounts (no table creation, no scans)
                         // Table creation moved to Phase 1b — even IF NOT EXISTS can be slow on 3.9GB DB
                         if let Ok(conn) = cache.connection() {
-                            let t = std::time::Instant::now();
                             data.accounts = darwin::list_darwin_accounts(&conn).unwrap_or_default();
-                            tracing::info!("BG: list_accounts {}ms (n={})", t.elapsed().as_millis(), data.accounts.len());
                         }
-                        tracing::info!("BG: Phase 1a done in {}ms", phase_start.elapsed().as_millis());
+                        tracing::trace!("BG: Phase 1a done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
                         // Phase 1b: table creation + SEC data + cache stats
@@ -5794,28 +6125,22 @@ impl TyphooNApp {
                             data.sec_alerts = sec_filing::get_filing_alerts(&conn, false).unwrap_or_default();
                         }
                         data.cache_stats = cache.stats().ok();
-                        tracing::info!("BG: Phase 1b done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
                         if let Ok(conn) = cache.connection() {
-                            let t = std::time::Instant::now();
                             data.portfolio = darwin::get_portfolio_summary(&conn).ok();
-                            tracing::info!("BG: portfolio_summary {}ms", t.elapsed().as_millis());
-                            let t = std::time::Instant::now();
                             data.daily_returns = darwin::get_portfolio_daily_returns(&conn).unwrap_or_default();
-                            tracing::info!("BG: daily_returns {}ms (n={})", t.elapsed().as_millis(), data.daily_returns.len());
                             data.correlations = darwin::get_darwin_correlations(&conn).unwrap_or_default();
                             data.exposure = darwin::get_portfolio_exposure(&conn).unwrap_or_default();
                             data.open_positions = darwin::get_portfolio_open_positions(&conn).unwrap_or_default();
                         }
-                        tracing::info!("BG: Phase 1b done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
                         // Phase 1c: heavier queries — release conn between each to avoid blocking UI
                         {
                             let t = std::time::Instant::now();
                             data.detailed_stats = cache.detailed_stats().unwrap_or_default();
-                            tracing::info!("BG: detailed_stats {}ms (n={})", t.elapsed().as_millis(), data.detailed_stats.len());
+                            tracing::trace!("BG: detailed_stats {}ms (n={})", t.elapsed().as_millis(), data.detailed_stats.len());
                         }
                         if let Ok(conn) = cache.connection() {
                             data.equity_curve = darwin::get_portfolio_equity_curve(&conn).unwrap_or_default();
@@ -5834,7 +6159,7 @@ impl TyphooNApp {
                             data.upcoming_earnings = fundamentals::get_upcoming_earnings(&conn, 50).unwrap_or_default();
                             data.upcoming_dividends = fundamentals::get_upcoming_dividends(&conn, 50).unwrap_or_default();
                         } // release conn
-                        tracing::info!("BG: Phase 1c done in {}ms", phase_start.elapsed().as_millis());
+                        tracing::trace!("BG: Phase 1c done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
                         // Phases 2-8: expensive computation — only on first run or every 5 minutes
@@ -5878,6 +6203,8 @@ impl TyphooNApp {
                             data.var_multipliers = darwin::compute_var_multipliers(&conn).unwrap_or_default();
                         }
                         if let Ok(conn) = cache.connection() {
+                            // No live prices available in BG thread — pass empty map
+                            // Closed balance still populated from deals; unrealized = 0 without live feed
                             let prices = std::collections::HashMap::new();
                             data.floating_equity = darwin::compute_floating_equity(&conn, &prices).ok();
                         }
@@ -6294,22 +6621,17 @@ impl TyphooNApp {
                     }
                 }
             }
-            "DARWIN_SCAN" => {
+            "DARWINIA_SCAN" | "DARWIN_SCAN" | "GPU_SCAN" => {
                 if self.darwin_ftp_dir.is_empty() {
                     self.log.push_back(LogEntry::warn("Set Darwinex FTP Dir in Settings first"));
-                } else {
-                    let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
-                    self.log.push_back(LogEntry::info("DARWIN FTP universe scan started (min 90 trading days)..."));
-                }
-            }
-            "GPU_SCAN" => {
-                if self.darwin_ftp_dir.is_empty() {
-                    self.log.push_back(LogEntry::warn("Set Darwinex FTP Dir in Settings first"));
-                } else if self.gpu_darwin.is_none() {
-                    self.log.push_back(LogEntry::warn("GPU not available"));
-                } else {
+                } else if self.gpu_darwin.is_some() {
+                    // GPU available — use GPU-accelerated scan
                     let _ = self.broker_tx.send(BrokerCmd::DarwinGpuScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
-                    self.log.push_back(LogEntry::info("GPU DARWIN scan started..."));
+                    self.log.push_back(LogEntry::info("DarwinIA scan started (GPU, 50K DARWINs)..."));
+                } else {
+                    // CPU fallback
+                    let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                    self.log.push_back(LogEntry::info("DarwinIA scan started (CPU fallback, no GPU)..."));
                 }
             }
             // Drawing tools
@@ -6773,6 +7095,7 @@ impl TyphooNApp {
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
 
     fn handle_zoom(chart: &mut ChartState, delta: f32) {
+        if chart.bars.is_empty() { return; }
         // TradingView-style zoom: scroll up = zoom in (fewer bars), scroll down = zoom out
         // Progressive factor: ~5% per notch (15px), capped at 15% per frame
         let pct = (delta * 0.003).clamp(-0.15, 0.15);
@@ -6784,8 +7107,10 @@ impl TyphooNApp {
         // When zooming in: view_offset moves right (toward latest)
         // When zooming out: view_offset moves left (toward oldest)
         let delta_bars = new_vis as isize - old_vis as isize;
+        let min_off = (new_vis as isize - 1).min(chart.bars.len() as isize - 1).max(0);
+        let max_off = (chart.bars.len() as isize - 1).max(min_off);
         chart.view_offset = (chart.view_offset as isize + delta_bars / 2)
-            .clamp(new_vis as isize - 1, chart.bars.len() as isize - 1) as usize;
+            .clamp(min_off, max_off) as usize;
         chart.visible_bars = new_vis;
     }
 
@@ -6841,6 +7166,12 @@ impl TyphooNApp {
                         ui.label("tastytrade Pass:");
                         ui.add(egui::TextEdit::singleline(&mut self.tt_password).desired_width(250.0).password(true));
                         ui.end_row();
+                        ui.label("tastytrade Mode:");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.tt_sandbox, true, "Sandbox");
+                            ui.radio_value(&mut self.tt_sandbox, false, "Production");
+                        });
+                        ui.end_row();
                     });
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -6851,7 +7182,7 @@ impl TyphooNApp {
                         };
                         if ui.button(connect_label).clicked() && !self.broker_connected {
                             if !self.broker_api_key.is_empty() && !self.broker_secret.is_empty() {
-                                // Save credentials to system keyring
+                                // Save all credentials to system keyring
                                 let _ = keyring::store(keyring::keys::ALPACA_API_KEY, &self.broker_api_key);
                                 let _ = keyring::store(keyring::keys::ALPACA_SECRET, &self.broker_secret);
                                 if !self.finnhub_key.is_empty() {
@@ -6867,6 +7198,22 @@ impl TyphooNApp {
                                     secret: self.broker_secret.clone(),
                                     paper: self.broker_paper,
                                 });
+                            }
+                        }
+                        // tastytrade connect button (right next to Alpaca)
+                        if !self.tt_username.is_empty() && !self.tt_password.is_empty() {
+                            if ui.button("Connect tastytrade").clicked() {
+                                let _ = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username);
+                                let _ = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password);
+                                let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
+                                    username: self.tt_username.clone(),
+                                    password: self.tt_password.clone(),
+                                    sandbox: self.tt_sandbox,
+                                });
+                                self.log.push_back(LogEntry::info(format!(
+                                    "tastytrade {} — connecting...",
+                                    if self.tt_sandbox { "Sandbox" } else { "Production" }
+                                )));
                             }
                         }
                     });
@@ -7405,12 +7752,24 @@ impl TyphooNApp {
                     } // end for det
 
                     // ── Floating Equity (compact) ─────────────────────────────────
-                    if let Some(ref float_eq) = self.bg.floating_equity {
+                    {
                         ui.add_space(6.0);
                         ui.separator();
+                        // Use account summaries as primary source (always populated from deals)
+                        // Fall back to floating_equity dashboard for unrealized/MTM data
+                        let details = &self.bg.account_details;
+                        let total_balance: f64 = details.iter()
+                            .filter_map(|d| d.summary.as_ref())
+                            .map(|s| s.final_balance)
+                            .sum();
+                        let total_unrealized: f64 = self.bg.floating_equity.as_ref()
+                            .map(|f| f.combined_unrealized_pnl)
+                            .unwrap_or(0.0);
+                        let combined = total_balance + total_unrealized;
+                        let fc = if combined >= total_balance { chart_green } else { chart_red };
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new("Floating Equity").strong());
-                            ui.label(egui::RichText::new(format!("${:.0}", float_eq.combined_floating_equity)).color(chart_gold).strong());
+                            ui.label(egui::RichText::new(format!("${:.0}", combined)).color(fc).strong());
                         });
                         egui::Grid::new("float_eq").striped(true).num_columns(4).min_col_width(70.0).show(ui, |ui| {
                             ui.label(egui::RichText::new("DARWIN").color(dim).small());
@@ -7418,12 +7777,18 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Unreal").color(dim).small());
                             ui.label(egui::RichText::new("Float").color(dim).small());
                             ui.end_row();
-                            for d in &float_eq.darwins {
-                                ui.label(egui::RichText::new(&d.darwin_ticker).small());
-                                ui.label(egui::RichText::new(format!("${:.0}", d.closed_balance)).small());
-                                let uc = if d.unrealized_pnl >= 0.0 { chart_green } else { chart_red };
-                                ui.label(egui::RichText::new(format!("${:.0}", d.unrealized_pnl)).color(uc).small());
-                                ui.label(egui::RichText::new(format!("${:.0}", d.floating_equity)).small());
+                            for det in details {
+                                let closed = det.summary.as_ref().map(|s| s.final_balance).unwrap_or(0.0);
+                                let unrealized = self.bg.floating_equity.as_ref()
+                                    .and_then(|f| f.darwins.iter().find(|d| d.darwin_ticker == det.ticker))
+                                    .map(|d| d.unrealized_pnl)
+                                    .unwrap_or(0.0);
+                                let floating = closed + unrealized;
+                                ui.label(egui::RichText::new(&det.ticker).small());
+                                ui.label(egui::RichText::new(format!("${:.0}", closed)).small());
+                                let uc = if unrealized >= 0.0 { chart_green } else { chart_red };
+                                ui.label(egui::RichText::new(format!("${:.0}", unrealized)).color(uc).small());
+                                ui.label(egui::RichText::new(format!("${:.0}", floating)).small());
                                 ui.end_row();
                             }
                         });
@@ -7476,9 +7841,15 @@ impl TyphooNApp {
                         }
                         let ftp_available = !self.darwin_ftp_dir.is_empty();
                         if ftp_available {
-                            if ui.small_button("FTP Scan").clicked() {
-                                let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
-                                self.log.push_back(LogEntry::info("FTP scan started (async)..."));
+                            let label = if self.gpu_darwin.is_some() { "DarwinIA Scan (GPU)" } else { "DarwinIA Scan (CPU)" };
+                            if ui.small_button(label).clicked() {
+                                if self.gpu_darwin.is_some() {
+                                    let _ = self.broker_tx.send(BrokerCmd::DarwinGpuScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                                    self.log.push_back(LogEntry::info("DarwinIA scan started (GPU)..."));
+                                } else {
+                                    let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                                    self.log.push_back(LogEntry::info("DarwinIA scan started (CPU)..."));
+                                }
                             }
                         }
                     });
@@ -9552,11 +9923,11 @@ impl TyphooNApp {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (2013-Now)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
                             let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                            let tfs = vec!["1Day".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
+                            let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
                             for sym in &["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"] {
                                 let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone() });
                             }
-                            self.log.push_back(LogEntry::info("Kraken backfill started for 10 crypto pairs × 4 timeframes"));
+                            self.log.push_back(LogEntry::info("Kraken backfill started for 10 crypto pairs × 5 timeframes"));
                         }
                     });
                     ui.add_space(4.0);
@@ -9567,9 +9938,9 @@ impl TyphooNApp {
                             let sym = self.backfill_symbol.trim().to_string();
                             if !sym.is_empty() {
                                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                let tfs = vec!["1Day".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
+                                let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
                                 let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: sym.clone(), timeframes: tfs, db_path });
-                                self.log.push_back(LogEntry::info(format!("Kraken backfill {} started (4 timeframes)", sym)));
+                                self.log.push_back(LogEntry::info(format!("Kraken backfill {} started (5 timeframes)", sym)));
                             }
                         }
                     });
@@ -11277,22 +11648,22 @@ impl TyphooNApp {
 
         // DARWIN FTP Browser
         if self.show_darwin_browser {
-            egui::Window::new("DARWIN Browser")
+            egui::Window::new("DarwinIA Browser")
                 .open(&mut self.show_darwin_browser)
                 .resizable(true).resizable(true).default_size([950.0, 600.0])
                 .show(ctx, |ui| {
                     // Top bar: scan button + stats
                     ui.horizontal(|ui| {
-                        if ui.button("Scan Universe").clicked() && !self.darwin_ftp_dir.is_empty() {
-                            let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
-                            self.log.push_back(LogEntry::info("Scanning DARWIN FTP universe..."));
-                        }
-                        if ui.add_enabled(
-                            !self.darwin_ftp_dir.is_empty() && self.gpu_darwin.is_some(),
-                            egui::Button::new("GPU Scan"),
-                        ).clicked() {
-                            let _ = self.broker_tx.send(BrokerCmd::DarwinGpuScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
-                            self.log.push_back(LogEntry::info("GPU DARWIN scan started (reading FTP → GPU compute)..."));
+                        let has_gpu = self.gpu_darwin.is_some();
+                        let label = if has_gpu { "DarwinIA Scan (GPU)" } else { "DarwinIA Scan (CPU)" };
+                        if ui.add_enabled(!self.darwin_ftp_dir.is_empty(), egui::Button::new(label)).clicked() {
+                            if has_gpu {
+                                let _ = self.broker_tx.send(BrokerCmd::DarwinGpuScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                                self.log.push_back(LogEntry::info("DarwinIA scan started (GPU)..."));
+                            } else {
+                                let _ = self.broker_tx.send(BrokerCmd::DarwinFtpScan { ftp_dir: self.darwin_ftp_dir.clone(), min_days: 90 });
+                                self.log.push_back(LogEntry::info("DarwinIA scan started (CPU)..."));
+                            }
                         }
                         ui.label(format!("{} DARWINs loaded", self.ftp_scan_results.len()));
                         ui.separator();
@@ -13599,21 +13970,16 @@ impl eframe::App for TyphooNApp {
 
                     // Arrow key navigation
                     let cmd_count = palette_commands.len();
-                    if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && cmd_count > 0 {
+                    let arrow_down = ctx.input(|i| i.key_pressed(egui::Key::ArrowDown));
+                    let arrow_up = ctx.input(|i| i.key_pressed(egui::Key::ArrowUp));
+                    if arrow_down && cmd_count > 0 {
                         self.console_selected = (self.console_selected + 1).min(cmd_count.saturating_sub(1));
-                        // Autocomplete: put selected command name into input
-                        if let Some(cmd) = palette_commands.get(self.console_selected) {
-                            self.command_input = cmd.name.to_string();
-                        }
                     }
-                    if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && cmd_count > 0 {
+                    if arrow_up && cmd_count > 0 {
                         self.console_selected = self.console_selected.saturating_sub(1);
-                        if let Some(cmd) = palette_commands.get(self.console_selected) {
-                            self.command_input = cmd.name.to_string();
-                        }
                     }
-                    // Reset selection when input changes (user types)
-                    if input_resp.changed() {
+                    // Reset selection only when user actually types (not arrow-key driven changes)
+                    if input_resp.changed() && !arrow_down && !arrow_up {
                         self.console_selected = 0;
                     }
 
@@ -14130,10 +14496,10 @@ mod tests {
     #[test]
     fn test_prev_candle_levels() {
         let bars = make_bars(10);
-        let (dh, dl, wh, wl) = compute_prev_candle_levels(&bars);
+        let (_h1, _h4, d1, w1, _mn1) = compute_prev_candle_levels(&bars);
         // With synthetic data, should have daily levels at least
         // (may be None if all bars are same "day" in synthetic data)
-        let _ = (dh, dl, wh, wl);
+        let _ = (d1, w1);
     }
 
     // ── Helper Functions ─────────────────────────────────────────────────
