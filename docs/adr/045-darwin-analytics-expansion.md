@@ -150,6 +150,23 @@ Part of the drawdown attribution and risk budget analysis:
 - Weight-at-peak analysis (which DARWIN was overweight when drawdown hit)
 - Component VaR attribution for risk budgeting decisions
 
+### 13. Visual Analytics (Graphically Rich)
+
+- **Calendar P&L Heatmap** (GitHub-style): daily cells colored green/red by P&L intensity, grouped by year
+- **Visual Correlation Heatmap**: NxN colored matrix (red=high corr, green=low, blue=negative) with numeric overlay
+- **DARWIN Ranking**: composite score (40% Sharpe + 30% Recovery Factor + 20% DD Duration + 10% completeness) with gold/silver/bronze rank colors
+- **Signal Decay Plot**: rolling Sharpe over time per DARWIN, detecting strategy degradation
+- **Divergence Index Plot**: signal vs quote return divergence tracking over time
+
+### 14. Signal vs Quote Analytics (Exceeding Darwinex)
+
+All views now show both signal (MT5 account) and DARWIN quote (investor product) data side-by-side:
+- Portfolio Summary: 14-column table with Signal + Quote metrics
+- Drawdown Dashboard: Signal DD% + Quote DD% + Quote DD Days
+- Equity Curves: overlaid signal + quote curves per DARWIN
+- Per-DARWIN detail cards: Quote Performance + Replication Quality Grade
+- VaR view: Signal vs Quote Risk Metrics comparison
+
 ## Consequences
 
 - **Pro**: Portfolio-level risk visibility across 6 accounts in one view
