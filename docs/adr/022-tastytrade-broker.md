@@ -1,6 +1,6 @@
 # ADR-022: Tastytrade Broker Integration
 
-**Status:** Implemented
+**Status:** Phase 1 — Auth Only
 **Date:** 2026-03-16
 
 ## Context
@@ -23,7 +23,7 @@ Implement `TastytradeBroker` in `src/broker/tastytrade.rs` with session-based au
 
 **Base URLs:**
 - Production: `https://api.tastyworks.com`
-- Sandbox: `https://api.cert.tastyworks.com`
+- Sandbox: `https://api.cert.tastyworks.com` (note: previously `api.cert.tastytrade.com`, changed upstream)
 
 **Auth:** Username + password → session token (stored in `Zeroizing<String>`)
 
@@ -41,10 +41,14 @@ Implement `TastytradeBroker` in `src/broker/tastytrade.rs` with session-based au
 - Tastytrade uses username/password instead of API key/secret
 - Engine tracks `active_broker` for routing
 
+## Current State (2026-03-26)
+
+Phase 1 (auth) is complete: session login, account listing, balances, positions endpoints are wired. Market data via DXLink WebSocket is on the roadmap but not yet implemented — tastytrade is currently auth-only with no live quotes or streaming.
+
 ## Consequences
 
 - **Pro**: Second broker validates multi-broker architecture
 - **Pro**: Better options/futures support than Alpaca
 - **Pro**: Free paper trading for testing
 - **Con**: Different auth model (session vs API key) adds complexity
-- **Con**: Market data via DXLink WebSocket (not implemented yet — future work)
+- **Con**: Market data via DXLink WebSocket — roadmap (not yet implemented)

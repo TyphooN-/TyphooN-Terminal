@@ -51,6 +51,12 @@ Priority 3: Alpaca         — live trading execution (NOT 24/7 for crypto)
 ### Weekend Auto-Sync
 The frontend automatically polls Kraken every 30 seconds when markets are closed (Friday 22:00 UTC - Sunday 22:00 UTC) for the currently viewed crypto symbol. This provides near-real-time weekend price updates without manual intervention.
 
+## Implementation Notes (2026-03-26)
+
+- **Deep backfill**: Kraken daily data now goes back to 2013 for BTC/USD, providing the deepest continuous history available.
+- **Live Alpaca fallback**: When cache misses occur, a live Alpaca bar fetch is used as fallback to fill gaps in real time.
+- **Cache key prefix fix**: Kraken-sourced bars are stored under the `kraken:` cache key prefix (not `mt5:`), ensuring correct source attribution and avoiding collisions with MT5 data.
+
 ## Consequences
 
 - **Pro**: Weekend gaps filled for all crypto symbols

@@ -23,7 +23,7 @@
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Console (`~`) with 104 commands
+- [x] Console (`~`) with 120+ commands
 - [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
@@ -57,42 +57,50 @@
 - [x] VaR multiplier (per-DARWIN corridor status)
 - [x] Screener (cache symbol browser)
 
+### Phase 7: Broker Connection
+- [x] Alpaca broker connection (async tokio runtime)
+- [x] Live positions + orders from Alpaca WebSocket
+- [x] Order placement (market, limit, stop, bracket, trailing)
+- [x] Real-time bar updates via WebSocket streaming
+- [x] Bid/ask spread display
+
+### Phase 8: Data & Analytics
+- [x] Crypto backfill (Kraken — BTC daily from 2013, weekend gap-fill)
+- [x] DARWIN signal vs quote comparison
+- [x] MTF SMA (H1/H4/D1/W1/MN1)
+- [x] ATR Projection MTF
+- [x] CLI/TUI (search, movers, fills)
+
 ## In Progress
 
-### Phase 7: Broker Connection
-- [ ] Alpaca broker connection (async tokio runtime)
-- [ ] Live positions + orders from Alpaca WebSocket
-- [ ] Order placement (market, limit, stop, bracket, trailing)
-- [ ] Real-time bar updates via WebSocket streaming
-- [ ] Bid/ask spread display
-
-### Phase 8: tastytrade Integration
-- [ ] tastytrade REST API client
+### Phase 9: tastytrade Integration
+- [x] tastytrade REST API client (auth only — session-based login)
+- [ ] Market data via DXLink WebSocket
 - [ ] Symbol comparison (tastytrade vs Alpaca coverage)
 - [ ] Options chain + Greeks
 
 ## Future
 
-### Phase 9: Advanced Features
+### Phase 10: Advanced Features
 - [ ] More drawing tools (pitchfork, Elliott, Gann)
 - [ ] Price alerts system
 - [ ] Trade journal
 - [ ] Pattern recognition (double top/bottom, H&S)
 - [ ] Supply/demand zones
 
-### Phase 10: Data Feeds
+### Phase 11: Data Feeds
 - [ ] News feed (Alpaca/Finnhub)
 - [ ] Economic calendar
 - [ ] SEC filings (EDGAR)
 - [ ] Analyst ratings (Finnhub)
 - [ ] FRED economic data
 
-### Phase 11: Bookmap
+### Phase 12: Bookmap
 - [ ] Order book depth heatmap (ADR-048)
 - [ ] wgpu compute shader pipeline
 - [ ] Level 2 WebSocket data
 
-### Phase 12: Scripting
+### Phase 13: Scripting
 - [ ] MQL5 indicator compatibility layer
 - [ ] PineScript-like DSL
 - [ ] Hot-reload custom indicators

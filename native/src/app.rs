@@ -4374,10 +4374,15 @@ const COMMANDS: &[Command] = &[
     Command { name: "INDICATORS",    desc: "Toggle indicator settings panel" },
     Command { name: "FULLSCREEN",    desc: "Toggle fullscreen mode" },
     // Trading
-    // Order placement commands removed from console — use Trading tab buttons instead
+    Command { name: "OPEN_TRADE",    desc: "Open order entry panel" },
+    Command { name: "CLOSE_ALL",     desc: "Close all open positions" },
+    Command { name: "CLOSE_PARTIAL", desc: "Close 50% of largest position" },
+    Command { name: "SET_SL",        desc: "Click chart to set stop loss" },
+    Command { name: "SET_TP",        desc: "Click chart to set take profit" },
+    Command { name: "OPEN_MG",       desc: "Open martingale position" },
     // Tools
     Command { name: "DARWIN",        desc: "DARWIN accounts overview" },
-    Command { name: "PORTFOLIO",     desc: "DARWIN portfolio dashboard" },
+    Command { name: "PORTFOLIO",     desc: "DARWIN portfolio dashboard + accounts" },
     Command { name: "OVERLAP",       desc: "Symbol overlap / correlation" },
     Command { name: "BACKTEST",      desc: "Run backtest on current symbol" },
     Command { name: "SCREENER",      desc: "Symbol screener" },
@@ -4416,7 +4421,6 @@ const COMMANDS: &[Command] = &[
     Command { name: "NEW_TAB",       desc: "Open new chart tab" },
     Command { name: "CLOSE_TAB",     desc: "Close current chart tab" },
     // DARWIN-specific
-    Command { name: "DARWINS",       desc: "Combined DARWIN portfolio view" },
     Command { name: "DRAWDOWN",      desc: "Drawdown dashboard per DARWIN" },
     Command { name: "REBALANCE",     desc: "VaR reduction via decorrelation" },
     Command { name: "DARWIN_TRADES", desc: "Toggle deal history markers on chart" },
@@ -4449,17 +4453,13 @@ const COMMANDS: &[Command] = &[
     Command { name: "MN1",           desc: "Switch to monthly timeframe" },
     // Analytics (from old app)
     Command { name: "EQUITY",        desc: "Account equity curve" },
-    Command { name: "CALC",          desc: "Position sizing calculator" },
     Command { name: "TRADESTATS",    desc: "Trade statistics (win rate, expectancy)" },
-    Command { name: "PERF",          desc: "Symbol performance chart" },
     Command { name: "COMPARE",       desc: "Normalized multi-symbol overlay" },
     Command { name: "SPREAD",        desc: "Price ratio / spread chart" },
     Command { name: "PIVOTS",        desc: "Classic pivot points on chart" },
-    Command { name: "SRLEVEL",       desc: "Auto support/resistance from fractals" },
     Command { name: "HEATMAP",       desc: "Daily P&L heatmap" },
     Command { name: "PROFILE",       desc: "Trading profile (best symbols, times)" },
     Command { name: "SIGNAL",        desc: "Composite 0-100 trading signal" },
-    Command { name: "DASHBOARD",     desc: "System health dashboard" },
     Command { name: "STATUS",        desc: "Cache, memory, uptime status" },
     // Crypto-specific
     Command { name: "CRYPTO_BACKFILL",desc: "Kraken weekend gap-fill" },
@@ -4476,10 +4476,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "RESET_IND",     desc: "Disable all indicators" },
     // Additional analytics
     Command { name: "DATA_WINDOW",   desc: "All indicator values at cursor" },
-    Command { name: "ALERTS",        desc: "Price alert manager" },
     // ORDER command removed — use Trading tab Open Trade button
     Command { name: "PREV_LEVELS",   desc: "Toggle previous candle levels (D/W)" },
-    Command { name: "PIVOTS",        desc: "Toggle pivot points (P/R1/R2/S1/S2)" },
     Command { name: "FRACTALS",      desc: "Toggle Bill Williams fractals" },
     Command { name: "HARMONICS",     desc: "Toggle harmonic pattern detection (Carney)" },
     Command { name: "AUTO_FIB",      desc: "Auto Fibonacci (fractal swing retracement + extension)" },
@@ -6812,6 +6810,7 @@ impl TyphooNApp {
             "mt5_db_paths": self.mt5_db_paths,
             "darwin_ftp_dir": self.darwin_ftp_dir,
             "finnhub_key": self.finnhub_key,
+            "fred_key": self.fred_key,
             "broker_api_key": self.broker_api_key,
             "broker_secret": self.broker_secret,
             "broker_paper": self.broker_paper,
@@ -6971,6 +6970,7 @@ impl TyphooNApp {
                 }
                 // Restore API keys
                 if let Some(fk) = v["finnhub_key"].as_str() { self.finnhub_key = fk.to_string(); }
+                if let Some(fk) = v["fred_key"].as_str() { self.fred_key = fk.to_string(); }
                 if let Some(ak) = v["broker_api_key"].as_str() { self.broker_api_key = ak.to_string(); }
                 if let Some(bs) = v["broker_secret"].as_str() { self.broker_secret = bs.to_string(); }
                 if let Some(tu) = v["tt_username"].as_str() { self.tt_username = tu.to_string(); }
@@ -7160,6 +7160,9 @@ impl TyphooNApp {
                         ui.label("Finnhub API Key:");
                         ui.add(egui::TextEdit::singleline(&mut self.finnhub_key).desired_width(250.0).password(true));
                         ui.end_row();
+                        ui.label("FRED API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.fred_key).desired_width(250.0).password(true));
+                        ui.end_row();
                         ui.label("tastytrade User:");
                         ui.add(egui::TextEdit::singleline(&mut self.tt_username).desired_width(250.0));
                         ui.end_row();
@@ -7187,6 +7190,9 @@ impl TyphooNApp {
                                 let _ = keyring::store(keyring::keys::ALPACA_SECRET, &self.broker_secret);
                                 if !self.finnhub_key.is_empty() {
                                     let _ = keyring::store(keyring::keys::FINNHUB_KEY, &self.finnhub_key);
+                                }
+                                if !self.fred_key.is_empty() {
+                                    let _ = keyring::store(keyring::keys::FRED_KEY, &self.fred_key);
                                 }
                                 if !self.tt_username.is_empty() {
                                     let _ = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username);
@@ -7933,11 +7939,12 @@ impl TyphooNApp {
                                             ui.add_space(10.0);
                                             ui.heading("Per-DARWIN");
                                             ui.separator();
-                                            egui::Grid::new("per_darwin").striped(true).num_columns(11).show(ui, |ui| {
+                                            egui::Grid::new("per_darwin").striped(true).num_columns(14).show(ui, |ui| {
                                                 ui.strong("DARWIN"); ui.strong("Signal Bal"); ui.strong("Signal P&L");
                                                 ui.strong("Win%"); ui.strong("PF"); ui.strong("Signal DD%");
                                                 ui.strong("Quote"); ui.strong("Quote Ret%"); ui.strong("Quote DD%");
                                                 ui.strong("Divergence"); ui.strong("Multiplier");
+                                                ui.strong("Exp"); ui.strong("Risk"); ui.strong("Perf");
                                                 ui.end_row();
                                                 for acct in &portfolio.accounts {
                                                     let ticker = &acct.account.darwin_ticker;
@@ -7973,8 +7980,16 @@ impl TyphooNApp {
                                                             let mc = if m.multiplier >= 1.0 { UP } else { DOWN };
                                                             ui.label(egui::RichText::new(format!("{:.2}x", m.multiplier)).color(mc));
                                                         } else { ui.label("—"); }
+                                                        // D-Score components
+                                                        let ec = if fs.experience_score >= 5.0 { UP } else { AXIS_TEXT };
+                                                        ui.label(egui::RichText::new(format!("{:.1}", fs.experience_score)).color(ec));
+                                                        let rsc = if fs.risk_stability_score >= 5.0 { UP } else { AXIS_TEXT };
+                                                        ui.label(egui::RichText::new(format!("{:.1}", fs.risk_stability_score)).color(rsc));
+                                                        let pc = if fs.performance_score >= 5.0 { UP } else { AXIS_TEXT };
+                                                        ui.label(egui::RichText::new(format!("{:.1}", fs.performance_score)).color(pc));
                                                     } else {
                                                         ui.label("—"); ui.label("—"); ui.label("—"); ui.label("—"); ui.label("—");
+                                                        ui.label("—"); ui.label("—"); ui.label("—");
                                                     }
                                                     ui.end_row();
                                                 }
@@ -8189,6 +8204,67 @@ impl TyphooNApp {
                                                                 plot_ui.hline(egui_plot::HLine::new("Zero", 0.0).color(egui::Color32::from_rgb(60, 60, 80)).width(0.5));
                                                             });
                                                     }
+                                                }
+                                            }
+
+                                            // Investor Flow (AUM & Count)
+                                            ui.add_space(10.0);
+                                            ui.label(egui::RichText::new("Investor Flow (AUM & Count)").strong());
+                                            ui.separator();
+                                            {
+                                                let has_any_ftp = self.bg.account_details.iter().any(|d| d.ftp_summary.is_some());
+                                                if has_any_ftp {
+                                                    for det in &self.bg.account_details {
+                                                        if det.ftp_summary.is_some() {
+                                                            ui.label(egui::RichText::new(format!("{} — Load via DarwinIA Browser for investor flow data", det.ticker)).color(AXIS_TEXT).small());
+                                                        }
+                                                    }
+                                                } else {
+                                                    ui.label(egui::RichText::new("No FTP data loaded. Import DARWIN data first.").color(AXIS_TEXT));
+                                                }
+                                            }
+
+                                            // Per-DARWIN Monthly Returns
+                                            ui.add_space(10.0);
+                                            ui.label(egui::RichText::new("Per-DARWIN Monthly Returns").strong());
+                                            ui.separator();
+                                            for (idx, det) in self.bg.account_details.iter().enumerate() {
+                                                if !det.monthly_returns.is_empty() {
+                                                    let c = darwin_colors[idx % darwin_colors.len()];
+                                                    ui.label(egui::RichText::new(&det.ticker).color(c).strong());
+                                                    // Show last 24 months as bar chart
+                                                    let monthly: Vec<&darwin::MonthlyReturn> = det.monthly_returns.iter().rev().take(24).collect::<Vec<_>>().into_iter().rev().collect();
+                                                    let bars: Vec<PlotBar> = monthly.iter().enumerate().map(|(i, m)| {
+                                                        let bar_c = if m.pnl >= 0.0 { UP } else { DOWN };
+                                                        PlotBar::new(i as f64, m.pnl).width(0.8).fill(bar_c).name(format!("{}/{:02}", m.year, m.month))
+                                                    }).collect();
+                                                    Plot::new(format!("monthly_pnl_{}", det.ticker))
+                                                        .height(80.0)
+                                                        .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                        .show_axes([false, true])
+                                                        .show(ui, |plot_ui| {
+                                                            plot_ui.bar_chart(BarChart::new("Monthly P&L", bars));
+                                                            plot_ui.hline(egui_plot::HLine::new("Zero", 0.0).color(egui::Color32::from_rgb(60, 60, 80)).width(0.5));
+                                                        });
+                                                    // Summary grid: last 6 months
+                                                    let recent: Vec<&darwin::MonthlyReturn> = det.monthly_returns.iter().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
+                                                    egui::Grid::new(format!("monthly_grid_{}", det.ticker)).striped(true).num_columns(6).show(ui, |ui| {
+                                                        for m in &recent {
+                                                            ui.label(egui::RichText::new(format!("{}/{:02}", m.year, m.month)).small());
+                                                        }
+                                                        ui.end_row();
+                                                        for m in &recent {
+                                                            let mc = if m.pnl >= 0.0 { UP } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("${:.0}", m.pnl)).color(mc).small());
+                                                        }
+                                                        ui.end_row();
+                                                        for m in &recent {
+                                                            let rc = if m.return_pct >= 0.0 { UP } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("{:.1}%", m.return_pct)).color(rc).small());
+                                                        }
+                                                        ui.end_row();
+                                                    });
+                                                    ui.add_space(4.0);
                                                 }
                                             }
                                         }
@@ -11270,20 +11346,31 @@ impl TyphooNApp {
                         ui.heading("VaR Multipliers");
                         ui.separator();
                         if !self.bg.var_multipliers.is_empty() {
-                            egui::Grid::new("var_mult_grid").striped(true).num_columns(5).show(ui, |ui| {
-                                ui.strong("DARWIN"); ui.strong("Monthly VaR"); ui.strong("Multiplier"); ui.strong("Corridor"); ui.strong("45d VaR");
+                            egui::Grid::new("var_mult_grid").striped(true).num_columns(6).show(ui, |ui| {
+                                ui.strong("DARWIN"); ui.strong("Monthly VaR"); ui.strong("Multiplier"); ui.strong("Inv. Return"); ui.strong("Corridor"); ui.strong("45d VaR");
                                 ui.end_row();
                                 for m in &self.bg.var_multipliers {
                                     ui.label(&m.darwin_ticker);
                                     ui.label(format!("{:.2}%", m.monthly_var));
                                     let mc = if m.multiplier >= 1.5 { UP } else if m.multiplier >= 0.8 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
                                     ui.label(egui::RichText::new(format!("{:.2}x", m.multiplier)).color(mc));
+                                    let irf_c = if m.investor_return_factor >= 1.0 { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(format!("{:.2}x", m.investor_return_factor)).color(irf_c));
                                     let cc = if m.in_corridor { UP } else { DOWN };
                                     ui.label(egui::RichText::new(&m.corridor_position).color(cc));
                                     ui.label(format!("{:.2}%", m.var_45d));
                                     ui.end_row();
                                 }
                             });
+                            // Per-DARWIN recommendations
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new("Recommendations").strong());
+                            for m in &self.bg.var_multipliers {
+                                if !m.recommendation.is_empty() {
+                                    let rc = if m.in_corridor { AXIS_TEXT } else { egui::Color32::from_rgb(255, 200, 50) };
+                                    ui.label(egui::RichText::new(format!("{}: {}", m.darwin_ticker, m.recommendation)).color(rc).small());
+                                }
+                            }
                         }
                     } else {
                         ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
@@ -11878,6 +11965,7 @@ impl eframe::App for TyphooNApp {
                 if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_API_KEY) { self.broker_api_key = v; }
                 if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_SECRET) { self.broker_secret = v; }
                 if let Ok(Some(v)) = keyring::load(keyring::keys::FINNHUB_KEY) { self.finnhub_key = v; }
+                if let Ok(Some(v)) = keyring::load(keyring::keys::FRED_KEY) { self.fred_key = v; }
                 if let Ok(Some(v)) = keyring::load(keyring::keys::TT_USERNAME) { self.tt_username = v; }
                 if let Ok(Some(v)) = keyring::load(keyring::keys::TT_PASSWORD) { self.tt_password = v; }
                 if !self.broker_api_key.is_empty() {

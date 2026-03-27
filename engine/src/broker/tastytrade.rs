@@ -125,7 +125,17 @@ impl TastytradeBroker {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("tastytrade login returned {}: {}", status, text));
+            // Strip HTML from error responses (nginx 502/503 pages)
+            let clean = if text.contains('<') {
+                text.lines()
+                    .filter(|l| !l.trim().starts_with('<'))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .trim()
+                    .to_string()
+            } else { text };
+            let msg = if clean.is_empty() { status.to_string() } else { clean };
+            return Err(format!("tastytrade login returned {} — {}", status, msg));
         }
 
         let data: serde_json::Value = resp.json().await

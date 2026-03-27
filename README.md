@@ -14,11 +14,11 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Startup Time** | < 2 seconds |
 | **Lines of Code** | ~9,500 GUI + ~12,000 engine (pure Rust) |
 | **Indicators** | 32+ (NNFX + Ehlers DSP + standard + harmonics) |
-| **Commands** | 104 Quake-console style (~) |
+| **Commands** | 120+ Quake-console style (~) |
 | **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
 | **Harmonic Patterns** | 7 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
-| **Data Sources** | MT5 (Darwinex), Alpaca, Kraken, tastytrade |
+| **Data Sources** | MT5 (Darwinex), Alpaca, Kraken, tastytrade (auth, roadmap) |
 | **DARWIN Analytics** | 69/69 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
@@ -102,7 +102,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Yield Curve** | Treasury rates with 2Y-10Y inversion detection (~ →YIELD) |
 | **GPU Chart Engine** | Native wgpu candlesticks, drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
 | **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
-| **50+ Commands** | Quake-console command palette with fuzzy search |
+| **120+ Commands** | Quake-console command palette with fuzzy search |
 
 ---
 
