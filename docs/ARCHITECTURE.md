@@ -18,7 +18,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ - Console (~) with 125+ commands             ││
 │  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
-│  │ - DARWIN analytics (74 engine functions)    ││
+│  │ - DARWIN analytics (77+ engine functions)   ││
 │  │ - SEC Filing Scanner + Insider Trades       ││
 │  │ - Finnhub News + Market Data APIs           ││
 │  │ - Backtest engine + optimizer               ││
@@ -29,7 +29,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  Engine Library (typhoon-engine crate)          │
 │  - AlpacaBroker (REST + WebSocket)              │
 │  - SqliteCache (TTBR binary, zstd compression)  │
-│  - DarwinDB (74 analytics functions, 100% wired)│
+│  - DarwinDB (77+ analytics functions, 100% wired)│
 │  - RiskEngine (VaR, TRIM, martingale)           │
 │  - BacktestEngine (bar-by-bar, optimization)    │
 │  - BarBuilder (WebSocket → OHLCV)               │

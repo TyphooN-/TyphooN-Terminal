@@ -122,6 +122,34 @@ Darwinex-style monthly returns grid per DARWIN:
 - Built from `get_monthly_returns()` data
 - Displayed in the combined Drawdown dashboard view
 
+### 10. Replication Quality (`compute_replication_quality`)
+
+Measures how faithfully the DARWIN quote (investor product) tracks the underlying signal (MT5 trades):
+
+- **Tracking Error**: Annualized standard deviation of signal-vs-quote return difference
+- **Information Ratio**: Excess return per unit of tracking error
+- **R-squared**: Correlation coefficient between signal and quote returns
+- **Quality Grade**: A (excellent) through F (poor) based on composite score
+- Displayed inline in per-DARWIN detail cards with color-coded grade
+
+### 11. Risk Budget (`compute_risk_budget`)
+
+VaR decomposition across the multi-DARWIN portfolio:
+
+- **Standalone VaR**: Each DARWIN's individual Value-at-Risk
+- **Marginal VaR**: Additional VaR each DARWIN contributes to the portfolio
+- **Risk Contribution %**: Component VaR as percentage of total portfolio VaR
+- **Diversification Benefit**: Standalone minus marginal — positive means the DARWIN reduces portfolio risk
+- Color-coded status (DIVERSIFIES / CONCENTRATES) in the Portfolio VaR view
+
+### 12. Performance Attribution
+
+Part of the drawdown attribution and risk budget analysis:
+
+- Per-DARWIN contribution to combined portfolio drawdown
+- Weight-at-peak analysis (which DARWIN was overweight when drawdown hit)
+- Component VaR attribution for risk budgeting decisions
+
 ## Consequences
 
 - **Pro**: Portfolio-level risk visibility across 6 accounts in one view

@@ -4628,6 +4628,7 @@ struct BgDarwinData {
     // ── DARWIN analytics: drawdown attribution + signal decay ──
     drawdown_attribution: Vec<darwin::DrawdownAttribution>,
     signal_decay: Vec<darwin::SignalDecay>,
+    risk_budget: Vec<darwin::RiskBudget>,
 }
 
 /// Bottom panel mode.
@@ -6362,6 +6363,9 @@ impl TyphooNApp {
                             data.drawdown_attribution = darwin::compute_drawdown_attribution(&conn).unwrap_or_default();
                         }
                         if let Ok(conn) = cache.connection() {
+                            data.risk_budget = darwin::compute_risk_budget(&conn).unwrap_or_default();
+                        }
+                        if let Ok(conn) = cache.connection() {
                             let mut decays = Vec::new();
                             for acct in &data.accounts {
                                 if let Ok(decay) = darwin::compute_signal_decay(&conn, &acct.darwin_ticker, 90) {
@@ -7887,6 +7891,22 @@ impl TyphooNApp {
                             });
                         }
 
+                        // ── Replication Quality (Signal vs Quote) ──
+                        if !det.daily_returns.is_empty() && !det.ftp_equity_curve.is_empty() {
+                            if let Some(mut rq) = darwin::compute_replication_quality(&det.daily_returns, &det.ftp_equity_curve) {
+                                rq.darwin_ticker = det.ticker.clone();
+                                let grade_c = match rq.quality_grade.as_str() {
+                                    "A" => UP, "B" => egui::Color32::from_rgb(100, 200, 100),
+                                    "C" => egui::Color32::from_rgb(241, 196, 15), _ => DOWN,
+                                };
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("Replication: {} (TE:{:.1}% IR:{:.2} R\u{00B2}:{:.2})",
+                                        rq.quality_grade, rq.tracking_error, rq.information_ratio, rq.r_squared
+                                    )).color(grade_c).small());
+                                });
+                            }
+                        }
+
                         // ── Advanced metrics row (CAGR, RF, DD Duration) ──
                         ui.horizontal(|ui| {
                             let cagr_c = if det.cagr >= 0.0 { chart_green } else { chart_red };
@@ -8470,6 +8490,32 @@ impl TyphooNApp {
                                                             ui.end_row();
                                                         }
                                                     });
+                                                    // ── Risk Budget (VaR Decomposition) ──
+                                                    if !self.bg.risk_budget.is_empty() {
+                                                        ui.add_space(8.0);
+                                                        ui.label(egui::RichText::new("Risk Budget (VaR Decomposition)").strong());
+                                                        egui::Grid::new("risk_budget_grid").striped(true).num_columns(6).show(ui, |ui| {
+                                                            ui.label(egui::RichText::new("DARWIN").color(AXIS_TEXT).small().strong());
+                                                            ui.label(egui::RichText::new("Standalone").color(AXIS_TEXT).small().strong());
+                                                            ui.label(egui::RichText::new("Marginal").color(AXIS_TEXT).small().strong());
+                                                            ui.label(egui::RichText::new("Risk %").color(AXIS_TEXT).small().strong());
+                                                            ui.label(egui::RichText::new("Diversif.").color(AXIS_TEXT).small().strong());
+                                                            ui.label(egui::RichText::new("Status").color(AXIS_TEXT).small().strong());
+                                                            ui.end_row();
+                                                            for rb in &self.bg.risk_budget {
+                                                                let risk_c = if rb.risk_contribution_pct > 40.0 { DOWN } else if rb.risk_contribution_pct > 25.0 { egui::Color32::from_rgb(241, 196, 15) } else { UP };
+                                                                let div_c = if rb.diversification_benefit > 0.0 { UP } else { DOWN };
+                                                                let status = if rb.diversification_benefit > 0.0 { "DIVERSIFIES" } else { "CONCENTRATES" };
+                                                                ui.label(egui::RichText::new(&rb.darwin_ticker).small());
+                                                                ui.label(egui::RichText::new(format!("{:.2}%", rb.standalone_var)).small());
+                                                                ui.label(egui::RichText::new(format!("{:.2}%", rb.marginal_var)).small());
+                                                                ui.label(egui::RichText::new(format!("{:.1}%", rb.risk_contribution_pct)).color(risk_c).small());
+                                                                ui.label(egui::RichText::new(format!("{:+.2}%", rb.diversification_benefit)).color(div_c).small());
+                                                                ui.label(egui::RichText::new(status).color(div_c).small());
+                                                                ui.end_row();
+                                                            }
+                                                        });
+                                                    }
                                                 } // if let Some(vs)
                                             } } // if !daily.is_empty()
                                         }
