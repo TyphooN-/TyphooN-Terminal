@@ -867,4 +867,85 @@ impl SqliteCache {
         ).map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
         Ok(deleted)
     }
+
+    /// Recompress all bar_cache entries at target zstd level (e.g. 19 for max compression).
+    /// Decompression speed is identical regardless of compression level — only storage shrinks.
+    /// Returns (entries_processed, bytes_saved).
+    /// Progress callback: (processed, total, key, old_size, new_size)
+    pub fn compact_storage(&self, level: i32, progress: Option<&dyn Fn(usize, usize, &str, usize, usize)>) -> Result<(usize, i64), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        // Get all keys and their compressed data
+        let mut stmt = conn.prepare("SELECT key, data, timestamp, bar_count, last_ts, second_last_ts FROM bar_cache")
+            .map_err(|e| format!("Prepare failed: {e}"))?;
+        let entries: Vec<(String, Vec<u8>, i64, i64, i64, i64)> = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4).unwrap_or(0),
+                row.get::<_, i64>(5).unwrap_or(0),
+            ))
+        }).map_err(|e| format!("Query failed: {e}"))?
+          .filter_map(|r| r.ok())
+          .collect();
+        drop(stmt);
+
+        let total = entries.len();
+        let mut processed = 0usize;
+        let mut bytes_saved = 0i64;
+
+        for (key, compressed, timestamp, bar_count, last_ts, second_last_ts) in &entries {
+            // Decompress
+            let decompressed = match zstd::decode_all(compressed.as_slice()) {
+                Ok(d) => d,
+                Err(_) => { processed += 1; continue; } // skip corrupt entries
+            };
+            // Recompress at target level
+            let recompressed = match zstd::encode_all(decompressed.as_slice(), level) {
+                Ok(r) => r,
+                Err(_) => { processed += 1; continue; }
+            };
+            // Only write if actually smaller
+            let saved = compressed.len() as i64 - recompressed.len() as i64;
+            if saved > 0 {
+                conn.execute(
+                    "UPDATE bar_cache SET data = ?1 WHERE key = ?2",
+                    params![recompressed, key],
+                ).map_err(|e| format!("Update failed: {e}"))?;
+                bytes_saved += saved;
+            }
+            processed += 1;
+            if let Some(cb) = progress {
+                cb(processed, total, key, compressed.len(), if saved > 0 { recompressed.len() } else { compressed.len() });
+            }
+        }
+
+        // Also compact KV entries
+        let mut kv_stmt = conn.prepare("SELECT key, data FROM kv_store")
+            .map_err(|e| format!("KV prepare failed: {e}"))?;
+        let kv_entries: Vec<(String, Vec<u8>)> = kv_stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+        }).map_err(|e| format!("KV query failed: {e}"))?
+          .filter_map(|r| r.ok())
+          .collect();
+        drop(kv_stmt);
+
+        for (key, compressed) in &kv_entries {
+            if let Ok(decompressed) = zstd::decode_all(compressed.as_slice()) {
+                if let Ok(recompressed) = zstd::encode_all(decompressed.as_slice(), level) {
+                    let saved = compressed.len() as i64 - recompressed.len() as i64;
+                    if saved > 0 {
+                        let _ = conn.execute("UPDATE kv_store SET data = ?1 WHERE key = ?2", params![recompressed, key]);
+                        bytes_saved += saved;
+                    }
+                }
+            }
+        }
+
+        // VACUUM to reclaim freed space in SQLite file
+        let _ = conn.execute_batch("VACUUM;");
+
+        Ok((processed, bytes_saved))
+    }
 }
