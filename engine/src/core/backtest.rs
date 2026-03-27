@@ -291,6 +291,350 @@ impl Strategy for NNFXStrategy {
     }
 }
 
+// ── KAMA Cross Strategy ───────────────────────────────────────────
+
+/// KAMA crossover strategy — buy when price crosses above KAMA, sell when below.
+pub struct KAMACrossStrategy {
+    period: usize,
+    fast: usize,
+    slow: usize,
+    position: i8, // 0 = flat, 1 = long, -1 = short
+}
+
+impl KAMACrossStrategy {
+    pub fn new(period: usize, fast: usize, slow: usize) -> Self {
+        Self { period, fast, slow, position: 0 }
+    }
+}
+
+fn kama_custom(bars: &[Bar], end: usize, period: usize, fast: usize, slow: usize) -> Option<f64> {
+    if end + 1 < period + 1 { return None; }
+    let fast_sc = 2.0 / (fast as f64 + 1.0);
+    let slow_sc = 2.0 / (slow as f64 + 1.0);
+    let start = end + 1 - (period + 1);
+    let mut kama = bars[start].close;
+    for i in (start + 1)..=end {
+        let direction = (bars[i].close - bars[i.saturating_sub(period)].close).abs();
+        let mut volatility = 0.0;
+        for j in (i.saturating_sub(period - 1))..=i {
+            if j > 0 { volatility += (bars[j].close - bars[j - 1].close).abs(); }
+        }
+        let er = if volatility > 1e-10 { direction / volatility } else { 0.0 };
+        let sc = (er * (fast_sc - slow_sc) + slow_sc).powi(2);
+        kama += sc * (bars[i].close - kama);
+    }
+    Some(kama)
+}
+
+impl Strategy for KAMACrossStrategy {
+    fn on_bar(&mut self, _bar: &Bar, index: usize, bars: &[Bar]) -> Option<Signal> {
+        if index < 1 { return None; }
+        let kama_now = kama_custom(bars, index, self.period, self.fast, self.slow)?;
+        let kama_prev = kama_custom(bars, index - 1, self.period, self.fast, self.slow)?;
+        let close = bars[index].close;
+        let prev_close = bars[index - 1].close;
+
+        // Price crosses above KAMA → Buy
+        if prev_close <= kama_prev && close > kama_now && self.position != 1 {
+            self.position = 1;
+            return Some(Signal::Buy);
+        }
+        // Price crosses below KAMA → Sell
+        if prev_close >= kama_prev && close < kama_now && self.position != -1 {
+            self.position = -1;
+            return Some(Signal::Sell);
+        }
+        None
+    }
+
+    fn name(&self) -> &str {
+        "KAMA Cross"
+    }
+}
+
+// ── Fisher Cross Strategy ─────────────────────────────────────────
+
+/// Fisher Transform crossover — buy when Fisher > Signal, sell when Fisher < Signal.
+pub struct FisherCrossStrategy {
+    period: usize,
+    position: i8,
+}
+
+impl FisherCrossStrategy {
+    pub fn new(period: usize) -> Self {
+        Self { period, position: 0 }
+    }
+}
+
+/// Compute Fisher Transform value at given bar index. Returns (fisher, signal).
+fn fisher_pair(bars: &[Bar], end: usize, period: usize) -> Option<(f64, f64)> {
+    if end + 1 < period + 1 { return None; }
+    // We need at least period+1 bars to compute both current and previous Fisher
+    let start = end + 1 - (period + 1).min(end + 1);
+    let mut val = 0.0_f64;
+    let mut prev_val = 0.0_f64;
+    let mut fisher = 0.0_f64;
+    let mut prev_fisher = 0.0_f64;
+
+    // Walk through bars to iteratively compute Fisher
+    for i in start..=end {
+        if i + 1 < period { continue; }
+        let lo = i + 1 - period;
+        let mut highest = f64::MIN;
+        let mut lowest = f64::MAX;
+        for j in lo..=i {
+            let mid = (bars[j].high + bars[j].low) / 2.0;
+            highest = highest.max(mid);
+            lowest = lowest.min(mid);
+        }
+        let range = highest - lowest;
+        let mid = (bars[i].high + bars[i].low) / 2.0;
+        let raw = if range > 1e-10 { 2.0 * ((mid - lowest) / range - 0.5) } else { 0.0 };
+        val = 0.5 * val + 0.5 * raw.clamp(-0.999, 0.999);
+        prev_fisher = fisher;
+        fisher = 0.5 * ((1.0 + val) / (1.0 - val)).ln() + 0.5 * prev_fisher;
+        prev_val = val;
+    }
+    let _ = prev_val; // suppress unused warning
+    Some((fisher, prev_fisher))
+}
+
+impl Strategy for FisherCrossStrategy {
+    fn on_bar(&mut self, _bar: &Bar, index: usize, bars: &[Bar]) -> Option<Signal> {
+        if index < 1 { return None; }
+        let (fisher_now, signal_now) = fisher_pair(bars, index, self.period)?;
+        let (fisher_prev, signal_prev) = fisher_pair(bars, index - 1, self.period)?;
+
+        // Fisher crosses above Signal → Buy
+        if fisher_prev <= signal_prev && fisher_now > signal_now && self.position != 1 {
+            self.position = 1;
+            return Some(Signal::Buy);
+        }
+        // Fisher crosses below Signal → Sell
+        if fisher_prev >= signal_prev && fisher_now < signal_now && self.position != -1 {
+            self.position = -1;
+            return Some(Signal::Sell);
+        }
+        None
+    }
+
+    fn name(&self) -> &str {
+        "Fisher Cross"
+    }
+}
+
+// ── RSI Mean Reversion Strategy ───────────────────────────────────
+
+/// RSI mean-reversion — buy when RSI < oversold, sell when RSI > overbought.
+pub struct RSIMeanRevStrategy {
+    period: usize,
+    oversold: f64,
+    overbought: f64,
+    position: i8,
+}
+
+impl RSIMeanRevStrategy {
+    pub fn new(period: usize, oversold: f64, overbought: f64) -> Self {
+        Self { period, oversold, overbought, position: 0 }
+    }
+}
+
+fn rsi_at(bars: &[Bar], end: usize, period: usize) -> Option<f64> {
+    if end < period { return None; }
+    let mut avg_gain = 0.0;
+    let mut avg_loss = 0.0;
+
+    // Wilder-smoothed RSI
+    let seed_start = if end + 1 > 2 * period { end + 1 - 2 * period } else { 1 };
+    let seed_end = seed_start + period;
+    if seed_end > end + 1 || seed_start == 0 { return None; }
+
+    for i in seed_start..seed_end {
+        let change = bars[i].close - bars[i - 1].close;
+        if change > 0.0 { avg_gain += change; } else { avg_loss += change.abs(); }
+    }
+    avg_gain /= period as f64;
+    avg_loss /= period as f64;
+
+    // Smooth forward
+    for i in seed_end..=end {
+        let change = bars[i].close - bars[i - 1].close;
+        let gain = if change > 0.0 { change } else { 0.0 };
+        let loss = if change < 0.0 { change.abs() } else { 0.0 };
+        avg_gain = (avg_gain * (period as f64 - 1.0) + gain) / period as f64;
+        avg_loss = (avg_loss * (period as f64 - 1.0) + loss) / period as f64;
+    }
+
+    if avg_loss < 1e-10 { return Some(100.0); }
+    let rs = avg_gain / avg_loss;
+    Some(100.0 - 100.0 / (1.0 + rs))
+}
+
+impl Strategy for RSIMeanRevStrategy {
+    fn on_bar(&mut self, _bar: &Bar, index: usize, bars: &[Bar]) -> Option<Signal> {
+        let rsi = rsi_at(bars, index, self.period)?;
+
+        // Buy when RSI crosses below oversold (mean reversion: expect bounce)
+        if rsi < self.oversold && self.position != 1 {
+            self.position = 1;
+            return Some(Signal::Buy);
+        }
+        // Sell when RSI crosses above overbought (mean reversion: expect drop)
+        if rsi > self.overbought && self.position != -1 {
+            self.position = -1;
+            return Some(Signal::Sell);
+        }
+        // Exit to flat when RSI returns to neutral zone
+        if self.position == 1 && rsi > 50.0 {
+            self.position = 0;
+            return Some(Signal::Close);
+        }
+        if self.position == -1 && rsi < 50.0 {
+            self.position = 0;
+            return Some(Signal::Close);
+        }
+        None
+    }
+
+    fn name(&self) -> &str {
+        "RSI Mean Rev"
+    }
+}
+
+// ── Walk-Forward Analysis ─────────────────────────────────────────
+
+/// Walk-forward analysis result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalkForwardResult {
+    pub windows: Vec<WalkForwardWindow>,
+    pub oos_sharpe: f64,        // out-of-sample Sharpe
+    pub oos_profit_factor: f64, // out-of-sample PF
+    pub oos_win_rate: f64,      // out-of-sample win rate
+    pub robustness_score: f64,  // oos_sharpe / is_sharpe ratio (>0.5 = robust)
+    pub best_params: (usize, usize), // optimal parameters from walk-forward
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalkForwardWindow {
+    pub window_idx: usize,
+    pub is_start: usize,     // in-sample start bar
+    pub is_end: usize,       // in-sample end bar
+    pub oos_start: usize,    // out-of-sample start bar
+    pub oos_end: usize,      // out-of-sample end bar
+    pub best_fast: usize,
+    pub best_slow: usize,
+    pub is_sharpe: f64,      // in-sample Sharpe with best params
+    pub oos_sharpe: f64,     // out-of-sample Sharpe with those params
+    pub oos_pnl: f64,
+    pub oos_trades: usize,
+}
+
+/// Run walk-forward optimization.
+/// Splits bars into `num_windows` rolling windows.
+/// For each window: optimize on in-sample (70%), validate on out-of-sample (30%).
+pub fn walk_forward(
+    bars: &[Bar],
+    fast_range: std::ops::Range<usize>,
+    slow_range: std::ops::Range<usize>,
+    num_windows: usize,
+    equity: f64,
+) -> WalkForwardResult {
+    let n = bars.len();
+    if n < 200 || num_windows < 2 {
+        return WalkForwardResult {
+            windows: Vec::new(), oos_sharpe: 0.0, oos_profit_factor: 0.0,
+            oos_win_rate: 0.0, robustness_score: 0.0, best_params: (10, 50),
+        };
+    }
+
+    let window_size = n / num_windows;
+    let is_size = (window_size as f64 * 0.7) as usize;
+    let mut windows = Vec::new();
+    let mut oos_trades_all: Vec<Trade> = Vec::new();
+
+    for w in 0..num_windows {
+        let start = w * window_size;
+        let is_end = start + is_size;
+        let oos_end = (start + window_size).min(n);
+        if oos_end <= is_end { continue; }
+
+        // Optimize on in-sample
+        let is_bars = &bars[start..is_end];
+        let mut best_sharpe = f64::NEG_INFINITY;
+        let mut best_fast = fast_range.start;
+        let mut best_slow = slow_range.start;
+
+        let mut fast = fast_range.start;
+        while fast < fast_range.end {
+            let mut slow = slow_range.start;
+            while slow < slow_range.end {
+                if fast < slow && slow <= is_bars.len() {
+                    let mut strat = SMACrossStrategy::new(fast, slow);
+                    let result = run_backtest(is_bars, &mut strat, equity);
+                    if result.report.sharpe_ratio > best_sharpe {
+                        best_sharpe = result.report.sharpe_ratio;
+                        best_fast = fast;
+                        best_slow = slow;
+                    }
+                }
+                slow += 5;
+            }
+            fast += 2;
+        }
+
+        // Validate on out-of-sample with best params
+        let oos_bars = &bars[is_end..oos_end];
+        let mut oos_strat = SMACrossStrategy::new(best_fast, best_slow);
+        let oos_result = run_backtest(oos_bars, &mut oos_strat, equity);
+
+        oos_trades_all.extend(oos_result.trades.iter().cloned());
+
+        windows.push(WalkForwardWindow {
+            window_idx: w,
+            is_start: start, is_end,
+            oos_start: is_end, oos_end,
+            best_fast, best_slow,
+            is_sharpe: best_sharpe,
+            oos_sharpe: oos_result.report.sharpe_ratio,
+            oos_pnl: oos_result.report.total_pnl,
+            oos_trades: oos_result.trades.len(),
+        });
+    }
+
+    // Aggregate OOS results
+    let total_oos_trades = oos_trades_all.len();
+    let oos_wins = oos_trades_all.iter().filter(|t| t.pnl > 0.0).count();
+    let oos_gross_win: f64 = oos_trades_all.iter().filter(|t| t.pnl > 0.0).map(|t| t.pnl).sum();
+    let oos_gross_loss: f64 = oos_trades_all.iter().filter(|t| t.pnl <= 0.0).map(|t| t.pnl.abs()).sum();
+
+    let avg_is_sharpe = if !windows.is_empty() {
+        windows.iter().map(|w| w.is_sharpe).sum::<f64>() / windows.len() as f64
+    } else { 0.0 };
+    let avg_oos_sharpe = if !windows.is_empty() {
+        windows.iter().map(|w| w.oos_sharpe).sum::<f64>() / windows.len() as f64
+    } else { 0.0 };
+    let robustness = if avg_is_sharpe > 0.0 { avg_oos_sharpe / avg_is_sharpe } else { 0.0 };
+
+    // Most common best params across windows
+    let most_common_fast = windows.iter()
+        .map(|w| w.best_fast)
+        .max_by_key(|&f| windows.iter().filter(|w| w.best_fast == f).count())
+        .unwrap_or(10);
+    let most_common_slow = windows.iter()
+        .map(|w| w.best_slow)
+        .max_by_key(|&s| windows.iter().filter(|w| w.best_slow == s).count())
+        .unwrap_or(50);
+
+    WalkForwardResult {
+        windows,
+        oos_sharpe: avg_oos_sharpe,
+        oos_profit_factor: if oos_gross_loss > 0.0 { oos_gross_win / oos_gross_loss } else { 0.0 },
+        oos_win_rate: if total_oos_trades > 0 { oos_wins as f64 / total_oos_trades as f64 } else { 0.0 },
+        robustness_score: robustness,
+        best_params: (most_common_fast, most_common_slow),
+    }
+}
+
 // ── Backtest Engine ─────────────────────────────────────────────────
 
 // ── Bar-by-bar State (for visual replay) ────────────────────────

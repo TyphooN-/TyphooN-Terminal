@@ -7051,7 +7051,7 @@ impl TyphooNApp {
             "darwin_xlsx_dir": self.darwin_xlsx_dir,
             "mt5_db_paths": self.mt5_db_paths,
             "darwin_ftp_dir": self.darwin_ftp_dir,
-            // Secrets are stored in the system keyring — never write them to session.json
+            // Credentials: keyring-only (secure OS storage). Session stores non-secret config.
             "broker_paper": self.broker_paper,
             "tt_sandbox": self.tt_sandbox,
             "sl_enabled": self.sl_enabled,
@@ -12677,7 +12677,12 @@ impl TyphooNApp {
                         .filter(|(k, _, _)| filter.is_empty() || k.to_uppercase().contains(&filter))
                         .collect();
 
-                    ui.label(egui::RichText::new(format!("{} entries (showing {})", stats.len(), filtered.len())).small().color(AXIS_TEXT));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{} bar entries (showing {})", stats.len(), filtered.len().min(1000))).small().color(AXIS_TEXT));
+                        if !self.bg.accounts.is_empty() {
+                            ui.label(egui::RichText::new(format!("| {} DARWIN accounts", self.bg.accounts.len())).small().color(AXIS_TEXT));
+                        }
+                    });
 
                     let avail = ui.available_height().max(200.0);
                     egui::ScrollArea::vertical().id_salt("storage_scroll").min_scrolled_height(avail).show(ui, |ui| {
@@ -12690,7 +12695,7 @@ impl TyphooNApp {
 
                             let now = chrono::Utc::now().timestamp();
                             let mut delete_key: Option<String> = None;
-                            for (key, count, ts) in filtered.iter().take(500) {
+                            for (key, count, ts) in filtered.iter().take(1000) {
                                 // Color by source prefix
                                 let key_color = if key.starts_with("mt5:") { egui::Color32::from_rgb(26, 188, 156) }
                                     else if key.starts_with("kraken:") { egui::Color32::from_rgb(255, 130, 60) }
@@ -15592,9 +15597,23 @@ impl eframe::App for TyphooNApp {
         }
 
         // Request continuous repainting for real-time tick updates
-        // Auto-save session every 60 seconds (240 frames at 250ms repaint)
+        // Auto-save session + keyring sync every 60 seconds (240 frames at 250ms repaint)
         if self.frame_count % 240 == 0 && self.frame_count > 0 {
             self.save_session();
+            // Sync credentials to OS keyring — only write if value changed (prevents corruption)
+            let sync_key = |key: &str, val: &str| {
+                if val.is_empty() { return; }
+                if let Ok(Some(existing)) = keyring::load(key) {
+                    if existing == val { return; } // unchanged, skip write
+                }
+                let _ = keyring::store(key, val);
+            };
+            sync_key(keyring::keys::ALPACA_API_KEY, &self.broker_api_key);
+            sync_key(keyring::keys::ALPACA_SECRET, &self.broker_secret);
+            sync_key(keyring::keys::FINNHUB_KEY, &self.finnhub_key);
+            sync_key(keyring::keys::FRED_KEY, &self.fred_key);
+            sync_key(keyring::keys::TT_USERNAME, &self.tt_username);
+            sync_key(keyring::keys::TT_PASSWORD, &self.tt_password);
         }
 
         // Poll watchlist quotes every ~15 seconds (60 frames at 250ms repaint)
