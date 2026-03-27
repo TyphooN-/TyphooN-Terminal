@@ -7469,6 +7469,8 @@ impl TyphooNApp {
                         if self.tt_username.is_empty() || self.tt_password.is_empty() {
                             self.log.push_back(LogEntry::warn("Enter tastytrade username and password"));
                         } else {
+                            let _ = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username);
+                            let _ = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password);
                             let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
                                 username: self.tt_username.clone(),
                                 password: self.tt_password.clone(),
