@@ -770,6 +770,10 @@ impl App {
                     self.log("Usage: unwatch SYMBOL", Color::Yellow);
                 }
             }
+            "cache" | "storage" => {
+                self.log("Cache management — use GUI for full storage manager", Color::Yellow);
+                self.log("  cache stats: shows key count and sizes", Color::Cyan);
+            }
             "help" | "h" | "?" => {
                 self.log("--- Trade Commands ---", Color::Cyan);
                 self.log("  buy/sell SYMBOL QTY           Market order", Color::Cyan);

@@ -4431,6 +4431,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
     Command { name: "RISKRUIN",        desc: "Risk-of-Ruin calculator (Monte Carlo equity path simulation)" },
     Command { name: "REPLAY",          desc: "Market replay mode — step through history bar-by-bar" },
+    Command { name: "STORAGE",         desc: "Cache storage manager — view and delete data by symbol/source" },
     // Drawing tools
     Command { name: "DRAW_HLINE",    desc: "Draw horizontal line" },
     Command { name: "DRAW_TRENDLINE",desc: "Draw trendline (2 clicks)" },
@@ -4712,6 +4713,8 @@ enum BrokerCmd {
     DarwinImportAll { dir: PathBuf, db_path: PathBuf },
     /// Sync bar data from MT5 BarCacheWriter databases into main cache.
     Mt5Sync { sources: Vec<String>, target: PathBuf },
+    /// Recompress cache at target zstd level (e.g. 22 for max compression).
+    CompactStorage { db_path: PathBuf, level: i32 },
     /// Scrape fundamentals for all MT5 stock symbols (non-blocking).
     FundamentalsScrape { db_path: PathBuf },
     /// Scrape fundamentals for a single ticker.
@@ -4985,6 +4988,9 @@ pub struct TyphooNApp {
     show_var_mult: bool,
     show_margin_monitor: bool,
     show_cache_stats: bool,
+    show_storage: bool,
+    storage_filter: String,
+    storage_delete_confirm: Option<String>,
     show_help: bool,
     show_connect: bool,
     show_indicators_panel: bool,
@@ -5092,8 +5098,14 @@ pub struct TyphooNApp {
     live_orders: Vec<OrderInfo>,
 
     // ── right panel state (WebKit parity) ─────────────────────────────
-    /// Active right panel tab.
+    /// Active right panel tab (kept for session compat).
     right_tab: RightTab,
+    /// Collapsible right panel sections (all visible, individually expandable).
+    right_trading_open: bool,
+    right_positions_open: bool,
+    right_orders_open: bool,
+    right_watchlist_open: bool,
+    right_risk_open: bool,
     /// Risk sizing mode dropdown.
     risk_mode: RiskMode,
     /// Order type mode dropdown.
@@ -5624,6 +5636,33 @@ impl TyphooNApp {
                             });
                         });
                     }
+                    BrokerCmd::CompactStorage { db_path, level } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        std::thread::spawn(move || {
+                            match typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                Ok(cache) => {
+                                    let msg_tx2 = msg_tx.clone();
+                                    match cache.compact_storage(level, Some(&|processed, total, key, old_size, new_size| {
+                                        if processed % 200 == 0 || processed == total {
+                                            let _ = msg_tx2.send(BrokerMsg::OrderResult(format!(
+                                                "Compact: {}/{} — {} ({} → {} bytes)",
+                                                processed, total, key, old_size, new_size
+                                            )));
+                                        }
+                                    })) {
+                                        Ok((count, saved)) => {
+                                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                                "Compact complete: {} entries, {:.1} MB saved. Run VACUUM in SQLite for full effect.",
+                                                count, saved as f64 / 1024.0 / 1024.0
+                                            )));
+                                        }
+                                        Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Compact failed: {}", e))); }
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Cannot open cache: {e}"))); }
+                            }
+                        });
+                    }
                     BrokerCmd::Mt5Sync { sources, target } => {
                         // Spawn dedicated thread for MT5 sync (heavy I/O)
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -6085,6 +6124,9 @@ impl TyphooNApp {
             show_var_mult: false,
             show_margin_monitor: false,
             show_cache_stats: false,
+            show_storage: false,
+            storage_filter: String::new(),
+            storage_delete_confirm: None,
             show_help: false,
             show_connect: false,
             show_indicators_panel: false,
@@ -6149,6 +6191,11 @@ impl TyphooNApp {
             live_positions: Vec::new(),
             live_orders: Vec::new(),
             right_tab: RightTab::Trading,
+            right_trading_open: true,
+            right_positions_open: true,
+            right_orders_open: true,
+            right_watchlist_open: false,
+            right_risk_open: true,
             risk_mode: RiskMode::VaR,
             order_type_mode: OrderTypeMode::Market,
             sl_input: String::new(),
@@ -6625,6 +6672,7 @@ impl TyphooNApp {
             "BOOKMAP"       => self.show_bookmap = true,
             "JOURNAL"       => self.show_journal = true,
             "CACHE_STATS"   => self.show_cache_stats = true,
+            "STORAGE"       => self.show_storage = true,
             "HELP"          => self.show_help = true,
             "FULLSCREEN"    => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true)),
             "CLOSE_WINDOWS" => self.close_all_windows(),
@@ -6930,6 +6978,7 @@ impl TyphooNApp {
                 "var_mult": self.show_var_mult,
                 "montecarlo": self.show_montecarlo,
                 "earnings_calendar": self.show_earnings_calendar,
+                "storage": self.show_storage,
             },
             "journal": self.journal_entries.iter().map(|e| serde_json::json!({
                 "timestamp": e.timestamp, "symbol": e.symbol, "side": e.side,
@@ -7097,6 +7146,7 @@ impl TyphooNApp {
                     if let Some(b) = w["var_mult"].as_bool() { self.show_var_mult = b; }
                     if let Some(b) = w["montecarlo"].as_bool() { self.show_montecarlo = b; }
                     if let Some(b) = w["earnings_calendar"].as_bool() { self.show_earnings_calendar = b; }
+                    if let Some(b) = w["storage"].as_bool() { self.show_storage = b; }
                 }
                 // Restore journal entries
                 if let Some(journal) = v["journal"].as_array() {
@@ -7178,6 +7228,7 @@ impl TyphooNApp {
         self.show_var_mult = false;
         self.show_margin_monitor = false;
         self.show_cache_stats = false;
+        self.show_storage = false;
         self.show_help = false;
         self.show_connect = false;
         self.show_indicators_panel = false;
@@ -7439,6 +7490,9 @@ impl TyphooNApp {
                     ui.add_space(10.0);
                     if ui.button("Open Indicators Panel").clicked() {
                         self.show_indicators_panel = true;
+                    }
+                    if ui.button("Storage Manager").clicked() {
+                        self.show_storage = true;
                     }
                     });
                 });
@@ -11610,6 +11664,101 @@ impl TyphooNApp {
                     if self.cache.is_none() {
                         ui.label(egui::RichText::new("Cache not available").color(egui::Color32::from_rgb(255, 80, 80)));
                     }
+                });
+        }
+
+        // Storage Manager
+        if self.show_storage {
+            egui::Window::new("Storage Manager")
+                .open(&mut self.show_storage)
+                .resizable(true).default_size([800.0, 500.0]).constrain(false)
+                .scroll([false, true])
+                .show(ctx, |ui| {
+                    // Summary stats at top
+                    if let Some((rows, kv, size)) = self.bg.cache_stats {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("Bar entries: {} | KV entries: {} | DB size: {:.1} MB", rows, kv, size as f64 / 1024.0 / 1024.0)).small());
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button(egui::RichText::new("Compact (zstd-22)").small()).clicked() {
+                                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                let log_tx = self.broker_tx.clone();
+                                let size_before = size;
+                                let _ = log_tx.send(BrokerCmd::CompactStorage { db_path: db_path.clone(), level: 22 });
+                                self.log.push_back(LogEntry::info(format!(
+                                    "Compacting cache at zstd-22 (current: {:.1} MB)... this may take several minutes",
+                                    size_before as f64 / 1024.0 / 1024.0
+                                )));
+                            }
+                            ui.label(egui::RichText::new("Recompress all data at max level. No impact on load speed.").color(AXIS_TEXT).small());
+                        });
+                    }
+                    ui.separator();
+
+                    // Filter input
+                    ui.horizontal(|ui| {
+                        ui.label("Filter:");
+                        ui.add(egui::TextEdit::singleline(&mut self.storage_filter).desired_width(200.0).hint_text("symbol or prefix..."));
+                        if ui.small_button("Clear").clicked() { self.storage_filter.clear(); }
+                    });
+                    ui.separator();
+
+                    // Data table from detailed_stats (key, bar_count, timestamp)
+                    let filter = self.storage_filter.to_uppercase();
+                    let stats = &self.bg.detailed_stats;
+                    let filtered: Vec<&(String, i64, i64)> = stats.iter()
+                        .filter(|(k, _, _)| filter.is_empty() || k.to_uppercase().contains(&filter))
+                        .collect();
+
+                    ui.label(egui::RichText::new(format!("{} entries (showing {})", stats.len(), filtered.len())).small().color(AXIS_TEXT));
+
+                    let avail = ui.available_height().max(200.0);
+                    egui::ScrollArea::vertical().id_salt("storage_scroll").min_scrolled_height(avail).show(ui, |ui| {
+                        egui::Grid::new("storage_grid").striped(true).num_columns(4).min_col_width(60.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Key").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("Bars").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("Age").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("Action").color(AXIS_TEXT).small().strong());
+                            ui.end_row();
+
+                            let now = chrono::Utc::now().timestamp();
+                            let mut delete_key: Option<String> = None;
+                            for (key, count, ts) in filtered.iter().take(500) {
+                                // Color by source prefix
+                                let key_color = if key.starts_with("mt5:") { egui::Color32::from_rgb(26, 188, 156) }
+                                    else if key.starts_with("kraken:") { egui::Color32::from_rgb(255, 130, 60) }
+                                    else if key.starts_with("alpaca:") { egui::Color32::from_rgb(52, 152, 219) }
+                                    else { egui::Color32::from_rgb(180, 180, 190) };
+                                ui.label(egui::RichText::new(key.as_str()).color(key_color).small().monospace());
+                                ui.label(egui::RichText::new(format!("{}", count)).small());
+                                // Age
+                                let age_secs = now - ts;
+                                let age_str = if age_secs < 3600 { format!("{}m", age_secs / 60) }
+                                    else if age_secs < 86400 { format!("{}h", age_secs / 3600) }
+                                    else { format!("{}d", age_secs / 86400) };
+                                ui.label(egui::RichText::new(age_str).color(AXIS_TEXT).small());
+                                // Delete button
+                                if self.storage_delete_confirm.as_deref() == Some(key.as_str()) {
+                                    if ui.small_button(egui::RichText::new("Confirm?").color(egui::Color32::from_rgb(231, 76, 60))).clicked() {
+                                        delete_key = Some(key.clone());
+                                        self.storage_delete_confirm = None;
+                                    }
+                                } else {
+                                    if ui.small_button(egui::RichText::new("Del").color(AXIS_TEXT)).clicked() {
+                                        self.storage_delete_confirm = Some(key.clone());
+                                    }
+                                }
+                                ui.end_row();
+                            }
+
+                            if let Some(key) = delete_key {
+                                if let Some(ref cache) = self.cache {
+                                    let _ = cache.delete_key(&key);
+                                    self.log.push_back(LogEntry::info(format!("Deleted cache key: {}", key)));
+                                }
+                            }
+                        });
+                    });
                 });
         }
 
