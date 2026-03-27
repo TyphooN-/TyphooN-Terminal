@@ -4555,6 +4555,8 @@ struct AccountDetailCache {
     ftp_summary: Option<darwin_ftp::DarwinFtpSummary>,
     ftp_equity_curve: Vec<(f64, f64)>,   // (day_index, quote_price) from RETURN cumulative
     ftp_drawdown_curve: Vec<(f64, f64)>, // (day_index, drawdown_pct) from RETURN
+    // Per-DARWIN daily returns (for weekly best/worst computation)
+    daily_returns: Vec<darwin::DailyReturn>,
     // Advanced DARWIN metrics
     cagr: f64,
     recovery_factor: f64,
@@ -6428,8 +6430,8 @@ impl TyphooNApp {
                                             det.cagr = darwin::compute_cagr(&daily);
                                             det.recovery_factor = darwin::compute_recovery_factor(&daily);
                                             det.dd_duration = darwin::compute_drawdown_duration(&daily);
-                                            // Divergence index computed after FTP load (needs ftp_equity_curve)
-                                            // Store daily for divergence below
+                                            // Store daily returns for drawdown analytics (weekly best/worst)
+                                            det.daily_returns = daily.clone();
                                         }
                                     }
                                 } // release conn
@@ -8700,7 +8702,7 @@ impl TyphooNApp {
                                                 }
                                             }
                                         }
-                                        7 => { // Drawdown — combined + per-DARWIN drawdown curves
+                                        7 => { // Drawdown — comprehensive drawdown analytics + monthly gain/loss grid
                                             let dd_colors = [
                                                 egui::Color32::from_rgb(26, 188, 156),
                                                 egui::Color32::from_rgb(52, 152, 219),
@@ -8712,21 +8714,19 @@ impl TyphooNApp {
                                                 egui::Color32::from_rgb(149, 165, 166),
                                             ];
                                             if let Some(ref dd) = self.bg.drawdown_dashboard {
-                                                // Combined drawdown curve (all DARWINs overlaid)
+                                                // ── Drawdown Curves Plot ──
                                                 ui.label(egui::RichText::new("Drawdown Curves (% from peak)").strong());
                                                 Plot::new("dd_overlay_plot")
                                                     .height(250.0)
                                                     .allow_drag(false).allow_zoom(false).allow_scroll(false)
                                                     .legend(egui_plot::Legend::default())
                                                     .show(ui, |plot_ui| {
-                                                        // Combined drawdown — bold red
                                                         if dd.combined.drawdown_curve.len() > 2 {
                                                             let pts: PlotPoints = PlotPoints::new(
                                                                 dd.combined.drawdown_curve.iter().enumerate().map(|(i, d)| [i as f64, -d.drawdown_pct]).collect()
                                                             );
                                                             plot_ui.line(Line::new("Combined", pts).color(egui::Color32::from_rgb(255, 60, 60)).width(2.0));
                                                         }
-                                                        // Per-DARWIN drawdown curves
                                                         for (idx, darwin_dd) in dd.darwins.iter().enumerate() {
                                                             if darwin_dd.drawdown_curve.len() > 2 {
                                                                 let c = dd_colors[idx % dd_colors.len()];
@@ -8737,41 +8737,396 @@ impl TyphooNApp {
                                                             }
                                                         }
                                                     });
-                                                // Drawdown summary table
-                                                ui.add_space(6.0);
-                                                egui::Grid::new("dd_summary").striped(true).num_columns(4).min_col_width(80.0).show(ui, |ui| {
-                                                    let dim = egui::Color32::from_rgb(100, 100, 120);
+
+                                                // ── Per-DARWIN Drawdown Stats Table (Signal + Quote) ──
+                                                ui.add_space(8.0);
+                                                ui.label(egui::RichText::new("Per-DARWIN Drawdown Analytics").strong());
+                                                ui.add_space(2.0);
+                                                let dim = egui::Color32::from_rgb(100, 100, 120);
+                                                egui::Grid::new("dd_stats_full").striped(true).num_columns(9).min_col_width(70.0).show(ui, |ui| {
                                                     ui.label(egui::RichText::new("DARWIN").color(dim).small());
-                                                    ui.label(egui::RichText::new("Max DD").color(dim).small());
-                                                    ui.label(egui::RichText::new("Date").color(dim).small());
-                                                    ui.label(egui::RichText::new("Current").color(dim).small());
+                                                    ui.label(egui::RichText::new("Signal DD%").color(dim).small());
+                                                    ui.label(egui::RichText::new("Sig DD Days").color(dim).small());
+                                                    ui.label(egui::RichText::new("Quote DD%").color(dim).small());
+                                                    ui.label(egui::RichText::new("Quote DD Days").color(dim).small());
+                                                    ui.label(egui::RichText::new("Recovery F").color(dim).small());
+                                                    ui.label(egui::RichText::new("Current DD%").color(dim).small());
+                                                    ui.label(egui::RichText::new("Best Day").color(dim).small());
+                                                    ui.label(egui::RichText::new("Worst Day").color(dim).small());
                                                     ui.end_row();
-                                                    for d in &dd.darwins {
-                                                        ui.label(egui::RichText::new(&d.darwin_ticker).strong());
-                                                        ui.label(egui::RichText::new(format!("{:.2}%", d.max_drawdown_pct)).color(DOWN));
-                                                        ui.label(egui::RichText::new(&d.max_dd_date).small());
-                                                        let cur_c = if d.current_drawdown_pct > 5.0 { DOWN } else { AXIS_TEXT };
-                                                        ui.label(egui::RichText::new(format!("{:.2}%", d.current_drawdown_pct)).color(cur_c));
+
+                                                    for darwin_dd in &dd.darwins {
+                                                        let ticker = &darwin_dd.darwin_ticker;
+                                                        // Find matching AccountDetailCache for this DARWIN
+                                                        let det_opt = self.bg.account_details.iter().find(|d| d.ticker == *ticker);
+
+                                                        ui.label(egui::RichText::new(ticker).strong());
+
+                                                        // Signal Max DD%
+                                                        let sig_dd = if let Some(det) = det_opt {
+                                                            det.summary.as_ref().map(|s| s.max_drawdown_pct).unwrap_or(darwin_dd.max_drawdown_pct)
+                                                        } else { darwin_dd.max_drawdown_pct };
+                                                        ui.label(egui::RichText::new(format!("{:.2}%", sig_dd)).color(DOWN));
+
+                                                        // Signal DD Days (max)
+                                                        if let Some(det) = det_opt {
+                                                            let (max_dd_days, _cur_dd_days, _avg) = det.dd_duration;
+                                                            ui.label(egui::RichText::new(format!("{}", max_dd_days)).color(AXIS_TEXT));
+                                                        } else {
+                                                            ui.label(egui::RichText::new("--").color(dim));
+                                                        }
+
+                                                        // Quote DD% (from FTP)
+                                                        if let Some(det) = det_opt {
+                                                            if let Some(ref ftp) = det.ftp_summary {
+                                                                ui.label(egui::RichText::new(format!("{:.2}%", ftp.max_drawdown_pct)).color(DOWN));
+                                                            } else {
+                                                                ui.label(egui::RichText::new("--").color(dim));
+                                                            }
+                                                        } else {
+                                                            ui.label(egui::RichText::new("--").color(dim));
+                                                        }
+
+                                                        // Quote DD Days — derive from ftp_drawdown_curve
+                                                        if let Some(det) = det_opt {
+                                                            if !det.ftp_drawdown_curve.is_empty() {
+                                                                // Count consecutive days in drawdown from end
+                                                                let mut cur_q_dd_days = 0usize;
+                                                                for &(_x, dd_val) in det.ftp_drawdown_curve.iter().rev() {
+                                                                    if dd_val < -0.01 { cur_q_dd_days += 1; } else { break; }
+                                                                }
+                                                                ui.label(egui::RichText::new(format!("{}", cur_q_dd_days)).color(AXIS_TEXT));
+                                                            } else {
+                                                                ui.label(egui::RichText::new("--").color(dim));
+                                                            }
+                                                        } else {
+                                                            ui.label(egui::RichText::new("--").color(dim));
+                                                        }
+
+                                                        // Recovery Factor
+                                                        if let Some(det) = det_opt {
+                                                            let rf = det.recovery_factor;
+                                                            let rf_c = if rf > 2.0 { UP } else if rf > 1.0 { AXIS_TEXT } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("{:.2}", rf)).color(rf_c));
+                                                        } else {
+                                                            ui.label(egui::RichText::new("--").color(dim));
+                                                        }
+
+                                                        // Current DD%
+                                                        let cur_c = if darwin_dd.current_drawdown_pct > 5.0 { DOWN } else { AXIS_TEXT };
+                                                        ui.label(egui::RichText::new(format!("{:.2}%", darwin_dd.current_drawdown_pct)).color(cur_c));
+
+                                                        // Best Day% / Worst Day% (from FTP if available, else signal best_days)
+                                                        if let Some(det) = det_opt {
+                                                            if let Some(ref ftp) = det.ftp_summary {
+                                                                ui.label(egui::RichText::new(format!("{:+.2}%", ftp.best_day_pct)).color(UP));
+                                                                ui.label(egui::RichText::new(format!("{:.2}%", ftp.worst_day_pct)).color(DOWN));
+                                                            } else {
+                                                                let best = darwin_dd.best_days.first().map(|d| d.return_pct).unwrap_or(0.0);
+                                                                let worst = darwin_dd.worst_days.first().map(|d| d.return_pct).unwrap_or(0.0);
+                                                                ui.label(egui::RichText::new(format!("{:+.2}%", best)).color(UP));
+                                                                ui.label(egui::RichText::new(format!("{:.2}%", worst)).color(DOWN));
+                                                            }
+                                                        } else {
+                                                            let best = darwin_dd.best_days.first().map(|d| d.return_pct).unwrap_or(0.0);
+                                                            let worst = darwin_dd.worst_days.first().map(|d| d.return_pct).unwrap_or(0.0);
+                                                            ui.label(egui::RichText::new(format!("{:+.2}%", best)).color(UP));
+                                                            ui.label(egui::RichText::new(format!("{:.2}%", worst)).color(DOWN));
+                                                        }
                                                         ui.end_row();
                                                     }
+                                                    // Combined row
                                                     ui.label(egui::RichText::new("COMBINED").strong());
                                                     ui.label(egui::RichText::new(format!("{:.2}%", dd.combined.max_drawdown_pct)).color(DOWN).strong());
-                                                    ui.label(egui::RichText::new(&dd.combined.max_dd_date).small());
-                                                    ui.label(egui::RichText::new(format!("{:.2}%", dd.combined.current_drawdown_pct)).strong());
+                                                    ui.label(egui::RichText::new("").color(dim)); // no combined dd days
+                                                    ui.label(egui::RichText::new("--").color(dim)); // no combined quote dd
+                                                    ui.label(egui::RichText::new("--").color(dim));
+                                                    ui.label(egui::RichText::new("--").color(dim));
+                                                    let comb_cur_c = if dd.combined.current_drawdown_pct > 5.0 { DOWN } else { AXIS_TEXT };
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", dd.combined.current_drawdown_pct)).color(comb_cur_c).strong());
+                                                    let comb_best = dd.combined.best_days.first().map(|d| d.return_pct).unwrap_or(0.0);
+                                                    let comb_worst = dd.combined.worst_days.first().map(|d| d.return_pct).unwrap_or(0.0);
+                                                    ui.label(egui::RichText::new(format!("{:+.2}%", comb_best)).color(UP));
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", comb_worst)).color(DOWN));
                                                     ui.end_row();
                                                 });
-                                                // Best/Worst days
-                                                if !dd.combined.best_days.is_empty() || !dd.combined.worst_days.is_empty() {
+
+                                                // ── Monthly Gain/Loss Grid (Darwinex-style heatmap) ──
+                                                ui.add_space(12.0);
+                                                ui.label(egui::RichText::new("Monthly Returns Grid").strong());
+                                                ui.add_space(4.0);
+                                                let month_names = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+                                                for det in &self.bg.account_details {
+                                                    if det.monthly_returns.is_empty() { continue; }
                                                     ui.add_space(6.0);
+                                                    ui.label(egui::RichText::new(format!("{} Monthly Returns (Signal)", det.ticker)).strong().color(dd_colors[self.bg.account_details.iter().position(|d| d.ticker == det.ticker).unwrap_or(0) % dd_colors.len()]));
+
+                                                    // Build year -> month -> return_pct map
+                                                    let mut year_map: std::collections::BTreeMap<i32, [Option<f64>; 12]> = std::collections::BTreeMap::new();
+                                                    for mr in &det.monthly_returns {
+                                                        let entry = year_map.entry(mr.year).or_insert([None; 12]);
+                                                        if mr.month >= 1 && mr.month <= 12 {
+                                                            entry[(mr.month - 1) as usize] = Some(mr.return_pct);
+                                                        }
+                                                    }
+
+                                                    egui::Grid::new(format!("monthly_grid_{}", det.ticker)).striped(true).num_columns(14).min_col_width(46.0).show(ui, |ui| {
+                                                        // Header row
+                                                        ui.label(egui::RichText::new("Year").color(dim).small());
+                                                        for m in &month_names {
+                                                            ui.label(egui::RichText::new(*m).color(dim).small());
+                                                        }
+                                                        ui.label(egui::RichText::new("Year").color(dim).small());
+                                                        ui.end_row();
+
+                                                        for (&year, months) in &year_map {
+                                                            ui.label(egui::RichText::new(format!("{}", year)).strong().small());
+                                                            let mut year_total = 0.0f64;
+                                                            let mut year_count = 0;
+                                                            for m_val in months.iter() {
+                                                                if let Some(ret) = m_val {
+                                                                    let intensity = (ret.abs() / 5.0).min(1.0);
+                                                                    let color = if *ret >= 0.0 {
+                                                                        egui::Color32::from_rgb(
+                                                                            (40.0 + 215.0 * intensity) as u8,
+                                                                            (180.0 + 75.0 * intensity) as u8,
+                                                                            (40.0 + 40.0 * intensity) as u8,
+                                                                        )
+                                                                    } else {
+                                                                        egui::Color32::from_rgb(
+                                                                            (180.0 + 75.0 * intensity) as u8,
+                                                                            (40.0 + 40.0 * intensity) as u8,
+                                                                            (40.0 + 40.0 * intensity) as u8,
+                                                                        )
+                                                                    };
+                                                                    ui.label(egui::RichText::new(format!("{:.1}%", ret)).color(color).small());
+                                                                    year_total += ret;
+                                                                    year_count += 1;
+                                                                } else {
+                                                                    ui.label(egui::RichText::new("").small());
+                                                                }
+                                                            }
+                                                            // Year total
+                                                            if year_count > 0 {
+                                                                let yr_c = if year_total >= 0.0 { UP } else { DOWN };
+                                                                ui.label(egui::RichText::new(format!("{:.1}%", year_total)).color(yr_c).strong().small());
+                                                            } else {
+                                                                ui.label(egui::RichText::new("").small());
+                                                            }
+                                                            ui.end_row();
+                                                        }
+                                                    });
+
+                                                    // FTP Quote monthly returns (derived from ftp_equity_curve)
+                                                    if !det.ftp_equity_curve.is_empty() && det.ftp_equity_curve.len() > 30 {
+                                                        ui.add_space(4.0);
+                                                        ui.label(egui::RichText::new(format!("{} Monthly Returns (Quote)", det.ticker)).small().strong().color(AXIS_TEXT));
+
+                                                        // Derive monthly returns from FTP equity curve
+                                                        // ftp_equity_curve is (day_index, quote_price) — approximate months as 21 trading days
+                                                        let eq = &det.ftp_equity_curve;
+                                                        let chunk_size = 21usize; // ~1 month of trading days
+                                                        let mut ftp_months: Vec<(usize, f64)> = Vec::new(); // (month_idx, return_pct)
+                                                        let mut i = 0usize;
+                                                        let mut month_idx = 0usize;
+                                                        while i + chunk_size <= eq.len() {
+                                                            let start_price = eq[i].1;
+                                                            let end_idx = (i + chunk_size - 1).min(eq.len() - 1);
+                                                            let end_price = eq[end_idx].1;
+                                                            if start_price > 0.0 {
+                                                                let ret = (end_price / start_price - 1.0) * 100.0;
+                                                                ftp_months.push((month_idx, ret));
+                                                            }
+                                                            i += chunk_size;
+                                                            month_idx += 1;
+                                                        }
+                                                        // Handle remaining days
+                                                        if i < eq.len() && i > 0 {
+                                                            let start_price = eq[i - chunk_size.min(i)].1;
+                                                            let end_price = eq[eq.len() - 1].1;
+                                                            if start_price > 0.0 {
+                                                                let ret = (end_price / start_price - 1.0) * 100.0;
+                                                                ftp_months.push((month_idx, ret));
+                                                            }
+                                                        }
+
+                                                        if !ftp_months.is_empty() {
+                                                            // Display as a simple row of monthly returns
+                                                            ui.horizontal_wrapped(|ui| {
+                                                                for (idx, ret) in &ftp_months {
+                                                                    let intensity = (ret.abs() / 5.0).min(1.0);
+                                                                    let color = if *ret >= 0.0 {
+                                                                        egui::Color32::from_rgb(
+                                                                            (40.0 + 215.0 * intensity) as u8,
+                                                                            (180.0 + 75.0 * intensity) as u8,
+                                                                            (40.0 + 40.0 * intensity) as u8,
+                                                                        )
+                                                                    } else {
+                                                                        egui::Color32::from_rgb(
+                                                                            (180.0 + 75.0 * intensity) as u8,
+                                                                            (40.0 + 40.0 * intensity) as u8,
+                                                                            (40.0 + 40.0 * intensity) as u8,
+                                                                        )
+                                                                    };
+                                                                    ui.label(egui::RichText::new(format!("M{}: {:.1}%", idx + 1, ret)).color(color).small());
+                                                                }
+                                                            });
+                                                        }
+                                                    }
+                                                }
+
+                                                // ── Best/Worst Analysis Table ──
+                                                ui.add_space(12.0);
+                                                ui.label(egui::RichText::new("Best/Worst Analysis").strong());
+                                                ui.add_space(2.0);
+                                                egui::Grid::new("best_worst_table").striped(true).num_columns(7).min_col_width(90.0).show(ui, |ui| {
+                                                    ui.label(egui::RichText::new("DARWIN").color(dim).small());
+                                                    ui.label(egui::RichText::new("Best Day").color(dim).small());
+                                                    ui.label(egui::RichText::new("Worst Day").color(dim).small());
+                                                    ui.label(egui::RichText::new("Best Week").color(dim).small());
+                                                    ui.label(egui::RichText::new("Worst Week").color(dim).small());
+                                                    ui.label(egui::RichText::new("Best Month").color(dim).small());
+                                                    ui.label(egui::RichText::new("Worst Month").color(dim).small());
+                                                    ui.end_row();
+
+                                                    for det in &self.bg.account_details {
+                                                        ui.label(egui::RichText::new(&det.ticker).strong());
+
+                                                        // Best/Worst Day (from daily_returns)
+                                                        if !det.daily_returns.is_empty() {
+                                                            let best_day = det.daily_returns.iter().max_by(|a, b| a.return_pct.partial_cmp(&b.return_pct).unwrap_or(std::cmp::Ordering::Equal));
+                                                            let worst_day = det.daily_returns.iter().min_by(|a, b| a.return_pct.partial_cmp(&b.return_pct).unwrap_or(std::cmp::Ordering::Equal));
+                                                            if let Some(bd) = best_day {
+                                                                let date_short = if bd.date.len() >= 10 { &bd.date[5..10] } else { &bd.date };
+                                                                ui.label(egui::RichText::new(format!("{:+.2}% {}", bd.return_pct, date_short)).color(UP).small());
+                                                            } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+                                                            if let Some(wd) = worst_day {
+                                                                let date_short = if wd.date.len() >= 10 { &wd.date[5..10] } else { &wd.date };
+                                                                ui.label(egui::RichText::new(format!("{:.2}% {}", wd.return_pct, date_short)).color(DOWN).small());
+                                                            } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+                                                        } else {
+                                                            ui.label(egui::RichText::new("--").color(dim).small());
+                                                            ui.label(egui::RichText::new("--").color(dim).small());
+                                                        }
+
+                                                        // Best/Worst Week (from daily_returns, grouped by ISO week)
+                                                        if det.daily_returns.len() >= 5 {
+                                                            let mut week_map: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+                                                            for dr in &det.daily_returns {
+                                                                // Parse date to get ISO week key
+                                                                if dr.date.len() >= 10 {
+                                                                    let parts: Vec<&str> = dr.date[..10].split('-').collect();
+                                                                    if parts.len() == 3 {
+                                                                        if let (Ok(y), Ok(m), Ok(d)) = (parts[0].parse::<i32>(), parts[1].parse::<u32>(), parts[2].parse::<u32>()) {
+                                                                            // Approximate ISO week: day_of_year / 7
+                                                                            let doy = (m - 1) * 30 + d; // rough approximation
+                                                                            let week_num = doy / 7;
+                                                                            let key = format!("{}-W{:02}", y, week_num);
+                                                                            *week_map.entry(key).or_insert(0.0) += dr.return_pct;
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            if !week_map.is_empty() {
+                                                                let best_wk = week_map.iter().max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
+                                                                let worst_wk = week_map.iter().min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
+                                                                if let Some((wk, ret)) = best_wk {
+                                                                    ui.label(egui::RichText::new(format!("{:+.2}% {}", ret, wk)).color(UP).small());
+                                                                } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+                                                                if let Some((wk, ret)) = worst_wk {
+                                                                    ui.label(egui::RichText::new(format!("{:.2}% {}", ret, wk)).color(DOWN).small());
+                                                                } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+                                                            } else {
+                                                                ui.label(egui::RichText::new("--").color(dim).small());
+                                                                ui.label(egui::RichText::new("--").color(dim).small());
+                                                            }
+                                                        } else {
+                                                            ui.label(egui::RichText::new("--").color(dim).small());
+                                                            ui.label(egui::RichText::new("--").color(dim).small());
+                                                        }
+
+                                                        // Best/Worst Month (from monthly_returns)
+                                                        if !det.monthly_returns.is_empty() {
+                                                            let best_mo = det.monthly_returns.iter().max_by(|a, b| a.return_pct.partial_cmp(&b.return_pct).unwrap_or(std::cmp::Ordering::Equal));
+                                                            let worst_mo = det.monthly_returns.iter().min_by(|a, b| a.return_pct.partial_cmp(&b.return_pct).unwrap_or(std::cmp::Ordering::Equal));
+                                                            if let Some(bm) = best_mo {
+                                                                let mo_name = month_names.get((bm.month - 1).max(0) as usize).unwrap_or(&"???");
+                                                                ui.label(egui::RichText::new(format!("{:+.2}% {}{}", bm.return_pct, mo_name, bm.year % 100)).color(UP).small());
+                                                            } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+                                                            if let Some(wm) = worst_mo {
+                                                                let mo_name = month_names.get((wm.month - 1).max(0) as usize).unwrap_or(&"???");
+                                                                ui.label(egui::RichText::new(format!("{:.2}% {}{}", wm.return_pct, mo_name, wm.year % 100)).color(DOWN).small());
+                                                            } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+                                                        } else {
+                                                            ui.label(egui::RichText::new("--").color(dim).small());
+                                                            ui.label(egui::RichText::new("--").color(dim).small());
+                                                        }
+
+                                                        ui.end_row();
+                                                    }
+
+                                                    // Combined row (from portfolio daily_returns)
+                                                    ui.label(egui::RichText::new("COMBINED").strong());
+                                                    // Best/Worst day combined
+                                                    let comb_best_d = dd.combined.best_days.first();
+                                                    let comb_worst_d = dd.combined.worst_days.first();
+                                                    if let Some(bd) = comb_best_d {
+                                                        let ds = if bd.date.len() >= 10 { &bd.date[5..10] } else { &bd.date };
+                                                        ui.label(egui::RichText::new(format!("{:+.2}% {}", bd.return_pct, ds)).color(UP).small());
+                                                    } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+                                                    if let Some(wd) = comb_worst_d {
+                                                        let ds = if wd.date.len() >= 10 { &wd.date[5..10] } else { &wd.date };
+                                                        ui.label(egui::RichText::new(format!("{:.2}% {}", wd.return_pct, ds)).color(DOWN).small());
+                                                    } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+
+                                                    // Best/Worst week combined (from portfolio daily returns)
+                                                    if !self.bg.daily_returns.is_empty() {
+                                                        let mut comb_week_map: std::collections::BTreeMap<String, f64> = std::collections::BTreeMap::new();
+                                                        for dr in &self.bg.daily_returns {
+                                                            if dr.date.len() >= 10 {
+                                                                let parts: Vec<&str> = dr.date[..10].split('-').collect();
+                                                                if parts.len() == 3 {
+                                                                    if let (Ok(y), Ok(m), Ok(d)) = (parts[0].parse::<i32>(), parts[1].parse::<u32>(), parts[2].parse::<u32>()) {
+                                                                        let doy = (m - 1) * 30 + d;
+                                                                        let week_num = doy / 7;
+                                                                        let key = format!("{}-W{:02}", y, week_num);
+                                                                        *comb_week_map.entry(key).or_insert(0.0) += dr.return_pct;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        let cbw = comb_week_map.iter().max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
+                                                        let cww = comb_week_map.iter().min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal));
+                                                        if let Some((wk, ret)) = cbw {
+                                                            ui.label(egui::RichText::new(format!("{:+.2}% {}", ret, wk)).color(UP).small());
+                                                        } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+                                                        if let Some((wk, ret)) = cww {
+                                                            ui.label(egui::RichText::new(format!("{:.2}% {}", ret, wk)).color(DOWN).small());
+                                                        } else { ui.label(egui::RichText::new("--").color(dim).small()); }
+                                                    } else {
+                                                        ui.label(egui::RichText::new("--").color(dim).small());
+                                                        ui.label(egui::RichText::new("--").color(dim).small());
+                                                    }
+
+                                                    // Best/Worst month combined — not directly available, skip
+                                                    ui.label(egui::RichText::new("--").color(dim).small());
+                                                    ui.label(egui::RichText::new("--").color(dim).small());
+                                                    ui.end_row();
+                                                });
+
+                                                // ── Combined Best/Worst Days (Top 5, kept from original) ──
+                                                if !dd.combined.best_days.is_empty() || !dd.combined.worst_days.is_empty() {
+                                                    ui.add_space(8.0);
                                                     ui.horizontal(|ui| {
                                                         ui.vertical(|ui| {
-                                                            ui.label(egui::RichText::new("Best Days").small().strong().color(UP));
+                                                            ui.label(egui::RichText::new("Best Days (Combined)").small().strong().color(UP));
                                                             for d in dd.combined.best_days.iter().take(5) {
                                                                 ui.label(egui::RichText::new(format!("{} +${:.0} ({:+.2}%)", d.date, d.pnl, d.return_pct)).color(UP).small());
                                                             }
                                                         });
                                                         ui.vertical(|ui| {
-                                                            ui.label(egui::RichText::new("Worst Days").small().strong().color(DOWN));
+                                                            ui.label(egui::RichText::new("Worst Days (Combined)").small().strong().color(DOWN));
                                                             for d in dd.combined.worst_days.iter().take(5) {
                                                                 ui.label(egui::RichText::new(format!("{} ${:.0} ({:.2}%)", d.date, d.pnl, d.return_pct)).color(DOWN).small());
                                                             }

@@ -89,8 +89,8 @@ impl AlpacaBroker {
 
     fn headers(&self) -> reqwest::header::HeaderMap {
         let mut h = reqwest::header::HeaderMap::new();
-        h.insert("APCA-API-KEY-ID", self.api_key.parse().unwrap());
-        h.insert("APCA-API-SECRET-KEY", self.secret_key.parse().unwrap());
+        if let Ok(v) = self.api_key.parse() { h.insert("APCA-API-KEY-ID", v); }
+        if let Ok(v) = self.secret_key.parse() { h.insert("APCA-API-SECRET-KEY", v); }
         h
     }
 
