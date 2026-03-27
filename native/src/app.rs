@@ -7671,7 +7671,7 @@ impl TyphooNApp {
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
                     // ── Compact overview table ──────────────────────────────────
-                    egui::Grid::new("darwin_overview").striped(true).num_columns(8).min_col_width(55.0).show(ui, |ui| {
+                    egui::Grid::new("darwin_overview").striped(true).num_columns(10).min_col_width(55.0).show(ui, |ui| {
                         ui.label(egui::RichText::new("DARWIN").color(dim).small());
                         ui.label(egui::RichText::new("MT5").color(dim).small());
                         ui.label(egui::RichText::new("Deals").color(dim).small());
@@ -7680,6 +7680,8 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new("P&L").color(dim).small());
                         ui.label(egui::RichText::new("Win%").color(dim).small());
                         ui.label(egui::RichText::new("PF").color(dim).small());
+                        ui.label(egui::RichText::new("Quote").color(dim).small());
+                        ui.label(egui::RichText::new("Q.Ret%").color(dim).small());
                         ui.end_row();
                         if !self.bg.account_details.is_empty() {
                             for det in &self.bg.account_details {
@@ -7695,6 +7697,16 @@ impl TyphooNApp {
                                     let wc = if s.win_rate >= 0.5 { chart_green } else { chart_red };
                                     ui.label(egui::RichText::new(format!("{:.1}%", s.win_rate * 100.0)).color(wc));
                                     ui.label(format!("{:.2}", s.profit_factor));
+                                    // Quote columns from FTP data
+                                    if let Some(ref fs) = det.ftp_summary {
+                                        let qc = if fs.last_quote >= 100.0 { chart_green } else { chart_red };
+                                        ui.label(egui::RichText::new(format!("{:.2}", fs.last_quote)).color(qc));
+                                        let rc = if fs.total_return_pct >= 0.0 { chart_green } else { chart_red };
+                                        ui.label(egui::RichText::new(format!("{:.1}%", fs.total_return_pct)).color(rc));
+                                    } else {
+                                        ui.label(egui::RichText::new("—").color(dim));
+                                        ui.label(egui::RichText::new("—").color(dim));
+                                    }
                                     ui.end_row();
                                 }
                             }
@@ -7706,6 +7718,7 @@ impl TyphooNApp {
                                 ui.label(format!("{}", acct.position_count));
                                 ui.label(format!("${:.0}", acct.initial_balance));
                                 ui.label(egui::RichText::new("...").color(dim));
+                                ui.label(""); ui.label("");
                                 ui.label(""); ui.label("");
                                 ui.end_row();
                             }
@@ -7734,6 +7747,22 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new(format!("D-Score {:.1}", ds.total_dscore)).color(chart_purple).small());
                             }
                         });
+
+                        // ── Quote Performance (FTP) ──
+                        if let Some(ref fs) = det.ftp_summary {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 12.0;
+                                let qc = if fs.last_quote >= 100.0 { chart_green } else { chart_red };
+                                ui.label(egui::RichText::new(format!("Quote {:.2}", fs.last_quote)).color(qc).small());
+                                let rc = if fs.total_return_pct >= 0.0 { chart_green } else { chart_red };
+                                ui.label(egui::RichText::new(format!("Ret {:.1}%", fs.total_return_pct)).color(rc).small());
+                                ui.label(egui::RichText::new(format!("MaxDD {:.1}%", fs.max_drawdown_pct)).color(chart_red).small());
+                                let sc = if fs.sharpe >= 0.0 { chart_green } else { chart_red };
+                                ui.label(egui::RichText::new(format!("Sharpe {:.2}", fs.sharpe)).color(sc).small());
+                                let soc = if fs.sortino >= 0.0 { chart_green } else { chart_red };
+                                ui.label(egui::RichText::new(format!("Sortino {:.2}", fs.sortino)).color(soc).small());
+                            });
+                        }
 
                         // ── Equity Curve ──
                         if det.equity_curve.len() > 2 {
@@ -7932,10 +7961,11 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Floating Equity").strong());
                             ui.label(egui::RichText::new(format!("${:.0}", combined)).color(fc).strong());
                         });
-                        egui::Grid::new("float_eq").striped(true).num_columns(3).min_col_width(70.0).show(ui, |ui| {
+                        egui::Grid::new("float_eq").striped(true).num_columns(4).min_col_width(70.0).show(ui, |ui| {
                             ui.label(egui::RichText::new("DARWIN").color(dim).small());
                             ui.label(egui::RichText::new("Balance").color(dim).small());
                             ui.label(egui::RichText::new("P&L").color(dim).small());
+                            ui.label(egui::RichText::new("Quote").color(dim).small());
                             ui.end_row();
                             for det in details {
                                 if let Some(ref s) = det.summary {
@@ -7944,6 +7974,12 @@ impl TyphooNApp {
                                     ui.label(egui::RichText::new(&det.ticker).small());
                                     ui.label(egui::RichText::new(format!("${:.0}", s.final_balance)).small());
                                     ui.label(egui::RichText::new(format!("${:.0}", pnl)).color(pc).small());
+                                    if let Some(ref fs) = det.ftp_summary {
+                                        let qc = if fs.last_quote >= 100.0 { chart_green } else { chart_red };
+                                        ui.label(egui::RichText::new(format!("{:.2}", fs.last_quote)).color(qc).small());
+                                    } else {
+                                        ui.label(egui::RichText::new("—").color(dim).small());
+                                    }
                                     ui.end_row();
                                 }
                             }
@@ -8209,7 +8245,7 @@ impl TyphooNApp {
                                                                         .map(|&(_, dd)| -dd) // stored negative
                                                                         .unwrap_or(0.0);
                                                                     ui.label(format!("{:.2}%", cur_dd));
-                                                                } else { ui.label("—"); ui.label("—"); }
+                                                                } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT)); ui.label(egui::RichText::new("—").color(AXIS_TEXT)); }
                                                                 ui.end_row();
                                                             }
                                                             // Combined row
@@ -8217,8 +8253,46 @@ impl TyphooNApp {
                                                             ui.label(egui::RichText::new(format!("{:.2}%", dd.combined.max_drawdown_pct)).color(DOWN).strong());
                                                             ui.label(&dd.combined.max_dd_date);
                                                             ui.label(format!("{:.2}%", dd.combined.current_drawdown_pct));
+                                                            ui.label(egui::RichText::new("—").color(AXIS_TEXT));
+                                                            ui.label(egui::RichText::new("—").color(AXIS_TEXT));
                                                             ui.end_row();
                                                         });
+                                                    }
+                                                    // ── Signal vs Quote Risk Metrics ──
+                                                    {
+                                                        let has_any_ftp = self.bg.account_details.iter().any(|d| d.ftp_summary.is_some());
+                                                        if has_any_ftp {
+                                                            ui.add_space(10.0);
+                                                            ui.label(egui::RichText::new("Signal vs Quote Risk Metrics").strong());
+                                                            egui::Grid::new("sig_vs_quote").striped(true).num_columns(5).show(ui, |ui| {
+                                                                ui.strong("DARWIN"); ui.strong("Signal Sharpe"); ui.strong("Quote Sharpe");
+                                                                ui.strong("Signal DD%"); ui.strong("Quote DD%");
+                                                                ui.end_row();
+                                                                for det in &self.bg.account_details {
+                                                                    ui.label(&det.ticker);
+                                                                    // Signal metrics from per-account var_stats
+                                                                    if let Some(ref vs) = det.var_stats {
+                                                                        ui.label(format!("{:.3}", vs.sharpe));
+                                                                    } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT)); }
+                                                                    // Quote metrics from FTP summary
+                                                                    if let Some(ref fs) = det.ftp_summary {
+                                                                        let qsc = if fs.sharpe >= 0.0 { UP } else { DOWN };
+                                                                        ui.label(egui::RichText::new(format!("{:.3}", fs.sharpe)).color(qsc));
+                                                                    } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT)); }
+                                                                    // Signal DD%
+                                                                    if let Some(ref vs) = det.var_stats {
+                                                                        ui.label(egui::RichText::new(format!("{:.2}%", vs.max_drawdown_pct)).color(DOWN));
+                                                                    } else if let Some(ref s) = det.summary {
+                                                                        ui.label(egui::RichText::new(format!("{:.2}%", s.max_drawdown_pct)).color(DOWN));
+                                                                    } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT)); }
+                                                                    // Quote DD%
+                                                                    if let Some(ref fs) = det.ftp_summary {
+                                                                        ui.label(egui::RichText::new(format!("{:.2}%", fs.max_drawdown_pct)).color(DOWN));
+                                                                    } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT)); }
+                                                                    ui.end_row();
+                                                                }
+                                                            });
+                                                        }
                                                     }
                                                 } // if let Some(vs)
                                             } } // if !daily.is_empty()
