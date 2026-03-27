@@ -11671,7 +11671,7 @@ impl TyphooNApp {
         if self.show_storage {
             egui::Window::new("Storage Manager")
                 .open(&mut self.show_storage)
-                .resizable(true).default_size([800.0, 500.0]).constrain(false)
+                .resizable(true).default_size([650.0, 500.0])
                 .scroll([false, true])
                 .show(ctx, |ui| {
                     // Summary stats at top
@@ -13325,15 +13325,15 @@ impl eframe::App for TyphooNApp {
                 ui.separator();
                 match self.bottom_tab {
                     BottomTab::Log => {
-                        egui::ScrollArea::vertical()
+                        egui::ScrollArea::both()
                             .stick_to_bottom(true)
                             .show(ui, |ui| {
                                 for entry in &self.log {
-                                    ui.label(
+                                    ui.add(egui::Label::new(
                                         egui::RichText::new(format!("{}{}", entry.prefix(), entry.msg))
                                             .color(entry.color())
                                             .font(egui::FontId::monospace(11.0)),
-                                    );
+                                    ).wrap_mode(egui::TextWrapMode::Extend));
                                 }
                             });
                     }
