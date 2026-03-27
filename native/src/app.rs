@@ -6997,6 +6997,7 @@ impl TyphooNApp {
             "broker_secret": self.broker_secret,
             "broker_paper": self.broker_paper,
             "tt_username": self.tt_username,
+            "tt_password": self.tt_password,
             "tt_sandbox": self.tt_sandbox,
             "sl_enabled": self.sl_enabled,
             "tp_enabled": self.tp_enabled,
@@ -7159,6 +7160,7 @@ impl TyphooNApp {
                 if let Some(ak) = v["broker_api_key"].as_str() { self.broker_api_key = ak.to_string(); }
                 if let Some(bs) = v["broker_secret"].as_str() { self.broker_secret = bs.to_string(); }
                 if let Some(tu) = v["tt_username"].as_str() { self.tt_username = tu.to_string(); }
+                if let Some(tp) = v["tt_password"].as_str() { self.tt_password = tp.to_string(); }
                 if let Some(ts) = v["tt_sandbox"].as_bool() { self.tt_sandbox = ts; }
                 if let Some(bp) = v["broker_paper"].as_bool() { self.broker_paper = bp; }
                 // Restore user watchlist
@@ -7605,8 +7607,12 @@ impl TyphooNApp {
                         if self.tt_username.is_empty() || self.tt_password.is_empty() {
                             self.log.push_back(LogEntry::warn("Enter tastytrade username and password"));
                         } else {
-                            let _ = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username);
-                            let _ = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password);
+                            if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
+                                self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
+                            }
+                            if let Err(e) = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password) {
+                                self.log.push_back(LogEntry::warn(format!("Keyring store tt_password failed: {}", e)));
+                            }
                             let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
                                 username: self.tt_username.clone(),
                                 password: self.tt_password.clone(),
@@ -8969,7 +8975,14 @@ impl TyphooNApp {
                                                                             (40.0 + 40.0 * intensity) as u8,
                                                                         )
                                                                     };
-                                                                    ui.label(egui::RichText::new(format!("M{}: {:.1}%", idx + 1, ret)).color(color).small());
+                                                                    // Map chunk index to approximate calendar month using signal monthly_returns as reference
+                                                                    let month_label = det.monthly_returns.get(*idx)
+                                                                        .map(|m| {
+                                                                            let mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                                                                            format!("{} {}", mon.get((m.month - 1) as usize).unwrap_or(&"?"), m.year % 100)
+                                                                        })
+                                                                        .unwrap_or_else(|| format!("M{}", idx + 1));
+                                                                    ui.label(egui::RichText::new(format!("{}: {:.1}%", month_label, ret)).color(color).small());
                                                                 }
                                                             });
                                                         }
@@ -13003,8 +13016,8 @@ impl eframe::App for TyphooNApp {
             style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::new(11.0, egui::FontFamily::Monospace));
             style.text_styles.insert(egui::TextStyle::Button, egui::FontId::new(10.0, egui::FontFamily::Monospace));
             style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::new(12.0, egui::FontFamily::Monospace));
-            // Ultra-compact spacing (tighter than WebKit)
-            style.spacing.item_spacing = egui::vec2(3.0, 1.0);
+            // Compact but readable spacing
+            style.spacing.item_spacing = egui::vec2(6.0, 2.0);
             style.spacing.button_padding = egui::vec2(4.0, 1.0);
             style.spacing.interact_size = egui::vec2(16.0, 14.0);
             style.spacing.indent = 8.0;
