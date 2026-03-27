@@ -895,7 +895,7 @@ impl SqliteCache {
         let mut processed = 0usize;
         let mut bytes_saved = 0i64;
 
-        for (key, compressed, timestamp, bar_count, last_ts, second_last_ts) in &entries {
+        for (key, compressed, _timestamp, _bar_count, _last_ts, _second_last_ts) in &entries {
             // Decompress
             let decompressed = match zstd::decode_all(compressed.as_slice()) {
                 Ok(d) => d,
