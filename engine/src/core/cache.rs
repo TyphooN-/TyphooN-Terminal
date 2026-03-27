@@ -921,15 +921,16 @@ impl SqliteCache {
             }
         }
 
-        // Also compact KV entries
-        let mut kv_stmt = conn.prepare("SELECT key, data FROM kv_store")
-            .map_err(|e| format!("KV prepare failed: {e}"))?;
-        let kv_entries: Vec<(String, Vec<u8>)> = kv_stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-        }).map_err(|e| format!("KV query failed: {e}"))?
-          .filter_map(|r| r.ok())
-          .collect();
-        drop(kv_stmt);
+        // Also compact KV entries (table may not exist in all DBs)
+        let kv_entries: Vec<(String, Vec<u8>)> = match conn.prepare("SELECT key, data FROM kv_store") {
+            Ok(mut kv_stmt) => {
+                let entries: Vec<_> = kv_stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                }).ok().map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default();
+                entries
+            }
+            Err(_) => Vec::new(), // table doesn't exist — skip
+        };
 
         for (key, compressed) in &kv_entries {
             if let Ok(decompressed) = zstd::decode_all(compressed.as_slice()) {
