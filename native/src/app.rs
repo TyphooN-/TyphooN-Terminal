@@ -6819,7 +6819,11 @@ impl TyphooNApp {
                                     if sr > 0.0 { atr_map.insert(f.symbol.clone(), sr); }
                                 }
                             }
-                            // SEC filings per symbol (recent activity)
+                            // SEC filings per symbol — initialize ALL symbols to 0 first
+                            // so z-score sees full distribution (not just non-zero entries)
+                            for (sym, _) in &symbols {
+                                sec_map.entry(sym.clone()).or_insert(0);
+                            }
                             for filing in &self.bg.sec_filings {
                                 *sec_map.entry(filing.ticker.clone()).or_insert(0) += 1;
                             }
@@ -12267,7 +12271,8 @@ impl TyphooNApp {
                             let high_count = self.darwinex_multi_outliers.iter().filter(|o| o.dimensions_flagged == 2).count();
                             ui.label(egui::RichText::new(format!("Multi-Signal Anomaly Scanner — {} EXTREME, {} HIGH, {} total",
                                 extreme_count, high_count, self.darwinex_multi_outliers.len())).strong());
-                            ui.label(egui::RichText::new("Dimensions: P/E (risk) + MCap/EV (valuation) + Short Ratio (volatility) + SEC filings (activity)").color(ol_dim).small());
+                            ui.label(egui::RichText::new("Score = sum of |z-scores| across flagged dimensions. Higher = more anomalous.").color(ol_dim).small());
+                            ui.label(egui::RichText::new("Dims: P/E (risk) + MCap/EV (valuation) + Short Ratio (volatility) + SEC filings+insider trades (activity)").color(ol_dim).small());
                             ui.add_space(4.0);
                             egui::Grid::new("multi_outlier_grid").striped(true).num_columns(9).min_col_width(50.0).show(ui, |ui| {
                                 ui.label(egui::RichText::new("Symbol").color(ol_dim).small().strong());
