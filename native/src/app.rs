@@ -13116,8 +13116,7 @@ impl eframe::App for TyphooNApp {
                         let tickers: Vec<String> = returns_data.iter().map(|(t, _)| t.clone()).collect();
                         let series: Vec<Vec<f32>> = returns_data.into_iter().map(|(_, r)| r).collect();
                         gpu.upload_returns(&series, max_days);
-                        gpu.compute_stats();
-                        if let Some(stats) = gpu.readback_stats() {
+                        if let Some(stats) = gpu.compute_all_batches() {
                             self.log.push_back(LogEntry::info(format!("GPU: {} DARWIN stats computed", stats.len())));
                             self.ftp_scan_results.clear();
                             for (i, s) in stats.iter().enumerate() {

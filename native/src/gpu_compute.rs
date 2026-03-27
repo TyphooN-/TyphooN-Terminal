@@ -1002,6 +1002,10 @@ pub struct GpuDarwinAnalytics {
     darwin_count: u32,
     /// Max days per DARWIN (stride in the flat array).
     max_days: u32,
+    /// Max DARWINs per GPU batch (for chunked processing when buffer limit exceeded).
+    chunk_size: u32,
+    /// All return series (kept for multi-batch processing).
+    all_returns: Vec<Vec<f32>>,
     /// Compute pipelines.
     stats_pipeline: wgpu::ComputePipeline,
     corr_pipeline: wgpu::ComputePipeline,
@@ -1060,7 +1064,7 @@ impl GpuDarwinAnalytics {
         Self {
             device, queue, returns_buffer: None, lengths_buffer: None,
             stats_buffer: None, corr_buffer: None, staging_buffer: None,
-            darwin_count: 0, max_days: 0,
+            darwin_count: 0, max_days: 0, chunk_size: 0, all_returns: Vec::new(),
             stats_pipeline, corr_pipeline, stats_bgl, corr_bgl,
         }
     }
@@ -1073,24 +1077,30 @@ impl GpuDarwinAnalytics {
         self.darwin_count = count;
         self.max_days = max_days;
 
-        // Check GPU buffer size limit and cap if needed
+        // Check GPU buffer size limit — chunk by DARWIN count if needed
         let max_buffer = self.device.limits().max_storage_buffer_binding_size as usize;
-        let needed = count as usize * max_days as usize * 4; // bytes
-        let max_days = if needed > max_buffer {
-            // Cap max_days to fit within GPU limit
-            let capped = max_buffer / (count as usize * 4);
-            tracing::warn!("GPU: returns buffer {}MB exceeds limit {}MB — capping max_days {} → {}",
-                needed / 1024 / 1024, max_buffer / 1024 / 1024, max_days, capped);
-            capped as u32
-        } else { max_days };
-        self.max_days = max_days;
+        let per_darwin_bytes = max_days as usize * 4;
+        let max_darwins_per_batch = max_buffer / per_darwin_bytes;
+        if (count as usize) > max_darwins_per_batch {
+            // Need to chunk — store batch info for multi-pass compute
+            self.chunk_size = max_darwins_per_batch as u32;
+            tracing::info!("GPU: {}MB needed for {} DARWINs × {} days — chunking into batches of {} (limit {}MB)",
+                count as usize * per_darwin_bytes / 1024 / 1024, count, max_days,
+                max_darwins_per_batch, max_buffer / 1024 / 1024);
+        } else {
+            self.chunk_size = count; // single batch
+        }
 
-        // Flatten and pad to max_days stride
-        let total_floats = count as usize * max_days as usize;
+        // Store all returns for chunked processing
+        self.all_returns = returns.to_vec();
+
+        // For upload, use min(count, chunk_size) DARWINs (first batch)
+        let batch_count = (count as usize).min(self.chunk_size as usize);
+        let total_floats = batch_count * max_days as usize;
         let mut flat = vec![0.0_f32; total_floats];
-        let mut lengths = vec![0_u32; count as usize];
+        let mut lengths = vec![0_u32; batch_count];
 
-        for (i, series) in returns.iter().enumerate() {
+        for (i, series) in returns.iter().take(batch_count).enumerate() {
             let len = series.len().min(max_days as usize);
             lengths[i] = len as u32;
             for (j, &val) in series.iter().take(len).enumerate() {
@@ -1118,8 +1128,8 @@ impl GpuDarwinAnalytics {
         }));
         self.queue.write_buffer(self.lengths_buffer.as_ref().unwrap(), 0, lengths_bytes);
 
-        // Allocate stats output: 10 floats per DARWIN
-        let stats_size = count as u64 * 10 * 4;
+        // Allocate stats output: 10 floats per batch
+        let stats_size = batch_count as u64 * 10 * 4;
         self.stats_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("darwin_stats_out"), size: stats_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
@@ -1132,17 +1142,19 @@ impl GpuDarwinAnalytics {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         }));
 
-        tracing::info!("GPU: uploaded {} DARWINs × {} max_days ({:.1}MB VRAM)",
-            count, max_days, total_floats as f64 * 4.0 / 1024.0 / 1024.0);
+        let num_batches = (count as usize + self.chunk_size as usize - 1) / self.chunk_size as usize;
+        tracing::info!("GPU: uploaded batch 1/{} ({} DARWINs × {} days, {:.1}MB VRAM)",
+            num_batches, batch_count, max_days, total_floats as f64 * 4.0 / 1024.0 / 1024.0);
     }
 
-    /// Dispatch batch statistics shader. Computes Sharpe/Sortino/DD/etc for ALL DARWINs in one pass.
+    /// Dispatch batch statistics shader for currently uploaded batch.
     pub fn compute_stats(&self) {
         let (Some(ret_buf), Some(len_buf), Some(stats_buf)) =
             (&self.returns_buffer, &self.lengths_buffer, &self.stats_buffer) else { return; };
 
-        // Params: [darwin_count, max_days]
-        let params = [self.darwin_count, self.max_days];
+        // Params: [batch_darwin_count, max_days]
+        let batch_count = (self.darwin_count as usize).min(self.chunk_size as usize) as u32;
+        let params = [batch_count, self.max_days];
         let params_bytes = unsafe {
             std::slice::from_raw_parts(params.as_ptr() as *const u8, 8)
         };
@@ -1171,16 +1183,17 @@ impl GpuDarwinAnalytics {
             });
             pass.set_pipeline(&self.stats_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups((self.darwin_count + 255) / 256, 1, 1);
+            pass.dispatch_workgroups((batch_count + 255) / 256, 1, 1);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
     }
 
-    /// Read back computed statistics from GPU.
+    /// Read back computed statistics from GPU (current batch).
     pub fn readback_stats(&self) -> Option<Vec<GpuDarwinStats>> {
         let (Some(stats_buf), Some(staging)) = (&self.stats_buffer, &self.staging_buffer) else { return None; };
 
-        let size = self.darwin_count as u64 * 10 * 4;
+        let batch_count = (self.darwin_count as usize).min(self.chunk_size as usize);
+        let size = batch_count as u64 * 10 * 4;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("stats_readback_encoder"),
         });
@@ -1197,8 +1210,8 @@ impl GpuDarwinAnalytics {
         let results = {
             let data = buffer_slice.get_mapped_range();
             let floats = bytemuck_cast_slice_to_f32(&data);
-            let mut results = Vec::with_capacity(self.darwin_count as usize);
-            for i in 0..self.darwin_count as usize {
+            let mut results = Vec::with_capacity(batch_count);
+            for i in 0..batch_count {
                 let base = i * 10;
                 if base + 9 < floats.len() {
                     results.push(GpuDarwinStats {
@@ -1219,6 +1232,88 @@ impl GpuDarwinAnalytics {
         }; // data (mapped range) dropped here
         staging.unmap();
         Some(results)
+    }
+
+    /// Process ALL batches and return merged stats for all DARWINs.
+    /// Handles chunked GPU processing when dataset exceeds buffer limit.
+    pub fn compute_all_batches(&mut self) -> Option<Vec<GpuDarwinStats>> {
+        if self.all_returns.is_empty() { return None; }
+        let total = self.all_returns.len();
+        let chunk = self.chunk_size as usize;
+        if chunk == 0 { return None; }
+        let num_batches = (total + chunk - 1) / chunk;
+        let mut all_stats = Vec::with_capacity(total);
+
+        for batch_idx in 0..num_batches {
+            let start = batch_idx * chunk;
+            let end = (start + chunk).min(total);
+            let batch_slice = &self.all_returns[start..end];
+            let batch_count = batch_slice.len();
+
+            // Flatten this batch
+            let total_floats = batch_count * self.max_days as usize;
+            let mut flat = vec![0.0_f32; total_floats];
+            let mut lengths = vec![0_u32; batch_count];
+            for (i, series) in batch_slice.iter().enumerate() {
+                let len = series.len().min(self.max_days as usize);
+                lengths[i] = len as u32;
+                for (j, &val) in series.iter().take(len).enumerate() {
+                    flat[i * self.max_days as usize + j] = val;
+                }
+            }
+
+            // Upload
+            let returns_bytes = unsafe {
+                std::slice::from_raw_parts(flat.as_ptr() as *const u8, flat.len() * 4)
+            };
+            self.returns_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("darwin_returns"), size: returns_bytes.len() as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            }));
+            self.queue.write_buffer(self.returns_buffer.as_ref().unwrap(), 0, returns_bytes);
+
+            let lengths_bytes = unsafe {
+                std::slice::from_raw_parts(lengths.as_ptr() as *const u8, lengths.len() * 4)
+            };
+            self.lengths_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("darwin_lengths"), size: lengths_bytes.len() as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            }));
+            self.queue.write_buffer(self.lengths_buffer.as_ref().unwrap(), 0, lengths_bytes);
+
+            let stats_size = batch_count as u64 * 10 * 4;
+            self.stats_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("darwin_stats_out"), size: stats_size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+            }));
+            self.staging_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("darwin_staging"), size: stats_size.max(1024 * 1024 * 4),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+            }));
+
+            // Temporarily set darwin_count to batch size for compute/readback
+            let saved_count = self.darwin_count;
+            self.darwin_count = batch_count as u32;
+            self.chunk_size = batch_count as u32; // so readback uses correct count
+
+            self.compute_stats();
+            if let Some(batch_stats) = self.readback_stats() {
+                all_stats.extend(batch_stats);
+            }
+
+            self.darwin_count = saved_count;
+            self.chunk_size = (self.device.limits().max_storage_buffer_binding_size as usize / (self.max_days as usize * 4)) as u32;
+
+            if num_batches > 1 {
+                tracing::info!("GPU: batch {}/{} complete ({} DARWINs)", batch_idx + 1, num_batches, batch_count);
+            }
+        }
+
+        // Free stored returns to reclaim memory
+        self.all_returns.clear();
+        self.all_returns.shrink_to_fit();
+
+        Some(all_stats)
     }
 
     /// Dispatch correlation shader for a tile of DARWINs.
