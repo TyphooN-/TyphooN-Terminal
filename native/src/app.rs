@@ -13299,10 +13299,12 @@ fn dirs_home() -> PathBuf {
 
 // ─── eframe::App ─────────────────────────────────────────────────────────────
 
+#[allow(deprecated)] // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui)
+                      // Full migration to ui() pattern deferred — show(ctx) works identically
 impl eframe::App for TyphooNApp {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // All UI rendering is done in update() via ctx panels/windows
-        // This is required by eframe 0.34 but we use the Context-based API
+        // Panels rendered in update() via ctx — egui 0.34 migration to ui() pattern is deferred
+        // since our 16K-line update() mixes panel rendering with floating windows + state logic
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
