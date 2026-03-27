@@ -399,6 +399,115 @@ pub fn detect_outliers(
     (outliers, stats)
 }
 
+/// Multi-dimensional anomaly detection result.
+/// Combines VaR, EV, ATR, and SEC filing activity into a composite risk score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiOutlierResult {
+    pub symbol: String,
+    pub sector: String,
+    /// Individual z-scores per dimension (0 = not anomalous)
+    pub var_z: f64,      // price risk outlier
+    pub ev_z: f64,       // valuation outlier
+    pub atr_z: f64,      // volatility outlier
+    pub sec_z: f64,      // SEC filing activity outlier
+    /// Composite anomaly score (sum of |z-scores| for flagged dimensions)
+    pub composite_score: f64,
+    /// Number of dimensions flagging (1-4)
+    pub dimensions_flagged: u8,
+    /// Human-readable tier: EXTREME (3+dim), HIGH (2dim), ELEVATED (1dim)
+    pub tier: String,
+    /// Raw values
+    pub var_value: f64,
+    pub ev_value: f64,
+    pub atr_value: f64,
+    pub sec_filings: i32,
+}
+
+/// Multi-dimensional outlier detection combining VaR + EV + ATR + SEC activity.
+/// Each dimension is z-scored within its sector. Symbols flagging on multiple
+/// dimensions get higher composite scores.
+pub fn detect_multi_outliers(
+    symbols: &[(String, String)],  // (symbol, sector)
+    var_map: &std::collections::HashMap<String, f64>,   // symbol → VaR 95%
+    ev_map: &std::collections::HashMap<String, f64>,    // symbol → MCap/EV ratio
+    atr_map: &std::collections::HashMap<String, f64>,   // symbol → ATR as % of price
+    sec_map: &std::collections::HashMap<String, i32>,   // symbol → filing count (recent)
+    threshold: f64,  // z-score threshold (typically 1.5-2.0)
+) -> Vec<MultiOutlierResult> {
+    // Group by sector
+    let mut by_sector: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    for (sym, sector) in symbols {
+        by_sector.entry(sector.clone()).or_default().push(sym.clone());
+    }
+
+    let mut results = Vec::new();
+
+    for (sector, syms) in &by_sector {
+        if syms.len() < 4 { continue; }
+
+        // Compute z-scores per dimension within this sector
+        let z_scores = |map: &std::collections::HashMap<String, f64>| -> std::collections::HashMap<String, f64> {
+            let vals: Vec<f64> = syms.iter().filter_map(|s| map.get(s).copied()).collect();
+            if vals.len() < 4 { return std::collections::HashMap::new(); }
+            let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+            let sd = std_dev(&vals);
+            if sd <= 0.0 { return std::collections::HashMap::new(); }
+            syms.iter().filter_map(|s| {
+                map.get(s).map(|v| (s.clone(), (v - mean) / sd))
+            }).collect()
+        };
+
+        let var_zs = z_scores(var_map);
+        let ev_zs = z_scores(ev_map);
+        let atr_zs = z_scores(atr_map);
+        // SEC filings: convert i32 to f64 for z-scoring
+        let sec_f64: std::collections::HashMap<String, f64> = sec_map.iter()
+            .map(|(k, v)| (k.clone(), *v as f64)).collect();
+        let sec_zs = z_scores(&sec_f64);
+
+        for sym in syms {
+            let vz = var_zs.get(sym).copied().unwrap_or(0.0);
+            let ez = ev_zs.get(sym).copied().unwrap_or(0.0);
+            let az = atr_zs.get(sym).copied().unwrap_or(0.0);
+            let sz = sec_zs.get(sym).copied().unwrap_or(0.0);
+
+            let mut dims = 0u8;
+            if vz.abs() > threshold { dims += 1; }
+            if ez.abs() > threshold { dims += 1; }
+            if az.abs() > threshold { dims += 1; }
+            if sz.abs() > threshold { dims += 1; }
+
+            if dims == 0 { continue; } // not an outlier on any dimension
+
+            let composite = vz.abs() + ez.abs() + az.abs() + sz.abs();
+            let tier = if dims >= 3 { "EXTREME" }
+                else if dims >= 2 { "HIGH" }
+                else { "ELEVATED" };
+
+            let sector_str = symbols.iter().find(|(s, _)| s == sym).map(|(_, sec)| sec.clone()).unwrap_or_default();
+            results.push(MultiOutlierResult {
+                symbol: sym.clone(),
+                sector: sector_str,
+                var_z: vz,
+                ev_z: ez,
+                atr_z: az,
+                sec_z: sz,
+                composite_score: composite,
+                dimensions_flagged: dims,
+                tier: tier.to_string(),
+                var_value: var_map.get(sym).copied().unwrap_or(0.0),
+                ev_value: ev_map.get(sym).copied().unwrap_or(0.0),
+                atr_value: atr_map.get(sym).copied().unwrap_or(0.0),
+                sec_filings: sec_map.get(sym).copied().unwrap_or(0),
+            });
+        }
+    }
+
+    // Sort by composite score descending (most anomalous first)
+    results.sort_by(|a, b| b.composite_score.partial_cmp(&a.composite_score).unwrap_or(std::cmp::Ordering::Equal));
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

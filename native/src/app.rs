@@ -4993,6 +4993,7 @@ pub struct TyphooNApp {
     show_darwinex_outliers: bool,
     darwinex_outliers: Vec<typhoon_engine::core::var::OutlierResult>,
     darwinex_sector_stats: Vec<typhoon_engine::core::var::SectorStats>,
+    darwinex_multi_outliers: Vec<typhoon_engine::core::var::MultiOutlierResult>,
     show_journal: bool,
     journal_entries: Vec<JournalEntry>,
     show_var_mult: bool,
@@ -6130,6 +6131,7 @@ impl TyphooNApp {
             show_order_flow: false,
             show_bookmap: false,
             show_darwinex_outliers: false,
+            darwinex_multi_outliers: Vec::new(),
             darwinex_outliers: Vec::new(),
             darwinex_sector_stats: Vec::new(),
             show_journal: false,
@@ -6766,36 +6768,66 @@ impl TyphooNApp {
                 self.alert_symbol = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
             }
             "DARWINEXOUTLIERS" => {
-                // Read specs from cache, run outlier detection
+                // Multi-dimensional outlier detection: VaR + EV + ATR + SEC + Volume
                 if let Some(ref cache) = self.cache {
                     if let Some(_conn) = cache.try_connection() {
-                        // Get all symbols with their specs from cache
                         use typhoon_engine::core::var;
-                        let mut data: Vec<(String, String, f64)> = Vec::new();
-                        // Read from __SPECS__ key or from fundamentals
-                        // Use detailed_stats from bg cache (symbol, bar_count, last_ts)
-                        // Or build from fundamentals + cache stats
                         let fund = &self.bg.all_fundamentals;
-                        for f in fund {
-                            let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
-                            // Use market cap as the metric for outlier detection
-                            if let Some(mc) = f.market_cap {
-                                if mc > 0.0 {
-                                    data.push((f.symbol.clone(), sector, mc));
+                        if fund.len() < 10 {
+                            self.log.push_back(LogEntry::warn("Need 10+ symbols with fundamentals data. Run EVSCRAPE first."));
+                        } else {
+                            // Build per-symbol data maps from all available sources
+                            let mut symbols: Vec<(String, String)> = Vec::new();
+                            let mut ev_map = std::collections::HashMap::new();
+                            let mut var_map = std::collections::HashMap::new();
+                            let mut atr_map = std::collections::HashMap::new();
+                            let mut sec_map = std::collections::HashMap::new();
+
+                            for f in fund {
+                                let sector = if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() };
+                                symbols.push((f.symbol.clone(), sector));
+                                // EV: MCap/EV ratio (valuation anomaly)
+                                if let (Some(mc), Some(ev)) = (f.market_cap, f.enterprise_value) {
+                                    if ev > 0.0 { ev_map.insert(f.symbol.clone(), mc / ev * 100.0); }
+                                }
+                                // P/E as proxy for VaR (extreme P/E = risk)
+                                if let Some(pe) = f.pe_ratio {
+                                    if pe.abs() > 0.0 { var_map.insert(f.symbol.clone(), pe.abs()); }
+                                }
+                                // Short ratio as ATR proxy (high short = volatility risk)
+                                if let Some(sr) = f.short_ratio {
+                                    if sr > 0.0 { atr_map.insert(f.symbol.clone(), sr); }
                                 }
                             }
-                        }
-                        if data.len() >= 10 {
+                            // SEC filings per symbol (recent activity)
+                            for filing in &self.bg.sec_filings {
+                                *sec_map.entry(filing.ticker.clone()).or_insert(0) += 1;
+                            }
+                            // Also count insider trades
+                            for (ticker, trades) in &self.bg.insider_trades {
+                                *sec_map.entry(ticker.clone()).or_insert(0) += trades.len() as i32;
+                            }
+
+                            // Run multi-dimensional outlier detection
+                            let multi = var::detect_multi_outliers(&symbols, &var_map, &ev_map, &atr_map, &sec_map, 1.5);
+                            // Also run single-dimension (legacy) for sector stats
+                            let data: Vec<(String, String, f64)> = fund.iter()
+                                .filter_map(|f| f.market_cap.map(|mc| (f.symbol.clone(), if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() }, mc)))
+                                .filter(|(_, _, mc)| *mc > 0.0)
+                                .collect();
                             let (outliers, stats) = var::detect_outliers(&data, 1.5);
+
+                            let extreme = multi.iter().filter(|o| o.dimensions_flagged >= 3).count();
+                            let high = multi.iter().filter(|o| o.dimensions_flagged == 2).count();
                             self.log.push_back(LogEntry::info(format!(
-                                "Outlier analysis: {} outliers across {} sectors from {} symbols",
-                                outliers.len(), stats.len(), data.len()
+                                "Multi-outlier scan: {} total ({} EXTREME, {} HIGH) from {} symbols | VaR:{} EV:{} ATR:{} SEC:{}",
+                                multi.len(), extreme, high, symbols.len(),
+                                var_map.len(), ev_map.len(), atr_map.len(), sec_map.len()
                             )));
                             self.darwinex_outliers = outliers;
                             self.darwinex_sector_stats = stats;
+                            self.darwinex_multi_outliers = multi;
                             self.show_darwinex_outliers = true;
-                        } else {
-                            self.log.push_back(LogEntry::warn("Need 10+ symbols with fundamentals data. Run EVSCRAPE first."));
                         }
                     }
                 }
@@ -11918,7 +11950,49 @@ impl TyphooNApp {
                     ui.separator();
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        // Sector summary
+                        // Multi-dimensional anomaly table (VaR + EV + ATR + SEC)
+                        if !self.darwinex_multi_outliers.is_empty() {
+                            let extreme_count = self.darwinex_multi_outliers.iter().filter(|o| o.dimensions_flagged >= 3).count();
+                            let high_count = self.darwinex_multi_outliers.iter().filter(|o| o.dimensions_flagged == 2).count();
+                            ui.label(egui::RichText::new(format!("Multi-Signal Anomaly Scanner — {} EXTREME, {} HIGH, {} total",
+                                extreme_count, high_count, self.darwinex_multi_outliers.len())).strong());
+                            ui.label(egui::RichText::new("Dimensions: P/E (risk) + MCap/EV (valuation) + Short Ratio (volatility) + SEC filings (activity)").color(ol_dim).small());
+                            ui.add_space(4.0);
+                            egui::Grid::new("multi_outlier_grid").striped(true).num_columns(9).min_col_width(50.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Symbol").color(ol_dim).small().strong());
+                                ui.label(egui::RichText::new("Sector").color(ol_dim).small().strong());
+                                ui.label(egui::RichText::new("Score").color(ol_dim).small().strong());
+                                ui.label(egui::RichText::new("Dims").color(ol_dim).small().strong());
+                                ui.label(egui::RichText::new("Tier").color(ol_dim).small().strong());
+                                ui.label(egui::RichText::new("P/E z").color(ol_dim).small().strong());
+                                ui.label(egui::RichText::new("EV z").color(ol_dim).small().strong());
+                                ui.label(egui::RichText::new("Short z").color(ol_dim).small().strong());
+                                ui.label(egui::RichText::new("SEC z").color(ol_dim).small().strong());
+                                ui.end_row();
+                                for o in self.darwinex_multi_outliers.iter().take(100) {
+                                    let tier_c = match o.tier.as_str() {
+                                        "EXTREME" => ol_high, "HIGH" => ol_med, _ => ol_green
+                                    };
+                                    let z_color = |z: f64| -> egui::Color32 {
+                                        if z.abs() > 2.0 { ol_high } else if z.abs() > 1.5 { ol_med } else { ol_dim }
+                                    };
+                                    ui.label(egui::RichText::new(&o.symbol).small().strong().color(egui::Color32::WHITE));
+                                    ui.label(egui::RichText::new(&o.sector).small().color(ol_cyan));
+                                    ui.label(egui::RichText::new(format!("{:.1}", o.composite_score)).small().color(tier_c).strong());
+                                    ui.label(egui::RichText::new(format!("{}/4", o.dimensions_flagged)).small().color(tier_c));
+                                    ui.label(egui::RichText::new(&o.tier).small().color(tier_c));
+                                    ui.label(egui::RichText::new(format!("{:+.1}", o.var_z)).small().color(z_color(o.var_z)));
+                                    ui.label(egui::RichText::new(format!("{:+.1}", o.ev_z)).small().color(z_color(o.ev_z)));
+                                    ui.label(egui::RichText::new(format!("{:+.1}", o.atr_z)).small().color(z_color(o.atr_z)));
+                                    ui.label(egui::RichText::new(format!("{:+.1}", o.sec_z)).small().color(z_color(o.sec_z)));
+                                    ui.end_row();
+                                }
+                            });
+                            ui.add_space(8.0);
+                            ui.separator();
+                        }
+
+                        // Sector summary (single-dimension)
                         if !self.darwinex_sector_stats.is_empty() {
                             ui.label(egui::RichText::new("Sector Statistics").small().strong());
                             egui::Grid::new("sector_stats_grid").striped(true).num_columns(6).min_col_width(60.0).show(ui, |ui| {
