@@ -14160,13 +14160,31 @@ impl eframe::App for TyphooNApp {
                     ui.label(egui::RichText::new("~").color(AXIS_TEXT).small());
                     ui.separator();
                     if self.broker_connected {
-                        // Show connected data sources
+                        // Show connected data sources + market status
                         let mut sources = vec!["Alpaca"];
                         if !self.mt5_db_paths.iter().all(|p| p.is_empty()) { sources.push("MT5"); }
                         if !self.finnhub_key.is_empty() { sources.push("Finnhub"); }
                         if !self.fred_key.is_empty() { sources.push("FRED"); }
                         let src_text = sources.join(" + ");
-                        ui.label(egui::RichText::new(format!("\u{25CF} LIVE [{}]", src_text)).color(UP).small());
+                        // Market hours check (US Eastern: 9:30-16:00 Mon-Fri)
+                        let now_utc = chrono::Utc::now();
+                        let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
+                        use chrono::{Timelike, Datelike};
+                        let hour = eastern.hour();
+                        let min = eastern.minute();
+                        let time_mins = hour * 60 + min;
+                        let weekday = eastern.weekday();
+                        let is_weekday = matches!(weekday, chrono::Weekday::Mon | chrono::Weekday::Tue | chrono::Weekday::Wed | chrono::Weekday::Thu | chrono::Weekday::Fri);
+                        let is_market_hours = is_weekday && time_mins >= 9 * 60 + 30 && time_mins < 16 * 60;
+                        let is_extended = is_weekday && ((time_mins >= 4 * 60 && time_mins < 9 * 60 + 30) || (time_mins >= 16 * 60 && time_mins < 20 * 60));
+                        let (status, color) = if is_market_hours {
+                            ("LIVE", UP)
+                        } else if is_extended {
+                            ("EXT", egui::Color32::from_rgb(241, 196, 15)) // yellow for extended
+                        } else {
+                            ("CLOSED", egui::Color32::from_rgb(100, 100, 120))
+                        };
+                        ui.label(egui::RichText::new(format!("\u{25CF} {} [{}]", status, src_text)).color(color).small());
                         if let Some(ref acct) = self.live_account {
                             ui.label(egui::RichText::new(format!("${:.0}", acct.equity)).color(egui::Color32::WHITE).small());
                         }
