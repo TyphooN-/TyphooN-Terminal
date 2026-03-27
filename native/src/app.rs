@@ -4483,6 +4483,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "HARMONICS",     desc: "Toggle harmonic pattern detection (Carney)" },
     Command { name: "AUTO_FIB",      desc: "Auto Fibonacci (fractal swing retracement + extension)" },
     Command { name: "SUPPLY_DEMAND", desc: "Toggle supply/demand zone detection" },
+    Command { name: "LAN_SYNC",      desc: "Export/import cache data for LAN sync to another machine" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -4552,6 +4553,11 @@ struct AccountDetailCache {
     ftp_summary: Option<darwin_ftp::DarwinFtpSummary>,
     ftp_equity_curve: Vec<(f64, f64)>,   // (day_index, quote_price) from RETURN cumulative
     ftp_drawdown_curve: Vec<(f64, f64)>, // (day_index, drawdown_pct) from RETURN
+    // Advanced DARWIN metrics
+    cagr: f64,
+    recovery_factor: f64,
+    dd_duration: (usize, usize, f64), // (max, current, avg)
+    divergence: Vec<darwin::DivergencePoint>,
 }
 
 /// Background-computed data — populated by background thread, read by render thread.
@@ -4991,6 +4997,9 @@ pub struct TyphooNApp {
     show_storage: bool,
     storage_filter: String,
     storage_delete_confirm: Option<String>,
+    show_lan_sync: bool,
+    lan_sync_patterns: String,
+    lan_sync_preview: Vec<(String, i64, usize)>,
     show_help: bool,
     show_connect: bool,
     show_indicators_panel: bool,
@@ -6127,6 +6136,9 @@ impl TyphooNApp {
             show_storage: false,
             storage_filter: String::new(),
             storage_delete_confirm: None,
+            show_lan_sync: false,
+            lan_sync_patterns: "darwin,kraken,mt5:Darwinex".into(),
+            lan_sync_preview: Vec::new(),
             show_help: false,
             show_connect: false,
             show_indicators_panel: false,
@@ -6410,6 +6422,12 @@ impl TyphooNApp {
                                             det.var_stats = Some(darwin::compute_var(&daily));
                                             det.monthly_returns = darwin::get_monthly_returns(&daily);
                                             det.rolling_var = darwin::get_rolling_var(&daily, 30);
+                                            // Advanced DARWIN metrics
+                                            det.cagr = darwin::compute_cagr(&daily);
+                                            det.recovery_factor = darwin::compute_recovery_factor(&daily);
+                                            det.dd_duration = darwin::compute_drawdown_duration(&daily);
+                                            // Divergence index computed after FTP load (needs ftp_equity_curve)
+                                            // Store daily for divergence below
                                         }
                                     }
                                 } // release conn
@@ -6434,6 +6452,17 @@ impl TyphooNApp {
                                             det.ftp_summary = Some(summary);
                                             det.ftp_equity_curve = eq;
                                             det.ftp_drawdown_curve = dd;
+                                        }
+                                    }
+                                }
+
+                                // Compute divergence index (needs both daily returns + FTP equity curve)
+                                if !det.ftp_equity_curve.is_empty() {
+                                    if let Ok(conn) = cache.connection() {
+                                        if let Ok(daily) = darwin::get_daily_returns(&conn, ticker) {
+                                            if !daily.is_empty() {
+                                                det.divergence = darwin::compute_divergence_index(&daily, &det.ftp_equity_curve);
+                                            }
                                         }
                                     }
                                 }
@@ -6673,6 +6702,7 @@ impl TyphooNApp {
             "JOURNAL"       => self.show_journal = true,
             "CACHE_STATS"   => self.show_cache_stats = true,
             "STORAGE"       => self.show_storage = true,
+            "LAN_SYNC"      => self.show_lan_sync = true,
             "HELP"          => self.show_help = true,
             "FULLSCREEN"    => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true)),
             "CLOSE_WINDOWS" => self.close_all_windows(),
@@ -6979,6 +7009,7 @@ impl TyphooNApp {
                 "montecarlo": self.show_montecarlo,
                 "earnings_calendar": self.show_earnings_calendar,
                 "storage": self.show_storage,
+                "lan_sync": self.show_lan_sync,
             },
             "journal": self.journal_entries.iter().map(|e| serde_json::json!({
                 "timestamp": e.timestamp, "symbol": e.symbol, "side": e.side,
@@ -7147,6 +7178,7 @@ impl TyphooNApp {
                     if let Some(b) = w["montecarlo"].as_bool() { self.show_montecarlo = b; }
                     if let Some(b) = w["earnings_calendar"].as_bool() { self.show_earnings_calendar = b; }
                     if let Some(b) = w["storage"].as_bool() { self.show_storage = b; }
+                    if let Some(b) = w["lan_sync"].as_bool() { self.show_lan_sync = b; }
                 }
                 // Restore journal entries
                 if let Some(journal) = v["journal"].as_array() {
@@ -7229,6 +7261,7 @@ impl TyphooNApp {
         self.show_margin_monitor = false;
         self.show_cache_stats = false;
         self.show_storage = false;
+        self.show_lan_sync = false;
         self.show_help = false;
         self.show_connect = false;
         self.show_indicators_panel = false;
@@ -7764,6 +7797,18 @@ impl TyphooNApp {
                             });
                         }
 
+                        // ── Advanced metrics row (CAGR, RF, DD Duration) ──
+                        ui.horizontal(|ui| {
+                            let cagr_c = if det.cagr >= 0.0 { chart_green } else { chart_red };
+                            ui.label(egui::RichText::new(format!("CAGR: {:.2}%", det.cagr)).color(cagr_c).small());
+                            ui.label(egui::RichText::new(format!("  RF: {:.2}", det.recovery_factor)).small());
+                            let (max_d, cur_d, _) = det.dd_duration;
+                            ui.label(egui::RichText::new(format!("  MaxDD: {}d", max_d)).small());
+                            if cur_d > 0 {
+                                ui.label(egui::RichText::new(format!("  InDD: {}d", cur_d)).color(chart_red).small());
+                            }
+                        });
+
                         // ── Equity Curve ──
                         if det.equity_curve.len() > 2 {
                             ui.label(egui::RichText::new("Equity").color(chart_cyan).small());
@@ -8294,6 +8339,47 @@ impl TyphooNApp {
                                                             });
                                                         }
                                                     }
+                                                    // ── Advanced Metrics (CAGR, Recovery Factor, DD Duration) ──
+                                                    ui.add_space(10.0);
+                                                    ui.label(egui::RichText::new("Advanced Metrics").strong());
+                                                    egui::Grid::new("adv_metrics").striped(true).num_columns(4).show(ui, |ui| {
+                                                        let portfolio_daily = &self.bg.daily_returns;
+                                                        if !portfolio_daily.is_empty() {
+                                                            let cagr = darwin::compute_cagr(portfolio_daily);
+                                                            let rf = darwin::compute_recovery_factor(portfolio_daily);
+                                                            let (max_dd_d, cur_dd_d, avg_dd_d) = darwin::compute_drawdown_duration(portfolio_daily);
+                                                            ui.label("CAGR:"); ui.label(egui::RichText::new(format!("{:.2}%", cagr)).color(if cagr >= 0.0 { UP } else { DOWN }));
+                                                            ui.label("Recovery Factor:"); ui.label(format!("{:.2}", rf));
+                                                            ui.end_row();
+                                                            ui.label("Max DD Duration:"); ui.label(format!("{} days", max_dd_d));
+                                                            ui.label("Current DD Duration:"); ui.label(format!("{} days", cur_dd_d));
+                                                            ui.end_row();
+                                                            ui.label("Avg DD Duration:"); ui.label(format!("{:.0} days", avg_dd_d));
+                                                            ui.label(""); ui.label("");
+                                                            ui.end_row();
+                                                        }
+                                                    });
+                                                    // Per-DARWIN Advanced Metrics
+                                                    egui::Grid::new("per_darwin_adv").striped(true).num_columns(6).show(ui, |ui| {
+                                                        ui.strong("DARWIN"); ui.strong("CAGR"); ui.strong("RF");
+                                                        ui.strong("Max DD Days"); ui.strong("Curr DD Days"); ui.strong("Avg DD Days");
+                                                        ui.end_row();
+                                                        for det in &self.bg.account_details {
+                                                            ui.label(&det.ticker);
+                                                            let cc = if det.cagr >= 0.0 { UP } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("{:.2}%", det.cagr)).color(cc));
+                                                            ui.label(format!("{:.2}", det.recovery_factor));
+                                                            let (md, cd, ad) = det.dd_duration;
+                                                            ui.label(format!("{}", md));
+                                                            if cd > 0 {
+                                                                ui.label(egui::RichText::new(format!("{}", cd)).color(DOWN));
+                                                            } else {
+                                                                ui.label("0");
+                                                            }
+                                                            ui.label(format!("{:.0}", ad));
+                                                            ui.end_row();
+                                                        }
+                                                    });
                                                 } // if let Some(vs)
                                             } } // if !daily.is_empty()
                                         }
@@ -8379,6 +8465,31 @@ impl TyphooNApp {
                                                                         det.ftp_drawdown_curve.iter().map(|&(x, y)| [x, y]).collect()
                                                                     );
                                                                     plot_ui.line(Line::new(format!("{} DD", det.ticker), pts).color(c).width(1.2));
+                                                                }
+                                                            }
+                                                            plot_ui.hline(egui_plot::HLine::new("Zero", 0.0).color(egui::Color32::from_rgb(80, 80, 100)).width(0.5));
+                                                        });
+                                                }
+                                            }
+
+                                            // Divergence Index plot (Signal vs Quote return divergence over time)
+                                            {
+                                                let has_divergence = self.bg.account_details.iter().any(|d| !d.divergence.is_empty());
+                                                if has_divergence {
+                                                    ui.add_space(10.0);
+                                                    ui.label(egui::RichText::new("Signal vs Quote Divergence").strong());
+                                                    Plot::new("divergence_plot")
+                                                        .height(180.0)
+                                                        .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                        .legend(egui_plot::Legend::default())
+                                                        .show(ui, |plot_ui| {
+                                                            for (idx, det) in self.bg.account_details.iter().enumerate() {
+                                                                if det.divergence.len() > 2 {
+                                                                    let c = darwin_colors[idx % darwin_colors.len()];
+                                                                    let pts: PlotPoints = PlotPoints::new(
+                                                                        det.divergence.iter().map(|d| [d.day_index as f64, d.divergence_pct]).collect()
+                                                                    );
+                                                                    plot_ui.line(Line::new(format!("{} Div", det.ticker), pts).color(c).width(1.5));
                                                                 }
                                                             }
                                                             plot_ui.hline(egui_plot::HLine::new("Zero", 0.0).color(egui::Color32::from_rgb(80, 80, 100)).width(0.5));
@@ -11827,6 +11938,114 @@ impl TyphooNApp {
                                 }
                             }
                         });
+                    });
+                });
+        }
+
+        // LAN Sync
+        if self.show_lan_sync {
+            egui::Window::new("LAN Sync")
+                .open(&mut self.show_lan_sync)
+                .resizable(true).default_size([600.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Export cache data for syncing to another TyphooN Terminal instance.").color(AXIS_TEXT).small());
+                    ui.add_space(4.0);
+
+                    // Pattern input
+                    ui.horizontal(|ui| {
+                        ui.label("Patterns (comma-separated):");
+                        ui.add(egui::TextEdit::singleline(&mut self.lan_sync_patterns).desired_width(300.0)
+                            .hint_text("darwin,kraken,mt5:Darwinex"));
+                    });
+
+                    // Quick presets
+                    ui.horizontal(|ui| {
+                        if ui.small_button("DARWIN data").clicked() { self.lan_sync_patterns = "darwin".to_string(); }
+                        if ui.small_button("Crypto (Kraken)").clicked() { self.lan_sync_patterns = "kraken".to_string(); }
+                        if ui.small_button("MT5 + DARWIN + Crypto").clicked() { self.lan_sync_patterns = "mt5,darwin,kraken".to_string(); }
+                        if ui.small_button("Everything").clicked() { self.lan_sync_patterns = String::new(); }
+                    });
+                    ui.add_space(4.0);
+
+                    // Preview button
+                    if ui.button("Preview matching keys").clicked() {
+                        if let Some(ref cache) = self.cache {
+                            let patterns: Vec<&str> = self.lan_sync_patterns.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                            let patterns_ref: Vec<&str> = if patterns.is_empty() { vec![""] } else { patterns };
+                            match cache.list_matching_keys(&patterns_ref) {
+                                Ok(keys) => {
+                                    let total_size: usize = keys.iter().map(|(_, _, s)| *s).sum();
+                                    self.log.push_back(LogEntry::info(format!("LAN Sync: {} keys, {:.1} MB compressed", keys.len(), total_size as f64 / 1024.0 / 1024.0)));
+                                    self.lan_sync_preview = keys;
+                                }
+                                Err(e) => self.log.push_back(LogEntry::err(format!("Preview failed: {}", e))),
+                            }
+                        }
+                    }
+
+                    // Show preview
+                    if !self.lan_sync_preview.is_empty() {
+                        let total_keys = self.lan_sync_preview.len();
+                        let total_size: usize = self.lan_sync_preview.iter().map(|(_, _, s)| *s).sum();
+                        ui.label(egui::RichText::new(format!("{} keys — {:.1} MB compressed", total_keys, total_size as f64 / 1024.0 / 1024.0)).strong());
+
+                        egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                            for (key, count, size) in self.lan_sync_preview.iter().take(100) {
+                                ui.label(egui::RichText::new(format!("  {} ({} bars, {} KB)", key, count, size / 1024)).color(AXIS_TEXT).small().monospace());
+                            }
+                            if total_keys > 100 {
+                                ui.label(egui::RichText::new(format!("  ... and {} more", total_keys - 100)).color(AXIS_TEXT).small());
+                            }
+                        });
+                    }
+
+                    ui.add_space(8.0);
+                    ui.separator();
+
+                    // Export / Import buttons
+                    ui.horizontal(|ui| {
+                        if ui.button(egui::RichText::new("Export to file").strong()).clicked() {
+                            if let Some(ref cache) = self.cache {
+                                let patterns: Vec<&str> = self.lan_sync_patterns.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                                let patterns_ref: Vec<&str> = if patterns.is_empty() { vec![""] } else { patterns };
+                                match cache.export_keys(&patterns_ref) {
+                                    Ok(bundle) => {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .set_title("Save LAN Sync Bundle")
+                                            .set_file_name("typhoon_sync.bin")
+                                            .save_file()
+                                        {
+                                            match std::fs::write(&path, &bundle) {
+                                                Ok(()) => self.log.push_back(LogEntry::info(format!("Exported {:.1} MB to {}", bundle.len() as f64 / 1024.0 / 1024.0, path.display()))),
+                                                Err(e) => self.log.push_back(LogEntry::err(format!("Write failed: {}", e))),
+                                            }
+                                        }
+                                    }
+                                    Err(e) => self.log.push_back(LogEntry::err(format!("Export failed: {}", e))),
+                                }
+                            }
+                        }
+
+                        // Import button
+                        if ui.button("Import from file").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_title("Open LAN Sync Bundle")
+                                .add_filter("Sync Bundle", &["bin"])
+                                .pick_file()
+                            {
+                                if let Some(ref cache) = self.cache {
+                                    match std::fs::read(&path) {
+                                        Ok(bundle) => {
+                                            match cache.import_keys(&bundle) {
+                                                Ok(count) => self.log.push_back(LogEntry::info(format!("Imported {} keys from {}", count, path.display()))),
+                                                Err(e) => self.log.push_back(LogEntry::err(format!("Import failed: {}", e))),
+                                            }
+                                        }
+                                        Err(e) => self.log.push_back(LogEntry::err(format!("Read failed: {}", e))),
+                                    }
+                                }
+                            }
+                        }
                     });
                 });
         }
