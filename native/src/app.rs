@@ -4888,6 +4888,8 @@ pub struct TyphooNApp {
     mtf_enabled: bool,
     /// Which chart cell is focused in MTF grid (click to select).
     mtf_focused: Option<usize>,
+    /// Which tabs are visible in MTF grid (true = shown, per chart index).
+    mtf_visible: Vec<bool>,
 
     /// Command palette open state.
     command_open: bool,
@@ -6078,6 +6080,7 @@ impl TyphooNApp {
             mtf_cols: 2,
             mtf_enabled: false,
             mtf_focused: None,
+            mtf_visible: Vec::new(),
             command_open: false,
             command_input: String::new(),
             console_selected: 0,
@@ -14025,6 +14028,24 @@ impl eframe::App for TyphooNApp {
                         if ui.button("4×3 (12 charts)").clicked() { self.setup_mtf_grid(4, 12); ui.close(); }
                         if ui.button("4×4 (16 charts)").clicked() { self.setup_mtf_grid(4, 16); ui.close(); }
                     });
+                    // MTF tab visibility checkboxes
+                    if self.charts.len() > 1 {
+                        ui.menu_button("MTF Tabs", |ui| {
+                            // Ensure mtf_visible is the right size
+                            while self.mtf_visible.len() < self.charts.len() { self.mtf_visible.push(true); }
+                            ui.horizontal(|ui| {
+                                if ui.small_button("All").clicked() { self.mtf_visible.iter_mut().for_each(|v| *v = true); }
+                                if ui.small_button("None").clicked() { self.mtf_visible.iter_mut().for_each(|v| *v = false); self.mtf_visible[0] = true; }
+                            });
+                            ui.separator();
+                            for (i, chart) in self.charts.iter().enumerate() {
+                                let label = format!("{} [{}]", chart.symbol.split(':').nth(1).or(Some(&chart.symbol)).unwrap_or(&chart.symbol), chart.timeframe.label());
+                                if i < self.mtf_visible.len() {
+                                    ui.checkbox(&mut self.mtf_visible[i], label);
+                                }
+                            }
+                        });
+                    }
                     if ui.button("Indicators…").clicked() {
                         self.show_indicators_panel = true;
                         ui.close();
@@ -15489,7 +15510,13 @@ impl eframe::App for TyphooNApp {
             let tp_price = self.tp_price;
 
             if self.mtf_enabled {
-                let total = self.charts.len().min(16);
+                // Filter to visible charts only
+                while self.mtf_visible.len() < self.charts.len() { self.mtf_visible.push(true); }
+                let visible_indices: Vec<usize> = (0..self.charts.len())
+                    .filter(|&i| self.mtf_visible.get(i).copied().unwrap_or(true))
+                    .take(16)
+                    .collect();
+                let total = visible_indices.len().max(1);
                 let cols   = self.mtf_cols.max(1).min(total);
                 let rows   = (total + cols - 1) / cols;
                 let cell_w = available.width()  / cols  as f32;
@@ -15500,9 +15527,10 @@ impl eframe::App for TyphooNApp {
                     ctx.input(|i| i.pointer.interact_pos())
                 } else { None };
 
-                // Lazy-load bars for MTF grid charts — non-blocking (skip if Mutex contended)
+                // Lazy-load bars for visible MTF grid charts
                 if let Some(ref cache) = self.cache {
-                    for chart in self.charts.iter_mut().take(total) {
+                    for &vi in &visible_indices {
+                    let chart = &mut self.charts[vi];
                         if chart.bars.is_empty() {
                             let loaded = { let mut gpu = self.gpu_indicators.take(); let r = chart.try_load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; r };
                             if loaded {
@@ -15514,7 +15542,9 @@ impl eframe::App for TyphooNApp {
                     }
                 }
 
-                for (idx, chart) in self.charts.iter_mut().take(total).enumerate() {
+                for (grid_pos, &vi) in visible_indices.iter().enumerate() {
+                let chart = &mut self.charts[vi];
+                let idx = grid_pos;
                     let col = idx % cols;
                     let row = idx / cols;
                     let cell_rect = egui::Rect::from_min_size(
