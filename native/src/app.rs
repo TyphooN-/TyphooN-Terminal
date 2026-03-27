@@ -4484,6 +4484,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "AUTO_FIB",      desc: "Auto Fibonacci (fractal swing retracement + extension)" },
     Command { name: "SUPPLY_DEMAND", desc: "Toggle supply/demand zone detection" },
     Command { name: "LAN_SYNC",      desc: "Export/import cache data for LAN sync to another machine" },
+    Command { name: "NEW_WINDOW",    desc: "Open new terminal window (separate process, multi-monitor)" },
+    Command { name: "POPOUT",        desc: "Pop out new terminal window (alias for NEW_WINDOW)" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -6706,6 +6708,13 @@ impl TyphooNApp {
             "HELP"          => self.show_help = true,
             "FULLSCREEN"    => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true)),
             "CLOSE_WINDOWS" => self.close_all_windows(),
+            "NEW_WINDOW" | "POPOUT" => {
+                let exe = std::env::current_exe().unwrap_or_default();
+                match std::process::Command::new(&exe).spawn() {
+                    Ok(_) => self.log.push_back(LogEntry::info("New window launched (separate process)")),
+                    Err(e) => self.log.push_back(LogEntry::err(format!("Failed to launch new window: {}", e))),
+                }
+            }
             // Chart types
             "CANDLE"     => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.chart_type = ChartType::Candle; } }
             "HEIKINASHI" => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.chart_type = ChartType::HeikinAshi; } }
