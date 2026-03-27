@@ -13782,10 +13782,16 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::SymbolSuggestions(results) => {
                     // Merge broker search results into autocomplete (if dropdown still visible)
+                    // Normalize: remove slash from crypto (BTC/USD → BTCUSD) to avoid duplicates
                     if self.symbol_ac_visible {
                         for (sym, name, class) in results {
-                            if !self.symbol_suggestions.iter().any(|(s, _, _)| s.to_uppercase() == sym.to_uppercase()) {
-                                self.symbol_suggestions.push((sym, name, class));
+                            let normalized = sym.replace('/', "");
+                            let already = self.symbol_suggestions.iter().any(|(s, _, _)| {
+                                let s_norm = s.replace('/', "");
+                                s_norm.eq_ignore_ascii_case(&normalized)
+                            });
+                            if !already {
+                                self.symbol_suggestions.push((normalized, name, class));
                             }
                         }
                         self.symbol_suggestions.truncate(20);
