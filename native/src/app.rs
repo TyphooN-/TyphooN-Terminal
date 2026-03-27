@@ -1762,6 +1762,26 @@ fn detect_harmonic_patterns(bars: &[Bar], fractals_up: &[bool], fractals_down: &
                                 c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
                             });
                         }
+                        // Alt Bat (Carney): AB=0.382 XA, BC=0.382-0.886 AB, XD=1.13 XA
+                        else if in_range(ab_xa, 0.33, 0.43) && in_range(bc_ab, 0.35, 0.92) && in_range(xd_xa, 1.10, 1.16) {
+                            let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                            let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                            let sl = if bullish { d.1 - xa * 0.15 } else { d.1 + xa * 0.15 };
+                            patterns.push(HarmonicPattern {
+                                name: "Alt Bat", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                            });
+                        }
+                        // Deep Crab (Carney): AB=0.886 XA, BC=0.382-0.886 AB, XD=1.618 XA
+                        else if in_range(ab_xa, 0.84, 0.93) && in_range(bc_ab, 0.35, 0.92) && in_range(xd_xa, 1.55, 1.70) {
+                            let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                            let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                            let sl = if bullish { d.1 - xa * 0.15 } else { d.1 + xa * 0.15 };
+                            patterns.push(HarmonicPattern {
+                                name: "Deep Crab", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                            });
+                        }
                         // 5-0: AB=1.13-1.618 XA, BC=1.618-2.24 AB, XD=0.50 BC
                         else if in_range(ab_xa, 1.10, 1.65) && in_range(bc_ab, 1.55, 2.30) {
                             let bc_val = (d.1 - c.1).abs();
@@ -4521,6 +4541,9 @@ const COMMANDS: &[Command] = &[
     Command { name: "LAN_SYNC",      desc: "Export/import cache data for LAN sync to another machine" },
     Command { name: "NEW_WINDOW",    desc: "Open new terminal window (separate process, multi-monitor)" },
     Command { name: "POPOUT",        desc: "Pop out new terminal window (alias for NEW_WINDOW)" },
+    // Unusual Whales / Godel Terminal features
+    Command { name: "UNUSUAL_VOLUME", desc: "Unusual volume scanner — symbols with volume > 2x 20-day average" },
+    Command { name: "SECTOR_ROTATION", desc: "Sector ETF relative performance (11 SPDR sectors)" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -5069,6 +5092,10 @@ pub struct TyphooNApp {
     show_ev_scanner: bool,
     show_earnings_calendar: bool,
     show_dividend_calendar: bool,
+    // Unusual Whales / Godel Terminal features
+    show_unusual_volume: bool,
+    unusual_volume_results: Vec<(String, f64, f64, f64)>, // (symbol, today_vol, avg_vol, ratio)
+    show_sector_rotation: bool,
     /// Crypto backfill single symbol input.
     backfill_symbol: String,
     /// SEC filing type filters [Form 4, 13F, DEF 14A, S-1, 10-K, 10-Q, 8-K].
@@ -6203,6 +6230,9 @@ impl TyphooNApp {
             show_ev_scanner: false,
             show_earnings_calendar: false,
             show_dividend_calendar: false,
+            show_unusual_volume: false,
+            unusual_volume_results: Vec::new(),
+            show_sector_rotation: false,
             backfill_symbol: String::new(),
             sec_filters: [true; 7],
             sec_page: 0,
@@ -6768,6 +6798,35 @@ impl TyphooNApp {
             "CACHE_STATS"   => self.show_cache_stats = true,
             "STORAGE"       => self.show_storage = true,
             "LAN_SYNC"      => self.show_lan_sync = true,
+            "UNUSUAL_VOLUME" => {
+                self.show_unusual_volume = true;
+                // Scan from cache
+                if let Some(ref cache) = self.cache {
+                    let mut results: Vec<(String, f64, f64, f64)> = Vec::new();
+                    for (key, count, _) in &self.bg.detailed_stats {
+                        if *count < 30 { continue; }
+                        if !key.contains(":1Day") { continue; }
+                        if let Ok(Some(raw)) = cache.get_bars_raw(key) {
+                            let n = raw.len();
+                            if n < 21 { continue; }
+                            let today_vol = raw[n-1].5;
+                            let avg_vol: f64 = raw[n-21..n-1].iter().map(|r| r.5).sum::<f64>() / 20.0;
+                            if avg_vol > 0.0 {
+                                let ratio = today_vol / avg_vol;
+                                if ratio > 1.5 {
+                                    let parts: Vec<&str> = key.split(':').collect();
+                                    let sym = if parts.len() >= 3 { parts[parts.len()-2] } else { key };
+                                    results.push((sym.to_string(), today_vol, avg_vol, ratio));
+                                }
+                            }
+                        }
+                    }
+                    results.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+                    self.unusual_volume_results = results;
+                    self.log.push_back(LogEntry::info(format!("Unusual volume: {} symbols flagged", self.unusual_volume_results.len())));
+                }
+            }
+            "SECTOR_ROTATION" => self.show_sector_rotation = true,
             "HELP"          => self.show_help = true,
             "FULLSCREEN"    => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true)),
             "CLOSE_WINDOWS" => self.close_all_windows(),
@@ -7112,6 +7171,8 @@ impl TyphooNApp {
                 "earnings_calendar": self.show_earnings_calendar,
                 "storage": self.show_storage,
                 "lan_sync": self.show_lan_sync,
+                "unusual_volume": self.show_unusual_volume,
+                "sector_rotation": self.show_sector_rotation,
             },
             "journal": self.journal_entries.iter().map(|e| serde_json::json!({
                 "timestamp": e.timestamp, "symbol": e.symbol, "side": e.side,
@@ -7296,6 +7357,8 @@ impl TyphooNApp {
                     if let Some(b) = w["earnings_calendar"].as_bool() { self.show_earnings_calendar = b; }
                     if let Some(b) = w["storage"].as_bool() { self.show_storage = b; }
                     if let Some(b) = w["lan_sync"].as_bool() { self.show_lan_sync = b; }
+                    if let Some(b) = w["unusual_volume"].as_bool() { self.show_unusual_volume = b; }
+                    if let Some(b) = w["sector_rotation"].as_bool() { self.show_sector_rotation = b; }
                 }
                 // Restore journal entries
                 if let Some(journal) = v["journal"].as_array() {
@@ -7390,6 +7453,8 @@ impl TyphooNApp {
         self.show_ev_scanner = false;
         self.show_earnings_calendar = false;
         self.show_dividend_calendar = false;
+        self.show_unusual_volume = false;
+        self.show_sector_rotation = false;
     }
 
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
@@ -7767,32 +7832,84 @@ impl TyphooNApp {
                 .open(&mut self.show_indicators_panel)
                 .resizable(true).resizable(true).default_size([450.0, 400.0])
                 .show(ctx, |ui| {
-                    ui.heading("Overlay Indicators");
+                    // ── Presets ──
+                    ui.heading("Presets");
                     ui.separator();
-                    ui.checkbox(&mut self.show_sma200,    "SMA(200)");
+                    ui.horizontal(|ui| {
+                        if ui.button("TyphooN (NNFX)").clicked() {
+                            self.show_sma200 = true; self.show_kama = true; self.show_fisher = true;
+                            self.show_atr_proj = true; self.show_better_volume = true;
+                            self.show_prev_levels = true; self.show_supply_demand = true; self.show_auto_fib = true;
+                            self.log.push_back(LogEntry::info("Preset: TyphooN (NNFX) — MTF_MA + MultiKAMA + Fisher + ATR MTF + BVol + PrevLevels + S/D + AutoFib"));
+                        }
+                        if ui.button("Carney").clicked() {
+                            self.show_sma200 = false; self.show_sma100 = false; self.show_kama = false;
+                            self.show_ema21 = false; self.show_bollinger = false; self.show_ichimoku = false;
+                            self.show_wma = false; self.show_hma = false; self.show_psar = false;
+                            self.show_atr_proj = false; self.show_prev_levels = false; self.show_pivots = false;
+                            self.show_supply_demand = false; self.show_auto_fib = false;
+                            self.show_rsi = false; self.show_macd = false; self.show_stochastic = false;
+                            self.show_adx = false; self.show_cci = false; self.show_williams_r = false;
+                            self.show_obv = false; self.show_momentum = false;
+                            self.show_fisher = true; self.show_harmonics = true;
+                            self.show_better_volume = true; self.show_fractals = true;
+                            self.log.push_back(LogEntry::info("Preset: Carney — Ehlers Fisher + Harmonics (9 XABCD) + BetterVolume + Fractals"));
+                        }
+                        if ui.button("Clean").clicked() {
+                            self.show_sma200 = false; self.show_sma100 = false; self.show_kama = false;
+                            self.show_ema21 = false; self.show_bollinger = false; self.show_ichimoku = false;
+                            self.show_wma = false; self.show_hma = false; self.show_psar = false;
+                            self.show_atr_proj = false; self.show_prev_levels = false; self.show_pivots = false;
+                            self.show_supply_demand = false; self.show_auto_fib = false;
+                            self.show_rsi = false; self.show_fisher = false; self.show_macd = false;
+                            self.show_stochastic = false; self.show_adx = false; self.show_cci = false;
+                            self.show_williams_r = false; self.show_obv = false; self.show_momentum = false;
+                            self.show_better_volume = false; self.show_volume_pane = false;
+                            self.show_fractals = false; self.show_harmonics = false;
+                            self.show_ehlers_ss = false; self.show_ehlers_decycler = false;
+                            self.show_ehlers_itl = false; self.show_ehlers_mama = false;
+                            self.show_ehlers_ebsw = false; self.show_ehlers_cyber = false;
+                            self.show_ehlers_cg = false; self.show_ehlers_roof = false;
+                            self.log.push_back(LogEntry::info("All indicators disabled"));
+                        }
+                    });
+
+                    // ── Moving Averages ──
+                    ui.add_space(4.0);
+                    ui.heading("Moving Averages");
+                    ui.separator();
+                    ui.checkbox(&mut self.show_sma200,    "MTF_MA — SMA(200/100) H1/H4/D1/W1/MN1");
                     ui.checkbox(&mut self.show_sma100,    "SMA(100)");
-                    ui.checkbox(&mut self.show_kama,      "KAMA(10,2,30)");
+                    ui.checkbox(&mut self.show_kama,      "MultiKAMA(10,2,30) — H1/H4/D1/W1/MN1");
                     ui.checkbox(&mut self.show_ema21,     "EMA(21)");
+                    ui.checkbox(&mut self.show_wma,       "WMA(20)");
+                    ui.checkbox(&mut self.show_hma,       "HMA(20)");
+
+                    // ── Bands, Cloud & Levels ──
+                    ui.add_space(4.0);
+                    ui.heading("Bands, Cloud & Levels");
+                    ui.separator();
                     ui.checkbox(&mut self.show_bollinger, "Bollinger Bands(20,2)");
-                    ui.checkbox(&mut self.show_ichimoku, "Ichimoku Cloud(9,26,52)");
-                    ui.checkbox(&mut self.show_wma,      "WMA(20)");
-                    ui.checkbox(&mut self.show_hma,      "HMA(20)");
-                    ui.checkbox(&mut self.show_psar,     "Parabolic SAR(0.02,0.2)");
-                    ui.checkbox(&mut self.show_atr_proj, "ATR Projection(14)");
-                    ui.checkbox(&mut self.show_prev_levels, "Previous Candle Levels (D/W)");
+                    ui.checkbox(&mut self.show_ichimoku,  "Ichimoku Cloud(9,26,52)");
+                    ui.checkbox(&mut self.show_psar,      "Parabolic SAR(0.02,0.2)");
+                    ui.checkbox(&mut self.show_atr_proj,  "ATR Projection MTF (M15/H1/H4/D1/W1/MN1)");
+                    ui.checkbox(&mut self.show_prev_levels, "Previous Candle Levels (H1/H4/D1/W1/MN1)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (Classic)");
                     ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
-                    ui.add_space(10.0);
+
+                    // ── Pattern Recognition ──
+                    ui.add_space(4.0);
                     ui.heading("Pattern Recognition");
                     ui.separator();
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
-                    ui.checkbox(&mut self.show_harmonics,     "Harmonic Patterns (Carney XABCD)");
-                    ui.checkbox(&mut self.show_auto_fib,      "Auto Fibonacci (swing retracement)");
-                    ui.add_space(10.0);
-                    ui.heading("Sub-Pane Indicators");
+                    ui.checkbox(&mut self.show_harmonics,   "Harmonic Patterns (Scott Carney — 9 XABCD)");
+                    ui.checkbox(&mut self.show_auto_fib,    "Auto Fibonacci (fractal swing)");
+
+                    // ── Oscillators ──
+                    ui.add_space(4.0);
+                    ui.heading("Oscillators (Sub-Pane)");
                     ui.separator();
                     ui.checkbox(&mut self.show_rsi,            "RSI(14)");
-                    ui.checkbox(&mut self.show_fisher,         "Fisher Transform(32)");
                     ui.checkbox(&mut self.show_macd,           "MACD(12,26,9)");
                     ui.checkbox(&mut self.show_stochastic,     "Stochastic(14,3,3)");
                     ui.checkbox(&mut self.show_adx,            "ADX(14)");
@@ -7802,8 +7919,10 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_momentum,       "Momentum(10)");
                     ui.checkbox(&mut self.show_better_volume,  "Better Volume");
                     ui.checkbox(&mut self.show_volume_pane,    "Volume");
-                    ui.add_space(10.0);
-                    ui.heading("Ehlers Indicators");
+
+                    // ── Ehlers DSP Indicators ──
+                    ui.add_space(4.0);
+                    ui.heading("Ehlers DSP");
                     ui.separator();
                     ui.label(egui::RichText::new("Overlay").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_ehlers_ss,       "Super Smoother(10)");
@@ -7811,10 +7930,11 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_ehlers_itl,      "Instantaneous Trendline");
                     ui.checkbox(&mut self.show_ehlers_mama,     "MAMA / FAMA");
                     ui.label(egui::RichText::new("Sub-Pane").color(AXIS_TEXT).small());
-                    ui.checkbox(&mut self.show_ehlers_ebsw,  "Even Better Sinewave");
-                    ui.checkbox(&mut self.show_ehlers_cyber, "Cyber Cycle");
-                    ui.checkbox(&mut self.show_ehlers_cg,    "CG Oscillator(10)");
-                    ui.checkbox(&mut self.show_ehlers_roof,  "Roofing Filter(10,48)");
+                    ui.checkbox(&mut self.show_fisher,          "Ehlers Fisher Transform(32)");
+                    ui.checkbox(&mut self.show_ehlers_ebsw,     "Even Better Sinewave");
+                    ui.checkbox(&mut self.show_ehlers_cyber,    "Cyber Cycle");
+                    ui.checkbox(&mut self.show_ehlers_cg,       "CG Oscillator(10)");
+                    ui.checkbox(&mut self.show_ehlers_roof,     "Roofing Filter(10,48)");
                 });
         }
 
@@ -11077,6 +11197,40 @@ impl TyphooNApp {
                         if trades.is_empty() {
                             ui.label(egui::RichText::new(format!("No insider trades for {} (last 90 days)", ticker)).color(AXIS_TEXT));
                         } else {
+                            // Insider Sentiment Summary
+                            {
+                                let total_buys = trades.iter().filter(|t| {
+                                    let tt = t.transaction_type.to_lowercase();
+                                    tt.contains("purchase") || tt.contains("buy") || tt.contains("acquisition")
+                                }).count();
+                                let total_sells = trades.iter().filter(|t| {
+                                    let tt = t.transaction_type.to_lowercase();
+                                    tt.contains("sale") || tt.contains("sell") || tt.contains("disposition")
+                                }).count();
+                                let total_value_buy: f64 = trades.iter()
+                                    .filter(|t| {
+                                        let tt = t.transaction_type.to_lowercase();
+                                        tt.contains("purchase") || tt.contains("buy") || tt.contains("acquisition")
+                                    })
+                                    .map(|t| t.aggregate_value).sum();
+                                let total_value_sell: f64 = trades.iter()
+                                    .filter(|t| {
+                                        let tt = t.transaction_type.to_lowercase();
+                                        tt.contains("sale") || tt.contains("sell") || tt.contains("disposition")
+                                    })
+                                    .map(|t| t.aggregate_value).sum();
+                                let sentiment = if total_buys > total_sells * 2 { ("BULLISH", UP) }
+                                    else if total_sells > total_buys * 2 { ("BEARISH", DOWN) }
+                                    else { ("NEUTRAL", AXIS_TEXT) };
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("Sentiment: {}", sentiment.0)).color(sentiment.1).strong());
+                                    ui.label(egui::RichText::new(format!("  Buys: {} (${:.0}M)  Sells: {} (${:.0}M)",
+                                        total_buys, total_value_buy / 1_000_000.0,
+                                        total_sells, total_value_sell / 1_000_000.0
+                                    )).small());
+                                });
+                                ui.separator();
+                            }
                             egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                                 let mut insider_sorted: Vec<&_> = trades.iter().collect();
                                 match self.insider_sort.column {
@@ -11113,6 +11267,76 @@ impl TyphooNApp {
                     } else {
                         ui.label(egui::RichText::new(format!("No insider trades for {} (last 90 days)", ticker)).color(AXIS_TEXT));
                     }
+                });
+        }
+
+        // Unusual Volume Scanner
+        if self.show_unusual_volume {
+            egui::Window::new("Unusual Volume Scanner")
+                .open(&mut self.show_unusual_volume)
+                .resizable(true).default_size([500.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(format!("{} symbols with volume > 1.5x 20-day average", self.unusual_volume_results.len())).strong());
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::Grid::new("unusual_vol_grid").striped(true).num_columns(4).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Symbol").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("Today Vol").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("Avg Vol").color(AXIS_TEXT).small().strong());
+                            ui.label(egui::RichText::new("Ratio").color(AXIS_TEXT).small().strong());
+                            ui.end_row();
+                            for (sym, today, avg, ratio) in &self.unusual_volume_results {
+                                let ratio_c = if *ratio > 3.0 { egui::Color32::from_rgb(231, 76, 60) }
+                                    else if *ratio > 2.0 { egui::Color32::from_rgb(241, 196, 15) }
+                                    else { egui::Color32::from_rgb(46, 204, 113) };
+                                ui.label(egui::RichText::new(sym).small().strong());
+                                let fmt_vol = |v: f64| -> String {
+                                    if v >= 1_000_000.0 { format!("{:.1}M", v / 1_000_000.0) }
+                                    else if v >= 1_000.0 { format!("{:.1}K", v / 1_000.0) }
+                                    else { format!("{:.0}", v) }
+                                };
+                                ui.label(egui::RichText::new(fmt_vol(*today)).small());
+                                ui.label(egui::RichText::new(fmt_vol(*avg)).small().color(AXIS_TEXT));
+                                ui.label(egui::RichText::new(format!("{:.1}x", ratio)).color(ratio_c).small().strong());
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+        }
+
+        // Sector Rotation Dashboard
+        if self.show_sector_rotation {
+            egui::Window::new("Sector Rotation")
+                .open(&mut self.show_sector_rotation)
+                .resizable(true).default_size([600.0, 350.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Sector Performance (from fundamentals data)").strong());
+                    ui.separator();
+                    let fund = &self.bg.all_fundamentals;
+                    let mut sectors: std::collections::BTreeMap<String, (usize, f64, f64)> = std::collections::BTreeMap::new();
+                    for f in fund {
+                        if f.sector.is_empty() { continue; }
+                        let entry = sectors.entry(f.sector.clone()).or_insert((0, 0.0, 0.0));
+                        entry.0 += 1;
+                        if let Some(pe) = f.pe_ratio { entry.1 += pe; }
+                        if let Some(mc) = f.market_cap { entry.2 += mc; }
+                    }
+                    egui::Grid::new("sector_rot_grid").striped(true).num_columns(4).show(ui, |ui| {
+                        ui.label(egui::RichText::new("Sector").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Symbols").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Avg P/E").color(AXIS_TEXT).small().strong());
+                        ui.label(egui::RichText::new("Total MCap").color(AXIS_TEXT).small().strong());
+                        ui.end_row();
+                        for (sector, (count, total_pe, total_mcap)) in &sectors {
+                            ui.label(egui::RichText::new(sector).small());
+                            ui.label(egui::RichText::new(format!("{}", count)).small());
+                            let avg_pe = if *count > 0 { total_pe / *count as f64 } else { 0.0 };
+                            ui.label(egui::RichText::new(format!("{:.1}", avg_pe)).small());
+                            ui.label(egui::RichText::new(fundamentals::format_large_number(*total_mcap)).small());
+                            ui.end_row();
+                        }
+                    });
                 });
         }
 
