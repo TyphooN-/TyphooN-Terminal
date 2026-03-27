@@ -410,4 +410,73 @@ impl AlpacaBroker {
             }).collect()
         }).unwrap_or_default())
     }
+
+    /// Search all tradable assets by symbol or name.
+    pub async fn search_symbols(&self, query: &str) -> Result<Vec<(String, String, String)>, String> {
+        let resp = self.client.get(format!("{}/v2/assets", self.base_url))
+            .headers(self.headers())
+            .query(&[("status", "active")])
+            .send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() { return Err(format!("HTTP {}", resp.status())); }
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        let q = query.to_uppercase();
+        let mut matches: Vec<(u8, String, String, String)> = Vec::new();
+        if let Some(arr) = json.as_array() {
+            for a in arr {
+                if a["tradable"].as_bool() != Some(true) { continue; }
+                let sym = a["symbol"].as_str().unwrap_or("").to_uppercase();
+                let name = a["name"].as_str().unwrap_or("").to_string();
+                let class = a["class"].as_str().unwrap_or("").to_string();
+                let sym_no_slash = sym.replace('/', "");
+                let pri = if sym == q || sym_no_slash == q { 0 }
+                    else if sym.starts_with(&q) || sym_no_slash.starts_with(&q) { 1 }
+                    else if sym.contains(&q) || sym_no_slash.contains(&q) { 2 }
+                    else if name.to_uppercase().contains(&q) { 3 }
+                    else { continue; };
+                matches.push((pri, sym, name, class));
+            }
+        }
+        matches.sort_by_key(|(pri, _, _, _)| *pri);
+        Ok(matches.into_iter().take(20).map(|(_, s, n, c)| (s, n, c)).collect())
+    }
+
+    /// Get top market movers (most active by volume).
+    pub async fn get_top_movers(&self) -> Result<Vec<(String, f64, f64)>, String> {
+        let resp = self.client.get(format!("{}/v1beta1/screener/stocks/most-actives", DATA_BASE))
+            .headers(self.headers())
+            .query(&[("top", "20")])
+            .send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() { return Err(format!("HTTP {}", resp.status())); }
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        let movers = json["most_actives"].as_array()
+            .map(|arr| arr.iter().map(|m| {
+                let sym = m["symbol"].as_str().unwrap_or("").to_string();
+                let price = m["price"].as_f64().unwrap_or(0.0);
+                let change = m["change"].as_f64().unwrap_or(0.0);
+                (sym, price, change)
+            }).collect())
+            .unwrap_or_default();
+        Ok(movers)
+    }
+
+    /// Get recent account activities (fills).
+    pub async fn get_activities(&self, limit: u32) -> Result<Vec<(String, String, String, String, String)>, String> {
+        let resp = self.client.get(format!("{}/v2/account/activities/FILL", self.base_url))
+            .headers(self.headers())
+            .query(&[("page_size", &limit.to_string())])
+            .send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() { return Err(format!("HTTP {}", resp.status())); }
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        let fills = json.as_array()
+            .map(|arr| arr.iter().map(|a| {
+                let sym = a["symbol"].as_str().unwrap_or("").to_string();
+                let side = a["side"].as_str().unwrap_or("").to_string();
+                let qty = a["qty"].as_str().unwrap_or("0").to_string();
+                let price = a["price"].as_str().unwrap_or("0").to_string();
+                let ts = a["transaction_time"].as_str().unwrap_or("").to_string();
+                (ts, sym, side, qty, price)
+            }).collect())
+            .unwrap_or_default();
+        Ok(fills)
+    }
 }

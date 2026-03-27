@@ -701,6 +701,75 @@ impl App {
                     }
                 }
             }
+            "search" | "find" => {
+                if parts.len() < 2 {
+                    self.log("Usage: search QUERY", Color::Yellow);
+                } else {
+                    let query = parts[1..].join(" ");
+                    match self.broker.search_symbols(&query).await {
+                        Ok(results) => {
+                            if results.is_empty() {
+                                self.log(&format!("No symbols matching '{}'", query), Color::Yellow);
+                            } else {
+                                self.log(&format!("--- Symbol Search: {} ({} results) ---", query, results.len()), Color::Cyan);
+                                for (sym, name, class) in &results {
+                                    let c = if class == "crypto" { Color::Magenta } else { Color::White };
+                                    self.log(&format!("  {:<12} {:<40} ({})", sym, name, class), c);
+                                }
+                            }
+                        }
+                        Err(e) => self.log(&format!("Search failed: {e}"), Color::Red),
+                    }
+                }
+            }
+            "movers" | "top" => {
+                match self.broker.get_top_movers().await {
+                    Ok(movers) => {
+                        if movers.is_empty() {
+                            self.log("No movers data available", Color::Yellow);
+                        } else {
+                            self.log("--- Top Movers (Most Active) ---", Color::Cyan);
+                            for (sym, price, change) in &movers {
+                                let c = if *change >= 0.0 { Color::Green } else { Color::Red };
+                                self.log(&format!("  {:<8} ${:.2}  {:+.2}%", sym, price, change), c);
+                            }
+                        }
+                    }
+                    Err(e) => self.log(&format!("Movers failed: {e}"), Color::Red),
+                }
+            }
+            "fills" | "activity" => {
+                let limit = parts.get(1).and_then(|s| s.parse::<u32>().ok()).unwrap_or(20);
+                match self.broker.get_activities(limit).await {
+                    Ok(fills) => {
+                        if fills.is_empty() {
+                            self.log("No recent fills", Color::Yellow);
+                        } else {
+                            self.log(&format!("--- Recent Fills ({}) ---", fills.len()), Color::Cyan);
+                            for (ts, sym, side, qty, price) in &fills {
+                                let c = if side == "buy" { Color::Green } else { Color::Red };
+                                let ts_short = if ts.len() >= 16 { &ts[..16] } else { ts };
+                                self.log(&format!("  {} {} {} {} @ ${}", ts_short, side.to_uppercase(), qty, sym, price), c);
+                            }
+                        }
+                    }
+                    Err(e) => self.log(&format!("Fills failed: {e}"), Color::Red),
+                }
+            }
+            "unwatch" | "uw" => {
+                if parts.len() >= 2 {
+                    let sym = parts[1].to_uppercase();
+                    let before = self.watchlist.len();
+                    self.watchlist.retain(|s| s != &sym);
+                    if self.watchlist.len() < before {
+                        self.log(&format!("Removed {sym} from watchlist"), Color::Yellow);
+                    } else {
+                        self.log(&format!("{sym} not in watchlist"), Color::Red);
+                    }
+                } else {
+                    self.log("Usage: unwatch SYMBOL", Color::Yellow);
+                }
+            }
             "help" | "h" | "?" => {
                 self.log("--- Trade Commands ---", Color::Cyan);
                 self.log("  buy/sell SYMBOL QTY           Market order", Color::Cyan);
@@ -711,7 +780,12 @@ impl App {
                 self.log("  closeall                      Close ALL positions", Color::Cyan);
                 self.log("  cancelall                     Cancel ALL open orders", Color::Cyan);
                 self.log("--- Research ---", Color::Cyan);
-                self.log("  chart SYM [TF], tf TF, watch SYM, history [N]", Color::Cyan);
+                self.log("  chart SYM [TF]                Load chart", Color::Cyan);
+                self.log("  tf TF                         Change timeframe", Color::Cyan);
+                self.log("  watch SYM / unwatch SYM       Manage watchlist", Color::Cyan);
+                self.log("  search QUERY                  Search symbols (stocks + crypto)", Color::Cyan);
+                self.log("  movers                        Top market movers", Color::Cyan);
+                self.log("  fills [N] / history [N]       Recent fills / order history", Color::Cyan);
                 self.log("--- Accounts ---", Color::Cyan);
                 self.log("  import NAME /path.csv, accounts, rmacct NAME", Color::Cyan);
                 self.log("Tabs: 1-7 or Tab. : for command mode. q to quit.", Color::Cyan);

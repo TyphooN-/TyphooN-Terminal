@@ -194,6 +194,7 @@ struct IndicatorAlert {
     active: bool,
     triggered: bool,
     last_value: Option<f64>,
+    #[allow(dead_code)]
     created_at: String,
 }
 
@@ -595,14 +596,40 @@ impl ChartState {
             }
         };
 
+        // Normalize crypto: try both with and without slash
+        let sym_alt = if sym.contains('/') {
+            sym.replace('/', "")
+        } else {
+            // Check if it looks like a crypto pair (e.g. SOLUSD → SOL/USD)
+            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+                "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB",
+                "OP","MKR","COMP","SNX","CRV","SUSHI","YFI","BAT","MANA","SAND",
+                "AXS","BCH","ETC","XLM","FIL","HBAR","ICP","VET","THETA"];
+            let su = sym.to_uppercase();
+            crypto_bases.iter().find_map(|base| {
+                if su.starts_with(base) && su.ends_with("USD") && su.len() == base.len() + 3 {
+                    Some(format!("{}/USD", base))
+                } else { None }
+            }).unwrap_or_default()
+        };
+
         // Try these key patterns in order of priority
-        let candidates = [
+        let mut candidates = vec![
             format!("{}:{}", sym, tf),                    // exact: "mt5:SLV:4Hour" or "SLV:4Hour"
             format!("mt5:{}:{}", sym, tf),                // mt5 prefix: "mt5:SLV:4Hour"
+            format!("kraken:{}:{}", sym, tf),             // kraken: "kraken:SOLUSD:1Day"
+            format!("alpaca:{}:{}", sym, tf),             // alpaca live: "alpaca:SOL/USD:1Day"
             format!("default:{}:{}", sym, tf),            // default: "default:SLV:4Hour"
             format!("paper_TyphooN:{}:{}", sym, tf),      // paper: "paper_TyphooN:SLV:4Hour"
-            format!("alpaca_paper_TyphooN:{}:{}", sym, tf),// alpaca: "alpaca_paper_TyphooN:SLV:4Hour"
+            format!("alpaca_paper_TyphooN:{}:{}", sym, tf),// alpaca paper: "alpaca_paper_TyphooN:SLV:4Hour"
         ];
+        // Also try slash/no-slash variants for crypto
+        if !sym_alt.is_empty() {
+            candidates.push(format!("{}:{}", sym_alt, tf));
+            candidates.push(format!("mt5:{}:{}", sym_alt, tf));
+            candidates.push(format!("kraken:{}:{}", sym_alt, tf));
+            candidates.push(format!("alpaca:{}:{}", sym_alt, tf));
+        }
 
         for key in &candidates {
             if let Ok(Some(_)) = cache.get_bars_raw(key) {
@@ -4200,6 +4227,10 @@ struct AccountDetailCache {
     benchmark: Option<darwin::BenchmarkComparison>,
     sector_classification: Vec<(String, String)>,
     rolling_var: Vec<darwin::RollingVaR>,
+    // FTP DARWIN quote data (investor product performance)
+    ftp_summary: Option<darwin_ftp::DarwinFtpSummary>,
+    ftp_equity_curve: Vec<(f64, f64)>,   // (day_index, quote_price) from RETURN cumulative
+    ftp_drawdown_curve: Vec<(f64, f64)>, // (day_index, drawdown_pct) from RETURN
 }
 
 /// Background-computed data — populated by background thread, read by render thread.
@@ -4352,6 +4383,8 @@ enum BrokerCmd {
     GetAnalyst { symbol: String, finnhub_key: String },
     /// Fetch orderbook (Level 2).
     GetOrderbook { symbol: String },
+    /// Fetch live bars from Alpaca and store in cache (fallback when cache misses).
+    FetchBars { symbol: String, timeframe: String, db_path: std::path::PathBuf },
     /// Crypto backfill via Kraken public OHLC API.
     KrakenBackfill { symbol: String, timeframes: Vec<String>, db_path: std::path::PathBuf },
     /// Import all DARWIN XLSX files from a directory (non-blocking).
@@ -4400,6 +4433,10 @@ enum BrokerMsg {
     DarwinFtpScanResult(Vec<darwin_ftp::DarwinFtpSummary>),
     /// Raw return data ready for GPU upload (ticker, daily_returns_f32).
     DarwinFtpReturns(Vec<(String, Vec<f32>)>),
+    /// Bars fetched from Alpaca and stored in cache — trigger chart reload.
+    BarsFetched { symbol: String, timeframe: String, count: usize },
+    /// Symbol search results for autocomplete.
+    SymbolSuggestions(Vec<(String, String, String)>), // (symbol, name, asset_class)
 }
 
 pub struct TyphooNApp {
@@ -4484,6 +4521,8 @@ pub struct TyphooNApp {
 
     /// Darwinex FTP data directory (contains DARWIN CSV files for correlation scanning).
     darwin_ftp_dir: String,
+    /// Shared FTP dir for background thread access.
+    shared_ftp_dir: std::sync::Arc<std::sync::Mutex<String>>,
 
     /// Broker connection fields (Alpaca).
     broker_api_key: String,
@@ -4616,6 +4655,8 @@ pub struct TyphooNApp {
     backfill_symbol: String,
     /// SEC filing type filters [Form 4, 13F, DEF 14A, S-1, 10-K, 10-Q, 8-K].
     sec_filters: [bool; 7],
+    /// SEC filings pagination (0-indexed page number).
+    sec_page: usize,
 
     /// Price alerts.
     alerts: Vec<(f64, String)>,
@@ -4637,6 +4678,7 @@ pub struct TyphooNApp {
     // Replay mode
     replay_active: bool,
     replay_bar_idx: usize,
+    #[allow(dead_code)]
     confirm_close_all: bool,
     // Symbol autocomplete
     symbol_suggestions: Vec<(String, String, String)>,  // (symbol, company, sector)
@@ -4773,6 +4815,7 @@ impl TyphooNApp {
 
         // Flag: true while DARWIN XLSX import is running — background thread skips DB queries
         let importing_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let shared_ftp_dir: std::sync::Arc<std::sync::Mutex<String>> = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
 
         // Spawn broker message processor
         let broker_msg_tx_clone = broker_msg_tx.clone();
@@ -4921,12 +4964,39 @@ impl TyphooNApp {
                             match b.get_all_assets().await {
                                 Ok(assets) => {
                                     let q = query.to_uppercase();
-                                    let text = assets.iter()
-                                        .filter(|a| a.symbol.contains(&q) || a.name.to_uppercase().contains(&q))
+                                    // Collect matching assets with priority scoring:
+                                    // 0 = exact symbol match, 1 = symbol starts with query,
+                                    // 2 = symbol contains query, 3 = name contains query
+                                    let mut matches: Vec<(u8, &_)> = assets.iter()
+                                        .filter_map(|a| {
+                                            let sym = a.symbol.to_uppercase();
+                                            // Also match without slash (e.g. "SOLUSD" matches "SOL/USD")
+                                            let sym_no_slash = sym.replace('/', "");
+                                            if sym == q || sym_no_slash == q {
+                                                Some((0, a))
+                                            } else if sym.starts_with(&q) || sym_no_slash.starts_with(&q) {
+                                                Some((1, a))
+                                            } else if sym.contains(&q) || sym_no_slash.contains(&q) {
+                                                Some((2, a))
+                                            } else if a.name.to_uppercase().contains(&q) {
+                                                Some((3, a))
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+                                    matches.sort_by_key(|(pri, _)| *pri);
+                                    let text = matches.iter()
                                         .take(20)
-                                        .map(|a| format!("{} — {} ({})", a.symbol, a.name, a.asset_class))
+                                        .map(|(_, a)| format!("{} — {} ({})", a.symbol, a.name, a.asset_class))
                                         .collect::<Vec<_>>().join("\n");
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Symbol Search".into(), text));
+                                    // Also send structured suggestions for autocomplete
+                                    let suggestions: Vec<(String, String, String)> = matches.iter()
+                                        .take(20)
+                                        .map(|(_, a)| (a.symbol.clone(), a.name.clone(), a.asset_class.clone()))
+                                        .collect();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::SymbolSuggestions(suggestions));
                                 }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
                             }
@@ -5254,6 +5324,64 @@ impl TyphooNApp {
                             }
                         });
                     }
+                    BrokerCmd::FetchBars { symbol, timeframe, db_path } => {
+                        if let Some(ref b) = broker {
+                            let tf_alpaca = match timeframe.as_str() {
+                                "1Min" => "1Min", "5Min" => "5Min", "15Min" => "15Min",
+                                "30Min" => "30Min", "1Hour" => "1Hour", "4Hour" => "4Hour",
+                                "1Day" => "1Day", "1Week" => "1Week", "1Month" => "1Month",
+                                _ => "1Day",
+                            };
+                            // Normalize crypto: SOLUSD → SOL/USD for Alpaca API
+                            let api_symbol = if symbol.contains('/') {
+                                symbol.clone()
+                            } else {
+                                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK",
+                                    "AVAX","DOT","UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM",
+                                    "NEAR","APE","ARB","OP","MKR","COMP","SNX","CRV","SUSHI","YFI",
+                                    "BAT","MANA","SAND","AXS","BCH","ETC","XLM","FIL","HBAR","ICP",
+                                    "VET","THETA"];
+                                let su = symbol.to_uppercase();
+                                crypto_bases.iter().find_map(|base| {
+                                    if su.starts_with(base) && su.ends_with("USD") && su.len() == base.len() + 3 {
+                                        Some(format!("{}/USD", base))
+                                    } else { None }
+                                }).unwrap_or_else(|| symbol.clone())
+                            };
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                format!("Fetching {} {} bars from Alpaca...", api_symbol, timeframe)
+                            ));
+                            match b.get_bars(&api_symbol, tf_alpaca, 1000).await {
+                                Ok(bars) => {
+                                    let count = bars.len();
+                                    if count > 0 {
+                                        // Store in cache as alpaca: prefix
+                                        if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                            let json = serde_json::to_string(&bars).unwrap_or_default();
+                                            let key = format!("alpaca:{}:{}", symbol, timeframe);
+                                            let _ = cache.put_bars(&key, &json);
+                                            let _ = broker_msg_tx_clone.send(BrokerMsg::BarsFetched {
+                                                symbol: symbol.clone(), timeframe: timeframe.clone(), count,
+                                            });
+                                        }
+                                    } else {
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                            format!("No bars returned for {} {}", symbol, timeframe)
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                        format!("Fetch bars failed for {} {}: {}", symbol, timeframe, e)
+                                    ));
+                                }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                "Broker not connected — connect Alpaca first".into()
+                            ));
+                        }
+                    }
                     BrokerCmd::KrakenBackfill { symbol, timeframes, db_path } => {
                         use typhoon_engine::core::kraken;
                         let client = reqwest::Client::builder()
@@ -5302,21 +5430,46 @@ impl TyphooNApp {
                     }
                     BrokerCmd::FetchFilingContent { url } => {
                         let msg_tx = broker_msg_tx_clone.clone();
+                        // SEC EDGAR requires a proper User-Agent with contact email
                         let client = reqwest::Client::builder()
-                            .user_agent("TyphooN-Terminal/1.0 (SEC EDGAR research)")
+                            .user_agent("TyphooN-Terminal/1.0 (typhoon@marketwizardry.org)")
                             .timeout(std::time::Duration::from_secs(15))
                             .build().unwrap_or_default();
-                        match client.get(&url).send().await {
+                        // Rate limit: SEC allows 10 req/sec, we do 1
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        match client.get(&url)
+                            .header("Accept", "text/html,application/xhtml+xml,application/xml")
+                            .header("Accept-Encoding", "identity")
+                            .send().await {
                             Ok(resp) => {
                                 if let Ok(text) = resp.text().await {
-                                    // Strip HTML tags for plain-text rendering
-                                    let plain = text
-                                        .replace("<br>", "\n").replace("<br/>", "\n").replace("<BR>", "\n")
-                                        .replace("<p>", "\n").replace("</p>", "\n")
-                                        .replace("<tr>", "\n").replace("</tr>", "")
-                                        .replace("<td>", " | ").replace("</td>", "")
-                                        .replace("<th>", " | ").replace("</th>", "");
-                                    // Remove remaining HTML tags
+                                    // Remove <style>, <script>, <head> blocks entirely (content + tags)
+                                    let mut clean = text.clone();
+                                    for tag in &["style", "script", "head", "noscript"] {
+                                        loop {
+                                            let open = format!("<{}", tag);
+                                            let close = format!("</{}>", tag);
+                                            if let Some(start) = clean.to_lowercase().find(&open) {
+                                                if let Some(end) = clean.to_lowercase()[start..].find(&close) {
+                                                    clean = format!("{}{}", &clean[..start], &clean[start + end + close.len()..]);
+                                                } else { break; }
+                                            } else { break; }
+                                        }
+                                    }
+                                    // Convert HTML structure to readable text
+                                    let plain = clean
+                                        .replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n").replace("<BR>", "\n")
+                                        .replace("<p>", "\n").replace("</p>", "\n").replace("<P>", "\n")
+                                        .replace("<div>", "\n").replace("</div>", "").replace("<DIV>", "\n")
+                                        .replace("<tr>", "\n").replace("</tr>", "").replace("<TR>", "\n")
+                                        .replace("<td>", " | ").replace("</td>", "").replace("<TD>", " | ")
+                                        .replace("<th>", " | ").replace("</th>", "").replace("<TH>", " | ")
+                                        .replace("<li>", "\n  • ").replace("</li>", "")
+                                        .replace("<hr>", "\n────────────────────\n").replace("<hr/>", "\n────────────────────\n")
+                                        .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                                        .replace("&nbsp;", " ").replace("&quot;", "\"").replace("&#39;", "'")
+                                        .replace("&apos;", "'");
+                                    // Strip remaining HTML tags
                                     let mut result = String::new();
                                     let mut in_tag = false;
                                     for ch in plain.chars() {
@@ -5324,9 +5477,11 @@ impl TyphooNApp {
                                         if ch == '>' { in_tag = false; continue; }
                                         if !in_tag { result.push(ch); }
                                     }
-                                    // Collapse multiple blank lines
+                                    // Collapse whitespace
+                                    while result.contains("  ") { result = result.replace("  ", " "); }
                                     while result.contains("\n\n\n") { result = result.replace("\n\n\n", "\n\n"); }
-                                    let truncated = if result.len() > 50000 { format!("{}...\n\n[Truncated at 50KB]", &result[..50000]) } else { result };
+                                    result = result.trim().to_string();
+                                    let truncated = if result.len() > 80000 { format!("{}...\n\n[Truncated at 80KB]", &result[..80000]) } else { result };
                                     let _ = msg_tx.send(BrokerMsg::FilingContent(truncated));
                                 }
                             }
@@ -5434,6 +5589,7 @@ impl TyphooNApp {
                 String::new(),
             ],
             darwin_ftp_dir: String::new(),
+            shared_ftp_dir: shared_ftp_dir.clone(),
             broker_api_key: String::new(),
             broker_secret: String::new(),
             broker_paper: true,
@@ -5528,6 +5684,7 @@ impl TyphooNApp {
             show_dividend_calendar: false,
             backfill_symbol: String::new(),
             sec_filters: [true; 7],
+            sec_page: 0,
             alerts: Vec::new(),
             alert_price_input: String::new(),
             indicator_alerts: Vec::new(),
@@ -5592,6 +5749,7 @@ impl TyphooNApp {
             let (bg_tx, bg_rx) = std::sync::mpsc::channel::<BgDarwinData>();
             app.bg_rx = bg_rx;
             let shared_cache_bg = shared_cache.clone();
+            let shared_ftp_dir_bg = shared_ftp_dir.clone();
             std::thread::spawn(move || {
                 let importing_flag_bg = importing_flag_bg;
                 let mut full_refresh_done = false;
@@ -5791,6 +5949,31 @@ impl TyphooNApp {
                                         }
                                     }
                                 } // release conn
+                                // Load FTP DARWIN quote data (investor product performance)
+                                let ftp_dir_str = shared_ftp_dir_bg.lock().ok().map(|d| d.clone()).unwrap_or_default();
+                                if !ftp_dir_str.is_empty() {
+                                    let ftp_path = std::path::Path::new(&ftp_dir_str);
+                                    if ftp_path.is_dir() {
+                                        if let Ok(returns) = darwin_ftp::read_return_file(ftp_path, ticker) {
+                                            let summary = darwin_ftp::compute_return_summary(ticker, &returns);
+                                            // Build equity curve from cumulative returns (DARWIN quote starts at 100)
+                                            let eq: Vec<(f64, f64)> = returns.iter().enumerate()
+                                                .filter_map(|(i, r)| r.cumulative_returns.last().map(|&v| (i as f64, v * 100.0)))
+                                                .collect();
+                                            // Build drawdown curve
+                                            let mut peak = 100.0_f64;
+                                            let dd: Vec<(f64, f64)> = eq.iter().map(|&(x, price)| {
+                                                if price > peak { peak = price; }
+                                                let dd_pct = if peak > 0.0 { (peak - price) / peak * 100.0 } else { 0.0 };
+                                                (x, -dd_pct) // negative for plotting below zero
+                                            }).collect();
+                                            det.ftp_summary = Some(summary);
+                                            det.ftp_equity_curve = eq;
+                                            det.ftp_drawdown_curve = dd;
+                                        }
+                                    }
+                                }
+
                                 tracing::info!("BG: account {} detail {}ms", ticker, t.elapsed().as_millis());
                                 details.push(det);
                                 // Send incrementally after each account so UI updates progressively
@@ -5885,6 +6068,16 @@ impl TyphooNApp {
             chart.chart_type = chart_type;
             let cache_ref = Arc::as_ref(cache);
             { let mut gpu = self.gpu_indicators.take(); chart.load(cache_ref, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+            // If chart loaded 0 bars, trigger live fetch from Alpaca
+            if chart.bars.is_empty() {
+                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                let _ = self.broker_tx.send(BrokerCmd::FetchBars {
+                    symbol: symbol.to_string(),
+                    timeframe: tf.cache_suffix().to_string(),
+                    db_path,
+                });
+                self.log.push_back(LogEntry::info(format!("No cached data for {} {} — fetching from Alpaca...", symbol, tf.label())));
+            }
             if let Some(target) = self.charts.get_mut(self.active_tab) {
                 *target = chart;
             }
@@ -6069,7 +6262,7 @@ impl TyphooNApp {
             "DARWINEXOUTLIERS" => {
                 // Read specs from cache, run outlier detection
                 if let Some(ref cache) = self.cache {
-                    if let Some(conn) = cache.try_connection() {
+                    if let Some(_conn) = cache.try_connection() {
                         // Get all symbols with their specs from cache
                         use typhoon_engine::core::var;
                         let mut data: Vec<(String, String, f64)> = Vec::new();
@@ -6199,7 +6392,7 @@ impl TyphooNApp {
                 self.log.push_back(LogEntry::info("All indicators disabled"));
             }
             "DATA_WINDOW"    => self.show_data_window = true,
-            "ALERTS"         => self.show_alerts = true,
+            // "ALERTS" handled above (alert builder)
             "ORDER"          => { self.show_order_entry = true; self.order_symbol = self.symbol_input.clone(); }
             "PREV_LEVELS"    => self.show_prev_levels = !self.show_prev_levels,
             "CRYPTO_BACKFILL" => {
@@ -6450,7 +6643,10 @@ impl TyphooNApp {
                         if let Some(s) = p.as_str() { self.mt5_db_paths[i] = s.to_string(); }
                     }
                 }
-                if let Some(ftp) = v["darwin_ftp_dir"].as_str() { self.darwin_ftp_dir = ftp.to_string(); }
+                if let Some(ftp) = v["darwin_ftp_dir"].as_str() {
+                    self.darwin_ftp_dir = ftp.to_string();
+                    if let Ok(mut dir) = self.shared_ftp_dir.lock() { *dir = ftp.to_string(); }
+                }
                 // Restore API keys
                 if let Some(fk) = v["finnhub_key"].as_str() { self.finnhub_key = fk.to_string(); }
                 if let Some(ak) = v["broker_api_key"].as_str() { self.broker_api_key = ak.to_string(); }
@@ -6742,6 +6938,7 @@ impl TyphooNApp {
                                 .pick_folder()
                             {
                                 self.darwin_ftp_dir = dir.display().to_string();
+                                if let Ok(mut d) = self.shared_ftp_dir.lock() { *d = self.darwin_ftp_dir.clone(); }
                             }
                         }
                         if !self.darwin_ftp_dir.is_empty() {
@@ -7365,11 +7562,15 @@ impl TyphooNApp {
                                             ui.add_space(10.0);
                                             ui.heading("Per-DARWIN");
                                             ui.separator();
-                                            egui::Grid::new("per_darwin").striped(true).num_columns(6).show(ui, |ui| {
-                                                ui.strong("DARWIN"); ui.strong("Balance"); ui.strong("P&L"); ui.strong("Win%"); ui.strong("PF"); ui.strong("DD%");
+                                            egui::Grid::new("per_darwin").striped(true).num_columns(11).show(ui, |ui| {
+                                                ui.strong("DARWIN"); ui.strong("Signal Bal"); ui.strong("Signal P&L");
+                                                ui.strong("Win%"); ui.strong("PF"); ui.strong("Signal DD%");
+                                                ui.strong("Quote"); ui.strong("Quote Ret%"); ui.strong("Quote DD%");
+                                                ui.strong("Divergence"); ui.strong("Multiplier");
                                                 ui.end_row();
                                                 for acct in &portfolio.accounts {
-                                                    ui.label(&acct.account.darwin_ticker);
+                                                    let ticker = &acct.account.darwin_ticker;
+                                                    ui.label(ticker);
                                                     ui.label(format!("${:.0}", acct.final_balance));
                                                     let c = if acct.total_profit >= 0.0 { UP } else { DOWN };
                                                     ui.label(egui::RichText::new(format!("${:.0}", acct.total_profit)).color(c));
@@ -7377,6 +7578,33 @@ impl TyphooNApp {
                                                     ui.label(egui::RichText::new(format!("{:.1}%", acct.win_rate)).color(wr_c));
                                                     ui.label(format!("{:.2}", acct.profit_factor));
                                                     ui.label(format!("{:.1}%", acct.max_drawdown_pct));
+                                                    // DARWIN quote columns (from FTP data)
+                                                    let ftp = self.bg.account_details.iter()
+                                                        .find(|d| d.ticker == *ticker)
+                                                        .and_then(|d| d.ftp_summary.as_ref());
+                                                    if let Some(fs) = ftp {
+                                                        let qc = if fs.last_quote >= 100.0 { UP } else { DOWN };
+                                                        ui.label(egui::RichText::new(format!("{:.2}", fs.last_quote)).color(qc));
+                                                        let rc = if fs.total_return_pct >= 0.0 { UP } else { DOWN };
+                                                        ui.label(egui::RichText::new(format!("{:.1}%", fs.total_return_pct)).color(rc));
+                                                        ui.label(egui::RichText::new(format!("{:.1}%", fs.max_drawdown_pct)).color(DOWN));
+                                                        // Divergence: signal return % vs DARWIN quote return %
+                                                        let signal_ret_pct = if acct.account.initial_balance > 0.0 {
+                                                            (acct.final_balance / acct.account.initial_balance - 1.0) * 100.0
+                                                        } else { 0.0 };
+                                                        let div = fs.total_return_pct - signal_ret_pct;
+                                                        let dc = if div.abs() < 5.0 { AXIS_TEXT } else if div > 0.0 { UP } else { DOWN };
+                                                        ui.label(egui::RichText::new(format!("{:+.1}%", div)).color(dc));
+                                                        // VaR multiplier
+                                                        let mult = self.bg.var_multipliers.iter()
+                                                            .find(|m| m.darwin_ticker == *ticker);
+                                                        if let Some(m) = mult {
+                                                            let mc = if m.multiplier >= 1.0 { UP } else { DOWN };
+                                                            ui.label(egui::RichText::new(format!("{:.2}x", m.multiplier)).color(mc));
+                                                        } else { ui.label("—"); }
+                                                    } else {
+                                                        ui.label("—"); ui.label("—"); ui.label("—"); ui.label("—"); ui.label("—");
+                                                    }
                                                     ui.end_row();
                                                 }
                                             });
@@ -7423,14 +7651,29 @@ impl TyphooNApp {
                                                     if let Some(ref dd) = self.bg.drawdown_dashboard {
                                                         ui.add_space(10.0);
                                                         ui.label(egui::RichText::new("Drawdown Dashboard").strong());
-                                                        egui::Grid::new("dd_dash").striped(true).num_columns(4).show(ui, |ui| {
-                                                            ui.strong("DARWIN"); ui.strong("Max DD"); ui.strong("Date"); ui.strong("Current DD");
+                                                        egui::Grid::new("dd_dash").striped(true).num_columns(6).show(ui, |ui| {
+                                                            ui.strong("DARWIN"); ui.strong("Signal Max DD"); ui.strong("Date"); ui.strong("Signal Curr DD");
+                                                            ui.strong("Quote Max DD"); ui.strong("Quote Curr DD");
                                                             ui.end_row();
                                                             for d in &dd.darwins {
                                                                 ui.label(&d.darwin_ticker);
                                                                 ui.label(egui::RichText::new(format!("{:.2}%", d.max_drawdown_pct)).color(DOWN));
                                                                 ui.label(&d.max_dd_date);
                                                                 ui.label(format!("{:.2}%", d.current_drawdown_pct));
+                                                                // Quote DD from FTP data
+                                                                let ftp = self.bg.account_details.iter()
+                                                                    .find(|det| det.ticker == d.darwin_ticker)
+                                                                    .and_then(|det| det.ftp_summary.as_ref());
+                                                                if let Some(fs) = ftp {
+                                                                    ui.label(egui::RichText::new(format!("{:.2}%", fs.max_drawdown_pct)).color(DOWN));
+                                                                    // Current DD from last drawdown curve point
+                                                                    let cur_dd = self.bg.account_details.iter()
+                                                                        .find(|det| det.ticker == d.darwin_ticker)
+                                                                        .and_then(|det| det.ftp_drawdown_curve.last())
+                                                                        .map(|&(_, dd)| -dd) // stored negative
+                                                                        .unwrap_or(0.0);
+                                                                    ui.label(format!("{:.2}%", cur_dd));
+                                                                } else { ui.label("—"); ui.label("—"); }
                                                                 ui.end_row();
                                                             }
                                                             // Combined row
@@ -7484,21 +7727,97 @@ impl TyphooNApp {
                                                         }
                                                     });
                                             }
-                                            // Per-DARWIN individual equity curves (smaller, stacked)
+                                            // DARWIN Quote Equity Curves (FTP — investor product price)
+                                            {
+                                                let has_ftp = self.bg.account_details.iter().any(|d| !d.ftp_equity_curve.is_empty());
+                                                if has_ftp {
+                                                    ui.add_space(10.0);
+                                                    ui.label(egui::RichText::new("DARWIN Quote Price (Investor View)").strong());
+                                                    Plot::new("quote_equity_plot")
+                                                        .height(200.0)
+                                                        .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                        .legend(egui_plot::Legend::default())
+                                                        .show(ui, |plot_ui| {
+                                                            for (idx, det) in self.bg.account_details.iter().enumerate() {
+                                                                if det.ftp_equity_curve.len() > 2 {
+                                                                    let c = darwin_colors[idx % darwin_colors.len()];
+                                                                    let pts: PlotPoints = PlotPoints::new(
+                                                                        det.ftp_equity_curve.iter().map(|&(x, y)| [x, y]).collect()
+                                                                    );
+                                                                    plot_ui.line(Line::new(format!("{} Quote", det.ticker), pts).color(c).width(1.5));
+                                                                }
+                                                            }
+                                                            // Reference line at 100 (starting price)
+                                                            let max_days = self.bg.account_details.iter()
+                                                                .map(|d| d.ftp_equity_curve.len()).max().unwrap_or(100) as f64;
+                                                            plot_ui.hline(egui_plot::HLine::new("Start 100", 100.0).color(egui::Color32::from_rgb(80, 80, 100)).width(0.5));
+                                                            let _ = max_days; // used implicitly by hline domain
+                                                        });
+
+                                                    // DARWIN Quote Drawdown
+                                                    ui.add_space(6.0);
+                                                    ui.label(egui::RichText::new("DARWIN Quote Drawdown").strong());
+                                                    Plot::new("quote_drawdown_plot")
+                                                        .height(150.0)
+                                                        .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                        .legend(egui_plot::Legend::default())
+                                                        .show(ui, |plot_ui| {
+                                                            for (idx, det) in self.bg.account_details.iter().enumerate() {
+                                                                if det.ftp_drawdown_curve.len() > 2 {
+                                                                    let c = darwin_colors[idx % darwin_colors.len()];
+                                                                    let pts: PlotPoints = PlotPoints::new(
+                                                                        det.ftp_drawdown_curve.iter().map(|&(x, y)| [x, y]).collect()
+                                                                    );
+                                                                    plot_ui.line(Line::new(format!("{} DD", det.ticker), pts).color(c).width(1.2));
+                                                                }
+                                                            }
+                                                            plot_ui.hline(egui_plot::HLine::new("Zero", 0.0).color(egui::Color32::from_rgb(80, 80, 100)).width(0.5));
+                                                        });
+                                                }
+                                            }
+
+                                            // Per-DARWIN individual equity curves: Signal vs Quote side-by-side
                                             ui.add_space(6.0);
-                                            ui.label(egui::RichText::new("Individual Equity Curves").small().strong());
+                                            ui.label(egui::RichText::new("Signal vs Quote — Per-DARWIN").small().strong());
                                             for (idx, det) in self.bg.account_details.iter().enumerate() {
                                                 if det.equity_curve.len() > 2 {
                                                     let c = darwin_colors[idx % darwin_colors.len()];
+                                                    // Signal equity (solid)
                                                     let pts: PlotPoints = PlotPoints::new(
                                                         det.equity_curve.iter().enumerate().map(|(i, (_, b))| [i as f64, *b]).collect()
                                                     );
-                                                    let line = Line::new(&det.ticker, pts).color(c).width(1.5);
+                                                    let signal_line = Line::new(format!("{} Signal", det.ticker), pts).color(c).width(1.5);
+                                                    // Quote equity (dashed, same color but dimmer)
+                                                    let has_quote = det.ftp_equity_curve.len() > 2;
                                                     Plot::new(format!("eq_ind_{}", det.ticker))
-                                                        .height(80.0)
+                                                        .height(100.0)
                                                         .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                        .legend(egui_plot::Legend::default())
                                                         .show_axes([false, true])
-                                                        .show(ui, |plot_ui| { plot_ui.line(line); });
+                                                        .show(ui, |plot_ui| {
+                                                            plot_ui.line(signal_line);
+                                                            if has_quote {
+                                                                let qpts: PlotPoints = PlotPoints::new(
+                                                                    det.ftp_equity_curve.iter().map(|&(x, y)| [x, y]).collect()
+                                                                );
+                                                                let qc = egui::Color32::from_rgba_premultiplied(c.r() / 2 + 128, c.g() / 2 + 128, c.b() / 2 + 128, 180);
+                                                                plot_ui.line(Line::new(format!("{} Quote", det.ticker), qpts).color(qc).width(1.0));
+                                                            }
+                                                        });
+                                                    // Drawdown subplot for this DARWIN
+                                                    if !det.ftp_drawdown_curve.is_empty() {
+                                                        let dd_pts: PlotPoints = PlotPoints::new(
+                                                            det.ftp_drawdown_curve.iter().map(|&(x, y)| [x, y]).collect()
+                                                        );
+                                                        Plot::new(format!("dd_ind_{}", det.ticker))
+                                                            .height(60.0)
+                                                            .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                            .show_axes([false, true])
+                                                            .show(ui, |plot_ui| {
+                                                                plot_ui.line(Line::new("Drawdown", dd_pts).color(DOWN).width(1.0).fill(-100.0));
+                                                                plot_ui.hline(egui_plot::HLine::new("Zero", 0.0).color(egui::Color32::from_rgb(60, 60, 80)).width(0.5));
+                                                            });
+                                                    }
                                                 }
                                             }
                                         }
@@ -8848,7 +9167,7 @@ impl TyphooNApp {
         if self.show_news {
             egui::Window::new("News & Events")
                 .open(&mut self.show_news)
-                .resizable(true).resizable(true).default_size([550.0, 400.0])
+                .resizable(true).default_size([550.0, 400.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Finnhub Key:").color(AXIS_TEXT));
@@ -8933,7 +9252,8 @@ impl TyphooNApp {
         if self.show_sec {
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
-                .resizable(true).resizable(true).default_size([900.0, 650.0])
+                .resizable(true).default_size([900.0, 650.0]).min_size([600.0, 200.0]).constrain(false)
+                .scroll([false, true])
                 .show(ctx, |ui| {
                     let sec_high = egui::Color32::from_rgb(231, 76, 60);
                     let sec_med = egui::Color32::from_rgb(241, 196, 15);
@@ -8952,7 +9272,9 @@ impl TyphooNApp {
                         ui.separator();
                         let labels = ["4", "13F", "14A", "S-1", "10-K", "10-Q", "8-K"];
                         for (i, label) in labels.iter().enumerate() {
+                            let prev = self.sec_filters[i];
                             ui.checkbox(&mut self.sec_filters[i], egui::RichText::new(*label).small());
+                            if self.sec_filters[i] != prev { self.sec_page = 0; self.sec_selected_filing = None; }
                         }
                         ui.separator();
                         if ui.small_button(egui::RichText::new("Scrape Now").color(BTN_GREEN_TEXT)).clicked() {
@@ -8966,15 +9288,25 @@ impl TyphooNApp {
                     if self.sec_tab == 0 {
                         // ═══════════ FILINGS TAB (full height) ═══════════
                         let filings = &self.bg.sec_filings;
-                        let filter_types: Vec<&str> = vec!["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
+                        let filter_types: &[&str] = &["4", "13F", "DEF 14A", "S-1", "10-K", "10-Q", "8-K"];
+                        let all_on = self.sec_filters.iter().all(|&v| v);
+                        let none_on = self.sec_filters.iter().all(|&v| !v);
+                        let show_all = all_on || none_on;
                         let mut seen = std::collections::HashSet::new();
                         let mut deduped = Vec::new();
                         for f in filings {
                             let key = format!("{}:{}:{}", f.filing_date, f.ticker, f.form_type);
                             if seen.insert(key) {
-                                let pass = self.sec_filters.iter().enumerate().any(|(i, &en)| {
-                                    en && f.form_type.contains(filter_types.get(i).unwrap_or(&""))
-                                }) || self.sec_filters.iter().all(|&v| v);
+                                let pass = show_all || self.sec_filters.iter().enumerate().any(|(i, &en)| {
+                                    if !en { return false; }
+                                    let ft = filter_types.get(i).unwrap_or(&"");
+                                    // Exact match for "4" to avoid "424B2" matching
+                                    if *ft == "4" {
+                                        f.form_type == "4"
+                                    } else {
+                                        f.form_type.contains(ft)
+                                    }
+                                });
                                 if pass { deduped.push(f); }
                             }
                         }
@@ -8985,7 +9317,7 @@ impl TyphooNApp {
                                 egui::Frame::NONE
                                     .fill(egui::Color32::from_rgb(15, 18, 30))
                                     .inner_margin(8.0)
-                                    .rounding(4.0)
+                                    .corner_radius(4.0)
                                     .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new(format!("{} — {} — {}", f.ticker, f.form_type, f.filing_date)).heading().color(sec_cyan));
@@ -9027,7 +9359,8 @@ impl TyphooNApp {
                                     } else if !self.sec_filing_content.is_empty() {
                                         ui.separator();
                                         ui.label(egui::RichText::new("Filing Document").small().strong());
-                                        egui::ScrollArea::vertical().id_salt("sec_doc_viewer").max_height(300.0).show(ui, |ui| {
+                                        let doc_h = ui.available_height().max(150.0);
+                                        egui::ScrollArea::vertical().id_salt("sec_doc_viewer").max_height(doc_h).show(ui, |ui| {
                                             ui.label(egui::RichText::new(&self.sec_filing_content).small().monospace().color(egui::Color32::from_rgb(190, 190, 200)));
                                         });
                                     }
@@ -9036,8 +9369,34 @@ impl TyphooNApp {
                             }
                         }
 
-                        // Filing table (scrollable, full remaining height)
-                        egui::ScrollArea::vertical().id_salt("sec_filings_tab").show(ui, |ui| {
+                        // Pagination
+                        let page_size = 100;
+                        let total = deduped.len();
+                        let total_pages = (total + page_size - 1) / page_size;
+                        if self.sec_page >= total_pages && total_pages > 0 { self.sec_page = total_pages - 1; }
+                        let page_start = self.sec_page * page_size;
+                        let page_end = (page_start + page_size).min(total);
+                        let page_slice = &deduped[page_start..page_end];
+
+                        // Pagination controls
+                        if total_pages > 1 {
+                            ui.horizontal(|ui| {
+                                if ui.add_enabled(self.sec_page > 0, egui::Button::new(egui::RichText::new("◀ Prev").small())).clicked() {
+                                    self.sec_page = self.sec_page.saturating_sub(1);
+                                    self.sec_selected_filing = None;
+                                }
+                                ui.label(egui::RichText::new(format!("Page {} / {}  ({} filings)", self.sec_page + 1, total_pages, total)).small().color(sec_low));
+                                if ui.add_enabled(self.sec_page + 1 < total_pages, egui::Button::new(egui::RichText::new("Next ▶").small())).clicked() {
+                                    self.sec_page += 1;
+                                    self.sec_selected_filing = None;
+                                }
+                            });
+                            ui.separator();
+                        }
+
+                        // Filing table (scrollable, fill remaining height)
+                        let avail = ui.available_height().max(200.0);
+                        egui::ScrollArea::vertical().id_salt("sec_filings_tab").min_scrolled_height(avail).show(ui, |ui| {
                             if deduped.is_empty() {
                                 ui.label(egui::RichText::new("No filings. Click Scrape Now to fetch from SEC EDGAR.").color(sec_low));
                             } else {
@@ -9049,11 +9408,12 @@ impl TyphooNApp {
                                     ui.label(egui::RichText::new("Company").color(sec_low).small());
                                     ui.label(egui::RichText::new("Accession #").color(sec_low).small());
                                     ui.end_row();
-                                    for (idx, f) in deduped.iter().take(200).enumerate() {
-                                        let sel = self.sec_selected_filing == Some(idx);
+                                    for (local_idx, f) in page_slice.iter().enumerate() {
+                                        let global_idx = page_start + local_idx;
+                                        let sel = self.sec_selected_filing == Some(global_idx);
                                         let rc = if sel { egui::Color32::WHITE } else { egui::Color32::from_rgb(180, 180, 190) };
-                                        if ui.add(egui::Label::new(egui::RichText::new(&f.filing_date).small().color(rc)).sense(egui::Sense::click())).clicked() { self.sec_selected_filing = if sel { None } else { Some(idx) }; }
-                                        if ui.add(egui::Label::new(egui::RichText::new(&f.ticker).small().strong().color(if sel { egui::Color32::WHITE } else { sec_cyan })).sense(egui::Sense::click())).clicked() { self.sec_selected_filing = if sel { None } else { Some(idx) }; }
+                                        if ui.add(egui::Label::new(egui::RichText::new(&f.filing_date).small().color(rc)).sense(egui::Sense::click())).clicked() { self.sec_selected_filing = if sel { None } else { Some(global_idx) }; }
+                                        if ui.add(egui::Label::new(egui::RichText::new(&f.ticker).small().strong().color(if sel { egui::Color32::WHITE } else { sec_cyan })).sense(egui::Sense::click())).clicked() { self.sec_selected_filing = if sel { None } else { Some(global_idx) }; }
                                         let tc = match f.form_type.as_str() { "4" => sec_med, "10-K"|"10-Q" => sec_blue, "8-K" => sec_orange, _ => sec_purple };
                                         ui.label(egui::RichText::new(&f.form_type).color(tc).small());
                                         let cc = match f.category.as_str() { c if c.contains("INSIDER") => sec_med, c if c.contains("DILUTION") => sec_high, c if c.contains("RESTATE") => sec_orange, _ => sec_low };
@@ -9079,7 +9439,8 @@ impl TyphooNApp {
                                 }
                             }
                         });
-                        egui::ScrollArea::vertical().id_salt("sec_alerts_tab").show(ui, |ui| {
+                        let avail = ui.available_height().max(200.0);
+                        egui::ScrollArea::vertical().id_salt("sec_alerts_tab").min_scrolled_height(avail).show(ui, |ui| {
                             if alerts.is_empty() {
                                 ui.label(egui::RichText::new("No active alerts.").color(sec_low));
                             } else {
@@ -9186,7 +9547,7 @@ impl TyphooNApp {
         if self.show_crypto_backfill {
             egui::Window::new("Crypto Backfill (Kraken)")
                 .open(&mut self.show_crypto_backfill)
-                .resizable(true).resizable(true).default_size([550.0, 400.0])
+                .resizable(true).default_size([550.0, 400.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (2013-Now)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
@@ -9231,7 +9592,7 @@ impl TyphooNApp {
                         {
                             let stats = &self.bg.detailed_stats;
                                 for (key, count, _) in stats {
-                                    if key.starts_with("CC:") || key.starts_with("KRAKEN:") {
+                                    if key.starts_with("CC:") || key.starts_with("kraken:") || key.starts_with("KRAKEN:") {
                                         let parts: Vec<&str> = key.rsplitn(2, ':').collect();
                                         let (tf_part, sym_part) = if parts.len() == 2 { (parts[0], parts[1]) } else { ("—", key.as_str()) };
                                         ui.label(egui::RichText::new(sym_part).small().monospace());
@@ -10279,7 +10640,7 @@ impl TyphooNApp {
                 Some((&*c.symbol, c.timeframe.label(), close, rsi, fisher, adx, atr))
             });
 
-            if let Some((sym, tf, close, rsi, fisher, adx, atr)) = chart_data {
+            if let Some((sym, _tf, close, rsi, fisher, adx, atr)) = chart_data {
                 for alert in self.indicator_alerts.iter_mut() {
                     if !alert.active || alert.triggered { continue; }
                     // Only check if symbol matches current chart
@@ -11291,9 +11652,31 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::FundamentalsProgress(msg) => {
                     self.log.push_back(LogEntry::info(msg));
                 }
+                BrokerMsg::SymbolSuggestions(results) => {
+                    // Merge broker search results into autocomplete (if dropdown still visible)
+                    if self.symbol_ac_visible {
+                        for (sym, name, class) in results {
+                            if !self.symbol_suggestions.iter().any(|(s, _, _)| s.to_uppercase() == sym.to_uppercase()) {
+                                self.symbol_suggestions.push((sym, name, class));
+                            }
+                        }
+                        self.symbol_suggestions.truncate(20);
+                    }
+                }
                 BrokerMsg::DarwinFtpScanResult(results) => {
                     self.log.push_back(LogEntry::info(format!("DARWIN FTP: {} results loaded", results.len())));
                     self.ftp_scan_results = results;
+                }
+                BrokerMsg::BarsFetched { symbol, timeframe, count } => {
+                    self.log.push_back(LogEntry::info(format!("Fetched {} bars for {} {} — reloading chart", count, symbol, timeframe)));
+                    // Reload the active chart if it matches this symbol
+                    let should_reload = self.charts.get(self.active_tab)
+                        .map(|c| c.symbol == symbol || c.symbol.replace('/', "") == symbol.replace('/', ""))
+                        .unwrap_or(false);
+                    if should_reload {
+                        let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::D1);
+                        self.reload_symbol(&symbol, tf);
+                    }
                 }
                 BrokerMsg::DarwinFtpReturns(returns_data) => {
                     self.log.push_back(LogEntry::info(format!("GPU: uploading {} DARWINs to VRAM...", returns_data.len())));
@@ -11793,16 +12176,29 @@ impl eframe::App for TyphooNApp {
                                 suggestions.push((f.symbol.clone(), f.company_name.clone(), f.sector.clone()));
                             }
                         }
-                        // From cache keys (bare symbols without fundamentals)
+                        // From cache keys (all prefixes: mt5, kraken, alpaca, default, etc.)
                         if let Some(ref cache) = self.cache {
                             if let Ok(keys) = cache.all_keys() {
                                 for key in &keys {
                                     let parts: Vec<&str> = key.split(':').collect();
-                                    if parts.len() >= 4 && parts[0] == "mt5" {
-                                        let sym = parts[2].to_uppercase();
-                                        if sym.contains(&query) && !suggestions.iter().any(|(s, _, _)| s.to_uppercase() == sym) {
-                                            suggestions.push((sym, String::new(), String::new()));
-                                        }
+                                    // Extract symbol from known key patterns:
+                                    // "mt5:BROKER:SYMBOL:TF", "kraken:SYMBOL:TF", "alpaca:SYMBOL:TF", "SYMBOL:TF"
+                                    // Extract symbol from cache key — second-to-last part is always the symbol
+                                    // "mt5:Darwinex:ETHUSD:4Hour" → ETHUSD, "kraken:SOLUSD:1Day" → SOLUSD
+                                    // "alpaca:SOL/USD:4Hour" → SOL/USD, "AAPL:1Day" → AAPL
+                                    let sym = if parts.len() >= 3 {
+                                        parts[parts.len() - 2].to_uppercase()
+                                    } else if parts.len() == 2 {
+                                        parts[0].to_uppercase()
+                                    } else {
+                                        continue;
+                                    };
+                                    if sym.contains(&query) && !suggestions.iter().any(|(s, _, _)| s.to_uppercase() == sym) {
+                                        // Label crypto vs equity
+                                        let class = if sym.ends_with("USD") && !sym.contains('.') && sym.len() <= 10 {
+                                            "crypto".to_string()
+                                        } else { String::new() };
+                                        suggestions.push((sym, String::new(), class));
                                     }
                                 }
                             }
@@ -11815,6 +12211,10 @@ impl eframe::App for TyphooNApp {
                         });
                         suggestions.truncate(12);
                         self.symbol_suggestions = suggestions;
+                        // If few local results and query >= 2 chars, also search Alpaca
+                        if self.symbol_suggestions.len() < 5 && query.len() >= 2 {
+                            let _ = self.broker_tx.send(BrokerCmd::SearchSymbols { query: query.clone() });
+                        }
                     } else {
                         self.symbol_ac_visible = false;
                     }
@@ -11920,7 +12320,7 @@ impl eframe::App for TyphooNApp {
                     egui::Frame::NONE
                         .fill(ac_bg)
                         .inner_margin(4.0)
-                        .rounding(4.0)
+                        .corner_radius(4.0)
                         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 50, 70)))
                         .show(ui, |ui| {
                             ui.set_min_width(350.0);
