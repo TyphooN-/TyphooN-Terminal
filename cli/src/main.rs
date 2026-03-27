@@ -286,7 +286,7 @@ fn aggregate_bars(bars: &[broker::Bar], factor: usize) -> Vec<broker::Bar> {
             open: chunk[0].open,
             high: chunk.iter().map(|b| b.high).fold(f64::MIN, f64::max),
             low: chunk.iter().map(|b| b.low).fold(f64::MAX, f64::min),
-            close: chunk.last().unwrap().close,
+            close: chunk.last().expect("non-empty chunk").close,
             volume: chunk.iter().map(|b| b.volume).sum(),
         });
     }
@@ -1051,7 +1051,10 @@ fn draw_chart(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    let last = bars.last().unwrap();
+    let last = match bars.last() {
+        Some(b) => b,
+        None => return, // guarded above, but defensive
+    };
     let change = last.close - last.open;
     let change_pct = if last.open > 0.0 { change / last.open * 100.0 } else { 0.0 };
     let title = format!(

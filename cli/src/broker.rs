@@ -4,6 +4,7 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use zeroize::Zeroizing;
 
 const PAPER_BASE: &str = "https://paper-api.alpaca.markets";
 const LIVE_BASE: &str = "https://api.alpaca.markets";
@@ -73,8 +74,8 @@ fn parse_f64(v: &serde_json::Value, field: &str) -> f64 {
 pub struct AlpacaBroker {
     client: Client,
     base_url: String,
-    api_key: String,
-    secret_key: String,
+    api_key: Zeroizing<String>,
+    secret_key: Zeroizing<String>,
 }
 
 impl AlpacaBroker {
@@ -82,8 +83,8 @@ impl AlpacaBroker {
         Self {
             client: Client::new(),
             base_url: if paper { PAPER_BASE } else { LIVE_BASE }.to_string(),
-            api_key: api_key.to_string(),
-            secret_key: secret_key.to_string(),
+            api_key: Zeroizing::new(api_key.to_string()),
+            secret_key: Zeroizing::new(secret_key.to_string()),
         }
     }
 

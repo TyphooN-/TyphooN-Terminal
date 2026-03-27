@@ -5887,6 +5887,191 @@ pub fn compute_investment_velocity(investor_flow: &[InvestorFlow]) -> Vec<(Strin
     result
 }
 
+// ── Advanced DARWIN Analytics ────────────────────────────────────────
+
+/// Rolling correlation between two DARWINs over time.
+/// Returns Vec of (window_end_idx, correlation) for sliding windows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RollingCorrelation {
+    pub darwin_a: String,
+    pub darwin_b: String,
+    pub points: Vec<(usize, f64)>,  // (day_index, correlation)
+}
+
+pub fn compute_rolling_correlation(
+    conn: &Connection,
+    ticker_a: &str,
+    ticker_b: &str,
+    window: usize,  // typically 45 (Darwinex standard)
+) -> Result<RollingCorrelation, String> {
+    let returns_a = get_daily_returns(conn, ticker_a)?;
+    let returns_b = get_daily_returns(conn, ticker_b)?;
+
+    if returns_a.len() < window || returns_b.len() < window {
+        return Ok(RollingCorrelation { darwin_a: ticker_a.into(), darwin_b: ticker_b.into(), points: Vec::new() });
+    }
+
+    // Align by date
+    let dates_b: std::collections::HashMap<String, f64> = returns_b.iter()
+        .map(|d| (d.date.clone(), d.return_pct)).collect();
+
+    let aligned: Vec<(f64, f64)> = returns_a.iter()
+        .filter_map(|a| dates_b.get(&a.date).map(|b_ret| (a.return_pct, *b_ret)))
+        .collect();
+
+    let mut points = Vec::new();
+    for i in window..=aligned.len() {
+        let slice = &aligned[i-window..i];
+        let mean_a = slice.iter().map(|p| p.0).sum::<f64>() / window as f64;
+        let mean_b = slice.iter().map(|p| p.1).sum::<f64>() / window as f64;
+        let mut cov = 0.0;
+        let mut var_a = 0.0;
+        let mut var_b = 0.0;
+        for (a, b) in slice {
+            cov += (a - mean_a) * (b - mean_b);
+            var_a += (a - mean_a).powi(2);
+            var_b += (b - mean_b).powi(2);
+        }
+        let denom = (var_a * var_b).sqrt();
+        let corr = if denom > 0.0 { cov / denom } else { 0.0 };
+        points.push((i, corr));
+    }
+
+    Ok(RollingCorrelation { darwin_a: ticker_a.into(), darwin_b: ticker_b.into(), points })
+}
+
+/// Marginal drawdown contribution per DARWIN to portfolio drawdown.
+/// Shows which DARWIN caused the most damage during peak-to-trough.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrawdownAttribution {
+    pub darwin_ticker: String,
+    pub contribution_pct: f64,    // % of portfolio DD attributable to this DARWIN
+    pub standalone_dd_pct: f64,   // this DARWIN's own DD during the same period
+    pub weight_at_peak: f64,      // allocation weight when portfolio peaked
+}
+
+pub fn compute_drawdown_attribution(conn: &Connection) -> Result<Vec<DrawdownAttribution>, String> {
+    let accounts = list_darwin_accounts(conn)?;
+    if accounts.is_empty() { return Ok(Vec::new()); }
+
+    // Get daily returns per DARWIN
+    let mut all_returns: Vec<(String, Vec<DailyReturn>)> = Vec::new();
+    for acct in &accounts {
+        if let Ok(daily) = get_daily_returns(conn, &acct.darwin_ticker) {
+            if !daily.is_empty() {
+                all_returns.push((acct.darwin_ticker.clone(), daily));
+            }
+        }
+    }
+    if all_returns.is_empty() { return Ok(Vec::new()); }
+
+    // Compute portfolio equity curve (sum of all DARWIN balances per day)
+    // Align all DARWINs by date
+    let mut date_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (_, returns) in &all_returns {
+        for d in returns { date_set.insert(d.date.clone()); }
+    }
+    let dates: Vec<String> = date_set.into_iter().collect();
+
+    // Build portfolio daily balance + per-DARWIN contribution
+    let mut portfolio_balance = Vec::new();
+    let mut per_darwin_balance: Vec<Vec<f64>> = vec![Vec::new(); all_returns.len()];
+
+    for date in &dates {
+        let mut total = 0.0;
+        for (i, (_, returns)) in all_returns.iter().enumerate() {
+            let bal = returns.iter().find(|d| d.date == *date).map(|d| d.balance).unwrap_or(0.0);
+            per_darwin_balance[i].push(bal);
+            total += bal;
+        }
+        portfolio_balance.push(total);
+    }
+
+    if portfolio_balance.len() < 2 { return Ok(Vec::new()); }
+
+    // Find portfolio peak and trough
+    let mut peak_idx = 0;
+    let mut peak_val = portfolio_balance[0];
+    let mut trough_idx = 0;
+    let mut max_dd = 0.0;
+
+    for (i, &bal) in portfolio_balance.iter().enumerate() {
+        if bal > peak_val { peak_val = bal; peak_idx = i; }
+        let dd = if peak_val > 0.0 { (peak_val - bal) / peak_val } else { 0.0 };
+        if dd > max_dd { max_dd = dd; trough_idx = i; }
+    }
+
+    if trough_idx <= peak_idx || peak_val <= 0.0 { return Ok(Vec::new()); }
+
+    // Compute each DARWIN's contribution during peak-to-trough
+    let mut result = Vec::new();
+    let portfolio_loss = portfolio_balance[peak_idx] - portfolio_balance[trough_idx];
+
+    for (i, (ticker, _)) in all_returns.iter().enumerate() {
+        let darwin_at_peak = per_darwin_balance[i].get(peak_idx).copied().unwrap_or(0.0);
+        let darwin_at_trough = per_darwin_balance[i].get(trough_idx).copied().unwrap_or(0.0);
+        let darwin_loss = darwin_at_peak - darwin_at_trough;
+
+        let contribution = if portfolio_loss > 0.0 { darwin_loss / portfolio_loss * 100.0 } else { 0.0 };
+        let standalone_dd = if darwin_at_peak > 0.0 { (darwin_at_peak - darwin_at_trough) / darwin_at_peak * 100.0 } else { 0.0 };
+        let weight = if peak_val > 0.0 { darwin_at_peak / peak_val * 100.0 } else { 0.0 };
+
+        result.push(DrawdownAttribution {
+            darwin_ticker: ticker.clone(),
+            contribution_pct: contribution,
+            standalone_dd_pct: standalone_dd,
+            weight_at_peak: weight,
+        });
+    }
+
+    result.sort_by(|a, b| b.contribution_pct.partial_cmp(&a.contribution_pct).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(result)
+}
+
+/// Signal decay: rolling Sharpe ratio over time to detect strategy degradation.
+/// Returns Vec of (window_end_date, rolling_sharpe) per DARWIN.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignalDecay {
+    pub darwin_ticker: String,
+    pub points: Vec<(String, f64)>,  // (date, rolling_sharpe)
+    pub current_sharpe: f64,
+    pub peak_sharpe: f64,
+    pub decay_pct: f64,  // (peak - current) / peak * 100 — 0% = no decay, 100% = fully decayed
+}
+
+pub fn compute_signal_decay(conn: &Connection, ticker: &str, window: usize) -> Result<SignalDecay, String> {
+    let daily = get_daily_returns(conn, ticker)?;
+    if daily.len() < window { return Err("Not enough data for decay analysis".into()); }
+
+    let mut points = Vec::new();
+    let mut peak_sharpe = f64::NEG_INFINITY;
+
+    for i in window..=daily.len() {
+        let slice = &daily[i-window..i];
+        let returns: Vec<f64> = slice.iter().map(|d| d.return_pct).collect();
+        let n = returns.len() as f64;
+        let mean = returns.iter().sum::<f64>() / n;
+        let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0);
+        let std = var.sqrt();
+        let sharpe = if std > 0.0 { mean / std * (252.0_f64).sqrt() } else { 0.0 };
+
+        let date = slice.last().map(|d| d.date.clone()).unwrap_or_default();
+        points.push((date, sharpe));
+        if sharpe > peak_sharpe { peak_sharpe = sharpe; }
+    }
+
+    let current = points.last().map(|p| p.1).unwrap_or(0.0);
+    let decay = if peak_sharpe > 0.0 { ((peak_sharpe - current) / peak_sharpe * 100.0).max(0.0) } else { 0.0 };
+
+    Ok(SignalDecay {
+        darwin_ticker: ticker.into(),
+        points,
+        current_sharpe: current,
+        peak_sharpe: if peak_sharpe.is_finite() { peak_sharpe } else { 0.0 },
+        decay_pct: decay,
+    })
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]

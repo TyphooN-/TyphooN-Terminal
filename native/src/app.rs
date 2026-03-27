@@ -7023,13 +7023,8 @@ impl TyphooNApp {
             "darwin_xlsx_dir": self.darwin_xlsx_dir,
             "mt5_db_paths": self.mt5_db_paths,
             "darwin_ftp_dir": self.darwin_ftp_dir,
-            "finnhub_key": self.finnhub_key,
-            "fred_key": self.fred_key,
-            "broker_api_key": self.broker_api_key,
-            "broker_secret": self.broker_secret,
+            // Secrets are stored in the system keyring — never write them to session.json
             "broker_paper": self.broker_paper,
-            "tt_username": self.tt_username,
-            "tt_password": self.tt_password,
             "tt_sandbox": self.tt_sandbox,
             "sl_enabled": self.sl_enabled,
             "tp_enabled": self.tp_enabled,
@@ -7186,13 +7181,27 @@ impl TyphooNApp {
                     self.darwin_ftp_dir = ftp.to_string();
                     if let Ok(mut dir) = self.shared_ftp_dir.lock() { *dir = ftp.to_string(); }
                 }
-                // Restore API keys
-                if let Some(fk) = v["finnhub_key"].as_str() { self.finnhub_key = fk.to_string(); }
-                if let Some(fk) = v["fred_key"].as_str() { self.fred_key = fk.to_string(); }
-                if let Some(ak) = v["broker_api_key"].as_str() { self.broker_api_key = ak.to_string(); }
-                if let Some(bs) = v["broker_secret"].as_str() { self.broker_secret = bs.to_string(); }
-                if let Some(tu) = v["tt_username"].as_str() { self.tt_username = tu.to_string(); }
-                if let Some(tp) = v["tt_password"].as_str() { self.tt_password = tp.to_string(); }
+                // Migration fallback: load credentials from old session.json if keyring is empty.
+                // Secrets are no longer written to session.json (see save_session).
+                // Once a session has been saved under the new code these keys will be absent.
+                if self.finnhub_key.is_empty() {
+                    if let Some(fk) = v["finnhub_key"].as_str() { self.finnhub_key = fk.to_string(); }
+                }
+                if self.fred_key.is_empty() {
+                    if let Some(fk) = v["fred_key"].as_str() { self.fred_key = fk.to_string(); }
+                }
+                if self.broker_api_key.is_empty() {
+                    if let Some(ak) = v["broker_api_key"].as_str() { self.broker_api_key = ak.to_string(); }
+                }
+                if self.broker_secret.is_empty() {
+                    if let Some(bs) = v["broker_secret"].as_str() { self.broker_secret = bs.to_string(); }
+                }
+                if self.tt_username.is_empty() {
+                    if let Some(tu) = v["tt_username"].as_str() { self.tt_username = tu.to_string(); }
+                }
+                if self.tt_password.is_empty() {
+                    if let Some(tp) = v["tt_password"].as_str() { self.tt_password = tp.to_string(); }
+                }
                 if let Some(ts) = v["tt_sandbox"].as_bool() { self.tt_sandbox = ts; }
                 if let Some(bp) = v["broker_paper"].as_bool() { self.broker_paper = bp; }
                 // Restore user watchlist
@@ -7414,17 +7423,29 @@ impl TyphooNApp {
                         if ui.button(connect_label).clicked() && !self.broker_connected {
                             if !self.broker_api_key.is_empty() && !self.broker_secret.is_empty() {
                                 // Save all credentials to system keyring
-                                let _ = keyring::store(keyring::keys::ALPACA_API_KEY, &self.broker_api_key);
-                                let _ = keyring::store(keyring::keys::ALPACA_SECRET, &self.broker_secret);
+                                if let Err(e) = keyring::store(keyring::keys::ALPACA_API_KEY, &self.broker_api_key) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store alpaca_api_key failed: {}", e)));
+                                }
+                                if let Err(e) = keyring::store(keyring::keys::ALPACA_SECRET, &self.broker_secret) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store alpaca_secret failed: {}", e)));
+                                }
                                 if !self.finnhub_key.is_empty() {
-                                    let _ = keyring::store(keyring::keys::FINNHUB_KEY, &self.finnhub_key);
+                                    if let Err(e) = keyring::store(keyring::keys::FINNHUB_KEY, &self.finnhub_key) {
+                                        self.log.push_back(LogEntry::warn(format!("Keyring store finnhub_key failed: {}", e)));
+                                    }
                                 }
                                 if !self.fred_key.is_empty() {
-                                    let _ = keyring::store(keyring::keys::FRED_KEY, &self.fred_key);
+                                    if let Err(e) = keyring::store(keyring::keys::FRED_KEY, &self.fred_key) {
+                                        self.log.push_back(LogEntry::warn(format!("Keyring store fred_key failed: {}", e)));
+                                    }
                                 }
                                 if !self.tt_username.is_empty() {
-                                    let _ = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username);
-                                    let _ = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password);
+                                    if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
+                                        self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
+                                    }
+                                    if let Err(e) = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password) {
+                                        self.log.push_back(LogEntry::warn(format!("Keyring store tt_password failed: {}", e)));
+                                    }
                                 }
                                 self.log.push_back(LogEntry::info("Credentials saved to system keyring"));
                                 let _ = self.broker_tx.send(BrokerCmd::Connect {
@@ -7437,8 +7458,12 @@ impl TyphooNApp {
                         // tastytrade connect button (right next to Alpaca)
                         if !self.tt_username.is_empty() && !self.tt_password.is_empty() {
                             if ui.button("Connect tastytrade").clicked() {
-                                let _ = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username);
-                                let _ = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password);
+                                if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
+                                }
+                                if let Err(e) = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store tt_password failed: {}", e)));
+                                }
                                 let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
                                     username: self.tt_username.clone(),
                                     password: self.tt_password.clone(),

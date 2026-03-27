@@ -14,12 +14,12 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Startup Time** | < 2 seconds |
 | **Lines of Code** | ~9,500 GUI + ~12,000 engine (pure Rust) |
 | **Indicators** | 32+ (NNFX + Ehlers DSP + standard + harmonics) |
-| **Commands** | 120+ Quake-console style (~) |
+| **Commands** | 125+ Quake-console style (~) |
 | **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
 | **Harmonic Patterns** | 7 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
-| **Data Sources** | MT5 (Darwinex), Alpaca, Kraken, tastytrade (auth, roadmap) |
-| **DARWIN Analytics** | 69/69 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots) |
+| **Data Sources** | MT5 (Darwinex), Alpaca, Kraken, tastytrade (auth only, roadmap) |
+| **DARWIN Analytics** | 74 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
 ---
@@ -40,6 +40,9 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Stock Screener** | Filter by price, volume, sector, change%, tradable/shortable flags |
 | **Command Palette** | ~ (tilde) Quake-console: DARWIN, BACKTEST, RISK_CALC, SCREENER, EXPORT_CSV |
 | **Watchlist** | Multi-symbol quote monitor with live prices and daily change |
+| **LAN Sync** | Export/import cache data between machines on local network |
+| **Storage Manager** | View, delete, and compact (zstd-22) cache data by symbol/source |
+| **Multi-Window** | Open additional terminal windows (NEW_WINDOW/POPOUT) for multi-monitor setups |
 | **Chart Templates** | Save/load indicator configs and order mode |
 | **Workspace Profiles** | Save/load entire layout (tabs, indicators, pane sizes) |
 | **Drawing Tools** | 44 types: trend, fib, ray, ruler, rectangle, channel, pitchfork, Elliott, Gann, regression, arrows, labels + GPU rendering |
@@ -102,7 +105,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Yield Curve** | Treasury rates with 2Y-10Y inversion detection (~ →YIELD) |
 | **GPU Chart Engine** | Native wgpu candlesticks, drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
 | **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
-| **120+ Commands** | Quake-console command palette with fuzzy search |
+| **125+ Commands** | Quake-console command palette with fuzzy search |
 
 ---
 
@@ -116,8 +119,9 @@ Ported from the [MQL5-NNFX-Risk_Management_System](https://github.com/TyphooN-/M
 |---|---|---|
 | **MultiKAMA** (10/2/30) | KAMA.mqh / MultiKAMA.mqh | Kaufman Adaptive MA from multiple timeframes, white, width 2 |
 | **200 SMA** | Standard | Yellow, width 1 |
-| **Previous Candle Levels** | PreviousCandleLevels.mqh | MTF previous bar high/low — white (H1/H4), magenta (D1/W1) |
-| **ATR Projection** (14) | ATR_Projection.mqh | MTF open ± ATR bands — solid yellow, width 2 |
+| **MTF SMA** | Standard | H1/H4/D1/W1 200SMA + W1/MN1 100SMA — Tomato (H1), Magenta (H4+) |
+| **Previous Candle Levels** | PreviousCandleLevels.mqh | MTF previous bar high/low — H1/H4/D1/W1/MN1 |
+| **ATR Projection MTF** (14) | ATR_Projection.mqh | MTF open ± ATR bands (M15/H1/H4/D1/W1/MN1) — solid yellow, width 2 |
 | **Supply/Demand Zones** | Custom | Filled rectangles at impulse move origins — green (demand), red (supply) |
 
 ### Separate Panes (enabled by default)
@@ -190,7 +194,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | Document | Purpose |
 |---|---|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Native GPU architecture, data flow, project structure |
-| [INDICATORS.md](docs/INDICATORS.md) | All 21 indicators with parameters and colors |
+| [INDICATORS.md](docs/INDICATORS.md) | All 32+ indicators with parameters and colors |
 | [KEYBOARD_SHORTCUTS.md](docs/KEYBOARD_SHORTCUTS.md) | Keybindings, commands, menu reference |
 | [PERFORMANCE.md](docs/PERFORMANCE.md) | Benchmarks, data pipeline timing, cache format |
 | [ROADMAP.md](docs/ROADMAP.md) | Current status and future plans |

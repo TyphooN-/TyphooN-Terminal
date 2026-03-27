@@ -34,6 +34,7 @@ hmac = "0.12"
 pbkdf2 = "0.12"
 # rand = "0.10"  # Not used in CLI (used in engine for nonce generation)
 base64 = "0.22"
+zeroize = { version = "1", features = ["derive"] }
 
 [profile.release]
 opt-level = "z"
