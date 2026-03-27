@@ -4763,6 +4763,34 @@ enum BrokerMsg {
     WatchlistQuotes(Vec<WatchlistRow>),
 }
 
+/// Reusable sort state for clickable column headers.
+#[derive(Clone, Default)]
+struct SortState {
+    column: usize,    // which column is sorted (0-indexed)
+    ascending: bool,  // true = ascending, false = descending
+}
+
+impl SortState {
+    fn toggle(&mut self, col: usize) {
+        if self.column == col {
+            self.ascending = !self.ascending;
+        } else {
+            self.column = col;
+            self.ascending = true;
+        }
+    }
+
+    /// Render a clickable header label. Returns true if clicked.
+    fn header(ui: &mut egui::Ui, label: &str, col: usize, state: &SortState) -> bool {
+        let arrow = if state.column == col {
+            if state.ascending { " \u{25B2}" } else { " \u{25BC}" }
+        } else { "" };
+        let text = format!("{}{}", label, arrow);
+        let color = if state.column == col { egui::Color32::WHITE } else { egui::Color32::from_rgb(120, 120, 140) };
+        ui.add(egui::Label::new(egui::RichText::new(text).color(color).small().strong()).sense(egui::Sense::click())).clicked()
+    }
+}
+
 pub struct TyphooNApp {
     /// Shared cache handle — opened once at startup.
     cache: Option<Arc<SqliteCache>>,
@@ -4987,6 +5015,12 @@ pub struct TyphooNApp {
     sec_filters: [bool; 7],
     /// SEC filings pagination (0-indexed page number).
     sec_page: usize,
+
+    /// Sort states for data tables.
+    ev_sort: SortState,
+    sec_sort: SortState,
+    darwin_browser_sort: SortState,
+    insider_sort: SortState,
 
     /// Price alerts.
     alerts: Vec<(f64, String)>,
@@ -6070,6 +6104,10 @@ impl TyphooNApp {
             backfill_symbol: String::new(),
             sec_filters: [true; 7],
             sec_page: 0,
+            ev_sort: SortState::default(),
+            sec_sort: SortState::default(),
+            darwin_browser_sort: SortState::default(),
+            insider_sort: SortState::default(),
             alerts: Vec::new(),
             alert_price_input: String::new(),
             indicator_alerts: Vec::new(),
@@ -9821,6 +9859,18 @@ impl TyphooNApp {
                             }
                         }
 
+                        // Sort filings
+                        match self.sec_sort.column {
+                            0 => deduped.sort_by(|a, b| a.filing_date.cmp(&b.filing_date)),
+                            1 => deduped.sort_by(|a, b| a.ticker.cmp(&b.ticker)),
+                            2 => deduped.sort_by(|a, b| a.form_type.cmp(&b.form_type)),
+                            3 => deduped.sort_by(|a, b| a.category.cmp(&b.category)),
+                            4 => deduped.sort_by(|a, b| a.company_name.cmp(&b.company_name)),
+                            5 => deduped.sort_by(|a, b| a.accession_number.cmp(&b.accession_number)),
+                            _ => {}
+                        }
+                        if !self.sec_sort.ascending { deduped.reverse(); }
+
                         // Detail panel at top (if a filing is selected)
                         if let Some(sel) = self.sec_selected_filing {
                             if let Some(f) = deduped.get(sel) {
@@ -9911,12 +9961,12 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new("No filings. Click Scrape Now to fetch from SEC EDGAR.").color(sec_low));
                             } else {
                                 egui::Grid::new("sec_filings_grid").striped(true).num_columns(6).min_col_width(45.0).show(ui, |ui| {
-                                    ui.label(egui::RichText::new("Date").color(sec_low).small());
-                                    ui.label(egui::RichText::new("Symbol").color(sec_low).small());
-                                    ui.label(egui::RichText::new("Type").color(sec_low).small());
-                                    ui.label(egui::RichText::new("Category").color(sec_low).small());
-                                    ui.label(egui::RichText::new("Company").color(sec_low).small());
-                                    ui.label(egui::RichText::new("Accession #").color(sec_low).small());
+                                    if SortState::header(ui, "Date", 0, &self.sec_sort) { self.sec_sort.toggle(0); }
+                                    if SortState::header(ui, "Symbol", 1, &self.sec_sort) { self.sec_sort.toggle(1); }
+                                    if SortState::header(ui, "Type", 2, &self.sec_sort) { self.sec_sort.toggle(2); }
+                                    if SortState::header(ui, "Category", 3, &self.sec_sort) { self.sec_sort.toggle(3); }
+                                    if SortState::header(ui, "Company", 4, &self.sec_sort) { self.sec_sort.toggle(4); }
+                                    if SortState::header(ui, "Accession #", 5, &self.sec_sort) { self.sec_sort.toggle(5); }
                                     ui.end_row();
                                     for (local_idx, f) in page_slice.iter().enumerate() {
                                         let global_idx = page_start + local_idx;
@@ -10031,10 +10081,26 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new(format!("No insider trades for {} (last 90 days)", ticker)).color(AXIS_TEXT));
                         } else {
                             egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                                let mut insider_sorted: Vec<&_> = trades.iter().collect();
+                                match self.insider_sort.column {
+                                    0 => insider_sorted.sort_by(|a, b| a.transaction_date.cmp(&b.transaction_date)),
+                                    1 => insider_sorted.sort_by(|a, b| a.insider_name.cmp(&b.insider_name)),
+                                    2 => insider_sorted.sort_by(|a, b| a.insider_title.cmp(&b.insider_title)),
+                                    3 => insider_sorted.sort_by(|a, b| a.transaction_type.cmp(&b.transaction_type)),
+                                    4 => insider_sorted.sort_by(|a, b| a.shares.partial_cmp(&b.shares).unwrap_or(std::cmp::Ordering::Equal)),
+                                    5 => insider_sorted.sort_by(|a, b| a.aggregate_value.partial_cmp(&b.aggregate_value).unwrap_or(std::cmp::Ordering::Equal)),
+                                    _ => {}
+                                }
+                                if !self.insider_sort.ascending { insider_sorted.reverse(); }
                                 egui::Grid::new("insider_grid").striped(true).num_columns(6).show(ui, |ui| {
-                                    ui.strong("Date"); ui.strong("Insider"); ui.strong("Title"); ui.strong("Type"); ui.strong("Shares"); ui.strong("Value");
+                                    if SortState::header(ui, "Date", 0, &self.insider_sort) { self.insider_sort.toggle(0); }
+                                    if SortState::header(ui, "Insider", 1, &self.insider_sort) { self.insider_sort.toggle(1); }
+                                    if SortState::header(ui, "Title", 2, &self.insider_sort) { self.insider_sort.toggle(2); }
+                                    if SortState::header(ui, "Type", 3, &self.insider_sort) { self.insider_sort.toggle(3); }
+                                    if SortState::header(ui, "Shares", 4, &self.insider_sort) { self.insider_sort.toggle(4); }
+                                    if SortState::header(ui, "Value", 5, &self.insider_sort) { self.insider_sort.toggle(5); }
                                     ui.end_row();
-                                    for t in trades {
+                                    for t in &insider_sorted {
                                         ui.label(egui::RichText::new(&t.transaction_date).small());
                                         ui.label(egui::RichText::new(&t.insider_name).small().strong());
                                         ui.label(egui::RichText::new(&t.insider_title).color(AXIS_TEXT).small());
@@ -10274,12 +10340,33 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new(format!("{} symbols", self.bg.all_fundamentals.len())).color(AXIS_TEXT).small());
                     });
                     ui.separator();
+                    let mut fund_sorted: Vec<&_> = self.bg.all_fundamentals.iter().collect();
+                    match self.ev_sort.column {
+                        0 => fund_sorted.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
+                        1 => fund_sorted.sort_by(|a, b| a.company_name.cmp(&b.company_name)),
+                        2 => fund_sorted.sort_by(|a, b| a.enterprise_value.unwrap_or(0.0).partial_cmp(&b.enterprise_value.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)),
+                        3 => fund_sorted.sort_by(|a, b| a.market_cap.unwrap_or(0.0).partial_cmp(&b.market_cap.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)),
+                        4 => fund_sorted.sort_by(|a, b| a.mcap_ev_ratio.unwrap_or(0.0).partial_cmp(&b.mcap_ev_ratio.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)),
+                        5 => fund_sorted.sort_by(|a, b| a.pe_ratio.unwrap_or(0.0).partial_cmp(&b.pe_ratio.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)),
+                        6 => fund_sorted.sort_by(|a, b| a.next_earnings_date.as_deref().unwrap_or("").cmp(b.next_earnings_date.as_deref().unwrap_or(""))),
+                        7 => fund_sorted.sort_by(|a, b| a.dividend_yield.unwrap_or(0.0).partial_cmp(&b.dividend_yield.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)),
+                        8 => fund_sorted.sort_by(|a, b| a.sector.cmp(&b.sector)),
+                        _ => {}
+                    }
+                    if !self.ev_sort.ascending { fund_sorted.reverse(); }
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         egui::Grid::new("ev_scanner_grid").striped(true).num_columns(9).show(ui, |ui| {
-                            ui.strong("Symbol"); ui.strong("Company"); ui.strong("EV"); ui.strong("MCap");
-                            ui.strong("MCap/EV%"); ui.strong("P/E"); ui.strong("Earnings"); ui.strong("Dividend"); ui.strong("Sector");
+                            if SortState::header(ui, "Symbol", 0, &self.ev_sort) { self.ev_sort.toggle(0); }
+                            if SortState::header(ui, "Company", 1, &self.ev_sort) { self.ev_sort.toggle(1); }
+                            if SortState::header(ui, "EV", 2, &self.ev_sort) { self.ev_sort.toggle(2); }
+                            if SortState::header(ui, "MCap", 3, &self.ev_sort) { self.ev_sort.toggle(3); }
+                            if SortState::header(ui, "MCap/EV%", 4, &self.ev_sort) { self.ev_sort.toggle(4); }
+                            if SortState::header(ui, "P/E", 5, &self.ev_sort) { self.ev_sort.toggle(5); }
+                            if SortState::header(ui, "Earnings", 6, &self.ev_sort) { self.ev_sort.toggle(6); }
+                            if SortState::header(ui, "Dividend", 7, &self.ev_sort) { self.ev_sort.toggle(7); }
+                            if SortState::header(ui, "Sector", 8, &self.ev_sort) { self.ev_sort.toggle(8); }
                             ui.end_row();
-                            for f in &self.bg.all_fundamentals {
+                            for f in &fund_sorted {
                                 ui.label(egui::RichText::new(&f.symbol).small().strong().monospace());
                                 ui.label(egui::RichText::new(if f.company_name.is_empty() { "—" } else { &f.company_name }).small());
                                 ui.label(egui::RichText::new(f.enterprise_value.map(|v| fundamentals::format_large_number(v)).unwrap_or_else(|| "—".into())).small());
@@ -11842,18 +11929,36 @@ impl TyphooNApp {
                         // Left panel: scan results table
                         ui.vertical(|ui| {
                             ui.set_width(avail_width * 0.55);
-                            ui.heading("Universe (sorted by Sharpe)");
+                            ui.heading("Universe");
                             if self.ftp_scan_results.is_empty() {
                                 ui.label(egui::RichText::new("Click 'Scan Universe' to load DARWINs from FTP.").color(AXIS_TEXT));
                                 if self.darwin_ftp_dir.is_empty() {
                                     ui.label(egui::RichText::new("Set FTP Dir in Settings first.").color(DOWN));
                                 }
                             } else {
+                                let mut darwin_sorted: Vec<&_> = self.ftp_scan_results.iter().collect();
+                                match self.darwin_browser_sort.column {
+                                    0 => darwin_sorted.sort_by(|a, b| a.ticker.cmp(&b.ticker)),
+                                    1 => darwin_sorted.sort_by(|a, b| a.trading_days.cmp(&b.trading_days)),
+                                    2 => darwin_sorted.sort_by(|a, b| a.total_return_pct.partial_cmp(&b.total_return_pct).unwrap_or(std::cmp::Ordering::Equal)),
+                                    3 => darwin_sorted.sort_by(|a, b| a.max_drawdown_pct.partial_cmp(&b.max_drawdown_pct).unwrap_or(std::cmp::Ordering::Equal)),
+                                    4 => darwin_sorted.sort_by(|a, b| a.sharpe.partial_cmp(&b.sharpe).unwrap_or(std::cmp::Ordering::Equal)),
+                                    5 => darwin_sorted.sort_by(|a, b| a.sortino.partial_cmp(&b.sortino).unwrap_or(std::cmp::Ordering::Equal)),
+                                    6 => darwin_sorted.sort_by(|a, b| a.last_quote.partial_cmp(&b.last_quote).unwrap_or(std::cmp::Ordering::Equal)),
+                                    _ => {}
+                                }
+                                if !self.darwin_browser_sort.ascending { darwin_sorted.reverse(); }
                                 egui::ScrollArea::vertical().max_height(500.0).show(ui, |ui| {
                                     egui::Grid::new("ftp_universe").striped(true).num_columns(7).show(ui, |ui| {
-                                        ui.strong("DARWIN"); ui.strong("Days"); ui.strong("Return%"); ui.strong("MaxDD%"); ui.strong("Sharpe"); ui.strong("Sortino"); ui.strong("Price");
+                                        if SortState::header(ui, "DARWIN", 0, &self.darwin_browser_sort) { self.darwin_browser_sort.toggle(0); }
+                                        if SortState::header(ui, "Days", 1, &self.darwin_browser_sort) { self.darwin_browser_sort.toggle(1); }
+                                        if SortState::header(ui, "Return%", 2, &self.darwin_browser_sort) { self.darwin_browser_sort.toggle(2); }
+                                        if SortState::header(ui, "MaxDD%", 3, &self.darwin_browser_sort) { self.darwin_browser_sort.toggle(3); }
+                                        if SortState::header(ui, "Sharpe", 4, &self.darwin_browser_sort) { self.darwin_browser_sort.toggle(4); }
+                                        if SortState::header(ui, "Sortino", 5, &self.darwin_browser_sort) { self.darwin_browser_sort.toggle(5); }
+                                        if SortState::header(ui, "Price", 6, &self.darwin_browser_sort) { self.darwin_browser_sort.toggle(6); }
                                         ui.end_row();
-                                        for s in self.ftp_scan_results.iter().take(500) {
+                                        for s in darwin_sorted.iter().take(500) {
                                             let ret_c = if s.total_return_pct >= 0.0 { UP } else { DOWN };
                                             // Clickable ticker
                                             if ui.add(egui::Label::new(egui::RichText::new(&s.ticker).strong().color(ACCENT)).sense(egui::Sense::click())).clicked() {
