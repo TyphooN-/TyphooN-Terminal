@@ -5046,6 +5046,8 @@ pub struct TyphooNApp {
     sec_sort: SortState,
     darwin_browser_sort: SortState,
     insider_sort: SortState,
+    outlier_sort: SortState,
+    watchlist_sort: SortState,
 
     /// Price alerts.
     alerts: Vec<(f64, String)>,
@@ -6170,6 +6172,8 @@ impl TyphooNApp {
             sec_filters: [true; 7],
             sec_page: 0,
             ev_sort: SortState::default(),
+            outlier_sort: SortState { column: 2, ascending: false }, // default: sort by Score desc
+            watchlist_sort: SortState::default(),
             sec_sort: SortState::default(),
             darwin_browser_sort: SortState::default(),
             insider_sort: SortState::default(),
@@ -12274,18 +12278,34 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Score = sum of |z-scores| across flagged dimensions. Higher = more anomalous.").color(ol_dim).small());
                             ui.label(egui::RichText::new("Dims: P/E (risk) + MCap/EV (valuation) + Short Ratio (volatility) + SEC filings+insider trades (activity)").color(ol_dim).small());
                             ui.add_space(4.0);
+                            // Sort outliers
+                            let mut sorted_outliers: Vec<&_> = self.darwinex_multi_outliers.iter().collect();
+                            match self.outlier_sort.column {
+                                0 => sorted_outliers.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
+                                1 => sorted_outliers.sort_by(|a, b| a.sector.cmp(&b.sector)),
+                                2 => sorted_outliers.sort_by(|a, b| a.composite_score.partial_cmp(&b.composite_score).unwrap_or(std::cmp::Ordering::Equal)),
+                                3 => sorted_outliers.sort_by(|a, b| a.dimensions_flagged.cmp(&b.dimensions_flagged)),
+                                4 => sorted_outliers.sort_by(|a, b| a.tier.cmp(&b.tier)),
+                                5 => sorted_outliers.sort_by(|a, b| a.var_z.abs().partial_cmp(&b.var_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
+                                6 => sorted_outliers.sort_by(|a, b| a.ev_z.abs().partial_cmp(&b.ev_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
+                                7 => sorted_outliers.sort_by(|a, b| a.atr_z.abs().partial_cmp(&b.atr_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
+                                8 => sorted_outliers.sort_by(|a, b| a.sec_z.abs().partial_cmp(&b.sec_z.abs()).unwrap_or(std::cmp::Ordering::Equal)),
+                                _ => {}
+                            }
+                            if !self.outlier_sort.ascending { sorted_outliers.reverse(); }
+
                             egui::Grid::new("multi_outlier_grid").striped(true).num_columns(9).min_col_width(50.0).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Symbol").color(ol_dim).small().strong());
-                                ui.label(egui::RichText::new("Sector").color(ol_dim).small().strong());
-                                ui.label(egui::RichText::new("Score").color(ol_dim).small().strong());
-                                ui.label(egui::RichText::new("Dims").color(ol_dim).small().strong());
-                                ui.label(egui::RichText::new("Tier").color(ol_dim).small().strong());
-                                ui.label(egui::RichText::new("P/E z").color(ol_dim).small().strong());
-                                ui.label(egui::RichText::new("EV z").color(ol_dim).small().strong());
-                                ui.label(egui::RichText::new("Short z").color(ol_dim).small().strong());
-                                ui.label(egui::RichText::new("SEC z").color(ol_dim).small().strong());
+                                if SortState::header(ui, "Symbol", 0, &self.outlier_sort) { self.outlier_sort.toggle(0); }
+                                if SortState::header(ui, "Sector", 1, &self.outlier_sort) { self.outlier_sort.toggle(1); }
+                                if SortState::header(ui, "Score", 2, &self.outlier_sort) { self.outlier_sort.toggle(2); }
+                                if SortState::header(ui, "Dims", 3, &self.outlier_sort) { self.outlier_sort.toggle(3); }
+                                if SortState::header(ui, "Tier", 4, &self.outlier_sort) { self.outlier_sort.toggle(4); }
+                                if SortState::header(ui, "P/E z", 5, &self.outlier_sort) { self.outlier_sort.toggle(5); }
+                                if SortState::header(ui, "EV z", 6, &self.outlier_sort) { self.outlier_sort.toggle(6); }
+                                if SortState::header(ui, "Short z", 7, &self.outlier_sort) { self.outlier_sort.toggle(7); }
+                                if SortState::header(ui, "SEC z", 8, &self.outlier_sort) { self.outlier_sort.toggle(8); }
                                 ui.end_row();
-                                for o in self.darwinex_multi_outliers.iter().take(100) {
+                                for o in sorted_outliers.iter().take(200) {
                                     let tier_c = match o.tier.as_str() {
                                         "EXTREME" => ol_high, "HIGH" => ol_med, _ => ol_green
                                     };
@@ -14747,15 +14767,27 @@ impl eframe::App for TyphooNApp {
 
                             // ── Header row ────────────────────────────────
                             egui::Grid::new("wl_header").num_columns(7).spacing(egui::vec2(4.0, 0.0)).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Symbol").color(AXIS_TEXT).small());
-                                ui.label(egui::RichText::new("Last").color(AXIS_TEXT).small());
-                                ui.label(egui::RichText::new("Chg").color(AXIS_TEXT).small());
-                                ui.label(egui::RichText::new("Chg%").color(AXIS_TEXT).small());
-                                ui.label(egui::RichText::new("Vol").color(AXIS_TEXT).small());
-                                ui.label(egui::RichText::new("Ext").color(AXIS_TEXT).small());
-                                ui.label(egui::RichText::new("").small()); // remove column
+                                if SortState::header(ui, "Symbol", 0, &self.watchlist_sort) { self.watchlist_sort.toggle(0); }
+                                if SortState::header(ui, "Last", 1, &self.watchlist_sort) { self.watchlist_sort.toggle(1); }
+                                if SortState::header(ui, "Chg", 2, &self.watchlist_sort) { self.watchlist_sort.toggle(2); }
+                                if SortState::header(ui, "Chg%", 3, &self.watchlist_sort) { self.watchlist_sort.toggle(3); }
+                                if SortState::header(ui, "Vol", 4, &self.watchlist_sort) { self.watchlist_sort.toggle(4); }
+                                if SortState::header(ui, "Ext", 5, &self.watchlist_sort) { self.watchlist_sort.toggle(5); }
+                                ui.label(egui::RichText::new("").small());
                                 ui.end_row();
                             });
+                            // Sort watchlist rows
+                            let mut sorted_wl: Vec<&WatchlistRow> = self.watchlist_rows.iter().collect();
+                            match self.watchlist_sort.column {
+                                0 => sorted_wl.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
+                                1 => sorted_wl.sort_by(|a, b| a.last.partial_cmp(&b.last).unwrap_or(std::cmp::Ordering::Equal)),
+                                2 => sorted_wl.sort_by(|a, b| a.change.partial_cmp(&b.change).unwrap_or(std::cmp::Ordering::Equal)),
+                                3 => sorted_wl.sort_by(|a, b| a.change_pct.partial_cmp(&b.change_pct).unwrap_or(std::cmp::Ordering::Equal)),
+                                4 => sorted_wl.sort_by(|a, b| a.volume.partial_cmp(&b.volume).unwrap_or(std::cmp::Ordering::Equal)),
+                                5 => sorted_wl.sort_by(|a, b| a.ext_change_pct.partial_cmp(&b.ext_change_pct).unwrap_or(std::cmp::Ordering::Equal)),
+                                _ => {}
+                            }
+                            if !self.watchlist_sort.ascending { sorted_wl.reverse(); }
                             // Thin separator under header
                             let sep_rect = ui.available_rect_before_wrap();
                             ui.painter().line_segment(
@@ -14775,7 +14807,7 @@ impl eframe::App for TyphooNApp {
                             } else {
                                 let mut load_key: Option<String> = None;
                                 let mut remove_sym: Option<String> = None;
-                                for (idx, wl) in self.watchlist_rows.iter().enumerate() {
+                                for (idx, wl) in sorted_wl.iter().enumerate() {
                                         let sym_color = WL_COLORS[idx % WL_COLORS.len()];
                                         let chg_color = if wl.change >= 0.0 { UP } else { DOWN };
                                         let is_selected = self.charts.get(self.active_tab)
