@@ -484,10 +484,9 @@ pub fn detect_multi_outliers(
                 else if dims >= 2 { "HIGH" }
                 else { "ELEVATED" };
 
-            let sector_str = symbols.iter().find(|(s, _)| s == sym).map(|(_, sec)| sec.clone()).unwrap_or_default();
             results.push(MultiOutlierResult {
                 symbol: sym.clone(),
-                sector: sector_str,
+                sector: sector.clone(),
                 var_z: vz,
                 ev_z: ez,
                 atr_z: az,

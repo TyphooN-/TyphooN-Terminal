@@ -6,7 +6,7 @@ description = "TyphooN Terminal CLI — TUI interface for trading, research, and
 license = "LicenseRef-BSL-1.1"
 
 [[bin]]
-name = "typhoon"
+name = "typhoon-cli"
 path = "src/main.rs"
 
 [dependencies]
@@ -35,8 +35,3 @@ pbkdf2 = "0.12"
 # rand = "0.10"  # Not used in CLI (used in engine for nonce generation)
 base64 = "0.22"
 zeroize = { version = "1", features = ["derive"] }
-
-[profile.release]
-opt-level = "z"
-lto = true
-strip = true
