@@ -13300,6 +13300,11 @@ fn dirs_home() -> PathBuf {
 // ─── eframe::App ─────────────────────────────────────────────────────────────
 
 impl eframe::App for TyphooNApp {
+    fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // All UI rendering is done in update() via ctx panels/windows
+        // This is required by eframe 0.34 but we use the Context-based API
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
         ctx.set_visuals(Self::dark_visuals());
@@ -13393,7 +13398,7 @@ impl eframe::App for TyphooNApp {
 
         // ── Global font/spacing to match old WebKit (Consolas 11px) ──────
         if self.frame_count == 1 {
-            let mut style = (*ctx.style()).clone();
+            let mut style = (*ctx.global_style()).clone();
             // ── AESTHETIC: MarketWizardry.org + Godel Terminal + old WebKit ──
             // Monospace everything, compact, square, green accents
             style.text_styles.insert(egui::TextStyle::Small, egui::FontId::new(10.0, egui::FontFamily::Monospace));
@@ -13419,7 +13424,7 @@ impl eframe::App for TyphooNApp {
             style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(0.5, egui::Color32::from_rgb(35, 40, 55));
             style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(50, 65, 90));
             style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(0.0, egui::Color32::TRANSPARENT);
-            ctx.set_style(style);
+            ctx.set_global_style(style);
         }
 
         // ── drain background DARWIN data ─────────────────────────────────
@@ -13608,7 +13613,7 @@ impl eframe::App for TyphooNApp {
 
         // ── crosshair from pointer ───────────────────────────────────────────
         // Suppress crosshair when pointer is over a floating window (dragging, resizing, scrolling)
-        let pointer_over_ui = ctx.wants_pointer_input() || ctx.is_using_pointer() || ctx.dragged_id().is_some();
+        let pointer_over_ui = ctx.egui_wants_pointer_input() || ctx.egui_is_using_pointer() || ctx.dragged_id().is_some();
         let pointer_over_floating = if !pointer_over_ui {
             let hp = ctx.input(|i| i.pointer.hover_pos().unwrap_or_default());
             ctx.layer_id_at(hp)
@@ -13699,7 +13704,7 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── top menu bar ─────────────────────────────────────────────────────
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+        egui::Panel::top("menu_bar").show(ctx, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Connect to Broker…").clicked() {
@@ -13981,7 +13986,7 @@ impl eframe::App for TyphooNApp {
         });
 
         // ── symbol + timeframe toolbar ───────────────────────────────────────
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+        egui::Panel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Symbol:").color(AXIS_TEXT).small());
                 let resp = ui.add(
@@ -14193,8 +14198,8 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── tab bar ───────────────────────────────────────────────────────────
-        egui::TopBottomPanel::top("tab_bar")
-            .exact_height(26.0) // WebKit: height: 26px
+        egui::Panel::top("tab_bar")
+            .exact_size(26.0) // WebKit: height: 26px
             .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -14362,10 +14367,10 @@ impl eframe::App for TyphooNApp {
         });
 
         // ── bottom panel (log / volume) ──────────────────────────────────────
-        egui::TopBottomPanel::bottom("bottom_panel")
+        egui::Panel::bottom("bottom_panel")
             .resizable(true)
-            .min_height(80.0)
-            .default_height(120.0)
+            .min_size(80.0)
+            .default_size(120.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.bottom_tab, BottomTab::Log, "Log");
@@ -14391,8 +14396,8 @@ impl eframe::App for TyphooNApp {
             });
 
         // ── bottom status bar ────────────────────────────────────────────────
-        egui::TopBottomPanel::bottom("status_bar")
-            .exact_height(20.0)
+        egui::Panel::bottom("status_bar")
+            .exact_size(20.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let n_bars = self.charts.first().map(|c| c.bars.len()).unwrap_or(0);
@@ -14443,8 +14448,8 @@ impl eframe::App for TyphooNApp {
             });
 
         // ── right panel (collapsible sections — all visible, individually expandable) ──
-        egui::SidePanel::right("right_panel")
-            .min_width(220.0).max_width(350.0).default_width(280.0)
+        egui::Panel::right("right_panel")
+            .min_size(220.0).max_size(350.0).default_size(280.0)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
 
@@ -15017,7 +15022,7 @@ impl eframe::App for TyphooNApp {
 
             let hover_pos = ctx.input(|i| i.pointer.hover_pos().unwrap_or_default());
             // Don't interact with chart when pointer is over a floating window or egui wants pointer
-            let egui_hover = ctx.wants_pointer_input() || ctx.is_using_pointer() || ctx.dragged_id().is_some();
+            let egui_hover = ctx.egui_wants_pointer_input() || ctx.egui_is_using_pointer() || ctx.dragged_id().is_some();
             let layer_at_hover = ctx.layer_id_at(hover_pos);
             let hover_over_window = egui_hover || layer_at_hover
                 .map(|id| id.order == egui::Order::Middle || id.order == egui::Order::Foreground)
@@ -15074,7 +15079,7 @@ impl eframe::App for TyphooNApp {
             let pointer    = ctx.input(|i| i.pointer.clone());
             let drag_delta = ctx.input(|i| i.pointer.delta());
             // Block chart interaction when ANY egui widget/window is using the pointer
-            let egui_wants_pointer = ctx.wants_pointer_input() || ctx.is_using_pointer();
+            let egui_wants_pointer = ctx.egui_wants_pointer_input() || ctx.egui_is_using_pointer();
             let anything_dragged = ctx.dragged_id().is_some();
             let layer_id_at_pointer = ctx.layer_id_at(pointer.hover_pos().unwrap_or_default());
             let pointer_over_window = egui_wants_pointer || anything_dragged || layer_id_at_pointer
@@ -15482,7 +15487,7 @@ impl eframe::App for TyphooNApp {
                 .title_bar(false)
                 .anchor(egui::Align2::LEFT_TOP, [0.0, 0.0])
                 .fixed_size([screen_width, console_height])
-                .frame(egui::Frame::window(&ctx.style())
+                .frame(egui::Frame::window(&ctx.global_style())
                     .fill(egui::Color32::from_rgba_premultiplied(8, 8, 24, 247))
                     .inner_margin(8.0)
                     .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(76, 175, 80))))

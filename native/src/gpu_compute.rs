@@ -183,8 +183,8 @@ impl GpuCompute {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("indicator_pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         // SMA compute shader
@@ -1039,10 +1039,10 @@ impl GpuDarwinAnalytics {
         });
 
         let stats_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("darwin_stats_layout"), bind_group_layouts: &[&stats_bgl], push_constant_ranges: &[],
+            label: Some("darwin_stats_layout"), bind_group_layouts: &[Some(&stats_bgl)], immediate_size: 0,
         });
         let corr_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("darwin_corr_layout"), bind_group_layouts: &[&corr_bgl], push_constant_ranges: &[],
+            label: Some("darwin_corr_layout"), bind_group_layouts: &[Some(&corr_bgl)], immediate_size: 0,
         });
 
         let stats_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -2959,7 +2959,7 @@ impl GpuBacktester {
         });
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("backtest_layout"), bind_group_layouts: &[&eval_bgl], push_constant_ranges: &[],
+            label: Some("backtest_layout"), bind_group_layouts: &[Some(&eval_bgl)], immediate_size: 0,
         });
 
         let eval_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

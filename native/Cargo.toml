@@ -12,11 +12,11 @@ path = "src/main.rs"
 # Engine (shared core library)
 typhoon-engine = { path = "../engine" }
 
-# Native GPU UI — latest stable egui ecosystem
-eframe = { version = "0.33", default-features = true, features = ["wgpu"] }
-egui = "0.33"
-egui_plot = "0.34"
-wgpu = "27"  # Pinned to match eframe 0.33's internal wgpu — will bump to 29 when eframe 0.34 releases
+# Native GPU UI — latest stable egui ecosystem (2026-03-27)
+eframe = { version = "0.34", default-features = true, features = ["wgpu"] }
+egui = "0.34"
+egui_plot = "0.35"
+wgpu = "29"  # Aligned with eframe 0.34
 
 # Async runtime (shared with engine)
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
