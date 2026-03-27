@@ -5977,7 +5977,7 @@ impl TyphooNApp {
             broker_paper: true,
             tt_username: String::new(),
             tt_password: String::new(),
-            tt_sandbox: true,
+            tt_sandbox: false,  // Default to Production (sandbox requires separate dev credentials)
             finnhub_key: String::new(),
             fred_key: String::new(),
             news_articles: Vec::new(),
@@ -6870,6 +6870,7 @@ impl TyphooNApp {
             "broker_secret": self.broker_secret,
             "broker_paper": self.broker_paper,
             "tt_username": self.tt_username,
+            "tt_sandbox": self.tt_sandbox,
             "sl_enabled": self.sl_enabled,
             "tp_enabled": self.tp_enabled,
             "windows": {
@@ -7029,6 +7030,7 @@ impl TyphooNApp {
                 if let Some(ak) = v["broker_api_key"].as_str() { self.broker_api_key = ak.to_string(); }
                 if let Some(bs) = v["broker_secret"].as_str() { self.broker_secret = bs.to_string(); }
                 if let Some(tu) = v["tt_username"].as_str() { self.tt_username = tu.to_string(); }
+                if let Some(ts) = v["tt_sandbox"].as_bool() { self.tt_sandbox = ts; }
                 if let Some(bp) = v["broker_paper"].as_bool() { self.broker_paper = bp; }
                 // Restore user watchlist
                 if let Some(wl) = v["user_watchlist"].as_array() {
