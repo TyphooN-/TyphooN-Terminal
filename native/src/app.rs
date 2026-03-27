@@ -12925,12 +12925,21 @@ impl eframe::App for TyphooNApp {
                     ui.label(egui::RichText::new("~").color(AXIS_TEXT).small());
                     ui.separator();
                     if self.broker_connected {
-                        ui.label(egui::RichText::new("\u{25CF} LIVE").color(UP).small());
+                        // Show connected data sources
+                        let mut sources = vec!["Alpaca"];
+                        if !self.mt5_db_paths.iter().all(|p| p.is_empty()) { sources.push("MT5"); }
+                        if !self.finnhub_key.is_empty() { sources.push("Finnhub"); }
+                        if !self.fred_key.is_empty() { sources.push("FRED"); }
+                        let src_text = sources.join(" + ");
+                        ui.label(egui::RichText::new(format!("\u{25CF} LIVE [{}]", src_text)).color(UP).small());
                         if let Some(ref acct) = self.live_account {
                             ui.label(egui::RichText::new(format!("${:.0}", acct.equity)).color(egui::Color32::WHITE).small());
                         }
                     } else {
-                        ui.label(egui::RichText::new("\u{25CB} OFFLINE").color(AXIS_TEXT).small());
+                        let mut offline_sources = Vec::new();
+                        if !self.mt5_db_paths.iter().all(|p| p.is_empty()) { offline_sources.push("MT5 cache"); }
+                        let src = if offline_sources.is_empty() { "no sources".to_string() } else { offline_sources.join(" + ") };
+                        ui.label(egui::RichText::new(format!("\u{25CB} OFFLINE [{}]", src)).color(AXIS_TEXT).small());
                     }
                 });
             });
@@ -14354,6 +14363,15 @@ impl eframe::App for TyphooNApp {
         // Poll watchlist quotes every ~15 seconds (60 frames at 250ms repaint)
         if self.frame_count % 60 == 5 && !self.user_watchlist.is_empty() && self.broker_connected {
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
+        }
+
+        // Auto MT5 sync every ~5 minutes (1200 frames at 250ms) — picks up BarCacheWriter updates
+        if self.frame_count % 1200 == 100 && self.frame_count > 0 {
+            let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
+            if !paths.is_empty() {
+                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths, target: db_path });
+            }
         }
 
         // Repaint strategy:
