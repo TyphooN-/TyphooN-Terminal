@@ -6072,6 +6072,204 @@ pub fn compute_signal_decay(conn: &Connection, ticker: &str, window: usize) -> R
     })
 }
 
+// ── Replication Quality ─────────────────────────────────────────────
+
+/// Replication quality: how well does the DARWIN quote track the signal?
+/// Lower tracking error = better replication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplicationQuality {
+    pub darwin_ticker: String,
+    pub tracking_error: f64,      // annualized std dev of (signal_ret - quote_ret)
+    pub information_ratio: f64,   // (signal_ret - quote_ret) / tracking_error
+    pub r_squared: f64,           // R² of signal vs quote returns
+    pub avg_lag_days: f64,        // average number of days quote lags signal
+    pub quality_grade: String,    // "A" (excellent) to "F" (poor)
+}
+
+pub fn compute_replication_quality(
+    daily_returns: &[DailyReturn],
+    ftp_equity_curve: &[(f64, f64)],  // (day_index, quote_price)
+) -> Option<ReplicationQuality> {
+    if daily_returns.len() < 30 || ftp_equity_curve.len() < 30 { return None; }
+    let initial = daily_returns.first()?.balance;
+    if initial <= 0.0 { return None; }
+    let quote_start = ftp_equity_curve.first()?.1;
+    if quote_start <= 0.0 { return None; }
+
+    let n = daily_returns.len().min(ftp_equity_curve.len());
+    let mut signal_rets = Vec::new();
+    let mut quote_rets = Vec::new();
+
+    for i in 1..n {
+        let sr = daily_returns[i].return_pct;
+        let qr = if ftp_equity_curve[i].1 > 0.0 && ftp_equity_curve[i-1].1 > 0.0 {
+            (ftp_equity_curve[i].1 / ftp_equity_curve[i-1].1 - 1.0) * 100.0
+        } else { 0.0 };
+        signal_rets.push(sr);
+        quote_rets.push(qr);
+    }
+
+    if signal_rets.is_empty() { return None; }
+    let nn = signal_rets.len() as f64;
+
+    // Tracking error: annualized std dev of difference
+    let diffs: Vec<f64> = signal_rets.iter().zip(&quote_rets).map(|(s, q)| s - q).collect();
+    let diff_mean = diffs.iter().sum::<f64>() / nn;
+    let diff_var = diffs.iter().map(|d| (d - diff_mean).powi(2)).sum::<f64>() / (nn - 1.0);
+    let tracking_error = diff_var.sqrt() * (252.0_f64).sqrt();
+
+    // Information ratio
+    let info_ratio = if tracking_error > 0.0 { diff_mean * 252.0 / tracking_error } else { 0.0 };
+
+    // R-squared
+    let mean_s = signal_rets.iter().sum::<f64>() / nn;
+    let mean_q = quote_rets.iter().sum::<f64>() / nn;
+    let mut cov = 0.0;
+    let mut var_s = 0.0;
+    let mut var_q = 0.0;
+    for i in 0..signal_rets.len() {
+        cov += (signal_rets[i] - mean_s) * (quote_rets[i] - mean_q);
+        var_s += (signal_rets[i] - mean_s).powi(2);
+        var_q += (quote_rets[i] - mean_q).powi(2);
+    }
+    let r = if var_s > 0.0 && var_q > 0.0 { cov / (var_s * var_q).sqrt() } else { 0.0 };
+    let r_squared = r * r;
+
+    // Quality grade
+    let grade = if r_squared > 0.95 && tracking_error < 5.0 { "A" }
+        else if r_squared > 0.90 && tracking_error < 10.0 { "B" }
+        else if r_squared > 0.80 { "C" }
+        else if r_squared > 0.60 { "D" }
+        else { "F" };
+
+    Some(ReplicationQuality {
+        darwin_ticker: String::new(),
+        tracking_error,
+        information_ratio: info_ratio,
+        r_squared,
+        avg_lag_days: 0.0, // would need cross-correlation to compute properly
+        quality_grade: grade.to_string(),
+    })
+}
+
+// ── Risk Budget Consumption ─────────────────────────────────────────
+
+/// Risk budget: how much of the VaR corridor is each DARWIN consuming?
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskBudget {
+    pub darwin_ticker: String,
+    pub standalone_var: f64,        // this DARWIN's individual VaR
+    pub marginal_var: f64,          // additional VaR this DARWIN adds to portfolio
+    pub component_var: f64,         // proportion of portfolio VaR due to this DARWIN
+    pub risk_contribution_pct: f64, // component_var / portfolio_var * 100
+    pub diversification_benefit: f64, // standalone - marginal (positive = diversifies)
+}
+
+pub fn compute_risk_budget(conn: &Connection) -> Result<Vec<RiskBudget>, String> {
+    let accounts = list_darwin_accounts(conn)?;
+    if accounts.len() < 2 { return Ok(Vec::new()); }
+
+    // Get daily returns per DARWIN
+    let mut all_returns: Vec<(String, Vec<f64>)> = Vec::new();
+    for acct in &accounts {
+        if let Ok(daily) = get_daily_returns(conn, &acct.darwin_ticker) {
+            let rets: Vec<f64> = daily.iter().map(|d| d.return_pct).collect();
+            if rets.len() >= 30 {
+                all_returns.push((acct.darwin_ticker.clone(), rets));
+            }
+        }
+    }
+    if all_returns.len() < 2 { return Ok(Vec::new()); }
+
+    // Portfolio daily returns (sum of all)
+    let max_len = all_returns.iter().map(|(_, r)| r.len()).min().unwrap_or(0);
+    let portfolio_rets: Vec<f64> = (0..max_len).map(|i| {
+        all_returns.iter().map(|(_, r)| r.get(i).copied().unwrap_or(0.0)).sum()
+    }).collect();
+
+    let portfolio_var = var_95(&portfolio_rets);
+
+    let mut result = Vec::new();
+    for (ticker, rets) in &all_returns {
+        let standalone = var_95(rets);
+
+        // Marginal VaR: portfolio VaR without this DARWIN
+        let without: Vec<f64> = (0..max_len).map(|i| {
+            all_returns.iter()
+                .filter(|(t, _)| t != ticker)
+                .map(|(_, r)| r.get(i).copied().unwrap_or(0.0))
+                .sum()
+        }).collect();
+        let var_without = var_95(&without);
+        let marginal = portfolio_var - var_without;
+
+        let risk_contrib = if portfolio_var.abs() > 0.0 { marginal / portfolio_var * 100.0 } else { 0.0 };
+
+        result.push(RiskBudget {
+            darwin_ticker: ticker.clone(),
+            standalone_var: standalone,
+            marginal_var: marginal,
+            component_var: marginal,
+            risk_contribution_pct: risk_contrib,
+            diversification_benefit: standalone - marginal,
+        });
+    }
+
+    result.sort_by(|a, b| b.risk_contribution_pct.partial_cmp(&a.risk_contribution_pct).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(result)
+}
+
+/// Helper: compute VaR 95% from returns
+fn var_95(returns: &[f64]) -> f64 {
+    if returns.len() < 10 { return 0.0; }
+    let mut sorted = returns.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let idx = (sorted.len() as f64 * 0.05) as usize;
+    sorted.get(idx).copied().unwrap_or(0.0).abs()
+}
+
+// ── Performance Attribution by Symbol ───────────────────────────────
+
+/// Performance attribution: which symbols drive returns for each DARWIN?
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolAttribution {
+    pub symbol: String,
+    pub total_pnl: f64,
+    pub trade_count: i64,
+    pub win_rate: f64,
+    pub avg_pnl: f64,
+    pub contribution_pct: f64,  // % of total DARWIN P&L from this symbol
+}
+
+pub fn compute_performance_attribution(conn: &Connection, darwin_ticker: &str) -> Result<Vec<SymbolAttribution>, String> {
+    let positions = get_darwin_positions(conn, darwin_ticker, None, None)?;
+    if positions.is_empty() { return Ok(Vec::new()); }
+
+    let total_pnl: f64 = positions.iter().map(|p| p.profit).sum();
+
+    let mut by_symbol: std::collections::HashMap<String, (f64, i64, i64)> = std::collections::HashMap::new(); // (pnl, wins, total)
+    for pos in &positions {
+        let entry = by_symbol.entry(pos.symbol.clone()).or_insert((0.0, 0, 0));
+        entry.0 += pos.profit;
+        if pos.profit > 0.0 { entry.1 += 1; }
+        entry.2 += 1;
+    }
+
+    let mut result: Vec<SymbolAttribution> = by_symbol.into_iter().map(|(sym, (pnl, wins, total))| {
+        SymbolAttribution {
+            symbol: sym,
+            total_pnl: pnl,
+            trade_count: total,
+            win_rate: if total > 0 { wins as f64 / total as f64 * 100.0 } else { 0.0 },
+            avg_pnl: if total > 0 { pnl / total as f64 } else { 0.0 },
+            contribution_pct: if total_pnl.abs() > 0.0 { pnl / total_pnl * 100.0 } else { 0.0 },
+        }
+    }).collect();
+
+    result.sort_by(|a, b| b.total_pnl.partial_cmp(&a.total_pnl).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(result)
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
