@@ -13393,34 +13393,16 @@ impl eframe::App for TyphooNApp {
                 });
             });
 
-        // ── right panel (WebKit parity — trading buttons, positions, watchlist) ──
+        // ── right panel (collapsible sections — all visible, individually expandable) ──
         egui::SidePanel::right("right_panel")
-            .default_width(240.0)  // WebKit: width: 240px
-            .min_width(140.0)      // WebKit: min-width: 140px
+            .min_width(220.0).max_width(350.0).default_width(280.0)
             .show(ctx, |ui| {
-                // ── tab bar (compact tabs across top) ──────────────────
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    for &tab in &[RightTab::Trading, RightTab::Positions, RightTab::Orders, RightTab::Watchlist, RightTab::Risk] {
-                        let label = match tab {
-                            RightTab::Trading => "Trade",
-                            RightTab::Positions => "Pos",
-                            RightTab::Orders => "Ord",
-                            RightTab::Watchlist => "WL",
-                            RightTab::Risk => "Risk",
-                        };
-                        let selected = self.right_tab == tab;
-                        let color = if selected { ACCENT } else { AXIS_TEXT };
-                        if ui.add(egui::Button::new(egui::RichText::new(label).color(color).small()).fill(if selected { egui::Color32::from_rgb(20, 40, 60) } else { egui::Color32::TRANSPARENT }).min_size(egui::vec2(40.0, 20.0))).clicked() {
-                            self.right_tab = tab;
-                        }
-                    }
-                });
-                ui.separator();
-
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    match self.right_tab {
-                        RightTab::Trading => {
+
+                    // ── Trading Section ──────────────────────────────────
+                    egui::CollapsingHeader::new(egui::RichText::new("Trading").strong().small())
+                        .default_open(self.right_trading_open)
+                        .show(ui, |ui| {
                             // ── Trading Buttons Grid (exact WebKit CSS: #button-grid) ──
                             ui.add_space(8.0);
                             ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0); // gap: 4px
@@ -13579,72 +13561,13 @@ impl eframe::App for TyphooNApp {
                                 }
                             }
 
-                            // ── MTF MA Grid (colored dots) ─────────────────────
-                            ui.add_space(6.0);
-                            ui.separator();
-                            ui.label(egui::RichText::new("MTF Grid").color(AXIS_TEXT).small().strong());
-                            let tf_labels = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
-                            let ma_labels = ["SMA200", "KAMA", "Fisher"];
-                            let chart_ref = self.charts.get(self.active_tab);
-                            egui::Grid::new("mtf_ma_grid").spacing(egui::vec2(4.0, 2.0)).show(ui, |ui| {
-                                // Header row
-                                ui.label(egui::RichText::new("").small());
-                                for tf in &tf_labels {
-                                    ui.label(egui::RichText::new(*tf).color(AXIS_TEXT).small());
-                                }
-                                ui.end_row();
-                                // Data rows — green if bullish, red if bearish, gray if no data
-                                let active_tf_label = chart_ref.map(|c| c.timeframe.label()).unwrap_or("");
-                                for ma in &ma_labels {
-                                    ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
-                                    for tf in &tf_labels {
-                                        let dot_color = if *tf == active_tf_label {
-                                            if let Some(c) = chart_ref {
-                                                let last_bar = c.bars.last();
-                                                let bullish = match *ma {
-                                                    "SMA200" => {
-                                                        let sma = c.sma200.last().and_then(|v| *v);
-                                                        match (last_bar, sma) {
-                                                            (Some(b), Some(s)) => Some(b.close > s),
-                                                            _ => None,
-                                                        }
-                                                    }
-                                                    "KAMA" => {
-                                                        let kama = c.kama.last().and_then(|v| *v);
-                                                        match (last_bar, kama) {
-                                                            (Some(b), Some(k)) => Some(b.close > k),
-                                                            _ => None,
-                                                        }
-                                                    }
-                                                    "Fisher" => {
-                                                        let fisher = c.fisher.last().and_then(|v| *v);
-                                                        let signal = c.fisher_signal.last().and_then(|v| *v);
-                                                        match (fisher, signal) {
-                                                            (Some(f), Some(s)) => Some(f > s),
-                                                            _ => None,
-                                                        }
-                                                    }
-                                                    _ => None,
-                                                };
-                                                match bullish {
-                                                    Some(true) => UP,
-                                                    Some(false) => DOWN,
-                                                    None => AXIS_TEXT,
-                                                }
-                                            } else {
-                                                AXIS_TEXT
-                                            }
-                                        } else {
-                                            egui::Color32::from_rgb(50, 50, 60)
-                                        };
-                                        ui.label(egui::RichText::new("\u{25CF}").color(dot_color).small());
-                                    }
-                                    ui.end_row();
-                                }
-                            });
-                        }
+                        });
 
-                        RightTab::Positions => {
+                    // ── Positions Section ─────────────────────────────────
+                    let pos_count = self.bg.open_positions.len() + self.live_positions.len();
+                    egui::CollapsingHeader::new(egui::RichText::new(format!("Positions ({})", pos_count)).strong().small())
+                        .default_open(self.right_positions_open)
+                        .show(ui, |ui| {
                             ui.add_space(4.0);
                             let mut has_positions = false;
                             // DARWIN positions — from bg cache
@@ -13705,9 +13628,13 @@ impl eframe::App for TyphooNApp {
                                     });
                                 }
                             }
-                        }
+                        });
 
-                        RightTab::Orders => {
+                    // ── Orders Section ────────────────────────────────────
+                    let ord_count = self.live_orders.len();
+                    egui::CollapsingHeader::new(egui::RichText::new(format!("Orders ({})", ord_count)).strong().small())
+                        .default_open(self.right_orders_open)
+                        .show(ui, |ui| {
                             ui.add_space(4.0);
                             if self.broker_connected && !self.live_orders.is_empty() {
                                 for order in &self.live_orders {
@@ -13723,9 +13650,13 @@ impl eframe::App for TyphooNApp {
                             } else {
                                 ui.label(egui::RichText::new(if self.broker_connected { "No open orders." } else { "Connect broker for live orders." }).color(AXIS_TEXT).small());
                             }
-                        }
+                        });
 
-                        RightTab::Watchlist => {
+                    // ── Watchlist Section ─────────────────────────────────
+                    let wl_count = self.user_watchlist.len();
+                    egui::CollapsingHeader::new(egui::RichText::new(format!("Watchlist ({})", wl_count)).strong().small())
+                        .default_open(self.right_watchlist_open)
+                        .show(ui, |ui| {
                             // ── Add symbol input ──────────────────────────
                             ui.add_space(2.0);
                             ui.horizontal(|ui| {
@@ -13783,8 +13714,7 @@ impl eframe::App for TyphooNApp {
                             } else {
                                 let mut load_key: Option<String> = None;
                                 let mut remove_sym: Option<String> = None;
-                                egui::ScrollArea::vertical().show(ui, |ui| {
-                                    for (idx, wl) in self.watchlist_rows.iter().enumerate() {
+                                for (idx, wl) in self.watchlist_rows.iter().enumerate() {
                                         let sym_color = WL_COLORS[idx % WL_COLORS.len()];
                                         let chg_color = if wl.change >= 0.0 { UP } else { DOWN };
                                         let is_selected = self.charts.get(self.active_tab)
@@ -13845,7 +13775,6 @@ impl eframe::App for TyphooNApp {
                                             remove_sym = Some(wl.symbol.clone());
                                         }
                                     }
-                                });
                                 // Handle remove
                                 if let Some(ref sym) = remove_sym {
                                     self.user_watchlist.retain(|s| s != sym);
@@ -13882,9 +13811,12 @@ impl eframe::App for TyphooNApp {
                                     }
                                 }
                             }
-                        }
+                        });
 
-                        RightTab::Risk => {
+                    // ── Risk & Account Section ───────────────────────────
+                    egui::CollapsingHeader::new(egui::RichText::new("Risk & Account").strong().small())
+                        .default_open(self.right_risk_open)
+                        .show(ui, |ui| {
                             ui.add_space(4.0);
                             // Live broker account data
                             if let Some(ref acct) = self.live_account {
@@ -13946,8 +13878,71 @@ impl eframe::App for TyphooNApp {
                             ui.label(egui::RichText::new("DARWIN").small().strong());
                             ui.label(egui::RichText::new("VaR corridor: 3.25% – 6.5%").color(AXIS_TEXT).small());
                             ui.label(egui::RichText::new("Correlation limit: 0.95 / 45d").color(AXIS_TEXT).small());
+                        });
+
+                    // ── MTF Grid (always visible at bottom) ──────────────
+                    ui.add_space(6.0);
+                    ui.separator();
+                    ui.label(egui::RichText::new("MTF Grid").color(AXIS_TEXT).small().strong());
+                    let tf_labels = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
+                    let ma_labels = ["SMA200", "KAMA", "Fisher"];
+                    let chart_ref = self.charts.get(self.active_tab);
+                    egui::Grid::new("mtf_ma_grid").spacing(egui::vec2(4.0, 2.0)).show(ui, |ui| {
+                        // Header row
+                        ui.label(egui::RichText::new("").small());
+                        for tf in &tf_labels {
+                            ui.label(egui::RichText::new(*tf).color(AXIS_TEXT).small());
                         }
-                    }
+                        ui.end_row();
+                        // Data rows — green if bullish, red if bearish, gray if no data
+                        let active_tf_label = chart_ref.map(|c| c.timeframe.label()).unwrap_or("");
+                        for ma in &ma_labels {
+                            ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
+                            for tf in &tf_labels {
+                                let dot_color = if *tf == active_tf_label {
+                                    if let Some(c) = chart_ref {
+                                        let last_bar = c.bars.last();
+                                        let bullish = match *ma {
+                                            "SMA200" => {
+                                                let sma = c.sma200.last().and_then(|v| *v);
+                                                match (last_bar, sma) {
+                                                    (Some(b), Some(s)) => Some(b.close > s),
+                                                    _ => None,
+                                                }
+                                            }
+                                            "KAMA" => {
+                                                let kama = c.kama.last().and_then(|v| *v);
+                                                match (last_bar, kama) {
+                                                    (Some(b), Some(k)) => Some(b.close > k),
+                                                    _ => None,
+                                                }
+                                            }
+                                            "Fisher" => {
+                                                let fisher = c.fisher.last().and_then(|v| *v);
+                                                let signal = c.fisher_signal.last().and_then(|v| *v);
+                                                match (fisher, signal) {
+                                                    (Some(f), Some(s)) => Some(f > s),
+                                                    _ => None,
+                                                }
+                                            }
+                                            _ => None,
+                                        };
+                                        match bullish {
+                                            Some(true) => UP,
+                                            Some(false) => DOWN,
+                                            None => AXIS_TEXT,
+                                        }
+                                    } else {
+                                        AXIS_TEXT
+                                    }
+                                } else {
+                                    egui::Color32::from_rgb(50, 50, 60)
+                                };
+                                ui.label(egui::RichText::new("\u{25CF}").color(dot_color).small());
+                            }
+                            ui.end_row();
+                        }
+                    });
                 });
             });
 
