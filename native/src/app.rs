@@ -7932,25 +7932,20 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Floating Equity").strong());
                             ui.label(egui::RichText::new(format!("${:.0}", combined)).color(fc).strong());
                         });
-                        egui::Grid::new("float_eq").striped(true).num_columns(4).min_col_width(70.0).show(ui, |ui| {
+                        egui::Grid::new("float_eq").striped(true).num_columns(3).min_col_width(70.0).show(ui, |ui| {
                             ui.label(egui::RichText::new("DARWIN").color(dim).small());
-                            ui.label(egui::RichText::new("Closed").color(dim).small());
-                            ui.label(egui::RichText::new("Unreal").color(dim).small());
-                            ui.label(egui::RichText::new("Float").color(dim).small());
+                            ui.label(egui::RichText::new("Balance").color(dim).small());
+                            ui.label(egui::RichText::new("P&L").color(dim).small());
                             ui.end_row();
                             for det in details {
-                                let closed = det.summary.as_ref().map(|s| s.final_balance).unwrap_or(0.0);
-                                let unrealized = self.bg.floating_equity.as_ref()
-                                    .and_then(|f| f.darwins.iter().find(|d| d.darwin_ticker == det.ticker))
-                                    .map(|d| d.unrealized_pnl)
-                                    .unwrap_or(0.0);
-                                let floating = closed + unrealized;
-                                ui.label(egui::RichText::new(&det.ticker).small());
-                                ui.label(egui::RichText::new(format!("${:.0}", closed)).small());
-                                let uc = if unrealized >= 0.0 { chart_green } else { chart_red };
-                                ui.label(egui::RichText::new(format!("${:.0}", unrealized)).color(uc).small());
-                                ui.label(egui::RichText::new(format!("${:.0}", floating)).small());
-                                ui.end_row();
+                                if let Some(ref s) = det.summary {
+                                    let pnl = s.total_profit;
+                                    let pc = if pnl >= 0.0 { chart_green } else { chart_red };
+                                    ui.label(egui::RichText::new(&det.ticker).small());
+                                    ui.label(egui::RichText::new(format!("${:.0}", s.final_balance)).small());
+                                    ui.label(egui::RichText::new(format!("${:.0}", pnl)).color(pc).small());
+                                    ui.end_row();
+                                }
                             }
                         });
                     }
