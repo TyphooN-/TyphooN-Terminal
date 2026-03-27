@@ -1073,6 +1073,18 @@ impl GpuDarwinAnalytics {
         self.darwin_count = count;
         self.max_days = max_days;
 
+        // Check GPU buffer size limit and cap if needed
+        let max_buffer = self.device.limits().max_storage_buffer_binding_size as usize;
+        let needed = count as usize * max_days as usize * 4; // bytes
+        let max_days = if needed > max_buffer {
+            // Cap max_days to fit within GPU limit
+            let capped = max_buffer / (count as usize * 4);
+            tracing::warn!("GPU: returns buffer {}MB exceeds limit {}MB — capping max_days {} → {}",
+                needed / 1024 / 1024, max_buffer / 1024 / 1024, max_days, capped);
+            capped as u32
+        } else { max_days };
+        self.max_days = max_days;
+
         // Flatten and pad to max_days stride
         let total_floats = count as usize * max_days as usize;
         let mut flat = vec![0.0_f32; total_floats];
@@ -1182,28 +1194,30 @@ impl GpuDarwinAnalytics {
 
         if rx.recv().ok()?.is_err() { return None; }
 
-        let data = buffer_slice.get_mapped_range();
-        let floats = bytemuck_cast_slice_to_f32(&data);
-        staging.unmap();
-
-        let mut results = Vec::with_capacity(self.darwin_count as usize);
-        for i in 0..self.darwin_count as usize {
-            let base = i * 10;
-            if base + 9 < floats.len() {
-                results.push(GpuDarwinStats {
-                    mean: floats[base],
-                    variance: floats[base + 1],
-                    sharpe: floats[base + 2],
-                    sortino: floats[base + 3],
-                    max_drawdown: floats[base + 4],
-                    best_day: floats[base + 5],
-                    worst_day: floats[base + 6],
-                    skewness: floats[base + 7],
-                    kurtosis: floats[base + 8],
-                    total_return: floats[base + 9],
-                });
+        let results = {
+            let data = buffer_slice.get_mapped_range();
+            let floats = bytemuck_cast_slice_to_f32(&data);
+            let mut results = Vec::with_capacity(self.darwin_count as usize);
+            for i in 0..self.darwin_count as usize {
+                let base = i * 10;
+                if base + 9 < floats.len() {
+                    results.push(GpuDarwinStats {
+                        mean: floats[base],
+                        variance: floats[base + 1],
+                        sharpe: floats[base + 2],
+                        sortino: floats[base + 3],
+                        max_drawdown: floats[base + 4],
+                        best_day: floats[base + 5],
+                        worst_day: floats[base + 6],
+                        skewness: floats[base + 7],
+                        kurtosis: floats[base + 8],
+                        total_return: floats[base + 9],
+                    });
+                }
             }
-        }
+            results
+        }; // data (mapped range) dropped here
+        staging.unmap();
         Some(results)
     }
 

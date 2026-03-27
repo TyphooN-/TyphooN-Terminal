@@ -949,4 +949,109 @@ impl SqliteCache {
 
         Ok((processed, bytes_saved))
     }
+
+    /// Export selected cache keys to a portable binary bundle for LAN sync.
+    /// Bundle format: [u32 entry_count][per entry: u32 key_len, key_bytes, u32 data_len, data_bytes, i64 timestamp, i64 bar_count]
+    /// Returns the serialized bundle bytes.
+    pub fn export_keys(&self, key_patterns: &[&str]) -> Result<Vec<u8>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let all_keys = {
+            let mut stmt = conn.prepare("SELECT key FROM bar_cache")
+                .map_err(|e| format!("Prepare failed: {e}"))?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("Query failed: {e}"))?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Collect failed: {e}"))?
+        };
+
+        // Filter keys matching any pattern (prefix match or substring match)
+        let matched: Vec<&String> = all_keys.iter()
+            .filter(|k| key_patterns.iter().any(|p| k.contains(p) || k.starts_with(p)))
+            .collect();
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(matched.len() as u32).to_le_bytes());
+
+        for key in &matched {
+            // Read raw compressed data directly (no decompression needed)
+            let mut stmt = conn.prepare_cached(
+                "SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1"
+            ).map_err(|e| format!("Prepare failed: {e}"))?;
+
+            if let Ok(row) = stmt.query_row(params![key], |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            }) {
+                let (data, timestamp, bar_count) = row;
+                let key_bytes = key.as_bytes();
+                buf.extend_from_slice(&(key_bytes.len() as u32).to_le_bytes());
+                buf.extend_from_slice(key_bytes);
+                buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                buf.extend_from_slice(&data);
+                buf.extend_from_slice(&timestamp.to_le_bytes());
+                buf.extend_from_slice(&bar_count.to_le_bytes());
+            }
+        }
+
+        Ok(buf)
+    }
+
+    /// Import a portable bundle into this cache (from LAN sync).
+    /// Returns number of entries imported.
+    pub fn import_keys(&self, bundle: &[u8]) -> Result<usize, String> {
+        if bundle.len() < 4 { return Err("Bundle too small".into()); }
+        let count = u32::from_le_bytes(bundle[0..4].try_into().map_err(|_| "Bad header")?) as usize;
+        let mut offset = 4;
+        let mut imported = 0;
+
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+
+        for _ in 0..count {
+            if offset + 4 > bundle.len() { break; }
+            let key_len = u32::from_le_bytes(bundle[offset..offset+4].try_into().map_err(|_| "Bad key_len")?) as usize;
+            offset += 4;
+            if offset + key_len > bundle.len() { break; }
+            let key = std::str::from_utf8(&bundle[offset..offset+key_len]).map_err(|_| "Bad key UTF-8")?.to_string();
+            offset += key_len;
+
+            if offset + 4 > bundle.len() { break; }
+            let data_len = u32::from_le_bytes(bundle[offset..offset+4].try_into().map_err(|_| "Bad data_len")?) as usize;
+            offset += 4;
+            if offset + data_len > bundle.len() { break; }
+            let data = &bundle[offset..offset+data_len];
+            offset += data_len;
+
+            if offset + 16 > bundle.len() { break; }
+            let timestamp = i64::from_le_bytes(bundle[offset..offset+8].try_into().map_err(|_| "Bad timestamp")?);
+            offset += 8;
+            let bar_count = i64::from_le_bytes(bundle[offset..offset+8].try_into().map_err(|_| "Bad bar_count")?);
+            offset += 8;
+
+            conn.execute(
+                "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
+                params![key, data, timestamp, bar_count],
+            ).map_err(|e| format!("Insert failed: {e}"))?;
+            imported += 1;
+        }
+
+        Ok(imported)
+    }
+
+    /// List keys matching patterns with their sizes (for sync preview).
+    /// Returns Vec of (key, bar_count, compressed_size_bytes).
+    pub fn list_matching_keys(&self, patterns: &[&str]) -> Result<Vec<(String, i64, usize)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare("SELECT key, bar_count, length(data) FROM bar_cache")
+            .map_err(|e| format!("Prepare failed: {e}"))?;
+        let rows: Vec<(String, i64, usize)> = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)? as usize))
+        }).map_err(|e| format!("Query failed: {e}"))?
+          .filter_map(|r| r.ok())
+          .filter(|(k, _, _)| patterns.iter().any(|p| k.contains(p) || k.starts_with(p)))
+          .collect();
+        Ok(rows)
+    }
 }

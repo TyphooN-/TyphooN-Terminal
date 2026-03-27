@@ -5776,6 +5776,117 @@ pub fn delete_darwin_account(conn: &Connection, darwin_ticker: &str) -> Result<(
     Ok(())
 }
 
+// ── Darwinex Metrics ────────────────────────────────────────────────
+
+/// Compute CAGR from daily returns.
+pub fn compute_cagr(daily_returns: &[DailyReturn]) -> f64 {
+    if daily_returns.len() < 2 { return 0.0; }
+    let first_balance = daily_returns.first().map(|d| d.balance).unwrap_or(1.0);
+    let last_balance = daily_returns.last().map(|d| d.balance).unwrap_or(1.0);
+    if first_balance <= 0.0 { return 0.0; }
+    let years = daily_returns.len() as f64 / 252.0; // trading days
+    if years <= 0.0 { return 0.0; }
+    ((last_balance / first_balance).powf(1.0 / years) - 1.0) * 100.0
+}
+
+/// Recovery Factor = net profit / max drawdown (higher = faster recovery).
+pub fn compute_recovery_factor(daily_returns: &[DailyReturn]) -> f64 {
+    if daily_returns.len() < 2 { return 0.0; }
+    let first_balance = daily_returns.first().map(|d| d.balance).unwrap_or(0.0);
+    let last_balance = daily_returns.last().map(|d| d.balance).unwrap_or(0.0);
+    let net_profit = last_balance - first_balance;
+    let max_dd = daily_returns.iter().map(|d| d.drawdown_pct.abs()).fold(0.0_f64, f64::max);
+    if max_dd <= 0.0 { return 0.0; }
+    let max_dd_abs = first_balance * max_dd / 100.0;
+    if max_dd_abs <= 0.0 { return 0.0; }
+    net_profit / max_dd_abs
+}
+
+/// Maximum drawdown duration — how many trading days from peak to recovery (or ongoing).
+/// Returns (max_dd_duration_days, current_dd_duration_days, avg_dd_duration_days).
+pub fn compute_drawdown_duration(daily_returns: &[DailyReturn]) -> (usize, usize, f64) {
+    if daily_returns.is_empty() { return (0, 0, 0.0); }
+    let mut peak = daily_returns[0].balance;
+    let mut dd_start = 0usize;
+    let mut in_drawdown = false;
+    let mut max_duration = 0usize;
+    let mut current_duration = 0usize;
+    let mut durations: Vec<usize> = Vec::new();
+
+    for (i, d) in daily_returns.iter().enumerate() {
+        if d.balance >= peak {
+            peak = d.balance;
+            if in_drawdown {
+                let dur = i - dd_start;
+                durations.push(dur);
+                max_duration = max_duration.max(dur);
+                in_drawdown = false;
+            }
+        } else if !in_drawdown {
+            in_drawdown = true;
+            dd_start = i;
+        }
+    }
+    // If still in drawdown at end
+    if in_drawdown {
+        current_duration = daily_returns.len() - dd_start;
+        max_duration = max_duration.max(current_duration);
+    }
+    let avg = if durations.is_empty() { 0.0 } else { durations.iter().sum::<usize>() as f64 / durations.len() as f64 };
+    (max_duration, current_duration, avg)
+}
+
+/// Divergence Index — tracks signal return vs DARWIN quote return over time.
+/// Signal returns from daily_returns, quote returns from FTP cumulative_returns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DivergencePoint {
+    pub day_index: usize,
+    pub signal_return_pct: f64,
+    pub quote_return_pct: f64,
+    pub divergence_pct: f64,  // quote - signal (positive = quote outperforms)
+}
+
+pub fn compute_divergence_index(
+    daily_returns: &[DailyReturn],
+    ftp_returns: &[(f64, f64)],  // (day_index, quote_price) from ftp_equity_curve
+) -> Vec<DivergencePoint> {
+    if daily_returns.is_empty() || ftp_returns.is_empty() { return Vec::new(); }
+    let initial_balance = daily_returns.first().map(|d| d.balance).unwrap_or(1.0);
+    if initial_balance <= 0.0 { return Vec::new(); }
+
+    let mut result = Vec::new();
+    let quote_start = ftp_returns.first().map(|&(_, p)| p).unwrap_or(100.0);
+    if quote_start <= 0.0 { return Vec::new(); }
+
+    // Align by index (both are day-indexed)
+    let n = daily_returns.len().min(ftp_returns.len());
+    for i in 0..n {
+        let signal_ret = (daily_returns[i].balance / initial_balance - 1.0) * 100.0;
+        let quote_ret = (ftp_returns[i].1 / quote_start - 1.0) * 100.0;
+        result.push(DivergencePoint {
+            day_index: i,
+            signal_return_pct: signal_ret,
+            quote_return_pct: quote_ret,
+            divergence_pct: quote_ret - signal_ret,
+        });
+    }
+    result
+}
+
+/// Investment velocity — rate of AUM change over time.
+/// Returns monthly AUM growth rate %.
+pub fn compute_investment_velocity(investor_flow: &[InvestorFlow]) -> Vec<(String, f64)> {
+    if investor_flow.len() < 2 { return Vec::new(); }
+    let mut result = Vec::new();
+    for i in 1..investor_flow.len() {
+        let prev_aum = investor_flow[i-1].aum;
+        let curr_aum = investor_flow[i].aum;
+        let growth = if prev_aum > 0.0 { (curr_aum / prev_aum - 1.0) * 100.0 } else { 0.0 };
+        result.push((investor_flow[i].date.clone(), growth));
+    }
+    result
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
