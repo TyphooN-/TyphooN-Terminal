@@ -4513,6 +4513,8 @@ struct WatchlistRow {
     change_pct: f64,
     /// Last bar volume.
     volume: f64,
+    /// Extended hours change % (pre/post market).
+    ext_change_pct: f64,
 }
 
 /// Cached per-account analytics (computed in background thread).
@@ -4726,6 +4728,8 @@ enum BrokerCmd {
     TastytradePositions,
     /// Get tastytrade option chain.
     TastytradeOptionChain { symbol: String },
+    /// Batch quote request for watchlist symbols.
+    GetWatchlistQuotes { symbols: Vec<String> },
 }
 
 /// Messages sent from async broker task → UI.
@@ -4755,6 +4759,8 @@ enum BrokerMsg {
     BarsFetched { symbol: String, timeframe: String, count: usize },
     /// Symbol search results for autocomplete.
     SymbolSuggestions(Vec<(String, String, String)>), // (symbol, name, asset_class)
+    /// Batch watchlist quote data.
+    WatchlistQuotes(Vec<WatchlistRow>),
 }
 
 pub struct TyphooNApp {
@@ -4911,6 +4917,10 @@ pub struct TyphooNApp {
     watchlist_symbols: Vec<(String, i64)>,
     /// Rich watchlist data: symbol name, last, prev_close, change, change_pct, volume, cache_key.
     watchlist_rows: Vec<WatchlistRow>,
+    /// User-managed watchlist symbols (persisted in session).
+    user_watchlist: Vec<String>,
+    /// Input field for adding symbols to watchlist.
+    watchlist_input: String,
 
     // ── floating window visibility ───────────────────────────────────────
     show_settings: bool,
@@ -5240,6 +5250,48 @@ impl TyphooNApp {
                                 Ok(q) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Quote(symbol, q.bid, q.ask, (q.bid + q.ask) / 2.0)); }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
                             }
+                        }
+                    }
+                    BrokerCmd::GetWatchlistQuotes { symbols } => {
+                        if let Some(ref b) = broker {
+                            let mut rows = Vec::new();
+                            for sym in &symbols {
+                                // Normalize crypto: SOLUSD → SOL/USD for Alpaca
+                                let api_sym = {
+                                    let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                                    let su = sym.to_uppercase();
+                                    crypto_bases.iter().find_map(|base| {
+                                        if su.starts_with(base) && su.ends_with("USD") && su.len() == base.len() + 3 {
+                                            Some(format!("{}/USD", base))
+                                        } else { None }
+                                    }).unwrap_or_else(|| sym.clone())
+                                };
+                                match b.get_snapshot(&api_sym).await {
+                                    Ok(snap) => {
+                                        let change = snap.last - snap.prev_close;
+                                        let change_pct = if snap.prev_close > 0.0 { (snap.last / snap.prev_close - 1.0) * 100.0 } else { 0.0 };
+                                        rows.push(WatchlistRow {
+                                            symbol: sym.clone(),
+                                            cache_key: sym.clone(),
+                                            last: snap.last,
+                                            prev_close: snap.prev_close,
+                                            change,
+                                            change_pct,
+                                            volume: snap.daily_volume,
+                                            ext_change_pct: 0.0,
+                                        });
+                                    }
+                                    Err(_) => {
+                                        rows.push(WatchlistRow {
+                                            symbol: sym.clone(),
+                                            cache_key: sym.clone(),
+                                            last: 0.0, prev_close: 0.0, change: 0.0,
+                                            change_pct: 0.0, volume: 0.0, ext_change_pct: 0.0,
+                                        });
+                                    }
+                                }
+                            }
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::WatchlistQuotes(rows));
                         }
                     }
                     BrokerCmd::GetMarketClock => {
@@ -5963,6 +6015,8 @@ impl TyphooNApp {
             active_tab: 0,
             watchlist_symbols,
             watchlist_rows,
+            user_watchlist: vec!["BTCUSD".into(), "ETHUSD".into(), "SOLUSD".into()],
+            watchlist_input: String::new(),
             show_settings: false,
             show_darwin_accounts: false,
             show_darwin_portfolio: false,
@@ -6805,6 +6859,7 @@ impl TyphooNApp {
                 RightTab::Watchlist => "watchlist",
                 RightTab::Risk => "risk",
             },
+            "user_watchlist": self.user_watchlist,
             "darwin_view": self.darwin_view,
             "darwin_xlsx_dir": self.darwin_xlsx_dir,
             "mt5_db_paths": self.mt5_db_paths,
@@ -6975,6 +7030,10 @@ impl TyphooNApp {
                 if let Some(bs) = v["broker_secret"].as_str() { self.broker_secret = bs.to_string(); }
                 if let Some(tu) = v["tt_username"].as_str() { self.tt_username = tu.to_string(); }
                 if let Some(bp) = v["broker_paper"].as_bool() { self.broker_paper = bp; }
+                // Restore user watchlist
+                if let Some(wl) = v["user_watchlist"].as_array() {
+                    self.user_watchlist = wl.iter().filter_map(|s| s.as_str().map(String::from)).collect();
+                }
                 // Restore SL/TP state
                 if let Some(sl) = v["sl_enabled"].as_bool() { self.sl_enabled = sl; }
                 if let Some(tp) = v["tp_enabled"].as_bool() { self.tp_enabled = tp; }
@@ -12102,6 +12161,9 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::Quote(symbol, bid, ask, last) => {
                     self.log.push_back(LogEntry::info(format!("{}: bid {} ask {} last {}", symbol, format_price(bid), format_price(ask), format_price(last))));
                 }
+                BrokerMsg::WatchlistQuotes(rows) => {
+                    self.watchlist_rows = rows;
+                }
                 BrokerMsg::MarketClock(msg) => {
                     self.log.push_back(LogEntry::info(msg));
                 }
@@ -13397,14 +13459,42 @@ impl eframe::App for TyphooNApp {
                         }
 
                         RightTab::Watchlist => {
-                            // TradingView-style watchlist header
+                            // ── Add symbol input ──────────────────────────
                             ui.add_space(2.0);
-                            egui::Grid::new("wl_header").num_columns(5).spacing(egui::vec2(4.0, 0.0)).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let te = egui::TextEdit::singleline(&mut self.watchlist_input)
+                                    .desired_width(80.0)
+                                    .hint_text("Symbol")
+                                    .font(egui::TextStyle::Small)
+                                    .text_color(egui::Color32::WHITE);
+                                let te_resp = ui.add(te);
+                                let enter_pressed = te_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                if (ui.add(egui::Button::new(egui::RichText::new("+").color(UP).small()).min_size(egui::vec2(20.0, 18.0))).clicked() || enter_pressed)
+                                    && !self.watchlist_input.trim().is_empty()
+                                {
+                                    let sym = self.watchlist_input.trim().to_uppercase();
+                                    if !self.user_watchlist.contains(&sym) {
+                                        self.user_watchlist.push(sym);
+                                        // Trigger immediate refresh
+                                        if self.broker_connected {
+                                            let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
+                                        }
+                                    }
+                                    self.watchlist_input.clear();
+                                }
+                            });
+                            ui.add_space(2.0);
+
+                            // ── Header row ────────────────────────────────
+                            egui::Grid::new("wl_header").num_columns(7).spacing(egui::vec2(4.0, 0.0)).show(ui, |ui| {
                                 ui.label(egui::RichText::new("Symbol").color(AXIS_TEXT).small());
                                 ui.label(egui::RichText::new("Last").color(AXIS_TEXT).small());
                                 ui.label(egui::RichText::new("Chg").color(AXIS_TEXT).small());
                                 ui.label(egui::RichText::new("Chg%").color(AXIS_TEXT).small());
                                 ui.label(egui::RichText::new("Vol").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("Ext").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("").small()); // remove column
                                 ui.end_row();
                             });
                             // Thin separator under header
@@ -13415,10 +13505,17 @@ impl eframe::App for TyphooNApp {
                             );
                             ui.add_space(2.0);
 
-                            if self.watchlist_rows.is_empty() {
-                                ui.label(egui::RichText::new("No cached symbols.").color(AXIS_TEXT).small());
+                            if self.watchlist_rows.is_empty() && self.user_watchlist.is_empty() {
+                                ui.label(egui::RichText::new("Add symbols above.").color(AXIS_TEXT).small());
+                            } else if self.watchlist_rows.is_empty() {
+                                // Watchlist has symbols but no data yet
+                                ui.label(egui::RichText::new("Fetching quotes...").color(AXIS_TEXT).small());
+                                for sym in &self.user_watchlist {
+                                    ui.label(egui::RichText::new(sym).color(egui::Color32::from_rgb(100, 100, 110)).small().monospace());
+                                }
                             } else {
                                 let mut load_key: Option<String> = None;
+                                let mut remove_sym: Option<String> = None;
                                 egui::ScrollArea::vertical().show(ui, |ui| {
                                     for (idx, wl) in self.watchlist_rows.iter().enumerate() {
                                         let sym_color = WL_COLORS[idx % WL_COLORS.len()];
@@ -13436,7 +13533,7 @@ impl eframe::App for TyphooNApp {
                                         let row_rect = egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 18.0));
                                         ui.painter().rect_filled(row_rect, 0.0, row_bg);
 
-                                        let row = egui::Grid::new(format!("wl_row_{}", idx)).num_columns(5).spacing(egui::vec2(4.0, 0.0)).show(ui, |ui| {
+                                        let row = egui::Grid::new(format!("wl_row_{}", idx)).num_columns(7).spacing(egui::vec2(4.0, 0.0)).show(ui, |ui| {
                                             // Symbol with colored dot
                                             ui.horizontal(|ui| {
                                                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -13452,21 +13549,45 @@ impl eframe::App for TyphooNApp {
                                             ui.label(egui::RichText::new(format!("{:.2}%", wl.change_pct)).color(chg_color).small().monospace());
                                             // Volume (compact format)
                                             let vol_str = if wl.volume >= 1_000_000.0 {
-                                                format!("{:.2} M", wl.volume / 1_000_000.0)
+                                                format!("{:.1}M", wl.volume / 1_000_000.0)
                                             } else if wl.volume >= 1_000.0 {
-                                                format!("{:.2} K", wl.volume / 1_000.0)
+                                                format!("{:.1}K", wl.volume / 1_000.0)
                                             } else {
                                                 format!("{:.0}", wl.volume)
                                             };
                                             ui.label(egui::RichText::new(vol_str).color(AXIS_TEXT).small().monospace());
+                                            // Extended hours change %
+                                            if wl.ext_change_pct.abs() > 0.001 {
+                                                let ext_color = if wl.ext_change_pct >= 0.0 { UP } else { DOWN };
+                                                ui.label(egui::RichText::new(format!("{:.2}%", wl.ext_change_pct)).color(ext_color).small().monospace());
+                                            } else {
+                                                ui.label(egui::RichText::new("--").color(egui::Color32::from_rgb(60, 60, 70)).small().monospace());
+                                            }
+                                            // Remove button
+                                            if ui.add(egui::Button::new(egui::RichText::new("x").color(DOWN).small()).frame(false).min_size(egui::vec2(14.0, 14.0))).clicked() {
+                                                remove_sym = Some(wl.symbol.clone());
+                                            }
                                             ui.end_row();
                                         });
-                                        if row.response.interact(egui::Sense::click()).clicked() {
+                                        // Left-click loads chart, right-click removes
+                                        let row_resp = row.response.interact(egui::Sense::click());
+                                        if row_resp.clicked() {
                                             load_key = Some(wl.cache_key.clone());
+                                        }
+                                        if row_resp.secondary_clicked() {
+                                            remove_sym = Some(wl.symbol.clone());
                                         }
                                     }
                                 });
+                                // Handle remove
+                                if let Some(ref sym) = remove_sym {
+                                    self.user_watchlist.retain(|s| s != sym);
+                                    self.watchlist_rows.retain(|r| &r.symbol != sym);
+                                }
+                                // Handle load
                                 if let Some(key) = load_key {
+                                    // First try loading from cache
+                                    let mut loaded = false;
                                     if let Some(ref cache) = self.cache {
                                         if let Some(chart) = self.charts.get_mut(self.active_tab) {
                                             match cache.get_bars_raw(&key) {
@@ -13478,11 +13599,19 @@ impl eframe::App for TyphooNApp {
                                                     chart.symbol = key.clone();
                                                     chart.compute_indicators();
                                                     self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
+                                                    loaded = true;
                                                 }
-                                                Ok(None) => { self.log.push_back(LogEntry::warn(format!("No data for {}", key))); }
+                                                Ok(None) => {}
                                                 Err(e) => { self.log.push_back(LogEntry::err(format!("Load error: {}", e))); }
                                             }
                                         }
+                                    }
+                                    // If not in cache and broker connected, fetch from Alpaca
+                                    if !loaded && self.broker_connected {
+                                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                        let tf = self.charts.get(self.active_tab).map(|c| c.timeframe.label().to_string()).unwrap_or_else(|| "1Day".to_string());
+                                        let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: key.clone(), timeframe: tf, db_path });
+                                        self.log.push_back(LogEntry::info(format!("Fetching {} from Alpaca...", key)));
                                     }
                                 }
                             }
@@ -14111,6 +14240,11 @@ impl eframe::App for TyphooNApp {
         // Auto-save session every 60 seconds (240 frames at 250ms repaint)
         if self.frame_count % 240 == 0 && self.frame_count > 0 {
             self.save_session();
+        }
+
+        // Poll watchlist quotes every ~15 seconds (60 frames at 250ms repaint)
+        if self.frame_count % 60 == 5 && !self.user_watchlist.is_empty() && self.broker_connected {
+            let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
         }
 
         // Repaint strategy:

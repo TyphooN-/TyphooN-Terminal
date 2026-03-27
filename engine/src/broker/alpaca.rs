@@ -1912,6 +1912,57 @@ impl AlpacaBroker {
         }
     }
 
+    // ── Snapshot (watchlist) ────────────────────────────────────────
+
+    /// Fetch snapshot for a symbol: last price, prev close, daily volume.
+    /// Works for both stocks (v2/stocks snapshot) and crypto (v1beta3 snapshots).
+    pub async fn get_snapshot(&self, symbol: &str) -> Result<SnapshotData, String> {
+        self.rate_limiter.wait().await;
+        let is_crypto = symbol.contains('/');
+
+        if is_crypto {
+            // Crypto: use latest bars endpoint for prev close, latest trade for last
+            let snap_url = format!("{}/v1beta3/crypto/us/snapshots", DATA_BASE);
+            let resp = self.client.get(&snap_url)
+                .headers(self.headers())
+                .query(&[("symbols", symbol)])
+                .send().await
+                .map_err(|e| format!("Crypto snapshot failed: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("Crypto snapshot HTTP {}", resp.status()));
+            }
+            let json: serde_json::Value = resp.json().await
+                .map_err(|e| format!("Crypto snapshot parse: {e}"))?;
+            let snap = &json["snapshots"][symbol];
+            let last = snap["latestTrade"]["p"].as_f64().unwrap_or(0.0);
+            let daily_volume = snap["dailyBar"]["v"].as_f64().unwrap_or(0.0);
+            let prev_close = snap["prevDailyBar"]["c"].as_f64().unwrap_or(0.0);
+            Ok(SnapshotData { symbol: symbol.to_string(), last, prev_close, daily_volume })
+        } else {
+            // Stock/ETF: v2/stocks/{symbol}/snapshot
+            let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
+            let resp = self.client.get(&url)
+                .headers(self.headers())
+                .query(&[("feed", "iex")])
+                .send().await
+                .map_err(|e| format!("Snapshot failed: {e}"))?;
+            if !resp.status().is_success() {
+                return Err(format!("Snapshot HTTP {}", resp.status()));
+            }
+            let json: serde_json::Value = resp.json().await
+                .map_err(|e| format!("Snapshot parse: {e}"))?;
+            // latestTrade.p = last trade price
+            let trade_price = json["latestTrade"]["p"].as_f64().unwrap_or(0.0);
+            // dailyBar.v = today's volume, dailyBar.c = today's last bar close
+            let daily_volume = json["dailyBar"]["v"].as_f64().unwrap_or(0.0);
+            // prevDailyBar.c = yesterday's close
+            let prev_close = json["prevDailyBar"]["c"].as_f64().unwrap_or(0.0);
+            // Use trade price for "last" (includes pre/post market)
+            let last = if trade_price > 0.0 { trade_price } else { json["dailyBar"]["c"].as_f64().unwrap_or(0.0) };
+            Ok(SnapshotData { symbol: symbol.to_string(), last, prev_close, daily_volume })
+        }
+    }
+
     // ── Account Activities ───────────────────────────────────────────
 
     /// Fetch account activities (fills, dividends, deposits, etc.)
@@ -2408,6 +2459,15 @@ pub struct LatestQuote {
     pub ask_size: f64,
     pub spread: f64,
     pub timestamp: String,
+}
+
+/// Snapshot data for watchlist: last price, prev close, daily volume.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotData {
+    pub symbol: String,
+    pub last: f64,
+    pub prev_close: f64,
+    pub daily_volume: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
