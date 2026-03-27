@@ -4624,6 +4624,10 @@ struct BgDarwinData {
     all_fundamentals: Vec<fundamentals::Fundamentals>,
     upcoming_earnings: Vec<(String, String, String)>,
     upcoming_dividends: Vec<(String, String, String, Option<f64>)>,
+
+    // ── DARWIN analytics: drawdown attribution + signal decay ──
+    drawdown_attribution: Vec<darwin::DrawdownAttribution>,
+    signal_decay: Vec<darwin::SignalDecay>,
 }
 
 /// Bottom panel mode.
@@ -6353,6 +6357,18 @@ impl TyphooNApp {
                         }
                         if let Ok(conn) = cache.connection() {
                             data.drawdown_dashboard = darwin::get_combined_drawdown_dashboard(&conn, 5).ok();
+                        }
+                        if let Ok(conn) = cache.connection() {
+                            data.drawdown_attribution = darwin::compute_drawdown_attribution(&conn).unwrap_or_default();
+                        }
+                        if let Ok(conn) = cache.connection() {
+                            let mut decays = Vec::new();
+                            for acct in &data.accounts {
+                                if let Ok(decay) = darwin::compute_signal_decay(&conn, &acct.darwin_ticker, 90) {
+                                    decays.push(decay);
+                                }
+                            }
+                            data.signal_decay = decays;
                         }
                         if let Ok(conn) = cache.connection() {
                             data.var_multipliers = darwin::compute_var_multipliers(&conn).unwrap_or_default();
@@ -9203,6 +9219,26 @@ impl TyphooNApp {
                                                         });
                                                     });
                                                 }
+                                                // Drawdown Attribution — which DARWIN caused the most damage?
+                                                if !self.bg.drawdown_attribution.is_empty() {
+                                                    ui.add_space(8.0);
+                                                    ui.label(egui::RichText::new("Drawdown Attribution (Who Caused the Pain?)").strong());
+                                                    egui::Grid::new("dd_attribution").striped(true).num_columns(4).show(ui, |ui| {
+                                                        ui.label(egui::RichText::new("DARWIN").color(AXIS_TEXT).small().strong());
+                                                        ui.label(egui::RichText::new("Contribution").color(AXIS_TEXT).small().strong());
+                                                        ui.label(egui::RichText::new("Own DD%").color(AXIS_TEXT).small().strong());
+                                                        ui.label(egui::RichText::new("Weight@Peak").color(AXIS_TEXT).small().strong());
+                                                        ui.end_row();
+                                                        for attr in &self.bg.drawdown_attribution {
+                                                            let c = if attr.contribution_pct > 30.0 { DOWN } else if attr.contribution_pct > 15.0 { egui::Color32::from_rgb(241, 196, 15) } else { AXIS_TEXT };
+                                                            ui.label(egui::RichText::new(&attr.darwin_ticker).small());
+                                                            ui.label(egui::RichText::new(format!("{:.1}%", attr.contribution_pct)).color(c).small());
+                                                            ui.label(egui::RichText::new(format!("{:.1}%", attr.standalone_dd_pct)).color(DOWN).small());
+                                                            ui.label(egui::RichText::new(format!("{:.1}%", attr.weight_at_peak)).small());
+                                                            ui.end_row();
+                                                        }
+                                                    });
+                                                }
                                             } else {
                                                 ui.label(egui::RichText::new("Import DARWIN data first.").color(AXIS_TEXT));
                                             }
@@ -9411,6 +9447,51 @@ impl TyphooNApp {
                                                     ui.label("Fat Tail Warning:"); ui.label(egui::RichText::new(if tail.fat_tail_warning { "YES" } else { "NO" }).color(ft_c));
                                                     ui.end_row();
                                                 });
+                                            }
+                                            // Signal Decay Analysis — is the strategy degrading?
+                                            if !self.bg.signal_decay.is_empty() {
+                                                ui.add_space(8.0);
+                                                ui.label(egui::RichText::new("Signal Decay Analysis (90-day rolling Sharpe)").strong());
+                                                egui::Grid::new("signal_decay_grid").striped(true).num_columns(5).show(ui, |ui| {
+                                                    ui.label(egui::RichText::new("DARWIN").color(AXIS_TEXT).small().strong());
+                                                    ui.label(egui::RichText::new("Current Sharpe").color(AXIS_TEXT).small().strong());
+                                                    ui.label(egui::RichText::new("Peak Sharpe").color(AXIS_TEXT).small().strong());
+                                                    ui.label(egui::RichText::new("Decay %").color(AXIS_TEXT).small().strong());
+                                                    ui.label(egui::RichText::new("Status").color(AXIS_TEXT).small().strong());
+                                                    ui.end_row();
+                                                    for decay in &self.bg.signal_decay {
+                                                        let decay_c = if decay.decay_pct > 50.0 { DOWN } else if decay.decay_pct > 25.0 { egui::Color32::from_rgb(241, 196, 15) } else { UP };
+                                                        let status = if decay.decay_pct > 50.0 { "DEGRADED" } else if decay.decay_pct > 25.0 { "WEAKENING" } else { "HEALTHY" };
+                                                        ui.label(egui::RichText::new(&decay.darwin_ticker).small());
+                                                        ui.label(egui::RichText::new(format!("{:.2}", decay.current_sharpe)).small());
+                                                        ui.label(egui::RichText::new(format!("{:.2}", decay.peak_sharpe)).small());
+                                                        ui.label(egui::RichText::new(format!("{:.1}%", decay.decay_pct)).color(decay_c).small());
+                                                        ui.label(egui::RichText::new(status).color(decay_c).small().strong());
+                                                        ui.end_row();
+                                                    }
+                                                });
+
+                                                // Signal decay plot
+                                                let darwin_colors = [
+                                                    egui::Color32::from_rgb(26, 188, 156), egui::Color32::from_rgb(52, 152, 219),
+                                                    egui::Color32::from_rgb(241, 196, 15), egui::Color32::from_rgb(155, 89, 182),
+                                                    egui::Color32::from_rgb(230, 126, 34), egui::Color32::from_rgb(231, 76, 60),
+                                                ];
+                                                ui.add_space(4.0);
+                                                Plot::new("signal_decay_plot").height(150.0).allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                                    .legend(egui_plot::Legend::default())
+                                                    .show(ui, |plot_ui| {
+                                                        for (idx, decay) in self.bg.signal_decay.iter().enumerate() {
+                                                            if decay.points.len() > 5 {
+                                                                let c = darwin_colors[idx % darwin_colors.len()];
+                                                                let pts: PlotPoints = PlotPoints::new(
+                                                                    decay.points.iter().enumerate().map(|(i, (_, s))| [i as f64, *s]).collect()
+                                                                );
+                                                                plot_ui.line(Line::new(&decay.darwin_ticker, pts).color(c).width(1.5));
+                                                            }
+                                                        }
+                                                        plot_ui.hline(egui_plot::HLine::new("Zero", 0.0).color(egui::Color32::from_rgb(80, 80, 100)).width(0.5));
+                                                    });
                                             }
                                         }
                                         14 => { // Seasonals — from bg cache (with bar chart)
