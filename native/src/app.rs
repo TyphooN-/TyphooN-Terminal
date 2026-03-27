@@ -3285,6 +3285,11 @@ fn draw_chart(
             }
         }
         ChartType::OhlcBars => {
+            let is_crypto_ohlc = {
+                let sym = chart.symbol.to_uppercase();
+                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                sym.contains('/') || crypto_bases.iter().any(|b| sym.starts_with(b) && sym.ends_with("USD"))
+            };
             // OHLC Bars: vertical wick + left tick (open) + right tick (close)
             for (rel_idx, bar) in bars.iter().enumerate() {
                 let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
@@ -3292,7 +3297,16 @@ fn draw_chart(
                 let y_high  = price_to_y(bar.high);
                 let y_low   = price_to_y(bar.low);
                 let y_close = price_to_y(bar.close);
-                let color = if bar.close >= bar.open { UP } else { DOWN };
+                let is_wknd = if is_crypto_ohlc {
+                    chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0)
+                        .map(|d| { use chrono::Datelike; matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) })
+                        .unwrap_or(false)
+                } else { false };
+                let color = if is_wknd {
+                    if bar.close >= bar.open { egui::Color32::from_rgb(0, 180, 220) } else { egui::Color32::from_rgb(0, 120, 160) }
+                } else {
+                    if bar.close >= bar.open { UP } else { DOWN }
+                };
                 let tick = half_body.max(2.0);
 
                 // Vertical line
@@ -3313,13 +3327,34 @@ fn draw_chart(
             }
         }
         ChartType::Candle | ChartType::HeikinAshi | ChartType::Renko => {
+            // Detect crypto symbols for weekend gap-fill coloring
+            let is_crypto = {
+                let sym = chart.symbol.to_uppercase();
+                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+                    "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
+                sym.contains('/') || crypto_bases.iter().any(|b| sym.starts_with(b) && sym.ends_with("USD"))
+            };
+            let weekend_up = egui::Color32::from_rgb(0, 180, 220);   // cyan bull (Kraken gap-fill)
+            let weekend_dn = egui::Color32::from_rgb(0, 120, 160);   // dark cyan bear (Kraken gap-fill)
             for (rel_idx, bar) in render_bars.iter().enumerate() {
                 let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
                 let y_open  = price_to_y(bar.open);
                 let y_high  = price_to_y(bar.high);
                 let y_low   = price_to_y(bar.low);
                 let y_close = price_to_y(bar.close);
-                let color = if bar.close >= bar.open { UP } else { DOWN };
+                // Weekend bars for crypto get distinct color (Kraken gap-fill data)
+                let is_weekend = if is_crypto {
+                    let dt = chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0);
+                    dt.map(|d| {
+                        use chrono::Datelike;
+                        matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+                    }).unwrap_or(false)
+                } else { false };
+                let color = if is_weekend {
+                    if bar.close >= bar.open { weekend_up } else { weekend_dn }
+                } else {
+                    if bar.close >= bar.open { UP } else { DOWN }
+                };
 
                 // Wick
                 painter.line_segment(
