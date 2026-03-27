@@ -23,7 +23,7 @@
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Console (`~`) with 120+ commands
+- [x] Console (`~`) with 125+ commands
 - [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
@@ -67,9 +67,19 @@
 ### Phase 8: Data & Analytics
 - [x] Crypto backfill (Kraken — BTC daily from 2013, weekend gap-fill)
 - [x] DARWIN signal vs quote comparison
-- [x] MTF SMA (H1/H4/D1/W1/MN1)
-- [x] ATR Projection MTF
+- [x] MTF SMA (H1/H4/D1/W1 200SMA + W1/MN1 100SMA — Tomato + Magenta)
+- [x] ATR Projection MTF (M15/H1/H4/D1/W1/MN1 horizontal levels)
+- [x] Previous Candle Levels (H1/H4/D1/W1/MN1)
 - [x] CLI/TUI (search, movers, fills)
+- [x] Monthly Returns Heatmap (Darwinex-style grid per DARWIN)
+- [x] Drawdown Analytics (combined + per-DARWIN dashboard, best/worst days)
+- [x] Divergence Index (signal vs quote return divergence)
+- [x] CAGR, Recovery Factor, Drawdown Duration
+- [x] LAN Sync (export/import cache data between machines)
+- [x] Storage Manager (view, delete, compact zstd-22 per symbol/source)
+- [x] Multi-window support (NEW_WINDOW/POPOUT for multi-monitor)
+- [x] Collapsible right panel sections
+- [x] Sortable columns (SEC filings, insider trades tables)
 
 ## In Progress
 
@@ -83,17 +93,17 @@
 
 ### Phase 10: Advanced Features
 - [ ] More drawing tools (pitchfork, Elliott, Gann)
-- [ ] Price alerts system
-- [ ] Trade journal
+- [x] Price alerts system (indicator-based: RSI, MACD, Fisher, Price conditions)
+- [x] Trade journal (log trades with notes, ~ → JOURNAL)
 - [ ] Pattern recognition (double top/bottom, H&S)
-- [ ] Supply/demand zones
+- [x] Supply/demand zones (auto-detected from impulse candles)
 
 ### Phase 11: Data Feeds
-- [ ] News feed (Alpaca/Finnhub)
+- [x] News feed (Finnhub)
 - [ ] Economic calendar
-- [ ] SEC filings (EDGAR)
-- [ ] Analyst ratings (Finnhub)
-- [ ] FRED economic data
+- [x] SEC filings (EDGAR — full-text search, insider trades)
+- [x] Analyst ratings (Finnhub consensus: buy/hold/sell + price targets)
+- [x] FRED economic data (Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply)
 
 ### Phase 12: Bookmap
 - [ ] Order book depth heatmap (ADR-048)

@@ -94,6 +94,34 @@ All analytics accessible via the existing DARWIN/DARWINS command palette entries
 | Symbol Overlap | DARWINS → Overlap | Cross-account position conflicts |
 | Equity History | DARWINS → History | Equity curve from snapshots |
 
+### 7. Advanced Performance Metrics
+
+Additional per-DARWIN and portfolio-level metrics implemented in `core/darwin.rs`:
+
+- **CAGR** (`compute_cagr`): Compound Annual Growth Rate from daily returns
+- **Recovery Factor** (`compute_recovery_factor`): Net profit / max drawdown ratio
+- **Drawdown Duration** (`compute_drawdown_duration`): Max drawdown duration in days, current drawdown duration, average recovery time
+- **Divergence Index** (`compute_divergence_index`): Measures return divergence between signal (MT5 trades) and DARWIN quote price over time — identifies when investor-visible performance diverges from underlying strategy
+- **Investment Velocity** (`compute_investment_velocity`): Rate of AuM change from investor flow data
+
+### 8. Signal vs Quote Comparison
+
+All DARWIN views now include signal vs quote comparison:
+
+- Signal Sharpe vs Quote Sharpe per DARWIN
+- Signal max drawdown vs Quote max drawdown
+- Per-DARWIN equity curves rendered side-by-side (Signal vs Quote)
+- Divergence Index plot showing cumulative return gap over time
+- Per-DARWIN drawdown stats table with both Signal and Quote columns
+
+### 9. Monthly Returns Heatmap
+
+Darwinex-style monthly returns grid per DARWIN:
+
+- Year × Month colored grid (green = positive, red = negative)
+- Built from `get_monthly_returns()` data
+- Displayed in the combined Drawdown dashboard view
+
 ## Consequences
 
 - **Pro**: Portfolio-level risk visibility across 6 accounts in one view

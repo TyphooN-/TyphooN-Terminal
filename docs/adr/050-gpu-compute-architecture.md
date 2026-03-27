@@ -114,6 +114,16 @@ Total VRAM for a 10K bar chart: ~500 KB. Negligible on a 8GB GPU.
 | 5K×5K correlation matrix | ~30 min | ~5s | 360× |
 | Monte Carlo 10K paths | ~10s | ~50ms | 200× |
 
+## Chunked Batching for Large DarwinIA Scans
+
+When scanning >50K DARWINs via the FTP pipeline, the combined daily return data can exceed wgpu buffer size limits (~128MB). The `compute_all_batches()` method in `GpuCompute` handles this by:
+
+1. Splitting the return series into chunks that fit within the GPU buffer limit (`chunk_size`)
+2. Dispatching each chunk as a separate GPU compute pass
+3. Merging the per-chunk `GpuDarwinStats` results into a single output vector
+
+This ensures the GPU path works for arbitrarily large DarwinIA datasets without falling back to CPU.
+
 ## Consequences
 
 ### Positive

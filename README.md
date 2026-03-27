@@ -92,7 +92,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Community Chat** | Matrix protocol chat via ~ (tilde) → CHAT, no server needed |
 | **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
 | **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), AES-256-GCM encrypted credential storage |
-| **Indicators** | 39 indicators: NNFX system (9) + standard (21) + MT5 parity (9: Alligator, AO, MFI, Force Index, Envelopes, StdDev, Chaikin, DeMarker, Fractals) |
+| **Indicators** | 32+ indicators: NNFX system (9) + standard (21) + Ehlers DSP (8) + MTF overlays (MTF SMA, ATR Projection MTF, Previous Candle Levels) |
 | **Security** | 21-pass audit (97 findings): AES-256-GCM credential encryption, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
 | **Analyst Ratings** | Finnhub consensus: stacked buy/hold/sell chart + price targets (~ →ANR) |
 | **Fear & Greed** | Market sentiment gauge (0-100) + 30-day sparkline (~ →FEAR) |
@@ -234,6 +234,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [045](docs/adr/045-darwin-analytics-expansion.md) | DARWIN analytics expansion |
 | [048](docs/adr/ADR-048-bookmap-depth-heatmap.md) | Bookmap depth heatmap |
 | [049](docs/adr/049-harmonic-pattern-detection.md) | Scott Carney harmonic pattern detection |
+| [050](docs/adr/050-gpu-compute-architecture.md) | GPU compute architecture (37 wgpu shaders) |
 
 ---
 

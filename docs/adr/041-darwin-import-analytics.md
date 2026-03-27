@@ -20,7 +20,7 @@ TyphooN-Terminal needed the ability to import MT5 trade history from 6 live DARW
 4. Dedicated SQLite connections (not shared cache Mutex) prevent contention with MT5 bar sync
 
 **Analytics Engine (`core/darwin.rs` — 5,400+ lines):**
-- 70+ public functions covering per-DARWIN and portfolio-level analytics
+- 74 public functions covering per-DARWIN and portfolio-level analytics
 - 47 unit tests with in-memory SQLite test database
 - All functions are pure computation on SQLite data — no external API calls
 

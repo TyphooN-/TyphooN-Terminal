@@ -11,7 +11,7 @@ All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM
 | **Confirmation 1** | Fisher Transform | 32 | Green/Red bars | Ehlers Fisher — NNFX confirmation (MT5 parity) |
 | **Volume** | Better Volume | 20 | Multi-color | Climax up (green), climax down (red), high (blue), low (yellow), churn (gray) |
 | **Exit** | ATR Projection | 14 | Yellow bands | Open ± ATR(14) — volatility bands |
-| **Support** | Previous Candle Levels | D/W | White/Magenta | Previous daily/weekly high/low |
+| **Support** | Previous Candle Levels | H1/H4/D1/W1/MN1 | White/Magenta | Previous bar high/low per timeframe |
 | **Support** | Supply/Demand Zones | Auto | Green/Red fill | Auto-detected from impulse candles |
 | **Support** | Fractals | 5-bar | Green ▲ / Red ▼ | Bill Williams swing points |
 | **Pattern** | Harmonic Patterns | Auto | Cyan XABCD | Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0 |
@@ -20,6 +20,8 @@ All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM
 
 | Indicator | Parameters | Color | Description |
 |-----------|-----------|-------|-------------|
+| MTF SMA | H1/H4/D1/W1 200, W1/MN1 100 | Tomato (H1), Magenta (H4+) | Multi-timeframe SMA overlay (matching MT5) |
+| ATR Projection MTF | 14 | Yellow bands | Open ± ATR on M15/H1/H4/D1/W1/MN1 horizontal levels |
 | SMA | 200, 100 | Yellow, Blue | Simple Moving Average |
 | EMA | 21 | Orange | Exponential Moving Average |
 | KAMA | 10, 2, 30 | White | Kaufman Adaptive Moving Average (MT5 match) |
@@ -54,7 +56,7 @@ All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM
 | Indicator | Parameters | Color | Range | Description |
 |-----------|-----------|-------|-------|-------------|
 | RSI | 14 | Yellow | 0-100 | Relative Strength Index, OB 70 / OS 30 |
-| Fisher Transform | 32 | Green/Red bars + signal | Auto | NNFX confirmation (MT5 parity) |
+| Fisher Transform | 32 (smoothing 0.5/0.5, coefficient 0.25) | Green/Red bars + signal | Auto | NNFX confirmation (MT5 parity) |
 | MACD | 12, 26, 9 | Blue line, orange signal | Auto | MACD + signal + histogram |
 | Stochastic | 14, 3, 3 | Blue %K, Orange %D | 0-100 | OB 80 / OS 20 |
 | ADX | 14 | Yellow ADX, Green DI+, Red DI- | 0-60 | Trend strength + directional |

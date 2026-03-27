@@ -35,6 +35,18 @@ The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScrip
 4. **Vulkan backend** — wgpu selects Vulkan on Linux (NVIDIA), Metal on macOS
 5. **No garbage collection** — Rust ownership model, no GC pauses
 
+### GPU DarwinIA Scan
+
+Large DarwinIA datasets (>128MB) are processed via chunked batching in the GPU compute pipeline. The `compute_all_batches()` method splits return series into chunks that fit within wgpu buffer size limits, processes each chunk on the GPU, and merges the results. This enables scanning 50K+ DARWINs without exceeding VRAM constraints.
+
+### Storage Compact (zstd-22)
+
+The Storage Manager (`STORAGE` command) can recompress all bar_cache entries at zstd level 22 for maximum compression. Decompression speed is identical regardless of compression level — only on-disk storage shrinks. Progress is reported per 200 entries.
+
+### Auto MT5 Sync
+
+Bar data from MT5 (via BarCacheWriter EA) is automatically synced every ~5 minutes (1200 frames at 250ms). This picks up new bars without manual refresh.
+
 ### Cache Format
 
 Bar data stored in TTBR (TyphooN Terminal Binary Record) format:
