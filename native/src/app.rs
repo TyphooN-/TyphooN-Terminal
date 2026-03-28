@@ -7497,14 +7497,13 @@ impl TyphooNApp {
         let old_vis = chart.visible_bars;
         let new_vis = ((old_vis as f32 * factor) as usize)
             .clamp(10, chart.bars.len().max(10));
-        // Anchor zoom to the right side (latest bars stay in view) — TradingView behavior
-        // When zooming in: view_offset moves right (toward latest)
-        // When zooming out: view_offset moves left (toward oldest)
-        let delta_bars = new_vis as isize - old_vis as isize;
-        let min_off = (new_vis as isize - 1).min(chart.bars.len() as isize - 1).max(0);
-        let max_off = (chart.bars.len() as isize - 1).max(min_off);
-        chart.view_offset = (chart.view_offset as isize + delta_bars / 2)
-            .clamp(min_off, max_off) as usize;
+        // TradingView zoom: anchor to the RIGHT (latest bars stay fixed)
+        // view_offset is the rightmost visible bar index
+        // When zooming in (fewer bars): offset stays same, we see fewer bars on the left
+        // When zooming out (more bars): offset stays same, we see more bars on the left
+        let max_off = chart.bars.len().saturating_sub(1);
+        // Keep the right edge (view_offset) fixed — just change visible_bars
+        chart.view_offset = chart.view_offset.min(max_off);
         chart.visible_bars = new_vis;
     }
 
@@ -15621,7 +15620,7 @@ impl eframe::App for TyphooNApp {
 
                 // Normal chart body drag → pan
                 if chart.is_dragging && (drag_delta.x.abs() > 0.0 || drag_delta.y.abs() > 0.0) {
-                    Self::handle_pan_h(chart, -drag_delta.x, available.width());
+                    Self::handle_pan_h(chart, drag_delta.x, available.width());
                     if drag_delta.y.abs() > 0.5 {
                         let range = {
                             let bars = &chart.bars;
@@ -15736,7 +15735,7 @@ impl eframe::App for TyphooNApp {
                         // Drag pan for this cell
                         let drag = ctx.input(|i| i.pointer.delta());
                         if ctx.input(|i| i.pointer.primary_down()) && drag.x.abs() > 0.5 {
-                            Self::handle_pan_h(chart, -drag.x, cell_rect.width());
+                            Self::handle_pan_h(chart, drag.x, cell_rect.width());
                         }
                     }
 
