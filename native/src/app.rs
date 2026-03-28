@@ -15958,12 +15958,24 @@ impl eframe::App for TyphooNApp {
                         chart.price_pan = 0.0;
                     }
                 } else if on_chart_body {
-                    // Double-click chart → reset everything
-                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                        chart.price_zoom = 1.0;
-                        chart.price_pan = 0.0;
-                        chart.visible_bars = 200;
-                        chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                    if self.mtf_enabled {
+                        // Double-click in MTF grid → toggle single chart focus
+                        self.mtf_enabled = false;
+                        self.log.push_back(LogEntry::info(format!("Focused: {} [{}] — double-click to return to MTF grid",
+                            self.charts.get(self.active_tab).map(|c| c.symbol.as_str()).unwrap_or("?"),
+                            self.charts.get(self.active_tab).map(|c| c.timeframe.label()).unwrap_or("?"))));
+                    } else if self.charts.len() > 1 {
+                        // Double-click in single mode with multiple tabs → return to MTF grid
+                        self.mtf_enabled = true;
+                        self.log.push_back(LogEntry::info("MTF grid restored"));
+                    } else {
+                        // Single chart, no MTF → reset zoom/pan
+                        if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                            chart.price_zoom = 1.0;
+                            chart.price_pan = 0.0;
+                            chart.visible_bars = 200;
+                            chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                        }
                     }
                 }
             }
