@@ -657,7 +657,9 @@ impl ChartState {
             format!("paper_TyphooN:{}:{}", sym, tf),
             format!("alpaca_paper_TyphooN:{}:{}", sym, tf),
             format!("default:{}:{}", sym, tf),
-            // Priority 3: Kraken (gap-fill / historical backfill — lowest priority)
+            // Priority 3: CryptoCompare (deep history — 2000 bars/request, back to 2010)
+            format!("cryptocompare:{}:{}", sym, tf),
+            // Priority 4: Kraken (legacy gap-fill — limited to ~720 bars)
             format!("kraken:{}:{}", sym, tf),
         ];
         // Also try slash/no-slash variants for crypto (same priority order)
@@ -665,6 +667,7 @@ impl ChartState {
             candidates.push(format!("mt5:{}:{}", sym_alt, tf));
             candidates.push(format!("{}:{}", sym_alt, tf));
             candidates.push(format!("alpaca:{}:{}", sym_alt, tf));
+            candidates.push(format!("cryptocompare:{}:{}", sym_alt, tf));
             candidates.push(format!("kraken:{}:{}", sym_alt, tf));
         }
 
@@ -4799,6 +4802,8 @@ enum BrokerCmd {
     FetchBars { symbol: String, timeframe: String, db_path: std::path::PathBuf },
     /// Crypto backfill via Kraken public OHLC API.
     KrakenBackfill { symbol: String, timeframes: Vec<String>, db_path: std::path::PathBuf },
+    /// Deep crypto backfill via CryptoCompare (2000 bars/request, back to 2010).
+    CryptoCompareBackfill { symbol: String, timeframes: Vec<String>, db_path: std::path::PathBuf },
     /// Import all DARWIN XLSX files from a directory (non-blocking).
     /// Ticker is derived from filename: e.g. "THA.xlsx" → "THA", "THB_history.xlsx" → "THB".
     DarwinImportAll { dir: PathBuf, db_path: PathBuf },
@@ -5970,6 +5975,65 @@ impl TyphooNApp {
                             format!("Kraken {} complete: {} total bars across {} TFs — full history from earliest available",
                                 symbol, total_bars, timeframes.len())
                         ));
+                    }
+                    BrokerCmd::CryptoCompareBackfill { symbol, timeframes, db_path } => {
+                        use typhoon_engine::core::cryptocompare;
+                        let client = reqwest::Client::builder()
+                            .user_agent("TyphooN-Terminal/1.0")
+                            .build().unwrap_or_default();
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                            "CryptoCompare backfill {} started ({} TFs)...", symbol, timeframes.len()
+                        )));
+                        let now_ms = chrono::Utc::now().timestamp_millis();
+                        let start_ms = chrono::NaiveDate::from_ymd_opt(2010, 1, 1)
+                            .and_then(|d| d.and_hms_opt(0, 0, 0))
+                            .map(|ndt| ndt.and_utc().timestamp() * 1000)
+                            .unwrap_or(0);
+                        let mut total_bars = 0usize;
+                        for tf in &timeframes {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                "CryptoCompare {} {} fetching...", symbol, tf
+                            )));
+                            match cryptocompare::fetch_ohlcv(&client, &symbol, tf, start_ms, now_ms).await {
+                                Ok(bars) => {
+                                    let count = bars.len();
+                                    total_bars += count;
+                                    if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                        let json = serde_json::to_string(&bars).unwrap_or_default();
+                                        let key = format!("cryptocompare:{}:{}", symbol, tf);
+                                        let _ = cache.put_bars(&key, &json);
+                                    }
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                        "CryptoCompare {} {}: {} bars cached", symbol, tf, count
+                                    )));
+                                }
+                                Err(e) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
+                                        "CryptoCompare {} {}: {}", symbol, tf, e
+                                    )));
+                                }
+                            }
+                        }
+                        // Auto-delete old Kraken data for this symbol (superseded by CryptoCompare)
+                        if total_bars > 0 {
+                            if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                let mut kraken_deleted = 0u64;
+                                for tf in &timeframes {
+                                    let kraken_key = format!("kraken:{}:{}", symbol, tf);
+                                    if let Ok(true) = cache.delete_key(&kraken_key) { kraken_deleted += 1; }
+                                }
+                                if kraken_deleted > 0 {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                        "Cleaned up {} old Kraken entries for {} (superseded by CryptoCompare)",
+                                        kraken_deleted, symbol
+                                    )));
+                                }
+                            }
+                        }
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                            "CryptoCompare {} complete: {} bars across {} TFs",
+                            symbol, total_bars, timeframes.len()
+                        )));
                     }
                     BrokerCmd::FetchFilingContent { url } => {
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -11441,13 +11505,13 @@ impl TyphooNApp {
                 .resizable(true).default_size([550.0, 400.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (~720 bars/TF)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (Deep History)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
                             let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                             let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
                             for sym in &["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"] {
-                                let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone() });
+                                let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill { symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone() });
                             }
-                            self.log.push_back(LogEntry::info("Kraken backfill started for 10 crypto pairs × 5 timeframes"));
+                            self.log.push_back(LogEntry::info("CryptoCompare backfill started for 10 crypto pairs × 5 timeframes (deep history)"));
                         }
                     });
                     ui.add_space(4.0);
@@ -11459,8 +11523,8 @@ impl TyphooNApp {
                             if !sym.is_empty() {
                                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                                 let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
-                                let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: sym.clone(), timeframes: tfs, db_path });
-                                self.log.push_back(LogEntry::info(format!("Kraken backfill {} started (5 timeframes)", sym)));
+                                let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill { symbol: sym.clone(), timeframes: tfs, db_path });
+                                self.log.push_back(LogEntry::info(format!("CryptoCompare backfill {} started (5 timeframes)", sym)));
                             }
                         }
                     });
@@ -11468,7 +11532,7 @@ impl TyphooNApp {
 
                     // Progress section
                     ui.label(egui::RichText::new("Progress").small().strong());
-                    ui.label(egui::RichText::new("Connect Kraken API to start backfill").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("CryptoCompare deep history — no API key needed").color(AXIS_TEXT).small());
                     ui.add_space(4.0);
 
                     // Table header (matching old WebKit)

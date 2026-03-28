@@ -1,6 +1,7 @@
 pub mod backtest;
 pub mod bar_builder;
 pub mod kraken;
+pub mod cryptocompare;
 pub mod cache;
 pub mod darwin;
 pub mod darwin_ftp;

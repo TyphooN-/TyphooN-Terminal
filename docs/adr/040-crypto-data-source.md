@@ -1,7 +1,7 @@
-# ADR-040: Crypto Data Source Hierarchy — Kraken over Binance
+# ADR-040: Crypto Data Source Hierarchy — CryptoCompare + Kraken
 
-**Status:** Implemented
-**Date:** 2026-03-22
+**Status:** Implemented (Updated 2026-03-27)
+**Date:** 2026-03-22 | **Updated:** 2026-03-27
 
 ## Context
 
@@ -10,60 +10,63 @@ Crypto symbols at Darwinex (MT5) have weekend gaps — markets close Friday and 
 ## Decision
 
 ### Rejected: Binance Public API
+Binance.com geo-blocks API access from US/Canada. HTTP 451 returned.
 
-Binance.com geo-blocks API access from restricted jurisdictions (US, Canada, and others) per their Terms of Service section "b. Eligibility". HTTP 451 "Unavailable For Legal Reasons" is returned. Binance.US exists but has limited pair coverage and separate API.
+### Rejected: Kraken OHLC as Primary Backfill
+Kraken's OHLC endpoint returns only the most recent ~720 bars regardless of the `since` parameter. The `since` parameter does NOT enable historical pagination for OHLC data (unlike their Trades endpoint). This makes Kraken unsuitable for deep historical backfill.
 
-### Accepted: Kraken Public API
+### Accepted: CryptoCompare (Primary Backfill)
 
-Kraken has no geo-restrictions, requires no API key for public market data, and provides deep history:
+CryptoCompare provides the deepest free crypto history with proper pagination:
 
-- **BTC/USD**: from 2013 (deepest of any exchange)
-- **ETH/USD**: from 2016
-- **Most alts**: from 2017-2018
-- **Rate limit**: ~15 calls/minute (public), 720 bars per request
-- **Timeframes**: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w (monthly aggregated from daily)
-- **24/7/365**: including weekends, holidays
+- **No API key required** — works without authentication
+- **No geo-restrictions** — available worldwide
+- **2000 bars per request** — 3x more than Kraken
+- **Proper backward pagination** — `toTs` parameter works correctly
+- **Deep history**: BTC from 2010, ETH from 2015, most alts from 2017+
+- **Endpoints**: `histoday`, `histohour`, `histominute`
+- **OHLCV data**: open, high, low, close, volumefrom, volumeto
 
-### Data Hierarchy (3-tier)
+### Kraken (Retained for Weekend Gap-Fill)
+Kraken is retained as a secondary source for near-real-time weekend data (720 most recent bars), but CryptoCompare handles all deep history backfill.
+
+### Data Hierarchy (4-tier)
 
 ```
-Priority 1: MT5 (Darwinex) — weekday authority, has the spread/pricing DARWINs trade
-Priority 2: Kraken         — fills weekend gaps + extends history pre-MT5
-Priority 3: Alpaca         — live trading execution (NOT 24/7 for crypto)
+Priority 1: MT5 (Darwinex)      — weekday authority, signal account data
+Priority 2: Alpaca/tastytrade   — where user actually trades
+Priority 3: CryptoCompare       — deep history backfill (2010+)
+Priority 4: Kraken              — weekend gap-fill (720 most recent bars)
 ```
 
-### Merge Logic
+### Cache Key Prefixes
 
-1. Load existing MT5 bars (have Friday-close → Monday-open gaps)
-2. Fetch Kraken bars for full date range (including pre-MT5 history)
-3. Insert Kraken bars **only where MT5 has no data** (gap-fill, never overwrite)
-4. For symbols not at Darwinex/Alpaca — Kraken is sole source, stored under `mt5:` key for unified charting
+```
+mt5:SYMBOL:TF           — MT5 BarCacheWriter data (authoritative)
+alpaca:SYMBOL:TF         — Live Alpaca bar fetch
+cryptocompare:SYMBOL:TF  — CryptoCompare deep history
+kraken:SYMBOL:TF         — Kraken weekend gap-fill (legacy, auto-deleted when CryptoCompare replaces)
+```
 
-### Symbol Mapping
+### Auto-Cleanup
+When CryptoCompare backfill completes for a symbol, old Kraken data for the same symbol/timeframes is automatically deleted from cache (superseded by deeper CryptoCompare data).
 
-| TyphooN | Kraken | Notes |
-|---------|--------|-------|
-| BTC/USD | XBTUSD | Kraken uses XBT for Bitcoin |
-| DOGE/USD | XDGUSD | Kraken uses XDG for Dogecoin |
-| ETH/USD | ETHUSD | Direct mapping |
-| SOL/USD | SOLUSD | Direct mapping |
+### Symbol Handling
+CryptoCompare uses standard symbols: `fsym=BTC&tsym=USD`. The module normalizes TyphooN symbols: `BTCUSD` → `BTC`, `SOL/USD` → `SOL`.
 
-### Weekend Auto-Sync
-The frontend automatically polls Kraken every 30 seconds when markets are closed (Friday 22:00 UTC - Sunday 22:00 UTC) for the currently viewed crypto symbol. This provides near-real-time weekend price updates without manual intervention.
-
-## Implementation Notes (2026-03-26)
-
-- **Deep backfill**: Kraken daily data now goes back to 2013 for BTC/USD, providing the deepest continuous history available.
-- **Live Alpaca fallback**: When cache misses occur, a live Alpaca bar fetch is used as fallback to fill gaps in real time.
-- **Cache key prefix fix**: Kraken-sourced bars are stored under the `kraken:` cache key prefix (not `mt5:`), ensuring correct source attribution and avoiding collisions with MT5 data.
+### Aggregation
+For timeframes not natively supported by CryptoCompare:
+- 5Min/15Min/30Min: aggregated from 1Min
+- 4Hour: aggregated from 1Hour
+- 1Week: aggregated from 1Day
+- 1Month: aggregated from 1Day (calendar month grouping)
 
 ## Consequences
 
+- **Pro**: Full crypto history from 2010 (BTC) — deepest available
+- **Pro**: No API key, no geo-blocking, no rate limit issues
+- **Pro**: 2000 bars/request with proper backward pagination
+- **Pro**: Automatically supersedes and cleans up limited Kraken data
 - **Pro**: Weekend gaps filled for all crypto symbols
-- **Pro**: No API key or account needed
-- **Pro**: Works in all jurisdictions (no geo-blocking)
-- **Pro**: BTC history from 2013 (vs MT5's ~2011, but with gaps)
-- **Pro**: Can chart Kraken-only symbols not available at Darwinex
-- **Con**: 720 bars per request = multiple paginated calls for deep history
-- **Con**: Kraken doesn't list every alt (some niche coins may be missing)
-- **Con**: Rate limit lower than Binance (15/min vs 1200/min)
+- **Con**: CryptoCompare may have slightly different prices than Darwinex/Kraken
+- **Con**: Lower timeframes (1Min) have limited history (~7 days at CryptoCompare)
