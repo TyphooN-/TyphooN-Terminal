@@ -3039,12 +3039,13 @@ fn draw_chart(
 
     // MQL4 mode uses white for all; MTF_MA overlay uses magenta for higher TFs
     if flags.kama && !chart.multi_kama.is_empty() {
+        // MultiKAMA: ALL WHITE (matching MT5 MultiKAMA.mqh SetIndexStyle lines 59-63)
         let htf_colors = [
-            egui::Color32::from_rgb(255, 255, 255),   // H1 — white
-            egui::Color32::from_rgb(255, 0, 255),     // H4 — magenta (clrMagenta)
-            egui::Color32::from_rgb(255, 0, 255),     // D1 — magenta
-            egui::Color32::from_rgb(255, 0, 255),     // W1 — magenta
-            egui::Color32::from_rgb(255, 0, 255),     // MN1 — magenta
+            egui::Color32::from_rgb(255, 255, 255),   // H1 — white (clrWhite)
+            egui::Color32::from_rgb(255, 255, 255),   // H4 — white (clrWhite)
+            egui::Color32::from_rgb(255, 255, 255),   // D1 — white (clrWhite)
+            egui::Color32::from_rgb(255, 255, 255),   // W1 — white (clrWhite)
+            egui::Color32::from_rgb(255, 255, 255),   // MN1 — white (clrWhite)
         ];
         for (tf_idx, (_tf_label, projected)) in chart.multi_kama.iter().enumerate() {
             let color = htf_colors.get(tf_idx).copied().unwrap_or(egui::Color32::from_rgb(255, 0, 255));
