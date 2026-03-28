@@ -11152,7 +11152,7 @@ impl TyphooNApp {
                                         ui.separator();
                                         ui.label(egui::RichText::new("Filing Document").small().strong());
                                         let doc_h = ui.available_height().max(150.0);
-                                        egui::ScrollArea::vertical().id_salt("sec_doc_viewer").max_height(doc_h).show(ui, |ui| {
+                                        egui::ScrollArea::vertical().id_salt("sec_doc_viewer").max_height(doc_h).auto_shrink(false).show(ui, |ui| {
                                             ui.label(egui::RichText::new(&self.sec_filing_content).small().monospace().color(egui::Color32::from_rgb(190, 190, 200)));
                                         });
                                     }
@@ -11188,7 +11188,7 @@ impl TyphooNApp {
 
                         // Filing table (scrollable, fill remaining height)
                         let avail = ui.available_height().max(200.0);
-                        egui::ScrollArea::vertical().id_salt("sec_filings_tab").min_scrolled_height(avail).show(ui, |ui| {
+                        egui::ScrollArea::vertical().id_salt("sec_filings_tab").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
                             if deduped.is_empty() {
                                 ui.label(egui::RichText::new("No filings. Click Scrape Now to fetch from SEC EDGAR.").color(sec_low));
                             } else {
@@ -11232,7 +11232,7 @@ impl TyphooNApp {
                             }
                         });
                         let avail = ui.available_height().max(200.0);
-                        egui::ScrollArea::vertical().id_salt("sec_alerts_tab").min_scrolled_height(avail).show(ui, |ui| {
+                        egui::ScrollArea::vertical().id_salt("sec_alerts_tab").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
                             if alerts.is_empty() {
                                 ui.label(egui::RichText::new("No active alerts.").color(sec_low));
                             } else {
@@ -13092,7 +13092,7 @@ impl TyphooNApp {
                     }
 
                     let avail = ui.available_height().max(200.0);
-                    egui::ScrollArea::vertical().id_salt("storage_scroll").min_scrolled_height(avail).show(ui, |ui| {
+                    egui::ScrollArea::vertical().id_salt("storage_scroll").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
                         egui::Grid::new("storage_grid").striped(true).num_columns(4).min_col_width(60.0).show(ui, |ui| {
                             ui.label(egui::RichText::new("Key").color(AXIS_TEXT).small().strong());
                             ui.label(egui::RichText::new("Bars").color(AXIS_TEXT).small().strong());
