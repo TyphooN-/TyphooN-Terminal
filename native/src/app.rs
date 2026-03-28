@@ -11539,24 +11539,37 @@ impl TyphooNApp {
                     ui.add_space(4.0);
 
                     // Table header (matching old WebKit)
-                    egui::Grid::new("backfill_grid").striped(true).num_columns(5).show(ui, |ui| {
+                    egui::Grid::new("backfill_grid").striped(true).num_columns(6).show(ui, |ui| {
                         ui.strong("Symbol");
-                        ui.strong("Timeframe");
-                        ui.strong("New Bars");
-                        ui.strong("Total Bars");
+                        ui.strong("TF");
+                        ui.strong("Bars");
+                        ui.strong("First");
+                        ui.strong("Last");
                         ui.strong("Status");
                         ui.end_row();
-                        // Show cached crypto symbols if available
                         {
                             let stats = &self.bg.detailed_stats;
                                 for (key, count, _) in stats {
                                     if key.starts_with("cryptocompare:") || key.starts_with("kraken:") || key.starts_with("CC:") {
                                         let parts: Vec<&str> = key.rsplitn(2, ':').collect();
                                         let (tf_part, sym_part) = if parts.len() == 2 { (parts[0], parts[1]) } else { ("—", key.as_str()) };
+                                        // Get first/last bar timestamps from cache
+                                        let (first_ts, last_ts) = if let Some(ref cache) = self.cache {
+                                            cache.get_bars_raw(key).ok().flatten().map(|raw| {
+                                                let first = raw.first().map(|b| b.0).unwrap_or(0);
+                                                let last = raw.last().map(|b| b.0).unwrap_or(0);
+                                                (first, last)
+                                            }).unwrap_or((0, 0))
+                                        } else { (0, 0) };
+                                        let fmt_ts = |ts: i64| -> String {
+                                            if ts == 0 { "—".to_string() }
+                                            else { chrono::DateTime::from_timestamp(ts / 1000, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default() }
+                                        };
                                         ui.label(egui::RichText::new(sym_part).small().monospace());
                                         ui.label(egui::RichText::new(tf_part).color(AXIS_TEXT).small());
-                                        ui.label(egui::RichText::new("—").color(AXIS_TEXT).small());
                                         ui.label(egui::RichText::new(format!("{}", count)).small());
+                                        ui.label(egui::RichText::new(fmt_ts(first_ts)).color(AXIS_TEXT).small());
+                                        ui.label(egui::RichText::new(fmt_ts(last_ts)).color(AXIS_TEXT).small());
                                         ui.label(egui::RichText::new("cached").color(ACCENT).small());
                                         ui.end_row();
                                     }
