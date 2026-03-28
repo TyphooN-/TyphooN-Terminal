@@ -89,4 +89,4 @@ Optional API keys that unlock additional features. All are free to register.
 
 ## How to Add Keys
 
-In TyphooN-Terminal: **Ctrl+K → SETTINGS** to open the settings panel. Enter your API keys — they're stored with AES-256-GCM encryption in SQLite (PBKDF2-derived machine-specific key).
+In TyphooN-Terminal: **~ → SETTINGS** to open the settings panel. Enter your API keys — they're stored in the OS-native keyring (libsecret on Linux, Keychain on macOS, Credential Manager on Windows).

@@ -5,7 +5,7 @@
 
 ## Context
 
-Scott Carney's harmonic patterns (Gartley, Butterfly, Bat, Crab) are XABCD price structures defined by specific Fibonacci ratios between swing points. They provide high-probability reversal zones with predefined entries, targets, and stops — a complete trading strategy per pattern.
+Scott Carney's harmonic patterns (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) are XABCD price structures defined by specific Fibonacci ratios between swing points. They provide high-probability reversal zones with predefined entries, targets, and stops — a complete trading strategy per pattern.
 
 ## Decision
 
@@ -19,6 +19,12 @@ Implement auto-scanning harmonic pattern detection in the native chart engine. P
 | **Butterfly** | 0.786 | 0.382-0.886 | 1.27 | D reversal |
 | **Bat** | 0.382-0.50 | 0.382-0.886 | 0.886 | D reversal |
 | **Crab** | 0.382-0.618 | 0.382-0.886 | 1.618 | D reversal |
+| **Shark** | 1.13-1.618 | 1.618-2.24 | 0.886 | D reversal |
+| **Cypher** | 0.382-0.618 | 1.13-1.414 | 0.786 | D reversal |
+| **5-0** | 1.13-1.618 | 1.618-2.24 | 0.50 BC | D reversal |
+| **Alt Bat** | 0.382 | 0.382-0.886 | 1.13 | D reversal |
+| **Deep Crab** | 0.886 | 0.382-0.886 | 1.618 | D reversal |
+| **Three Drives** | 0.618-0.786 | 1.272-1.618 | — | Drive 3 |
 
 ### Detection Algorithm
 

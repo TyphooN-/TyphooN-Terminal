@@ -23,7 +23,7 @@
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Console (`~`) with 125+ commands
+- [x] Console (`~`) with 117 commands
 - [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
@@ -48,8 +48,9 @@
 ### Phase 6: Engine Integration
 - [x] Risk calculator (risk.rs: lot sizing, R:R)
 - [x] Margin monitor (margin.rs: margin level, max safe lots, protect urgency)
-- [x] Backtest engine (SMA Cross + NNFX strategies)
+- [x] Backtest engine (5 strategies: SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev)
 - [x] Optimizer (SMA Cross grid search, top N results)
+- [x] Walk-forward optimizer (70/30 in-sample/out-of-sample, 5 strategies)
 - [x] Seasonals (monthly return patterns from bar data)
 - [x] Volume Profile (POC, Value Area High/Low)
 - [x] Monte Carlo VaR (from DARWIN daily returns)

@@ -8,7 +8,7 @@ Every byte from SQLite cache to GPU pixels traverses zero serialization layers. 
 
 ### 2. DARWIN-First Analytics
 
-The terminal is built around Darwinex DARWIN accounts. The analytics engine (darwin.rs, 5,400+ lines, 70+ functions) provides independent risk verification — VaR, correlation, exposure, streaks, hourly P&L — without relying on Darwinex's own dashboards.
+The terminal is built around Darwinex DARWIN accounts. The analytics engine (darwin.rs, 6,800+ lines, 80 functions) provides independent risk verification — VaR, correlation, exposure, streaks, hourly P&L — without relying on Darwinex's own dashboards.
 
 ### 3. MT5 as View-Only Data Source
 
@@ -54,5 +54,5 @@ Indicator toggles, symbol, MTF state, and window positions persist to `~/.config
 - No external JavaScript execution
 - No WebView (no XSS, no CSP issues)
 - SQLite parameterized queries only (no SQL injection)
-- API credentials stored via AES-256-GCM (keychain module)
+- API credentials stored via OS-native keyring (libsecret/Keychain/CredentialManager)
 - XLSX parsing via calamine (pure Rust, no shell execution)

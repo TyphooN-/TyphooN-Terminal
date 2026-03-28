@@ -14,7 +14,7 @@ All indicators computed in pure Rust on `&[f64]` slices. Pre-computed on load, c
 
 **Standard (14+):** EMA, WMA, HMA, Bollinger, Ichimoku, Parabolic SAR, RSI, MACD, Stochastic, ADX, CCI, Williams %R, OBV, Momentum, Volume.
 
-**Patterns:** 7 Carney harmonics (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0), Pivot Points.
+**Patterns:** 10 Carney harmonics (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives), Pivot Points.
 
 ## Consequences
 - Pro: < 15ms for all 32+ indicators on 10K bars

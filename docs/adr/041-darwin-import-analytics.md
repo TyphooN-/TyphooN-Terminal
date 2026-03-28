@@ -19,8 +19,8 @@ TyphooN-Terminal needed the ability to import MT5 trade history from 6 live DARW
 3. Open positions reconstructed from deal volume balance (sum "in" - sum "out" per symbol+side)
 4. Dedicated SQLite connections (not shared cache Mutex) prevent contention with MT5 bar sync
 
-**Analytics Engine (`core/darwin.rs` — 5,400+ lines):**
-- 74 public functions covering per-DARWIN and portfolio-level analytics
+**Analytics Engine (`core/darwin.rs` — 6,800+ lines):**
+- 80 public functions covering per-DARWIN and portfolio-level analytics
 - 47 unit tests with in-memory SQLite test database
 - All functions are pure computation on SQLite data — no external API calls
 
@@ -72,4 +72,4 @@ Priority 3: Alpaca          — live trading execution
 - **Pro**: Portfolio-level risk aggregation across 6 accounts
 - **Con**: XLSX re-export required for trade history updates (until investor mode)
 - **Con**: Kraken rate limit (15 req/min) makes full backfill slow (~5-10 min)
-- **Con**: darwin.rs is large (5,400+ lines) — may benefit from module split in future
+- **Con**: darwin.rs is large (6,800+ lines) — may benefit from module split in future

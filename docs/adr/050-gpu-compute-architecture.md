@@ -6,9 +6,9 @@
 
 With the WebKit/JS layer eliminated, we have direct access to wgpu from Rust. GPU parallelism provides 100-5000× speedup for batch numerical work on the GTX 1080 (2560 CUDA cores) vs the E5-2696 v4 (44 threads).
 
-## Implementation Status: 37 GPU Compute Shaders (~98% coverage)
+## Implementation Status: 28 GPU Compute Shaders (~98% coverage)
 
-### Chart Indicators on GPU (32 shaders)
+### Chart Indicators on GPU (23 shaders)
 
 | # | Shader | Dispatch | Output | Category |
 |---|--------|----------|--------|----------|

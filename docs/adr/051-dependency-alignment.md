@@ -15,7 +15,7 @@ Align all direct dependencies to their latest stable versions across the entire 
 
 | Crate | Before | After | Notes |
 |-------|--------|-------|-------|
-| wgpu | 24 | **27** | Match eframe 0.33 internal version — eliminates naga 24/27 duplicate |
+| wgpu | 24 | **29** | Match eframe 0.34 internal version — eliminates naga duplicate |
 | rfd | 0.15 | **0.17** | Native file dialog |
 | pest / pest_derive | 2.7 | **2.8** | Parser (mql5-compiler) |
 | rusqlite (cli) | 0.34 | **0.39** | Match engine version — was 5 versions behind |

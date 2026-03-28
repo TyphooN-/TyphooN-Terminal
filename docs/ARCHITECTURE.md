@@ -11,25 +11,25 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ Chart Renderer (egui Painter)               ││
 │  │ - Candle/HeikinAshi/Line/Bars/Renko         ││
 │  │ - 32+ indicators (pure Rust computation)    ││
-│  │ - 7 drawing tools + 7 harmonic patterns     ││
+│  │ - 7 drawing tools + 10 harmonic patterns     ││
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
 │  │ egui Panels                                 ││
-│  │ - Console (~) with 125+ commands             ││
+│  │ - Console (~) with 117 commands               ││
 │  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
-│  │ - DARWIN analytics (80+ engine functions)   ││
+│  │ - DARWIN analytics (80 engine functions)    ││
 │  │ - SEC Filing Scanner + Insider Trades       ││
 │  │ - Finnhub News + Market Data APIs           ││
 │  │ - Backtest engine + optimizer               ││
 │  │ - MTF Grid (up to 16 chart viewports)       ││
-│  │ - 32 floating windows                       ││
+│  │ - 29 floating windows                       ││
 │  └─────────────────────────────────────────────┘│
 ├─────────────────────────────────────────────────┤
 │  Engine Library (typhoon-engine crate)          │
 │  - AlpacaBroker (REST + WebSocket)              │
 │  - SqliteCache (TTBR binary, zstd compression)  │
-│  - DarwinDB (80+ analytics functions, 100% wired)│
+│  - DarwinDB (80 analytics functions, 100% wired) │
 │  - RiskEngine (VaR, TRIM, martingale)           │
 │  - BacktestEngine (bar-by-bar, optimization)    │
 │  - BarBuilder (WebSocket → OHLCV)               │
@@ -69,7 +69,7 @@ MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter 
 | Plots | egui_plot | Analytics charts (equity curves, histograms) |
 | Async | tokio | Shared with engine for broker WebSocket |
 | Cache | SQLite + zstd | TTBR binary format, ~3-5x compression |
-| Analytics | darwin.rs (5,400+ lines) | 74 functions, 47 unit tests |
+| Analytics | darwin.rs (6,800+ lines) | 80 functions, 47 unit tests |
 | Risk | risk.rs + margin.rs + var.rs | Full port of TyphooN EA v1.420 |
 
 ## Project Structure
@@ -79,14 +79,14 @@ TyphooN-Terminal/
 ├── native/                 # Native GPU application
 │   ├── src/
 │   │   ├── main.rs         # eframe init, wgpu renderer selection
-│   │   └── app.rs          # All UI (5,147 lines)
+│   │   └── app.rs          # All UI (16,643 lines)
 │   └── Cargo.toml
 ├── engine/                 # Shared engine library
 │   ├── src/
 │   │   ├── lib.rs          # Crate root
 │   │   ├── core/
 │   │   │   ├── cache.rs    # SQLite + zstd bar cache
-│   │   │   ├── darwin.rs   # DARWIN analytics (74 functions)
+│   │   │   ├── darwin.rs   # DARWIN analytics (80 functions)
 │   │   │   ├── risk.rs     # Lot sizing (4 order modes)
 │   │   │   ├── margin.rs   # TRIM, PROTECT, margin math
 │   │   │   ├── var.rs      # VaR, CVaR, portfolio risk
@@ -99,7 +99,7 @@ TyphooN-Terminal/
 ├── cli/                    # Standalone TUI (6.5MB, SSH-ready)
 ├── mql5-compiler/          # MT5 XML → SQLite import pipeline
 └── docs/
-    ├── adr/                # 15 Architecture Decision Records
+    ├── adr/                # 39 Architecture Decision Records
     ├── API_KEYS.md
     └── KEYBOARD_SHORTCUTS.md
 ```

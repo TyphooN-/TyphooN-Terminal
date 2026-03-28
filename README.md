@@ -12,14 +12,14 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **CLI Binary** | 6.5MB standalone TUI (SSH/VPS ready) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | < 2 seconds |
-| **Lines of Code** | ~9,500 GUI + ~12,000 engine (pure Rust) |
+| **Lines of Code** | ~16,600 GUI + ~12,000 engine (pure Rust) |
 | **Indicators** | 32+ (NNFX + Ehlers DSP + standard + harmonics) |
-| **Commands** | 125+ Quake-console style (~) |
+| **Commands** | 117 Quake-console style (~) |
 | **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
-| **Harmonic Patterns** | 7 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0) |
+| **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
 | **Data Sources** | MT5 (Darwinex), Alpaca, Kraken, tastytrade (auth only, roadmap) |
-| **DARWIN Analytics** | 80+ functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
+| **DARWIN Analytics** | 80 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
 ---
@@ -34,7 +34,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Order Placement** | Draggable SL/TP lines, 6 order types (market/bracket/limit/stop/stop-limit/trailing), auto lot calculation |
 | **Order Management** | Open positions panel with live P/L, trade history, cancel pending orders, smart partial close |
 | **Price Alerts** | Set alerts at any price, browser notifications, persistent across sessions |
-| **Backtester** | Strategy trait with SMA Cross example, equity curve, trade reports (Sharpe, drawdown, profit factor) |
+| **Backtester** | 5 strategies (SMA Cross, NNFX, KAMA Cross, Fisher Cross, RSI Mean-Rev), equity curve, trade reports (Sharpe, drawdown, profit factor) |
 | **WebSocket Streaming** | Real-time trades/quotes via Alpaca WebSocket, Time & Sales |
 | **Options Chain** | Full Greeks, strike/expiry/bid/ask via Alpaca options API |
 | **Stock Screener** | Filter by price, volume, sector, change%, tradable/shortable flags |
@@ -50,7 +50,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Screenshot Export** | Ctrl+Shift+S to clipboard with toast notification |
 | **Push Notifications** | Pushover + ntfy.sh for mobile alerts |
 | **CSV Export** | Export trade history as CSV |
-| **Chart Types** | Candlestick, Heikin-Ashi, Line, and Bar chart rendering |
+| **Chart Types** | Candlestick, Heikin-Ashi, Line, OHLC Bar, and Renko chart rendering |
 | **Risk/Reward Overlay** | Visual profit/loss zones on chart when SL/TP lines set |
 | **Trade Journal** | Log trades with notes, review history (~ →JOURNAL) |
 | **Position Calculator** | Risk-based sizing with R:R ratio (~ →CALC) |
@@ -91,9 +91,9 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Headless CLI** | `--backtest` mode: run strategies from command line, no GUI needed (VPS/SSH) |
 | **Community Chat** | Matrix protocol chat via ~ (tilde) → CHAT, no server needed |
 | **Broker Abstraction** | BrokerTrait — extensible to any broker via single Rust file |
-| **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), AES-256-GCM encrypted credential storage |
+| **Multi-Account** | Save/load multiple Alpaca accounts (paper + live), OS-native keyring credential storage |
 | **Indicators** | 32+ indicators: NNFX system (9) + standard (21) + Ehlers DSP (8) + MTF overlays (MTF SMA, ATR Projection MTF, Previous Candle Levels) |
-| **Security** | 21-pass audit (97 findings): AES-256-GCM credential encryption, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
+| **Security** | 21-pass audit (97 findings): OS-native keyring credentials, input validation, HTTP timeouts, path traversal, CSP, config bounds, zeroize, async lock optimization |
 | **Analyst Ratings** | Finnhub consensus: stacked buy/hold/sell chart + price targets (~ →ANR) |
 | **Fear & Greed** | Market sentiment gauge (0-100) + 30-day sparkline (~ →FEAR) |
 | **Dark Pool** | FINRA RegSHO daily short volume with gauge visualization (~ →DARKPOOL) |
@@ -105,7 +105,7 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Yield Curve** | Treasury rates with 2Y-10Y inversion detection (~ →YIELD) |
 | **GPU Chart Engine** | Native wgpu candlesticks, drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
 | **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
-| **125+ Commands** | Quake-console command palette with fuzzy search |
+| **117 Commands** | Quake-console command palette with fuzzy search |
 
 ---
 
@@ -211,7 +211,7 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [003](docs/adr/003-sqlite-cache.md) | SQLite + zstd TTBR binary cache |
 | [004](docs/adr/004-mtf-indicators.md) | Multi-timeframe indicator support |
 | [005](docs/adr/005-indicator-visual-parity.md) | Indicator visual parity with MT5 |
-| [006](docs/adr/006-security.md) | Security (no WebView, parameterized SQL, AES-256-GCM) |
+| [006](docs/adr/006-security.md) | Security (no WebView, parameterized SQL, OS keyring) |
 | [008](docs/adr/008-multi-tab-charts.md) | Multi-tab charts (Ctrl+N/W/Tab) |
 | [009](docs/adr/009-rate-limiter.md) | Centralized rate limiter |
 | [010](docs/adr/010-multi-broker.md) | Multi-broker (Alpaca + tastytrade + MT5 view-only) |
@@ -234,7 +234,17 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [045](docs/adr/045-darwin-analytics-expansion.md) | DARWIN analytics expansion |
 | [048](docs/adr/ADR-048-bookmap-depth-heatmap.md) | Bookmap depth heatmap |
 | [049](docs/adr/049-harmonic-pattern-detection.md) | Scott Carney harmonic pattern detection |
-| [050](docs/adr/050-gpu-compute-architecture.md) | GPU compute architecture (37 wgpu shaders) |
+| [050](docs/adr/050-gpu-compute-architecture.md) | GPU compute architecture (28 wgpu compute shaders) |
+| [051](docs/adr/051-dependency-alignment.md) | Dependency version alignment |
+| [052](docs/adr/052-performance-architecture.md) | Performance architecture |
+| [053](docs/adr/053-background-data-channels.md) | Background data channels |
+| [054](docs/adr/054-fundamentals-engine.md) | Fundamentals engine |
+| [055](docs/adr/055-gpu-darwin-analytics.md) | GPU DARWIN analytics |
+| [056](docs/adr/056-data-pipelines.md) | Data pipelines |
+| [057](docs/adr/057-symbol-specs-tracking.md) | Symbol specs tracking |
+| [058](docs/adr/058-gpu-strategy-optimizer.md) | GPU strategy optimizer |
+| [059](docs/adr/059-security-by-design.md) | Security by design (credential & data protection) |
+| [060](docs/adr/060-mql5-compiler-pipeline.md) | MQL5 compiler pipeline |
 
 ---
 

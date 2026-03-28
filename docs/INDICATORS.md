@@ -14,7 +14,7 @@ All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM
 | **Support** | Previous Candle Levels | H1/H4/D1/W1/MN1 | White/Magenta | Previous bar high/low per timeframe |
 | **Support** | Supply/Demand Zones | Auto | Green/Red fill | Auto-detected from impulse candles |
 | **Support** | Fractals | 5-bar | Green ▲ / Red ▼ | Bill Williams swing points |
-| **Pattern** | Harmonic Patterns | Auto | Cyan XABCD | Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0 |
+| **Pattern** | Harmonic Patterns | Auto | Cyan XABCD | Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives |
 
 ## Overlay Indicators (on price chart)
 
@@ -78,6 +78,9 @@ All indicators computed in pure Rust on `&[f64]` slices. No Web Workers, no WASM
 | Shark | Harmonic XABCD | AB=1.13-1.618 XA, XD=0.886 XA |
 | Cypher | Harmonic XABCD | AB=0.382-0.618 XA, BC=1.13-1.414 AB |
 | 5-0 | Harmonic XABCD | AB=1.13-1.618 XA, XD=0.50 BC |
+| Alt Bat | Harmonic XABCD | AB=0.382 XA, XD=1.13 XA |
+| Deep Crab | Harmonic XABCD | AB=0.886 XA, XD=1.618 XA |
+| Three Drives | Harmonic XABCD | AB=0.618-0.786 XA, CD=0.618-0.786 BC |
 | Supply/Demand Zones | Price action | Auto-detected from impulse candles (>2x ATR) |
 | Fractals | Bill Williams | 5-bar swing high/low arrows |
 

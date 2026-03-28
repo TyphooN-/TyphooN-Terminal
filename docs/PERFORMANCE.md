@@ -10,7 +10,7 @@ The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScrip
 |--------|-------|
 | Startup to interactive | < 2s (including SQLite cache load) |
 | 10K bar chart render | < 5ms |
-| 21 indicators on 10K bars | < 10ms total |
+| 32+ indicators on 10K bars | < 10ms total |
 | MTF grid (4 cells x 5K bars) | < 50ms |
 | Chart zoom/pan | 60fps, zero frame drops |
 | Memory (single chart + indicators) | ~50-80MB |
@@ -23,7 +23,7 @@ The terminal uses egui + wgpu for direct GPU rendering. No WebView, no JavaScrip
 |------|------|
 | SQLite read + zstd decompress | < 1ms |
 | Bar struct construction | < 0.5ms |
-| Indicator computation (all 21) | < 10ms |
+| Indicator computation (all 32+) | < 10ms |
 | egui Painter → wgpu surface | < 2ms |
 | **Total: cache → pixels** | **< 15ms** |
 
