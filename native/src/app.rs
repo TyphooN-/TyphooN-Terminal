@@ -1206,20 +1206,61 @@ impl ChartState {
             ("MN1 100", "1Month", 100),
         ];
 
-        let prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
+        // Extract bare symbol (strip ALL prefixes and timeframe)
+        let bare_sym = {
+            let known_prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:"];
+            let mut s = base_sym.as_str();
+            for pfx in &known_prefixes {
+                if s.starts_with(pfx) { s = &s[pfx.len()..]; break; }
+            }
+            // For mt5:Darwinex:CC format, the broker name is the second part
+            // We want just the symbol — last part before the TF was already stripped
+            let parts: Vec<&str> = s.split(':').collect();
+            parts.last().copied().unwrap_or(s).to_string()
+        };
+
+        let prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
 
         for &(label, tf_suffix, period) in mtf_lines {
-            // Skip if this is the same or lower TF as the chart
             if self.timeframe.cache_suffix() == tf_suffix { continue; }
 
             let mut htf_bars: Option<Vec<Bar>> = None;
+            // Try with bare symbol under each prefix, plus the original base_sym
             for prefix in &prefixes {
-                let key = format!("{}{}:{}", prefix, base_sym, tf_suffix);
+                // Try bare symbol: "mt5:CC:1Hour"
+                let key = format!("{}{}:{}", prefix, bare_sym, tf_suffix);
                 if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
                     htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                         ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                     }).collect());
                     break;
+                }
+            }
+            // Also try with full base_sym (e.g., "mt5:Darwinex:CC:1Hour")
+            if htf_bars.is_none() {
+                let key = format!("{}:{}", base_sym, tf_suffix);
+                if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                    htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                        ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                    }).collect());
+                }
+            }
+            // Fallback: search detailed_stats for partial match
+            if htf_bars.is_none() {
+                if let Ok(stats) = cache.detailed_stats() {
+                    let sym_lower = bare_sym.to_lowercase();
+                    let tf_lower = tf_suffix.to_lowercase();
+                    for (k, _, _) in &stats {
+                        let kl = k.to_lowercase();
+                        if kl.contains(&sym_lower) && kl.ends_with(&tf_lower) {
+                            if let Ok(Some(raw)) = cache.get_bars_raw(k) {
+                                htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                                    ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                                }).collect());
+                                break;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -1263,22 +1304,58 @@ impl ChartState {
             ("H1", "1Hour"), ("H4", "4Hour"), ("D1", "1Day"), ("W1", "1Week"), ("MN1", "1Month"),
         ];
 
-        // Prefixes to try
-        let prefixes = ["mt5:", "default:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
+        // Extract bare symbol (strip prefixes like mt5:Darwinex:)
+        let bare_sym = {
+            let known_prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:"];
+            let mut s = base_sym.as_str();
+            for pfx in &known_prefixes {
+                if s.starts_with(pfx) { s = &s[pfx.len()..]; break; }
+            }
+            let parts: Vec<&str> = s.split(':').collect();
+            parts.last().copied().unwrap_or(s).to_string()
+        };
+
+        let prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
 
         for (tf_label, tf_suffix) in &higher_tfs {
-            // Skip if this is the same TF as the chart
             if self.timeframe.cache_suffix() == *tf_suffix { continue; }
 
-            // Try to load bars from cache
             let mut htf_bars: Option<Vec<Bar>> = None;
+            // Try bare symbol with each prefix
             for prefix in &prefixes {
-                let key = format!("{}{}:{}", prefix, base_sym, tf_suffix);
+                let key = format!("{}{}:{}", prefix, bare_sym, tf_suffix);
                 if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
                     htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                         ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                     }).collect());
                     break;
+                }
+            }
+            // Fallback: try with full base_sym
+            if htf_bars.is_none() {
+                let key = format!("{}:{}", base_sym, tf_suffix);
+                if let Ok(Some(raw)) = cache.get_bars_raw(&key) {
+                    htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                        ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                    }).collect());
+                }
+            }
+            // Fallback: search by partial match
+            if htf_bars.is_none() {
+                if let Ok(stats) = cache.detailed_stats() {
+                    let sym_lower = bare_sym.to_lowercase();
+                    let tf_lower = tf_suffix.to_lowercase();
+                    for (k, _, _) in &stats {
+                        let kl = k.to_lowercase();
+                        if kl.contains(&sym_lower) && kl.ends_with(&tf_lower) {
+                            if let Ok(Some(raw)) = cache.get_bars_raw(k) {
+                                htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                                    ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                                }).collect());
+                                break;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2914,9 +2991,15 @@ fn draw_chart(
     }
 
     // ── indicator lines ──────────────────────────────────────────────────────
-    if flags.sma200 { draw_indicator_line(painter, chart_rect, bars, &chart.sma200, start_idx, bar_w, &price_to_y, SMA200_COL, 1.5); }
+    // Current-TF SMA200: only show if NO MTF SMA data exists (MTF replaces it in NNFX mode)
+    if flags.sma200 && chart.mtf_sma.is_empty() {
+        draw_indicator_line(painter, chart_rect, bars, &chart.sma200, start_idx, bar_w, &price_to_y, SMA200_COL, 1.5);
+    }
     if flags.sma100 { draw_indicator_line(painter, chart_rect, bars, &chart.sma100, start_idx, bar_w, &price_to_y, SMA100_COL, 1.5); }
-    if flags.kama   { draw_indicator_line(painter, chart_rect, bars, &chart.kama,   start_idx, bar_w, &price_to_y, KAMA_COL,   1.5); }
+    // Current-TF KAMA: only show if NO MultiKAMA HTF data exists
+    if flags.kama && chart.multi_kama.is_empty() {
+        draw_indicator_line(painter, chart_rect, bars, &chart.kama, start_idx, bar_w, &price_to_y, KAMA_COL, 1.5);
+    }
     // MultiKAMA: higher TF KAMAs (MT5: clrWhite for KAMA, but visually distinguished)
     // MTF SMA lines (matching MTF_MA.mqh: H1/200, H4/200, D1/200, W1/200, W1/100, MN1/100)
     if flags.sma200 && !chart.mtf_sma.is_empty() {
