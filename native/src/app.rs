@@ -14489,12 +14489,15 @@ impl eframe::App for TyphooNApp {
                                     } else {
                                         continue;
                                     };
-                                    if sym.contains(&query) && !suggestions.iter().any(|(s, _, _)| s.to_uppercase() == sym) {
-                                        // Label crypto vs equity
-                                        let class = if sym.ends_with("USD") && !sym.contains('.') && sym.len() <= 10 {
+                                    // Normalize: remove slash for dedup (SOL/USD == SOLUSD)
+                                    let sym_norm = sym.replace('/', "");
+                                    let query_norm = query.replace('/', "");
+                                    if sym_norm.contains(&query_norm) && !suggestions.iter().any(|(s, _, _)| s.replace('/', "").to_uppercase() == sym_norm) {
+                                        // Label crypto vs equity, always use no-slash form
+                                        let class = if sym_norm.ends_with("USD") && !sym_norm.contains('.') && sym_norm.len() <= 10 {
                                             "crypto".to_string()
                                         } else { String::new() };
-                                        suggestions.push((sym, String::new(), class));
+                                        suggestions.push((sym_norm, String::new(), class));
                                     }
                                 }
                             }
