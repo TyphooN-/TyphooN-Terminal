@@ -647,22 +647,25 @@ impl ChartState {
             }).unwrap_or_default()
         };
 
-        // Try these key patterns in order of priority
+        // Data hierarchy: MT5 (authoritative) > Broker (where user trades) > Kraken (gap-fill)
         let mut candidates = vec![
-            format!("{}:{}", sym, tf),                    // exact: "mt5:SLV:4Hour" or "SLV:4Hour"
-            format!("mt5:{}:{}", sym, tf),                // mt5 prefix: "mt5:SLV:4Hour"
-            format!("kraken:{}:{}", sym, tf),             // kraken: "kraken:SOLUSD:1Day"
-            format!("alpaca:{}:{}", sym, tf),             // alpaca live: "alpaca:SOL/USD:1Day"
-            format!("default:{}:{}", sym, tf),            // default: "default:SLV:4Hour"
-            format!("paper_TyphooN:{}:{}", sym, tf),      // paper: "paper_TyphooN:SLV:4Hour"
-            format!("alpaca_paper_TyphooN:{}:{}", sym, tf),// alpaca paper: "alpaca_paper_TyphooN:SLV:4Hour"
+            // Priority 1: MT5 (Darwinex signal account — authoritative)
+            format!("mt5:{}:{}", sym, tf),
+            format!("{}:{}", sym, tf),                    // exact match (often mt5-sourced)
+            // Priority 2: Connected broker (where user actually trades)
+            format!("alpaca:{}:{}", sym, tf),
+            format!("paper_TyphooN:{}:{}", sym, tf),
+            format!("alpaca_paper_TyphooN:{}:{}", sym, tf),
+            format!("default:{}:{}", sym, tf),
+            // Priority 3: Kraken (gap-fill / historical backfill — lowest priority)
+            format!("kraken:{}:{}", sym, tf),
         ];
-        // Also try slash/no-slash variants for crypto
+        // Also try slash/no-slash variants for crypto (same priority order)
         if !sym_alt.is_empty() {
-            candidates.push(format!("{}:{}", sym_alt, tf));
             candidates.push(format!("mt5:{}:{}", sym_alt, tf));
-            candidates.push(format!("kraken:{}:{}", sym_alt, tf));
+            candidates.push(format!("{}:{}", sym_alt, tf));
             candidates.push(format!("alpaca:{}:{}", sym_alt, tf));
+            candidates.push(format!("kraken:{}:{}", sym_alt, tf));
         }
 
         for key in &candidates {
