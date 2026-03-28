@@ -4837,6 +4837,10 @@ enum BrokerCmd {
     GetWatchlistQuotes { symbols: Vec<String> },
     /// Fetch FRED economic data series.
     FredFetch { api_key: String },
+    /// Fetch Finnhub economic calendar.
+    FetchEconCalendar { finnhub_key: String },
+    /// Fetch congressional stock trades (House Stock Watcher).
+    FetchCongressTrades,
 }
 
 /// Messages sent from async broker task → UI.
@@ -4870,6 +4874,10 @@ enum BrokerMsg {
     WatchlistQuotes(Vec<WatchlistRow>),
     /// FRED economic data results.
     FredData(Vec<typhoon_engine::core::fred::FredSeries>, Vec<(String, f64)>),
+    /// Economic calendar events (date, country, event, impact, actual).
+    EconCalendarData(Vec<(String, String, String, String, String)>),
+    /// Congressional stock trades (date, rep, ticker, type, amount, party).
+    CongressData(Vec<(String, String, String, String, String, String)>),
 }
 
 /// Reusable sort state for clickable column headers.
@@ -5138,6 +5146,10 @@ pub struct TyphooNApp {
     show_fred: bool,
     fred_data: Vec<typhoon_engine::core::fred::FredSeries>,
     fred_yield_curve: Vec<(String, f64)>,
+    show_econ_calendar: bool,
+    econ_events: Vec<(String, String, String, String, String)>, // (date, country, event, impact, actual)
+    show_congress: bool,
+    congress_trades: Vec<(String, String, String, String, String, String)>, // (date, rep, ticker, type, amount, party)
     /// Crypto backfill single symbol input.
     backfill_symbol: String,
     /// SEC filing type filters [Form 4, 13F, DEF 14A, S-1, 10-K, 10-Q, 8-K].
@@ -6159,6 +6171,63 @@ impl TyphooNApp {
                         let yield_curve = fred::fetch_yield_curve(&client, &api_key).await.unwrap_or_default();
                         let _ = broker_msg_tx_clone.send(BrokerMsg::FredData(series_data, yield_curve));
                     }
+                    BrokerCmd::FetchEconCalendar { finnhub_key } => {
+                        if finnhub_key.is_empty() {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Set Finnhub API Key in Settings".into()));
+                        } else {
+                            let client = reqwest::Client::new();
+                            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                            let next_week = (chrono::Utc::now() + chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
+                            let url = format!("https://finnhub.io/api/v1/calendar/economic?from={}&to={}&token={}", today, next_week, finnhub_key);
+                            match client.get(&url).send().await {
+                                Ok(resp) => {
+                                    if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                        let mut events = Vec::new();
+                                        if let Some(arr) = body["economicCalendar"].as_array() {
+                                            for e in arr {
+                                                let date = e["time"].as_str().unwrap_or("").to_string();
+                                                let country = e["country"].as_str().unwrap_or("").to_string();
+                                                let event_name = e["event"].as_str().unwrap_or("").to_string();
+                                                let impact = e["impact"].as_str().unwrap_or("low").to_string();
+                                                let actual = e["actual"].as_f64().map(|v| format!("{:.2}", v)).unwrap_or("\u{2014}".into());
+                                                events.push((date, country, event_name, impact, actual));
+                                            }
+                                        }
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::EconCalendarData(events));
+                                    }
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Econ calendar: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::FetchCongressTrades => {
+                        let client = reqwest::Client::builder().user_agent("TyphooN-Terminal/1.0").build().unwrap_or_default();
+                        match client.get("https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json")
+                            .timeout(std::time::Duration::from_secs(30))
+                            .send().await {
+                            Ok(resp) => {
+                                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                                    let mut trades = Vec::new();
+                                    if let Some(arr) = body.as_array() {
+                                        // Take last 200 (most recent)
+                                        for t in arr.iter().rev().take(200) {
+                                            let date = t["transaction_date"].as_str().unwrap_or("").to_string();
+                                            let rep = t["representative"].as_str().unwrap_or("").to_string();
+                                            let ticker = t["ticker"].as_str().unwrap_or("").to_string();
+                                            let tx_type = t["type"].as_str().unwrap_or("").to_string();
+                                            let amount = t["amount"].as_str().unwrap_or("").to_string();
+                                            let party = t["party"].as_str().unwrap_or("").to_string();
+                                            if !ticker.is_empty() && ticker != "--" {
+                                                trades.push((date, rep, ticker, tx_type, amount, party));
+                                            }
+                                        }
+                                    }
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::CongressData(trades));
+                                }
+                            }
+                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Congress trades: {}", e))); }
+                        }
+                    }
                 }
             }
         });
@@ -6335,6 +6404,10 @@ impl TyphooNApp {
             show_fred: false,
             fred_data: Vec::new(),
             fred_yield_curve: Vec::new(),
+            show_econ_calendar: false,
+            econ_events: Vec::new(),
+            show_congress: false,
+            congress_trades: Vec::new(),
             backfill_symbol: String::new(),
             sec_filters: [true; 7],
             sec_page: 0,
@@ -6938,6 +7011,18 @@ impl TyphooNApp {
                 }
             }
             "SECTOR_ROTATION" => self.show_sector_rotation = true,
+            "ECON_CALENDAR" => {
+                self.show_econ_calendar = true;
+                if self.econ_events.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::FetchEconCalendar { finnhub_key: self.finnhub_key.clone() });
+                }
+            }
+            "CONGRESS" => {
+                self.show_congress = true;
+                if self.congress_trades.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::FetchCongressTrades);
+                }
+            }
             "HELP"          => self.show_help = true,
             "FULLSCREEN"    => ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true)),
             "CLOSE_WINDOWS" => self.close_all_windows(),
@@ -7285,6 +7370,8 @@ impl TyphooNApp {
                 "unusual_volume": self.show_unusual_volume,
                 "sector_rotation": self.show_sector_rotation,
                 "fred": self.show_fred,
+                "econ_calendar": self.show_econ_calendar,
+                "congress": self.show_congress,
             },
             "journal": self.journal_entries.iter().map(|e| serde_json::json!({
                 "timestamp": e.timestamp, "symbol": e.symbol, "side": e.side,
@@ -7472,6 +7559,8 @@ impl TyphooNApp {
                     if let Some(b) = w["unusual_volume"].as_bool() { self.show_unusual_volume = b; }
                     if let Some(b) = w["sector_rotation"].as_bool() { self.show_sector_rotation = b; }
                     if let Some(b) = w["fred"].as_bool() { self.show_fred = b; }
+                    if let Some(b) = w["econ_calendar"].as_bool() { self.show_econ_calendar = b; }
+                    if let Some(b) = w["congress"].as_bool() { self.show_congress = b; }
                 }
                 // Restore journal entries
                 if let Some(journal) = v["journal"].as_array() {
@@ -7569,6 +7658,8 @@ impl TyphooNApp {
         self.show_unusual_volume = false;
         self.show_sector_rotation = false;
         self.show_fred = false;
+        self.show_econ_calendar = false;
+        self.show_congress = false;
     }
 
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
@@ -11593,6 +11684,92 @@ impl TyphooNApp {
                 });
         }
 
+        // Economic Calendar (Finnhub)
+        if self.show_econ_calendar {
+            egui::Window::new("Economic Calendar")
+                .open(&mut self.show_econ_calendar)
+                .resizable(true).default_size([700.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Upcoming Economic Events (7 days)").strong());
+                    if ui.small_button("Refresh").clicked() && !self.finnhub_key.is_empty() {
+                        let _ = self.broker_tx.send(BrokerCmd::FetchEconCalendar { finnhub_key: self.finnhub_key.clone() });
+                    }
+                    ui.separator();
+                    if self.econ_events.is_empty() {
+                        ui.label(egui::RichText::new("Loading...").color(AXIS_TEXT));
+                    } else {
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            egui::Grid::new("econ_cal_grid").striped(true).num_columns(5).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Date").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Country").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Event").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Impact").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Actual").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for (date, country, event, impact, actual) in &self.econ_events {
+                                    let date_short = if date.len() > 16 { &date[..16] } else { date };
+                                    ui.label(egui::RichText::new(date_short).small().monospace());
+                                    ui.label(egui::RichText::new(country).small());
+                                    ui.label(egui::RichText::new(event).small());
+                                    let impact_c = match impact.as_str() {
+                                        "high" => egui::Color32::from_rgb(231, 76, 60),
+                                        "medium" => egui::Color32::from_rgb(241, 196, 15),
+                                        _ => AXIS_TEXT,
+                                    };
+                                    ui.label(egui::RichText::new(impact).color(impact_c).small().strong());
+                                    ui.label(egui::RichText::new(actual).small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+        }
+
+        // Congressional Trades (House Stock Watcher)
+        if self.show_congress {
+            egui::Window::new("Congressional Trades")
+                .open(&mut self.show_congress)
+                .resizable(true).default_size([750.0, 450.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("House Stock Watcher \u{2014} Congressional Stock Trades").strong());
+                    if ui.small_button("Refresh").clicked() {
+                        let _ = self.broker_tx.send(BrokerCmd::FetchCongressTrades);
+                    }
+                    ui.separator();
+                    if self.congress_trades.is_empty() {
+                        ui.label(egui::RichText::new("Loading...").color(AXIS_TEXT));
+                    } else {
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            egui::Grid::new("congress_grid").striped(true).num_columns(6).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Date").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Representative").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Ticker").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Type").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Amount").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Party").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for (date, rep, ticker, tx_type, amount, party) in &self.congress_trades {
+                                    ui.label(egui::RichText::new(date).small().monospace());
+                                    ui.label(egui::RichText::new(rep).small());
+                                    ui.label(egui::RichText::new(ticker).small().strong().color(egui::Color32::WHITE));
+                                    let type_c = if tx_type.to_lowercase().contains("purchase") { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(tx_type).color(type_c).small());
+                                    ui.label(egui::RichText::new(amount).small());
+                                    let party_c = match party.as_str() {
+                                        "Democrat" => egui::Color32::from_rgb(52, 152, 219),
+                                        "Republican" => egui::Color32::from_rgb(231, 76, 60),
+                                        _ => AXIS_TEXT,
+                                    };
+                                    ui.label(egui::RichText::new(party).color(party_c).small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+        }
+
         // Crypto Backfill (CryptoCompare deep history)
         if self.show_crypto_backfill {
             egui::Window::new("Crypto Backfill (CryptoCompare)")
@@ -14071,6 +14248,14 @@ impl eframe::App for TyphooNApp {
                     self.fred_data = series;
                     self.fred_yield_curve = yields;
                     self.log.push_back(LogEntry::info(format!("FRED: {} series loaded", self.fred_data.len())));
+                }
+                BrokerMsg::EconCalendarData(events) => {
+                    self.econ_events = events;
+                    self.log.push_back(LogEntry::info(format!("Economic calendar: {} events loaded", self.econ_events.len())));
+                }
+                BrokerMsg::CongressData(trades) => {
+                    self.congress_trades = trades;
+                    self.log.push_back(LogEntry::info(format!("Congressional trades: {} loaded", self.congress_trades.len())));
                 }
                 BrokerMsg::MarketClock(msg) => {
                     self.log.push_back(LogEntry::info(msg));
