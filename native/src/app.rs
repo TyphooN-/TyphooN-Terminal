@@ -16165,6 +16165,31 @@ impl eframe::App for TyphooNApp {
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
         }
 
+        // Weekend crypto auto-update every ~5 minutes (1200 frames at 250ms)
+        // Fetches latest bars from CryptoCompare for the currently viewed crypto symbol
+        if self.frame_count % 1200 == 300 && self.frame_count > 0 {
+            let now_utc = chrono::Utc::now();
+            let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
+            use chrono::Datelike;
+            let is_weekend = matches!(eastern.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
+            if is_weekend {
+                if let Some(chart) = self.charts.get(self.active_tab) {
+                    let sym = chart.symbol.replace('/', "").to_uppercase();
+                    let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                    let is_crypto = crypto_bases.iter().any(|b| sym.starts_with(b) && sym.ends_with("USD"));
+                    if is_crypto {
+                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                        let tf = chart.timeframe.cache_suffix().to_string();
+                        let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill {
+                            symbol: sym.clone(),
+                            timeframes: vec![tf],
+                            db_path,
+                        });
+                    }
+                }
+            }
+        }
+
         // Auto MT5 sync every ~5 minutes (1200 frames at 250ms) — picks up BarCacheWriter updates
         if self.frame_count % 1200 == 100 && self.frame_count > 0 {
             let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
