@@ -1785,6 +1785,21 @@ fn detect_harmonic_patterns(bars: &[Bar], fractals_up: &[bool], fractals_down: &
                                 c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
                             });
                         }
+                        // Three Drives: AB=0.618-0.786 XA, CD=0.618-0.786 BC, BC=1.272-1.618 AB
+                        else if in_range(ab_xa, 0.58, 0.82) && in_range(bc_ab, 1.22, 1.66) && in_range(xd_xa, 0.90, 1.10) {
+                            // Verify the CD retracement is also in range
+                            let cd = (d.1 - c.1).abs();
+                            let cd_bc = if bc > f64::EPSILON { cd / bc } else { 0.0 };
+                            if in_range(cd_bc, 0.58, 0.82) {
+                                let tp1 = if bullish { d.1 + ad * 0.382 } else { d.1 - ad * 0.382 };
+                                let tp2 = if bullish { d.1 + ad * 0.618 } else { d.1 - ad * 0.618 };
+                                let sl = if bullish { d.1 - xa * 0.15 } else { d.1 + xa * 0.15 };
+                                patterns.push(HarmonicPattern {
+                                    name: "3 Drives", x: (x.0, x.1), a: (a.0, a.1), b: (b.0, b.1),
+                                    c: (c.0, c.1), d: (d.0, d.1), tp1, tp2, sl, bullish,
+                                });
+                            }
+                        }
                         // 5-0: AB=1.13-1.618 XA, BC=1.618-2.24 AB, XD=0.50 BC
                         else if in_range(ab_xa, 1.10, 1.65) && in_range(bc_ab, 1.55, 2.30) {
                             let bc_val = (d.1 - c.1).abs();
@@ -5001,6 +5016,9 @@ pub struct TyphooNApp {
     opt_fast_range: String,
     opt_slow_range: String,
     opt_results: Vec<backtest::OptimizationResult>,
+    // Walk-forward analysis state
+    wf_result: Option<backtest::WalkForwardResult>,
+    wf_windows_count: String,
     // GPU optimizer state
     opt_rsi_range: String,
     opt_atr_sl_range: String,
@@ -5070,6 +5088,7 @@ pub struct TyphooNApp {
     show_storage: bool,
     storage_filter: String,
     storage_delete_confirm: Option<String>,
+    storage_page: usize,
     show_lan_sync: bool,
     lan_sync_patterns: String,
     lan_sync_preview: Vec<(String, i64, usize)>,
@@ -5967,8 +5986,9 @@ impl TyphooNApp {
                                 }
                             }
                         }
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::SecScrapeResult(
-                            format!("Kraken backfill complete: {} {} bars across {} timeframes", symbol, total_bars, timeframes.len())
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                            format!("Kraken {} complete: {} total bars across {} TFs — full history from earliest available",
+                                symbol, total_bars, timeframes.len())
                         ));
                     }
                     BrokerCmd::FetchFilingContent { url } => {
@@ -6163,6 +6183,8 @@ impl TyphooNApp {
             opt_fast_range: "5-50".to_string(),
             opt_slow_range: "20-200".to_string(),
             opt_results: Vec::new(),
+            wf_result: None,
+            wf_windows_count: "5".into(),
             opt_rsi_range: "10-20".to_string(),
             opt_atr_sl_range: "1.0-3.0".to_string(),
             opt_atr_tp_range: "2.0-5.0".to_string(),
@@ -6217,6 +6239,7 @@ impl TyphooNApp {
             show_storage: false,
             storage_filter: String::new(),
             storage_delete_confirm: None,
+            storage_page: 0,
             show_lan_sync: false,
             lan_sync_patterns: "darwin,kraken,mt5:Darwinex".into(),
             lan_sync_preview: Vec::new(),
@@ -7859,7 +7882,7 @@ impl TyphooNApp {
                             self.show_obv = false; self.show_momentum = false;
                             self.show_fisher = true; self.show_harmonics = true;
                             self.show_better_volume = true; self.show_fractals = true;
-                            self.log.push_back(LogEntry::info("Preset: Carney — Ehlers Fisher + Harmonics (9 XABCD) + BetterVolume + Fractals"));
+                            self.log.push_back(LogEntry::info("Preset: Carney — Ehlers Fisher + Harmonics (10 XABCD) + BetterVolume + Fractals"));
                         }
                         if ui.button("Clean").clicked() {
                             self.show_sma200 = false; self.show_sma100 = false; self.show_kama = false;
@@ -7908,7 +7931,7 @@ impl TyphooNApp {
                     ui.heading("Pattern Recognition");
                     ui.separator();
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
-                    ui.checkbox(&mut self.show_harmonics,   "Harmonic Patterns (Scott Carney — 9 XABCD)");
+                    ui.checkbox(&mut self.show_harmonics,   "Harmonic Patterns (Scott Carney — 10 XABCD)");
                     ui.checkbox(&mut self.show_auto_fib,    "Auto Fibonacci (fractal swing)");
 
                     // ── Oscillators ──
@@ -10295,6 +10318,9 @@ impl TyphooNApp {
                         ui.label("Strategy:");
                         ui.radio_value(&mut self.bt_strategy, 0, "SMA Cross");
                         ui.radio_value(&mut self.bt_strategy, 1, "NNFX");
+                        ui.radio_value(&mut self.bt_strategy, 2, "KAMA Cross");
+                        ui.radio_value(&mut self.bt_strategy, 3, "Fisher Cross");
+                        ui.radio_value(&mut self.bt_strategy, 4, "RSI Mean-Rev");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Fast Period:"); ui.add(egui::TextEdit::singleline(&mut self.bt_fast_period).desired_width(50.0));
@@ -10315,12 +10341,31 @@ impl TyphooNApp {
                             let slow: usize = self.bt_slow_period.parse().unwrap_or(50);
                             let equity: f64 = self.bt_equity.replace(['$', ','], "").parse().unwrap_or(10000.0);
 
-                            let result = if self.bt_strategy == 0 {
-                                let mut strat = backtest::SMACrossStrategy::new(fast, slow);
-                                backtest::run_backtest(&engine_bars, &mut strat, equity)
-                            } else {
-                                let mut strat = backtest::NNFXStrategy::new(fast, slow);
-                                backtest::run_backtest(&engine_bars, &mut strat, equity)
+                            let result = match self.bt_strategy {
+                                0 => {
+                                    let mut strat = backtest::SMACrossStrategy::new(fast, slow);
+                                    backtest::run_backtest(&engine_bars, &mut strat, equity)
+                                }
+                                1 => {
+                                    let mut strat = backtest::NNFXStrategy::new(fast, slow);
+                                    backtest::run_backtest(&engine_bars, &mut strat, equity)
+                                }
+                                2 => {
+                                    let mut strat = backtest::KAMACrossStrategy::new(fast, 2, 30);
+                                    backtest::run_backtest(&engine_bars, &mut strat, equity)
+                                }
+                                3 => {
+                                    let mut strat = backtest::FisherCrossStrategy::new(fast.max(10));
+                                    backtest::run_backtest(&engine_bars, &mut strat, equity)
+                                }
+                                4 => {
+                                    let mut strat = backtest::RSIMeanRevStrategy::new(fast.max(5), 30.0, 70.0);
+                                    backtest::run_backtest(&engine_bars, &mut strat, equity)
+                                }
+                                _ => {
+                                    let mut strat = backtest::SMACrossStrategy::new(fast, slow);
+                                    backtest::run_backtest(&engine_bars, &mut strat, equity)
+                                }
                             };
                             self.bt_result = Some(result.report);
                             self.bt_trades = result.trades;
@@ -10830,6 +10875,70 @@ impl TyphooNApp {
                                 }
                             });
                         });
+                    }
+
+                    // ── Walk-Forward Analysis ──
+                    ui.add_space(8.0);
+                    ui.heading("Walk-Forward Analysis");
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Windows:"); ui.add(egui::TextEdit::singleline(&mut self.wf_windows_count).desired_width(40.0));
+                        if ui.button("Run Walk-Forward").clicked() && n_bars > 200 {
+                            if let Some(chart) = self.charts.get(self.active_tab) {
+                                let engine_bars: Vec<EngineBar> = chart.bars.iter().map(|b| EngineBar {
+                                    timestamp: format_ts(b.ts_ms, chart.timeframe),
+                                    open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume,
+                                }).collect();
+                                let fast_r: (usize, usize) = parse_range(&self.opt_fast_range, 5, 50);
+                                let slow_r: (usize, usize) = parse_range(&self.opt_slow_range, 20, 200);
+                                let equity: f64 = self.bt_equity.replace(['$', ','], "").parse().unwrap_or(10000.0);
+                                let windows: usize = self.wf_windows_count.parse().unwrap_or(5);
+                                self.wf_result = Some(backtest::walk_forward(&engine_bars, fast_r.0..fast_r.1, slow_r.0..slow_r.1, windows, equity));
+                                self.log.push_back(LogEntry::info(format!("Walk-forward complete: {} windows", windows)));
+                            }
+                        }
+                    });
+
+                    if let Some(ref wf) = self.wf_result {
+                        ui.add_space(4.0);
+                        // Summary
+                        let rob_c = if wf.robustness_score > 0.5 { UP } else if wf.robustness_score > 0.25 { egui::Color32::from_rgb(241, 196, 15) } else { DOWN };
+                        egui::Grid::new("wf_summary").striped(true).num_columns(4).show(ui, |ui| {
+                            ui.label("OOS Sharpe:"); ui.label(format!("{:.3}", wf.oos_sharpe));
+                            ui.label("OOS PF:"); ui.label(format!("{:.2}", wf.oos_profit_factor));
+                            ui.end_row();
+                            ui.label("OOS Win%:"); ui.label(format!("{:.1}%", wf.oos_win_rate * 100.0));
+                            ui.label("Robustness:"); ui.label(egui::RichText::new(format!("{:.2}", wf.robustness_score)).color(rob_c));
+                            ui.end_row();
+                            ui.label("Best Params:"); ui.label(format!("Fast={} Slow={}", wf.best_params.0, wf.best_params.1));
+                            ui.label(""); ui.label("");
+                            ui.end_row();
+                        });
+                        // Per-window table
+                        if !wf.windows.is_empty() {
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new("Per-Window Results").small().strong());
+                            egui::Grid::new("wf_windows").striped(true).num_columns(6).show(ui, |ui| {
+                                ui.label(egui::RichText::new("#").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("Fast/Slow").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("IS Sharpe").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("OOS Sharpe").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("OOS P&L").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("Trades").color(AXIS_TEXT).small());
+                                ui.end_row();
+                                for w in &wf.windows {
+                                    ui.label(format!("{}", w.window_idx + 1));
+                                    ui.label(format!("{}/{}", w.best_fast, w.best_slow));
+                                    ui.label(format!("{:.3}", w.is_sharpe));
+                                    let oos_c = if w.oos_sharpe > 0.0 { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(format!("{:.3}", w.oos_sharpe)).color(oos_c));
+                                    let pnl_c = if w.oos_pnl >= 0.0 { UP } else { DOWN };
+                                    ui.label(egui::RichText::new(format!("${:.0}", w.oos_pnl)).color(pnl_c));
+                                    ui.label(format!("{}", w.oos_trades));
+                                    ui.end_row();
+                                }
+                            });
+                        }
                     }
                 });
         }
@@ -12570,6 +12679,16 @@ impl TyphooNApp {
                                 if SortState::header(ui, "Short z", 7, &self.outlier_sort) { self.outlier_sort.toggle(7); }
                                 if SortState::header(ui, "SEC z", 8, &self.outlier_sort) { self.outlier_sort.toggle(8); }
                                 ui.end_row();
+                                // Build tradability set from MT5 cache keys
+                                let mt5_symbols: std::collections::HashSet<String> = self.bg.detailed_stats.iter()
+                                    .filter(|(k, _, _)| k.starts_with("mt5:"))
+                                    .map(|(k, _, _)| {
+                                        let parts: Vec<&str> = k.split(':').collect();
+                                        if parts.len() >= 3 { parts[parts.len()-2].to_uppercase() } else { String::new() }
+                                    })
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+
                                 for o in sorted_outliers.iter().take(200) {
                                     let tier_c = match o.tier.as_str() {
                                         "EXTREME" => ol_high, "HIGH" => ol_med, _ => ol_green
@@ -12577,7 +12696,11 @@ impl TyphooNApp {
                                     let z_color = |z: f64| -> egui::Color32 {
                                         if z.abs() > 2.0 { ol_high } else if z.abs() > 1.5 { ol_med } else { ol_dim }
                                     };
-                                    ui.label(egui::RichText::new(&o.symbol).small().strong().color(egui::Color32::WHITE));
+                                    // Tradability: green dot = in MT5 (tradable), dim = close-only
+                                    let tradable = mt5_symbols.contains(&o.symbol.to_uppercase());
+                                    let sym_color = if tradable { egui::Color32::WHITE } else { egui::Color32::from_rgb(80, 80, 90) };
+                                    let trade_icon = if tradable { "\u{25CF} " } else { "\u{25CB} " };
+                                    ui.label(egui::RichText::new(format!("{}{}", trade_icon, o.symbol)).small().strong().color(sym_color));
                                     ui.label(egui::RichText::new(&o.sector).small().color(ol_cyan));
                                     ui.label(egui::RichText::new(format!("{:.1}", o.composite_score)).small().color(tier_c).strong());
                                     ui.label(egui::RichText::new(format!("{}/4", o.dimensions_flagged)).small().color(tier_c));
@@ -12931,7 +13054,7 @@ impl TyphooNApp {
                     ui.horizontal(|ui| {
                         ui.label("Filter:");
                         ui.add(egui::TextEdit::singleline(&mut self.storage_filter).desired_width(200.0).hint_text("symbol or prefix..."));
-                        if ui.small_button("Clear").clicked() { self.storage_filter.clear(); }
+                        if ui.small_button("Clear").clicked() { self.storage_filter.clear(); self.storage_page = 0; }
                     });
                     ui.separator();
 
@@ -12942,12 +13065,31 @@ impl TyphooNApp {
                         .filter(|(k, _, _)| filter.is_empty() || k.to_uppercase().contains(&filter))
                         .collect();
 
+                    // Pagination
+                    let page_size = 200;
+                    let total = filtered.len();
+                    let total_pages = (total + page_size - 1) / page_size;
+                    if self.storage_page >= total_pages && total_pages > 0 { self.storage_page = total_pages - 1; }
+                    let page_start = self.storage_page * page_size;
+                    let page_end = (page_start + page_size).min(total);
+
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("{} bar entries (showing {})", stats.len(), filtered.len().min(1000))).small().color(AXIS_TEXT));
+                        ui.label(egui::RichText::new(format!("{} entries", total)).small().color(AXIS_TEXT));
                         if !self.bg.accounts.is_empty() {
                             ui.label(egui::RichText::new(format!("| {} DARWIN accounts", self.bg.accounts.len())).small().color(AXIS_TEXT));
                         }
                     });
+                    if total_pages > 1 {
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled(self.storage_page > 0, egui::Button::new(egui::RichText::new("◀ Prev").small())).clicked() {
+                                self.storage_page = self.storage_page.saturating_sub(1);
+                            }
+                            ui.label(egui::RichText::new(format!("Page {} / {}", self.storage_page + 1, total_pages)).small().color(AXIS_TEXT));
+                            if ui.add_enabled(self.storage_page + 1 < total_pages, egui::Button::new(egui::RichText::new("Next ▶").small())).clicked() {
+                                self.storage_page += 1;
+                            }
+                        });
+                    }
 
                     let avail = ui.available_height().max(200.0);
                     egui::ScrollArea::vertical().id_salt("storage_scroll").min_scrolled_height(avail).show(ui, |ui| {
@@ -12960,7 +13102,7 @@ impl TyphooNApp {
 
                             let now = chrono::Utc::now().timestamp();
                             let mut delete_key: Option<String> = None;
-                            for (key, count, ts) in filtered.iter().take(1000) {
+                            for (key, count, ts) in &filtered[page_start..page_end] {
                                 // Color by source prefix
                                 let key_color = if key.starts_with("mt5:") { egui::Color32::from_rgb(26, 188, 156) }
                                     else if key.starts_with("kraken:") { egui::Color32::from_rgb(255, 130, 60) }
