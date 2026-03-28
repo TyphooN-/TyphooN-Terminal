@@ -1,7 +1,8 @@
-//! LAN Sync — WebSocket-based cache synchronization between TyphooN Terminal instances.
+//! LAN Sync — Encrypted WebSocket (TLS) cache synchronization between TyphooN Terminal instances.
 //!
 //! Server mode: serves bar cache data to connecting clients over local network.
 //! Client mode: connects to a server, syncs missing/outdated cache entries.
+//! Transport: wss:// (TLS encrypted) with ephemeral self-signed certificate.
 //! Auth: PBKDF2-derived shared secret + HMAC-SHA256 challenge-response.
 
 use serde::{Serialize, Deserialize};
@@ -11,6 +12,35 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::core::cache::SqliteCache;
+
+// ── TLS Certificate Generation ────────────────────────────────────
+
+/// Generate an ephemeral self-signed TLS certificate for LAN sync server.
+/// Returns (DER certificate, DER private key) for native-tls.
+fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>), String> {
+    let cert = rcgen::generate_simple_self_signed(vec!["typhoon-lan-sync".into(), "localhost".into()])
+        .map_err(|e| format!("Certificate generation failed: {e}"))?;
+    let cert_der = cert.cert.der().to_vec();
+    let key_der = cert.key_pair.serialize_der();
+    Ok((cert_der, key_der))
+}
+
+/// Build a native-tls TLS acceptor from self-signed cert.
+fn build_tls_acceptor(cert_der: &[u8], key_der: &[u8]) -> Result<native_tls::TlsAcceptor, String> {
+    let identity = native_tls::Identity::from_pkcs8(cert_der, key_der)
+        .map_err(|e| format!("TLS identity from PKCS8 failed: {e}"))?;
+    native_tls::TlsAcceptor::new(identity)
+        .map_err(|e| format!("TLS acceptor build failed: {e}"))
+}
+
+/// Build a native-tls TLS connector that accepts any certificate (for LAN self-signed).
+fn build_tls_connector() -> Result<native_tls::TlsConnector, String> {
+    native_tls::TlsConnector::builder()
+        .danger_accept_invalid_certs(true) // LAN self-signed cert
+        .danger_accept_invalid_hostnames(true) // LAN IP addresses
+        .build()
+        .map_err(|e| format!("TLS connector build failed: {e}"))
+}
 
 // ── Protocol Messages ──────────────────────────────────────────────
 
@@ -29,6 +59,13 @@ pub enum SyncMessage {
     IncrementalUpdate { key: String, data: String, timestamp: i64 },
     Ping,
     Pong,
+    // ── DARWIN data sync (opt-in) ──
+    /// Request DARWIN snapshot (deals, positions, equity) for all accounts.
+    RequestDarwinData,
+    /// Server response: serialized DARWIN data (JSON blob, zstd + base64 encoded).
+    DarwinData { data: String, accounts: usize, deals: usize, positions: usize },
+    /// Server stats pushed to client on connect and periodically.
+    SyncStats { bytes_sent: u64, bytes_received: u64, entries_synced: usize, uptime_secs: u64 },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -90,16 +127,27 @@ fn parse_msg(msg: &Message) -> Result<SyncMessage, String> {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SyncStatus {
-    pub mode: String,      // "server", "client", "idle"
+    pub mode: String,           // "server", "client", "idle"
     pub connected: bool,
-    pub clients: usize,    // server: number of connected clients
-    pub host: String,      // client: server host
+    pub clients: usize,         // server: number of connected clients
+    pub host: String,           // client: server host
     pub port: u16,
+    pub bytes_sent: u64,        // total bytes sent
+    pub bytes_received: u64,    // total bytes received
+    pub entries_synced: usize,  // bar entries synced
+    pub darwin_synced: bool,    // whether DARWIN data has been synced
+    pub uptime_secs: u64,       // seconds since start
+    pub send_darwin: bool,      // server: opt-in to send DARWIN data to clients
 }
 
 impl Default for SyncStatus {
     fn default() -> Self {
-        Self { mode: "idle".into(), connected: false, clients: 0, host: String::new(), port: 0 }
+        Self {
+            mode: "idle".into(), connected: false, clients: 0,
+            host: String::new(), port: 0,
+            bytes_sent: 0, bytes_received: 0, entries_synced: 0,
+            darwin_synced: false, uptime_secs: 0, send_darwin: false,
+        }
     }
 }
 
@@ -117,6 +165,12 @@ impl LanSyncServer {
         passphrase: &str,
     ) -> Result<Self, String> {
         let secret = derive_secret(passphrase);
+
+        // Generate ephemeral self-signed TLS certificate
+        let (cert_der, key_der) = generate_self_signed_cert()?;
+        let tls_acceptor = build_tls_acceptor(&cert_der, &key_der)?;
+        let tls_acceptor_tokio = tokio_native_tls::TlsAcceptor::from(tls_acceptor);
+
         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
             .await
             .map_err(|e| format!("Bind failed on port {port}: {e}"))?;
@@ -127,22 +181,34 @@ impl LanSyncServer {
             clients: 0,
             host: "0.0.0.0".into(),
             port,
+            ..Default::default()
         }));
 
         let status_clone = status.clone();
         let task = tokio::spawn(async move {
-            tracing::info!("LAN sync server listening on 0.0.0.0:{port}");
+            tracing::info!("LAN sync server listening on wss://0.0.0.0:{port} (TLS encrypted)");
             loop {
                 match listener.accept().await {
                     Ok((stream, addr)) => {
-                        tracing::info!("LAN sync: client connected from {addr}");
+                        tracing::info!("LAN sync: TLS client connected from {addr}");
+                        let tls_acc = tls_acceptor_tokio.clone();
                         let cache = cache.clone();
                         let status = status_clone.clone();
-                        {
-                            let mut s = status.lock().await;
-                            s.clients += 1;
-                        }
-                        tokio::spawn(handle_client(stream, cache, secret, status));
+                        tokio::spawn(async move {
+                            // TLS handshake
+                            match tls_acc.accept(stream).await {
+                                Ok(tls_stream) => {
+                                    {
+                                        let mut s = status.lock().await;
+                                        s.clients += 1;
+                                    }
+                                    handle_client_tls(tls_stream, cache, secret, status).await;
+                                }
+                                Err(e) => {
+                                    tracing::warn!("LAN sync: TLS handshake failed from {addr}: {e}");
+                                }
+                            }
+                        });
                     }
                     Err(e) => {
                         tracing::warn!("LAN sync accept error: {e}");
@@ -166,13 +232,14 @@ impl LanSyncServer {
     }
 }
 
-async fn handle_client(
-    stream: tokio::net::TcpStream,
+/// Handle a TLS-encrypted client connection.
+async fn handle_client_tls(
+    tls_stream: tokio_native_tls::TlsStream<tokio::net::TcpStream>,
     cache: Arc<SqliteCache>,
     secret: [u8; 32],
     status: Arc<TokioMutex<SyncStatus>>,
 ) {
-    let ws = match tokio_tungstenite::accept_async(stream).await {
+    let ws = match tokio_tungstenite::accept_async(tls_stream).await {
         Ok(ws) => ws,
         Err(e) => {
             tracing::warn!("LAN sync WebSocket handshake failed: {e}");
@@ -318,18 +385,24 @@ impl LanSyncClient {
         passphrase: &str,
     ) -> Result<Self, String> {
         let secret = derive_secret(passphrase);
-        let url = format!("ws://{host}:{port}");
+        let url = format!("wss://{host}:{port}");
 
-        let (ws, _) = tokio_tungstenite::connect_async(&url)
+        // Build TLS connector that accepts self-signed certs (LAN only)
+        let tls_connector = build_tls_connector()?;
+        let connector = tokio_tungstenite::Connector::NativeTls(tls_connector);
+
+        let (ws, _) = tokio_tungstenite::connect_async_tls_with_config(
+            &url, None, false, Some(connector),
+        )
             .await
             .map_err(|e| format!("Connect to {url} failed: {e}"))?;
 
         let status = Arc::new(TokioMutex::new(SyncStatus {
             mode: "client".into(),
             connected: true,
-            clients: 0,
             host: host.to_string(),
             port,
+            ..Default::default()
         }));
 
         let (mut sink, mut stream_rx) = ws.split();

@@ -35,6 +35,8 @@ pub struct GpuCompute {
     ohlc_buffer: Option<wgpu::Buffer>,
     /// Midpoint data in VRAM: (high+low)/2 per bar for Fisher Transform
     mid_buffer: Option<wgpu::Buffer>,
+    /// Volume data in VRAM: f32 per bar for OBV
+    vol_buffer: Option<wgpu::Buffer>,
     /// Number of bars currently in GPU buffer.
     bar_count: u32,
     /// SMA output buffer (one f32 per bar).
@@ -263,6 +265,7 @@ impl GpuCompute {
             bar_buffer: None,
             ohlc_buffer: None,
             mid_buffer: None,
+            vol_buffer: None,
             bar_count: 0,
             sma_buffer: None,
             ema_buffer: None,
@@ -308,11 +311,11 @@ impl GpuCompute {
     /// `closes`: close prices (f32 per bar) — used by SMA, EMA, RSI, KAMA, Bollinger, MACD
     /// `highs`, `lows`: used by ATR, Stochastic, ADX, Fisher
     pub fn upload_bars(&mut self, closes: &[f32]) {
-        self.upload_bars_full(closes, &[], &[]);
+        self.upload_bars_full(closes, &[], &[], &[]);
     }
 
-    /// Upload full OHLC data to VRAM.
-    pub fn upload_bars_full(&mut self, closes: &[f32], highs: &[f32], lows: &[f32]) {
+    /// Upload full OHLCV data to VRAM.
+    pub fn upload_bars_full(&mut self, closes: &[f32], highs: &[f32], lows: &[f32], volumes: &[f32]) {
         let bar_count = closes.len() as u32;
         self.bar_count = bar_count;
 
@@ -355,6 +358,19 @@ impl GpuCompute {
             }));
             if let Some(ref buf) = self.mid_buffer {
                 self.queue.write_buffer(buf, 0, bytemuck_cast_slice(&mids));
+            }
+        }
+
+        // Volume buffer for OBV
+        if volumes.len() == closes.len() {
+            self.vol_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("vol_data"),
+                size: (bar_count as u64) * 4,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            if let Some(ref buf) = self.vol_buffer {
+                self.queue.write_buffer(buf, 0, bytemuck_cast_slice(volumes));
             }
         }
 
@@ -573,9 +589,57 @@ impl GpuCompute {
         Some(result)
     }
 
-    /// Compute OBV approximation on GPU (uses price change magnitude as volume proxy).
-    pub fn compute_obv_gpu(&self) -> Option<Vec<f32>> {
-        self.dispatch_indicator(&self.obv_gpu_pipeline, 0, false)
+    /// Compute OBV on GPU using real volume data.
+    /// Caller provides pre-interleaved [close, volume] pairs.
+    pub fn compute_obv_gpu_with_cv(&self, cv_interleaved: &[f32]) -> Option<Vec<f32>> {
+        if self.bar_count == 0 { return None; }
+        let rb_buf = self.readback_buffer.as_ref()?;
+        let n = self.bar_count as usize;
+        if cv_interleaved.len() != n * 2 { return None; }
+
+        let cv_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("obv_cv"), size: (n as u64) * 8,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&cv_buf, 0, bytemuck_cast_slice(cv_interleaved));
+
+        let out_size = (n as u64) * 4;
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("obv_out"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        });
+        let params = [0u32, self.bar_count];
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("obv_params"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("obv_bg"), layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: cv_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("obv_dispatch") });
+        { let mut pass = encoder.begin_compute_pass(&Default::default()); pass.set_pipeline(&self.obv_pipeline); pass.set_bind_group(0, &bind_group, &[]); pass.dispatch_workgroups(1, 1, 1); }
+        let read_size = out_size.min(rb_buf.size());
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
     }
 
     /// Compute Ehlers Super Smoother on GPU. Returns f32 per bar.
@@ -2713,11 +2777,13 @@ fn main() {
 "#;
 
 const SUPPLY_DEMAND_SHADER: &str = r#"
-// Supply/Demand Zone Detection — parallel per-bar
-// Detects impulse moves (large candles > 2× average range) and marks zones.
+// Supply/Demand Zone Detection — Phase 1: GPU fractal detection (parallel per-bar)
+// Port of SupplyDemand.mqh IsFractalHigh/IsFractalLow with 5-bar lookback.
 // Output: [zone_type, zone_high, zone_low] per bar (3 floats)
-// zone_type: 0=none, 1=demand(bullish impulse), -1=supply(bearish impulse)
-struct Params { period: u32, bar_count: u32, }  // period = ATR lookback for avg range
+//   zone_type: 0=none, 1=demand (fractal low), -1=supply (fractal high)
+//   zone_high/zone_low: body-to-wick boundaries matching MQL5
+// CPU then does zone testing, merging, and break detection.
+struct Params { period: u32, bar_count: u32, }  // period = fractal lookback (5)
 @group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h,l,c] interleaved
 @group(0) @binding(1) var<storage, read_write> output: array<f32>;
 @group(0) @binding(2) var<uniform> params: Params;
@@ -2727,8 +2793,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
     if (i >= params.bar_count) { return; }
     let base = i * 3u;
+    let lookback = params.period;  // 5
 
-    if (i < params.period) {
+    // Need lookback bars on each side
+    if (i < lookback || i + lookback >= params.bar_count) {
         output[base] = 0.0; output[base + 1u] = 0.0; output[base + 2u] = 0.0;
         return;
     }
@@ -2736,33 +2804,36 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let h = bars[i * 3u];
     let l = bars[i * 3u + 1u];
     let c = bars[i * 3u + 2u];
-    let prev_c = bars[(i - 1u) * 3u + 2u];
-    let range = h - l;
 
-    // Average range over lookback period
-    var avg_range: f32 = 0.0;
-    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
-        let idx = i - j;
-        avg_range = avg_range + bars[idx * 3u] - bars[idx * 3u + 1u];
-    }
-    avg_range = avg_range / f32(params.period);
-
-    // Impulse detection: range > 2× average AND strong close
-    let threshold = avg_range * 2.0;
-    let body = abs(c - prev_c);
-
-    if (range > threshold && body > avg_range) {
-        if (c > prev_c) {
-            // Demand zone (bullish impulse): zone at the base of the candle
-            output[base] = 1.0;
-            output[base + 1u] = l + range * 0.3;  // zone top
-            output[base + 2u] = l;                  // zone bottom
-        } else {
-            // Supply zone (bearish impulse): zone at the top of the candle
-            output[base] = -1.0;
-            output[base + 1u] = h;                  // zone top
-            output[base + 2u] = h - range * 0.3;   // zone bottom
+    // Fractal high: bar's high is strictly greater than lookback bars on each side
+    var is_fractal_high = true;
+    for (var k: u32 = 1u; k <= lookback; k = k + 1u) {
+        if (bars[(i - k) * 3u] >= h || bars[(i + k) * 3u] >= h) {
+            is_fractal_high = false;
+            break;
         }
+    }
+
+    // Fractal low: bar's low is strictly less than lookback bars on each side
+    var is_fractal_low = true;
+    for (var k: u32 = 1u; k <= lookback; k = k + 1u) {
+        if (bars[(i - k) * 3u + 1u] <= l || bars[(i + k) * 3u + 1u] <= l) {
+            is_fractal_low = false;
+            break;
+        }
+    }
+
+    if (is_fractal_high) {
+        // Supply zone: hi = high, lo = min(close, open) ≈ min(close, prev_close) approximation
+        // Note: OHLC buffer lacks open; use close as approximation (CPU refines with actual open)
+        output[base] = -1.0;
+        output[base + 1u] = h;
+        output[base + 2u] = c;  // placeholder — CPU replaces with min(close, open)
+    } else if (is_fractal_low) {
+        // Demand zone: hi = max(close, open) ≈ close, lo = low
+        output[base] = 1.0;
+        output[base + 1u] = c;  // placeholder — CPU replaces with max(close, open)
+        output[base + 2u] = l;
     } else {
         output[base] = 0.0; output[base + 1u] = 0.0; output[base + 2u] = 0.0;
     }

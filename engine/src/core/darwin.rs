@@ -1943,8 +1943,9 @@ pub fn scan_darwin_ftp(
 pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir: &str) -> Result<String, String> {
     // Read __SPECS__ from bar_cache (BarCacheWriter) or kv_cache (legacy)
     let try_table = |table: &str| -> Option<String> {
-        let col = if table == "bar_cache" { "data" } else { "value" };
-        let sql = format!("SELECT {} FROM {} WHERE key LIKE '%__SPECS__%' LIMIT 1", col, table);
+        // table/col are hardcoded constants, not user input — safe to format into SQL
+        let (col, tbl) = if table == "bar_cache" { ("data", "bar_cache") } else { ("value", "kv_cache") };
+        let sql = format!("SELECT {col} FROM {tbl} WHERE key LIKE '%__SPECS__%' LIMIT 1");
         let mut stmt = cache_conn.prepare(&sql).ok()?;
         let result = stmt.query_row([], |row| {
             row.get::<_, Vec<u8>>(0).or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))

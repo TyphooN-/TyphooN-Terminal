@@ -75,10 +75,15 @@ pub async fn fetch_ohlcv(
             endpoint, fsym, to_ts
         );
 
+        // Single attempt — on rate limit, abort immediately (use Kraken instead)
         let resp = client.get(&url)
             .timeout(std::time::Duration::from_secs(30))
             .send().await
             .map_err(|e| format!("CryptoCompare request failed: {e}"))?;
+
+        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err("CryptoCompare rate limited — use Kraken for recent data, try CryptoCompare later".into());
+        }
 
         if !resp.status().is_success() {
             return Err(format!("CryptoCompare HTTP {}", resp.status()));
@@ -88,8 +93,14 @@ pub async fn fetch_ohlcv(
             .map_err(|e| format!("CryptoCompare JSON parse failed: {e}"))?;
 
         if body["Response"].as_str() != Some("Success") {
-            return Err(format!("CryptoCompare error: {}", body["Message"].as_str().unwrap_or("unknown")));
+            let msg = body["Message"].as_str().unwrap_or("unknown");
+            if msg.contains("rate limit") || msg.contains("upgrade") {
+                return Err("CryptoCompare rate limited — use Kraken for recent data, try CryptoCompare later".into());
+            }
+            return Err(format!("CryptoCompare error: {msg}"));
         }
+
+        // (Success already verified above)
 
         let data = body["Data"]["Data"].as_array()
             .ok_or_else(|| "No data array in response".to_string())?;
@@ -127,8 +138,8 @@ pub async fn fetch_ohlcv(
         }
         to_ts = earliest_ts;
 
-        // Rate limit: be polite
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Rate limit: CryptoCompare free tier allows ~30 calls/min
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
     }
 
     // Sort by timestamp ascending and deduplicate

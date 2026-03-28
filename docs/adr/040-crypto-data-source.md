@@ -61,6 +61,20 @@ For timeframes not natively supported by CryptoCompare:
 - 1Week: aggregated from 1Day
 - 1Month: aggregated from 1Day (calendar month grouping)
 
+### Backfill Coverage (Updated 2026-03-28)
+All 9 timeframes are backfilled: 1Min, 5Min, 15Min, 30Min, 1Hour, 4Hour, 1Day, 1Week, 1Month.
+Note: 1Min history limited to ~7 days at CryptoCompare. All sub-hourly TFs aggregate from 1Min.
+
+### Two-Tier Refresh Strategy (Updated 2026-03-28)
+
+| Layer | Source | When | Coverage |
+|-------|--------|------|----------|
+| Daily refresh | CryptoCompare | Once per session | 10 symbols × 3 TFs (1Day, 1Hour, 4Hour) |
+| Weekend live | Kraken | Continuous adaptive polling | All visible crypto charts, current TF |
+| Deep history | CryptoCompare | Manual button | 10 symbols × 8 TFs (excludes 1Min) |
+
+CryptoCompare handles deep history (2000 bars/request, back to 2010). Kraken handles live weekend gap-fill (720 recent bars, no rate limit). Rate limit retry with exponential backoff (2s→16s) for CryptoCompare.
+
 ## Consequences
 
 - **Pro**: Full crypto history from 2010 (BTC) — deepest available

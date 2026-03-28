@@ -304,6 +304,33 @@ enum Drawing {
     },
 }
 
+/// Trade marker for chart overlay (DARWIN deals, broker fills).
+/// Aggregated: multiple deals at the same bar+price become one marker with combined volume.
+#[derive(Clone, Debug)]
+struct TradeMarker {
+    bar_idx: usize,     // index into bars array
+    price: f64,
+    volume: f64,        // aggregated total lots
+    is_buy: bool,       // true=buy, false=sell
+    count: u32,         // number of individual deals aggregated
+}
+
+/// Open position line for chart overlay (entry, SL, TP).
+#[derive(Clone, Debug)]
+struct PositionLine {
+    price: f64,
+    volume: f64,       // aggregated lots at this price
+    is_buy: bool,
+    line_type: u8,     // 0=entry, 1=SL, 2=TP
+}
+
+/// Trade overlay data passed to draw_chart for DARWIN/broker position rendering.
+#[derive(Clone, Debug, Default)]
+struct TradeOverlay {
+    markers: Vec<TradeMarker>,
+    position_lines: Vec<PositionLine>,
+}
+
 /// Drawing interaction mode.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum DrawMode {
@@ -510,6 +537,9 @@ struct ChartState {
     harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
     drawings: Vec<Drawing>,
+    /// Cached trade overlay (rebuilt when bg data changes, not every frame).
+    cached_trade_overlay: TradeOverlay,
+    cached_trade_overlay_frame: u64,
 
     // ── view state ────────────────────────────────────────────────────────
     /// How many bars are visible horizontally (zoom level).
@@ -605,6 +635,8 @@ impl ChartState {
             multi_kama: Vec::new(),
             harmonics: Vec::new(),
             drawings: Vec::new(),
+            cached_trade_overlay: TradeOverlay::default(),
+            cached_trade_overlay_frame: 0,
             visible_bars: 200,
             view_offset: 0,
             price_pan: 0.0,
@@ -781,7 +813,8 @@ impl ChartState {
                 let closes: Vec<f32> = self.bars.iter().map(|b| b.close as f32).collect();
                 let highs: Vec<f32> = self.bars.iter().map(|b| b.high as f32).collect();
                 let lows: Vec<f32> = self.bars.iter().map(|b| b.low as f32).collect();
-                gpu.upload_bars_full(&closes, &highs, &lows);
+                let volumes: Vec<f32> = self.bars.iter().map(|b| b.volume as f32).collect();
+                gpu.upload_bars_full(&closes, &highs, &lows, &volumes);
 
                 // SMA — parallel GPU
                 if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Sma, 200, true) {
@@ -935,10 +968,13 @@ impl ChartState {
                     self.williams_r = data.iter().map(|&v| Some(v as f64)).collect();
                 } else { self.williams_r = compute_williams_r(&self.bars, 14); }
 
-                // OBV — GPU (sequential, price-change proxy)
-                if let Some(data) = gpu.compute_obv_gpu() {
-                    self.obv = data.iter().map(|&v| Some(v as f64)).collect();
-                } else { self.obv = compute_obv(&self.bars); }
+                // OBV — GPU (sequential, real volume via interleaved [close, vol] buffer)
+                {
+                    let cv: Vec<f32> = self.bars.iter().flat_map(|b| [b.close as f32, b.volume as f32]).collect();
+                    if let Some(data) = gpu.compute_obv_gpu_with_cv(&cv) {
+                        self.obv = data.iter().map(|&v| Some(v as f64)).collect();
+                    } else { self.obv = compute_obv(&self.bars); }
+                }
 
                 // Momentum — GPU (parallel)
                 if let Some(data) = gpu.compute_momentum_gpu(10) {
@@ -975,12 +1011,8 @@ impl ChartState {
                 // ATR Projection MTF levels (matching ATR_Projection.mqh)
                 self.atr_proj_levels = compute_atr_projection_levels(&self.bars, self.timeframe.minutes());
 
-                // BetterVolume — GPU (parallel classification)
-                if let Some(data) = gpu.compute_better_volume_gpu(20) {
-                    self.better_vol_type = data.iter().map(|&v| v as u8).collect();
-                } else {
-                    self.better_vol_type = compute_better_volume(&self.bars);
-                }
+                // BetterVolume — CPU (buy/sell pressure estimation requires OHLC, 1:1 MQL5 port)
+                self.better_vol_type = compute_better_volume(&self.bars);
 
                 let (h1, h4, d1, w1, mn1) = compute_prev_candle_levels(&self.bars);
                 self.prev_h1_high = h1.0; self.prev_h1_low = h1.1;
@@ -1019,19 +1051,12 @@ impl ChartState {
 
                 self.harmonics = detect_harmonic_patterns(&self.bars, &self.fractal_up, &self.fractal_down); // CPU (complex pattern matching)
 
-                // Supply/Demand Zones — GPU (parallel impulse detection)
-                if let Some(data) = gpu.compute_sd_zones_gpu(14) {
-                    let n = self.bars.len();
-                    let mut supply = Vec::new();
-                    let mut demand = Vec::new();
-                    for i in 0..n {
-                        let zone_type = data.get(i * 3).copied().unwrap_or(0.0);
-                        let zone_high = data.get(i * 3 + 1).copied().unwrap_or(0.0);
-                        let zone_low = data.get(i * 3 + 2).copied().unwrap_or(0.0);
-                        if zone_type > 0.5 { demand.push((i, zone_high as f64, zone_low as f64, 1u8)); }
-                        else if zone_type < -0.5 { supply.push((i, zone_high as f64, zone_low as f64, 1u8)); }
-                    }
-                    self.supply_zones = supply; self.demand_zones = demand;
+                // Supply/Demand Zones — GPU fractal detection + CPU testing/merging
+                // GPU Phase 1: detect fractals (parallel per-bar, 5-bar lookback)
+                // CPU Phase 2: refine boundaries, test zones, merge, purge broken
+                if let Some(data) = gpu.compute_sd_zones_gpu(5) {
+                    let (sz, dz) = compute_supply_demand_zones_from_gpu(&data, &self.bars);
+                    self.supply_zones = sz; self.demand_zones = dz;
                 } else {
                     let (sz, dz) = compute_supply_demand_zones(&self.bars);
                     self.supply_zones = sz; self.demand_zones = dz;
@@ -2463,94 +2488,386 @@ fn compute_atr_projection(bars: &[Bar], atr: &[Option<f64>]) -> (Vec<Option<f64>
     (upper, lower)
 }
 
+/// BetterVolume — 1:1 port of BetterVolume.mqh (Emini-Watch algorithm).
+/// Classifies each bar using buy/sell pressure estimation and lookback extremes.
+/// Returns: 0=low_vol(yellow), 1=climax_up(red), 2=climax_dn(white), 3=churn(green),
+///          4=climax_churn(magenta), 5=normal(steelblue)
 fn compute_better_volume(bars: &[Bar]) -> Vec<u8> {
     let n = bars.len();
-    if n < 20 { return vec![0; n]; }
-    let mut out = vec![0u8; n];
-    for i in 20..n {
-        let avg_vol: f64 = bars[(i - 20)..i].iter().map(|b| b.volume).sum::<f64>() / 20.0;
-        let range = bars[i].high - bars[i].low;
-        let avg_range: f64 = bars[(i - 20)..i].iter().map(|b| b.high - b.low).sum::<f64>() / 20.0;
-        let vol_ratio = if avg_vol > 0.0 { bars[i].volume / avg_vol } else { 1.0 };
-        let range_ratio = if avg_range > 0.0 { range / avg_range } else { 1.0 };
-        let is_up = bars[i].close >= bars[i].open;
+    let lookback = 20usize;
+    if n < lookback + 2 { return vec![5; n]; } // all normal if too few bars
 
-        if vol_ratio > 2.0 && range_ratio > 1.5 {
-            out[i] = if is_up { 1 } else { 2 }; // climax up/down
-        } else if vol_ratio > 1.5 && range_ratio < 0.7 {
-            out[i] = 5; // churn (high vol, low range)
-        } else if vol_ratio > 1.5 {
-            out[i] = 3; // high volume
-        } else if vol_ratio < 0.5 {
-            out[i] = 4; // low volume
+    // Estimate buy/sell volumes from candle structure (matching MQL5 EstimateBuySell)
+    let estimate_buy_sell = |b: &Bar| -> (f64, f64) {
+        let total = b.volume;
+        let range = b.high - b.low;
+        if range <= 0.0 { return (total * 0.5, total * 0.5); }
+        let (o, c) = (b.open, b.close);
+        let buy = if c > o {
+            let denom = 2.0 * range + o - c;
+            let denom = if denom <= 0.0 { range } else { denom };
+            (range / denom) * total
+        } else if c < o {
+            let denom = 2.0 * range + c - o;
+            let denom = if denom <= 0.0 { range } else { denom };
+            ((range + c - o) / denom) * total
+        } else {
+            total * 0.5
+        };
+        (buy, total - buy)
+    };
+
+    let mut out = vec![5u8; n]; // default: normal
+    let min_range = 1e-10_f64;
+
+    for i in 0..n {
+        if i + lookback >= n { continue; } // MQL5 series: bar i needs lookback bars AFTER it
+        // Wait, in our chronological order: bar i needs lookback bars BEFORE it.
+        // MQL5 series: bar 0 = newest, lookback scans bar+1..bar+lookback (older bars).
+        // In chronological: bar i is our current bar. Lookback = previous bars i-1..i-lookback.
+        if i < lookback { continue; }
+
+        let b = &bars[i];
+        let vol = b.volume;
+        let range = (b.high - b.low).max(min_range);
+        let (buy_vol, sell_vol) = estimate_buy_sell(b);
+
+        let buy_range = buy_vol * range;
+        let sell_range = sell_vol * range;
+        let vol_div_r = vol / range;
+        let sell_div_r = sell_vol / range;
+        let buy_div_r = buy_vol / range;
+
+        // Find lookback extremes (previous `lookback` bars)
+        let mut high_buy_range = 0.0_f64;
+        let mut high_sell_range = 0.0_f64;
+        let mut high_vol_div_r = 0.0_f64;
+        let mut low_sell_div_r = f64::MAX;
+        let mut low_buy_div_r = f64::MAX;
+        let mut low_total_vol = f64::MAX;
+
+        for j in 1..=lookback {
+            let bi = i - j;
+            let bj = &bars[bi];
+            let (bv, sv) = estimate_buy_sell(bj);
+            let r = (bj.high - bj.low).max(min_range);
+            let v = bj.volume;
+
+            let br = bv * r;
+            let sr = sv * r;
+            let vr = v / r;
+            let sdr = sv / r;
+            let bdr = bv / r;
+
+            if br > high_buy_range { high_buy_range = br; }
+            if sr > high_sell_range { high_sell_range = sr; }
+            if vr > high_vol_div_r { high_vol_div_r = vr; }
+            if sdr < low_sell_div_r { low_sell_div_r = sdr; }
+            if bdr < low_buy_div_r { low_buy_div_r = bdr; }
+            if v < low_total_vol { low_total_vol = v; }
         }
+
+        // 1-bar classification flags
+        let mut is_climax_up = false;
+        let mut is_climax_dn = false;
+        let mut is_churn = false;
+        let mut is_low_vol = false;
+
+        // Low Volume: volume <= lowest in lookback
+        if vol <= low_total_vol { is_low_vol = true; }
+
+        // Climax Up: (buyVol*range == highest) OR (sellVol/range == lowest), C > O
+        if b.close > b.open {
+            if buy_range >= high_buy_range || sell_div_r <= low_sell_div_r {
+                is_climax_up = true;
+            }
+        }
+
+        // Climax Down: (sellVol*range == highest) OR (buyVol/range == lowest), C < O
+        if b.close < b.open {
+            if sell_range >= high_sell_range || buy_div_r <= low_buy_div_r {
+                is_climax_dn = true;
+            }
+        }
+
+        // Churn: totalVol/range == highest in lookback
+        if vol_div_r >= high_vol_div_r { is_churn = true; }
+
+        // 2-bar analysis (matching MQL5 InpUse2Bars=true)
+        if i >= lookback + 1 {
+            let b2 = &bars[i - 1];
+            let (bv2, sv2) = estimate_buy_sell(b2);
+            let total_buy = buy_vol + bv2;
+            let total_sell = sell_vol + sv2;
+            let total_vol2 = vol + b2.volume;
+            let range2 = (b.high.max(b2.high) - b.low.min(b2.low)).max(min_range);
+
+            let buy_range2 = total_buy * range2;
+            let sell_range2 = total_sell * range2;
+            let vol_div_r2 = total_vol2 / range2;
+            let sell_div_r2 = total_sell / range2;
+            let buy_div_r2 = total_buy / range2;
+
+            // 2-bar lookback extremes
+            let mut h_br2 = 0.0_f64;
+            let mut h_sr2 = 0.0_f64;
+            let mut h_vr2 = 0.0_f64;
+            let mut l_sdr2 = f64::MAX;
+            let mut l_bdr2 = f64::MAX;
+            let mut l_vol2 = f64::MAX;
+
+            for j in 1..=lookback {
+                let b1i = i - j;
+                if b1i == 0 { break; }
+                let b2i = b1i - 1;
+                let bj1 = &bars[b1i];
+                let bj2 = &bars[b2i];
+                let (bva, sva) = estimate_buy_sell(bj1);
+                let (bvb, svb) = estimate_buy_sell(bj2);
+                let tb = bva + bvb;
+                let ts = sva + svb;
+                let tv = bj1.volume + bj2.volume;
+                let r2 = (bj1.high.max(bj2.high) - bj1.low.min(bj2.low)).max(min_range);
+
+                if tb * r2 > h_br2 { h_br2 = tb * r2; }
+                if ts * r2 > h_sr2 { h_sr2 = ts * r2; }
+                if tv / r2 > h_vr2 { h_vr2 = tv / r2; }
+                if ts / r2 < l_sdr2 { l_sdr2 = ts / r2; }
+                if tb / r2 < l_bdr2 { l_bdr2 = tb / r2; }
+                if tv < l_vol2 { l_vol2 = tv; }
+            }
+
+            if total_vol2 <= l_vol2 { is_low_vol = true; }
+            if b.close > b.open && (buy_range2 >= h_br2 || sell_div_r2 <= l_sdr2) { is_climax_up = true; }
+            if b.close < b.open && (sell_range2 >= h_sr2 || buy_div_r2 <= l_bdr2) { is_climax_dn = true; }
+            if vol_div_r2 >= h_vr2 { is_churn = true; }
+        }
+
+        // Priority: ClimaxChurn > LowVol > ClimaxUp > ClimaxDown > Churn > Normal
+        out[i] = if (is_climax_up || is_climax_dn) && is_churn { 4 } // climax+churn (magenta)
+            else if is_low_vol { 0 }    // low volume (yellow)
+            else if is_climax_up { 1 }  // climax up (red)
+            else if is_climax_dn { 2 }  // climax down (white)
+            else if is_churn { 3 }      // churn (green)
+            else { 5 };                 // normal (steelblue)
     }
     out
 }
 
-fn compute_supply_demand_zones(bars: &[Bar]) -> (Vec<(usize, f64, f64, u8)>, Vec<(usize, f64, f64, u8)>) {
+/// Supply/Demand zones from GPU fractal detection output.
+/// GPU Phase 1 outputs [zone_type, zone_high, zone_low] per bar.
+/// CPU Phase 2: refine boundaries with actual open prices, test zones, merge, purge broken.
+fn compute_supply_demand_zones_from_gpu(gpu_data: &[f32], bars: &[Bar]) -> (Vec<(usize, f64, f64, u8)>, Vec<(usize, f64, f64, u8)>) {
+    const FRACTAL_LOOKBACK: usize = 5;
     let n = bars.len();
-    let mut supply: Vec<(usize, f64, f64, u8)> = Vec::new();
-    let mut demand: Vec<(usize, f64, f64, u8)> = Vec::new();
-    if n < 10 { return (supply, demand); }
+    if n < FRACTAL_LOOKBACK * 2 + 1 { return (Vec::new(), Vec::new()); }
 
-    let avg_range: f64 = bars.iter().map(|b| b.high - b.low).sum::<f64>() / n as f64;
-    let impulse_threshold = avg_range * 2.0;
+    struct Zone { idx: usize, hi: f64, lo: f64, touches: u32, is_supply: bool, broken: bool }
+    let mut zones: Vec<Zone> = Vec::new();
 
-    for i in 1..(n - 1) {
-        let range = bars[i].high - bars[i].low;
-        let body = (bars[i].close - bars[i].open).abs();
+    let min_height = bars.iter()
+        .filter_map(|b| { let r = b.high - b.low; if r > 0.0 { Some(r) } else { None } })
+        .fold(f64::MAX, f64::min) * 0.01;
 
-        if range > impulse_threshold && body > range * 0.6 {
-            let is_bullish = bars[i].close > bars[i].open;
+    // Extract fractals from GPU output, refine boundaries with actual open prices
+    for i in 0..n {
+        let zone_type = gpu_data.get(i * 3).copied().unwrap_or(0.0);
+        if zone_type < -0.5 {
+            // Supply fractal: hi = high, lo = min(close, open)
+            let hi = bars[i].high;
+            let lo = bars[i].close.min(bars[i].open);
+            let lo = if hi - lo < min_height { hi - min_height } else { lo };
+            zones.push(Zone { idx: i, hi, lo, touches: 0, is_supply: true, broken: false });
+        } else if zone_type > 0.5 {
+            // Demand fractal: hi = max(close, open), lo = low
+            let lo = bars[i].low;
+            let hi = bars[i].close.max(bars[i].open);
+            let hi = if hi - lo < min_height { lo + min_height } else { hi };
+            zones.push(Zone { idx: i, hi, lo, touches: 0, is_supply: false, broken: false });
+        }
+    }
 
-            if is_bullish {
-                let zone_high = bars[i - 1].high.max(bars[i].open);
-                let zone_low = bars[i - 1].low.min(bars[i].open);
-                if zone_high > zone_low {
-                    demand.push((i - 1, zone_high, zone_low, 0)); // untested
+    // Test zones, merge, purge — identical to CPU-only path
+    for z in &mut zones {
+        let scan_from = z.idx + FRACTAL_LOOKBACK + 1;
+        for b in scan_from..n {
+            if bars[b].high >= z.lo && bars[b].low <= z.hi {
+                if z.is_supply && bars[b].close > z.hi { z.broken = true; break; }
+                if !z.is_supply && bars[b].close < z.lo { z.broken = true; break; }
+                z.touches += 1;
+            }
+        }
+    }
+    zones.retain(|z| !z.broken);
+
+    if zones.len() >= 2 {
+        zones.sort_by(|a, b| {
+            let type_a = if a.is_supply { 0u8 } else { 1 };
+            let type_b = if b.is_supply { 0u8 } else { 1 };
+            type_a.cmp(&type_b).then(a.lo.partial_cmp(&b.lo).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        let mut write = 0;
+        for i in 1..zones.len() {
+            let same_type = zones[i].is_supply == zones[write].is_supply;
+            let overlapping = zones[i].lo <= zones[write].hi;
+            if same_type && overlapping {
+                zones[write].hi = zones[write].hi.max(zones[i].hi);
+                zones[write].lo = zones[write].lo.min(zones[i].lo);
+                zones[write].touches += zones[i].touches;
+                if zones[i].idx < zones[write].idx { zones[write].idx = zones[i].idx; }
+            } else {
+                write += 1;
+                if write != i {
+                    zones[write] = Zone {
+                        idx: zones[i].idx, hi: zones[i].hi, lo: zones[i].lo,
+                        touches: zones[i].touches, is_supply: zones[i].is_supply, broken: zones[i].broken,
+                    };
+                }
+            }
+        }
+        zones.truncate(write + 1);
+    }
+
+    let mut supply = Vec::new();
+    let mut demand = Vec::new();
+    for z in &zones {
+        let strength: u8 = if z.touches == 0 { 0 } else if z.touches <= 2 { 1 } else { 2 };
+        if z.is_supply { supply.push((z.idx, z.hi, z.lo, strength)); }
+        else { demand.push((z.idx, z.hi, z.lo, strength)); }
+    }
+    (supply, demand)
+}
+
+/// Supply/Demand zone detection — 1:1 port of SupplyDemand.mqh fractal-based algorithm.
+/// Returns (supply_zones, demand_zones) each as Vec<(bar_idx, zone_high, zone_low, strength)>.
+/// Strength: 0=untested, 1=tested (1-2 touches), 2=proven (3+ touches).
+/// Broken zones are purged (not returned).
+fn compute_supply_demand_zones(bars: &[Bar]) -> (Vec<(usize, f64, f64, u8)>, Vec<(usize, f64, f64, u8)>) {
+    const FRACTAL_LOOKBACK: usize = 5;
+    const BACK_LIMIT: usize = 1000;
+
+    let n = bars.len();
+    if n < FRACTAL_LOOKBACK * 2 + 1 { return (Vec::new(), Vec::new()); }
+
+    let limit = BACK_LIMIT.min(n.saturating_sub(FRACTAL_LOOKBACK + 1));
+
+    // Zone: (bar_idx, hi, lo, touch_count, is_supply, is_broken)
+    struct Zone { idx: usize, hi: f64, lo: f64, touches: u32, is_supply: bool, broken: bool }
+
+    let mut zones: Vec<Zone> = Vec::new();
+
+    // Minimum zone height: smallest price increment we can detect
+    let min_height = bars.iter()
+        .filter_map(|b| { let r = b.high - b.low; if r > 0.0 { Some(r) } else { None } })
+        .fold(f64::MAX, f64::min) * 0.01;
+
+    // ── Find fractal zones (matching MQL5 IsFractalHigh/IsFractalLow) ────
+    // Bars are in chronological order (0=oldest). MQL5 uses series mode (0=newest).
+    // MQL5 scans i from InpFractalLookback..limit-InpFractalLookback with series arrays.
+    // In chronological: scan from (n-1-limit+FRACTAL_LOOKBACK) to (n-1-FRACTAL_LOOKBACK).
+    let scan_start = if n > limit + FRACTAL_LOOKBACK { n - 1 - limit + FRACTAL_LOOKBACK } else { FRACTAL_LOOKBACK };
+    let scan_end = n - 1 - FRACTAL_LOOKBACK;
+
+    for i in scan_start..=scan_end {
+        // Fractal high: bar's high is strictly greater than lookback bars on each side
+        let is_fractal_high = (1..=FRACTAL_LOOKBACK).all(|k| {
+            i >= k && i + k < n &&
+            bars[i].high > bars[i - k].high && bars[i].high > bars[i + k].high
+        });
+        if is_fractal_high {
+            let hi = bars[i].high;
+            let lo = bars[i].close.min(bars[i].open);
+            let lo = if hi - lo < min_height { hi - min_height } else { lo };
+            zones.push(Zone { idx: i, hi, lo, touches: 0, is_supply: true, broken: false });
+        }
+
+        // Fractal low: bar's low is strictly less than lookback bars on each side
+        let is_fractal_low = (1..=FRACTAL_LOOKBACK).all(|k| {
+            i >= k && i + k < n &&
+            bars[i].low < bars[i - k].low && bars[i].low < bars[i + k].low
+        });
+        if is_fractal_low {
+            let lo = bars[i].low;
+            let hi = bars[i].close.max(bars[i].open);
+            let hi = if hi - lo < min_height { lo + min_height } else { hi };
+            zones.push(Zone { idx: i, hi, lo, touches: 0, is_supply: false, broken: false });
+        }
+    }
+
+    // ── Test zones against subsequent price action (matching MQL5 TestZones) ────
+    // MQL5 scans from fractalBar - lookback - 1 down to 0 (series = toward newest).
+    // In chronological: scan from fractal_idx + lookback + 1 toward n-1.
+    for z in &mut zones {
+        let scan_from = z.idx + FRACTAL_LOOKBACK + 1;
+        for b in scan_from..n {
+            // Does bar's range overlap the zone?
+            if bars[b].high >= z.lo && bars[b].low <= z.hi {
+                // Check for break: close pierces beyond zone boundary
+                if z.is_supply && bars[b].close > z.hi {
+                    z.broken = true;
+                    break;
+                }
+                if !z.is_supply && bars[b].close < z.lo {
+                    z.broken = true;
+                    break;
+                }
+                z.touches += 1;
+            }
+        }
+    }
+
+    // Purge broken zones
+    zones.retain(|z| !z.broken);
+
+    // ── Merge overlapping same-type zones (matching MQL5 MergeZones sort-and-sweep) ──
+    if zones.len() >= 2 {
+        // Sort by is_supply (supply first = false < true? MQL5: ZONE_SUPPLY=0 first)
+        // MQL5 sorts by type ascending (SUPPLY=0 first), then lo ascending
+        zones.sort_by(|a, b| {
+            let type_a = if a.is_supply { 0u8 } else { 1 };
+            let type_b = if b.is_supply { 0u8 } else { 1 };
+            type_a.cmp(&type_b).then(a.lo.partial_cmp(&b.lo).unwrap_or(std::cmp::Ordering::Equal))
+        });
+
+        let mut write = 0;
+        for i in 1..zones.len() {
+            let same_type = zones[i].is_supply == zones[write].is_supply;
+            let overlapping = zones[i].lo <= zones[write].hi;
+            if same_type && overlapping {
+                // Merge into write
+                zones[write].hi = zones[write].hi.max(zones[i].hi);
+                zones[write].lo = zones[write].lo.min(zones[i].lo);
+                zones[write].touches += zones[i].touches;
+                if zones[i].idx < zones[write].idx {
+                    zones[write].idx = zones[i].idx;
                 }
             } else {
-                let zone_high = bars[i - 1].high.max(bars[i].open);
-                let zone_low = bars[i - 1].low.min(bars[i].open);
-                if zone_high > zone_low {
-                    supply.push((i - 1, zone_high, zone_low, 0)); // untested
+                write += 1;
+                if write != i {
+                    let z = Zone {
+                        idx: zones[i].idx, hi: zones[i].hi, lo: zones[i].lo,
+                        touches: zones[i].touches, is_supply: zones[i].is_supply, broken: zones[i].broken,
+                    };
+                    zones[write] = z;
                 }
             }
+        }
+        zones.truncate(write + 1);
+    }
+
+    // ── Assign strength and split into supply/demand ──
+    let mut supply: Vec<(usize, f64, f64, u8)> = Vec::new();
+    let mut demand: Vec<(usize, f64, f64, u8)> = Vec::new();
+
+    for z in &zones {
+        let strength: u8 = if z.touches == 0 { 0 } else if z.touches <= 2 { 1 } else { 2 };
+        if z.is_supply {
+            supply.push((z.idx, z.hi, z.lo, strength));
+        } else {
+            demand.push((z.idx, z.hi, z.lo, strength));
         }
     }
 
-    // Determine zone status: check if price returned to zone after creation
-    for zone in &mut demand {
-        for j in (zone.0 + 2)..n {
-            if bars[j].low <= zone.1 && bars[j].low >= zone.2 {
-                // Price returned to zone
-                if bars[j].close > zone.1 {
-                    zone.3 = 2; // proven (bounced)
-                } else {
-                    zone.3 = 1; // tested
-                }
-                break;
-            }
-        }
-    }
-    for zone in &mut supply {
-        for j in (zone.0 + 2)..n {
-            if bars[j].high >= zone.2 && bars[j].high <= zone.1 {
-                if bars[j].close < zone.2 {
-                    zone.3 = 2; // proven (bounced down)
-                } else {
-                    zone.3 = 1; // tested
-                }
-                break;
-            }
-        }
-    }
-
-    supply.sort_by(|a, b| b.0.cmp(&a.0));
-    demand.sort_by(|a, b| b.0.cmp(&a.0));
-    supply.truncate(10);
-    demand.truncate(10);
     (supply, demand)
 }
 
@@ -2774,6 +3091,7 @@ fn draw_chart(
     show_ehlers_roof: bool,
     sl_price: Option<f64>,
     tp_price: Option<f64>,
+    trade_overlay: &TradeOverlay,
 ) {
     // ── background ──────────────────────────────────────────────────────────
     painter.rect_filled(rect, 0.0, BG);
@@ -3004,19 +3322,11 @@ fn draw_chart(
     // MTF SMA lines (matching MTF_MA.mqh: H1/200, H4/200, D1/200, W1/200, W1/100, MN1/100)
     if flags.sma200 && !chart.mtf_sma.is_empty() {
         // Colors matching MTF_MA.mqh SetIndexStyle (lines 226-231)
-        let mtf_sma_colors: &[(&str, egui::Color32)] = &[
-            ("H1 200",  egui::Color32::from_rgb(255, 99, 71)),   // clrTomato
-            ("H4 200",  egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
-            ("D1 200",  egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
-            ("W1 200",  egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
-            ("W1 100",  egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
-            ("MN1 100", egui::Color32::from_rgb(255, 0, 255)),   // clrMagenta
-        ];
         for (label, projected) in &chart.mtf_sma {
-            let color = mtf_sma_colors.iter()
-                .find(|(l, _)| l == label)
-                .map(|(_, c)| *c)
-                .unwrap_or(egui::Color32::from_rgb(200, 200, 200));
+            let color = match label.as_str() {
+                "H1 200" => egui::Color32::from_rgb(255, 99, 71),   // clrTomato
+                _        => egui::Color32::from_rgb(255, 0, 255),   // clrMagenta (all others)
+            };
             let mut prev: Option<egui::Pos2> = None;
             for &(bar_idx, sma_val) in projected {
                 if bar_idx >= start_idx && bar_idx < end_idx {
@@ -3268,20 +3578,25 @@ fn draw_chart(
     // ── supply/demand zones ─────────────────────────────────────────────────
     if flags.supply_demand {
         let status_label = |s: u8| -> &str { match s { 0 => "Untested", 1 => "Tested", 2 => "Proven", _ => "" } };
+        // Zones extend from their creation bar to the chart right edge (matching MT5).
+        // Show any zone whose creation bar is <= end_idx (it extends into or past the view).
         // Demand zones — MT5 colors: DarkSeaGreen/MediumSeaGreen/SeaGreen
         for &(idx, zh, zl, status) in &chart.demand_zones {
-            if idx >= start_idx && idx < end_idx {
-                let x_start = chart_rect.left() + ((idx - start_idx) as f32) * bar_w;
+            if idx < end_idx {
+                let x_start = if idx >= start_idx {
+                    chart_rect.left() + ((idx - start_idx) as f32) * bar_w
+                } else {
+                    chart_rect.left()
+                };
                 let y_top = price_to_y(zh);
                 let y_bot = price_to_y(zl);
                 if y_bot >= chart_rect.top() && y_top <= chart_rect.bottom() {
-                    // MT5 exact colors: clrDarkSeaGreen / clrMediumSeaGreen / clrSeaGreen
                     let (fill_col, label_col) = match status {
-                        0 => (egui::Color32::from_rgba_premultiplied(143, 188, 143, 50), // DarkSeaGreen
+                        0 => (egui::Color32::from_rgba_premultiplied(143, 188, 143, 50),
                               egui::Color32::from_rgb(143, 188, 143)),
-                        1 => (egui::Color32::from_rgba_premultiplied(60, 179, 113, 60),  // MediumSeaGreen
+                        1 => (egui::Color32::from_rgba_premultiplied(60, 179, 113, 60),
                               egui::Color32::from_rgb(60, 179, 113)),
-                        _ => (egui::Color32::from_rgba_premultiplied(46, 139, 87, 70),   // SeaGreen
+                        _ => (egui::Color32::from_rgba_premultiplied(46, 139, 87, 70),
                               egui::Color32::from_rgb(46, 139, 87)),
                     };
                     painter.rect_filled(
@@ -3303,18 +3618,21 @@ fn draw_chart(
         }
         // Supply zones — MT5 colors: SkyBlue/DeepSkyBlue/DodgerBlue
         for &(idx, zh, zl, status) in &chart.supply_zones {
-            if idx >= start_idx && idx < end_idx {
-                let x_start = chart_rect.left() + ((idx - start_idx) as f32) * bar_w;
+            if idx < end_idx {
+                let x_start = if idx >= start_idx {
+                    chart_rect.left() + ((idx - start_idx) as f32) * bar_w
+                } else {
+                    chart_rect.left()
+                };
                 let y_top = price_to_y(zh);
                 let y_bot = price_to_y(zl);
                 if y_bot >= chart_rect.top() && y_top <= chart_rect.bottom() {
-                    // MT5 exact colors: clrSkyBlue / clrDeepSkyBlue / clrDodgerBlue
                     let (fill_col, label_col) = match status {
-                        0 => (egui::Color32::from_rgba_premultiplied(135, 206, 235, 50), // SkyBlue
+                        0 => (egui::Color32::from_rgba_premultiplied(135, 206, 235, 50),
                               egui::Color32::from_rgb(135, 206, 235)),
-                        1 => (egui::Color32::from_rgba_premultiplied(0, 191, 255, 60),   // DeepSkyBlue
+                        1 => (egui::Color32::from_rgba_premultiplied(0, 191, 255, 60),
                               egui::Color32::from_rgb(0, 191, 255)),
-                        _ => (egui::Color32::from_rgba_premultiplied(30, 144, 255, 70),  // DodgerBlue
+                        _ => (egui::Color32::from_rgba_premultiplied(30, 144, 255, 70),
                               egui::Color32::from_rgb(30, 144, 255)),
                     };
                     painter.rect_filled(
@@ -3471,7 +3789,7 @@ fn draw_chart(
                 let y_high  = price_to_y(bar.high);
                 let y_low   = price_to_y(bar.low);
                 let y_close = price_to_y(bar.close);
-                // Weekend bars for crypto get distinct color (Kraken gap-fill data)
+                // Weekend bars for crypto get distinct color (CryptoCompare/Kraken gap-fill data)
                 let is_weekend = if is_crypto {
                     let dt = chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0);
                     dt.map(|d| {
@@ -3669,7 +3987,7 @@ fn draw_chart(
         egui::Align2::LEFT_TOP,
         &sym_label,
         egui::FontId::monospace(11.0),
-        egui::Color32::from_rgb(136, 204, 255), // #8cf — WebKit .mtf-cell-label color
+        egui::Color32::WHITE,
     );
 
     // ── indicator legend ─────────────────────────────────────────────────────
@@ -3878,6 +4196,72 @@ fn draw_chart(
         }
     }
 
+    // ── DARWIN/broker trade markers (buy/sell arrows + position lines) ────────
+    // Position entry/SL/TP lines
+    for pl in &trade_overlay.position_lines {
+        let y = price_to_y(pl.price);
+        if y >= chart_rect.top() && y <= chart_rect.bottom() {
+            let (color, label_prefix) = match pl.line_type {
+                0 => (if pl.is_buy { egui::Color32::from_rgb(0, 150, 255) } else { egui::Color32::from_rgb(255, 100, 50) }, if pl.is_buy { "BUY" } else { "SELL" }),
+                1 => (egui::Color32::from_rgb(255, 60, 60), "SL"),
+                _ => (egui::Color32::from_rgb(60, 200, 60), "TP"),
+            };
+            // Dashed line across chart
+            let dash_len = 6.0_f32;
+            let gap_len = 4.0_f32;
+            let mut fx = chart_rect.left();
+            while fx < chart_rect.right() {
+                let end = (fx + dash_len).min(chart_rect.right());
+                painter.line_segment([egui::pos2(fx, y), egui::pos2(end, y)], egui::Stroke::new(1.0, color));
+                fx += dash_len + gap_len;
+            }
+            // Label with volume
+            let label = format!("{} {:.2}", label_prefix, pl.volume);
+            painter.text(
+                egui::pos2(chart_rect.left() + 4.0, y - 10.0),
+                egui::Align2::LEFT_TOP, &label,
+                egui::FontId::monospace(9.0), color,
+            );
+        }
+    }
+    // Trade arrows (buy = green up-arrow, sell = red down-arrow)
+    for tm in &trade_overlay.markers {
+        if tm.bar_idx >= start_idx && tm.bar_idx < end_idx {
+            let rel = tm.bar_idx - start_idx;
+            let x = chart_rect.left() + (rel as f32 + 0.5) * bar_w;
+            let y = price_to_y(tm.price);
+            if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                let (color, arrow_dir) = if tm.is_buy {
+                    (egui::Color32::from_rgb(76, 175, 80), 1.0_f32) // green, points up (below bar)
+                } else {
+                    (egui::Color32::from_rgb(244, 67, 54), -1.0_f32) // red, points down (above bar)
+                };
+                let arrow_size = 6.0_f32;
+                let y_offset = arrow_size * 2.0 * arrow_dir; // offset away from price
+                let tip_y = y + y_offset;
+                let base_y = tip_y + arrow_size * arrow_dir;
+                // Triangle arrow
+                let points = vec![
+                    egui::pos2(x, tip_y),
+                    egui::pos2(x - arrow_size * 0.6, base_y),
+                    egui::pos2(x + arrow_size * 0.6, base_y),
+                ];
+                painter.add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+                // Volume label (only if aggregated or significant)
+                if tm.count > 1 || tm.volume >= 0.1 {
+                    let label_y = if tm.is_buy { base_y + 2.0 } else { base_y - 10.0 };
+                    painter.text(
+                        egui::pos2(x, label_y),
+                        egui::Align2::CENTER_TOP,
+                        &format!("{:.2}", tm.volume),
+                        egui::FontId::monospace(8.0),
+                        color,
+                    );
+                }
+            }
+        }
+    }
+
     // ── drawing annotations ──────────────────────────────────────────────────
     for drawing in &chart.drawings {
         match drawing {
@@ -4048,7 +4432,7 @@ fn draw_oscillator_pane(
     }
 
     // Label
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, label, egui::FontId::monospace(9.0), color);
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, label, egui::FontId::monospace(9.0), egui::Color32::WHITE);
 }
 
 /// Draw Fisher Transform sub-pane with color-coded histogram bars.
@@ -4146,7 +4530,7 @@ fn draw_fisher_pane(
         (Some(f), None) => format!("Ehlers Fisher transform (32) {:.3}", f),
         _ => "Ehlers Fisher transform (32)".to_string(),
     };
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, &label, egui::FontId::monospace(9.0), FISHER_POS);
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, &label, egui::FontId::monospace(9.0), egui::Color32::WHITE);
 }
 
 /// Draw MACD sub-pane with two lines + histogram.
@@ -4236,7 +4620,7 @@ fn draw_macd_pane(
     }
     if points.len() > 1 { painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, MACD_SIG_COL))); }
 
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "MACD(12,26,9)", egui::FontId::monospace(9.0), MACD_LINE_COL);
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "MACD(12,26,9)", egui::FontId::monospace(9.0), egui::Color32::WHITE);
 }
 
 /// Draw volume bars sub-pane.
@@ -4277,7 +4661,7 @@ fn draw_volume_pane(
         );
     }
 
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "Volume", egui::FontId::monospace(9.0), AXIS_TEXT);
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "Volume", egui::FontId::monospace(9.0), egui::Color32::WHITE);
 }
 
 /// Draw Better Volume sub-pane (NNFX-style color-coded volume).
@@ -4305,14 +4689,16 @@ fn draw_better_volume_pane(
         let abs_idx = start_idx + rel_idx;
         let x = rect.left() + (rel_idx as f32 + 0.5) * bar_w;
         let h = (b.volume / max_vol) as f32 * rect.height();
-        let vt = vol_type.get(abs_idx).copied().unwrap_or(0);
+        let vt = vol_type.get(abs_idx).copied().unwrap_or(5);
+        // MQL5 enum: 0=low(yellow), 1=climax_up(red), 2=climax_dn(white),
+        //            3=churn(green), 4=climax_churn(magenta), 5=normal(steelblue)
         let color = match vt {
-            1 => BVOL_CLIMAX_UP,
-            2 => BVOL_CLIMAX_DN,
-            3 => BVOL_HIGH,
-            4 => BVOL_LOW,
-            5 => BVOL_CHURN,
-            _ => BVOL_NORMAL, // clrSteelBlue — normal volume
+            0 => BVOL_LOW,          // Yellow — low volume
+            1 => BVOL_CLIMAX_UP,    // Red — climax up
+            2 => BVOL_CLIMAX_DN,    // White — climax down
+            3 => BVOL_HIGH,         // Green — churn
+            4 => BVOL_CHURN,        // Magenta — climax + churn
+            _ => BVOL_NORMAL,       // SteelBlue — normal
         };
         painter.rect_filled(
             egui::Rect::from_min_max(
@@ -4325,7 +4711,7 @@ fn draw_better_volume_pane(
     // Label with current volume value (MT5 style: "BetterVol(20) 10748 0")
     let last_vol = bars.last().map(|b| b.volume as i64).unwrap_or(0);
     let label = format!("BetterVol(20) {} 0", last_vol);
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, &label, egui::FontId::monospace(9.0), BVOL_HIGH);
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, &label, egui::FontId::monospace(9.0), egui::Color32::WHITE);
 }
 
 /// Draw Stochastic sub-pane.
@@ -4375,7 +4761,7 @@ fn draw_stoch_pane(
     }
     if points.len() > 1 { painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, STOCH_D_COL))); }
 
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "Stoch(14,3,3)", egui::FontId::monospace(9.0), STOCH_K_COL);
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "Stoch(14,3,3)", egui::FontId::monospace(9.0), egui::Color32::WHITE);
 }
 
 /// Draw ADX + DI+/DI- sub-pane.
@@ -4417,7 +4803,7 @@ fn draw_adx_pane(
         if points.len() > 1 { painter.add(egui::Shape::line(points, egui::Stroke::new(width, color))); }
     }
 
-    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "ADX(14)", egui::FontId::monospace(9.0), ADX_COL);
+    painter.text(egui::pos2(rect.left() + 4.0, rect.top() + 2.0), egui::Align2::LEFT_TOP, "ADX(14)", egui::FontId::monospace(9.0), egui::Color32::WHITE);
 }
 
 /// Render a single indicator series as a polyline.
@@ -4628,7 +5014,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "SIGNAL",        desc: "Composite 0-100 trading signal" },
     Command { name: "STATUS",        desc: "Cache, memory, uptime status" },
     // Crypto-specific
-    Command { name: "CRYPTO_BACKFILL",desc: "Kraken weekend gap-fill" },
+    Command { name: "CRYPTO_BACKFILL",desc: "CryptoCompare deep history backfill" },
     // Data management
     Command { name: "BACKUP",        desc: "Backup settings and cache" },
     Command { name: "IMPORT_XLSX",   desc: "Import DARWIN XLSX trade history" },
@@ -4752,6 +5138,8 @@ struct BgDarwinData {
     open_positions: Vec<darwin::PortfolioOpenPosition>,
     trade_overlaps: Vec<darwin::TradeOverlap>,
     detailed_stats: Vec<(String, i64, i64)>,
+    /// Cached first/last bar timestamps for crypto entries (avoids per-frame DB queries).
+    crypto_ts_cache: std::collections::HashMap<String, (i64, i64)>,
     // ── Heavy analytics that froze the UI when computed in render thread ──
     optimal_allocation: Vec<darwin::OptimalAllocation>,
     rebalance: Option<darwin::RebalanceDashboard>,
@@ -4851,6 +5239,24 @@ impl OrderTypeMode {
             OrderTypeMode::Market => "Market",
             OrderTypeMode::Limit => "Limit",
             OrderTypeMode::Stop => "Stop",
+        }
+    }
+}
+
+/// Which broker to route orders to.
+#[derive(Clone, Copy, PartialEq)]
+enum OrderBroker {
+    Alpaca,
+    Tastytrade,
+    Both,
+}
+
+impl OrderBroker {
+    fn label(self) -> &'static str {
+        match self {
+            OrderBroker::Alpaca => "Alpaca",
+            OrderBroker::Tastytrade => "tastytrade",
+            OrderBroker::Both => "Both",
         }
     }
 }
@@ -5159,6 +5565,9 @@ pub struct TyphooNApp {
 
     // ── floating window visibility ───────────────────────────────────────
     show_settings: bool,
+    was_settings_open: bool,
+    /// Whether daily CryptoCompare refresh has run this session.
+    crypto_daily_done: bool,
     show_darwin_accounts: bool,
     show_darwin_portfolio: bool,
     show_risk_calc: bool,
@@ -5249,6 +5658,8 @@ pub struct TyphooNApp {
     insider_sort: SortState,
     outlier_sort: SortState,
     watchlist_sort: SortState,
+    /// Whether we've already tried populating watchlist from cache (avoid repeated DB scans).
+    watchlist_cache_tried: bool,
 
     /// Price alerts.
     alerts: Vec<(f64, String)>,
@@ -5312,6 +5723,7 @@ pub struct TyphooNApp {
     broker_rx: mpsc::UnboundedReceiver<BrokerMsg>,
     /// Whether broker is connected.
     broker_connected: bool,
+    tt_connected: bool,
     /// Live account info.
     live_account: Option<AccountInfo>,
     /// Live positions.
@@ -5332,6 +5744,7 @@ pub struct TyphooNApp {
     risk_mode: RiskMode,
     /// Order type mode dropdown.
     order_type_mode: OrderTypeMode,
+    order_broker: OrderBroker,
     /// SL price input text.
     sl_input: String,
     /// TP price input text.
@@ -6426,6 +6839,8 @@ impl TyphooNApp {
             user_watchlist: vec!["BTCUSD".into(), "ETHUSD".into(), "SOLUSD".into()],
             watchlist_input: String::new(),
             show_settings: false,
+            was_settings_open: false,
+            crypto_daily_done: false,
             show_darwin_accounts: false,
             show_darwin_portfolio: false,
             show_risk_calc: false,
@@ -6499,6 +6914,7 @@ impl TyphooNApp {
             ev_sort: SortState::default(),
             outlier_sort: SortState { column: 2, ascending: false }, // default: sort by Score desc
             watchlist_sort: SortState::default(),
+            watchlist_cache_tried: false,
             sec_sort: SortState::default(),
             darwin_browser_sort: SortState::default(),
             insider_sort: SortState::default(),
@@ -6539,6 +6955,7 @@ impl TyphooNApp {
             broker_tx,
             broker_rx,
             broker_connected: false,
+            tt_connected: false,
             live_account: None,
             live_positions: Vec::new(),
             live_orders: Vec::new(),
@@ -6546,10 +6963,11 @@ impl TyphooNApp {
             right_trading_open: true,
             right_positions_open: true,
             right_orders_open: true,
-            right_watchlist_open: false,
+            right_watchlist_open: true,
             right_risk_open: true,
             risk_mode: RiskMode::VaR,
             order_type_mode: OrderTypeMode::Market,
+            order_broker: OrderBroker::Alpaca,
             sl_input: String::new(),
             tp_input: String::new(),
             sl_enabled: false,
@@ -6575,7 +6993,7 @@ impl TyphooNApp {
             std::thread::spawn(move || {
                 let importing_flag_bg = importing_flag_bg;
                 let mut full_refresh_done = false;
-                let mut last_full_refresh = std::time::Instant::now() - std::time::Duration::from_secs(999);
+                let _last_full_refresh = std::time::Instant::now();
                 const FULL_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
                 // Persist data across loops so lightweight refreshes keep expensive Phase 2-8 results
                 let mut data = BgDarwinData::default();
@@ -6630,6 +7048,18 @@ impl TyphooNApp {
                             let t = std::time::Instant::now();
                             data.detailed_stats = cache.detailed_stats().unwrap_or_default();
                             tracing::trace!("BG: detailed_stats {}ms (n={})", t.elapsed().as_millis(), data.detailed_stats.len());
+                            // Cache first/last bar timestamps for crypto entries (avoid per-frame DB queries)
+                            let mut ts_cache = std::collections::HashMap::new();
+                            for (key, _, _) in &data.detailed_stats {
+                                if key.starts_with("cryptocompare:") || key.starts_with("kraken:") {
+                                    if let Ok(Some(raw)) = cache.get_bars_raw(key) {
+                                        let first = raw.first().map(|b| b.0).unwrap_or(0);
+                                        let last = raw.last().map(|b| b.0).unwrap_or(0);
+                                        ts_cache.insert(key.clone(), (first, last));
+                                    }
+                                }
+                            }
+                            data.crypto_ts_cache = ts_cache;
                         }
                         if let Ok(conn) = cache.connection() {
                             data.equity_curve = darwin::get_portfolio_equity_curve(&conn).unwrap_or_default();
@@ -6651,8 +7081,9 @@ impl TyphooNApp {
                         tracing::trace!("BG: Phase 1c done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
-                        // Phases 2-8: expensive computation — only on first run or every 5 minutes
-                        let need_full_refresh = !full_refresh_done || last_full_refresh.elapsed() >= FULL_REFRESH_INTERVAL;
+                        // Phases 2-8: expensive DARWIN computation — once per startup only
+                        // DARWIN trade data is static (imported from XLSX), no need to rescan repeatedly
+                        let need_full_refresh = !full_refresh_done;
                         if !need_full_refresh {
                             // Lightweight refresh only — skip expensive phases
                             let _ = bg_tx.send(data.clone());
@@ -6760,8 +7191,8 @@ impl TyphooNApp {
                                     det.pyramiding = darwin::analyze_pyramiding(&conn, ticker).unwrap_or_default();
                                     det.bursts = darwin::detect_trading_bursts(&conn, ticker).unwrap_or_default();
                                     det.autocorrelation = darwin::compute_trade_autocorrelation(&conn, ticker).ok();
-                                    det.recent_deals = darwin::get_darwin_deals(&conn, ticker, None, Some(20)).unwrap_or_default();
-                                    det.closed_positions = darwin::get_darwin_positions(&conn, ticker, None, Some(20)).unwrap_or_default();
+                                    det.recent_deals = darwin::get_darwin_deals(&conn, ticker, None, None).unwrap_or_default();
+                                    det.closed_positions = darwin::get_darwin_positions(&conn, ticker, None, None).unwrap_or_default();
                                     det.equity_snapshots = darwin::get_equity_history(&conn, ticker, 10).unwrap_or_default();
                                     det.benchmark = darwin::compare_to_benchmark(&conn, ticker, &data.daily_returns).ok();
                                     if let Some(ref summary) = det.summary {
@@ -6853,7 +7284,7 @@ impl TyphooNApp {
 
                         // Mark full refresh complete
                         full_refresh_done = true;
-                        last_full_refresh = std::time::Instant::now();
+                        // DARWIN data is static — no periodic refresh needed
                         tracing::info!("BG: full refresh complete in {}ms — next in {}s",
                             phase_start.elapsed().as_millis(), FULL_REFRESH_INTERVAL.as_secs());
 
@@ -6951,9 +7382,172 @@ impl TyphooNApp {
             }
             self.charts.push(chart);
         }
+        // Load any existing charts that have empty bars (e.g. from session restore)
+        if let Some(ref cache) = self.cache {
+            for chart in &mut self.charts {
+                if chart.bars.is_empty() {
+                    { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                }
+            }
+        }
         self.mtf_cols = cols;
         self.mtf_enabled = true;
         self.log.push_back(LogEntry::info(format!("MTF grid: {}×{} ({} charts)", cols, (target + cols - 1) / cols, self.charts.len())));
+    }
+
+    /// Build trade overlay for a chart: DARWIN deals as arrows + open position lines.
+    /// Aggregates same-price entries at same bar into single markers.
+    fn build_trade_overlay(&self, chart: &ChartState) -> TradeOverlay {
+        let mut overlay = TradeOverlay::default();
+        if chart.bars.is_empty() { return overlay; }
+
+        // Extract bare symbol from chart symbol for matching
+        let bare_sym = {
+            let s = &chart.symbol;
+            let parts: Vec<&str> = s.split(':').collect();
+            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
+            let sym_parts = if is_tf && parts.len() > 1 { &parts[..parts.len()-1] } else { &parts[..] };
+            sym_parts.last().copied().unwrap_or(s.as_str()).to_string()
+        };
+        if bare_sym.is_empty() { return overlay; }
+
+        let first_ts = chart.bars.first().map(|b| b.ts_ms).unwrap_or(0);
+        let last_ts = chart.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+
+        // Parse MQL5 time string "YYYY.MM.DD HH:MM:SS" to epoch ms
+        let parse_time = |s: &str| -> i64 {
+            // "2024.10.08 16:47:19" → chrono parse
+            let s = s.replace('.', "-");
+            chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+                .map(|dt| dt.and_utc().timestamp_millis())
+                .unwrap_or(0)
+        };
+
+        // Find bar index for a timestamp (binary search on sorted bars)
+        let find_bar = |ts_ms: i64| -> Option<usize> {
+            if ts_ms < first_ts || ts_ms > last_ts + 86_400_000 { return None; }
+            match chart.bars.binary_search_by_key(&ts_ms, |b| b.ts_ms) {
+                Ok(idx) => Some(idx),
+                Err(idx) => if idx > 0 { Some(idx - 1) } else { Some(0) },
+            }
+        };
+
+        // Collect deals from all DARWIN accounts matching this symbol
+        use std::collections::HashMap;
+        let mut marker_map: HashMap<(usize, bool, i64), (f64, u32)> = HashMap::new(); // (bar_idx, is_buy, price_cents) → (total_vol, count)
+
+        for det in &self.bg.account_details {
+            // Check closed positions (have SL/TP)
+            for pos in &det.closed_positions {
+                if pos.symbol != bare_sym { continue; }
+                // Entry arrow
+                let ts = parse_time(&pos.open_time);
+                if let Some(bar_idx) = find_bar(ts) {
+                    let is_buy = pos.pos_type == "buy";
+                    let price_key = (pos.open_price * 100000.0) as i64;
+                    let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0));
+                    entry.0 += pos.volume;
+                    entry.1 += 1;
+                }
+                // Exit arrow (opposite direction)
+                if !pos.close_time.is_empty() {
+                    let ts = parse_time(&pos.close_time);
+                    if let Some(bar_idx) = find_bar(ts) {
+                        let is_buy = pos.pos_type != "buy"; // exit is opposite
+                        let price_key = (pos.close_price * 100000.0) as i64;
+                        let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0));
+                        entry.0 += pos.volume;
+                        entry.1 += 1;
+                    }
+                }
+            }
+            // Check recent deals
+            for deal in &det.recent_deals {
+                if deal.symbol != bare_sym { continue; }
+                if deal.direction.is_empty() { continue; } // skip balance entries
+                let ts = parse_time(&deal.time);
+                if let Some(bar_idx) = find_bar(ts) {
+                    let is_buy = deal.deal_type == "buy";
+                    let price_key = (deal.price * 100000.0) as i64;
+                    let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0));
+                    entry.0 += deal.volume;
+                    entry.1 += 1;
+                }
+            }
+
+            // Open position lines (entry, SL, TP)
+            for pos in &det.open_positions {
+                if pos.symbol != bare_sym { continue; }
+                let is_buy = pos.side == "buy";
+                overlay.position_lines.push(PositionLine {
+                    price: pos.avg_price,
+                    volume: pos.total_volume,
+                    is_buy,
+                    line_type: 0, // entry
+                });
+            }
+        }
+
+        // Also check portfolio-level positions for SL/TP from closed_positions
+        // (Open positions from DarwinOpenPosition don't have SL/TP; closed ones do)
+
+        // Broker fills (Alpaca/tastytrade) — add to marker map before conversion
+        for (sym, side, qty, price, time) in &self.recent_fills {
+            let fill_sym = sym.replace('/', "");
+            if !fill_sym.contains(&bare_sym) && !bare_sym.contains(&fill_sym) { continue; }
+            let ts = chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%dT%H:%M:%S%.fZ")
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S"))
+                .or_else(|_| chrono::NaiveDate::parse_from_str(time, "%Y-%m-%d").map(|d| d.and_hms_opt(0, 0, 0).unwrap()))
+                .map(|dt| dt.and_utc().timestamp_millis())
+                .unwrap_or(0);
+            if let Some(bar_idx) = find_bar(ts) {
+                let is_buy = side == "buy";
+                let price_key = (*price * 100000.0) as i64;
+                let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0));
+                entry.0 += qty;
+                entry.1 += 1;
+            }
+        }
+
+        // Convert marker map to sorted markers
+        for ((bar_idx, is_buy, price_key), (volume, count)) in marker_map {
+            overlay.markers.push(TradeMarker {
+                bar_idx,
+                price: price_key as f64 / 100000.0,
+                volume,
+                is_buy,
+                count,
+            });
+        }
+        overlay.markers.sort_by_key(|m| m.bar_idx);
+
+        // Live broker position lines
+        for pos in &self.live_positions {
+            let pos_sym = pos.symbol.replace('/', "");
+            if !pos_sym.contains(&bare_sym) && !bare_sym.contains(&pos_sym) { continue; }
+            let is_buy = pos.side == "long";
+            overlay.position_lines.push(PositionLine {
+                price: pos.avg_entry_price,
+                volume: pos.qty,
+                is_buy,
+                line_type: 0, // entry
+            });
+        }
+
+        // Deduplicate position lines (aggregate same price+type)
+        {
+            let mut agg: HashMap<(i64, u8), (f64, bool)> = HashMap::new();
+            for pl in &overlay.position_lines {
+                let key = ((pl.price * 100000.0) as i64, pl.line_type);
+                let entry = agg.entry(key).or_insert((0.0, pl.is_buy));
+                entry.0 += pl.volume;
+            }
+            overlay.position_lines = agg.into_iter().map(|((pk, lt), (vol, is_buy))| {
+                PositionLine { price: pk as f64 / 100000.0, volume: vol, is_buy, line_type: lt }
+            }).collect();
+        }
+
+        overlay
     }
 
     fn indicator_flags(&self) -> IndicatorFlags {
@@ -6991,6 +7585,16 @@ impl TyphooNApp {
             }
             "MTF" | "MTF_GRID" => {
                 self.mtf_enabled = !self.mtf_enabled;
+                // When enabling MTF grid, load any charts with empty bars
+                if self.mtf_enabled {
+                    if let Some(ref cache) = self.cache.clone() {
+                        for chart in &mut self.charts {
+                            if chart.bars.is_empty() {
+                                { let mut gpu = self.gpu_indicators.take(); chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                            }
+                        }
+                    }
+                }
                 self.log.push_back(LogEntry::info(format!("MTF grid: {}", self.mtf_enabled)));
             }
             "MTF_2X2" => { self.setup_mtf_grid(2, 4); }
@@ -7395,6 +7999,22 @@ impl TyphooNApp {
     }
 
     fn save_session(&self) {
+        // Persist credentials to keyring + SQLite fallback on quit
+        let creds = [
+            (keyring::keys::ALPACA_API_KEY, self.broker_api_key.as_str()),
+            (keyring::keys::ALPACA_SECRET, self.broker_secret.as_str()),
+            (keyring::keys::FINNHUB_KEY, self.finnhub_key.as_str()),
+            (keyring::keys::FRED_KEY, self.fred_key.as_str()),
+            (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
+            (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
+        ];
+        for (key, val) in &creds {
+            let _ = keyring::store(key, val);
+            if let Some(ref cache) = self.cache {
+                let _ = cache.put_kv(&format!("cred:{}", key), val);
+            }
+        }
+
         let session = serde_json::json!({
             "symbol": self.symbol_input,
             "active_tab": self.active_tab,
@@ -7526,9 +8146,15 @@ impl TyphooNApp {
                             chart.chart_type = ct;
                             self.charts.push(chart);
                         }
-                        // Load only the active chart — others load lazily on tab switch
+                        // Load charts: if MTF grid is active, load ALL charts; otherwise just the active tab
                         if let Some(ref cache) = self.cache {
-                            if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                            if self.mtf_enabled {
+                                for chart in &mut self.charts {
+                                    if chart.bars.is_empty() {
+                                        { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                                    }
+                                }
+                            } else if let Some(chart) = self.charts.get_mut(self.active_tab) {
                                 { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                             }
                         }
@@ -7799,6 +8425,32 @@ impl TyphooNApp {
     fn draw_floating_windows(&mut self, ctx: &egui::Context) {
 
         // Settings
+        // Save credentials to keyring + SQLite fallback when Settings window closes
+        if self.was_settings_open && !self.show_settings {
+            let creds = [
+                (keyring::keys::ALPACA_API_KEY, self.broker_api_key.as_str()),
+                (keyring::keys::ALPACA_SECRET, self.broker_secret.as_str()),
+                (keyring::keys::FINNHUB_KEY, self.finnhub_key.as_str()),
+                (keyring::keys::FRED_KEY, self.fred_key.as_str()),
+                (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
+                (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
+            ];
+            let mut kr_ok = true;
+            for (key, val) in &creds {
+                if let Err(e) = keyring::store(key, val) {
+                    kr_ok = false;
+                    self.log.push_back(LogEntry::warn(format!("Keyring store '{}' failed: {}", key, e)));
+                }
+                // Always write SQLite fallback
+                if let Some(ref cache) = self.cache {
+                    let _ = cache.put_kv(&format!("cred:{}", key), val);
+                }
+            }
+            let dest = if kr_ok { "system keyring + SQLite" } else { "SQLite fallback (keyring unavailable)" };
+            self.log.push_back(LogEntry::info(format!("Credentials saved to {}", dest)));
+        }
+        self.was_settings_open = self.show_settings;
+
         if self.show_settings {
             egui::Window::new("Settings")
                 .open(&mut self.show_settings)
@@ -7882,9 +8534,14 @@ impl TyphooNApp {
                                 });
                             }
                         }
-                        // tastytrade connect button (right next to Alpaca)
+                        // tastytrade connect button
                         if !self.tt_username.is_empty() && !self.tt_password.is_empty() {
-                            if ui.button("Connect tastytrade").clicked() {
+                            let tt_label = if self.tt_connected {
+                                egui::RichText::new("tastytrade Connected").color(UP)
+                            } else {
+                                egui::RichText::new("Connect tastytrade")
+                            };
+                            if ui.button(tt_label).clicked() && !self.tt_connected {
                                 if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
                                     self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
                                 }
@@ -7919,7 +8576,10 @@ impl TyphooNApp {
                     if let Some((rows, kv, size)) = self.bg.cache_stats {
                         ui.label(format!("Bar entries: {}  |  KV entries: {}  |  DB size: {} KB", rows, kv, size / 1024));
                     }
-                    ui.label("Alpaca: REST API + WebSocket streaming");
+                    let alpaca_status = if self.broker_connected { "Connected" } else { "Disconnected" };
+                    let tt_status = if self.tt_connected { "Connected" } else { "Disconnected" };
+                    ui.label(format!("Alpaca: REST API + WebSocket — {}", alpaca_status));
+                    ui.label(format!("tastytrade: REST API — {}", tt_status));
                     ui.label("Finnhub: News, Analyst, Insider Sentiment, Short Interest");
                     ui.label("SEC EDGAR: Filing scraper + Form 4 insider trades");
 
@@ -11896,11 +12556,13 @@ impl TyphooNApp {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (Deep History)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
                             let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                            let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
+                            // 8 timeframes (exclude 1Min — only ~7 days available, causes heavy pagination).
+                            // CryptoCompare: 1Hour/1Day direct, 5Min/15Min/30Min from 1Min, 4Hour from 1Hour, 1Week/1Month from 1Day.
+                            let tfs = vec!["1Day".into(), "1Month".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "30Min".into(), "15Min".into(), "5Min".into()];
                             for sym in &["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"] {
                                 let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill { symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone() });
                             }
-                            self.log.push_back(LogEntry::info("CryptoCompare backfill started for 10 crypto pairs × 5 timeframes (deep history)"));
+                            self.log.push_back(LogEntry::info("CryptoCompare backfill started for 10 crypto pairs × 8 timeframes (deep history)"));
                         }
                     });
                     ui.add_space(4.0);
@@ -11911,9 +12573,9 @@ impl TyphooNApp {
                             let sym = self.backfill_symbol.trim().to_string();
                             if !sym.is_empty() {
                                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
+                                let tfs = vec!["1Day".into(), "1Month".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "30Min".into(), "15Min".into(), "5Min".into(), "1Min".into()];
                                 let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill { symbol: sym.clone(), timeframes: tfs, db_path });
-                                self.log.push_back(LogEntry::info(format!("CryptoCompare backfill {} started (5 timeframes)", sym)));
+                                self.log.push_back(LogEntry::info(format!("CryptoCompare backfill {} started (9 timeframes)", sym)));
                             }
                         }
                     });
@@ -11935,18 +12597,14 @@ impl TyphooNApp {
                         ui.end_row();
                         {
                             let stats = &self.bg.detailed_stats;
-                                for (key, count, _) in stats {
+                                for (key, count, ts) in stats {
                                     if key.starts_with("cryptocompare:") || key.starts_with("kraken:") || key.starts_with("CC:") {
                                         let parts: Vec<&str> = key.rsplitn(2, ':').collect();
                                         let (tf_part, sym_part) = if parts.len() == 2 { (parts[0], parts[1]) } else { ("—", key.as_str()) };
-                                        // Get first/last bar timestamps from cache
-                                        let (first_ts, last_ts) = if let Some(ref cache) = self.cache {
-                                            cache.get_bars_raw(key).ok().flatten().map(|raw| {
-                                                let first = raw.first().map(|b| b.0).unwrap_or(0);
-                                                let last = raw.last().map(|b| b.0).unwrap_or(0);
-                                                (first, last)
-                                            }).unwrap_or((0, 0))
-                                        } else { (0, 0) };
+                                        // Use timestamp from detailed_stats (no per-frame DB query!)
+                                        // ts is the cache entry timestamp; first/last bar times need bg cache
+                                        let (first_ts, last_ts) = self.bg.crypto_ts_cache.get(key.as_str())
+                                            .copied().unwrap_or((0, *ts));
                                         let fmt_ts = |ts: i64| -> String {
                                             if ts == 0 { "—".to_string() }
                                             else { chrono::DateTime::from_timestamp(ts / 1000, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default() }
@@ -14203,29 +14861,80 @@ impl eframe::App for TyphooNApp {
                 }
             }
         }
-        // Load active chart once cache arrives
+        // Load charts once cache arrives
         if !self.cache_loaded && self.cache.is_some() {
             self.cache_loaded = true;
             // Load session (rebuilds chart tabs from saved state)
             self.load_session();
-            // Ensure active chart has bars
+            // Load charts: if MTF grid is active, load ALL; otherwise just active tab
             if let Some(cache) = self.cache.clone() {
-                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                if self.mtf_enabled {
+                    for chart in &mut self.charts {
+                        if chart.bars.is_empty() {
+                            { let mut gpu = self.gpu_indicators.take(); chart.load(&cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                        }
+                    }
+                } else if let Some(chart) = self.charts.get_mut(self.active_tab) {
                     if chart.bars.is_empty() {
                         { let mut gpu = self.gpu_indicators.take(); chart.load(&cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                     }
                 }
             }
             {
-                // Load credentials from system keyring
-                if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_API_KEY) { self.broker_api_key = v; }
-                if let Ok(Some(v)) = keyring::load(keyring::keys::ALPACA_SECRET) { self.broker_secret = v; }
-                if let Ok(Some(v)) = keyring::load(keyring::keys::FINNHUB_KEY) { self.finnhub_key = v; }
-                if let Ok(Some(v)) = keyring::load(keyring::keys::FRED_KEY) { self.fred_key = v; }
-                if let Ok(Some(v)) = keyring::load(keyring::keys::TT_USERNAME) { self.tt_username = v; }
-                if let Ok(Some(v)) = keyring::load(keyring::keys::TT_PASSWORD) { self.tt_password = v; }
-                if !self.broker_api_key.is_empty() {
-                    self.log.push_back(LogEntry::info("Credentials loaded from system keyring"));
+                // Load credentials: try system keyring first, fall back to SQLite kv_cache
+                let mut keyring_ok = true;
+                let cache_ref = self.cache.clone();
+                let cred_keys = [
+                    (keyring::keys::ALPACA_API_KEY, "alpaca_api_key"),
+                    (keyring::keys::ALPACA_SECRET, "alpaca_secret"),
+                    (keyring::keys::FINNHUB_KEY, "finnhub_key"),
+                    (keyring::keys::FRED_KEY, "fred_key"),
+                    (keyring::keys::TT_USERNAME, "tt_username"),
+                    (keyring::keys::TT_PASSWORD, "tt_password"),
+                ];
+                let mut loaded_values: Vec<(String, String)> = Vec::new();
+                for (kr_key, _label) in &cred_keys {
+                    match keyring::load(kr_key) {
+                        Ok(Some(v)) if !v.is_empty() => {
+                            loaded_values.push((kr_key.to_string(), v));
+                        }
+                        Ok(_) => {
+                            // Try SQLite kv_cache fallback
+                            if let Some(ref cache) = cache_ref {
+                                if let Ok(Some(v)) = cache.get_kv(&format!("cred:{}", kr_key)) {
+                                    if !v.is_empty() {
+                                        loaded_values.push((kr_key.to_string(), v));
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            keyring_ok = false;
+                            self.log.push_back(LogEntry::warn(format!("Keyring load '{}' failed: {}", kr_key, e)));
+                            if let Some(ref cache) = cache_ref {
+                                if let Ok(Some(v)) = cache.get_kv(&format!("cred:{}", kr_key)) {
+                                    if !v.is_empty() {
+                                        loaded_values.push((kr_key.to_string(), v));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for (key, val) in &loaded_values {
+                    match key.as_str() {
+                        k if k == keyring::keys::ALPACA_API_KEY => self.broker_api_key = val.clone(),
+                        k if k == keyring::keys::ALPACA_SECRET => self.broker_secret = val.clone(),
+                        k if k == keyring::keys::FINNHUB_KEY => self.finnhub_key = val.clone(),
+                        k if k == keyring::keys::FRED_KEY => self.fred_key = val.clone(),
+                        k if k == keyring::keys::TT_USERNAME => self.tt_username = val.clone(),
+                        k if k == keyring::keys::TT_PASSWORD => self.tt_password = val.clone(),
+                        _ => {}
+                    }
+                }
+                if !loaded_values.is_empty() {
+                    let src = if keyring_ok { "system keyring" } else { "SQLite fallback" };
+                    self.log.push_back(LogEntry::info(format!("Credentials loaded from {} ({} keys)", src, loaded_values.len())));
                 }
                 // Auto-import DARWIN XLSX if needed
                 if !self.darwin_xlsx_dir.is_empty() {
@@ -14320,14 +15029,27 @@ impl eframe::App for TyphooNApp {
         while let Ok(msg) = self.broker_rx.try_recv() {
             match msg {
                 BrokerMsg::Connected(s) => {
-                    self.broker_connected = true;
+                    if s.contains("tastytrade") {
+                        self.tt_connected = true;
+                    } else {
+                        self.broker_connected = true;
+                        // Auto-fetch positions and orders (Alpaca)
+                        let _ = self.broker_tx.send(BrokerCmd::GetPositions);
+                        let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                    }
                     self.log.push_back(LogEntry::info(s));
-                    // Auto-fetch positions and orders
-                    let _ = self.broker_tx.send(BrokerCmd::GetPositions);
-                    let _ = self.broker_tx.send(BrokerCmd::GetOrders);
                 }
                 BrokerMsg::Error(e) => {
-                    self.log.push_back(LogEntry::err(e));
+                    // Disconnect on auth failure to stop error spam
+                    if e.contains("401") || e.contains("Unauthorized") || e.contains("403") {
+                        if self.broker_connected {
+                            self.broker_connected = false;
+                            self.log.push_back(LogEntry::err(format!("{} — disconnected (check API keys in Settings)", e)));
+                        }
+                        // Don't log repeated auth failures
+                    } else {
+                        self.log.push_back(LogEntry::err(e));
+                    }
                 }
                 BrokerMsg::Account(acct) => {
                     self.live_account = Some(acct);
@@ -15074,9 +15796,11 @@ impl eframe::App for TyphooNApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new("~").color(AXIS_TEXT).small());
                     ui.separator();
-                    if self.broker_connected {
+                    if self.broker_connected || self.tt_connected {
                         // Show connected data sources + market status
-                        let mut sources = vec!["Alpaca"];
+                        let mut sources: Vec<&str> = Vec::new();
+                        if self.broker_connected { sources.push("Alpaca"); }
+                        if self.tt_connected { sources.push("tastytrade"); }
                         if !self.mt5_db_paths.iter().all(|p| p.is_empty()) { sources.push("MT5"); }
                         if !self.finnhub_key.is_empty() { sources.push("Finnhub"); }
                         if !self.fred_key.is_empty() { sources.push("FRED"); }
@@ -15521,6 +16245,26 @@ impl eframe::App for TyphooNApp {
                                         }
                                     });
                             });
+                            // Broker target selector (only show when both connected)
+                            if self.broker_connected || self.tt_connected {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small());
+                                    egui::ComboBox::from_id_salt("order_broker_combo")
+                                        .selected_text(self.order_broker.label())
+                                        .width(90.0)
+                                        .show_ui(ui, |ui| {
+                                            if self.broker_connected {
+                                                ui.selectable_value(&mut self.order_broker, OrderBroker::Alpaca, "Alpaca");
+                                            }
+                                            if self.tt_connected {
+                                                ui.selectable_value(&mut self.order_broker, OrderBroker::Tastytrade, "tastytrade");
+                                            }
+                                            if self.broker_connected && self.tt_connected {
+                                                ui.selectable_value(&mut self.order_broker, OrderBroker::Both, "Both");
+                                            }
+                                        });
+                                });
+                            }
                             ui.add_space(6.0);
 
                             // ── Position Info Block ────────────────────────────
@@ -15586,15 +16330,25 @@ impl eframe::App for TyphooNApp {
                     // ── Positions Section ─────────────────────────────────
                     let pos_count = self.bg.open_positions.len() + self.live_positions.len();
                     egui::CollapsingHeader::new(egui::RichText::new(format!("Positions ({})", pos_count)).strong().small())
+                        .id_salt("positions_section")
                         .default_open(self.right_positions_open)
                         .show(ui, |ui| {
                             ui.add_space(4.0);
                             let mut has_positions = false;
-                            // DARWIN positions — from bg cache
+                            // DARWIN positions — show current chart symbol first, then others dimmed
                             { let positions = &self.bg.open_positions;
                                 if !positions.is_empty() {
                                     has_positions = true;
+                                    let active_sym = self.charts.get(self.active_tab)
+                                        .map(|c| {
+                                            let parts: Vec<&str> = c.symbol.split(':').collect();
+                                            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
+                                            if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { parts.last().unwrap_or(&"").to_string() }
+                                        }).unwrap_or_default();
+                                    // Current symbol positions first
                                     for pos in positions.iter() {
+                                        let is_active = pos.symbol == active_sym;
+                                        if !is_active { continue; }
                                         let side_c = if pos.side == "buy" { UP } else { DOWN };
                                         ui.horizontal(|ui| {
                                             ui.label(egui::RichText::new(&pos.symbol).small().strong());
@@ -15606,6 +16360,23 @@ impl eframe::App for TyphooNApp {
                                         });
                                         let darwins: Vec<String> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.clone()).collect();
                                         ui.label(egui::RichText::new(darwins.join(", ")).color(AXIS_TEXT).small());
+                                        ui.separator();
+                                    }
+                                    // Other positions (dimmed)
+                                    for pos in positions.iter() {
+                                        let is_active = pos.symbol == active_sym;
+                                        if is_active { continue; }
+                                        let dim = egui::Color32::from_rgb(90, 90, 100);
+                                        let side_c = if pos.side == "buy" { egui::Color32::from_rgb(60, 120, 60) } else { egui::Color32::from_rgb(120, 60, 60) };
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(&pos.symbol).small().color(dim));
+                                            let side_label = if pos.side == "buy" { "L" } else { "S" };
+                                            ui.label(egui::RichText::new(side_label).color(side_c).small());
+                                            ui.label(egui::RichText::new(format!("{:.2}", pos.total_volume)).small().color(dim));
+                                            ui.label(egui::RichText::new(format!("${:.0}", pos.notional)).color(dim).small());
+                                        });
+                                        let darwins: Vec<String> = pos.darwin_breakdown.iter().map(|(d, _, _)| d.clone()).collect();
+                                        ui.label(egui::RichText::new(darwins.join(", ")).color(egui::Color32::from_rgb(60, 60, 70)).small());
                                         ui.separator();
                                     }
                                 }
@@ -15653,6 +16424,7 @@ impl eframe::App for TyphooNApp {
                     // ── Orders Section ────────────────────────────────────
                     let ord_count = self.live_orders.len();
                     egui::CollapsingHeader::new(egui::RichText::new(format!("Orders ({})", ord_count)).strong().small())
+                        .id_salt("orders_section")
                         .default_open(self.right_orders_open)
                         .show(ui, |ui| {
                             ui.add_space(4.0);
@@ -15672,9 +16444,91 @@ impl eframe::App for TyphooNApp {
                             }
                         });
 
+                    // ── Watchlist: populate from cache for symbols not yet in rows ──
+                    {
+                        let have_syms: std::collections::HashSet<&str> = self.watchlist_rows.iter().map(|r| r.symbol.as_str()).collect();
+                        let missing: Vec<String> = self.user_watchlist.iter().filter(|s| !have_syms.contains(s.as_str())).cloned().collect();
+                        if !missing.is_empty() && !self.watchlist_cache_tried {
+                        self.watchlist_cache_tried = true;
+                        if let Some(ref cache) = self.cache {
+                            let tf = self.charts.get(self.active_tab)
+                                .map(|c| c.timeframe.cache_suffix().to_string())
+                                .unwrap_or_else(|| "1Day".to_string());
+                            let mut rows: Vec<WatchlistRow> = self.watchlist_rows.clone();
+                            for sym in &missing {
+                                let candidates = [
+                                    format!("mt5:{}:{}", sym, tf),
+                                    format!("mt5:Darwinex:{}:{}", sym, tf),
+                                    format!("{}:{}", sym, tf),
+                                    format!("alpaca:{}:{}", sym, tf),
+                                    format!("cryptocompare:{}:{}", sym, tf),
+                                    format!("default:{}:{}", sym, tf),
+                                ];
+                                let mut found = false;
+                                for key in &candidates {
+                                    if let Ok(Some(raw)) = cache.get_bars_raw(key) {
+                                        if raw.len() >= 2 {
+                                            let last_bar = &raw[raw.len() - 1];
+                                            let prev_bar = &raw[raw.len() - 2];
+                                            let change = last_bar.3 - prev_bar.3;
+                                            let change_pct = if prev_bar.3 > 0.0 { change / prev_bar.3 * 100.0 } else { 0.0 };
+                                            rows.push(WatchlistRow {
+                                                symbol: sym.clone(),
+                                                cache_key: key.clone(),
+                                                last: last_bar.3,
+                                                prev_close: prev_bar.3,
+                                                change,
+                                                change_pct,
+                                                volume: last_bar.5,
+                                                ext_change_pct: 0.0,
+                                            });
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !found {
+                                    if let Ok(stats) = cache.detailed_stats() {
+                                        let sym_lower = sym.to_lowercase();
+                                        let tf_lower = tf.to_lowercase();
+                                        for (k, _, _) in &stats {
+                                            let kl = k.to_lowercase();
+                                            if kl.contains(&sym_lower) && kl.ends_with(&tf_lower) {
+                                                if let Ok(Some(raw)) = cache.get_bars_raw(k) {
+                                                    if raw.len() >= 2 {
+                                                        let last_bar = &raw[raw.len() - 1];
+                                                        let prev_bar = &raw[raw.len() - 2];
+                                                        let change = last_bar.3 - prev_bar.3;
+                                                        let change_pct = if prev_bar.3 > 0.0 { change / prev_bar.3 * 100.0 } else { 0.0 };
+                                                        rows.push(WatchlistRow {
+                                                            symbol: sym.clone(),
+                                                            cache_key: k.clone(),
+                                                            last: last_bar.3,
+                                                            prev_close: prev_bar.3,
+                                                            change,
+                                                            change_pct,
+                                                            volume: last_bar.5,
+                                                            ext_change_pct: 0.0,
+                                                        });
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if rows.len() > self.watchlist_rows.len() {
+                                self.watchlist_rows = rows;
+                            }
+                        }
+                        }
+                    }
+
                     // ── Watchlist Section ─────────────────────────────────
                     let wl_count = self.user_watchlist.len();
                     egui::CollapsingHeader::new(egui::RichText::new(format!("Watchlist ({})", wl_count)).strong().small())
+                        .id_salt("watchlist_section") // stable ID — don't reset on count change
                         .default_open(self.right_watchlist_open)
                         .show(ui, |ui| {
                             // ── Add symbol input ──────────────────────────
@@ -15694,6 +16548,7 @@ impl eframe::App for TyphooNApp {
                                     let sym = self.watchlist_input.trim().to_uppercase();
                                     if !self.user_watchlist.contains(&sym) {
                                         self.user_watchlist.push(sym);
+                                        self.watchlist_cache_tried = false; // retry cache lookup
                                         // Trigger immediate refresh
                                         if self.broker_connected {
                                             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
@@ -15704,17 +16559,6 @@ impl eframe::App for TyphooNApp {
                             });
                             ui.add_space(2.0);
 
-                            // ── Header row ────────────────────────────────
-                            egui::Grid::new("wl_header").num_columns(7).spacing(egui::vec2(4.0, 0.0)).show(ui, |ui| {
-                                if SortState::header(ui, "Symbol", 0, &self.watchlist_sort) { self.watchlist_sort.toggle(0); }
-                                if SortState::header(ui, "Last", 1, &self.watchlist_sort) { self.watchlist_sort.toggle(1); }
-                                if SortState::header(ui, "Chg", 2, &self.watchlist_sort) { self.watchlist_sort.toggle(2); }
-                                if SortState::header(ui, "Chg%", 3, &self.watchlist_sort) { self.watchlist_sort.toggle(3); }
-                                if SortState::header(ui, "Vol", 4, &self.watchlist_sort) { self.watchlist_sort.toggle(4); }
-                                if SortState::header(ui, "Ext", 5, &self.watchlist_sort) { self.watchlist_sort.toggle(5); }
-                                ui.label(egui::RichText::new("").small());
-                                ui.end_row();
-                            });
                             // Sort watchlist rows
                             let mut sorted_wl: Vec<&WatchlistRow> = self.watchlist_rows.iter().collect();
                             match self.watchlist_sort.column {
@@ -15727,86 +16571,127 @@ impl eframe::App for TyphooNApp {
                                 _ => {}
                             }
                             if !self.watchlist_sort.ascending { sorted_wl.reverse(); }
-                            // Thin separator under header
-                            let sep_rect = ui.available_rect_before_wrap();
-                            ui.painter().line_segment(
-                                [egui::pos2(sep_rect.left(), sep_rect.top()), egui::pos2(sep_rect.right(), sep_rect.top())],
-                                egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 40, 50)),
-                            );
-                            ui.add_space(2.0);
 
                             if self.watchlist_rows.is_empty() && self.user_watchlist.is_empty() {
                                 ui.label(egui::RichText::new("Add symbols above.").color(AXIS_TEXT).small());
                             } else if self.watchlist_rows.is_empty() {
-                                // Watchlist has symbols but no data yet
-                                ui.label(egui::RichText::new("Fetching quotes...").color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new("No cached data.").color(AXIS_TEXT).small());
                                 for sym in &self.user_watchlist {
                                     ui.label(egui::RichText::new(sym).color(egui::Color32::from_rgb(100, 100, 110)).small().monospace());
                                 }
                             } else {
                                 let mut load_key: Option<String> = None;
                                 let mut remove_sym: Option<String> = None;
+                                let row_h = 18.0_f32;
+                                let font = egui::FontId::monospace(10.0);
+                                let hdr_font = egui::FontId::monospace(9.0);
+                                let avail_w = ui.available_width();
+
+                                // Column layout: Symbol(left) | Last(right) | Chg(right) | Chg%(right) | Vol(right) | x
+                                // TradingView style: symbol left-aligned, numbers right-aligned
+                                let col_last = avail_w * 0.32;  // Last price column start
+                                let col_chg = avail_w * 0.52;   // Change column start
+                                let col_pct = avail_w * 0.68;   // Change% column start
+                                let col_vol = avail_w * 0.84;   // Volume column start
+                                let col_x = avail_w - 14.0;     // Remove button
+
+                                // Sortable header row
+                                let (hdr_rect, hdr_resp) = ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
+                                let hp = ui.painter_at(hdr_rect);
+                                let hy = hdr_rect.center().y;
+                                let hdr_col = egui::Color32::from_rgb(120, 120, 140);
+                                let sort_arrow = |col: usize| -> &str {
+                                    if self.watchlist_sort.column == col { if self.watchlist_sort.ascending { " \u{25B2}" } else { " \u{25BC}" } } else { "" }
+                                };
+                                hp.text(egui::pos2(hdr_rect.left() + 2.0, hy), egui::Align2::LEFT_CENTER, &format!("Symbol{}", sort_arrow(0)), hdr_font.clone(), hdr_col);
+                                hp.text(egui::pos2(hdr_rect.left() + col_last - 2.0, hy), egui::Align2::RIGHT_CENTER, &format!("Last{}", sort_arrow(1)), hdr_font.clone(), hdr_col);
+                                hp.text(egui::pos2(hdr_rect.left() + col_chg - 2.0, hy), egui::Align2::RIGHT_CENTER, &format!("Chg{}", sort_arrow(2)), hdr_font.clone(), hdr_col);
+                                hp.text(egui::pos2(hdr_rect.left() + col_pct - 2.0, hy), egui::Align2::RIGHT_CENTER, &format!("Chg%{}", sort_arrow(3)), hdr_font.clone(), hdr_col);
+                                hp.text(egui::pos2(hdr_rect.left() + col_vol - 2.0, hy), egui::Align2::RIGHT_CENTER, &format!("Vol{}", sort_arrow(4)), hdr_font.clone(), hdr_col);
+                                // Click header to sort
+                                if hdr_resp.clicked() {
+                                    if let Some(pos) = hdr_resp.interact_pointer_pos() {
+                                        let rx = pos.x - hdr_rect.left();
+                                        let col = if rx < col_last * 0.5 { 0 }
+                                            else if rx < (col_last + col_chg) * 0.5 { 1 }
+                                            else if rx < (col_chg + col_pct) * 0.5 { 2 }
+                                            else if rx < (col_pct + col_vol) * 0.5 { 3 }
+                                            else { 4 };
+                                        self.watchlist_sort.toggle(col);
+                                    }
+                                }
+                                // Separator
+                                let sep_y = hdr_rect.bottom();
+                                ui.painter().line_segment(
+                                    [egui::pos2(hdr_rect.left(), sep_y), egui::pos2(hdr_rect.right(), sep_y)],
+                                    egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 40, 55)),
+                                );
+
+                                // Data rows
                                 for (idx, wl) in sorted_wl.iter().enumerate() {
-                                        let sym_color = WL_COLORS[idx % WL_COLORS.len()];
-                                        let chg_color = if wl.change >= 0.0 { UP } else { DOWN };
-                                        let is_selected = self.charts.get(self.active_tab)
-                                            .map(|c| c.symbol == wl.cache_key)
-                                            .unwrap_or(false);
-                                        let row_bg = if is_selected {
-                                            egui::Color32::from_rgb(15, 25, 45)
-                                        } else {
-                                            egui::Color32::TRANSPARENT
-                                        };
+                                    let sym_color = WL_COLORS[idx % WL_COLORS.len()];
+                                    let chg_color = if wl.change >= 0.0 { UP } else { DOWN };
+                                    let is_selected = self.charts.get(self.active_tab)
+                                        .map(|c| c.symbol == wl.cache_key || c.symbol.contains(&wl.symbol))
+                                        .unwrap_or(false);
 
-                                        let row_rect = ui.available_rect_before_wrap();
-                                        let row_rect = egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 18.0));
-                                        ui.painter().rect_filled(row_rect, 0.0, row_bg);
+                                    let (row_rect, row_resp) = ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
+                                    let rp = ui.painter_at(row_rect);
 
-                                        let row = egui::Grid::new(format!("wl_row_{}", idx)).num_columns(7).spacing(egui::vec2(4.0, 0.0)).show(ui, |ui| {
-                                            // Symbol with colored dot
-                                            ui.horizontal(|ui| {
-                                                ui.spacing_mut().item_spacing.x = 2.0;
-                                                ui.label(egui::RichText::new("\u{25CF}").color(sym_color).small());
-                                                ui.label(egui::RichText::new(&wl.symbol).color(egui::Color32::WHITE).small().monospace().strong());
-                                            });
-                                            // Last price
-                                            ui.label(egui::RichText::new(format_price(wl.last)).color(egui::Color32::WHITE).small().monospace());
-                                            // Change
-                                            let chg_str = if wl.change >= 0.0 { format_price(wl.change) } else { format!("-{}", format_price(wl.change.abs())) };
-                                            ui.label(egui::RichText::new(chg_str).color(chg_color).small().monospace());
-                                            // Change %
-                                            ui.label(egui::RichText::new(format!("{:.2}%", wl.change_pct)).color(chg_color).small().monospace());
-                                            // Volume (compact format)
-                                            let vol_str = if wl.volume >= 1_000_000.0 {
-                                                format!("{:.1}M", wl.volume / 1_000_000.0)
-                                            } else if wl.volume >= 1_000.0 {
-                                                format!("{:.1}K", wl.volume / 1_000.0)
+                                    // Row background (striped + selection)
+                                    let row_bg = if is_selected {
+                                        egui::Color32::from_rgb(15, 25, 45)
+                                    } else if idx % 2 == 1 {
+                                        egui::Color32::from_rgb(8, 8, 14)
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    };
+                                    rp.rect_filled(row_rect, 0.0, row_bg);
+
+                                    let ry = row_rect.center().y;
+                                    let rx = row_rect.left();
+
+                                    // Symbol with colored dot
+                                    rp.text(egui::pos2(rx + 2.0, ry), egui::Align2::LEFT_CENTER, "\u{25CF}", font.clone(), sym_color);
+                                    rp.text(egui::pos2(rx + 14.0, ry), egui::Align2::LEFT_CENTER, &wl.symbol, font.clone(), egui::Color32::WHITE);
+
+                                    // Last (right-aligned)
+                                    rp.text(egui::pos2(rx + col_last - 2.0, ry), egui::Align2::RIGHT_CENTER, &format_price(wl.last), font.clone(), egui::Color32::WHITE);
+
+                                    // Change (right-aligned, colored)
+                                    let chg_str = if wl.change >= 0.0 { format_price(wl.change) } else { format!("-{}", format_price(wl.change.abs())) };
+                                    rp.text(egui::pos2(rx + col_chg - 2.0, ry), egui::Align2::RIGHT_CENTER, &chg_str, font.clone(), chg_color);
+
+                                    // Change % (right-aligned, colored)
+                                    rp.text(egui::pos2(rx + col_pct - 2.0, ry), egui::Align2::RIGHT_CENTER, &format!("{:.2}%", wl.change_pct), font.clone(), chg_color);
+
+                                    // Volume (right-aligned, dimmed)
+                                    let vol_str = if wl.volume >= 1_000_000.0 {
+                                        format!("{:.2}M", wl.volume / 1_000_000.0)
+                                    } else if wl.volume >= 1_000.0 {
+                                        format!("{:.1}K", wl.volume / 1_000.0)
+                                    } else {
+                                        format!("{:.0}", wl.volume)
+                                    };
+                                    rp.text(egui::pos2(rx + col_vol - 2.0, ry), egui::Align2::RIGHT_CENTER, &vol_str, font.clone(), AXIS_TEXT);
+
+                                    // Remove button (x)
+                                    rp.text(egui::pos2(rx + col_x, ry), egui::Align2::CENTER_CENTER, "x", egui::FontId::monospace(9.0), egui::Color32::from_rgb(100, 50, 50));
+
+                                    // Interactions
+                                    if row_resp.clicked() {
+                                        if let Some(pos) = row_resp.interact_pointer_pos() {
+                                            if pos.x >= rx + col_x - 8.0 {
+                                                remove_sym = Some(wl.symbol.clone()); // clicked x
                                             } else {
-                                                format!("{:.0}", wl.volume)
-                                            };
-                                            ui.label(egui::RichText::new(vol_str).color(AXIS_TEXT).small().monospace());
-                                            // Extended hours change %
-                                            if wl.ext_change_pct.abs() > 0.001 {
-                                                let ext_color = if wl.ext_change_pct >= 0.0 { UP } else { DOWN };
-                                                ui.label(egui::RichText::new(format!("{:.2}%", wl.ext_change_pct)).color(ext_color).small().monospace());
-                                            } else {
-                                                ui.label(egui::RichText::new("--").color(egui::Color32::from_rgb(60, 60, 70)).small().monospace());
+                                                load_key = Some(wl.cache_key.clone()); // clicked row
                                             }
-                                            // Remove button
-                                            if ui.add(egui::Button::new(egui::RichText::new("x").color(DOWN).small()).frame(false).min_size(egui::vec2(14.0, 14.0))).clicked() {
-                                                remove_sym = Some(wl.symbol.clone());
-                                            }
-                                            ui.end_row();
-                                        });
-                                        // Left-click loads chart, right-click removes
-                                        let row_resp = row.response.interact(egui::Sense::click());
-                                        if row_resp.clicked() {
-                                            load_key = Some(wl.cache_key.clone());
-                                        }
-                                        if row_resp.secondary_clicked() {
-                                            remove_sym = Some(wl.symbol.clone());
                                         }
                                     }
+                                    if row_resp.secondary_clicked() {
+                                        remove_sym = Some(wl.symbol.clone());
+                                    }
+                                }
                                 // Handle remove
                                 if let Some(ref sym) = remove_sym {
                                     self.user_watchlist.retain(|s| s != sym);
@@ -15911,6 +16796,42 @@ impl eframe::App for TyphooNApp {
                             ui.label(egui::RichText::new("VaR corridor: 3.25% – 6.5%").color(AXIS_TEXT).small());
                             ui.label(egui::RichText::new("Correlation limit: 0.95 / 45d").color(AXIS_TEXT).small());
                         });
+
+                    // ── News Section (Finnhub) ─────────────────────────
+                    {
+                        let news_count = self.news_articles.len();
+                        egui::CollapsingHeader::new(egui::RichText::new(format!("News ({})", news_count)).strong().small())
+                            .id_salt("news_section")
+                            .default_open(news_count > 0)
+                            .show(ui, |ui| {
+                                if news_count == 0 {
+                                    ui.horizontal(|ui| {
+                                        if !self.finnhub_key.is_empty() {
+                                            if ui.add(egui::Button::new(egui::RichText::new("Fetch News").small()).fill(BTN_BLUE).min_size(egui::vec2(80.0, 18.0))).clicked() {
+                                                let sym = self.charts.get(self.active_tab).map(|c| {
+                                                    c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("AAPL").to_string()
+                                                }).unwrap_or_else(|| "AAPL".to_string());
+                                                let _ = self.broker_tx.send(BrokerCmd::FinnhubNews { symbol: sym, api_key: self.finnhub_key.clone() });
+                                            }
+                                        } else {
+                                            ui.label(egui::RichText::new("Set Finnhub key in Settings").color(AXIS_TEXT).small());
+                                        }
+                                    });
+                                } else {
+                                    egui::ScrollArea::vertical().max_height(180.0).id_salt("news_scroll_r").show(ui, |ui| {
+                                        for (headline, source, dt) in &self.news_articles {
+                                            ui.horizontal(|ui| {
+                                                ui.spacing_mut().item_spacing.x = 4.0;
+                                                ui.label(egui::RichText::new(dt).color(egui::Color32::from_rgb(80, 80, 95)).small());
+                                                ui.label(egui::RichText::new(source).color(egui::Color32::from_rgb(100, 100, 120)).small());
+                                            });
+                                            ui.label(egui::RichText::new(headline).color(egui::Color32::from_rgb(190, 190, 200)).small());
+                                            ui.add_space(2.0);
+                                        }
+                                    });
+                                }
+                            });
+                    }
 
                     // ── MTF Grid (always visible at bottom) ──────────────
                     ui.add_space(6.0);
@@ -16052,6 +16973,14 @@ impl eframe::App for TyphooNApp {
                     } else if self.charts.len() > 1 {
                         // Double-click in single mode with multiple tabs → return to MTF grid
                         self.mtf_enabled = true;
+                        // Load any charts with empty bars so all grid cells render
+                        if let Some(ref cache) = self.cache.clone() {
+                            for chart in &mut self.charts {
+                                if chart.bars.is_empty() {
+                                    { let mut gpu = self.gpu_indicators.take(); chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                                }
+                            }
+                        }
                         self.log.push_back(LogEntry::info("MTF grid restored"));
                     } else {
                         // Single chart, no MTF → reset zoom/pan
@@ -16191,6 +17120,13 @@ impl eframe::App for TyphooNApp {
                 }
 
                 for (grid_pos, &vi) in visible_indices.iter().enumerate() {
+                // Rebuild trade overlay every 120 frames (~30s) or on first load
+                let fc = self.frame_count;
+                if self.charts[vi].cached_trade_overlay_frame == 0 || fc.wrapping_sub(self.charts[vi].cached_trade_overlay_frame) > 120 {
+                    self.charts[vi].cached_trade_overlay = self.build_trade_overlay(&self.charts[vi]);
+                    self.charts[vi].cached_trade_overlay_frame = fc;
+                }
+                let trade_ov = self.charts[vi].cached_trade_overlay.clone();
                 let chart = &mut self.charts[vi];
                 let idx = grid_pos;
                     let col = idx % cols;
@@ -16233,7 +17169,7 @@ impl eframe::App for TyphooNApp {
                     }
 
                     let painter = ui.painter_at(cell_rect);
-                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, sl_price, tp_price);
+                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, sl_price, tp_price, &trade_ov);
 
                     // Border: green for focused, dim for others (WebKit: .mtf-grid-cell:hover outline)
                     let border_color = if is_focused {
@@ -16252,9 +17188,19 @@ impl eframe::App for TyphooNApp {
             } else {
                 let (rect, resp) = ui.allocate_exact_size(available.size(), egui::Sense::click_and_drag());
 
+                // Rebuild trade overlay every 120 frames (~30s) or on first load
+                let fc = self.frame_count;
+                if let Some(c) = self.charts.get(self.active_tab) {
+                    if c.cached_trade_overlay_frame == 0 || fc.wrapping_sub(c.cached_trade_overlay_frame) > 120 {
+                        let ov = self.build_trade_overlay(c);
+                        self.charts[self.active_tab].cached_trade_overlay = ov;
+                        self.charts[self.active_tab].cached_trade_overlay_frame = fc;
+                    }
+                }
+                let trade_ov = self.charts.get(self.active_tab).map(|c| c.cached_trade_overlay.clone()).unwrap_or_default();
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
                     let painter = ui.painter_at(rect);
-                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, sl_price, tp_price);
+                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, sl_price, tp_price, &trade_ov);
 
                     // ── drawing mode click handling ──────────────────────
                     if resp.clicked() && self.draw_mode != DrawMode::None {
@@ -16574,37 +17520,29 @@ impl eframe::App for TyphooNApp {
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
         }
 
-        // Weekend crypto auto-update via CryptoCompare
-        // Adaptive polling: M1/M5 = every 60s, M15/M30 = every 2.5min, H1+ = every 5min
+        // Weekend crypto sync via Kraken — ALL symbols, ALL timeframes, every 60 seconds
+        // Kraken has no practical rate limit for public endpoints (720 bars per request)
         {
-            let poll_interval = if let Some(chart) = self.charts.get(self.active_tab) {
-                match chart.timeframe {
-                    Timeframe::M1 | Timeframe::M5 => 240,     // ~60 seconds
-                    Timeframe::M15 | Timeframe::M30 => 600,   // ~2.5 minutes
-                    _ => 1200,                                  // ~5 minutes
-                }
-            } else { 1200 };
-            if self.frame_count % poll_interval == 300 && self.frame_count > 0 {
+            if self.frame_count % 240 == 150 && self.frame_count > 0 { // every ~60s at 250ms repaint
                 let now_utc = chrono::Utc::now();
                 let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
                 use chrono::Datelike;
                 let is_weekend = matches!(eastern.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
                 if is_weekend {
-                    if let Some(chart) = self.charts.get(self.active_tab) {
-                        let sym = chart.symbol.replace('/', "").to_uppercase();
-                        let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
-                            "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
-                        let is_crypto = crypto_bases.iter().any(|b| sym.starts_with(b) && sym.ends_with("USD"));
-                        if is_crypto {
-                            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                            let tf = chart.timeframe.cache_suffix().to_string();
-                            let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill {
-                                symbol: sym.clone(),
-                                timeframes: vec![tf],
-                                db_path,
-                            });
-                        }
-                    }
+                    let crypto_syms = ["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"];
+                    // Rotate through symbols each poll (1 symbol per minute to spread load)
+                    let sym_idx = ((self.frame_count / 240) as usize) % crypto_syms.len();
+                    let sym = crypto_syms[sym_idx];
+                    let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                    // Fetch the active chart's timeframe + D1 (most important)
+                    let active_tf = self.charts.get(self.active_tab)
+                        .map(|c| c.timeframe.cache_suffix().to_string())
+                        .unwrap_or_else(|| "1Day".to_string());
+                    let mut tfs = vec![active_tf];
+                    if !tfs.contains(&"1Day".to_string()) { tfs.push("1Day".into()); }
+                    let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
+                        symbol: sym.to_string(), timeframes: tfs, db_path,
+                    });
                 }
             }
         }
@@ -16618,19 +17556,30 @@ impl eframe::App for TyphooNApp {
             }
         }
 
+        // Kraken startup sync — full backfill for all crypto symbols once per session
+        if self.frame_count == 600 && !self.crypto_daily_done {
+            self.crypto_daily_done = true;
+            let crypto_syms = ["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"];
+            let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into()];
+            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+            for sym in &crypto_syms {
+                let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
+                    symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone(),
+                });
+            }
+            self.log.push_back(LogEntry::info("Kraken startup sync: 10 symbols × 4 TFs (1Day/1Week/4Hour/1Hour)"));
+        }
+
         // Repaint strategy:
         // - egui auto-repaints on ANY user interaction (mouse move, click, scroll, key)
         // - We set a slow idle repaint for background updates (live data, time)
         // - Charts stay responsive because mouse events trigger instant repaints
         // - Floating windows with DB queries only update on idle repaints
-        // Fast repaint during startup until bg data arrives, then slow idle
+        // Repaint scheduling: fast during startup, then idle.
+        // egui internally triggers repaints on hover/click/animation — we only set
+        // the MINIMUM idle repaint interval (for chart tick updates, clock, etc.).
         let startup_loading = self.bg.portfolio.is_none() && self.cache.is_some();
-        let any_heavy_window = self.show_darwin_portfolio || self.show_darwin_accounts
-            || self.show_var_mult || self.show_montecarlo || self.show_stress_test
-            || self.show_correlation || self.show_seasonals || self.show_symbol_overlap
-            || self.show_sec || self.show_insider;
-        let idle_ms = if startup_loading || !self.cache_loaded { 100 }
-            else if any_heavy_window { 2000 } else { 500 };
+        let idle_ms = if startup_loading || !self.cache_loaded { 100 } else { 250 };
         ctx.request_repaint_after(std::time::Duration::from_millis(idle_ms));
     }
 }
@@ -16975,7 +17924,6 @@ mod tests {
     fn test_supply_demand_zones() {
         let bars = make_oscillating_bars(50);
         let (supply, demand) = compute_supply_demand_zones(&bars);
-        // Should return valid zone tuples
         for (idx, high, low, status) in &supply {
             assert!(*idx < bars.len());
             assert!(high > low);
@@ -16986,6 +17934,64 @@ mod tests {
             assert!(high > low);
             assert!(*status <= 2);
         }
+    }
+
+    #[test]
+    fn test_supply_demand_realistic_swings() {
+        // Simulate: rally from 20→200, then crash to 80, then bounce to 140, then drop to 85
+        // Should produce surviving zones near recent swing highs/lows
+        let mut bars = Vec::new();
+        let prices = [
+            // Phase 1: Rally 20→200 (100 bars)
+            20.0, 22.0, 25.0, 28.0, 30.0, 33.0, 35.0, 38.0, 40.0, 43.0,
+            45.0, 48.0, 50.0, 55.0, 58.0, 60.0, 65.0, 68.0, 70.0, 75.0,
+            78.0, 80.0, 85.0, 88.0, 90.0, 95.0, 98.0, 100.0, 105.0, 110.0,
+            112.0, 115.0, 118.0, 120.0, 125.0, 128.0, 130.0, 135.0, 138.0, 140.0,
+            142.0, 145.0, 148.0, 150.0, 155.0, 158.0, 160.0, 165.0, 168.0, 170.0,
+            172.0, 175.0, 178.0, 180.0, 182.0, 185.0, 188.0, 190.0, 192.0, 195.0,
+            197.0, 200.0, 198.0, 195.0, 192.0, 190.0, 188.0, 185.0, 182.0, 180.0,
+            // Phase 2: Crash 180→80 (30 bars)
+            175.0, 170.0, 165.0, 155.0, 150.0, 140.0, 135.0, 130.0, 125.0, 120.0,
+            115.0, 110.0, 105.0, 100.0, 95.0, 90.0, 88.0, 85.0, 82.0, 80.0,
+            // Phase 3: Bounce 80→140 (20 bars)
+            82.0, 85.0, 88.0, 92.0, 95.0, 100.0, 105.0, 110.0, 115.0, 120.0,
+            125.0, 128.0, 130.0, 135.0, 138.0, 140.0, 138.0, 135.0, 130.0, 125.0,
+            // Phase 4: Drop 125→85 (20 bars)
+            120.0, 115.0, 110.0, 105.0, 100.0, 98.0, 95.0, 92.0, 90.0, 88.0,
+            87.0, 86.0, 85.0, 86.0, 87.0, 85.0, 84.0, 85.0, 86.0, 85.0,
+        ];
+        for (i, &close) in prices.iter().enumerate() {
+            let range = close * 0.03; // 3% daily range
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 86400000,
+                open: close - range * 0.2,
+                high: close + range * 0.5,
+                low: close - range * 0.5,
+                close,
+                volume: 1000.0,
+            });
+        }
+        let n = bars.len();
+        eprintln!("[test] {} bars, price range {:.0}-{:.0}", n,
+            bars.iter().map(|b| b.low).fold(f64::MAX, f64::min),
+            bars.iter().map(|b| b.high).fold(f64::MIN, f64::max));
+
+        let (supply, demand) = compute_supply_demand_zones(&bars);
+
+        eprintln!("[test] Result: {} supply, {} demand zones", supply.len(), demand.len());
+        for (idx, hi, lo, st) in &supply {
+            eprintln!("[test]   SUPPLY bar={} hi={:.2} lo={:.2} st={}", idx, hi, lo, st);
+        }
+        for (idx, hi, lo, st) in &demand {
+            eprintln!("[test]   DEMAND bar={} hi={:.2} lo={:.2} st={}", idx, hi, lo, st);
+        }
+
+        // We should have at least some surviving zones:
+        // - The 200 peak supply zone (price never went above 200 again)
+        // - The 80 low demand zone (price never went below 80 again)
+        // - Recent swing zones near current price
+        assert!(!supply.is_empty() || !demand.is_empty(),
+            "Should have surviving zones for a chart with clear swings");
     }
 
     // ── Ehlers DSP Indicators ────────────────────────────────────────────

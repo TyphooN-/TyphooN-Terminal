@@ -10,12 +10,13 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  ┌─────────────────────────────────────────────┐│
 │  │ Chart Renderer (egui Painter)               ││
 │  │ - Candle/HeikinAshi/Line/Bars/Renko         ││
-│  │ - 32+ indicators (pure Rust computation)    ││
+│  │ - 32+ indicators (GPU + CPU fallback)        ││
 │  │ - 7 drawing tools + 10 harmonic patterns     ││
+│  │ - DARWIN trade arrows + position lines       ││
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
 │  │ egui Panels                                 ││
-│  │ - Console (~) with 120 commands               ││
+│  │ - Console (~) with 121 commands               ││
 │  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
 │  │ - DARWIN analytics (80 engine functions)    ││
@@ -54,8 +55,8 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 |----------|--------|----------|
 | 1 | MT5 via BarCacheWriter | 895 symbols x 9 TFs, weekday authority (Darwinex) |
 | 2 | Alpaca/tastytrade | Live trading execution, US equities + crypto |
-| 3 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request |
-| 4 | Kraken | Weekend gap-fill (720 most recent bars) |
+| 3 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, all 9 TFs |
+| 4 | Kraken | Weekend live gap-fill (720 bars, adaptive polling, no rate limit) |
 
 MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade management stays in MT5 directly. DARWIN account analytics are imported via XLSX trade history exports.
 
@@ -102,7 +103,7 @@ TyphooN-Terminal/
 ├── cli/                    # Standalone TUI (6.5MB, SSH-ready)
 ├── mql5-compiler/          # MT5 XML → SQLite import pipeline
 └── docs/
-    ├── adr/                # 39 Architecture Decision Records
+    ├── adr/                # 44 Architecture Decision Records
     ├── API_KEYS.md
     └── KEYBOARD_SHORTCUTS.md
 ```
@@ -122,7 +123,7 @@ TyphooN-Terminal/
 
 ### LAN Sync
 
-Export and import cache data between machines on the local network via `LAN_SYNC` command. Implemented in `engine/src/core/lan_sync.rs` with `export_keys` and `import_keys` functions.
+TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates generated on server start. PBKDF2-HMAC-SHA256 challenge-response authentication. Supports bar data + DARWIN analytics sync (opt-in). Stats tracking: bytes sent/received, entries synced, uptime. Implemented in `engine/src/core/lan_sync.rs`.
 
 ### Storage Manager
 
@@ -135,3 +136,18 @@ The `NEW_WINDOW` / `POPOUT` command spawns a new terminal process, enabling mult
 ### Collapsible Right Panel
 
 The right panel sections (Trade, Positions, Orders, Watchlist, Risk) are individually collapsible/expandable for flexible layout management.
+
+### GPU Indicator Compute
+
+28 indicators run on GPU (wgpu compute shaders) with CPU fallback for compatibility. Three indicators use CPU-only due to algorithmic requirements:
+- **Supply/Demand Zones**: GPU does fractal detection (parallel), CPU does zone testing/merging/break detection
+- **BetterVolume**: Requires buy/sell pressure estimation from OHLC (inherently sequential)
+- **OBV**: Uses real volume data via interleaved [close, volume] GPU buffer
+
+### DARWIN Trade Overlay
+
+Chart renders buy/sell arrows at DARWIN deal entry/exit points with timestamp-to-bar mapping. Open position entry prices shown as dashed lines. Same-price entries are aggregated (combined lot size, single marker). Positions panel filters to current chart symbol.
+
+### TradingView-Style Watchlist
+
+Right-aligned numeric columns (Last, Chg, Chg%, Vol) with painter-based rendering. Works offline via SQLite cache fallback — no broker connection required for cached price data. Sortable by any column.

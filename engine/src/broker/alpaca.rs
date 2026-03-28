@@ -343,6 +343,11 @@ impl AlpacaBroker {
             .await
             .map_err(|e| format!("Positions request failed: {e}"))?;
 
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("Positions request failed: HTTP {status}"));
+        }
+
         let json: Vec<serde_json::Value> = resp
             .json()
             .await
