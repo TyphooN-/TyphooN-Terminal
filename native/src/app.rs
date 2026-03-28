@@ -7220,16 +7220,26 @@ impl TyphooNApp {
             "AUTO_FIB"      => self.show_auto_fib = !self.show_auto_fib,
             "SUPPLY_DEMAND" => self.show_supply_demand = !self.show_supply_demand,
             "NNFX" => {
-                // Enable NNFX indicator preset
-                self.show_sma200 = true;
-                self.show_kama = true;
-                self.show_fisher = true;
-                self.show_atr_proj = true;
-                self.show_better_volume = true;
-                self.show_prev_levels = true;
-                self.show_supply_demand = true;
-                self.show_auto_fib = true;
-                self.log.push_back(LogEntry::info("NNFX preset: SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D + AutoFib"));
+                // 1:1 MT5 TyphooN NNFX preset (clean reset + enable)
+                // Reset all (skip sma200/kama since they get enabled below)
+                self.show_sma100 = false;
+                self.show_ema21 = false; self.show_bollinger = false; self.show_ichimoku = false;
+                self.show_wma = false; self.show_hma = false; self.show_psar = false;
+                self.show_rsi = false; self.show_macd = false; self.show_stochastic = false;
+                self.show_adx = false; self.show_cci = false; self.show_williams_r = false;
+                self.show_obv = false; self.show_momentum = false; self.show_volume_pane = false;
+                self.show_fractals = false; self.show_harmonics = false; self.show_pivots = false;
+                self.show_ehlers_ss = false; self.show_ehlers_decycler = false;
+                self.show_ehlers_itl = false; self.show_ehlers_mama = false;
+                self.show_ehlers_ebsw = false; self.show_ehlers_cyber = false;
+                self.show_ehlers_cg = false; self.show_ehlers_roof = false;
+                // Main chart: ATR_Projection + PreviousCandleLevels + MultiKAMA + MTF_MA + SupplyDemand + AutoFib
+                self.show_atr_proj = true; self.show_prev_levels = true;
+                self.show_kama = true; self.show_sma200 = true;
+                self.show_supply_demand = true; self.show_auto_fib = true;
+                // Sub-pane 1: EhlersFisherTransform | Sub-pane 2: BetterVolume
+                self.show_fisher = true; self.show_better_volume = true;
+                self.log.push_back(LogEntry::info("NNFX preset (1:1 MT5): ATR_Proj + PrevLevels + MultiKAMA + MTF_MA + S/D + AutoFib + Fisher + BVol"));
             }
             "RESET_IND" => {
                 self.show_sma200 = false; self.show_sma100 = false; self.show_kama = false;
@@ -8041,10 +8051,32 @@ impl TyphooNApp {
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui.button("TyphooN (NNFX)").clicked() {
-                            self.show_sma200 = true; self.show_kama = true; self.show_fisher = true;
-                            self.show_atr_proj = true; self.show_better_volume = true;
-                            self.show_prev_levels = true; self.show_supply_demand = true; self.show_auto_fib = true;
-                            self.log.push_back(LogEntry::info("Preset: TyphooN (NNFX) — MTF_MA + MultiKAMA + Fisher + ATR MTF + BVol + PrevLevels + S/D + AutoFib"));
+                            // Reset ALL indicators first (clean slate)
+                            self.show_sma100 = false;
+                            self.show_ema21 = false; self.show_bollinger = false; self.show_ichimoku = false;
+                            self.show_wma = false; self.show_hma = false; self.show_psar = false;
+                            self.show_rsi = false; self.show_macd = false; self.show_stochastic = false;
+                            self.show_adx = false; self.show_cci = false; self.show_williams_r = false;
+                            self.show_obv = false; self.show_momentum = false; self.show_volume_pane = false;
+                            self.show_fractals = false; self.show_harmonics = false;
+                            self.show_ehlers_ss = false; self.show_ehlers_decycler = false;
+                            self.show_ehlers_itl = false; self.show_ehlers_mama = false;
+                            self.show_ehlers_ebsw = false; self.show_ehlers_cyber = false;
+                            self.show_ehlers_cg = false; self.show_ehlers_roof = false;
+                            self.show_pivots = false;
+                            // Enable EXACTLY what MT5 TyphooN NNFX uses:
+                            // Main chart: ATR_Projection + PreviousCandleLevels + MultiKAMA + MTF_MA + SupplyDemand + AutoFib
+                            self.show_atr_proj = true;      // ATR_Projection (MTF horizontal levels)
+                            self.show_prev_levels = true;    // PreviousCandleLevels (H1/H4/D1/W1/MN1)
+                            self.show_kama = true;           // MultiKAMA (H1/H4/D1/W1/MN1 KAMA lines)
+                            self.show_sma200 = true;         // MTF_MA (SMA 200/100 from H1-MN1)
+                            self.show_supply_demand = true;  // SupplyDemand zones
+                            self.show_auto_fib = true;       // AutoFibonacci (fractal swing)
+                            // Indicator window 1: EhlersFisherTransform
+                            self.show_fisher = true;
+                            // Indicator window 2: BetterVolume
+                            self.show_better_volume = true;
+                            self.log.push_back(LogEntry::info("Preset: TyphooN (NNFX) — 1:1 MT5 parity: ATR_Proj + PrevLevels + MultiKAMA + MTF_MA + S/D + AutoFib + Fisher + BVol"));
                         }
                         if ui.button("Carney").clicked() {
                             self.show_sma200 = false; self.show_sma100 = false; self.show_kama = false;
