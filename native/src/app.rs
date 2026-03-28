@@ -7707,7 +7707,7 @@ impl TyphooNApp {
         if self.show_settings {
             egui::Window::new("Settings")
                 .open(&mut self.show_settings)
-                .resizable(true).resizable(true).default_size([450.0, 500.0])
+                .resizable(true).default_size([450.0, 500.0])
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                     // ── API Keys (matching old WebKit connection modal) ──
@@ -7937,7 +7937,7 @@ impl TyphooNApp {
         if self.show_connect {
             egui::Window::new("Connect to Broker")
                 .open(&mut self.show_connect)
-                .resizable(true).resizable(true).default_size([450.0, 300.0])
+                .resizable(true).default_size([450.0, 300.0])
                 .show(ctx, |ui| {
                     ui.heading("Alpaca Markets");
                     ui.separator();
@@ -8034,7 +8034,7 @@ impl TyphooNApp {
         if self.show_indicators_panel {
             egui::Window::new("Indicators")
                 .open(&mut self.show_indicators_panel)
-                .resizable(true).resizable(true).default_size([450.0, 400.0])
+                .resizable(true).default_size([450.0, 400.0])
                 .show(ctx, |ui| {
                     // ── Presets ──
                     ui.heading("Presets");
@@ -8146,7 +8146,7 @@ impl TyphooNApp {
         if self.show_darwin_accounts {
             egui::Window::new("DARWIN Accounts")
                 .open(&mut self.show_darwin_accounts)
-                .resizable(true).resizable(true).default_size([800.0, 600.0])
+                .resizable(true).default_size([800.0, 600.0])
                 .show(ctx, |ui| {
                     // Soft palette for charts
                     let chart_green = egui::Color32::from_rgb(46, 204, 113);
@@ -8594,7 +8594,7 @@ impl TyphooNApp {
         if self.show_darwin_portfolio {
             egui::Window::new("DARWIN Portfolio")
                 .open(&mut self.show_darwin_portfolio)
-                .resizable(true).resizable(true).default_size([700.0, 500.0])
+                .resizable(true).default_size([700.0, 500.0])
                 .show(ctx, |ui| {
                     // View selector dropdown (matching old WebKit 20+ views)
                     let views = [
@@ -10412,7 +10412,7 @@ impl TyphooNApp {
         if self.show_risk_calc {
             egui::Window::new("Risk Calculator")
                 .open(&mut self.show_risk_calc)
-                .resizable(true).resizable(true).default_size([400.0, 400.0])
+                .resizable(true).default_size([400.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("Position Sizing");
                     ui.separator();
@@ -10476,7 +10476,7 @@ impl TyphooNApp {
         if self.show_backtest {
             egui::Window::new("Backtest Engine")
                 .open(&mut self.show_backtest)
-                .resizable(true).resizable(true).default_size([600.0, 500.0])
+                .resizable(true).default_size([600.0, 500.0])
                 .show(ctx, |ui| {
                     ui.heading("Strategy Backtest");
                     ui.separator();
@@ -10626,7 +10626,7 @@ impl TyphooNApp {
         if self.show_screener {
             egui::Window::new("Symbol Screener")
                 .open(&mut self.show_screener)
-                .resizable(true).resizable(true).default_size([600.0, 400.0])
+                .resizable(true).default_size([600.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("Screener");
                     ui.separator();
@@ -10678,7 +10678,7 @@ impl TyphooNApp {
         if self.show_optimizer {
             egui::Window::new("Optimizer")
                 .open(&mut self.show_optimizer)
-                .resizable(true).resizable(true).default_size([750.0, 600.0])
+                .resizable(true).default_size([750.0, 600.0])
                 .show(ctx, |ui| {
                     let opt_green = egui::Color32::from_rgb(46, 204, 113);
                     let opt_red = egui::Color32::from_rgb(231, 76, 60);
@@ -11164,7 +11164,7 @@ impl TyphooNApp {
         if self.show_calendar {
             egui::Window::new("Economic Calendar")
                 .open(&mut self.show_calendar)
-                .resizable(true).resizable(true).default_size([500.0, 400.0])
+                .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
                     let sym = self.charts.get(self.active_tab)
                         .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
@@ -11473,7 +11473,7 @@ impl TyphooNApp {
         if self.show_insider {
             egui::Window::new("Insider Trades (Form 4)")
                 .open(&mut self.show_insider)
-                .resizable(true).resizable(true).default_size([650.0, 400.0])
+                .resizable(true).default_size([650.0, 400.0])
                 .show(ctx, |ui| {
                     let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
                     ui.horizontal(|ui| {
@@ -11852,7 +11852,7 @@ impl TyphooNApp {
         if self.show_fundamentals {
             egui::Window::new("Fundamentals")
                 .open(&mut self.show_fundamentals)
-                .resizable(true).resizable(true).default_size([600.0, 550.0])
+                .resizable(true).default_size([600.0, 550.0])
                 .show(ctx, |ui| {
                     let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
                     let ticker = sym.split(':').rev().nth(1).or_else(|| sym.split(':').last()).unwrap_or(&sym).to_string();
@@ -11993,7 +11993,7 @@ impl TyphooNApp {
         if self.show_ev_scanner {
             egui::Window::new("Enterprise Value Scanner")
                 .open(&mut self.show_ev_scanner)
-                .resizable(true).resizable(true).default_size([900.0, 500.0])
+                .resizable(true).default_size([900.0, 500.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         if ui.add(egui::Button::new(egui::RichText::new("Scrape All").color(egui::Color32::WHITE)).fill(BTN_GREEN)).clicked() {
@@ -12061,7 +12061,7 @@ impl TyphooNApp {
         if self.show_earnings_calendar {
             egui::Window::new("Earnings Calendar")
                 .open(&mut self.show_earnings_calendar)
-                .resizable(true).resizable(true).default_size([500.0, 400.0])
+                .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new(format!("{} upcoming earnings", self.bg.upcoming_earnings.len())).color(AXIS_TEXT).small());
                     ui.separator();
@@ -12093,7 +12093,7 @@ impl TyphooNApp {
         if self.show_dividend_calendar {
             egui::Window::new("Dividend Calendar")
                 .open(&mut self.show_dividend_calendar)
-                .resizable(true).resizable(true).default_size([500.0, 400.0])
+                .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new(format!("{} upcoming dividends", self.bg.upcoming_dividends.len())).color(AXIS_TEXT).small());
                     ui.separator();
@@ -12119,7 +12119,7 @@ impl TyphooNApp {
         if self.show_analyst {
             egui::Window::new("Analyst Ratings")
                 .open(&mut self.show_analyst)
-                .resizable(true).resizable(true).default_size([400.0, 300.0])
+                .resizable(true).default_size([400.0, 300.0])
                 .show(ctx, |ui| {
                     let sym = self.charts.get(self.active_tab)
                         .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
@@ -12145,7 +12145,7 @@ impl TyphooNApp {
         if self.show_holders {
             egui::Window::new("Institutional Holders")
                 .open(&mut self.show_holders)
-                .resizable(true).resizable(true).default_size([500.0, 350.0])
+                .resizable(true).default_size([500.0, 350.0])
                 .show(ctx, |ui| {
                     let ticker = self.charts.get(self.active_tab)
                         .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
@@ -12166,7 +12166,7 @@ impl TyphooNApp {
         if self.show_symbol_overlap {
             egui::Window::new("Symbol Overlap")
                 .open(&mut self.show_symbol_overlap)
-                .resizable(true).resizable(true).default_size([600.0, 400.0])
+                .resizable(true).default_size([600.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("Cross-DARWIN Symbol Overlap");
                     ui.separator();
@@ -12204,7 +12204,7 @@ impl TyphooNApp {
         if self.show_correlation {
             egui::Window::new("Correlation Matrix")
                 .open(&mut self.show_correlation)
-                .resizable(true).resizable(true).default_size([500.0, 400.0])
+                .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("DARWIN Correlation Matrix");
                     ui.separator();
@@ -12239,7 +12239,7 @@ impl TyphooNApp {
         if self.show_seasonals {
             egui::Window::new("Seasonal Patterns")
                 .open(&mut self.show_seasonals)
-                .resizable(true).resizable(true).default_size([500.0, 400.0])
+                .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("Seasonality Analysis");
                     ui.separator();
@@ -12287,7 +12287,7 @@ impl TyphooNApp {
         if self.show_montecarlo {
             egui::Window::new("Monte Carlo VaR")
                 .open(&mut self.show_montecarlo)
-                .resizable(true).resizable(true).default_size([500.0, 400.0])
+                .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("Monte Carlo Simulation");
                     ui.separator();
@@ -12332,7 +12332,7 @@ impl TyphooNApp {
         if self.show_stress_test {
             egui::Window::new("Stress Test")
                 .open(&mut self.show_stress_test)
-                .resizable(true).resizable(true).default_size([500.0, 400.0])
+                .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("Portfolio Stress Test");
                     ui.separator();
@@ -12376,7 +12376,7 @@ impl TyphooNApp {
         if self.show_volume_profile {
             egui::Window::new("Volume Profile")
                 .open(&mut self.show_volume_profile)
-                .resizable(true).resizable(true).default_size([400.0, 400.0])
+                .resizable(true).default_size([400.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("Volume Profile");
                     ui.separator();
@@ -12462,7 +12462,7 @@ impl TyphooNApp {
         if self.show_order_flow {
             egui::Window::new("Order Flow")
                 .open(&mut self.show_order_flow)
-                .resizable(true).resizable(true).default_size([500.0, 450.0])
+                .resizable(true).default_size([500.0, 450.0])
                 .show(ctx, |ui| {
                     let of_green = egui::Color32::from_rgb(0, 200, 80);
                     let of_red = egui::Color32::from_rgb(220, 50, 50);
@@ -12579,7 +12579,7 @@ impl TyphooNApp {
         if self.show_bookmap {
             egui::Window::new("Bookmap Heatmap")
                 .open(&mut self.show_bookmap)
-                .resizable(true).resizable(true).default_size([600.0, 450.0])
+                .resizable(true).default_size([600.0, 450.0])
                 .show(ctx, |ui| {
                     let bm_green = egui::Color32::from_rgb(0, 180, 80);
                     let bm_red = egui::Color32::from_rgb(200, 50, 50);
@@ -12673,7 +12673,7 @@ impl TyphooNApp {
         if self.show_risk_ruin {
             egui::Window::new("Risk-of-Ruin Calculator")
                 .open(&mut self.show_risk_ruin)
-                .resizable(true).resizable(true).default_size([600.0, 450.0])
+                .resizable(true).default_size([600.0, 450.0])
                 .show(ctx, |ui| {
                     let rr_green = egui::Color32::from_rgb(46, 204, 113);
                     let rr_red = egui::Color32::from_rgb(231, 76, 60);
@@ -12802,7 +12802,7 @@ impl TyphooNApp {
         if self.show_alert_builder {
             egui::Window::new("Alert Builder")
                 .open(&mut self.show_alert_builder)
-                .resizable(true).resizable(true).default_size([600.0, 400.0])
+                .resizable(true).default_size([600.0, 400.0])
                 .show(ctx, |ui| {
                     let al_green = egui::Color32::from_rgb(46, 204, 113);
                     let al_red = egui::Color32::from_rgb(231, 76, 60);
@@ -12941,7 +12941,7 @@ impl TyphooNApp {
         if self.show_darwinex_outliers {
             egui::Window::new("Darwinex Outliers")
                 .open(&mut self.show_darwinex_outliers)
-                .resizable(true).resizable(true).default_size([800.0, 550.0])
+                .resizable(true).default_size([800.0, 550.0])
                 .show(ctx, |ui| {
                     let ol_high = egui::Color32::from_rgb(231, 76, 60);
                     let ol_med = egui::Color32::from_rgb(241, 196, 15);
@@ -13109,7 +13109,7 @@ impl TyphooNApp {
         if self.show_journal {
             egui::Window::new("Trade Journal")
                 .open(&mut self.show_journal)
-                .resizable(true).resizable(true).default_size([700.0, 500.0])
+                .resizable(true).default_size([700.0, 500.0])
                 .show(ctx, |ui| {
                     let j_green = egui::Color32::from_rgb(46, 204, 113);
                     let j_red = egui::Color32::from_rgb(231, 76, 60);
@@ -13207,7 +13207,7 @@ impl TyphooNApp {
         if self.show_var_mult {
             egui::Window::new("VaR Multiplier")
                 .open(&mut self.show_var_mult)
-                .resizable(true).resizable(true).default_size([450.0, 400.0])
+                .resizable(true).default_size([450.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("Darwinex VaR Corridor");
                     ui.separator();
@@ -13279,7 +13279,7 @@ impl TyphooNApp {
         if self.show_margin_monitor {
             egui::Window::new("Margin Monitor")
                 .open(&mut self.show_margin_monitor)
-                .resizable(true).resizable(true).default_size([450.0, 350.0])
+                .resizable(true).default_size([450.0, 350.0])
                 .show(ctx, |ui| {
                     ui.heading("Margin Calculator");
                     ui.separator();
@@ -13318,7 +13318,7 @@ impl TyphooNApp {
         if self.show_cache_stats {
             egui::Window::new("Cache Statistics")
                 .open(&mut self.show_cache_stats)
-                .resizable(true).resizable(true).default_size([500.0, 400.0])
+                .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
                     ui.heading("SQLite Cache");
                     ui.separator();
@@ -13581,7 +13581,7 @@ impl TyphooNApp {
         if self.show_help {
             egui::Window::new("Keyboard Shortcuts")
                 .open(&mut self.show_help)
-                .resizable(true).resizable(true).default_size([400.0, 350.0])
+                .resizable(true).default_size([400.0, 350.0])
                 .show(ctx, |ui| {
                     ui.heading("Shortcuts");
                     ui.separator();
@@ -13632,7 +13632,7 @@ impl TyphooNApp {
         if self.show_data_window {
             egui::Window::new("Data Window")
                 .open(&mut self.show_data_window)
-                .resizable(true).resizable(true).default_size([400.0, 500.0])
+                .resizable(true).default_size([400.0, 500.0])
                 .show(ctx, |ui| {
                     if let Some(chart) = self.charts.get(self.active_tab) {
                         let (si, ei) = chart.visible_range();
@@ -13686,7 +13686,7 @@ impl TyphooNApp {
         if self.show_alerts {
             egui::Window::new("Price Alerts")
                 .open(&mut self.show_alerts)
-                .resizable(true).resizable(true).default_size([500.0, 350.0])
+                .resizable(true).default_size([500.0, 350.0])
                 .show(ctx, |ui| {
                     ui.heading("Alerts");
                     ui.separator();
@@ -13774,7 +13774,7 @@ impl TyphooNApp {
         if self.show_order_entry {
             egui::Window::new("Order Entry")
                 .open(&mut self.show_order_entry)
-                .resizable(true).resizable(true).default_size([400.0, 350.0])
+                .resizable(true).default_size([400.0, 350.0])
                 .show(ctx, |ui| {
                     ui.heading("Place Order");
                     ui.separator();
@@ -13851,7 +13851,7 @@ impl TyphooNApp {
         if self.show_darwin_browser {
             egui::Window::new("DarwinIA Browser")
                 .open(&mut self.show_darwin_browser)
-                .resizable(true).resizable(true).default_size([950.0, 600.0])
+                .resizable(true).default_size([950.0, 600.0])
                 .show(ctx, |ui| {
                     // Top bar: scan button + stats
                     ui.horizontal(|ui| {
