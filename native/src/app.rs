@@ -720,10 +720,11 @@ impl ChartState {
                 self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                     ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                 }).collect();
-                self.view_offset = self.bars.len().saturating_sub(1);
+                self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                 self.compute_indicators_gpu(gpu);
-                // Skip compute_multi_kama — it does blocking DB reads for HTF bars
-                // MultiKAMA will be computed when user explicitly switches to this chart tab
+                // MTF indicators: load HTF bars from cache, compute, project onto chart
+                self.compute_mtf_sma(cache);
+                self.compute_multi_kama(cache);
                 log.push_back(LogEntry::info(format!(
                     "Loaded {} bars for {} [{}]",
                     self.bars.len(), self.symbol, self.timeframe.label()
@@ -743,7 +744,7 @@ impl ChartState {
                 self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                     ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                 }).collect();
-                self.view_offset = self.bars.len().saturating_sub(1);
+                self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                 self.compute_indicators_gpu(gpu);
                 // MTF indicators: load higher TF bars, compute, project onto chart
                 self.compute_mtf_sma(cache);
