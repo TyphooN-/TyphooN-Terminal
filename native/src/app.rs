@@ -5939,34 +5939,14 @@ impl TyphooNApp {
                         let client = reqwest::Client::builder()
                             .user_agent("TyphooN-Terminal/1.0")
                             .build().unwrap_or_default();
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Kraken backfill {} started ({} TFs)...", symbol, timeframes.len())));
+                        // Kraken OHLC API returns max ~720 most recent bars per timeframe
+                        // (the `since` parameter does NOT enable historical pagination for OHLC)
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Kraken backfill {} ({} TFs, ~720 bars each)...", symbol, timeframes.len())));
                         let now_ms = chrono::Utc::now().timestamp_millis();
                         let mut total_bars = 0usize;
                         for tf in &timeframes {
-                            // Full history backfill: go back to earliest possible data
-                            // BTC: 2013, ETH: 2016, most alts: 2017+
-                            // For lower TFs, Kraken only keeps ~1-2 years of 1Min/5Min
-                            let start = match tf.as_str() {
-                                "1Min"  => now_ms - 30i64 * 24 * 3600 * 1000,    // 30 days (Kraken 1Min limit)
-                                "5Min"  => now_ms - 90i64 * 24 * 3600 * 1000,    // 90 days
-                                "15Min" => now_ms - 365i64 * 24 * 3600 * 1000,   // 1 year
-                                "30Min" => now_ms - 2 * 365i64 * 24 * 3600 * 1000, // 2 years
-                                "1Hour" => now_ms - 5 * 365i64 * 24 * 3600 * 1000, // 5 years
-                                "4Hour" => now_ms - 10 * 365i64 * 24 * 3600 * 1000, // 10 years
-                                _       => {
-                                    // 1Day, 1Week, 1Month: go back to 2013 (BTC genesis era)
-                                    chrono::NaiveDate::from_ymd_opt(2013, 1, 1)
-                                        .and_then(|d| d.and_hms_opt(0, 0, 0))
-                                        .map(|ndt| ndt.and_utc().timestamp() * 1000)
-                                        .unwrap_or(now_ms - 13 * 365i64 * 24 * 3600 * 1000)
-                                }
-                            };
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                format!("Kraken {} {} fetching from {}...", symbol, tf,
-                                    chrono::DateTime::from_timestamp(start / 1000, 0)
-                                        .map(|dt| dt.format("%Y-%m-%d").to_string())
-                                        .unwrap_or_default())
-                            ));
+                            // Kraken OHLC always returns most recent ~720 bars regardless of `since`
+                            let start = 0i64; // request from epoch — Kraken will return latest 720 anyway
                             match kraken::fetch_binance_klines(&client, &symbol, tf, start, now_ms).await {
                                 Ok(bars) => {
                                     let count = bars.len();
@@ -11461,7 +11441,7 @@ impl TyphooNApp {
                 .resizable(true).default_size([550.0, 400.0])
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (2013-Now)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new("Backfill ALL Crypto (~720 bars/TF)").color(egui::Color32::WHITE)).fill(BTN_GREEN).min_size(egui::vec2(260.0, 28.0))).clicked() {
                             let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                             let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "15Min".into()];
                             for sym in &["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"] {
