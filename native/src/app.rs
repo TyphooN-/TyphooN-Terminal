@@ -14575,6 +14575,29 @@ impl eframe::App for TyphooNApp {
                     self.mtf_enabled = !self.mtf_enabled;
                 }
 
+                // MTF tab visibility checkboxes (inline, when MTF is on)
+                if self.mtf_enabled && self.charts.len() > 1 {
+                    while self.mtf_visible.len() < self.charts.len() { self.mtf_visible.push(true); }
+                    ui.separator();
+                    for (i, chart) in self.charts.iter().enumerate() {
+                        if i >= self.mtf_visible.len() { break; }
+                        let sym_short = {
+                            let parts: Vec<&str> = chart.symbol.split(':').collect();
+                            let s = parts[parts.len().saturating_sub(2).max(0)];
+                            if s.len() > 8 { &s[..8] } else { s }
+                        };
+                        let label = format!("{} {}", sym_short, chart.timeframe.label());
+                        let color = if self.mtf_visible[i] { ACCENT } else { AXIS_TEXT };
+                        if ui.add(egui::SelectableLabel::new(self.mtf_visible[i],
+                            egui::RichText::new(&label).color(color).small().monospace()
+                        )).clicked() {
+                            self.mtf_visible[i] = !self.mtf_visible[i];
+                            // Ensure at least one is visible
+                            if self.mtf_visible.iter().all(|v| !v) { self.mtf_visible[i] = true; }
+                        }
+                    }
+                }
+
                 ui.separator();
 
                 // Bar count
