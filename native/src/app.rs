@@ -3347,7 +3347,7 @@ fn draw_chart(
                         .unwrap_or(false)
                 } else { false };
                 let color = if is_wknd {
-                    if bar.close >= bar.open { egui::Color32::from_rgb(255, 165, 0) } else { egui::Color32::from_rgb(200, 120, 0) }
+                    if bar.close >= bar.open { egui::Color32::from_rgb(255, 0, 255) } else { egui::Color32::from_rgb(180, 0, 180) }
                 } else {
                     if bar.close >= bar.open { UP } else { DOWN }
                 };
@@ -3378,8 +3378,8 @@ fn draw_chart(
                     "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
                 sym.contains('/') || crypto_bases.iter().any(|b| sym.starts_with(b) && sym.ends_with("USD"))
             };
-            let weekend_up = egui::Color32::from_rgb(255, 165, 0);    // orange bull (weekend gap-fill)
-            let weekend_dn = egui::Color32::from_rgb(200, 120, 0);   // dark orange bear (weekend gap-fill)
+            let weekend_up = egui::Color32::from_rgb(255, 0, 255);    // magenta bull (weekend gap-fill)
+            let weekend_dn = egui::Color32::from_rgb(180, 0, 180);   // dark magenta bear (weekend gap-fill)
             for (rel_idx, bar) in render_bars.iter().enumerate() {
                 let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
                 let y_open  = price_to_y(bar.open);
