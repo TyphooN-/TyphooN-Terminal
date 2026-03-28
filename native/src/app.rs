@@ -11498,9 +11498,9 @@ impl TyphooNApp {
                 });
         }
 
-        // Crypto Backfill (Kraken) — matching old WebKit layout
+        // Crypto Backfill (CryptoCompare deep history)
         if self.show_crypto_backfill {
-            egui::Window::new("Crypto Backfill (Kraken)")
+            egui::Window::new("Crypto Backfill (CryptoCompare)")
                 .open(&mut self.show_crypto_backfill)
                 .resizable(true).default_size([550.0, 400.0])
                 .show(ctx, |ui| {
@@ -11547,7 +11547,7 @@ impl TyphooNApp {
                         {
                             let stats = &self.bg.detailed_stats;
                                 for (key, count, _) in stats {
-                                    if key.starts_with("CC:") || key.starts_with("kraken:") || key.starts_with("KRAKEN:") {
+                                    if key.starts_with("cryptocompare:") || key.starts_with("kraken:") || key.starts_with("CC:") {
                                         let parts: Vec<&str> = key.rsplitn(2, ':').collect();
                                         let (tf_part, sym_part) = if parts.len() == 2 { (parts[0], parts[1]) } else { ("—", key.as_str()) };
                                         ui.label(egui::RichText::new(sym_part).small().monospace());
