@@ -21,6 +21,15 @@ Optional API keys that unlock additional features. All are free to register.
 - **Rate limit:** 120 requests/minute
 - **Key format:** 32-character alphanumeric string
 
+## CryptoCompare (Deep Crypto History)
+
+**Used for:** Historical crypto bar data — BTC from 2010, ETH from 2015, most alts from 2017+. Primary crypto backfill source (replaces Kraken for deep history).
+
+- **Sign up:** Not required
+- **Cost:** Free, no API key needed
+- **Rate limit:** Generous (no key = lower tier, but sufficient for backfill)
+- **Note:** 2000 bars per request with proper backward pagination. No geo-restrictions.
+
 ## Anthropic (Claude AI)
 
 **Used for:** AI chat — natural language queries about market data, position analysis

@@ -7,7 +7,7 @@
 
 Comprehensive research into free APIs and government data sources that could further expand TyphooN-Terminal's capabilities beyond the 21 data sources already integrated.
 
-## Currently Integrated (21 Sources)
+## Currently Integrated (22 Sources)
 
 | Source | Auth | Features |
 |---|---|---|
@@ -17,6 +17,7 @@ Comprehensive research into free APIs and government data sources that could fur
 | Finnhub | API key | Analyst ratings, price targets, short interest, insider sentiment, IPO, earnings, economic calendar |
 | FMP | API key | Analyst estimates, financial ratios, DCF |
 | Alpha Vantage | API key | Earnings surprises, company overview |
+| CryptoCompare | None | Deep crypto history (BTC from 2010, 2000 bars/req), primary backfill |
 | CoinGecko | None | Crypto market data, trending, sparklines |
 | ECB | None | Forex daily rates (XML) |
 | House Stock Watcher | None | Congressional stock trades |

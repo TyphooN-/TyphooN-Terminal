@@ -15,7 +15,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
 │  │ egui Panels                                 ││
-│  │ - Console (~) with 117 commands               ││
+│  │ - Console (~) with 120 commands               ││
 │  │ - Positions / Orders / TradingView Watchlist││
 │  │ - Risk calculator, VaR, Margin monitor      ││
 │  │ - DARWIN analytics (80 engine functions)    ││
@@ -53,8 +53,9 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 | Priority | Source | Coverage |
 |----------|--------|----------|
 | 1 | MT5 via BarCacheWriter | 895 symbols x 9 TFs, weekday authority (Darwinex) |
-| 2 | Kraken | 24/7 crypto, fills weekend gaps, history from 2013 |
-| 3 | Alpaca | Live trading execution, US equities + crypto |
+| 2 | Alpaca/tastytrade | Live trading execution, US equities + crypto |
+| 3 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request |
+| 4 | Kraken | Weekend gap-fill (720 most recent bars) |
 
 MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade management stays in MT5 directly. DARWIN account analytics are imported via XLSX trade history exports.
 
@@ -79,7 +80,7 @@ TyphooN-Terminal/
 ├── native/                 # Native GPU application
 │   ├── src/
 │   │   ├── main.rs         # eframe init, wgpu renderer selection
-│   │   └── app.rs          # All UI (16,643 lines)
+│   │   └── app.rs          # All UI (17,033 lines)
 │   └── Cargo.toml
 ├── engine/                 # Shared engine library
 │   ├── src/
@@ -92,6 +93,8 @@ TyphooN-Terminal/
 │   │   │   ├── var.rs      # VaR, CVaR, portfolio risk
 │   │   │   ├── backtest.rs # Bar-by-bar engine, strategies
 │   │   │   ├── screener.rs # Symbol filtering
+│   │   │   ├── fred.rs     # FRED economic data (yield curve, CPI, GDP, VIX, M2)
+│   │   │   ├── cryptocompare.rs # CryptoCompare deep history backfill
 │   │   │   └── ...
 │   │   └── broker/
 │   │       └── alpaca.rs   # REST + WebSocket client

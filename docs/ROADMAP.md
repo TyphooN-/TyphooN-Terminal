@@ -23,7 +23,7 @@
 - [x] NNFX default preset (SMA200 + KAMA + Fisher + ATR Proj + BetterVol + PrevLevels + S/D Zones)
 
 ### Phase 4: UI Panels
-- [x] Console (`~`) with 117 commands
+- [x] Console (`~`) with 120 commands
 - [x] Tab bar with drag-and-drop reordering (Ctrl+N/W/Tab)
 - [x] MTF grid (2×2 to 4×4, up to 16 charts)
 - [x] Right panel: tabbed (Trade/Pos/Ord/WL/Risk), TradingView-style watchlist
@@ -66,7 +66,7 @@
 - [x] Bid/ask spread display
 
 ### Phase 8: Data & Analytics
-- [x] Crypto backfill (Kraken — BTC daily from 2013, weekend gap-fill)
+- [x] Crypto backfill (CryptoCompare — BTC from 2010, 2000 bars/request; Kraken retained for weekend gap-fill)
 - [x] DARWIN signal vs quote comparison
 - [x] MTF SMA (H1/H4/D1/W1 200SMA + W1/MN1 100SMA — Tomato + Magenta)
 - [x] ATR Projection MTF (M15/H1/H4/D1/W1/MN1 horizontal levels)
@@ -81,6 +81,14 @@
 - [x] Multi-window support (NEW_WINDOW/POPOUT for multi-monitor)
 - [x] Collapsible right panel sections
 - [x] Sortable columns (SEC filings, insider trades tables)
+- [x] CryptoCompare deep history (BTC from 2010, replaces Kraken as primary backfill)
+- [x] Weekend crypto adaptive polling (60s M1, 2.5min M15, 5min H1+) with magenta candles
+- [x] Chart right margin (5 bars, MT5 chart shift style)
+- [x] Unusual Volume Scanner
+- [x] Multi-signal Anomaly Scanner (VaR + EV + ATR + SEC with tradability indicators)
+- [x] MTF Grid tab visibility checkboxes
+- [x] Storage Manager pagination
+- [x] Data hierarchy: MT5 > Broker > CryptoCompare > Kraken
 
 ## In Progress
 
@@ -101,7 +109,7 @@
 
 ### Phase 11: Data Feeds
 - [x] News feed (Finnhub)
-- [ ] Economic calendar
+- [x] Economic calendar (Finnhub — FOMC, NFP, CPI, PMI with impact ratings)
 - [x] SEC filings (EDGAR — full-text search, insider trades)
 - [x] Analyst ratings (Finnhub consensus: buy/hold/sell + price targets)
 - [x] FRED economic data (Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply)

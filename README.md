@@ -12,13 +12,13 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **CLI Binary** | 6.5MB standalone TUI (SSH/VPS ready) |
 | **Memory Usage** | ~50-100MB (vs thinkorswim ~2GB+) |
 | **Startup Time** | < 2 seconds |
-| **Lines of Code** | ~16,600 GUI + ~12,000 engine (pure Rust) |
+| **Lines of Code** | ~17,000+ GUI + ~12,000 engine (pure Rust) |
 | **Indicators** | 32+ (NNFX + Ehlers DSP + standard + harmonics) |
-| **Commands** | 117 Quake-console style (~) |
+| **Commands** | 120 Quake-console style (~) |
 | **Drawing Tools** | 7 types (HLine, Trendline, Fibonacci, VLine, Rectangle, Ray, Channel) |
 | **Harmonic Patterns** | 10 (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives) |
 | **Chart Types** | 5 (Candle, Heikin-Ashi, Line, OHLC Bars, Renko) |
-| **Data Sources** | MT5 (Darwinex), Alpaca, Kraken, tastytrade (auth only, roadmap) |
+| **Data Sources** | MT5 (Darwinex), Alpaca, CryptoCompare, Kraken, tastytrade (auth only, roadmap) |
 | **DARWIN Analytics** | 80 functions wired (VaR, correlation, equity, streaks, Monte Carlo, stress tests, rebalance, floating equity, D-Score, tax lots, CAGR, recovery factor, divergence index, risk budget, replication quality, performance attribution) |
 | **Cost** | Free for personal use ([commercial licensing](LICENSE-COMMERCIAL) available) |
 
@@ -105,7 +105,15 @@ A native desktop trading terminal + TUI CLI with full risk management, multi-tim
 | **Yield Curve** | Treasury rates with 2Y-10Y inversion detection (~ →YIELD) |
 | **GPU Chart Engine** | Native wgpu candlesticks, drawing tools, sub-panes, price lines, histograms, fills — all on GPU |
 | **Draggable Panel Splitter** | Resize chart/sidebar panels by dragging the divider — layout persists across sessions |
-| **117 Commands** | Quake-console command palette with fuzzy search |
+| **Economic Calendar** | Finnhub economic events: FOMC, NFP, CPI, PMI with impact ratings (~ →ECON) |
+| **CryptoCompare Deep History** | BTC from 2010, ETH from 2015, 2000 bars/request — replaces Kraken as primary crypto backfill |
+| **Weekend Crypto Live** | Adaptive polling: 60s (M1), 2.5min (M15), 5min (H1+) — magenta-colored weekend candles |
+| **Chart Right Margin** | 5-bar right margin (MT5 chart shift style) for price action breathing room |
+| **Unusual Volume Scanner** | Detect abnormal volume spikes across symbols (~ →UNUSUAL_VOLUME) |
+| **Multi-Signal Anomaly Scanner** | 4-dimensional scan: VaR + EV + ATR + SEC with tradability indicators (~ →ANOMALY) |
+| **MTF Grid Visibility** | Per-tab checkboxes to show/hide individual timeframes in multi-timeframe grid |
+| **Storage Pagination** | Paginated storage manager for large cache databases |
+| **120 Commands** | Quake-console command palette with fuzzy search |
 
 ---
 
@@ -226,9 +234,9 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [022](docs/adr/022-tastytrade-broker.md) | tastytrade broker integration |
 | [032](docs/adr/032-ehlers-dsp-indicators.md) | 8 Ehlers DSP indicators |
 | [033](docs/adr/033-free-api-expansion.md) | Free API expansion — 30+ data sources |
-| [037](docs/adr/037-data-source-hierarchy.md) | Data source hierarchy (MT5 → Kraken → Alpaca) |
+| [037](docs/adr/037-data-source-hierarchy.md) | Data source hierarchy (MT5 → Broker → CryptoCompare → Kraken) |
 | [038](docs/adr/038-data-source-indicator.md) | Data source indicator UI |
-| [040](docs/adr/040-crypto-data-source.md) | Crypto data sources (Kraken gap-fill) |
+| [040](docs/adr/040-crypto-data-source.md) | Crypto data sources (CryptoCompare + Kraken gap-fill) |
 | [041](docs/adr/041-darwin-import-analytics.md) | DARWIN import pipeline & analytics engine |
 | [044](docs/adr/044-backup-lan-sync.md) | Backup & LAN sync |
 | [045](docs/adr/045-darwin-analytics-expansion.md) | DARWIN analytics expansion |
@@ -245,6 +253,27 @@ Direct memory path: SQLite cache → zstd decompress → `&[f64]` OHLCV → wgpu
 | [058](docs/adr/058-gpu-strategy-optimizer.md) | GPU strategy optimizer |
 | [059](docs/adr/059-security-by-design.md) | Security by design (credential & data protection) |
 | [060](docs/adr/060-mql5-compiler-pipeline.md) | MQL5 compiler pipeline |
+
+---
+
+## Competitive Comparison
+
+| Feature | TyphooN Terminal | OpenBB | Godel | UnusualWhales | TradingView |
+|---------|-----------------|--------|-------|---------------|-------------|
+| **Native GPU Rendering** | Yes (wgpu) | No (Python) | No (Web) | No (Web) | No (Web) |
+| **Trading Execution** | 3 brokers | No | No | No | 1 broker |
+| **DARWIN Analytics** | 80 functions | No | No | No | No |
+| **MQL5 Compiler** | Yes | No | No | No | PineScript |
+| **FRED Economic Data** | Yes | Yes | No | No | No |
+| **SEC Filings** | Yes | Yes | Yes | No | No |
+| **Congressional Trades** | Yes | Yes | No | Yes | No |
+| **Harmonic Patterns** | 10 Carney | No | No | No | Community |
+| **Walk-Forward Optimizer** | Yes (5 strategies) | No | No | No | No |
+| **Deep Crypto History** | 2010+ (CryptoCompare) | Yes | No | No | Yes |
+| **Weekend Crypto Live** | Yes (60s polling) | No | No | No | Yes |
+| **Anomaly Scanner** | 4-dim (VaR+EV+ATR+SEC) | No | No | Options only | No |
+| **Storage Cost** | Free (local SQLite) | Free | $80-118/mo | $30-60/mo | $0-60/mo |
+| **Open Source** | BSL 1.1 | AGPL | No | No | No |
 
 ---
 
