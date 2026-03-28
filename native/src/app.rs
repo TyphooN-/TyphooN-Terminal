@@ -4470,6 +4470,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "VAR",           desc: "VaR multiplier estimator" },
     Command { name: "MARGIN",        desc: "Margin monitor" },
     // Research
+    Command { name: "FRED",          desc: "FRED economic data dashboard (Fed Funds, CPI, GDP, VIX, yields)" },
     Command { name: "NEWS",          desc: "Market news & events" },
     Command { name: "CALENDAR",      desc: "Economic calendar" },
     Command { name: "SEC",           desc: "SEC filings (10-K, 10-Q, 8-K)" },
@@ -4568,6 +4569,8 @@ const COMMANDS: &[Command] = &[
     // Unusual Whales / Godel Terminal features
     Command { name: "UNUSUAL_VOLUME", desc: "Unusual volume scanner — symbols with volume > 2x 20-day average" },
     Command { name: "SECTOR_ROTATION", desc: "Sector ETF relative performance (11 SPDR sectors)" },
+    Command { name: "ECON_CALENDAR", desc: "Economic calendar — upcoming FOMC, NFP, CPI, PMI releases" },
+    Command { name: "CONGRESS", desc: "Congressional stock trades (House Stock Watcher)" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -4832,6 +4835,8 @@ enum BrokerCmd {
     TastytradeOptionChain { symbol: String },
     /// Batch quote request for watchlist symbols.
     GetWatchlistQuotes { symbols: Vec<String> },
+    /// Fetch FRED economic data series.
+    FredFetch { api_key: String },
 }
 
 /// Messages sent from async broker task → UI.
@@ -4863,6 +4868,8 @@ enum BrokerMsg {
     SymbolSuggestions(Vec<(String, String, String)>), // (symbol, name, asset_class)
     /// Batch watchlist quote data.
     WatchlistQuotes(Vec<WatchlistRow>),
+    /// FRED economic data results.
+    FredData(Vec<typhoon_engine::core::fred::FredSeries>, Vec<(String, f64)>),
 }
 
 /// Reusable sort state for clickable column headers.
@@ -5128,6 +5135,9 @@ pub struct TyphooNApp {
     show_unusual_volume: bool,
     unusual_volume_results: Vec<(String, f64, f64, f64)>, // (symbol, today_vol, avg_vol, ratio)
     show_sector_rotation: bool,
+    show_fred: bool,
+    fred_data: Vec<typhoon_engine::core::fred::FredSeries>,
+    fred_yield_curve: Vec<(String, f64)>,
     /// Crypto backfill single symbol input.
     backfill_symbol: String,
     /// SEC filing type filters [Form 4, 13F, DEF 14A, S-1, 10-K, 10-Q, 8-K].
@@ -6136,6 +6146,19 @@ impl TyphooNApp {
                     BrokerCmd::TastytradeOptionChain { symbol } => {
                         let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("tastytrade option chain for {} — connect first", symbol)));
                     }
+                    BrokerCmd::FredFetch { api_key } => {
+                        use typhoon_engine::core::fred;
+                        let client = reqwest::Client::new();
+                        let mut series_data = Vec::new();
+                        for (id, _name) in fred::KEY_SERIES.iter().take(5) {
+                            if let Ok(s) = fred::fetch_series(&client, &api_key, id, 60).await {
+                                series_data.push(s);
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        }
+                        let yield_curve = fred::fetch_yield_curve(&client, &api_key).await.unwrap_or_default();
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::FredData(series_data, yield_curve));
+                    }
                 }
             }
         });
@@ -6309,6 +6332,9 @@ impl TyphooNApp {
             show_unusual_volume: false,
             unusual_volume_results: Vec::new(),
             show_sector_rotation: false,
+            show_fred: false,
+            fred_data: Vec::new(),
+            fred_yield_curve: Vec::new(),
             backfill_symbol: String::new(),
             sec_filters: [true; 7],
             sec_page: 0,
@@ -6832,6 +6858,15 @@ impl TyphooNApp {
             "RISK_CALC"     => self.show_risk_calc = true,
             "VAR"           => self.show_var_mult = true,
             "MARGIN"        => self.show_margin_monitor = true,
+            "FRED" => {
+                if self.fred_key.is_empty() {
+                    self.log.push_back(LogEntry::warn("Set FRED API Key in Settings first"));
+                } else {
+                    self.show_fred = true;
+                    let key = self.fred_key.clone();
+                    let _ = self.broker_tx.send(BrokerCmd::FredFetch { api_key: key });
+                }
+            }
             "NEWS"          => self.show_news = true,
             "CALENDAR"      => self.show_calendar = true,
             "SEC"           => self.show_sec = true,
@@ -7249,6 +7284,7 @@ impl TyphooNApp {
                 "lan_sync": self.show_lan_sync,
                 "unusual_volume": self.show_unusual_volume,
                 "sector_rotation": self.show_sector_rotation,
+                "fred": self.show_fred,
             },
             "journal": self.journal_entries.iter().map(|e| serde_json::json!({
                 "timestamp": e.timestamp, "symbol": e.symbol, "side": e.side,
@@ -7435,6 +7471,7 @@ impl TyphooNApp {
                     if let Some(b) = w["lan_sync"].as_bool() { self.show_lan_sync = b; }
                     if let Some(b) = w["unusual_volume"].as_bool() { self.show_unusual_volume = b; }
                     if let Some(b) = w["sector_rotation"].as_bool() { self.show_sector_rotation = b; }
+                    if let Some(b) = w["fred"].as_bool() { self.show_fred = b; }
                 }
                 // Restore journal entries
                 if let Some(journal) = v["journal"].as_array() {
@@ -7531,6 +7568,7 @@ impl TyphooNApp {
         self.show_dividend_calendar = false;
         self.show_unusual_volume = false;
         self.show_sector_rotation = false;
+        self.show_fred = false;
     }
 
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
@@ -11501,6 +11539,60 @@ impl TyphooNApp {
                 });
         }
 
+        // FRED Economic Data Dashboard
+        if self.show_fred {
+            egui::Window::new("FRED Economic Data")
+                .open(&mut self.show_fred)
+                .resizable(true).default_size([700.0, 500.0])
+                .show(ctx, |ui| {
+                    // Yield Curve
+                    if !self.fred_yield_curve.is_empty() {
+                        ui.label(egui::RichText::new("Treasury Yield Curve").strong());
+                        let points: PlotPoints = PlotPoints::new(
+                            self.fred_yield_curve.iter().enumerate().map(|(i, (_, v))| [i as f64, *v]).collect()
+                        );
+                        let line = Line::new("Yield", points).color(ACCENT).width(2.0);
+                        Plot::new("yield_curve_plot").height(120.0).allow_drag(false).allow_zoom(false)
+                            .show(ui, |plot_ui| { plot_ui.line(line); });
+                        ui.horizontal(|ui| {
+                            for (label, rate) in &self.fred_yield_curve {
+                                ui.label(egui::RichText::new(format!("{}: {:.2}%", label, rate)).small().monospace());
+                            }
+                        });
+                        // 2Y-10Y inversion check
+                        if self.fred_yield_curve.len() >= 3 {
+                            let y2 = self.fred_yield_curve[0].1;
+                            let y10 = self.fred_yield_curve[2].1;
+                            if y2 > y10 {
+                                ui.label(egui::RichText::new(format!("INVERTED: 2Y ({:.2}%) > 10Y ({:.2}%) -- recession signal", y2, y10)).color(DOWN));
+                            }
+                        }
+                        ui.separator();
+                    }
+
+                    // Series charts
+                    for series in &self.fred_data {
+                        ui.collapsing(format!("{} ({})", series.title, series.id), |ui| {
+                            if series.observations.len() > 2 {
+                                let last = series.observations.last().map(|o| o.value).unwrap_or(0.0);
+                                ui.label(egui::RichText::new(format!("Latest: {:.2} ({})", last,
+                                    series.observations.last().map(|o| o.date.as_str()).unwrap_or("?"))).strong());
+                                let points: PlotPoints = PlotPoints::new(
+                                    series.observations.iter().enumerate().map(|(i, o)| [i as f64, o.value]).collect()
+                                );
+                                let line = Line::new(&series.title, points).color(ACCENT);
+                                Plot::new(format!("fred_{}", series.id)).height(80.0).allow_drag(false).allow_zoom(false)
+                                    .show(ui, |plot_ui| { plot_ui.line(line); });
+                            }
+                        });
+                    }
+
+                    if self.fred_data.is_empty() && self.fred_yield_curve.is_empty() {
+                        ui.label(egui::RichText::new("Loading FRED data...").color(AXIS_TEXT));
+                    }
+                });
+        }
+
         // Crypto Backfill (CryptoCompare deep history)
         if self.show_crypto_backfill {
             egui::Window::new("Crypto Backfill (CryptoCompare)")
@@ -13974,6 +14066,11 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::WatchlistQuotes(rows) => {
                     self.watchlist_rows = rows;
+                }
+                BrokerMsg::FredData(series, yields) => {
+                    self.fred_data = series;
+                    self.fred_yield_curve = yields;
+                    self.log.push_back(LogEntry::info(format!("FRED: {} series loaded", self.fred_data.len())));
                 }
                 BrokerMsg::MarketClock(msg) => {
                     self.log.push_back(LogEntry::info(msg));

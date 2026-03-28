@@ -5,6 +5,7 @@ pub mod cryptocompare;
 pub mod cache;
 pub mod darwin;
 pub mod darwin_ftp;
+pub mod fred;
 pub mod fundamentals;
 pub mod lan_sync;
 pub mod margin;
