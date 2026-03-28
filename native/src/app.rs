@@ -16074,23 +16074,21 @@ impl eframe::App for TyphooNApp {
                         egui::vec2(cell_w - 2.0, cell_h - 2.0),
                     );
 
-                    // Click to focus this cell
+                    // Click to focus this cell (vi = actual chart index, not grid position)
                     if let Some(pos) = click_pos {
                         if cell_rect.contains(pos) {
-                            self.mtf_focused = Some(idx);
-                            self.active_tab = idx;
+                            self.mtf_focused = Some(vi);
+                            self.active_tab = vi;
                         }
                     }
 
                     // Auto-focus on hover, confirm on click
-                    // Skip chart interaction when pointer is over a floating window
                     let ptr_in_cell = !pointer_over_floating && ctx.input(|i| i.pointer.hover_pos().map(|p| cell_rect.contains(p)).unwrap_or(false));
                     if ptr_in_cell {
-                        // Auto-set focus when hovering (no click required for zoom)
-                        self.mtf_focused = Some(idx);
-                        self.active_tab = idx;
+                        self.mtf_focused = Some(vi);
+                        self.active_tab = vi;
                     }
-                    let is_focused = self.mtf_focused == Some(idx);
+                    let is_focused = self.mtf_focused == Some(vi);
 
                     // Zoom when pointer is in this cell (no focus-click required)
                     if ptr_in_cell {
