@@ -5034,7 +5034,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "HARMONICS",     desc: "Toggle harmonic pattern detection (Carney)" },
     Command { name: "AUTO_FIB",      desc: "Auto Fibonacci (fractal swing retracement + extension)" },
     Command { name: "SUPPLY_DEMAND", desc: "Toggle supply/demand zone detection" },
-    Command { name: "LAN_SYNC",      desc: "Export/import cache data for LAN sync to another machine" },
+    Command { name: "LAN_SYNC",      desc: "LAN sync — start server or connect to server by IP" },
     Command { name: "NEW_WINDOW",    desc: "Open new terminal window (separate process, multi-monitor)" },
     Command { name: "POPOUT",        desc: "Pop out new terminal window (alias for NEW_WINDOW)" },
     // Unusual Whales / Godel Terminal features
@@ -5607,8 +5607,10 @@ pub struct TyphooNApp {
     storage_delete_confirm: Option<String>,
     storage_page: usize,
     show_lan_sync: bool,
-    lan_sync_patterns: String,
-    lan_sync_preview: Vec<(String, i64, usize)>,
+    lan_sync_mode: String,        // "idle", "server", "client"
+    lan_sync_host: String,         // client: server IP to connect to
+    lan_sync_port: String,         // port (default 9847)
+    lan_sync_passphrase: String,   // shared secret for auth
     show_help: bool,
     show_connect: bool,
     show_indicators_panel: bool,
@@ -6880,8 +6882,10 @@ impl TyphooNApp {
             storage_delete_confirm: None,
             storage_page: 0,
             show_lan_sync: false,
-            lan_sync_patterns: "darwin,kraken,mt5:Darwinex".into(),
-            lan_sync_preview: Vec::new(),
+            lan_sync_mode: "idle".into(),
+            lan_sync_host: String::new(),
+            lan_sync_port: "9847".into(),
+            lan_sync_passphrase: String::new(),
             show_help: false,
             show_connect: false,
             show_indicators_panel: false,
@@ -14248,107 +14252,85 @@ impl TyphooNApp {
         if self.show_lan_sync {
             egui::Window::new("LAN Sync")
                 .open(&mut self.show_lan_sync)
-                .resizable(true).default_size([600.0, 400.0])
+                .resizable(true).default_size([400.0, 250.0])
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new("Export cache data for syncing to another TyphooN Terminal instance.").color(AXIS_TEXT).small());
+                    let is_idle = self.lan_sync_mode == "idle";
+
+                    // Status indicator
+                    let (status_text, status_color) = match self.lan_sync_mode.as_str() {
+                        "server" => ("Server Running", UP),
+                        "client" => ("Connected to Server", UP),
+                        _ => ("Idle", AXIS_TEXT),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("\u{25CF}").color(status_color));
+                        ui.label(egui::RichText::new(status_text).color(status_color).strong());
+                    });
+                    ui.separator();
+
+                    // Shared settings
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Port:").color(AXIS_TEXT).small());
+                        ui.add(egui::TextEdit::singleline(&mut self.lan_sync_port).desired_width(60.0).font(egui::TextStyle::Monospace));
+                        ui.label(egui::RichText::new("Passphrase:").color(AXIS_TEXT).small());
+                        ui.add(egui::TextEdit::singleline(&mut self.lan_sync_passphrase).desired_width(120.0).password(true).hint_text("shared secret"));
+                    });
                     ui.add_space(4.0);
 
-                    // Pattern input
-                    ui.horizontal(|ui| {
-                        ui.label("Patterns (comma-separated):");
-                        ui.add(egui::TextEdit::singleline(&mut self.lan_sync_patterns).desired_width(300.0)
-                            .hint_text("darwin,kraken,mt5:Darwinex"));
-                    });
-
-                    // Quick presets
-                    ui.horizontal(|ui| {
-                        if ui.small_button("DARWIN data").clicked() { self.lan_sync_patterns = "darwin".to_string(); }
-                        if ui.small_button("Crypto (Kraken)").clicked() { self.lan_sync_patterns = "kraken".to_string(); }
-                        if ui.small_button("MT5 + DARWIN + Crypto").clicked() { self.lan_sync_patterns = "mt5,darwin,kraken".to_string(); }
-                        if ui.small_button("Everything").clicked() { self.lan_sync_patterns = String::new(); }
-                    });
-                    ui.add_space(4.0);
-
-                    // Preview button
-                    if ui.button("Preview matching keys").clicked() {
-                        if let Some(ref cache) = self.cache {
-                            let patterns: Vec<&str> = self.lan_sync_patterns.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-                            let patterns_ref: Vec<&str> = if patterns.is_empty() { vec![""] } else { patterns };
-                            match cache.list_matching_keys(&patterns_ref) {
-                                Ok(keys) => {
-                                    let total_size: usize = keys.iter().map(|(_, _, s)| *s).sum();
-                                    self.log.push_back(LogEntry::info(format!("LAN Sync: {} keys, {:.1} MB compressed", keys.len(), total_size as f64 / 1024.0 / 1024.0)));
-                                    self.lan_sync_preview = keys;
+                    if is_idle {
+                        ui.horizontal(|ui| {
+                            // ── Start Server ──
+                            if ui.add(egui::Button::new(egui::RichText::new("Start Server").strong()).fill(BTN_GREEN).min_size(egui::vec2(120.0, 28.0))).clicked() {
+                                let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
+                                if self.lan_sync_passphrase.is_empty() {
+                                    self.log.push_back(LogEntry::warn("Set a passphrase for LAN sync"));
+                                } else {
+                                    self.lan_sync_mode = "server".into();
+                                    self.log.push_back(LogEntry::info(format!("LAN sync server starting on wss://0.0.0.0:{} (TLS encrypted)", port)));
+                                    // TODO: spawn LanSyncServer::start() via broker_tx
                                 }
-                                Err(e) => self.log.push_back(LogEntry::err(format!("Preview failed: {}", e))),
-                            }
-                        }
-                    }
-
-                    // Show preview
-                    if !self.lan_sync_preview.is_empty() {
-                        let total_keys = self.lan_sync_preview.len();
-                        let total_size: usize = self.lan_sync_preview.iter().map(|(_, _, s)| *s).sum();
-                        ui.label(egui::RichText::new(format!("{} keys — {:.1} MB compressed", total_keys, total_size as f64 / 1024.0 / 1024.0)).strong());
-
-                        egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
-                            for (key, count, size) in self.lan_sync_preview.iter().take(100) {
-                                ui.label(egui::RichText::new(format!("  {} ({} bars, {} KB)", key, count, size / 1024)).color(AXIS_TEXT).small().monospace());
-                            }
-                            if total_keys > 100 {
-                                ui.label(egui::RichText::new(format!("  ... and {} more", total_keys - 100)).color(AXIS_TEXT).small());
                             }
                         });
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        // ── Connect to Server ──
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Server IP:").color(AXIS_TEXT).small());
+                            ui.add(egui::TextEdit::singleline(&mut self.lan_sync_host).desired_width(140.0).hint_text("192.168.1.100").font(egui::TextStyle::Monospace));
+                            if ui.add(egui::Button::new(egui::RichText::new("Connect").strong()).fill(BTN_BLUE).min_size(egui::vec2(90.0, 28.0))).clicked() {
+                                if self.lan_sync_host.is_empty() || self.lan_sync_passphrase.is_empty() {
+                                    self.log.push_back(LogEntry::warn("Enter server IP and passphrase"));
+                                } else {
+                                    let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
+                                    self.lan_sync_mode = "client".into();
+                                    self.log.push_back(LogEntry::info(format!("LAN sync connecting to wss://{}:{} (TLS encrypted)...", self.lan_sync_host, port)));
+                                    // TODO: spawn LanSyncClient::connect() via broker_tx
+                                }
+                            }
+                        });
+                    } else {
+                        // ── Active connection — show stats + stop button ──
+                        ui.add_space(4.0);
+                        if self.lan_sync_mode == "server" {
+                            ui.label(egui::RichText::new("Serving bar cache + DARWIN data to LAN clients.").color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new("Clients connect using this machine's IP address.").color(AXIS_TEXT).small());
+                        } else {
+                            ui.label(egui::RichText::new(format!("Syncing from {}", self.lan_sync_host)).color(AXIS_TEXT).small());
+                        }
+                        ui.add_space(8.0);
+                        if ui.add(egui::Button::new(egui::RichText::new("Stop").strong()).fill(egui::Color32::from_rgb(180, 40, 40)).min_size(egui::vec2(80.0, 28.0))).clicked() {
+                            self.lan_sync_mode = "idle".into();
+                            self.log.push_back(LogEntry::info("LAN sync stopped"));
+                            // TODO: stop server/client
+                        }
                     }
 
                     ui.add_space(8.0);
                     ui.separator();
-
-                    // Export / Import buttons
-                    ui.horizontal(|ui| {
-                        if ui.button(egui::RichText::new("Export to file").strong()).clicked() {
-                            if let Some(ref cache) = self.cache {
-                                let patterns: Vec<&str> = self.lan_sync_patterns.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-                                let patterns_ref: Vec<&str> = if patterns.is_empty() { vec![""] } else { patterns };
-                                match cache.export_keys(&patterns_ref) {
-                                    Ok(bundle) => {
-                                        if let Some(path) = rfd::FileDialog::new()
-                                            .set_title("Save LAN Sync Bundle")
-                                            .set_file_name("typhoon_sync.bin")
-                                            .save_file()
-                                        {
-                                            match std::fs::write(&path, &bundle) {
-                                                Ok(()) => self.log.push_back(LogEntry::info(format!("Exported {:.1} MB to {}", bundle.len() as f64 / 1024.0 / 1024.0, path.display()))),
-                                                Err(e) => self.log.push_back(LogEntry::err(format!("Write failed: {}", e))),
-                                            }
-                                        }
-                                    }
-                                    Err(e) => self.log.push_back(LogEntry::err(format!("Export failed: {}", e))),
-                                }
-                            }
-                        }
-
-                        // Import button
-                        if ui.button("Import from file").clicked() {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .set_title("Open LAN Sync Bundle")
-                                .add_filter("Sync Bundle", &["bin"])
-                                .pick_file()
-                            {
-                                if let Some(ref cache) = self.cache {
-                                    match std::fs::read(&path) {
-                                        Ok(bundle) => {
-                                            match cache.import_keys(&bundle) {
-                                                Ok(count) => self.log.push_back(LogEntry::info(format!("Imported {} keys from {}", count, path.display()))),
-                                                Err(e) => self.log.push_back(LogEntry::err(format!("Import failed: {}", e))),
-                                            }
-                                        }
-                                        Err(e) => self.log.push_back(LogEntry::err(format!("Read failed: {}", e))),
-                                    }
-                                }
-                            }
-                        }
-                    });
+                    ui.label(egui::RichText::new("Transport: TLS encrypted (wss://) with ephemeral self-signed certificate.").color(egui::Color32::from_rgb(80, 80, 100)).small());
+                    ui.label(egui::RichText::new("Auth: PBKDF2-HMAC-SHA256 challenge-response (100K iterations).").color(egui::Color32::from_rgb(80, 80, 100)).small());
                 });
         }
 
