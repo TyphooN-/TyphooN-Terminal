@@ -362,6 +362,9 @@ const BVOL_LOW: egui::Color32 = egui::Color32::from_rgb(255, 255, 0);          /
 const BVOL_CHURN: egui::Color32 = egui::Color32::from_rgb(255, 0, 255);        // clrMagenta — climax + churn
 const BVOL_NORMAL: egui::Color32 = egui::Color32::from_rgb(70, 130, 180);      // clrSteelBlue — normal volume
 
+/// Right margin: empty bars of space after the last candle (MT5 "chart shift" feature).
+const CHART_RIGHT_MARGIN: usize = 5;
+
 /// Indicator visibility flags passed to draw_chart.
 struct IndicatorFlags {
     sma200: bool,
@@ -7545,7 +7548,7 @@ impl TyphooNApp {
         // view_offset is the rightmost visible bar index
         // When zooming in (fewer bars): offset stays same, we see fewer bars on the left
         // When zooming out (more bars): offset stays same, we see more bars on the left
-        let max_off = chart.bars.len().saturating_sub(1);
+        let max_off = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
         // Keep the right edge (view_offset) fixed — just change visible_bars
         chart.view_offset = chart.view_offset.min(max_off);
         chart.visible_bars = new_vis;
@@ -7556,7 +7559,7 @@ impl TyphooNApp {
         let bar_w = rect_width / chart.visible_bars as f32;
         let delta_bars = (dx / bar_w) as isize;
         let new_offset = (chart.view_offset as isize - delta_bars)
-            .clamp(0, chart.bars.len() as isize - 1) as usize;
+            .clamp(0, (chart.bars.len() + CHART_RIGHT_MARGIN) as isize - 1) as usize;
         chart.view_offset = new_offset;
     }
 
@@ -10524,7 +10527,7 @@ impl TyphooNApp {
                                                         chart.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                                                             ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                                                         }).collect();
-                                                        chart.view_offset = chart.bars.len().saturating_sub(1);
+                                                        chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                                                         chart.symbol = key.clone();
                                                         chart.compute_indicators();
                                                         self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
@@ -14181,11 +14184,11 @@ impl eframe::App for TyphooNApp {
 
             if let Some(chart) = self.charts.get_mut(self.active_tab) {
                 if left  { chart.view_offset = chart.view_offset.saturating_sub(1); }
-                if right { chart.view_offset = (chart.view_offset + 1).min(chart.bars.len().saturating_sub(1)); }
+                if right { chart.view_offset = (chart.view_offset + 1).min(chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN); }
                 if home  { chart.view_offset = chart.visible_bars.min(chart.bars.len()).saturating_sub(1); }
-                if end   { chart.view_offset = chart.bars.len().saturating_sub(1); }
+                if end   { chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN; }
                 if pgup  { chart.view_offset = chart.view_offset.saturating_sub(chart.visible_bars / 2); }
-                if pgdn  { chart.view_offset = (chart.view_offset + chart.visible_bars / 2).min(chart.bars.len().saturating_sub(1)); }
+                if pgdn  { chart.view_offset = (chart.view_offset + chart.visible_bars / 2).min(chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN); }
                 if plus  { Self::handle_zoom(chart, 1.0); }
                 if minus { Self::handle_zoom(chart, -1.0); }
             }
@@ -14931,6 +14934,7 @@ impl eframe::App for TyphooNApp {
                     BottomTab::Log => {
                         egui::ScrollArea::both()
                             .stick_to_bottom(true)
+                            .auto_shrink(false)
                             .show(ui, |ui| {
                                 for entry in &self.log {
                                     ui.add(egui::Label::new(
@@ -15407,7 +15411,7 @@ impl eframe::App for TyphooNApp {
                                                     chart.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                                                         ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                                                     }).collect();
-                                                    chart.view_offset = chart.bars.len().saturating_sub(1);
+                                                    chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                                                     chart.symbol = key.clone();
                                                     chart.compute_indicators();
                                                     self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
@@ -15632,7 +15636,7 @@ impl eframe::App for TyphooNApp {
                         chart.price_zoom = 1.0;
                         chart.price_pan = 0.0;
                         chart.visible_bars = 200;
-                        chart.view_offset = chart.bars.len().saturating_sub(1);
+                        chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                     }
                 }
             }
@@ -16005,7 +16009,7 @@ impl eframe::App for TyphooNApp {
                             chart.price_zoom = 1.0;
                             chart.price_pan = 0.0;
                             chart.visible_bars = 200;
-                            chart.view_offset = chart.bars.len().saturating_sub(1);
+                            chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                             ui.close();
                         }
                         for &ct in &[ChartType::Candle, ChartType::HeikinAshi, ChartType::Line, ChartType::OhlcBars, ChartType::Renko] {
