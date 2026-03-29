@@ -302,6 +302,106 @@ enum Drawing {
         width: f64, // price offset for parallel line
         color: egui::Color32,
     },
+    /// Extended line (infinite both directions through two points).
+    ExtendedLine {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Horizontal ray (extends right from a price level at a specific bar).
+    HRay {
+        bar_idx: usize,
+        price: f64,
+        color: egui::Color32,
+    },
+    /// Cross line (horizontal + vertical through one point).
+    CrossLine {
+        bar_idx: usize,
+        price: f64,
+        color: egui::Color32,
+    },
+    /// Arrow line (trendline with arrowhead at p2).
+    ArrowLine {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Info line (trendline showing distance, percent change, bars count).
+    InfoLine {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Andrews Pitchfork (3-point: pivot + two channel points).
+    Pitchfork {
+        pivot: (usize, f64),
+        p2: (usize, f64),
+        p3: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Fibonacci Extension (3-point trend-based).
+    FiboExtension {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        p3: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Gann Fan (8 angle lines from a pivot point).
+    GannFan {
+        origin: (usize, f64),
+        scale: f64, // price per bar for 1×1 angle
+        color: egui::Color32,
+    },
+    /// Long Position (risk/reward box).
+    LongPosition {
+        entry: (usize, f64),
+        stop: f64,
+        target: f64,
+    },
+    /// Short Position (risk/reward box).
+    ShortPosition {
+        entry: (usize, f64),
+        stop: f64,
+        target: f64,
+    },
+    /// Price Range measurement (two price levels).
+    PriceRange {
+        p1: (usize, f64),
+        p2: (usize, f64),
+    },
+    /// Text annotation at a specific point.
+    TextLabel {
+        bar_idx: usize,
+        price: f64,
+        text: String,
+        color: egui::Color32,
+    },
+    /// Arrow marker (up/down directional).
+    ArrowMarker {
+        bar_idx: usize,
+        price: f64,
+        is_up: bool,
+        color: egui::Color32,
+    },
+    /// Circle/Ellipse between two corner points.
+    Ellipse {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Triangle (3 points).
+    Triangle {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        p3: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Trend Angle (trendline with angle display).
+    TrendAngle {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
 }
 
 /// Trade marker for chart overlay (DARWIN deals, broker fills).
@@ -348,6 +448,39 @@ enum DrawMode {
     PlacingChannelP1,
     PlacingChannelP2 { bar1: usize, price1: f64 },
     PlacingChannelP3 { bar1: usize, price1: f64, bar2: usize, price2: f64 },
+    PlacingExtLineP1,
+    PlacingExtLineP2 { bar1: usize, price1: f64 },
+    PlacingHRay,
+    PlacingCrossLine,
+    PlacingArrowP1,
+    PlacingArrowP2 { bar1: usize, price1: f64 },
+    PlacingInfoLineP1,
+    PlacingInfoLineP2 { bar1: usize, price1: f64 },
+    PlacingPitchforkP1,
+    PlacingPitchforkP2 { bar1: usize, price1: f64 },
+    PlacingPitchforkP3 { bar1: usize, price1: f64, bar2: usize, price2: f64 },
+    PlacingFiboExtP1,
+    PlacingFiboExtP2 { bar1: usize, price1: f64 },
+    PlacingFiboExtP3 { bar1: usize, price1: f64, bar2: usize, price2: f64 },
+    PlacingGannFan,
+    PlacingLongPosP1,
+    PlacingLongPosP2 { bar1: usize, entry: f64 },
+    PlacingLongPosP3 { bar1: usize, entry: f64, stop: f64 },
+    PlacingShortPosP1,
+    PlacingShortPosP2 { bar1: usize, entry: f64 },
+    PlacingShortPosP3 { bar1: usize, entry: f64, stop: f64 },
+    PlacingPriceRangeP1,
+    PlacingPriceRangeP2 { bar1: usize, price1: f64 },
+    PlacingTextLabel,
+    PlacingArrowMarkerUp,
+    PlacingArrowMarkerDown,
+    PlacingEllipseP1,
+    PlacingEllipseP2 { bar1: usize, price1: f64 },
+    PlacingTriangleP1,
+    PlacingTriangleP2 { bar1: usize, price1: f64 },
+    PlacingTriangleP3 { bar1: usize, price1: f64, bar2: usize, price2: f64 },
+    PlacingTrendAngleP1,
+    PlacingTrendAngleP2 { bar1: usize, price1: f64 },
 }
 
 // ─── Ichimoku data ───────────────────────────────────────────────────────────
@@ -5198,10 +5331,257 @@ fn draw_chart(
                     let y2b = price_to_y(p2.1 + width);
                     painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
                     painter.line_segment([egui::pos2(x1, y1b), egui::pos2(x2, y2b)], egui::Stroke::new(1.0, *color));
-                    // Fill between
                     let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 20);
                     let poly = vec![egui::pos2(x1, y1), egui::pos2(x2, y2), egui::pos2(x2, y2b), egui::pos2(x1, y1b)];
                     painter.add(egui::Shape::convex_polygon(poly, fill, egui::Stroke::NONE));
+                }
+            }
+            Drawing::ExtendedLine { p1, p2, color } => {
+                // Extend line infinitely in both directions across visible chart
+                if p1.0 != p2.0 {
+                    let slope = (p2.1 - p1.1) / (p2.0 as f64 - p1.0 as f64);
+                    let price_at_start = p1.1 + slope * (start_idx as f64 - p1.0 as f64);
+                    let price_at_end = p1.1 + slope * (end_idx as f64 - p1.0 as f64);
+                    let y1 = price_to_y(price_at_start);
+                    let y2 = price_to_y(price_at_end);
+                    painter.line_segment([egui::pos2(chart_rect.left(), y1), egui::pos2(chart_rect.right(), y2)], egui::Stroke::new(1.5, *color));
+                }
+            }
+            Drawing::HRay { bar_idx, price, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    painter.line_segment([egui::pos2(x, y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, *color));
+                } else if *bar_idx < start_idx {
+                    // Bar is to the left of visible range — still draw across full width
+                    let y = price_to_y(*price);
+                    painter.line_segment([egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, *color));
+                }
+            }
+            Drawing::CrossLine { bar_idx, price, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    painter.line_segment([egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom())], egui::Stroke::new(1.0, *color));
+                    painter.line_segment([egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, *color));
+                }
+            }
+            Drawing::ArrowLine { p1, p2, color } => {
+                let x1 = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2 = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1, x2) {
+                    let y1 = price_to_y(p1.1);
+                    let y2 = price_to_y(p2.1);
+                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                    // Arrowhead at p2
+                    let dx = x2 - x1; let dy = y2 - y1;
+                    let len = (dx * dx + dy * dy).sqrt().max(1.0);
+                    let ux = dx / len; let uy = dy / len;
+                    let sz = 8.0_f32;
+                    let ax = x2 - ux * sz + uy * sz * 0.4;
+                    let ay = y2 - uy * sz - ux * sz * 0.4;
+                    let bx = x2 - ux * sz - uy * sz * 0.4;
+                    let by = y2 - uy * sz + ux * sz * 0.4;
+                    painter.add(egui::Shape::convex_polygon(vec![egui::pos2(x2, y2), egui::pos2(ax, ay), egui::pos2(bx, by)], *color, egui::Stroke::NONE));
+                }
+            }
+            Drawing::InfoLine { p1, p2, color } => {
+                let x1 = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2 = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1, x2) {
+                    let y1 = price_to_y(p1.1);
+                    let y2 = price_to_y(p2.1);
+                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.0, *color));
+                    // Info label: distance, percent, bars
+                    let dist = p2.1 - p1.1;
+                    let pct = if p1.1.abs() > f64::EPSILON { dist / p1.1 * 100.0 } else { 0.0 };
+                    let bar_count = if p2.0 > p1.0 { p2.0 - p1.0 } else { p1.0 - p2.0 };
+                    let label = format!("{:.2} ({:+.2}%) {} bars", dist, pct, bar_count);
+                    let mid_x = (x1 + x2) / 2.0;
+                    let mid_y = (y1 + y2) / 2.0 - 12.0;
+                    painter.text(egui::pos2(mid_x, mid_y), egui::Align2::CENTER_BOTTOM, &label, egui::FontId::monospace(10.0), *color);
+                }
+            }
+            Drawing::Pitchfork { pivot, p2, p3, color } => {
+                // Andrews Pitchfork: median line from pivot to midpoint(p2,p3), parallel upper/lower
+                let to_x = |idx: usize| -> Option<f32> {
+                    if idx >= start_idx && idx < end_idx { Some(chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w) } else { None }
+                };
+                if let (Some(xp), Some(x2), Some(x3)) = (to_x(pivot.0), to_x(p2.0), to_x(p3.0)) {
+                    let yp = price_to_y(pivot.1);
+                    let y2 = price_to_y(p2.1);
+                    let y3 = price_to_y(p3.1);
+                    let mid_x = (x2 + x3) / 2.0;
+                    let mid_y = (y2 + y3) / 2.0;
+                    // Median line (extended to chart edge)
+                    let dx = mid_x - xp; let dy = mid_y - yp;
+                    let ext = if dx.abs() > 0.1 { (chart_rect.right() - xp) / dx } else { 1.0 };
+                    let end_x = xp + dx * ext; let end_y = yp + dy * ext;
+                    painter.line_segment([egui::pos2(xp, yp), egui::pos2(end_x, end_y)], egui::Stroke::new(1.5, *color));
+                    // Upper line (through p2, parallel to median)
+                    let ux = x2 + dx * ext; let uy = y2 + dy * ext;
+                    painter.line_segment([egui::pos2(x2, y2), egui::pos2(ux.min(chart_rect.right()), uy)], egui::Stroke::new(1.0, *color));
+                    // Lower line (through p3, parallel to median)
+                    let lx = x3 + dx * ext; let ly = y3 + dy * ext;
+                    painter.line_segment([egui::pos2(x3, y3), egui::pos2(lx.min(chart_rect.right()), ly)], egui::Stroke::new(1.0, *color));
+                }
+            }
+            Drawing::FiboExtension { p1, p2, p3, color } => {
+                let to_x = |idx: usize| -> Option<f32> {
+                    if idx >= start_idx && idx < end_idx { Some(chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w) } else { None }
+                };
+                if let Some(x3) = to_x(p3.0) {
+                    let range = (p2.1 - p1.1).abs();
+                    let base = p3.1;
+                    let dir = if p2.1 > p1.1 { 1.0 } else { -1.0 };
+                    let levels = [0.0, 0.618, 1.0, 1.272, 1.618, 2.0, 2.618];
+                    let names = ["0%", "61.8%", "100%", "127.2%", "161.8%", "200%", "261.8%"];
+                    for (i, &lvl) in levels.iter().enumerate() {
+                        let price = base + dir * range * lvl;
+                        let y = price_to_y(price);
+                        if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                            let alpha = if lvl == 1.0 || lvl == 1.618 { 180 } else { 100 };
+                            let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
+                            painter.line_segment([egui::pos2(x3, y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, c));
+                            painter.text(egui::pos2(chart_rect.right() - 60.0, y - 10.0), egui::Align2::LEFT_BOTTOM, names[i], egui::FontId::monospace(9.0), c);
+                        }
+                    }
+                }
+            }
+            Drawing::GannFan { origin, scale, color } => {
+                if origin.0 >= start_idx && origin.0 < end_idx {
+                    let ox = chart_rect.left() + ((origin.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let oy = price_to_y(origin.1);
+                    // Gann angles: 1×8, 1×4, 1×3, 1×2, 1×1, 2×1, 3×1, 4×1, 8×1
+                    let ratios: &[(f64, &str)] = &[(0.125,"1×8"),(0.25,"1×4"),(0.333,"1×3"),(0.5,"1×2"),(1.0,"1×1"),(2.0,"2×1"),(3.0,"3×1"),(4.0,"4×1"),(8.0,"8×1")];
+                    for &(ratio, label) in ratios {
+                        let bars_to_edge = ((chart_rect.right() - ox) / bar_w) as f64;
+                        let end_price = origin.1 + scale * ratio * bars_to_edge;
+                        let end_y = price_to_y(end_price);
+                        let alpha = if ratio == 1.0 { 200 } else { 100 };
+                        let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
+                        let w = if ratio == 1.0 { 1.5 } else { 0.8 };
+                        painter.line_segment([egui::pos2(ox, oy), egui::pos2(chart_rect.right(), end_y)], egui::Stroke::new(w, c));
+                        painter.text(egui::pos2(chart_rect.right() - 2.0, end_y), egui::Align2::RIGHT_CENTER, label, egui::FontId::monospace(8.0), c);
+                        // Downward mirror
+                        let dn_price = origin.1 - scale * ratio * bars_to_edge;
+                        let dn_y = price_to_y(dn_price);
+                        painter.line_segment([egui::pos2(ox, oy), egui::pos2(chart_rect.right(), dn_y)], egui::Stroke::new(w, c));
+                    }
+                }
+            }
+            Drawing::LongPosition { entry, stop, target } => {
+                if entry.0 >= start_idx && entry.0 < end_idx {
+                    let x = chart_rect.left() + ((entry.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let ye = price_to_y(entry.1);
+                    let ys = price_to_y(*stop);
+                    let yt = price_to_y(*target);
+                    let w = (chart_rect.right() - x).min(200.0);
+                    // Stop zone (red)
+                    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(x, ye), egui::pos2(x + w, ys)), 0.0, egui::Color32::from_rgba_premultiplied(220, 40, 40, 30));
+                    // Target zone (green)
+                    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(x, yt), egui::pos2(x + w, ye)), 0.0, egui::Color32::from_rgba_premultiplied(0, 200, 80, 30));
+                    // Entry line
+                    painter.line_segment([egui::pos2(x, ye), egui::pos2(x + w, ye)], egui::Stroke::new(1.5, egui::Color32::WHITE));
+                    // R:R label
+                    let risk = (entry.1 - stop).abs();
+                    let reward = (target - entry.1).abs();
+                    let rr = if risk > f64::EPSILON { reward / risk } else { 0.0 };
+                    painter.text(egui::pos2(x + w + 4.0, ye), egui::Align2::LEFT_CENTER, &format!("R:R {:.1}", rr), egui::FontId::monospace(10.0), egui::Color32::WHITE);
+                }
+            }
+            Drawing::ShortPosition { entry, stop, target } => {
+                if entry.0 >= start_idx && entry.0 < end_idx {
+                    let x = chart_rect.left() + ((entry.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let ye = price_to_y(entry.1);
+                    let ys = price_to_y(*stop);
+                    let yt = price_to_y(*target);
+                    let w = (chart_rect.right() - x).min(200.0);
+                    // Stop zone (red, above entry for short)
+                    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(x, ys), egui::pos2(x + w, ye)), 0.0, egui::Color32::from_rgba_premultiplied(220, 40, 40, 30));
+                    // Target zone (green, below entry for short)
+                    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(x, ye), egui::pos2(x + w, yt)), 0.0, egui::Color32::from_rgba_premultiplied(0, 200, 80, 30));
+                    painter.line_segment([egui::pos2(x, ye), egui::pos2(x + w, ye)], egui::Stroke::new(1.5, egui::Color32::WHITE));
+                    let risk = (stop - entry.1).abs();
+                    let reward = (entry.1 - target).abs();
+                    let rr = if risk > f64::EPSILON { reward / risk } else { 0.0 };
+                    painter.text(egui::pos2(x + w + 4.0, ye), egui::Align2::LEFT_CENTER, &format!("R:R {:.1}", rr), egui::FontId::monospace(10.0), egui::Color32::WHITE);
+                }
+            }
+            Drawing::PriceRange { p1, p2 } => {
+                let x1 = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2 = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1, x2) {
+                    let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
+                    let fill = egui::Color32::from_rgba_premultiplied(100, 150, 255, 20);
+                    painter.rect_filled(egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2)), 0.0, fill);
+                    let dist = p2.1 - p1.1;
+                    let pct = if p1.1.abs() > f64::EPSILON { dist / p1.1 * 100.0 } else { 0.0 };
+                    let bars = if p2.0 > p1.0 { p2.0 - p1.0 } else { p1.0 - p2.0 };
+                    let label = format!("{:.2} ({:+.2}%) {} bars", dist, pct, bars);
+                    painter.text(egui::pos2((x1 + x2) / 2.0, y1.min(y2) - 4.0), egui::Align2::CENTER_BOTTOM, &label, egui::FontId::monospace(10.0), egui::Color32::from_rgb(100, 150, 255));
+                }
+            }
+            Drawing::TextLabel { bar_idx, price, text, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    painter.text(egui::pos2(x, y), egui::Align2::CENTER_CENTER, text, egui::FontId::monospace(11.0), *color);
+                }
+            }
+            Drawing::ArrowMarker { bar_idx, price, is_up, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    let sz = 8.0_f32;
+                    if *is_up {
+                        let pts = vec![egui::pos2(x, y - sz), egui::pos2(x - sz * 0.6, y + sz * 0.3), egui::pos2(x + sz * 0.6, y + sz * 0.3)];
+                        painter.add(egui::Shape::convex_polygon(pts, *color, egui::Stroke::NONE));
+                    } else {
+                        let pts = vec![egui::pos2(x, y + sz), egui::pos2(x - sz * 0.6, y - sz * 0.3), egui::pos2(x + sz * 0.6, y - sz * 0.3)];
+                        painter.add(egui::Shape::convex_polygon(pts, *color, egui::Stroke::NONE));
+                    }
+                }
+            }
+            Drawing::Ellipse { p1, p2, color } => {
+                let x1 = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2 = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1, x2) {
+                    let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
+                    let cx = (x1 + x2) / 2.0; let cy = (y1 + y2) / 2.0;
+                    let rx = (x2 - x1).abs() / 2.0; let ry = (y2 - y1).abs() / 2.0;
+                    let n_pts = 48;
+                    let pts: Vec<egui::Pos2> = (0..n_pts).map(|i| {
+                        let a = 2.0 * std::f32::consts::PI * i as f32 / n_pts as f32;
+                        egui::pos2(cx + rx * a.cos(), cy + ry * a.sin())
+                    }).collect();
+                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 20);
+                    painter.add(egui::Shape::convex_polygon(pts, fill, egui::Stroke::new(1.0, *color)));
+                }
+            }
+            Drawing::Triangle { p1, p2, p3, color } => {
+                let to_pt = |idx: usize, price: f64| -> Option<egui::Pos2> {
+                    if idx >= start_idx && idx < end_idx {
+                        let x = chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w;
+                        Some(egui::pos2(x, price_to_y(price)))
+                    } else { None }
+                };
+                if let (Some(a), Some(b), Some(c)) = (to_pt(p1.0, p1.1), to_pt(p2.0, p2.1), to_pt(p3.0, p3.1)) {
+                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 20);
+                    painter.add(egui::Shape::convex_polygon(vec![a, b, c], fill, egui::Stroke::new(1.0, *color)));
+                }
+            }
+            Drawing::TrendAngle { p1, p2, color } => {
+                let x1 = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2 = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1, x2) {
+                    let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
+                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                    // Angle display
+                    let dx = x2 - x1; let dy = y2 - y1;
+                    let angle_deg = (dy / dx).atan().to_degrees();
+                    painter.text(egui::pos2((x1 + x2) / 2.0, (y1 + y2) / 2.0 - 12.0), egui::Align2::CENTER_BOTTOM,
+                        &format!("{:.1}°", angle_deg), egui::FontId::monospace(10.0), *color);
                 }
             }
         }
@@ -17982,27 +18362,52 @@ impl eframe::App for TyphooNApp {
                     let drawing_count = self.charts.get(self.active_tab).map(|c| c.drawings.len()).unwrap_or(0);
 
                     // ── Lines group ──
-                    let lines_active = matches!(dm, DrawMode::PlacingHLine | DrawMode::PlacingVLine | DrawMode::PlacingTrendP1 | DrawMode::PlacingTrendP2 { .. });
-                    ui.menu_button(egui::RichText::new("Lines").small().color(if lines_active { active_col } else { normal_col }), |ui| {
+                    ui.menu_button(egui::RichText::new("Lines").small().color(normal_col), |ui| {
                         if ui.button("─  Horizontal Line").clicked() { self.draw_mode = DrawMode::PlacingHLine; ui.close(); }
                         if ui.button("│  Vertical Line").clicked() { self.draw_mode = DrawMode::PlacingVLine; ui.close(); }
-                        if ui.button("╲  Trendline (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingTrendP1; ui.close(); }
-                        if ui.button("╱  Ray (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingRayP1; ui.close(); }
+                        if ui.button("╲  Trendline").clicked() { self.draw_mode = DrawMode::PlacingTrendP1; ui.close(); }
+                        if ui.button("╱  Ray").clicked() { self.draw_mode = DrawMode::PlacingRayP1; ui.close(); }
+                        if ui.button("↔  Extended Line").clicked() { self.draw_mode = DrawMode::PlacingExtLineP1; ui.close(); }
+                        if ui.button("→  Horizontal Ray").clicked() { self.draw_mode = DrawMode::PlacingHRay; ui.close(); }
+                        if ui.button("+  Cross Line").clicked() { self.draw_mode = DrawMode::PlacingCrossLine; ui.close(); }
+                        if ui.button("➤  Arrow Line").clicked() { self.draw_mode = DrawMode::PlacingArrowP1; ui.close(); }
+                        if ui.button("ℹ  Info Line").clicked() { self.draw_mode = DrawMode::PlacingInfoLineP1; ui.close(); }
+                        if ui.button("∠  Trend Angle").clicked() { self.draw_mode = DrawMode::PlacingTrendAngleP1; ui.close(); }
+                    });
+                    ui.separator();
+
+                    // ── Gann & Fib group ──
+                    ui.menu_button(egui::RichText::new("Fib/Gann").small().color(normal_col), |ui| {
+                        if ui.button("Fib Retracement").clicked() { self.draw_mode = DrawMode::PlacingFiboP1; ui.close(); }
+                        if ui.button("Fib Extension (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingFiboExtP1; ui.close(); }
+                        if ui.button("Andrews Pitchfork (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingPitchforkP1; ui.close(); }
+                        if ui.button("Gann Fan").clicked() { self.draw_mode = DrawMode::PlacingGannFan; ui.close(); }
                     });
                     ui.separator();
 
                     // ── Shapes group ──
-                    let shapes_active = matches!(dm, DrawMode::PlacingRectP1 | DrawMode::PlacingRectP2 { .. } | DrawMode::PlacingChannelP1 | DrawMode::PlacingChannelP2 { .. } | DrawMode::PlacingChannelP3 { .. });
-                    ui.menu_button(egui::RichText::new("Shapes").small().color(if shapes_active { active_col } else { normal_col }), |ui| {
-                        if ui.button("▭  Rectangle (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingRectP1; ui.close(); }
+                    ui.menu_button(egui::RichText::new("Shapes").small().color(normal_col), |ui| {
+                        if ui.button("▭  Rectangle").clicked() { self.draw_mode = DrawMode::PlacingRectP1; ui.close(); }
                         if ui.button("═  Channel (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingChannelP1; ui.close(); }
+                        if ui.button("◯  Ellipse").clicked() { self.draw_mode = DrawMode::PlacingEllipseP1; ui.close(); }
+                        if ui.button("△  Triangle (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingTriangleP1; ui.close(); }
                     });
                     ui.separator();
 
-                    // ── Fibo group ──
-                    let fibo_active = matches!(dm, DrawMode::PlacingFiboP1 | DrawMode::PlacingFiboP2 { .. });
-                    let fibo_label = egui::RichText::new("Fibo").small().color(if fibo_active { active_col } else { normal_col });
-                    if ui.add(egui::Button::new(fibo_label).frame(false)).clicked() { self.draw_mode = DrawMode::PlacingFiboP1; }
+                    // ── Annotations ──
+                    ui.menu_button(egui::RichText::new("Annotate").small().color(normal_col), |ui| {
+                        if ui.button("T  Text Label").clicked() { self.draw_mode = DrawMode::PlacingTextLabel; ui.close(); }
+                        if ui.button("▲  Arrow Up").clicked() { self.draw_mode = DrawMode::PlacingArrowMarkerUp; ui.close(); }
+                        if ui.button("▼  Arrow Down").clicked() { self.draw_mode = DrawMode::PlacingArrowMarkerDown; ui.close(); }
+                    });
+                    ui.separator();
+
+                    // ── Trading ──
+                    ui.menu_button(egui::RichText::new("Trade").small().color(normal_col), |ui| {
+                        if ui.button("Long Position (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingLongPosP1; ui.close(); }
+                        if ui.button("Short Position (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingShortPosP1; ui.close(); }
+                        if ui.button("Price Range (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingPriceRangeP1; ui.close(); }
+                    });
                     ui.separator();
 
                     // ── Manage group ──
@@ -18023,17 +18428,50 @@ impl eframe::App for TyphooNApp {
                         let mode_name = match dm {
                             DrawMode::PlacingHLine => "H-Line: click to place",
                             DrawMode::PlacingVLine => "V-Line: click to place",
-                            DrawMode::PlacingTrendP1 => "Trendline: click start point",
-                            DrawMode::PlacingTrendP2 { .. } => "Trendline: click end point",
+                            DrawMode::PlacingTrendP1 => "Trendline: click start",
+                            DrawMode::PlacingTrendP2 { .. } => "Trendline: click end",
                             DrawMode::PlacingRayP1 => "Ray: click origin",
                             DrawMode::PlacingRayP2 { .. } => "Ray: click direction",
-                            DrawMode::PlacingRectP1 => "Rectangle: click corner 1",
-                            DrawMode::PlacingRectP2 { .. } => "Rectangle: click corner 2",
-                            DrawMode::PlacingChannelP1 => "Channel: click point 1",
-                            DrawMode::PlacingChannelP2 { .. } => "Channel: click point 2",
+                            DrawMode::PlacingRectP1 => "Rect: click corner 1",
+                            DrawMode::PlacingRectP2 { .. } => "Rect: click corner 2",
+                            DrawMode::PlacingChannelP1 => "Channel: click P1",
+                            DrawMode::PlacingChannelP2 { .. } => "Channel: click P2",
                             DrawMode::PlacingChannelP3 { .. } => "Channel: click width",
-                            DrawMode::PlacingFiboP1 => "Fibo: click high/low",
-                            DrawMode::PlacingFiboP2 { .. } => "Fibo: click other end",
+                            DrawMode::PlacingFiboP1 => "Fib: click start",
+                            DrawMode::PlacingFiboP2 { .. } => "Fib: click end",
+                            DrawMode::PlacingExtLineP1 => "Ext Line: click P1",
+                            DrawMode::PlacingExtLineP2 { .. } => "Ext Line: click P2",
+                            DrawMode::PlacingHRay => "H-Ray: click to place",
+                            DrawMode::PlacingCrossLine => "Cross: click to place",
+                            DrawMode::PlacingArrowP1 => "Arrow: click start",
+                            DrawMode::PlacingArrowP2 { .. } => "Arrow: click end",
+                            DrawMode::PlacingInfoLineP1 => "Info: click start",
+                            DrawMode::PlacingInfoLineP2 { .. } => "Info: click end",
+                            DrawMode::PlacingPitchforkP1 => "Pitchfork: click pivot",
+                            DrawMode::PlacingPitchforkP2 { .. } => "Pitchfork: click P2",
+                            DrawMode::PlacingPitchforkP3 { .. } => "Pitchfork: click P3",
+                            DrawMode::PlacingFiboExtP1 => "Fib Ext: click P1",
+                            DrawMode::PlacingFiboExtP2 { .. } => "Fib Ext: click P2",
+                            DrawMode::PlacingFiboExtP3 { .. } => "Fib Ext: click P3",
+                            DrawMode::PlacingGannFan => "Gann: click origin",
+                            DrawMode::PlacingLongPosP1 => "Long: click entry",
+                            DrawMode::PlacingLongPosP2 { .. } => "Long: click stop",
+                            DrawMode::PlacingLongPosP3 { .. } => "Long: click target",
+                            DrawMode::PlacingShortPosP1 => "Short: click entry",
+                            DrawMode::PlacingShortPosP2 { .. } => "Short: click stop",
+                            DrawMode::PlacingShortPosP3 { .. } => "Short: click target",
+                            DrawMode::PlacingPriceRangeP1 => "Range: click P1",
+                            DrawMode::PlacingPriceRangeP2 { .. } => "Range: click P2",
+                            DrawMode::PlacingTextLabel => "Text: click to place",
+                            DrawMode::PlacingArrowMarkerUp => "Arrow Up: click",
+                            DrawMode::PlacingArrowMarkerDown => "Arrow Down: click",
+                            DrawMode::PlacingEllipseP1 => "Ellipse: click corner 1",
+                            DrawMode::PlacingEllipseP2 { .. } => "Ellipse: click corner 2",
+                            DrawMode::PlacingTriangleP1 => "Triangle: click P1",
+                            DrawMode::PlacingTriangleP2 { .. } => "Triangle: click P2",
+                            DrawMode::PlacingTriangleP3 { .. } => "Triangle: click P3",
+                            DrawMode::PlacingTrendAngleP1 => "Angle: click start",
+                            DrawMode::PlacingTrendAngleP2 { .. } => "Angle: click end",
                             DrawMode::None => "",
                         };
                         ui.label(egui::RichText::new(mode_name).small().color(active_col));
@@ -18467,6 +18905,129 @@ impl eframe::App for TyphooNApp {
                                             p1: (bar1, price1), p2: (bar2, price2), width,
                                             color: egui::Color32::from_rgb(150, 200, 100),
                                         });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    // ── New drawing tool handlers ──
+                                    DrawMode::PlacingExtLineP1 => {
+                                        self.draw_mode = DrawMode::PlacingExtLineP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingExtLineP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::ExtendedLine { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(180, 180, 200) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingHRay => {
+                                        chart.drawings.push(Drawing::HRay { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(200, 200, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingCrossLine => {
+                                        chart.drawings.push(Drawing::CrossLine { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(180, 180, 200) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingArrowP1 => {
+                                        self.draw_mode = DrawMode::PlacingArrowP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingArrowP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::ArrowLine { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 200, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingInfoLineP1 => {
+                                        self.draw_mode = DrawMode::PlacingInfoLineP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingInfoLineP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::InfoLine { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingPitchforkP1 => {
+                                        self.draw_mode = DrawMode::PlacingPitchforkP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingPitchforkP2 { bar1, price1 } => {
+                                        self.draw_mode = DrawMode::PlacingPitchforkP3 { bar1, price1, bar2: abs_idx, price2: price };
+                                    }
+                                    DrawMode::PlacingPitchforkP3 { bar1, price1, bar2, price2 } => {
+                                        chart.drawings.push(Drawing::Pitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingFiboExtP1 => {
+                                        self.draw_mode = DrawMode::PlacingFiboExtP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingFiboExtP2 { bar1, price1 } => {
+                                        self.draw_mode = DrawMode::PlacingFiboExtP3 { bar1, price1, bar2: abs_idx, price2: price };
+                                    }
+                                    DrawMode::PlacingFiboExtP3 { bar1, price1, bar2, price2 } => {
+                                        chart.drawings.push(Drawing::FiboExtension { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(255, 200, 50) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingGannFan => {
+                                        // Scale = visible price range / visible bars (1×1 angle baseline)
+                                        let (si, ei) = chart.visible_range();
+                                        let vis = &chart.bars[si..ei];
+                                        let hi = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                                        let lo = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                                        let scale = if vis.len() > 1 { (hi - lo) / vis.len() as f64 } else { 1.0 };
+                                        chart.drawings.push(Drawing::GannFan { origin: (abs_idx, price), scale, color: egui::Color32::from_rgb(200, 150, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingLongPosP1 => {
+                                        self.draw_mode = DrawMode::PlacingLongPosP2 { bar1: abs_idx, entry: price };
+                                    }
+                                    DrawMode::PlacingLongPosP2 { bar1, entry } => {
+                                        self.draw_mode = DrawMode::PlacingLongPosP3 { bar1, entry, stop: price };
+                                    }
+                                    DrawMode::PlacingLongPosP3 { bar1, entry, stop } => {
+                                        chart.drawings.push(Drawing::LongPosition { entry: (bar1, entry), stop, target: price });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingShortPosP1 => {
+                                        self.draw_mode = DrawMode::PlacingShortPosP2 { bar1: abs_idx, entry: price };
+                                    }
+                                    DrawMode::PlacingShortPosP2 { bar1, entry } => {
+                                        self.draw_mode = DrawMode::PlacingShortPosP3 { bar1, entry, stop: price };
+                                    }
+                                    DrawMode::PlacingShortPosP3 { bar1, entry, stop } => {
+                                        chart.drawings.push(Drawing::ShortPosition { entry: (bar1, entry), stop, target: price });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingPriceRangeP1 => {
+                                        self.draw_mode = DrawMode::PlacingPriceRangeP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingPriceRangeP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::PriceRange { p1: (bar1, price1), p2: (abs_idx, price) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingTextLabel => {
+                                        chart.drawings.push(Drawing::TextLabel { bar_idx: abs_idx, price, text: "Label".to_string(), color: egui::Color32::WHITE });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingArrowMarkerUp => {
+                                        chart.drawings.push(Drawing::ArrowMarker { bar_idx: abs_idx, price, is_up: true, color: egui::Color32::from_rgb(0, 200, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingArrowMarkerDown => {
+                                        chart.drawings.push(Drawing::ArrowMarker { bar_idx: abs_idx, price, is_up: false, color: egui::Color32::from_rgb(220, 50, 50) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingEllipseP1 => {
+                                        self.draw_mode = DrawMode::PlacingEllipseP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingEllipseP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::Ellipse { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgba_premultiplied(100, 150, 255, 40) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingTriangleP1 => {
+                                        self.draw_mode = DrawMode::PlacingTriangleP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingTriangleP2 { bar1, price1 } => {
+                                        self.draw_mode = DrawMode::PlacingTriangleP3 { bar1, price1, bar2: abs_idx, price2: price };
+                                    }
+                                    DrawMode::PlacingTriangleP3 { bar1, price1, bar2, price2 } => {
+                                        chart.drawings.push(Drawing::Triangle { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgba_premultiplied(100, 200, 150, 40) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingTrendAngleP1 => {
+                                        self.draw_mode = DrawMode::PlacingTrendAngleP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingTrendAngleP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::TrendAngle { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 200, 100) });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::None => {}
