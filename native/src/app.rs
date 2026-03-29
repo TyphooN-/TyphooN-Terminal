@@ -414,6 +414,14 @@ struct IndicatorFlags {
     ehlers_decycler: bool,
     ehlers_itl: bool,
     ehlers_mama: bool,
+    sessions: bool,
+    vol_heatmap: bool,
+    vwap: bool,
+    price_histogram: bool,
+    supertrend: bool,
+    donchian: bool,
+    keltner: bool,
+    regression: bool,
 }
 
 /// All state for one chart viewport.
@@ -530,6 +538,40 @@ struct ChartState {
     auto_fib_levels: Vec<(f64, String, bool)>,
     /// Auto Fibonacci swing: (swing_high_price, swing_low_price, swing_high_idx, swing_low_idx).
     auto_fib_swing: Option<(f64, f64, usize, usize)>,
+    /// VWAP (volume-weighted average price), anchored daily.
+    vwap: Vec<Option<f64>>,
+    /// VWAP upper deviation bands (1σ, 2σ, 3σ).
+    vwap_upper1: Vec<Option<f64>>,
+    vwap_upper2: Vec<Option<f64>>,
+    vwap_upper3: Vec<Option<f64>>,
+    /// VWAP lower deviation bands (1σ, 2σ, 3σ).
+    vwap_lower1: Vec<Option<f64>>,
+    vwap_lower2: Vec<Option<f64>>,
+    vwap_lower3: Vec<Option<f64>>,
+    /// Supertrend line (ATR-based trend bands, single line that flips).
+    supertrend: Vec<Option<f64>>,
+    /// Supertrend direction: true = bullish (below price), false = bearish (above).
+    supertrend_bull: Vec<bool>,
+    /// Donchian Channel upper (highest high over N bars).
+    donchian_upper: Vec<Option<f64>>,
+    /// Donchian Channel lower (lowest low over N bars).
+    donchian_lower: Vec<Option<f64>>,
+    /// Keltner Channel middle (EMA).
+    keltner_mid: Vec<Option<f64>>,
+    /// Keltner Channel upper (EMA + ATR×mult).
+    keltner_upper: Vec<Option<f64>>,
+    /// Keltner Channel lower (EMA - ATR×mult).
+    keltner_lower: Vec<Option<f64>>,
+    /// Regression Channel middle (regression line).
+    regression_mid: Vec<Option<f64>>,
+    /// Regression Channel upper (regression + 2σ).
+    regression_upper: Vec<Option<f64>>,
+    /// Regression Channel lower (regression - 2σ).
+    regression_lower: Vec<Option<f64>>,
+    /// Squeeze Momentum: momentum histogram value.
+    squeeze_mom: Vec<Option<f64>>,
+    /// Squeeze state: true = in squeeze (BB inside KC).
+    squeeze_on: Vec<bool>,
     /// MultiKAMA: KAMA values from higher timeframes projected onto this chart's x-axis.
     /// Each entry: (timeframe_label, Vec of (bar_index_in_this_chart, kama_value))
     multi_kama: Vec<(String, Vec<(usize, f64)>)>,
@@ -632,6 +674,25 @@ impl ChartState {
             demand_zones: Vec::new(),
             auto_fib_levels: Vec::new(),
             auto_fib_swing: None,
+            supertrend: Vec::new(),
+            supertrend_bull: Vec::new(),
+            donchian_upper: Vec::new(),
+            donchian_lower: Vec::new(),
+            keltner_mid: Vec::new(),
+            keltner_upper: Vec::new(),
+            keltner_lower: Vec::new(),
+            regression_mid: Vec::new(),
+            regression_upper: Vec::new(),
+            regression_lower: Vec::new(),
+            squeeze_mom: Vec::new(),
+            squeeze_on: Vec::new(),
+            vwap: Vec::new(),
+            vwap_upper1: Vec::new(),
+            vwap_upper2: Vec::new(),
+            vwap_upper3: Vec::new(),
+            vwap_lower1: Vec::new(),
+            vwap_lower2: Vec::new(),
+            vwap_lower3: Vec::new(),
             multi_kama: Vec::new(),
             harmonics: Vec::new(),
             drawings: Vec::new(),
@@ -913,7 +974,7 @@ impl ChartState {
 
                 // RSI — sequential GPU
                 if let Some(data) = gpu.compute_rsi_gpu(14) {
-                    self.rsi = data.iter().map(|&v| Some(v as f64)).collect();
+                    self.rsi = data.iter().enumerate().map(|(i, &v)| if i <= 14 || v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.rsi = compute_rsi(&self.bars, 14); }
 
                 // Fisher — sequential GPU (uses midpoints)
@@ -937,15 +998,20 @@ impl ChartState {
                     self.atr = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.atr = compute_atr(&self.bars, 14); }
 
-                // MACD — sequential GPU
+                // MACD — sequential GPU (warmup: 26 bars for EMA26, +9 for signal)
                 if let Some(data) = gpu.compute_macd_gpu() {
                     let mut ml = Vec::with_capacity(n);
                     let mut ms = Vec::with_capacity(n);
                     let mut mh = Vec::with_capacity(n);
                     for i in 0..n {
-                        ml.push(Some(data.get(i * 3).copied().unwrap_or(0.0) as f64));
-                        ms.push(Some(data.get(i * 3 + 1).copied().unwrap_or(0.0) as f64));
-                        mh.push(Some(data.get(i * 3 + 2).copied().unwrap_or(0.0) as f64));
+                        let l = data.get(i * 3).copied().unwrap_or(0.0);
+                        let s = data.get(i * 3 + 1).copied().unwrap_or(0.0);
+                        let h = data.get(i * 3 + 2).copied().unwrap_or(0.0);
+                        if i < 26 || (l == 0.0 && s == 0.0 && h == 0.0) {
+                            ml.push(None); ms.push(None); mh.push(None);
+                        } else {
+                            ml.push(Some(l as f64)); ms.push(Some(s as f64)); mh.push(Some(h as f64));
+                        }
                     }
                     self.macd_line = ml; self.macd_signal = ms; self.macd_hist = mh;
                 } else {
@@ -953,13 +1019,17 @@ impl ChartState {
                     self.macd_line = ml; self.macd_signal = ms; self.macd_hist = mh;
                 }
 
-                // Stochastic — sequential GPU (uses OHLC)
+                // Stochastic — sequential GPU (uses OHLC, warmup: 14+3 bars)
                 if let Some(data) = gpu.compute_stochastic_gpu(14) {
                     let mut sk = Vec::with_capacity(n);
                     let mut sd = Vec::with_capacity(n);
                     for i in 0..n {
-                        sk.push(Some(data.get(i * 2).copied().unwrap_or(50.0) as f64));
-                        sd.push(Some(data.get(i * 2 + 1).copied().unwrap_or(50.0) as f64));
+                        if i < 14 {
+                            sk.push(None); sd.push(None);
+                        } else {
+                            sk.push(Some(data.get(i * 2).copied().unwrap_or(50.0) as f64));
+                            sd.push(Some(data.get(i * 2 + 1).copied().unwrap_or(50.0) as f64));
+                        }
                     }
                     self.stoch_k = sk; self.stoch_d = sd;
                 } else {
@@ -967,15 +1037,20 @@ impl ChartState {
                     self.stoch_k = sk; self.stoch_d = sd;
                 }
 
-                // ADX — sequential GPU (uses OHLC)
+                // ADX — sequential GPU (uses OHLC, warmup: 2×period bars)
                 if let Some(data) = gpu.compute_adx_gpu(14) {
                     let mut adx = Vec::with_capacity(n);
                     let mut dip = Vec::with_capacity(n);
                     let mut dim = Vec::with_capacity(n);
                     for i in 0..n {
-                        adx.push(Some(data.get(i * 3).copied().unwrap_or(0.0) as f64));
-                        dip.push(Some(data.get(i * 3 + 1).copied().unwrap_or(0.0) as f64));
-                        dim.push(Some(data.get(i * 3 + 2).copied().unwrap_or(0.0) as f64));
+                        let a = data.get(i * 3).copied().unwrap_or(0.0);
+                        let dp = data.get(i * 3 + 1).copied().unwrap_or(0.0);
+                        let dm = data.get(i * 3 + 2).copied().unwrap_or(0.0);
+                        if i < 28 || (a == 0.0 && dp == 0.0 && dm == 0.0) {
+                            adx.push(None); dip.push(None); dim.push(None);
+                        } else {
+                            adx.push(Some(a as f64)); dip.push(Some(dp as f64)); dim.push(Some(dm as f64));
+                        }
                     }
                     self.adx = adx; self.di_plus = dip; self.di_minus = dim;
                 } else {
@@ -1016,14 +1091,14 @@ impl ChartState {
                     self.hma = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.hma = compute_hma(&self.bars, 20); }
 
-                // CCI — GPU (parallel, from OHLC)
+                // CCI — GPU (parallel, from OHLC, warmup: period bars)
                 if let Some(data) = gpu.compute_cci_gpu(20) {
-                    self.cci = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                    self.cci = data.iter().enumerate().map(|(i, &v)| if i < 20 { None } else { Some(v as f64) }).collect();
                 } else { self.cci = compute_cci(&self.bars, 20); }
 
                 // Williams %R — GPU (parallel, from OHLC)
                 if let Some(data) = gpu.compute_williams_r_gpu(14) {
-                    self.williams_r = data.iter().map(|&v| Some(v as f64)).collect();
+                    self.williams_r = data.iter().enumerate().map(|(i, &v)| if i < 14 { None } else { Some(v as f64) }).collect();
                 } else { self.williams_r = compute_williams_r(&self.bars, 14); }
 
                 // OBV — GPU (sequential, real volume via interleaved [close, vol] buffer)
@@ -1120,10 +1195,25 @@ impl ChartState {
                     self.supply_zones = sz; self.demand_zones = dz;
                 }
                 self.compute_auto_fibonacci(); // CPU (fractal-based swing detection)
+                // VWAP — CPU (daily anchored, inherently sequential)
+                let (vw, vu1, vu2, vu3, vl1, vl2, vl3) = compute_vwap(&self.bars);
+                self.vwap = vw; self.vwap_upper1 = vu1; self.vwap_upper2 = vu2; self.vwap_upper3 = vu3;
+                self.vwap_lower1 = vl1; self.vwap_lower2 = vl2; self.vwap_lower3 = vl3;
+                // Supertrend, Donchian, Keltner — CPU (simple, fast)
+                let (st, st_bull) = compute_supertrend(&self.bars, &self.atr, 10, 3.0);
+                self.supertrend = st; self.supertrend_bull = st_bull;
+                let (du, dl) = compute_donchian(&self.bars, 20);
+                self.donchian_upper = du; self.donchian_lower = dl;
+                let (km, ku, kl) = compute_keltner(&self.bars, 20, 10, 1.5);
+                self.keltner_mid = km; self.keltner_upper = ku; self.keltner_lower = kl;
+                let (rm, ru, rl) = compute_regression_channel(&self.bars, 20);
+                self.regression_mid = rm; self.regression_upper = ru; self.regression_lower = rl;
+                let (sm, sq) = compute_squeeze_momentum(&self.bb_upper, &self.bb_lower, &self.keltner_upper, &self.keltner_lower, &self.bars, 20);
+                self.squeeze_mom = sm; self.squeeze_on = sq;
 
                 // Ehlers Super Smoother — GPU
                 if let Some(data) = gpu.compute_ehlers_ss_gpu(10) {
-                    self.ehlers_ss = data.iter().map(|&v| Some(v as f64)).collect();
+                    self.ehlers_ss = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_ss = ehlers_super_smoother(&self.bars, 10); }
 
                 // Ehlers Decycler — GPU
@@ -1133,7 +1223,7 @@ impl ChartState {
 
                 // Ehlers ITL — GPU
                 if let Some(data) = gpu.compute_ehlers_itl_gpu() {
-                    self.ehlers_itl = data.iter().map(|&v| Some(v as f64)).collect();
+                    self.ehlers_itl = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_itl = ehlers_instantaneous_trendline(&self.bars); }
 
                 // Ehlers MAMA/FAMA — GPU (2 outputs)
@@ -1142,8 +1232,10 @@ impl ChartState {
                     let mut mama = Vec::with_capacity(n);
                     let mut fama = Vec::with_capacity(n);
                     for i in 0..n {
-                        mama.push(Some(data.get(i * 2).copied().unwrap_or(0.0) as f64));
-                        fama.push(Some(data.get(i * 2 + 1).copied().unwrap_or(0.0) as f64));
+                        let m = data.get(i * 2).copied().unwrap_or(0.0);
+                        let f = data.get(i * 2 + 1).copied().unwrap_or(0.0);
+                        if m == 0.0 && f == 0.0 { mama.push(None); fama.push(None); }
+                        else { mama.push(Some(m as f64)); fama.push(Some(f as f64)); }
                     }
                     self.ehlers_mama = mama; self.ehlers_fama = fama;
                 } else {
@@ -1151,14 +1243,14 @@ impl ChartState {
                     self.ehlers_mama = m; self.ehlers_fama = f;
                 }
 
-                // Ehlers EBSW — GPU
+                // Ehlers EBSW — GPU (sub-pane oscillator, 0.0 valid but warmup outputs 0.0)
                 if let Some(data) = gpu.compute_ehlers_ebsw_gpu(40) {
-                    self.ehlers_ebsw = data.iter().map(|&v| Some(v as f64)).collect();
+                    self.ehlers_ebsw = data.iter().enumerate().map(|(i, &v)| if i < 40 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_ebsw = ehlers_even_better_sinewave(&self.bars, 40); }
 
-                // Ehlers Cyber Cycle — GPU
+                // Ehlers Cyber Cycle — GPU (sub-pane oscillator)
                 if let Some(data) = gpu.compute_ehlers_cyber_gpu() {
-                    self.ehlers_cyber = data.iter().map(|&v| Some(v as f64)).collect();
+                    self.ehlers_cyber = data.iter().enumerate().map(|(i, &v)| if i < 7 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_cyber = ehlers_cyber_cycle(&self.bars); }
 
                 // Ehlers CG Oscillator — GPU (parallel)
@@ -1166,9 +1258,9 @@ impl ChartState {
                     self.ehlers_cg = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_cg = ehlers_cg_oscillator(&self.bars, 10); }
 
-                // Ehlers Roofing Filter — GPU
+                // Ehlers Roofing Filter — GPU (sub-pane oscillator)
                 if let Some(data) = gpu.compute_ehlers_roof_gpu(10, 48) {
-                    self.ehlers_roof = data.iter().map(|&v| Some(v as f64)).collect();
+                    self.ehlers_roof = data.iter().enumerate().map(|(i, &v)| if i < 10 { None } else { Some(v as f64) }).collect();
                 } else { self.ehlers_roof = ehlers_roofing_filter(&self.bars, 10, 48); }
                 return;
             }
@@ -1248,6 +1340,21 @@ impl ChartState {
         self.demand_zones = dz;
         // Auto Fibonacci (fractal-based swing detection, matching AutoFibonacci.mqh)
         self.compute_auto_fibonacci();
+        // VWAP (daily anchored)
+        let (vw, vu1, vu2, vu3, vl1, vl2, vl3) = compute_vwap(&self.bars);
+        self.vwap = vw; self.vwap_upper1 = vu1; self.vwap_upper2 = vu2; self.vwap_upper3 = vu3;
+        self.vwap_lower1 = vl1; self.vwap_lower2 = vl2; self.vwap_lower3 = vl3;
+        // Supertrend, Donchian, Keltner
+        let (st, st_bull) = compute_supertrend(&self.bars, &self.atr, 10, 3.0);
+        self.supertrend = st; self.supertrend_bull = st_bull;
+        let (du, dl) = compute_donchian(&self.bars, 20);
+        self.donchian_upper = du; self.donchian_lower = dl;
+        let (km, ku, kl) = compute_keltner(&self.bars, 20, 10, 1.5);
+        self.keltner_mid = km; self.keltner_upper = ku; self.keltner_lower = kl;
+        let (rm, ru, rl) = compute_regression_channel(&self.bars, 20);
+        self.regression_mid = rm; self.regression_upper = ru; self.regression_lower = rl;
+        let (sm, sq) = compute_squeeze_momentum(&self.bb_upper, &self.bb_lower, &self.keltner_upper, &self.keltner_lower, &self.bars, 20);
+        self.squeeze_mom = sm; self.squeeze_on = sq;
         // Ehlers indicators
         self.ehlers_ss = ehlers_super_smoother(&self.bars, 10);
         self.ehlers_decycler = ehlers_decycler(&self.bars, 20);
@@ -1559,7 +1666,7 @@ fn compute_ema(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     out
 }
 
-/// Kaufman Adaptive Moving Average.
+/// Kaufman Adaptive Moving Average — O(n) with rolling volatility sum.
 fn compute_kama(bars: &[Bar], er_period: usize, fast: usize, slow: usize) -> Vec<Option<f64>> {
     let n = bars.len();
     let mut out = vec![None; n];
@@ -1571,12 +1678,18 @@ fn compute_kama(bars: &[Bar], er_period: usize, fast: usize, slow: usize) -> Vec
     let mut kama = bars[er_period].close;
     out[er_period] = Some(kama);
 
+    // Pre-compute absolute price changes
+    let mut changes = vec![0.0_f64; n];
+    for i in 1..n { changes[i] = (bars[i].close - bars[i - 1].close).abs(); }
+
+    // Initial volatility sum for first KAMA bar
+    let mut vol_sum: f64 = changes[1..=er_period].iter().sum();
+
     for i in (er_period + 1)..n {
+        // Rolling volatility: add newest change, remove oldest
+        vol_sum += changes[i] - changes[i - er_period];
         let direction = (bars[i].close - bars[i - er_period].close).abs();
-        let volatility: f64 = (0..er_period)
-            .map(|k| (bars[i - k].close - bars[i - k - 1].close).abs())
-            .sum();
-        let er = if volatility < f64::EPSILON { 0.0 } else { (direction / volatility).clamp(0.0, 1.0) };
+        let er = if vol_sum < f64::EPSILON { 0.0 } else { (direction / vol_sum).clamp(0.0, 1.0) };
         let sc = (er * (fast_sc - slow_sc) + slow_sc).powi(2);
         kama += sc * (bars[i].close - kama);
         out[i] = Some(kama);
@@ -1591,16 +1704,259 @@ fn compute_bollinger(bars: &[Bar], period: usize, mult: f64) -> (Vec<Option<f64>
     let mut lower = vec![None; n];
     if n < period { return (mid, upper, lower); }
 
-    for i in (period - 1)..n {
-        let slice = &bars[(i + 1 - period)..=i];
-        let mean: f64 = slice.iter().map(|b| b.close).sum::<f64>() / period as f64;
-        let variance: f64 = slice.iter().map(|b| (b.close - mean).powi(2)).sum::<f64>() / period as f64;
+    // Rolling sum/sum_sq — O(n) instead of O(n×period)
+    let pf = period as f64;
+    let mut sum: f64 = bars[..period].iter().map(|b| b.close).sum();
+    let mut sum_sq: f64 = bars[..period].iter().map(|b| b.close * b.close).sum();
+
+    let mean = sum / pf;
+    let variance = (sum_sq / pf - mean * mean).max(0.0);
+    let std_dev = variance.sqrt();
+    mid[period - 1] = Some(mean);
+    upper[period - 1] = Some(mean + mult * std_dev);
+    lower[period - 1] = Some(mean - mult * std_dev);
+
+    for i in period..n {
+        let old = bars[i - period].close;
+        let new = bars[i].close;
+        sum += new - old;
+        sum_sq += new * new - old * old;
+        let mean = sum / pf;
+        let variance = (sum_sq / pf - mean * mean).max(0.0);
         let std_dev = variance.sqrt();
         mid[i] = Some(mean);
         upper[i] = Some(mean + mult * std_dev);
         lower[i] = Some(mean - mult * std_dev);
     }
     (mid, upper, lower)
+}
+
+/// VWAP with standard deviation bands, anchored at each new UTC day.
+fn compute_vwap(bars: &[Bar]) -> (Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>) {
+    let n = bars.len();
+    let mut vwap = vec![None; n];
+    let mut u1 = vec![None; n];
+    let mut u2 = vec![None; n];
+    let mut u3 = vec![None; n];
+    let mut l1 = vec![None; n];
+    let mut l2 = vec![None; n];
+    let mut l3 = vec![None; n];
+    if n == 0 { return (vwap, u1, u2, u3, l1, l2, l3); }
+
+    let mut cum_vol = 0.0_f64;
+    let mut cum_tp_vol = 0.0_f64;
+    let mut cum_tp2_vol = 0.0_f64;
+    let mut prev_day = -1i64;
+
+    for i in 0..n {
+        let bar = &bars[i];
+        let day = bar.ts_ms / 1000 / 86400;
+        // Reset on new day
+        if day != prev_day {
+            cum_vol = 0.0;
+            cum_tp_vol = 0.0;
+            cum_tp2_vol = 0.0;
+            prev_day = day;
+        }
+
+        let tp = (bar.high + bar.low + bar.close) / 3.0;
+        let vol = bar.volume.max(1.0); // avoid div-by-zero for zero-volume bars
+        cum_vol += vol;
+        cum_tp_vol += tp * vol;
+        cum_tp2_vol += tp * tp * vol;
+
+        let vw = cum_tp_vol / cum_vol;
+        let variance = (cum_tp2_vol / cum_vol - vw * vw).max(0.0);
+        let sd = variance.sqrt();
+
+        vwap[i] = Some(vw);
+        u1[i] = Some(vw + sd);
+        u2[i] = Some(vw + 2.0 * sd);
+        u3[i] = Some(vw + 3.0 * sd);
+        l1[i] = Some(vw - sd);
+        l2[i] = Some(vw - 2.0 * sd);
+        l3[i] = Some(vw - 3.0 * sd);
+    }
+    (vwap, u1, u2, u3, l1, l2, l3)
+}
+
+/// Supertrend indicator: ATR-based trend following with direction flip.
+fn compute_supertrend(bars: &[Bar], atr: &[Option<f64>], period: usize, multiplier: f64) -> (Vec<Option<f64>>, Vec<bool>) {
+    let n = bars.len();
+    let mut st = vec![None; n];
+    let mut bull = vec![true; n];
+    if n <= period { return (st, bull); }
+
+    let mut upper_band = 0.0_f64;
+    let mut lower_band = 0.0_f64;
+    let mut prev_upper = 0.0_f64;
+    let mut prev_lower = 0.0_f64;
+    let mut prev_st = 0.0_f64;
+    #[allow(unused_assignments)]
+    let mut is_bull = true;
+
+    for i in period..n {
+        let atr_val = atr[i].unwrap_or(0.0);
+        let hl2 = (bars[i].high + bars[i].low) / 2.0;
+        let basic_upper = hl2 + multiplier * atr_val;
+        let basic_lower = hl2 - multiplier * atr_val;
+
+        // Final bands: use previous final band if it's more favorable
+        upper_band = if basic_upper < prev_upper || bars[i - 1].close > prev_upper { basic_upper } else { prev_upper };
+        lower_band = if basic_lower > prev_lower || bars[i - 1].close < prev_lower { basic_lower } else { prev_lower };
+
+        // Direction
+        if prev_st == prev_upper {
+            is_bull = bars[i].close > upper_band;
+        } else {
+            is_bull = bars[i].close >= lower_band;
+        }
+
+        let val = if is_bull { lower_band } else { upper_band };
+        st[i] = Some(val);
+        bull[i] = is_bull;
+        prev_upper = upper_band;
+        prev_lower = lower_band;
+        prev_st = val;
+    }
+    (st, bull)
+}
+
+/// Donchian Channels: highest high / lowest low over N bars. O(n) with deques.
+fn compute_donchian(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
+    let n = bars.len();
+    let mut upper = vec![None; n];
+    let mut lower = vec![None; n];
+    if n < period { return (upper, lower); }
+
+    let mut max_dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    let mut min_dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    for i in 0..n {
+        while max_dq.back().map_or(false, |&j| bars[j].high <= bars[i].high) { max_dq.pop_back(); }
+        max_dq.push_back(i);
+        while max_dq.front().map_or(false, |&j| j + period <= i) { max_dq.pop_front(); }
+        while min_dq.back().map_or(false, |&j| bars[j].low >= bars[i].low) { min_dq.pop_back(); }
+        min_dq.push_back(i);
+        while min_dq.front().map_or(false, |&j| j + period <= i) { min_dq.pop_front(); }
+        if i >= period - 1 {
+            upper[i] = Some(bars[*max_dq.front().unwrap()].high);
+            lower[i] = Some(bars[*min_dq.front().unwrap()].low);
+        }
+    }
+    (upper, lower)
+}
+
+/// Keltner Channels: EMA(20) ± ATR(10) × multiplier.
+fn compute_keltner(bars: &[Bar], ema_period: usize, atr_period: usize, mult: f64) -> (Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>) {
+    let ema = compute_ema(bars, ema_period);
+    let atr = compute_atr(bars, atr_period);
+    let n = bars.len();
+    let mut mid = vec![None; n];
+    let mut upper = vec![None; n];
+    let mut lower = vec![None; n];
+    for i in 0..n {
+        if let (Some(e), Some(a)) = (ema[i], atr[i]) {
+            mid[i] = Some(e);
+            upper[i] = Some(e + mult * a);
+            lower[i] = Some(e - mult * a);
+        }
+    }
+    (mid, upper, lower)
+}
+
+/// Linear Regression Channel: rolling regression ± 2σ standard error bands.
+fn compute_regression_channel(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>) {
+    let n = bars.len();
+    let mut mid = vec![None; n];
+    let mut upper = vec![None; n];
+    let mut lower = vec![None; n];
+    if n < period { return (mid, upper, lower); }
+    let pf = period as f64;
+
+    // Rolling sums for linear regression: Σx, Σy, Σxy, Σx²
+    // x = 0..period-1 (bar position in window), y = close
+    let sx: f64 = (0..period).map(|x| x as f64).sum();       // constant
+    let sx2: f64 = (0..period).map(|x| (x * x) as f64).sum(); // constant
+
+    for i in (period - 1)..n {
+        let start = i + 1 - period;
+        let mut sy = 0.0_f64;
+        let mut sxy = 0.0_f64;
+        for k in 0..period {
+            let y = bars[start + k].close;
+            sy += y;
+            sxy += k as f64 * y;
+        }
+        let denom = pf * sx2 - sx * sx;
+        if denom.abs() < f64::EPSILON { continue; }
+        let slope = (pf * sxy - sx * sy) / denom;
+        let intercept = (sy - slope * sx) / pf;
+
+        // Regression value at current bar (x = period-1)
+        let reg_val = intercept + slope * (period - 1) as f64;
+
+        // Standard error
+        let mut sse = 0.0_f64;
+        for k in 0..period {
+            let predicted = intercept + slope * k as f64;
+            let residual = bars[start + k].close - predicted;
+            sse += residual * residual;
+        }
+        let se = (sse / (pf - 2.0).max(1.0)).sqrt();
+
+        mid[i] = Some(reg_val);
+        upper[i] = Some(reg_val + 2.0 * se);
+        lower[i] = Some(reg_val - 2.0 * se);
+    }
+    (mid, upper, lower)
+}
+
+/// Squeeze Momentum: detect BB inside KC (squeeze), momentum from linear regression.
+fn compute_squeeze_momentum(
+    bb_upper: &[Option<f64>], bb_lower: &[Option<f64>],
+    kc_upper: &[Option<f64>], kc_lower: &[Option<f64>],
+    bars: &[Bar], period: usize,
+) -> (Vec<Option<f64>>, Vec<bool>) {
+    let n = bars.len();
+    let mut mom = vec![None; n];
+    let mut squeeze = vec![false; n];
+
+    // Squeeze: BB inside KC
+    for i in 0..n {
+        if let (Some(bbu), Some(bbl), Some(kcu), Some(kcl)) = (
+            bb_upper.get(i).and_then(|v| *v),
+            bb_lower.get(i).and_then(|v| *v),
+            kc_upper.get(i).and_then(|v| *v),
+            kc_lower.get(i).and_then(|v| *v),
+        ) {
+            squeeze[i] = bbu < kcu && bbl > kcl;
+        }
+    }
+
+    // Momentum: linear regression deviation of close from midline
+    if n >= period {
+        let pf = period as f64;
+        let sx: f64 = (0..period).map(|x| x as f64).sum();
+        let sx2: f64 = (0..period).map(|x| (x * x) as f64).sum();
+        for i in (period - 1)..n {
+            let start = i + 1 - period;
+            // Use close - midline (HL2) for momentum
+            let mut sy = 0.0_f64;
+            let mut sxy = 0.0_f64;
+            for k in 0..period {
+                let mid_hl = (bars[start + k].high + bars[start + k].low) / 2.0;
+                let val = bars[start + k].close - mid_hl;
+                sy += val;
+                sxy += k as f64 * val;
+            }
+            let denom = pf * sx2 - sx * sx;
+            if denom.abs() < f64::EPSILON { continue; }
+            let slope = (pf * sxy - sx * sy) / denom;
+            let intercept = (sy - slope * sx) / pf;
+            mom[i] = Some(intercept + slope * (period - 1) as f64);
+        }
+    }
+    (mom, squeeze)
 }
 
 fn compute_rsi(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
@@ -1636,6 +1992,7 @@ fn compute_rsi(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
 /// Ehlers Fisher Transform — matches EhlersFisherTransform.mqh exactly.
 /// Smoothing: 0.5 * oscillator + 0.5 * prev_work (NOT 0.33/0.67)
 /// Fisher: 0.25 * ln((1+w)/(1-w)) + 0.5 * prev_fisher (recursive)
+/// Ehlers Fisher Transform — O(n) with monotonic deque for sliding min/max.
 fn compute_fisher(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
     let n = bars.len();
     let mut fisher = vec![None; n];
@@ -1645,17 +2002,30 @@ fn compute_fisher(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<
     let mut work = 0.0_f64;
     let mut prev_fisher = 0.0_f64;
 
-    for i in period..n {
-        let slice = &bars[(i + 1 - period)..=i];
-        let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-        let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+    // Monotonic deques for O(1) amortized sliding window max/min
+    let mut max_dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    let mut min_dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+
+    for i in 0..n {
+        // Maintain max deque (bar.high)
+        while max_dq.back().map_or(false, |&j| bars[j].high <= bars[i].high) { max_dq.pop_back(); }
+        max_dq.push_back(i);
+        while max_dq.front().map_or(false, |&j| j + period <= i) { max_dq.pop_front(); }
+
+        // Maintain min deque (bar.low)
+        while min_dq.back().map_or(false, |&j| bars[j].low >= bars[i].low) { min_dq.pop_back(); }
+        min_dq.push_back(i);
+        while min_dq.front().map_or(false, |&j| j + period <= i) { min_dq.pop_front(); }
+
+        if i < period { continue; }
+
+        let hi = bars[*max_dq.front().unwrap()].high;
+        let lo = bars[*min_dq.front().unwrap()].low;
         let mid = (bars[i].high + bars[i].low) / 2.0;
 
         let range = hi - lo;
         let raw = if range < f64::EPSILON { 0.0 } else { 2.0 * ((mid - lo) / range - 0.5) };
-        // Smoothing: 0.5/0.5 (matching MT5 line 134)
         work = (0.5 * raw + 0.5 * work).clamp(-0.999, 0.999);
-        // Fisher: 0.25 * ln(...) + 0.5 * prev (matching MT5 line 136)
         let f = 0.25 * ((1.0 + work) / (1.0 - work)).ln() + 0.5 * prev_fisher;
 
         signal[i] = Some(prev_fisher);
@@ -2092,18 +2462,30 @@ fn compute_prev_candle_levels(bars: &[Bar]) -> (
     (h1, h4, d1, w1, mn1)
 }
 
+/// Stochastic Oscillator — O(n) with monotonic deque for sliding min/max.
 fn compute_stochastic(bars: &[Bar], k_period: usize, k_smooth: usize, d_smooth: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>) {
     let n = bars.len();
     let mut raw_k = vec![None; n];
     if n < k_period { return (raw_k.clone(), raw_k); }
 
-    // Raw %K
-    for i in (k_period - 1)..n {
-        let slice = &bars[(i + 1 - k_period)..=i];
-        let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-        let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-        let range = hi - lo;
-        raw_k[i] = Some(if range < f64::EPSILON { 50.0 } else { (bars[i].close - lo) / range * 100.0 });
+    // Raw %K with monotonic deque for O(1) sliding window max/min
+    let mut max_dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    let mut min_dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    for i in 0..n {
+        while max_dq.back().map_or(false, |&j| bars[j].high <= bars[i].high) { max_dq.pop_back(); }
+        max_dq.push_back(i);
+        while max_dq.front().map_or(false, |&j| j + k_period <= i) { max_dq.pop_front(); }
+
+        while min_dq.back().map_or(false, |&j| bars[j].low >= bars[i].low) { min_dq.pop_back(); }
+        min_dq.push_back(i);
+        while min_dq.front().map_or(false, |&j| j + k_period <= i) { min_dq.pop_front(); }
+
+        if i >= k_period - 1 {
+            let hi = bars[*max_dq.front().unwrap()].high;
+            let lo = bars[*min_dq.front().unwrap()].low;
+            let range = hi - lo;
+            raw_k[i] = Some(if range < f64::EPSILON { 50.0 } else { (bars[i].close - lo) / range * 100.0 });
+        }
     }
 
     // Smooth %K (SMA of raw_k)
@@ -2295,31 +2677,51 @@ fn compute_hma(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     compute_wma(&diff_bars, sqrt_p.max(1))
 }
 
+/// CCI — O(n×period) for mean deviation (inherent), but with rolling TP sum for mean.
 fn compute_cci(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     let n = bars.len();
     let mut out = vec![None; n];
     if n < period { return out; }
+    let pf = period as f64;
+
+    // Pre-compute typical prices
+    let tp: Vec<f64> = bars.iter().map(|b| (b.high + b.low + b.close) / 3.0).collect();
+
+    // Rolling TP sum for SMA
+    let mut tp_sum: f64 = tp[..period].iter().sum();
+
     for i in (period - 1)..n {
-        let slice = &bars[(i + 1 - period)..=i];
-        let tp: Vec<f64> = slice.iter().map(|b| (b.high + b.low + b.close) / 3.0).collect();
-        let mean: f64 = tp.iter().sum::<f64>() / period as f64;
-        let md: f64 = tp.iter().map(|v| (v - mean).abs()).sum::<f64>() / period as f64;
-        let current_tp = (bars[i].high + bars[i].low + bars[i].close) / 3.0;
-        out[i] = if md < f64::EPSILON { Some(0.0) } else { Some((current_tp - mean) / (0.015 * md)) };
+        if i > period - 1 {
+            tp_sum += tp[i] - tp[i - period];
+        }
+        let mean = tp_sum / pf;
+        // Mean deviation must be computed fresh (depends on mean)
+        let md: f64 = (0..period).map(|k| (tp[i + 1 - period + k] - mean).abs()).sum::<f64>() / pf;
+        out[i] = if md < f64::EPSILON { Some(0.0) } else { Some((tp[i] - mean) / (0.015 * md)) };
     }
     out
 }
 
+/// Williams %R — O(n) with monotonic deque for sliding min/max.
 fn compute_williams_r(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     let n = bars.len();
     let mut out = vec![None; n];
     if n < period { return out; }
-    for i in (period - 1)..n {
-        let slice = &bars[(i + 1 - period)..=i];
-        let hi = slice.iter().map(|b| b.high).fold(f64::MIN, f64::max);
-        let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
-        let range = hi - lo;
-        out[i] = if range < f64::EPSILON { Some(-50.0) } else { Some(-100.0 * (hi - bars[i].close) / range) };
+    let mut max_dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    let mut min_dq: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    for i in 0..n {
+        while max_dq.back().map_or(false, |&j| bars[j].high <= bars[i].high) { max_dq.pop_back(); }
+        max_dq.push_back(i);
+        while max_dq.front().map_or(false, |&j| j + period <= i) { max_dq.pop_front(); }
+        while min_dq.back().map_or(false, |&j| bars[j].low >= bars[i].low) { min_dq.pop_back(); }
+        min_dq.push_back(i);
+        while min_dq.front().map_or(false, |&j| j + period <= i) { min_dq.pop_front(); }
+        if i >= period - 1 {
+            let hi = bars[*max_dq.front().unwrap()].high;
+            let lo = bars[*min_dq.front().unwrap()].low;
+            let range = hi - lo;
+            out[i] = if range < f64::EPSILON { Some(-50.0) } else { Some(-100.0 * (hi - bars[i].close) / range) };
+        }
     }
     out
 }
@@ -3147,6 +3549,7 @@ fn draw_chart(
     show_ehlers_cyber: bool,
     show_ehlers_cg: bool,
     show_ehlers_roof: bool,
+    show_squeeze: bool,
     sl_price: Option<f64>,
     tp_price: Option<f64>,
     trade_overlay: &TradeOverlay,
@@ -3172,7 +3575,8 @@ fn draw_chart(
     let sub_pane_count = show_rsi as u8 + show_fisher as u8 + show_macd as u8 + show_volume_pane as u8
         + show_stochastic as u8 + show_adx as u8 + show_cci as u8 + show_williams_r as u8
         + show_obv as u8 + show_momentum as u8 + show_better_volume as u8
-        + show_ehlers_ebsw as u8 + show_ehlers_cyber as u8 + show_ehlers_cg as u8 + show_ehlers_roof as u8;
+        + show_ehlers_ebsw as u8 + show_ehlers_cyber as u8 + show_ehlers_cg as u8 + show_ehlers_roof as u8
+        + show_squeeze as u8;
     let sub_pane_height = if sub_pane_count > 0 { 80.0 * sub_pane_count as f32 } else { 0.0 };
     let main_rect = egui::Rect::from_min_max(
         rect.min,
@@ -3256,6 +3660,59 @@ fn draw_chart(
     let candle_w  = (bar_w * 0.7).max(1.0);
     let half_body = candle_w * 0.5;
 
+    // ── session highlighting (Asian / London / New York) ────────────────────
+    if flags.sessions {
+        // Session hours in UTC:
+        // Asian (Tokyo):  00:00 – 09:00
+        // London:         07:00 – 16:00
+        // New York:       13:30 – 20:00
+        let session_asian  = egui::Color32::from_rgba_premultiplied(40, 60, 120, 18);
+        let session_london = egui::Color32::from_rgba_premultiplied(60, 120, 60, 18);
+        let session_ny     = egui::Color32::from_rgba_premultiplied(120, 60, 40, 18);
+
+        // We iterate bars and paint vertical strips for each session a bar falls in.
+        // For H4/D1/W1/MN1 timeframes, skip (sessions only make sense on intraday).
+        let tf_minutes = chart.timeframe.minutes();
+        if tf_minutes < 240 {
+            let mut i = 0usize;
+            while i < bars.len() {
+                let bar = &bars[i];
+                // Convert ts_ms to UTC hour/minute
+                let secs = bar.ts_ms / 1000;
+                let day_secs = ((secs % 86400) + 86400) % 86400; // handle negative
+                let hour = (day_secs / 3600) as u32;
+                let minute = ((day_secs % 3600) / 60) as u32;
+                let hm = hour * 60 + minute; // minutes since midnight UTC
+
+                let x_left = chart_rect.left() + (i as f32) * bar_w;
+                let x_right = (x_left + bar_w).min(chart_rect.right());
+
+                // Asian: 00:00 – 09:00 (0..540)
+                if hm < 540 {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(x_left, chart_rect.top()), egui::pos2(x_right, chart_rect.bottom())),
+                        0.0, session_asian,
+                    );
+                }
+                // London: 07:00 – 16:00 (420..960)
+                if hm >= 420 && hm < 960 {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(x_left, chart_rect.top()), egui::pos2(x_right, chart_rect.bottom())),
+                        0.0, session_london,
+                    );
+                }
+                // New York: 13:30 – 20:00 (810..1200)
+                if hm >= 810 && hm < 1200 {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(x_left, chart_rect.top()), egui::pos2(x_right, chart_rect.bottom())),
+                        0.0, session_ny,
+                    );
+                }
+                i += 1;
+            }
+        }
+    }
+
     // ── grid lines (price) — dotted style matching MT5/WebKit ──────────────
     let grid_steps = 8;
     let dot_len = 3.0_f32;
@@ -3309,6 +3766,34 @@ fn draw_chart(
         );
     }
 
+    // ── MA ribbon fill (KAMA vs SMA200) ─────────────────────────────────────
+    if flags.sma200 && flags.kama {
+        for (rel_idx, _) in bars.iter().enumerate() {
+            let abs_idx = start_idx + rel_idx;
+            if abs_idx >= chart.sma200.len() || abs_idx >= chart.kama.len() { continue; }
+            if let (Some(sma_v), Some(kama_v)) = (chart.sma200[abs_idx], chart.kama[abs_idx]) {
+                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let y_sma = price_to_y(sma_v);
+                let y_kama = price_to_y(kama_v);
+                let (top, bot) = if y_sma < y_kama { (y_sma, y_kama) } else { (y_kama, y_sma) };
+                if top <= chart_rect.bottom() && bot >= chart_rect.top() {
+                    let fill = if kama_v > sma_v {
+                        egui::Color32::from_rgba_premultiplied(0, 180, 60, 18)  // bullish green
+                    } else {
+                        egui::Color32::from_rgba_premultiplied(180, 40, 0, 18)  // bearish red
+                    };
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(x - bar_w * 0.5, top.max(chart_rect.top())),
+                            egui::pos2(x + bar_w * 0.5, bot.min(chart_rect.bottom())),
+                        ),
+                        0.0, fill,
+                    );
+                }
+            }
+        }
+    }
+
     // ── Bollinger Band fill ──────────────────────────────────────────────────
     if flags.bollinger {
         let mut fill_points_upper: Vec<egui::Pos2> = Vec::new();
@@ -3335,6 +3820,150 @@ fn draw_chart(
         draw_indicator_line(painter, chart_rect, bars, &chart.bb_upper, start_idx, bar_w, &price_to_y, BB_COL, 1.0);
         draw_indicator_line(painter, chart_rect, bars, &chart.bb_lower, start_idx, bar_w, &price_to_y, BB_COL, 1.0);
         draw_indicator_line(painter, chart_rect, bars, &chart.bb_mid,   start_idx, bar_w, &price_to_y, BB_COL, 0.5);
+    }
+
+    // ── VWAP with deviation bands ───────────────────────────────────────────
+    if flags.vwap {
+        let vwap_col = egui::Color32::from_rgb(255, 215, 0); // gold
+        let band_col1 = egui::Color32::from_rgba_premultiplied(100, 149, 237, 50); // cornflower blue
+        let band_col2 = egui::Color32::from_rgba_premultiplied(100, 149, 237, 30);
+        let band_col3 = egui::Color32::from_rgba_premultiplied(100, 149, 237, 15);
+        // Fill bands (3σ first, then 2σ, then 1σ so inner is on top)
+        for (upper, lower, fill_col) in [
+            (&chart.vwap_upper3, &chart.vwap_lower3, band_col3),
+            (&chart.vwap_upper2, &chart.vwap_lower2, band_col2),
+            (&chart.vwap_upper1, &chart.vwap_lower1, band_col1),
+        ] {
+            for (rel_idx, _) in bars.iter().enumerate() {
+                let abs_idx = start_idx + rel_idx;
+                if abs_idx >= upper.len() { continue; }
+                if let (Some(u), Some(l)) = (upper[abs_idx], lower[abs_idx]) {
+                    let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                    let yu = price_to_y(u);
+                    let yl = price_to_y(l);
+                    let (top, bot) = if yu < yl { (yu, yl) } else { (yl, yu) };
+                    if top <= chart_rect.bottom() && bot >= chart_rect.top() {
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(x - bar_w * 0.5, top.max(chart_rect.top())),
+                                egui::pos2(x + bar_w * 0.5, bot.min(chart_rect.bottom())),
+                            ),
+                            0.0, fill_col,
+                        );
+                    }
+                }
+            }
+        }
+        // VWAP line
+        draw_indicator_line(painter, chart_rect, bars, &chart.vwap, start_idx, bar_w, &price_to_y, vwap_col, 2.0);
+        // Band edge lines
+        let band_line = egui::Color32::from_rgba_premultiplied(100, 149, 237, 80);
+        draw_indicator_line(painter, chart_rect, bars, &chart.vwap_upper1, start_idx, bar_w, &price_to_y, band_line, 0.5);
+        draw_indicator_line(painter, chart_rect, bars, &chart.vwap_lower1, start_idx, bar_w, &price_to_y, band_line, 0.5);
+        draw_indicator_line(painter, chart_rect, bars, &chart.vwap_upper2, start_idx, bar_w, &price_to_y, band_line, 0.5);
+        draw_indicator_line(painter, chart_rect, bars, &chart.vwap_lower2, start_idx, bar_w, &price_to_y, band_line, 0.5);
+    }
+
+    // ── Supertrend ─────────────────────────────────────────────────────────
+    if flags.supertrend {
+        let st_bull_col = egui::Color32::from_rgb(0, 200, 100);
+        let st_bear_col = egui::Color32::from_rgb(220, 50, 50);
+        // Draw as colored segments — bull=green, bear=red
+        let mut points: Vec<egui::Pos2> = Vec::new();
+        let mut prev_bull = true;
+        for (rel_idx, _) in bars.iter().enumerate() {
+            let abs_idx = start_idx + rel_idx;
+            if abs_idx >= chart.supertrend.len() { continue; }
+            if let Some(v) = chart.supertrend[abs_idx] {
+                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let y = price_to_y(v);
+                let is_bull = chart.supertrend_bull.get(abs_idx).copied().unwrap_or(true);
+                if is_bull != prev_bull && points.len() > 1 {
+                    let col = if prev_bull { st_bull_col } else { st_bear_col };
+                    painter.add(egui::Shape::line(std::mem::take(&mut points), egui::Stroke::new(2.0, col)));
+                }
+                if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                    points.push(egui::pos2(x, y));
+                }
+                prev_bull = is_bull;
+            }
+        }
+        if points.len() > 1 {
+            let col = if prev_bull { st_bull_col } else { st_bear_col };
+            painter.add(egui::Shape::line(points, egui::Stroke::new(2.0, col)));
+        }
+    }
+
+    // ── Donchian Channels ────────────────────────────────────────────────
+    if flags.donchian {
+        let dc_col = egui::Color32::from_rgb(0, 180, 255);
+        let dc_fill = egui::Color32::from_rgba_premultiplied(0, 180, 255, 15);
+        // Fill between upper and lower
+        for (rel_idx, _) in bars.iter().enumerate() {
+            let abs_idx = start_idx + rel_idx;
+            if abs_idx >= chart.donchian_upper.len() { continue; }
+            if let (Some(u), Some(l)) = (chart.donchian_upper[abs_idx], chart.donchian_lower[abs_idx]) {
+                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let yu = price_to_y(u);
+                let yl = price_to_y(l);
+                if yu <= chart_rect.bottom() && yl >= chart_rect.top() {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(x - bar_w * 0.5, yu.max(chart_rect.top())), egui::pos2(x + bar_w * 0.5, yl.min(chart_rect.bottom()))),
+                        0.0, dc_fill,
+                    );
+                }
+            }
+        }
+        draw_indicator_line(painter, chart_rect, bars, &chart.donchian_upper, start_idx, bar_w, &price_to_y, dc_col, 1.0);
+        draw_indicator_line(painter, chart_rect, bars, &chart.donchian_lower, start_idx, bar_w, &price_to_y, dc_col, 1.0);
+    }
+
+    // ── Keltner Channels ─────────────────────────────────────────────────
+    if flags.keltner {
+        let kc_col = egui::Color32::from_rgb(255, 165, 0);   // orange
+        let kc_fill = egui::Color32::from_rgba_premultiplied(255, 165, 0, 15);
+        for (rel_idx, _) in bars.iter().enumerate() {
+            let abs_idx = start_idx + rel_idx;
+            if abs_idx >= chart.keltner_upper.len() { continue; }
+            if let (Some(u), Some(l)) = (chart.keltner_upper[abs_idx], chart.keltner_lower[abs_idx]) {
+                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let yu = price_to_y(u);
+                let yl = price_to_y(l);
+                if yu <= chart_rect.bottom() && yl >= chart_rect.top() {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(x - bar_w * 0.5, yu.max(chart_rect.top())), egui::pos2(x + bar_w * 0.5, yl.min(chart_rect.bottom()))),
+                        0.0, kc_fill,
+                    );
+                }
+            }
+        }
+        draw_indicator_line(painter, chart_rect, bars, &chart.keltner_upper, start_idx, bar_w, &price_to_y, kc_col, 1.0);
+        draw_indicator_line(painter, chart_rect, bars, &chart.keltner_lower, start_idx, bar_w, &price_to_y, kc_col, 1.0);
+        draw_indicator_line(painter, chart_rect, bars, &chart.keltner_mid,   start_idx, bar_w, &price_to_y, kc_col, 0.5);
+    }
+
+    // ── Regression Channel ─────────────────────────────────────────────────
+    if flags.regression {
+        let rc_col = egui::Color32::from_rgb(180, 130, 255);  // light purple
+        let rc_fill = egui::Color32::from_rgba_premultiplied(180, 130, 255, 15);
+        for (rel_idx, _) in bars.iter().enumerate() {
+            let abs_idx = start_idx + rel_idx;
+            if abs_idx >= chart.regression_upper.len() { continue; }
+            if let (Some(u), Some(l)) = (chart.regression_upper[abs_idx], chart.regression_lower[abs_idx]) {
+                let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                let yu = price_to_y(u);
+                let yl = price_to_y(l);
+                if yu <= chart_rect.bottom() && yl >= chart_rect.top() {
+                    painter.rect_filled(
+                        egui::Rect::from_min_max(egui::pos2(x - bar_w * 0.5, yu.max(chart_rect.top())), egui::pos2(x + bar_w * 0.5, yl.min(chart_rect.bottom()))),
+                        0.0, rc_fill,
+                    );
+                }
+            }
+        }
+        draw_indicator_line(painter, chart_rect, bars, &chart.regression_upper, start_idx, bar_w, &price_to_y, rc_col, 0.8);
+        draw_indicator_line(painter, chart_rect, bars, &chart.regression_lower, start_idx, bar_w, &price_to_y, rc_col, 0.8);
+        draw_indicator_line(painter, chart_rect, bars, &chart.regression_mid,   start_idx, bar_w, &price_to_y, rc_col, 1.5);
     }
 
     // ── Ichimoku cloud ─────────────────────────────────────────────────────
@@ -3841,6 +4470,19 @@ fn draw_chart(
             };
             let weekend_up = egui::Color32::from_rgb(255, 0, 255);    // magenta bull (weekend gap-fill)
             let weekend_dn = egui::Color32::from_rgb(180, 0, 180);   // dark magenta bear (weekend gap-fill)
+            // Pre-compute 20-bar rolling average volume for heatmap mode
+            let vol_avg: Vec<f64> = if flags.vol_heatmap {
+                let full_bars = &chart.bars;
+                let mut avg = vec![0.0; full_bars.len()];
+                let period = 20usize;
+                let mut sum = 0.0;
+                for i in 0..full_bars.len() {
+                    sum += full_bars[i].volume;
+                    if i >= period { sum -= full_bars[i - period].volume; }
+                    avg[i] = if i >= period - 1 { sum / period as f64 } else { sum / (i + 1) as f64 };
+                }
+                avg
+            } else { Vec::new() };
             for (rel_idx, bar) in render_bars.iter().enumerate() {
                 let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
                 let y_open  = price_to_y(bar.open);
@@ -3855,7 +4497,31 @@ fn draw_chart(
                         matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
                     }).unwrap_or(false)
                 } else { false };
-                let color = if is_weekend {
+                let color = if flags.vol_heatmap && !vol_avg.is_empty() {
+                    // Volume heatmap: blue (low) → green → yellow → red (high)
+                    let abs_idx = start_idx + rel_idx;
+                    let avg = if abs_idx < vol_avg.len() && vol_avg[abs_idx] > 0.0 { vol_avg[abs_idx] } else { 1.0 };
+                    let ratio = (bar.volume / avg).min(3.0) / 3.0; // 0..1, capped at 3x avg
+                    if ratio < 0.33 {
+                        // Blue to green
+                        let t = ratio / 0.33;
+                        let r = (40.0 * (1.0 - t)) as u8;
+                        let g = (80.0 + 140.0 * t) as u8;
+                        let b = (200.0 * (1.0 - t)) as u8;
+                        egui::Color32::from_rgb(r, g, b)
+                    } else if ratio < 0.66 {
+                        // Green to yellow
+                        let t = (ratio - 0.33) / 0.33;
+                        let r = (220.0 * t) as u8;
+                        let g = (220.0 - 30.0 * t) as u8;
+                        egui::Color32::from_rgb(r, g, 0)
+                    } else {
+                        // Yellow to red
+                        let t = (ratio - 0.66) / 0.34;
+                        let g = (190.0 * (1.0 - t)) as u8;
+                        egui::Color32::from_rgb(230, g, 0)
+                    }
+                } else if is_weekend {
                     if bar.close >= bar.open { weekend_up } else { weekend_dn }
                 } else {
                     if bar.close >= bar.open { UP } else { DOWN }
@@ -3949,6 +4615,50 @@ fn draw_chart(
                 &label,
                 egui::FontId::monospace(10.0),
                 egui::Color32::BLACK,
+            );
+        }
+    }
+
+    // ── price distribution histogram (time-at-level) ──────────────────────
+    if flags.price_histogram {
+        // Bucket visible bars by price level
+        let num_buckets = (chart_rect.height() / 4.0).max(10.0) as usize;
+        let bucket_h = chart_rect.height() / num_buckets as f32;
+        let mut buckets = vec![0u32; num_buckets];
+        let mut max_count = 1u32;
+
+        for bar in bars {
+            // Count each bar at the levels it spans (high to low)
+            let y_high_frac = ((price_max - bar.high) / (price_max - price_min)).clamp(0.0, 1.0);
+            let y_low_frac  = ((price_max - bar.low)  / (price_max - price_min)).clamp(0.0, 1.0);
+            let b_top = (y_high_frac * num_buckets as f64) as usize;
+            let b_bot = ((y_low_frac * num_buckets as f64) as usize).min(num_buckets - 1);
+            for b in b_top..=b_bot {
+                if b < num_buckets {
+                    buckets[b] += 1;
+                    max_count = max_count.max(buckets[b]);
+                }
+            }
+        }
+
+        // Draw horizontal bars from right edge of chart, going left
+        let max_bar_w = chart_rect.width() * 0.15; // max 15% of chart width
+        let hist_color = egui::Color32::from_rgba_premultiplied(100, 140, 255, 40);
+        let hist_edge  = egui::Color32::from_rgba_premultiplied(100, 140, 255, 80);
+        for (i, &count) in buckets.iter().enumerate() {
+            if count == 0 { continue; }
+            let bar_w = (count as f32 / max_count as f32) * max_bar_w;
+            let y_top = chart_rect.top() + i as f32 * bucket_h;
+            let y_bot = y_top + bucket_h;
+            let r = egui::Rect::from_min_max(
+                egui::pos2(chart_rect.right() - bar_w, y_top),
+                egui::pos2(chart_rect.right(), y_bot),
+            );
+            painter.rect_filled(r, 0.0, hist_color);
+            // Left edge line
+            painter.line_segment(
+                [egui::pos2(r.left(), y_top), egui::pos2(r.left(), y_bot)],
+                egui::Stroke::new(0.5, hist_edge),
             );
         }
     }
@@ -4216,6 +4926,53 @@ fn draw_chart(
         for (ri, _) in bars.iter().enumerate() { if let Some(Some(v)) = chart.ehlers_roof.get(start_idx + ri) { cmin = cmin.min(*v); cmax = cmax.max(*v); } }
         let pad = (cmax - cmin).max(0.001) * 0.1;
         draw_oscillator_pane(painter, pr, bars, &chart.ehlers_roof, start_idx, bar_w, "Roofing Filter", EHLERS_ROOF_COL, cmin - pad, cmax + pad, None, None);
+    }
+
+    // ── Squeeze Momentum sub-pane ──────────────────────────────────────────
+    if show_squeeze {
+        let sr = egui::Rect::from_min_max(egui::pos2(rect.left(), sub_y), egui::pos2(rect.right() - price_axis_w, sub_y + 80.0));
+        sub_y += 80.0;
+        painter.rect_filled(sr, 0.0, egui::Color32::from_rgb(0, 0, 0));
+        painter.line_segment([egui::pos2(sr.left(), sr.top()), egui::pos2(sr.right(), sr.top())], egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)));
+        // Find momentum range
+        let mut mom_min = f64::MAX;
+        let mut mom_max = f64::MIN;
+        for (ri, _) in bars.iter().enumerate() {
+            if let Some(Some(v)) = chart.squeeze_mom.get(start_idx + ri) { mom_min = mom_min.min(*v); mom_max = mom_max.max(*v); }
+        }
+        if mom_min >= mom_max { mom_min = -1.0; mom_max = 1.0; }
+        let pad = (mom_max - mom_min) * 0.1;
+        mom_min -= pad; mom_max += pad;
+        let val_to_y = |v: f64| -> f32 { sr.top() + ((mom_max - v) / (mom_max - mom_min)) as f32 * sr.height() };
+        let zero_y = val_to_y(0.0);
+        // Zero line
+        painter.line_segment([egui::pos2(sr.left(), zero_y), egui::pos2(sr.right(), zero_y)], egui::Stroke::new(0.5, egui::Color32::from_rgb(60, 60, 60)));
+        // Histogram bars
+        for (ri, _) in bars.iter().enumerate() {
+            let abs_idx = start_idx + ri;
+            if let Some(Some(v)) = chart.squeeze_mom.get(abs_idx) {
+                let x = sr.left() + (ri as f32 + 0.5) * bar_w;
+                let y = val_to_y(*v);
+                let is_squeeze = chart.squeeze_on.get(abs_idx).copied().unwrap_or(false);
+                // Color: squeeze=gray, released: positive=cyan, negative=red
+                // Momentum direction: increasing=brighter, decreasing=dimmer
+                let prev_v = if abs_idx > 0 { chart.squeeze_mom.get(abs_idx - 1).and_then(|v| *v).unwrap_or(0.0) } else { 0.0 };
+                let color = if is_squeeze {
+                    egui::Color32::from_rgb(100, 100, 100) // gray = squeeze active
+                } else if *v > 0.0 {
+                    if *v > prev_v { egui::Color32::from_rgb(0, 220, 200) } else { egui::Color32::from_rgb(0, 120, 100) }
+                } else {
+                    if *v < prev_v { egui::Color32::from_rgb(220, 50, 50) } else { egui::Color32::from_rgb(120, 30, 30) }
+                };
+                let half = (bar_w * 0.35).max(0.5);
+                painter.rect_filled(
+                    egui::Rect::from_min_max(egui::pos2(x - half, y.min(zero_y)), egui::pos2(x + half, y.max(zero_y))),
+                    0.0, color,
+                );
+            }
+        }
+        // Label
+        painter.text(egui::pos2(sr.left() + 4.0, sr.top() + 2.0), egui::Align2::LEFT_TOP, "Squeeze", egui::FontId::monospace(9.0), AXIS_TEXT);
     }
 
     // ── SL/TP planning lines ───────────────────────────────────────────────
@@ -4877,6 +5634,7 @@ fn draw_indicator_line(
     width: f32,
 ) {
     let mut points: Vec<egui::Pos2> = Vec::with_capacity(bars.len());
+    let stroke = egui::Stroke::new(width, color);
     for (rel_idx, _bar) in bars.iter().enumerate() {
         let abs_idx = start_idx + rel_idx;
         if abs_idx >= series.len() { continue; }
@@ -4885,21 +5643,19 @@ fn draw_indicator_line(
             let y = price_to_y(v);
             if y >= chart_rect.top() && y <= chart_rect.bottom() {
                 points.push(egui::pos2(x, y));
-            } else if !points.is_empty() {
-                if points.len() > 1 {
-                    painter.add(egui::Shape::line(points.clone(), egui::Stroke::new(width, color)));
-                }
+            } else if points.len() > 1 {
+                painter.add(egui::Shape::line(std::mem::take(&mut points), stroke));
+            } else {
                 points.clear();
             }
-        } else if !points.is_empty() {
-            if points.len() > 1 {
-                painter.add(egui::Shape::line(points.clone(), egui::Stroke::new(width, color)));
-            }
+        } else if points.len() > 1 {
+            painter.add(egui::Shape::line(std::mem::take(&mut points), stroke));
+        } else {
             points.clear();
         }
     }
     if points.len() > 1 {
-        painter.add(egui::Shape::line(points, egui::Stroke::new(width, color)));
+        painter.add(egui::Shape::line(points, stroke));
     }
 }
 
@@ -5051,6 +5807,15 @@ const COMMANDS: &[Command] = &[
     Command { name: "DRAW_RAY",      desc: "Draw ray (extends right)" },
     Command { name: "DRAW_CHANNEL",  desc: "Draw parallel channel" },
     Command { name: "CLEAR_DRAWINGS",desc: "Clear all drawings on chart" },
+    Command { name: "SESSIONS",      desc: "Toggle trading session highlighting (Asian/London/NY)" },
+    Command { name: "VOL_HEATMAP",   desc: "Toggle volume heatmap candle coloring" },
+    Command { name: "VWAP",          desc: "Toggle VWAP with deviation bands" },
+    Command { name: "PRICE_HIST",    desc: "Toggle price distribution histogram" },
+    Command { name: "SUPERTREND",    desc: "Toggle Supertrend indicator (ATR-based trend)" },
+    Command { name: "DONCHIAN",      desc: "Toggle Donchian Channels (N-bar high/low)" },
+    Command { name: "KELTNER",       desc: "Toggle Keltner Channels (EMA ± ATR)" },
+    Command { name: "REGRESSION",    desc: "Toggle Regression Channel (linear regression ± 2σ)" },
+    Command { name: "SQUEEZE",       desc: "Toggle Squeeze Momentum (BB inside KC)" },
     // Timeframes (direct switch)
     Command { name: "M1",            desc: "Switch to 1-minute timeframe" },
     Command { name: "M5",            desc: "Switch to 5-minute timeframe" },
@@ -5530,6 +6295,15 @@ pub struct TyphooNApp {
     show_obv: bool,
     show_momentum: bool,
     show_better_volume: bool,
+    show_sessions: bool,
+    show_vol_heatmap: bool,
+    show_vwap: bool,
+    show_price_histogram: bool,
+    show_supertrend: bool,
+    show_donchian: bool,
+    show_keltner: bool,
+    show_regression: bool,
+    show_squeeze: bool,
 
     /// Drawing interaction mode.
     draw_mode: DrawMode,
@@ -5749,6 +6523,9 @@ pub struct TyphooNApp {
     // Replay mode
     replay_active: bool,
     replay_bar_idx: usize,
+    replay_playing: bool,
+    replay_speed: f32,
+    replay_timer: f32,
     #[allow(dead_code)]
     confirm_close_all: bool,
     // Symbol autocomplete
@@ -6921,6 +7698,15 @@ impl TyphooNApp {
             show_obv: false,
             show_momentum: false,
             show_better_volume: true,   // NNFX volume
+            show_sessions: false,
+            show_vol_heatmap: false,
+            show_vwap: false,
+            show_price_histogram: false,
+            show_supertrend: false,
+            show_donchian: false,
+            show_keltner: false,
+            show_regression: false,
+            show_squeeze: false,
             draw_mode: DrawMode::None,
             darwin_import_ticker: String::new(),
             darwin_xlsx_dir: String::new(),
@@ -7073,6 +7859,9 @@ impl TyphooNApp {
             ruin_results: Vec::new(),
             replay_active: false,
             replay_bar_idx: 0,
+            replay_playing: false,
+            replay_speed: 2.0,
+            replay_timer: 0.0,
             confirm_close_all: false,
             symbol_suggestions: Vec::new(),
             symbol_ac_selected: 0,
@@ -7711,6 +8500,14 @@ impl TyphooNApp {
             ehlers_decycler: self.show_ehlers_decycler,
             ehlers_itl: self.show_ehlers_itl,
             ehlers_mama: self.show_ehlers_mama,
+            sessions: self.show_sessions,
+            vol_heatmap: self.show_vol_heatmap,
+            vwap: self.show_vwap,
+            price_histogram: self.show_price_histogram,
+            supertrend: self.show_supertrend,
+            donchian: self.show_donchian,
+            keltner: self.show_keltner,
+            regression: self.show_regression,
         }
     }
 
@@ -7897,12 +8694,14 @@ impl TyphooNApp {
             "REPLAY" => {
                 self.replay_active = !self.replay_active;
                 if self.replay_active {
-                    if let Some(chart) = self.charts.get(self.active_tab) {
-                        self.replay_bar_idx = chart.bars.len().saturating_sub(100); // start 100 bars from end
-                    }
-                    self.log.push_back(LogEntry::info("Replay mode ON — use arrow keys to step"));
+                    self.replay_bar_idx = 50.min(self.charts.get(self.active_tab).map(|c| c.bars.len()).unwrap_or(0));
+                    self.replay_playing = false;
+                    self.replay_timer = 0.0;
+                    self.log.push_back(LogEntry::info("Replay ON — Space: play/pause, →: next bar, ←: prev bar, ↑/↓: speed".to_string()));
                 } else {
-                    self.log.push_back(LogEntry::info("Replay mode OFF"));
+                    self.replay_bar_idx = 0;
+                    self.replay_playing = false;
+                    self.log.push_back(LogEntry::info("Replay OFF".to_string()));
                 }
             }
             "ALERTS" => {
@@ -8000,6 +8799,15 @@ impl TyphooNApp {
             "DRAW_RAY"       => self.draw_mode = DrawMode::PlacingRayP1,
             "DRAW_CHANNEL"   => self.draw_mode = DrawMode::PlacingChannelP1,
             "CLEAR_DRAWINGS" => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); } }
+            "SESSIONS" => { self.show_sessions = !self.show_sessions; self.log.push_back(LogEntry::info(format!("Sessions: {}", if self.show_sessions { "ON" } else { "OFF" }))); }
+            "VOL_HEATMAP" => { self.show_vol_heatmap = !self.show_vol_heatmap; self.log.push_back(LogEntry::info(format!("Volume heatmap: {}", if self.show_vol_heatmap { "ON" } else { "OFF" }))); }
+            "VWAP" => { self.show_vwap = !self.show_vwap; self.log.push_back(LogEntry::info(format!("VWAP: {}", if self.show_vwap { "ON" } else { "OFF" }))); }
+            "PRICE_HIST" => { self.show_price_histogram = !self.show_price_histogram; self.log.push_back(LogEntry::info(format!("Price histogram: {}", if self.show_price_histogram { "ON" } else { "OFF" }))); }
+            "SUPERTREND" => { self.show_supertrend = !self.show_supertrend; self.log.push_back(LogEntry::info(format!("Supertrend: {}", if self.show_supertrend { "ON" } else { "OFF" }))); }
+            "DONCHIAN" => { self.show_donchian = !self.show_donchian; self.log.push_back(LogEntry::info(format!("Donchian: {}", if self.show_donchian { "ON" } else { "OFF" }))); }
+            "KELTNER" => { self.show_keltner = !self.show_keltner; self.log.push_back(LogEntry::info(format!("Keltner: {}", if self.show_keltner { "ON" } else { "OFF" }))); }
+            "REGRESSION" => { self.show_regression = !self.show_regression; self.log.push_back(LogEntry::info(format!("Regression: {}", if self.show_regression { "ON" } else { "OFF" }))); }
+            "SQUEEZE" => { self.show_squeeze = !self.show_squeeze; self.log.push_back(LogEntry::info(format!("Squeeze: {}", if self.show_squeeze { "ON" } else { "OFF" }))); }
             // Timeframe shortcuts
             "M1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M1); }
             "M5"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M5); }
@@ -8180,7 +8988,11 @@ impl TyphooNApp {
                 "adx": self.show_adx, "cci": self.show_cci,
                 "williams_r": self.show_williams_r, "obv": self.show_obv,
                 "momentum": self.show_momentum, "better_volume": self.show_better_volume,
-                "volume_pane": self.show_volume_pane,
+                "volume_pane": self.show_volume_pane, "sessions": self.show_sessions,
+                "vol_heatmap": self.show_vol_heatmap, "vwap": self.show_vwap,
+                "price_histogram": self.show_price_histogram,
+                "supertrend": self.show_supertrend, "donchian": self.show_donchian, "keltner": self.show_keltner,
+                "regression": self.show_regression, "squeeze": self.show_squeeze,
             },
             "mtf_enabled": self.mtf_enabled,
             "mtf_cols": self.mtf_cols,
@@ -8321,7 +9133,11 @@ impl TyphooNApp {
                         ("adx", &mut self.show_adx), ("cci", &mut self.show_cci),
                         ("williams_r", &mut self.show_williams_r), ("obv", &mut self.show_obv),
                         ("momentum", &mut self.show_momentum), ("better_volume", &mut self.show_better_volume),
-                        ("volume_pane", &mut self.show_volume_pane),
+                        ("volume_pane", &mut self.show_volume_pane), ("sessions", &mut self.show_sessions),
+                        ("vol_heatmap", &mut self.show_vol_heatmap), ("vwap", &mut self.show_vwap),
+                        ("price_histogram", &mut self.show_price_histogram),
+                        ("supertrend", &mut self.show_supertrend), ("donchian", &mut self.show_donchian), ("keltner", &mut self.show_keltner),
+                        ("regression", &mut self.show_regression), ("squeeze", &mut self.show_squeeze),
                     ] {
                         if let Some(b) = ind[key].as_bool() { *field = b; }
                     }
@@ -9036,12 +9852,25 @@ impl TyphooNApp {
                     ui.heading("Bands, Cloud & Levels");
                     ui.separator();
                     ui.checkbox(&mut self.show_bollinger, "Bollinger Bands(20,2)");
+                    ui.checkbox(&mut self.show_supertrend, "Supertrend(10,3)");
+                    ui.checkbox(&mut self.show_donchian, "Donchian Channels(20)");
+                    ui.checkbox(&mut self.show_keltner, "Keltner Channels(20,1.5)");
+                    ui.checkbox(&mut self.show_regression, "Regression Channel(20,2σ)");
                     ui.checkbox(&mut self.show_ichimoku,  "Ichimoku Cloud(9,26,52)");
                     ui.checkbox(&mut self.show_psar,      "Parabolic SAR(0.02,0.2)");
                     ui.checkbox(&mut self.show_atr_proj,  "ATR Projection MTF (M15/H1/H4/D1/W1/MN1)");
                     ui.checkbox(&mut self.show_prev_levels, "Previous Candle Levels (H1/H4/D1/W1/MN1)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (Classic)");
                     ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
+
+                    // ── Chart Overlays ──
+                    ui.add_space(4.0);
+                    ui.heading("Chart Overlays");
+                    ui.separator();
+                    ui.checkbox(&mut self.show_sessions, "Trading Sessions (Asian/London/NY)");
+                    ui.checkbox(&mut self.show_vol_heatmap, "Volume Heatmap Candles");
+                    ui.checkbox(&mut self.show_vwap, "VWAP (daily anchor, 1σ/2σ/3σ bands)");
+                    ui.checkbox(&mut self.show_price_histogram, "Price Distribution (time-at-level)");
 
                     // ── Pattern Recognition ──
                     ui.add_space(4.0);
@@ -9065,6 +9894,7 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_momentum,       "Momentum(10)");
                     ui.checkbox(&mut self.show_better_volume,  "Better Volume");
                     ui.checkbox(&mut self.show_volume_pane,    "Volume");
+                    ui.checkbox(&mut self.show_squeeze,        "Squeeze Momentum (BB inside KC)");
 
                     // ── Ehlers DSP Indicators ──
                     ui.add_space(4.0);
@@ -15484,18 +16314,61 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Escape = cancel drawing mode
+            // Escape = cancel drawing mode or exit replay
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.draw_mode = DrawMode::None;
+                if self.replay_active {
+                    self.replay_active = false;
+                    self.replay_playing = false;
+                    self.replay_bar_idx = 0;
+                } else {
+                    self.draw_mode = DrawMode::None;
+                }
+            }
+
+            // Replay mode controls
+            if self.replay_active {
+                let total_bars = self.charts.get(self.active_tab).map(|c| c.bars.len()).unwrap_or(0);
+                if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+                    self.replay_playing = !self.replay_playing;
+                }
+                if right && !self.replay_playing {
+                    self.replay_bar_idx = (self.replay_bar_idx + 1).min(total_bars);
+                }
+                if left && !self.replay_playing {
+                    self.replay_bar_idx = self.replay_bar_idx.saturating_sub(1).max(1);
+                }
+                // Up/Down = adjust speed
+                let up = ctx.input(|i| i.key_pressed(egui::Key::ArrowUp));
+                let down = ctx.input(|i| i.key_pressed(egui::Key::ArrowDown));
+                if up { self.replay_speed = (self.replay_speed * 1.5).min(60.0); }
+                if down { self.replay_speed = (self.replay_speed / 1.5).max(0.5); }
+
+                // Auto-play timer
+                if self.replay_playing {
+                    let dt = ctx.input(|i| i.stable_dt);
+                    self.replay_timer += dt;
+                    let interval = 1.0 / self.replay_speed;
+                    while self.replay_timer >= interval {
+                        self.replay_timer -= interval;
+                        self.replay_bar_idx = (self.replay_bar_idx + 1).min(total_bars);
+                        if self.replay_bar_idx >= total_bars {
+                            self.replay_playing = false;
+                        }
+                    }
+                    ctx.request_repaint(); // keep animating
+                }
             }
 
             if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                if left  { chart.view_offset = chart.view_offset.saturating_sub(1); }
-                if right { chart.view_offset = (chart.view_offset + 1).min(chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN); }
-                if home  { chart.view_offset = chart.visible_bars.min(chart.bars.len()).saturating_sub(1); }
-                if end   { chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN; }
-                if pgup  { chart.view_offset = chart.view_offset.saturating_sub(chart.visible_bars / 2); }
-                if pgdn  { chart.view_offset = (chart.view_offset + chart.visible_bars / 2).min(chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN); }
+                // In replay mode, arrow keys are used for bar stepping, not panning
+                if !self.replay_active {
+                    if left  { chart.view_offset = chart.view_offset.saturating_sub(1); }
+                    if right { chart.view_offset = (chart.view_offset + 1).min(chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN); }
+                    if home  { chart.view_offset = chart.visible_bars.min(chart.bars.len()).saturating_sub(1); }
+                    if end   { chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN; }
+                    if pgup  { chart.view_offset = chart.view_offset.saturating_sub(chart.visible_bars / 2); }
+                    if pgdn  { chart.view_offset = (chart.view_offset + chart.visible_bars / 2).min(chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN); }
+                }
                 if plus  { Self::handle_zoom(chart, 1.0); }
                 if minus { Self::handle_zoom(chart, -1.0); }
             }
@@ -17078,6 +17951,38 @@ impl eframe::App for TyphooNApp {
         self.draw_floating_windows(ctx);
 
         // ── central panel (chart area) ────────────────────────────────────────
+        // ── Drawing toolbar (left-side, TradingView style) ─────────────────────
+        egui::Window::new("draw_toolbar")
+            .title_bar(false)
+            .resizable(false)
+            .collapsible(false)
+            .anchor(egui::Align2::LEFT_TOP, egui::vec2(2.0, 40.0))
+            .max_width(28.0)
+            .frame(egui::Frame::NONE.fill(egui::Color32::from_rgba_premultiplied(20, 20, 30, 200)).inner_margin(2.0).corner_radius(4.0))
+            .show(ctx, |ui: &mut egui::Ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
+                let dm = self.draw_mode;
+                let btn = |ui: &mut egui::Ui, label: &str, tip: &str, active: bool| -> bool {
+                    let text = egui::RichText::new(label).monospace().size(14.0);
+                    let text = if active { text.color(egui::Color32::from_rgb(80, 200, 255)) } else { text.color(egui::Color32::from_rgb(160, 160, 180)) };
+                    let r = ui.add(egui::Button::new(text).min_size(egui::vec2(24.0, 22.0)).frame(false));
+                    r.clone().on_hover_text(tip);
+                    r.clicked()
+                };
+                if btn(ui, "─", "Horizontal Line", matches!(dm, DrawMode::PlacingHLine)) { self.draw_mode = DrawMode::PlacingHLine; }
+                if btn(ui, "│", "Vertical Line", matches!(dm, DrawMode::PlacingVLine)) { self.draw_mode = DrawMode::PlacingVLine; }
+                if btn(ui, "╲", "Trendline", matches!(dm, DrawMode::PlacingTrendP1 | DrawMode::PlacingTrendP2 { .. })) { self.draw_mode = DrawMode::PlacingTrendP1; }
+                if btn(ui, "╱", "Ray", matches!(dm, DrawMode::PlacingRayP1 | DrawMode::PlacingRayP2 { .. })) { self.draw_mode = DrawMode::PlacingRayP1; }
+                if btn(ui, "▭", "Rectangle", matches!(dm, DrawMode::PlacingRectP1 | DrawMode::PlacingRectP2 { .. })) { self.draw_mode = DrawMode::PlacingRectP1; }
+                if btn(ui, "═", "Channel", matches!(dm, DrawMode::PlacingChannelP1 | DrawMode::PlacingChannelP2 { .. } | DrawMode::PlacingChannelP3 { .. })) { self.draw_mode = DrawMode::PlacingChannelP1; }
+                if btn(ui, "F", "Fibonacci Retracement", matches!(dm, DrawMode::PlacingFiboP1 | DrawMode::PlacingFiboP2 { .. })) { self.draw_mode = DrawMode::PlacingFiboP1; }
+                ui.separator();
+                if btn(ui, "✕", "Cancel / Clear Mode", false) { self.draw_mode = DrawMode::None; }
+                if btn(ui, "🗑", "Clear All Drawings", false) {
+                    if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); }
+                }
+            });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let available = ui.available_rect_before_wrap();
 
@@ -17342,7 +18247,7 @@ impl eframe::App for TyphooNApp {
                     }
 
                     let painter = ui.painter_at(cell_rect);
-                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, sl_price, tp_price, &trade_ov);
+                    draw_chart(&painter, chart, cell_rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov);
 
                     // Border: green for focused, dim for others (WebKit: .mtf-grid-cell:hover outline)
                     let border_color = if is_focused {
@@ -17371,9 +18276,37 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 let trade_ov = self.charts.get(self.active_tab).map(|c| c.cached_trade_overlay.clone()).unwrap_or_default();
+
+                // Replay mode: clamp view to only show replay_bar_idx bars
+                if self.replay_active {
+                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                        let count = self.replay_bar_idx.max(1).min(chart.bars.len());
+                        chart.view_offset = count.saturating_sub(1);
+                        chart.visible_bars = chart.visible_bars.min(count);
+                    }
+                }
+
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
                     let painter = ui.painter_at(rect);
-                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, sl_price, tp_price, &trade_ov);
+                    draw_chart(&painter, chart, rect, crosshair, &flags, show_rsi, show_fisher, show_macd, show_volume_pane, show_stochastic, show_adx, show_cci, show_williams_r, show_obv, show_momentum, show_better_volume, show_ehlers_ebsw, show_ehlers_cyber, show_ehlers_cg, show_ehlers_roof, self.show_squeeze, sl_price, tp_price, &trade_ov);
+
+                    // Replay overlay: show bar count and speed
+                    if self.replay_active {
+                        let replay_text = format!(
+                            "REPLAY {}/{} | {} | {:.1} bars/s",
+                            self.replay_bar_idx,
+                            chart.bars.len(),
+                            if self.replay_playing { "▶ PLAY" } else { "⏸ PAUSED" },
+                            self.replay_speed,
+                        );
+                        painter.text(
+                            egui::pos2(rect.left() + 8.0, rect.top() + 8.0),
+                            egui::Align2::LEFT_TOP,
+                            &replay_text,
+                            egui::FontId::monospace(12.0),
+                            egui::Color32::from_rgb(255, 200, 50),
+                        );
+                    }
 
                     // ── drawing mode click handling ──────────────────────
                     if resp.clicked() && self.draw_mode != DrawMode::None {
