@@ -1865,6 +1865,7 @@ fn compute_keltner(bars: &[Bar], ema_period: usize, atr_period: usize, mult: f64
 }
 
 /// Linear Regression Channel: rolling regression ± 2σ standard error bands.
+/// Linear Regression Channel — O(n) with rolling sums for Σy, Σxy, Σy².
 fn compute_regression_channel(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>) {
     let n = bars.len();
     let mut mid = vec![None; n];
@@ -1873,35 +1874,41 @@ fn compute_regression_channel(bars: &[Bar], period: usize) -> (Vec<Option<f64>>,
     if n < period { return (mid, upper, lower); }
     let pf = period as f64;
 
-    // Rolling sums for linear regression: Σx, Σy, Σxy, Σx²
-    // x = 0..period-1 (bar position in window), y = close
-    let sx: f64 = (0..period).map(|x| x as f64).sum();       // constant
-    let sx2: f64 = (0..period).map(|x| (x * x) as f64).sum(); // constant
+    // Constants: Σx, Σx² for x = 0..period-1
+    let sx: f64 = (0..period).map(|x| x as f64).sum();
+    let sx2: f64 = (0..period).map(|x| (x * x) as f64).sum();
+    let denom = pf * sx2 - sx * sx;
+    if denom.abs() < f64::EPSILON { return (mid, upper, lower); }
+
+    // Initial sums for first window
+    let mut sy: f64 = 0.0;
+    let mut sxy: f64 = 0.0;
+    let mut sy2: f64 = 0.0;
+    for k in 0..period {
+        let y = bars[k].close;
+        sy += y;
+        sxy += k as f64 * y;
+        sy2 += y * y;
+    }
 
     for i in (period - 1)..n {
-        let start = i + 1 - period;
-        let mut sy = 0.0_f64;
-        let mut sxy = 0.0_f64;
-        for k in 0..period {
-            let y = bars[start + k].close;
-            sy += y;
-            sxy += k as f64 * y;
+        if i > period - 1 {
+            // Rolling update: window slides right by 1
+            let old_y = bars[i - period].close;
+            let new_y = bars[i].close;
+            // When window slides: each existing term's x decreases by 1
+            // sxy_new = sxy_old - (sy_old - old_y) + (period-1) * new_y
+            sxy = sxy - sy + old_y + (period - 1) as f64 * new_y;
+            sy = sy - old_y + new_y;
+            sy2 = sy2 - old_y * old_y + new_y * new_y;
         }
-        let denom = pf * sx2 - sx * sx;
-        if denom.abs() < f64::EPSILON { continue; }
+
         let slope = (pf * sxy - sx * sy) / denom;
         let intercept = (sy - slope * sx) / pf;
-
-        // Regression value at current bar (x = period-1)
         let reg_val = intercept + slope * (period - 1) as f64;
 
-        // Standard error
-        let mut sse = 0.0_f64;
-        for k in 0..period {
-            let predicted = intercept + slope * k as f64;
-            let residual = bars[start + k].close - predicted;
-            sse += residual * residual;
-        }
+        // SSE from algebra: Σ(y-ŷ)² = Σy² - b0*Σy - b1*Σxy
+        let sse = (sy2 - intercept * sy - slope * sxy).max(0.0);
         let se = (sse / (pf - 2.0).max(1.0)).sqrt();
 
         mid[i] = Some(reg_val);
@@ -1933,27 +1940,30 @@ fn compute_squeeze_momentum(
         }
     }
 
-    // Momentum: linear regression deviation of close from midline
+    // Momentum: linear regression of (close - HL2), O(n) rolling sums
     if n >= period {
         let pf = period as f64;
         let sx: f64 = (0..period).map(|x| x as f64).sum();
         let sx2: f64 = (0..period).map(|x| (x * x) as f64).sum();
-        for i in (period - 1)..n {
-            let start = i + 1 - period;
-            // Use close - midline (HL2) for momentum
-            let mut sy = 0.0_f64;
-            let mut sxy = 0.0_f64;
-            for k in 0..period {
-                let mid_hl = (bars[start + k].high + bars[start + k].low) / 2.0;
-                let val = bars[start + k].close - mid_hl;
-                sy += val;
-                sxy += k as f64 * val;
+        let denom = pf * sx2 - sx * sx;
+        if denom.abs() > f64::EPSILON {
+            // Pre-compute deviation values
+            let vals: Vec<f64> = bars.iter().map(|b| b.close - (b.high + b.low) / 2.0).collect();
+
+            let mut sy: f64 = vals[..period].iter().sum();
+            let mut sxy: f64 = vals[..period].iter().enumerate().map(|(k, &v)| k as f64 * v).sum();
+
+            for i in (period - 1)..n {
+                if i > period - 1 {
+                    let old = vals[i - period];
+                    let new = vals[i];
+                    sxy = sxy - sy + old + (period - 1) as f64 * new;
+                    sy = sy - old + new;
+                }
+                let slope = (pf * sxy - sx * sy) / denom;
+                let intercept = (sy - slope * sx) / pf;
+                mom[i] = Some(intercept + slope * (period - 1) as f64);
             }
-            let denom = pf * sx2 - sx * sx;
-            if denom.abs() < f64::EPSILON { continue; }
-            let slope = (pf * sxy - sx * sy) / denom;
-            let intercept = (sy - slope * sx) / pf;
-            mom[i] = Some(intercept + slope * (period - 1) as f64);
         }
     }
     (mom, squeeze)
