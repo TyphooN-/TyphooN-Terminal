@@ -818,9 +818,12 @@ impl ChartState {
                 // MTF indicators: load HTF bars from cache, compute, project onto chart
                 self.compute_mtf_sma(cache);
                 self.compute_multi_kama(cache);
+                let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
+                    format!(" | MTF_MA: {} lines, MultiKAMA: {} TFs", self.mtf_sma.len(), self.multi_kama.len())
+                } else { String::new() };
                 log.push_back(LogEntry::info(format!(
-                    "Loaded {} bars for {} [{}]",
-                    self.bars.len(), self.symbol, self.timeframe.label()
+                    "Loaded {} bars for {} [{}]{}",
+                    self.bars.len(), self.symbol, self.timeframe.label(), mtf_info
                 )));
                 true
             }
@@ -911,9 +914,12 @@ impl ChartState {
             self.compute_indicators_gpu(gpu);
             self.compute_mtf_sma(cache);
             self.compute_multi_kama(cache);
+            let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
+                format!(" | MTF_MA: {} lines, MultiKAMA: {} TFs", self.mtf_sma.len(), self.multi_kama.len())
+            } else { String::new() };
             log.push_back(LogEntry::info(format!(
-                "Loaded {} bars for {} [{}]",
-                self.bars.len(), self.symbol, self.timeframe.label()
+                "Loaded {} bars for {} [{}]{}",
+                self.bars.len(), self.symbol, self.timeframe.label(), mtf_info
             )));
         }
         while log.len() > 500 { log.pop_front(); }
@@ -1386,14 +1392,14 @@ impl ChartState {
             if is_tf && parts.len() > 1 { parts[..parts.len()-1].join(":") } else { self.symbol.clone() }
         };
 
-        // (label, tf_suffix, sma_period) — matching MTF_MA.mqh plotted lines
-        let mtf_lines: &[(&str, &str, usize)] = &[
-            ("H1 200",  "1Hour",  200),
-            ("H4 200",  "4Hour",  200),
-            ("D1 200",  "1Day",   200),
-            ("W1 200",  "1Week",  200),
-            ("W1 100",  "1Week",  100),
-            ("MN1 100", "1Month", 100),
+        // (label, tf_suffix, sma_period, tf_minutes) — matching MTF_MA.mqh plotted lines
+        let mtf_lines: &[(&str, &str, usize, u32)] = &[
+            ("H1 200",  "1Hour",  200, 60),
+            ("H4 200",  "4Hour",  200, 240),
+            ("D1 200",  "1Day",   200, 1440),
+            ("W1 200",  "1Week",  200, 10080),
+            ("W1 100",  "1Week",  100, 10080),
+            ("MN1 100", "1Month", 100, 43200),
         ];
 
         // Extract bare symbol (strip ALL prefixes and timeframe)
@@ -1403,16 +1409,16 @@ impl ChartState {
             for pfx in &known_prefixes {
                 if s.starts_with(pfx) { s = &s[pfx.len()..]; break; }
             }
-            // For mt5:Darwinex:CC format, the broker name is the second part
-            // We want just the symbol — last part before the TF was already stripped
             let parts: Vec<&str> = s.split(':').collect();
             parts.last().copied().unwrap_or(s).to_string()
         };
 
         let prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
+        let current_minutes = self.timeframe.minutes();
 
-        for &(label, tf_suffix, period) in mtf_lines {
-            if self.timeframe.cache_suffix() == tf_suffix { continue; }
+        for &(label, tf_suffix, period, tf_min) in mtf_lines {
+            // Only show timeframes HIGHER than current (matching MT5 MTF_MA behavior)
+            if tf_min <= current_minutes { continue; }
 
             let mut htf_bars: Option<Vec<Bar>> = None;
             // Try with bare symbol under each prefix, plus the original base_sym
@@ -1490,8 +1496,8 @@ impl ChartState {
             if is_tf && parts.len() > 1 { parts[..parts.len()-1].join(":") } else { self.symbol.clone() }
         };
 
-        let higher_tfs = [
-            ("H1", "1Hour"), ("H4", "4Hour"), ("D1", "1Day"), ("W1", "1Week"), ("MN1", "1Month"),
+        let higher_tfs: &[(&str, &str, u32)] = &[
+            ("H1", "1Hour", 60), ("H4", "4Hour", 240), ("D1", "1Day", 1440), ("W1", "1Week", 10080), ("MN1", "1Month", 43200),
         ];
 
         // Extract bare symbol (strip prefixes like mt5:Darwinex:)
@@ -1506,9 +1512,11 @@ impl ChartState {
         };
 
         let prefixes = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:", ""];
+        let current_minutes = self.timeframe.minutes();
 
-        for (tf_label, tf_suffix) in &higher_tfs {
-            if self.timeframe.cache_suffix() == *tf_suffix { continue; }
+        for &(tf_label, tf_suffix, tf_min) in higher_tfs {
+            // Only show timeframes HIGHER than current (matching MT5 MultiKAMA behavior)
+            if tf_min <= current_minutes { continue; }
 
             let mut htf_bars: Option<Vec<Bar>> = None;
             // Try bare symbol with each prefix
