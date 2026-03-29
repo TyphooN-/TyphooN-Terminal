@@ -6214,6 +6214,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "KELTNER",       desc: "Toggle Keltner Channels (EMA ± ATR)" },
     Command { name: "REGRESSION",    desc: "Toggle Regression Channel (linear regression ± 2σ)" },
     Command { name: "SQUEEZE",       desc: "Toggle Squeeze Momentum (BB inside KC)" },
+    Command { name: "OBJECTS",       desc: "Open drawing object list (manage/delete drawings)" },
     // Timeframes (direct switch)
     Command { name: "M1",            desc: "Switch to 1-minute timeframe" },
     Command { name: "M5",            desc: "Switch to 5-minute timeframe" },
@@ -6835,6 +6836,7 @@ pub struct TyphooNApp {
     darwinex_sector_stats: Vec<typhoon_engine::core::var::SectorStats>,
     darwinex_multi_outliers: Vec<typhoon_engine::core::var::MultiOutlierResult>,
     show_journal: bool,
+    show_object_list: bool,
     journal_entries: Vec<JournalEntry>,
     show_var_mult: bool,
     show_margin_monitor: bool,
@@ -8194,6 +8196,7 @@ impl TyphooNApp {
             darwinex_outliers: Vec::new(),
             darwinex_sector_stats: Vec::new(),
             show_journal: false,
+            show_object_list: false,
             journal_entries: Vec::new(),
             show_var_mult: false,
             show_margin_monitor: false,
@@ -9255,6 +9258,7 @@ impl TyphooNApp {
             "KELTNER" => { self.show_keltner = !self.show_keltner; self.log.push_back(LogEntry::info(format!("Keltner: {}", if self.show_keltner { "ON" } else { "OFF" }))); }
             "REGRESSION" => { self.show_regression = !self.show_regression; self.log.push_back(LogEntry::info(format!("Regression: {}", if self.show_regression { "ON" } else { "OFF" }))); }
             "SQUEEZE" => { self.show_squeeze = !self.show_squeeze; self.log.push_back(LogEntry::info(format!("Squeeze: {}", if self.show_squeeze { "ON" } else { "OFF" }))); }
+            "OBJECTS" | "OBJECT_LIST" => { self.show_object_list = !self.show_object_list; }
             // Timeframe shortcuts
             "M1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M1); }
             "M5"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M5); }
@@ -9498,8 +9502,29 @@ impl TyphooNApp {
             })).collect::<Vec<_>>(),
             "drawings": self.charts.get(0).map(|c| {
                 c.drawings.iter().filter_map(|d| match d {
-                    Drawing::HLine { price, .. } => Some(serde_json::json!({"type": "hline", "price": price})),
-                    _ => None, // Only persist HLines for now (trendlines need bar indices which shift)
+                    Drawing::HLine { price, color } => Some(serde_json::json!({"type":"hline","price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::VLine { bar_idx, color } => Some(serde_json::json!({"type":"vline","bar_idx":bar_idx,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TrendLine { p1, p2, color } => Some(serde_json::json!({"type":"trendline","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FiboRetrace { high, low, bar_start, bar_end } => Some(serde_json::json!({"type":"fibo","high":high,"low":low,"bar_start":bar_start,"bar_end":bar_end})),
+                    Drawing::Rectangle { p1, p2, color } => Some(serde_json::json!({"type":"rect","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Ray { origin, slope, color } => Some(serde_json::json!({"type":"ray","origin":[origin.0,origin.1],"slope":slope,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Channel { p1, p2, width, color } => Some(serde_json::json!({"type":"channel","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"width":width,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ExtendedLine { p1, p2, color } => Some(serde_json::json!({"type":"extline","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::HRay { bar_idx, price, color } => Some(serde_json::json!({"type":"hray","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::CrossLine { bar_idx, price, color } => Some(serde_json::json!({"type":"crossline","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ArrowLine { p1, p2, color } => Some(serde_json::json!({"type":"arrowline","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::InfoLine { p1, p2, color } => Some(serde_json::json!({"type":"infoline","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Pitchfork { pivot, p2, p3, color } => Some(serde_json::json!({"type":"pitchfork","pivot":[pivot.0,pivot.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FiboExtension { p1, p2, p3, color } => Some(serde_json::json!({"type":"fiboext","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::GannFan { origin, scale, color } => Some(serde_json::json!({"type":"gannfan","origin":[origin.0,origin.1],"scale":scale,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::LongPosition { entry, stop, target } => Some(serde_json::json!({"type":"longpos","entry":[entry.0,entry.1],"stop":stop,"target":target})),
+                    Drawing::ShortPosition { entry, stop, target } => Some(serde_json::json!({"type":"shortpos","entry":[entry.0,entry.1],"stop":stop,"target":target})),
+                    Drawing::PriceRange { p1, p2 } => Some(serde_json::json!({"type":"pricerange","p1":[p1.0,p1.1],"p2":[p2.0,p2.1]})),
+                    Drawing::TextLabel { bar_idx, price, text, color } => Some(serde_json::json!({"type":"text","bar_idx":bar_idx,"price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ArrowMarker { bar_idx, price, is_up, color } => Some(serde_json::json!({"type":"arrowmarker","bar_idx":bar_idx,"price":price,"is_up":is_up,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Ellipse { p1, p2, color } => Some(serde_json::json!({"type":"ellipse","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Triangle { p1, p2, p3, color } => Some(serde_json::json!({"type":"triangle","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TrendAngle { p1, p2, color } => Some(serde_json::json!({"type":"trendangle","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
                 }).collect::<Vec<_>>()
             }).unwrap_or_default(),
             "alerts": self.alerts.iter().map(|(p, l)| serde_json::json!({"price": p, "label": l})).collect::<Vec<_>>(),
@@ -9589,14 +9614,42 @@ impl TyphooNApp {
                         if let Some(b) = ind[key].as_bool() { *field = b; }
                     }
                 }
-                // Restore drawings
+                // Restore drawings (all types)
                 if let Some(drawings) = v["drawings"].as_array() {
                     if let Some(chart) = self.charts.get_mut(0) {
+                        let parse_col = |d: &serde_json::Value| -> egui::Color32 {
+                            let c = &d["color"];
+                            egui::Color32::from_rgb(c[0].as_u64().unwrap_or(200) as u8, c[1].as_u64().unwrap_or(200) as u8, c[2].as_u64().unwrap_or(200) as u8)
+                        };
+                        let parse_pt = |d: &serde_json::Value, key: &str| -> Option<(usize, f64)> {
+                            let a = &d[key]; Some((a[0].as_u64()? as usize, a[1].as_f64()?))
+                        };
                         for d in drawings {
-                            if d["type"].as_str() == Some("hline") {
-                                if let Some(price) = d["price"].as_f64() {
-                                    chart.drawings.push(Drawing::HLine { price, color: HLINE_COL });
-                                }
+                            match d["type"].as_str() {
+                                Some("hline") => { if let Some(price) = d["price"].as_f64() { chart.drawings.push(Drawing::HLine { price, color: parse_col(d) }); } }
+                                Some("vline") => { if let Some(idx) = d["bar_idx"].as_u64() { chart.drawings.push(Drawing::VLine { bar_idx: idx as usize, color: parse_col(d) }); } }
+                                Some("trendline") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::TrendLine { p1, p2, color: parse_col(d) }); } }
+                                Some("fibo") => { if let (Some(h), Some(l), Some(bs), Some(be)) = (d["high"].as_f64(), d["low"].as_f64(), d["bar_start"].as_u64(), d["bar_end"].as_u64()) { chart.drawings.push(Drawing::FiboRetrace { high: h, low: l, bar_start: bs as usize, bar_end: be as usize }); } }
+                                Some("rect") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::Rectangle { p1, p2, color: parse_col(d) }); } }
+                                Some("ray") => { if let (Some(o), Some(s)) = (parse_pt(d,"origin"), d["slope"].as_f64()) { chart.drawings.push(Drawing::Ray { origin: o, slope: s, color: parse_col(d) }); } }
+                                Some("channel") => { if let (Some(p1), Some(p2), Some(w)) = (parse_pt(d,"p1"), parse_pt(d,"p2"), d["width"].as_f64()) { chart.drawings.push(Drawing::Channel { p1, p2, width: w, color: parse_col(d) }); } }
+                                Some("extline") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::ExtendedLine { p1, p2, color: parse_col(d) }); } }
+                                Some("hray") => { if let (Some(idx), Some(p)) = (d["bar_idx"].as_u64(), d["price"].as_f64()) { chart.drawings.push(Drawing::HRay { bar_idx: idx as usize, price: p, color: parse_col(d) }); } }
+                                Some("crossline") => { if let (Some(idx), Some(p)) = (d["bar_idx"].as_u64(), d["price"].as_f64()) { chart.drawings.push(Drawing::CrossLine { bar_idx: idx as usize, price: p, color: parse_col(d) }); } }
+                                Some("arrowline") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::ArrowLine { p1, p2, color: parse_col(d) }); } }
+                                Some("infoline") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::InfoLine { p1, p2, color: parse_col(d) }); } }
+                                Some("pitchfork") => { if let (Some(pv), Some(p2), Some(p3)) = (parse_pt(d,"pivot"), parse_pt(d,"p2"), parse_pt(d,"p3")) { chart.drawings.push(Drawing::Pitchfork { pivot: pv, p2, p3, color: parse_col(d) }); } }
+                                Some("fiboext") => { if let (Some(p1), Some(p2), Some(p3)) = (parse_pt(d,"p1"), parse_pt(d,"p2"), parse_pt(d,"p3")) { chart.drawings.push(Drawing::FiboExtension { p1, p2, p3, color: parse_col(d) }); } }
+                                Some("gannfan") => { if let (Some(o), Some(s)) = (parse_pt(d,"origin"), d["scale"].as_f64()) { chart.drawings.push(Drawing::GannFan { origin: o, scale: s, color: parse_col(d) }); } }
+                                Some("longpos") => { if let (Some(e), Some(s), Some(t)) = (parse_pt(d,"entry"), d["stop"].as_f64(), d["target"].as_f64()) { chart.drawings.push(Drawing::LongPosition { entry: e, stop: s, target: t }); } }
+                                Some("shortpos") => { if let (Some(e), Some(s), Some(t)) = (parse_pt(d,"entry"), d["stop"].as_f64(), d["target"].as_f64()) { chart.drawings.push(Drawing::ShortPosition { entry: e, stop: s, target: t }); } }
+                                Some("pricerange") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::PriceRange { p1, p2 }); } }
+                                Some("text") => { if let (Some(idx), Some(p), Some(t)) = (d["bar_idx"].as_u64(), d["price"].as_f64(), d["text"].as_str()) { chart.drawings.push(Drawing::TextLabel { bar_idx: idx as usize, price: p, text: t.to_string(), color: parse_col(d) }); } }
+                                Some("arrowmarker") => { if let (Some(idx), Some(p), Some(up)) = (d["bar_idx"].as_u64(), d["price"].as_f64(), d["is_up"].as_bool()) { chart.drawings.push(Drawing::ArrowMarker { bar_idx: idx as usize, price: p, is_up: up, color: parse_col(d) }); } }
+                                Some("ellipse") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::Ellipse { p1, p2, color: parse_col(d) }); } }
+                                Some("triangle") => { if let (Some(p1), Some(p2), Some(p3)) = (parse_pt(d,"p1"), parse_pt(d,"p2"), parse_pt(d,"p3")) { chart.drawings.push(Drawing::Triangle { p1, p2, p3, color: parse_col(d) }); } }
+                                Some("trendangle") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::TrendAngle { p1, p2, color: parse_col(d) }); } }
+                                _ => {}
                             }
                         }
                     }
@@ -15788,6 +15841,82 @@ impl TyphooNApp {
                 });
         }
 
+        // Object List (drawing management, like MT5 Object List)
+        if self.show_object_list {
+            let mut delete_idx: Option<usize> = None;
+            egui::Window::new("Object List")
+                .open(&mut self.show_object_list)
+                .resizable(true).default_size([400.0, 300.0])
+                .show(ctx, |ui| {
+                    if let Some(chart) = self.charts.get(self.active_tab) {
+                        if chart.drawings.is_empty() {
+                            ui.label("No drawings on this chart.");
+                        } else {
+                            ui.label(egui::RichText::new(format!("{} drawings", chart.drawings.len())).small().color(AXIS_TEXT));
+                            ui.separator();
+                            egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
+                                egui::Grid::new("object_list_grid").striped(true).show(ui, |ui| {
+                                    ui.label(egui::RichText::new("#").small().strong());
+                                    ui.label(egui::RichText::new("Type").small().strong());
+                                    ui.label(egui::RichText::new("Details").small().strong());
+                                    ui.label(egui::RichText::new("").small());
+                                    ui.end_row();
+                                    for (idx, drawing) in chart.drawings.iter().enumerate() {
+                                        ui.label(egui::RichText::new(format!("{}", idx + 1)).small());
+                                        let (type_name, details) = match drawing {
+                                            Drawing::HLine { price, .. } => ("H-Line", format!("{:.5}", price)),
+                                            Drawing::VLine { bar_idx, .. } => ("V-Line", format!("bar {}", bar_idx)),
+                                            Drawing::TrendLine { p1, p2, .. } => ("Trendline", format!("{:.4}→{:.4}", p1.1, p2.1)),
+                                            Drawing::FiboRetrace { high, low, .. } => ("Fib Retrace", format!("{:.4}–{:.4}", high, low)),
+                                            Drawing::Rectangle { .. } => ("Rectangle", String::new()),
+                                            Drawing::Ray { origin, .. } => ("Ray", format!("{:.4}", origin.1)),
+                                            Drawing::Channel { .. } => ("Channel", String::new()),
+                                            Drawing::ExtendedLine { .. } => ("Ext Line", String::new()),
+                                            Drawing::HRay { price, .. } => ("H-Ray", format!("{:.5}", price)),
+                                            Drawing::CrossLine { price, .. } => ("Cross", format!("{:.5}", price)),
+                                            Drawing::ArrowLine { .. } => ("Arrow", String::new()),
+                                            Drawing::InfoLine { p1, p2, .. } => ("Info Line", format!("{:.4}→{:.4}", p1.1, p2.1)),
+                                            Drawing::Pitchfork { .. } => ("Pitchfork", String::new()),
+                                            Drawing::FiboExtension { .. } => ("Fib Extension", String::new()),
+                                            Drawing::GannFan { .. } => ("Gann Fan", String::new()),
+                                            Drawing::LongPosition { entry, stop, target } => ("Long Pos", format!("E:{:.4} S:{:.4} T:{:.4}", entry.1, stop, target)),
+                                            Drawing::ShortPosition { entry, stop, target } => ("Short Pos", format!("E:{:.4} S:{:.4} T:{:.4}", entry.1, stop, target)),
+                                            Drawing::PriceRange { .. } => ("Price Range", String::new()),
+                                            Drawing::TextLabel { text, .. } => ("Text", text.clone()),
+                                            Drawing::ArrowMarker { is_up, .. } => (if *is_up { "Arrow Up" } else { "Arrow Down" }, String::new()),
+                                            Drawing::Ellipse { .. } => ("Ellipse", String::new()),
+                                            Drawing::Triangle { .. } => ("Triangle", String::new()),
+                                            Drawing::TrendAngle { .. } => ("Trend Angle", String::new()),
+                                        };
+                                        ui.label(egui::RichText::new(type_name).small());
+                                        ui.label(egui::RichText::new(details).small().color(AXIS_TEXT));
+                                        if ui.small_button("Del").clicked() {
+                                            delete_idx = Some(idx);
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
+                            });
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                if ui.button("Clear All").clicked() {
+                                    delete_idx = Some(usize::MAX); // sentinel for clear all
+                                }
+                            });
+                        }
+                    }
+                });
+            if let Some(idx) = delete_idx {
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    if idx == usize::MAX {
+                        chart.drawings.clear();
+                    } else if idx < chart.drawings.len() {
+                        chart.drawings.remove(idx);
+                    }
+                }
+            }
+        }
+
         // Help
         if self.show_help {
             egui::Window::new("Keyboard Shortcuts")
@@ -18437,6 +18566,11 @@ impl eframe::App for TyphooNApp {
 
                     // ── Manage group ──
                     ui.menu_button(egui::RichText::new("Manage").small().color(normal_col), |ui| {
+                        if ui.button("Object List...").clicked() {
+                            self.show_object_list = true;
+                            ui.close();
+                        }
+                        ui.separator();
                         if ui.button("Delete Last Drawing").clicked() {
                             if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.pop(); }
                             ui.close();
