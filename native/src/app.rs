@@ -705,6 +705,8 @@ struct ChartState {
     squeeze_mom: Vec<Option<f64>>,
     /// Squeeze state: true = in squeeze (BB inside KC).
     squeeze_on: Vec<bool>,
+    /// Pre-computed 20-bar rolling average volume (for volume heatmap candle coloring).
+    vol_avg_20: Vec<f64>,
     /// MultiKAMA: KAMA values from higher timeframes projected onto this chart's x-axis.
     /// Each entry: (timeframe_label, Vec of (bar_index_in_this_chart, kama_value))
     multi_kama: Vec<(String, Vec<(usize, f64)>)>,
@@ -819,6 +821,7 @@ impl ChartState {
             regression_lower: Vec::new(),
             squeeze_mom: Vec::new(),
             squeeze_on: Vec::new(),
+            vol_avg_20: Vec::new(),
             vwap: Vec::new(),
             vwap_upper1: Vec::new(),
             vwap_upper2: Vec::new(),
@@ -1292,8 +1295,12 @@ impl ChartState {
                 // ATR Projection MTF levels (matching ATR_Projection.mqh)
                 self.atr_proj_levels = compute_atr_projection_levels(&self.bars, self.timeframe.minutes());
 
-                // BetterVolume — CPU (buy/sell pressure estimation requires OHLC, 1:1 MQL5 port)
-                self.better_vol_type = compute_better_volume(&self.bars);
+                // BetterVolume — GPU with CPU fallback
+                if let Some(data) = gpu.compute_better_volume_gpu(20) {
+                    self.better_vol_type = data.iter().map(|&v| v as u8).collect();
+                } else {
+                    self.better_vol_type = compute_better_volume(&self.bars);
+                }
 
                 let (h1, h4, d1, w1, mn1) = compute_prev_candle_levels(&self.bars);
                 self.prev_h1_high = h1.0; self.prev_h1_low = h1.1;
@@ -1358,6 +1365,19 @@ impl ChartState {
                 self.regression_mid = rm; self.regression_upper = ru; self.regression_lower = rl;
                 let (sm, sq) = compute_squeeze_momentum(&self.bb_upper, &self.bb_lower, &self.keltner_upper, &self.keltner_lower, &self.bars, 20);
                 self.squeeze_mom = sm; self.squeeze_on = sq;
+                // Pre-compute 20-bar rolling average volume for heatmap candle coloring
+                {
+                    let n = self.bars.len();
+                    let mut avg = vec![0.0_f64; n];
+                    let period = 20usize;
+                    let mut sum = 0.0;
+                    for i in 0..n {
+                        sum += self.bars[i].volume;
+                        if i >= period { sum -= self.bars[i - period].volume; }
+                        avg[i] = if i >= period - 1 { sum / period as f64 } else { sum / (i + 1) as f64 };
+                    }
+                    self.vol_avg_20 = avg;
+                }
 
                 // Ehlers Super Smoother — GPU
                 if let Some(data) = gpu.compute_ehlers_ss_gpu(10) {
@@ -1503,6 +1523,19 @@ impl ChartState {
         self.regression_mid = rm; self.regression_upper = ru; self.regression_lower = rl;
         let (sm, sq) = compute_squeeze_momentum(&self.bb_upper, &self.bb_lower, &self.keltner_upper, &self.keltner_lower, &self.bars, 20);
         self.squeeze_mom = sm; self.squeeze_on = sq;
+        // Pre-compute 20-bar rolling average volume for heatmap candle coloring
+        {
+            let n = self.bars.len();
+            let mut avg = vec![0.0_f64; n];
+            let period = 20usize;
+            let mut sum = 0.0;
+            for i in 0..n {
+                sum += self.bars[i].volume;
+                if i >= period { sum -= self.bars[i - period].volume; }
+                avg[i] = if i >= period - 1 { sum / period as f64 } else { sum / (i + 1) as f64 };
+            }
+            self.vol_avg_20 = avg;
+        }
         // Ehlers indicators
         self.ehlers_ss = ehlers_super_smoother(&self.bars, 10);
         self.ehlers_decycler = ehlers_decycler(&self.bars, 20);
@@ -4601,19 +4634,8 @@ fn draw_chart(
             };
             let weekend_up = egui::Color32::from_rgb(255, 0, 255);    // magenta bull (weekend gap-fill)
             let weekend_dn = egui::Color32::from_rgb(180, 0, 180);   // dark magenta bear (weekend gap-fill)
-            // Pre-compute 20-bar rolling average volume for heatmap mode
-            let vol_avg: Vec<f64> = if flags.vol_heatmap {
-                let full_bars = &chart.bars;
-                let mut avg = vec![0.0; full_bars.len()];
-                let period = 20usize;
-                let mut sum = 0.0;
-                for i in 0..full_bars.len() {
-                    sum += full_bars[i].volume;
-                    if i >= period { sum -= full_bars[i - period].volume; }
-                    avg[i] = if i >= period - 1 { sum / period as f64 } else { sum / (i + 1) as f64 };
-                }
-                avg
-            } else { Vec::new() };
+            // Volume heatmap uses pre-computed vol_avg_20 from ChartState (no per-frame alloc)
+            let vol_avg = &chart.vol_avg_20;
             for (rel_idx, bar) in render_bars.iter().enumerate() {
                 let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
                 let y_open  = price_to_y(bar.open);
