@@ -4347,6 +4347,16 @@ fn draw_chart(
 
     // ── fractals ─────────────────────────────────────────────────────────
     if flags.fractals {
+        // Market structure: track prev swing high/low to label HH/HL/LH/LL
+        let mut prev_swing_high: Option<f64> = None;
+        let mut prev_swing_low: Option<f64> = None;
+        // Scan all bars up to visible end to get accurate structure context
+        let scan_start = start_idx.saturating_sub(50); // look back for prior swings
+        for si in scan_start..start_idx {
+            if si < chart.fractal_up.len() && chart.fractal_up[si] { prev_swing_high = Some(chart.bars[si].high); }
+            if si < chart.fractal_down.len() && chart.fractal_down[si] { prev_swing_low = Some(chart.bars[si].low); }
+        }
+        let ms_font = egui::FontId::monospace(8.0);
         for (rel_idx, bar) in bars.iter().enumerate() {
             let abs_idx = start_idx + rel_idx;
             let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
@@ -4354,13 +4364,24 @@ fn draw_chart(
                 let y = price_to_y(bar.high) - 8.0;
                 if y >= chart_rect.top() {
                     painter.text(egui::pos2(x, y), egui::Align2::CENTER_BOTTOM, "▲", egui::FontId::proportional(10.0), UP);
+                    // Market structure label
+                    if let Some(prev_h) = prev_swing_high {
+                        let (label, col) = if bar.high > prev_h { ("HH", UP) } else { ("LH", DOWN) };
+                        painter.text(egui::pos2(x, y - 10.0), egui::Align2::CENTER_BOTTOM, label, ms_font.clone(), col);
+                    }
                 }
+                prev_swing_high = Some(bar.high);
             }
             if abs_idx < chart.fractal_down.len() && chart.fractal_down[abs_idx] {
                 let y = price_to_y(bar.low) + 2.0;
                 if y <= chart_rect.bottom() {
                     painter.text(egui::pos2(x, y), egui::Align2::CENTER_TOP, "▼", egui::FontId::proportional(10.0), DOWN);
+                    if let Some(prev_l) = prev_swing_low {
+                        let (label, col) = if bar.low > prev_l { ("HL", UP) } else { ("LL", DOWN) };
+                        painter.text(egui::pos2(x, y + 10.0), egui::Align2::CENTER_TOP, label, ms_font.clone(), col);
+                    }
                 }
+                prev_swing_low = Some(bar.low);
             }
         }
     }
