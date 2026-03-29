@@ -5630,8 +5630,6 @@ pub struct TyphooNApp {
     // ── floating window visibility ───────────────────────────────────────
     show_settings: bool,
     was_settings_open: bool,
-    /// Whether daily CryptoCompare refresh has run this session.
-    crypto_daily_done: bool,
     show_darwin_accounts: bool,
     show_darwin_portfolio: bool,
     show_risk_calc: bool,
@@ -6546,37 +6544,29 @@ impl TyphooNApp {
                         let client = reqwest::Client::builder()
                             .user_agent("TyphooN-Terminal/1.0")
                             .build().unwrap_or_default();
-                        // Kraken OHLC API returns max ~720 most recent bars per timeframe
-                        // (the `since` parameter does NOT enable historical pagination for OHLC)
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Kraken backfill {} ({} TFs, ~720 bars each)...", symbol, timeframes.len())));
+                        // Kraken OHLC: max ~720 most recent bars per timeframe
                         let now_ms = chrono::Utc::now().timestamp_millis();
                         let mut total_bars = 0usize;
                         for tf in &timeframes {
-                            // Kraken OHLC always returns most recent ~720 bars regardless of `since`
-                            let start = 0i64; // request from epoch — Kraken will return latest 720 anyway
+                            let start = 0i64;
                             match kraken::fetch_binance_klines(&client, &symbol, tf, start, now_ms).await {
                                 Ok(bars) => {
                                     let count = bars.len();
                                     total_bars += count;
-                                    // Store in cache
                                     if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
                                         let json = serde_json::to_string(&bars).unwrap_or_default();
                                         let key = format!("kraken:{}:{}", symbol, tf);
                                         let _ = cache.put_bars(&key, &json);
                                     }
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                        format!("Kraken {} {}: {} bars cached", symbol, tf, count)
-                                    ));
                                 }
                                 Err(e) => {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Kraken {} {}: {}", symbol, tf, e)));
+                                    tracing::debug!("Kraken {} {}: {}", symbol, tf, e);
                                 }
                             }
                         }
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                            format!("Kraken {} complete: {} total bars across {} TFs — full history from earliest available",
-                                symbol, total_bars, timeframes.len())
-                        ));
+                        if total_bars > 0 {
+                            tracing::debug!("Kraken {}: {} bars across {} TFs", symbol, total_bars, timeframes.len());
+                        }
                     }
                     BrokerCmd::CryptoCompareBackfill { symbol, timeframes, db_path: _ } => {
                         use typhoon_engine::core::cryptocompare;
@@ -6944,7 +6934,6 @@ impl TyphooNApp {
             watchlist_input: String::new(),
             show_settings: false,
             was_settings_open: false,
-            crypto_daily_done: false,
             show_darwin_accounts: false,
             show_darwin_portfolio: false,
             show_risk_calc: false,
@@ -17688,12 +17677,18 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Auto MT5 sync every ~30 seconds (matches BarCacheWriter update interval)
+            // Auto MT5 sync every ~30s on weekdays (BarCacheWriter doesn't run on weekends)
             if self.frame_count % 120 == 100 && self.frame_count > 0 {
-                let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
-                if !paths.is_empty() {
-                    let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                    let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths, target: db_path });
+                let now_utc = chrono::Utc::now();
+                let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
+                use chrono::Datelike;
+                let is_weekday = !matches!(eastern.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
+                if is_weekday {
+                    let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
+                    if !paths.is_empty() {
+                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                        let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths, target: db_path });
+                    }
                 }
             }
 
@@ -17720,19 +17715,7 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Kraken startup sync — once per session (delayed to give user time to connect as LAN client)
-            if self.frame_count == 2400 && !self.crypto_daily_done {
-                self.crypto_daily_done = true;
-                let crypto_syms = ["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"];
-                let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into()];
-                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                for sym in &crypto_syms {
-                    let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
-                        symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone(),
-                    });
-                }
-                self.log.push_back(LogEntry::info("Kraken startup sync: 10 symbols × 4 TFs (1Day/1Week/4Hour/1Hour)"));
-            }
+            // No Kraken bulk startup — weekend polling handles it (1 symbol/min, no log flood)
         }
 
         // Repaint strategy:
