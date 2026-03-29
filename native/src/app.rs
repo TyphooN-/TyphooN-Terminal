@@ -17541,21 +17541,21 @@ impl eframe::App for TyphooNApp {
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
         }
 
-        // Weekend crypto sync via Kraken — ALL symbols, ALL timeframes, every 60 seconds
-        // Kraken has no practical rate limit for public endpoints (720 bars per request)
-        {
-            if self.frame_count % 240 == 150 && self.frame_count > 0 { // every ~60s at 250ms repaint
+        // ── Data sync (disabled when LAN client — server provides all data) ──
+        let is_lan_client = self.lan_sync_mode == "client";
+
+        if !is_lan_client {
+            // Weekend crypto sync via Kraken — every 60 seconds, rotate through symbols
+            if self.frame_count % 240 == 150 && self.frame_count > 0 {
                 let now_utc = chrono::Utc::now();
                 let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
                 use chrono::Datelike;
                 let is_weekend = matches!(eastern.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
                 if is_weekend {
                     let crypto_syms = ["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"];
-                    // Rotate through symbols each poll (1 symbol per minute to spread load)
                     let sym_idx = ((self.frame_count / 240) as usize) % crypto_syms.len();
                     let sym = crypto_syms[sym_idx];
                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                    // Fetch the active chart's timeframe + D1 (most important)
                     let active_tf = self.charts.get(self.active_tab)
                         .map(|c| c.timeframe.cache_suffix().to_string())
                         .unwrap_or_else(|| "1Day".to_string());
@@ -17566,29 +17566,29 @@ impl eframe::App for TyphooNApp {
                     });
                 }
             }
-        }
 
-        // Auto MT5 sync every ~5 minutes (1200 frames at 250ms) — picks up BarCacheWriter updates
-        if self.frame_count % 1200 == 100 && self.frame_count > 0 {
-            let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
-            if !paths.is_empty() {
+            // Auto MT5 sync every ~5 minutes
+            if self.frame_count % 1200 == 100 && self.frame_count > 0 {
+                let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
+                if !paths.is_empty() {
+                    let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                    let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths, target: db_path });
+                }
+            }
+
+            // Kraken startup sync — once per session
+            if self.frame_count == 600 && !self.crypto_daily_done {
+                self.crypto_daily_done = true;
+                let crypto_syms = ["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"];
+                let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into()];
                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths, target: db_path });
+                for sym in &crypto_syms {
+                    let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
+                        symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone(),
+                    });
+                }
+                self.log.push_back(LogEntry::info("Kraken startup sync: 10 symbols × 4 TFs (1Day/1Week/4Hour/1Hour)"));
             }
-        }
-
-        // Kraken startup sync — full backfill for all crypto symbols once per session
-        if self.frame_count == 600 && !self.crypto_daily_done {
-            self.crypto_daily_done = true;
-            let crypto_syms = ["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"];
-            let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into()];
-            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-            for sym in &crypto_syms {
-                let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
-                    symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone(),
-                });
-            }
-            self.log.push_back(LogEntry::info("Kraken startup sync: 10 symbols × 4 TFs (1Day/1Week/4Hour/1Hour)"));
         }
 
         // Repaint strategy:
