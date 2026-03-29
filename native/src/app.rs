@@ -5332,6 +5332,12 @@ enum BrokerCmd {
     FetchEconCalendar { finnhub_key: String },
     /// Fetch congressional stock trades (House Stock Watcher).
     FetchCongressTrades,
+    /// Start LAN sync server on port with passphrase.
+    LanSyncStart { port: u16, passphrase: String, db_path: std::path::PathBuf },
+    /// Connect LAN sync client to server.
+    LanSyncConnect { host: String, port: u16, passphrase: String, db_path: std::path::PathBuf },
+    /// Stop LAN sync server or client.
+    LanSyncStop,
 }
 
 /// Messages sent from async broker task → UI.
@@ -6727,6 +6733,30 @@ impl TyphooNApp {
                             }
                             Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Congress trades: {}", e))); }
                         }
+                    }
+                    BrokerCmd::LanSyncStart { port, passphrase, db_path } => {
+                        use typhoon_engine::core::lan_sync::LanSyncServer;
+                        let cache_for_sync = Arc::new(typhoon_engine::core::cache::SqliteCache::open(&db_path).unwrap());
+                        match LanSyncServer::start(cache_for_sync, port, &passphrase).await {
+                            Ok(_server) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync server running on wss://0.0.0.0:{}", port)));
+                                // Server runs until task is aborted (keeps listening in background)
+                            }
+                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync server failed: {}", e))); }
+                        }
+                    }
+                    BrokerCmd::LanSyncConnect { host, port, passphrase, db_path } => {
+                        use typhoon_engine::core::lan_sync::LanSyncClient;
+                        let cache_for_sync = Arc::new(typhoon_engine::core::cache::SqliteCache::open(&db_path).unwrap());
+                        match LanSyncClient::connect(cache_for_sync, &host, port, &passphrase).await {
+                            Ok(_client) => {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync connected to wss://{}:{}", host, port)));
+                            }
+                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync connect failed: {}", e))); }
+                        }
+                    }
+                    BrokerCmd::LanSyncStop => {
+                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("LAN sync stopped".into()));
                     }
                 }
             }
@@ -14286,8 +14316,9 @@ impl TyphooNApp {
                                     self.log.push_back(LogEntry::warn("Set a passphrase for LAN sync"));
                                 } else {
                                     self.lan_sync_mode = "server".into();
+                                    let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                    let _ = self.broker_tx.send(BrokerCmd::LanSyncStart { port, passphrase: self.lan_sync_passphrase.clone(), db_path });
                                     self.log.push_back(LogEntry::info(format!("LAN sync server starting on wss://0.0.0.0:{} (TLS encrypted)", port)));
-                                    // TODO: spawn LanSyncServer::start() via broker_tx
                                 }
                             }
                         });
@@ -14305,8 +14336,9 @@ impl TyphooNApp {
                                 } else {
                                     let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
                                     self.lan_sync_mode = "client".into();
+                                    let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                    let _ = self.broker_tx.send(BrokerCmd::LanSyncConnect { host: self.lan_sync_host.clone(), port, passphrase: self.lan_sync_passphrase.clone(), db_path });
                                     self.log.push_back(LogEntry::info(format!("LAN sync connecting to wss://{}:{} (TLS encrypted)...", self.lan_sync_host, port)));
-                                    // TODO: spawn LanSyncClient::connect() via broker_tx
                                 }
                             }
                         });
@@ -14322,8 +14354,8 @@ impl TyphooNApp {
                         ui.add_space(8.0);
                         if ui.add(egui::Button::new(egui::RichText::new("Stop").strong()).fill(egui::Color32::from_rgb(180, 40, 40)).min_size(egui::vec2(80.0, 28.0))).clicked() {
                             self.lan_sync_mode = "idle".into();
+                            let _ = self.broker_tx.send(BrokerCmd::LanSyncStop);
                             self.log.push_back(LogEntry::info("LAN sync stopped"));
-                            // TODO: stop server/client
                         }
                     }
 
