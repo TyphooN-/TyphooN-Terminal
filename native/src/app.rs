@@ -1199,7 +1199,8 @@ impl ChartState {
 
                 // Remaining indicators — GPU where shader exists, CPU fallback
 
-                // Ichimoku — GPU (sequential, 4 outputs)
+                // Ichimoku — GPU (sequential, 4 outputs per bar)
+                // Warmup: Tenkan=8, Kijun=25, SpanA=51, SpanB=77 bars
                 if let Some(data) = gpu.compute_ichimoku_gpu() {
                     let n = self.bars.len();
                     let mut tk = Vec::with_capacity(n); let mut kj = Vec::with_capacity(n);
@@ -1209,10 +1210,10 @@ impl ChartState {
                         let k = data.get(i * 4 + 1).copied().unwrap_or(0.0);
                         let a = data.get(i * 4 + 2).copied().unwrap_or(0.0);
                         let b = data.get(i * 4 + 3).copied().unwrap_or(0.0);
-                        tk.push(if t == 0.0 { None } else { Some(t as f64) });
-                        kj.push(if k == 0.0 { None } else { Some(k as f64) });
-                        sa.push(if a == 0.0 { None } else { Some(a as f64) });
-                        sb.push(if b == 0.0 { None } else { Some(b as f64) });
+                        tk.push(if i < 9 { None } else { Some(t as f64) });
+                        kj.push(if i < 26 { None } else { Some(k as f64) });
+                        sa.push(if i < 52 { None } else { Some(a as f64) });
+                        sb.push(if i < 52 { None } else { Some(b as f64) });
                     }
                     self.ichi_tenkan = tk; self.ichi_kijun = kj; self.ichi_span_a = sa; self.ichi_span_b = sb;
                 } else {
@@ -1248,9 +1249,9 @@ impl ChartState {
                     } else { self.obv = compute_obv(&self.bars); }
                 }
 
-                // Momentum — GPU (parallel)
+                // Momentum — GPU (parallel, oscillator — 0.0 is valid)
                 if let Some(data) = gpu.compute_momentum_gpu(10) {
-                    self.momentum = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
+                    self.momentum = data.iter().enumerate().map(|(i, &v)| if i < 10 { None } else { Some(v as f64) }).collect();
                 } else { self.momentum = compute_momentum(&self.bars, 10); }
 
                 // Parabolic SAR — GPU (sequential, from OHLC)
@@ -2646,49 +2647,20 @@ fn compute_stochastic(bars: &[Bar], k_period: usize, k_smooth: usize, d_smooth: 
     (stoch_k, stoch_d)
 }
 
+/// SMA over Option<f64> series (skipping None values, rolling window over valid values only).
 fn sma_of_option(data: &[Option<f64>], period: usize) -> Vec<Option<f64>> {
     let n = data.len();
     let mut out = vec![None; n];
-    let mut sum = 0.0_f64;
-    let mut count = 0_usize;
-    for i in 0..n {
-        if let Some(v) = data[i] {
-            sum += v;
-            count += 1;
-            if count >= period {
-                if count > period {
-                    // Find the value to subtract (period steps back through valid values)
-                    let mut back = 0;
-                    let mut found = 0;
-                    for j in (0..i).rev() {
-                        if data[j].is_some() {
-                            found += 1;
-                            if found == period {
-                                back = j;
-                                break;
-                            }
-                        }
-                    }
-                    if let Some(old) = data[back] {
-                        sum -= old;
-                    }
-                }
-                out[i] = Some(sum / period as f64);
-            }
-        }
-    }
-    // Simpler approach: just running SMA over valid values
-    let mut out2 = vec![None; n];
     let vals: Vec<(usize, f64)> = data.iter().enumerate().filter_map(|(i, v)| v.map(|x| (i, x))).collect();
     if vals.len() >= period {
         let mut s: f64 = vals[..period].iter().map(|(_, v)| v).sum();
-        out2[vals[period - 1].0] = Some(s / period as f64);
+        out[vals[period - 1].0] = Some(s / period as f64);
         for j in period..vals.len() {
             s += vals[j].1 - vals[j - period].1;
-            out2[vals[j].0] = Some(s / period as f64);
+            out[vals[j].0] = Some(s / period as f64);
         }
     }
-    out2
+    out
 }
 
 fn compute_adx(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<f64>>, Vec<Option<f64>>) {
