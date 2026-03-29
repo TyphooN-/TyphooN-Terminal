@@ -6170,10 +6170,11 @@ impl TyphooNApp {
                             }
                         }
                     }
-                    BrokerCmd::DarwinImportAll { dir, db_path } => {
+                    BrokerCmd::DarwinImportAll { dir, db_path: _ } => {
                         // Spawn a dedicated thread so we don't block the broker command loop
                         let msg_tx = broker_msg_tx_clone.clone();
                         let importing = importing_flag.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
                         std::thread::spawn(move || {
                             importing.store(true, std::sync::atomic::Ordering::Relaxed);
                             let _ = msg_tx.send(BrokerMsg::OrderResult(format!("DARWIN XLSX scan: {}...", dir.display())));
@@ -6189,7 +6190,7 @@ impl TyphooNApp {
                                         let _ = msg_tx.send(BrokerMsg::Error(format!("No .xlsx files found in {}", dir.display())));
                                     } else {
                                         let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Found {} XLSX files", xlsx_files.len())));
-                                        if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                        if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
                                             if let Ok(conn) = cache.connection() {
                                                 let _ = darwin::create_darwin_tables(&conn);
                                                 let mut total_deals = 0usize;
@@ -6231,13 +6232,14 @@ impl TyphooNApp {
                             importing.store(false, std::sync::atomic::Ordering::Relaxed);
                         });
                     }
-                    BrokerCmd::FundamentalsScrape { db_path } => {
+                    BrokerCmd::FundamentalsScrape { db_path: _ } => {
                         let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
                         std::thread::spawn(move || {
                             let rt = tokio::runtime::Builder::new_current_thread()
                                 .enable_all().build().unwrap();
                             rt.block_on(async {
-                                match typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
                                     Ok(cache) => {
                                         if let Ok(conn) = cache.connection() {
                                             let _ = fundamentals::create_fundamentals_tables(&conn);
@@ -6302,13 +6304,14 @@ impl TyphooNApp {
                             });
                         });
                     }
-                    BrokerCmd::FundamentalsScrapeOne { ticker, db_path } => {
+                    BrokerCmd::FundamentalsScrapeOne { ticker, db_path: _ } => {
                         let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
                         std::thread::spawn(move || {
                             let rt = tokio::runtime::Builder::new_current_thread()
                                 .enable_all().build().unwrap();
                             rt.block_on(async {
-                                match typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
                                     Ok(cache) => {
                                         if let Ok(conn) = cache.connection() {
                                             let _ = fundamentals::create_fundamentals_tables(&conn);
@@ -6338,10 +6341,11 @@ impl TyphooNApp {
                             });
                         });
                     }
-                    BrokerCmd::CompactStorage { db_path, level } => {
+                    BrokerCmd::CompactStorage { db_path: _, level } => {
                         let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
                         std::thread::spawn(move || {
-                            match typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                            match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
                                 Ok(cache) => {
                                     let msg_tx2 = msg_tx.clone();
                                     match cache.compact_storage(level, Some(&|processed, total, key, old_size, new_size| {
@@ -6471,7 +6475,7 @@ impl TyphooNApp {
                             }
                         });
                     }
-                    BrokerCmd::FetchBars { symbol, timeframe, db_path } => {
+                    BrokerCmd::FetchBars { symbol, timeframe, db_path: _ } => {
                         if let Some(ref b) = broker {
                             let tf_alpaca = match timeframe.as_str() {
                                 "1Min" => "1Min", "5Min" => "5Min", "15Min" => "15Min",
@@ -6503,7 +6507,7 @@ impl TyphooNApp {
                                     let count = bars.len();
                                     if count > 0 {
                                         // Store in cache as alpaca: prefix
-                                        if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                        if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
                                             let json = serde_json::to_string(&bars).unwrap_or_default();
                                             let key = format!("alpaca:{}:{}", symbol, timeframe);
                                             let _ = cache.put_bars(&key, &json);
@@ -6529,7 +6533,7 @@ impl TyphooNApp {
                             ));
                         }
                     }
-                    BrokerCmd::KrakenBackfill { symbol, timeframes, db_path } => {
+                    BrokerCmd::KrakenBackfill { symbol, timeframes, db_path: _ } => {
                         use typhoon_engine::core::kraken;
                         let client = reqwest::Client::builder()
                             .user_agent("TyphooN-Terminal/1.0")
@@ -6547,7 +6551,7 @@ impl TyphooNApp {
                                     let count = bars.len();
                                     total_bars += count;
                                     // Store in cache
-                                    if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
                                         let json = serde_json::to_string(&bars).unwrap_or_default();
                                         let key = format!("kraken:{}:{}", symbol, tf);
                                         let _ = cache.put_bars(&key, &json);
@@ -6566,7 +6570,7 @@ impl TyphooNApp {
                                 symbol, total_bars, timeframes.len())
                         ));
                     }
-                    BrokerCmd::CryptoCompareBackfill { symbol, timeframes, db_path } => {
+                    BrokerCmd::CryptoCompareBackfill { symbol, timeframes, db_path: _ } => {
                         use typhoon_engine::core::cryptocompare;
                         let client = reqwest::Client::builder()
                             .user_agent("TyphooN-Terminal/1.0")
@@ -6588,7 +6592,7 @@ impl TyphooNApp {
                                 Ok(bars) => {
                                     let count = bars.len();
                                     total_bars += count;
-                                    if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
                                         let json = serde_json::to_string(&bars).unwrap_or_default();
                                         let key = format!("cryptocompare:{}:{}", symbol, tf);
                                         let _ = cache.put_bars(&key, &json);
@@ -6606,7 +6610,7 @@ impl TyphooNApp {
                         }
                         // Auto-delete old Kraken data for this symbol (superseded by CryptoCompare)
                         if total_bars > 0 {
-                            if let Ok(cache) = typhoon_engine::core::cache::SqliteCache::open(&db_path) {
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
                                 let mut kraken_deleted = 0u64;
                                 for tf in &timeframes {
                                     let kraken_key = format!("kraken:{}:{}", symbol, tf);
