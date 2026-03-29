@@ -48,4 +48,5 @@ pub mod keys {
     pub const TT_USERNAME: &str = "tastytrade_username";
     pub const TT_PASSWORD: &str = "tastytrade_password";
     pub const FRED_KEY: &str = "fred_api_key";
+    pub const LAN_SYNC_PASS: &str = "lan_sync_passphrase";
 }

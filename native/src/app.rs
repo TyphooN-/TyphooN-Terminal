@@ -8115,6 +8115,7 @@ impl TyphooNApp {
             (keyring::keys::FRED_KEY, self.fred_key.as_str()),
             (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
             (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
+            (keyring::keys::LAN_SYNC_PASS, self.lan_sync_passphrase.as_str()),
         ];
         for (key, val) in &creds {
             let _ = keyring::store(key, val);
@@ -8549,6 +8550,7 @@ impl TyphooNApp {
                 (keyring::keys::FRED_KEY, self.fred_key.as_str()),
                 (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
                 (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
+                (keyring::keys::LAN_SYNC_PASS, self.lan_sync_passphrase.as_str()),
             ];
             let mut kr_ok = true;
             for (key, val) in &creds {
@@ -15019,6 +15021,7 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::FRED_KEY, "fred_key"),
                     (keyring::keys::TT_USERNAME, "tt_username"),
                     (keyring::keys::TT_PASSWORD, "tt_password"),
+                    (keyring::keys::LAN_SYNC_PASS, "lan_sync_pass"),
                 ];
                 let mut loaded_values: Vec<(String, String)> = Vec::new();
                 for (kr_key, _label) in &cred_keys {
@@ -15057,6 +15060,7 @@ impl eframe::App for TyphooNApp {
                         k if k == keyring::keys::FRED_KEY => self.fred_key = val.clone(),
                         k if k == keyring::keys::TT_USERNAME => self.tt_username = val.clone(),
                         k if k == keyring::keys::TT_PASSWORD => self.tt_password = val.clone(),
+                        k if k == keyring::keys::LAN_SYNC_PASS => self.lan_sync_passphrase = val.clone(),
                         _ => {}
                     }
                 }
