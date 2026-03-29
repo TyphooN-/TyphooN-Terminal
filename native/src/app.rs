@@ -5841,6 +5841,7 @@ impl TyphooNApp {
         let importing_flag_broker = importing_flag.clone();
         let importing_flag_bg = importing_flag.clone();
         let rt = rt_handle.clone();
+        let shared_cache_broker = shared_cache.clone(); // shared DB connection for LAN sync
         rt_handle.spawn(async move {
             let mut cmd_rx = _broker_cmd_rx;
             let mut broker: Option<AlpacaBroker> = None;
@@ -6734,25 +6735,31 @@ impl TyphooNApp {
                             Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Congress trades: {}", e))); }
                         }
                     }
-                    BrokerCmd::LanSyncStart { port, passphrase, db_path } => {
+                    BrokerCmd::LanSyncStart { port, passphrase, .. } => {
                         use typhoon_engine::core::lan_sync::LanSyncServer;
-                        let cache_for_sync = Arc::new(typhoon_engine::core::cache::SqliteCache::open(&db_path).unwrap());
-                        match LanSyncServer::start(cache_for_sync, port, &passphrase).await {
-                            Ok(_server) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync server running on wss://0.0.0.0:{}", port)));
-                                // Server runs until task is aborted (keeps listening in background)
+                        // Use shared cache — no duplicate DB open (prevents DB locking)
+                        if let Some(cache_arc) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                            match LanSyncServer::start(cache_arc, port, &passphrase).await {
+                                Ok(_server) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync server running on wss://0.0.0.0:{}", port)));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync server failed: {}", e))); }
                             }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync server failed: {}", e))); }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("LAN sync: cache not ready yet".into()));
                         }
                     }
-                    BrokerCmd::LanSyncConnect { host, port, passphrase, db_path } => {
+                    BrokerCmd::LanSyncConnect { host, port, passphrase, .. } => {
                         use typhoon_engine::core::lan_sync::LanSyncClient;
-                        let cache_for_sync = Arc::new(typhoon_engine::core::cache::SqliteCache::open(&db_path).unwrap());
-                        match LanSyncClient::connect(cache_for_sync, &host, port, &passphrase).await {
-                            Ok(_client) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync connected to wss://{}:{}", host, port)));
+                        if let Some(cache_arc) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                            match LanSyncClient::connect(cache_arc, &host, port, &passphrase).await {
+                                Ok(_client) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync connected to wss://{}:{}", host, port)));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync connect failed: {}", e))); }
                             }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync connect failed: {}", e))); }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("LAN sync: cache not ready yet".into()));
                         }
                     }
                     BrokerCmd::LanSyncStop => {
