@@ -1055,3 +1055,495 @@ impl SqliteCache {
         Ok(rows)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Monotonic counter for unique temp DB paths across parallel tests.
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// Helper: unique temp DB path per test invocation (no external crate needed).
+    fn temp_db_path() -> PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        std::env::temp_dir().join(format!("typhoon_cache_test_{}_{}.db", pid, id))
+    }
+
+    /// Helper: build a valid TTBR binary blob with N bars.
+    fn make_binary_bars(bars: &[(i64, f64, f64, f64, f64, f64)]) -> Vec<u8> {
+        let count = bars.len() as u32;
+        let mut buf = Vec::with_capacity(4 + 4 + bars.len() * BYTES_PER_BAR);
+        buf.extend_from_slice(BAR_BINARY_MAGIC);
+        buf.extend_from_slice(&count.to_le_bytes());
+        for &(ts, o, h, l, c, v) in bars {
+            buf.extend_from_slice(&ts.to_le_bytes());
+            buf.extend_from_slice(&o.to_le_bytes());
+            buf.extend_from_slice(&h.to_le_bytes());
+            buf.extend_from_slice(&l.to_le_bytes());
+            buf.extend_from_slice(&c.to_le_bytes());
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        buf
+    }
+
+    // ---- unpack_bars_raw tests ----
+
+    #[test]
+    fn unpack_bars_raw_single_bar() {
+        let ts: i64 = 1_700_000_000_000; // 2023-11-14T22:13:20Z
+        let bars = vec![(ts, 100.0, 105.0, 99.0, 103.0, 5000.0)];
+        let binary = make_binary_bars(&bars);
+        let result = unpack_bars_raw(&binary).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], (ts, 100.0, 105.0, 99.0, 103.0, 5000.0));
+    }
+
+    #[test]
+    fn unpack_bars_raw_multiple_bars() {
+        let bars = vec![
+            (1_700_000_000_000, 100.0, 105.0, 99.0, 103.0, 5000.0),
+            (1_700_000_060_000, 103.0, 107.0, 102.0, 106.0, 6000.0),
+            (1_700_000_120_000, 106.0, 108.0, 104.0, 105.0, 4500.0),
+        ];
+        let binary = make_binary_bars(&bars);
+        let result = unpack_bars_raw(&binary).unwrap();
+        assert_eq!(result.len(), 3);
+        for (i, bar) in bars.iter().enumerate() {
+            assert_eq!(result[i], *bar);
+        }
+    }
+
+    #[test]
+    fn unpack_bars_raw_zero_bars() {
+        let binary = make_binary_bars(&[]);
+        let result = unpack_bars_raw(&binary).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn unpack_bars_raw_empty_data() {
+        let result = unpack_bars_raw(&[]);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Not binary bar format");
+    }
+
+    #[test]
+    fn unpack_bars_raw_too_short_for_header() {
+        let result = unpack_bars_raw(&[b'T', b'T', b'B']);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Not binary bar format");
+    }
+
+    #[test]
+    fn unpack_bars_raw_wrong_magic() {
+        let mut binary = make_binary_bars(&[(0, 1.0, 2.0, 3.0, 4.0, 5.0)]);
+        binary[0] = b'X'; // corrupt magic
+        let result = unpack_bars_raw(&binary);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Not binary bar format");
+    }
+
+    #[test]
+    fn unpack_bars_raw_truncated_data() {
+        let bars = vec![(1_700_000_000_000, 100.0, 105.0, 99.0, 103.0, 5000.0)];
+        let mut binary = make_binary_bars(&bars);
+        binary.truncate(binary.len() - 10); // chop off last 10 bytes
+        let result = unpack_bars_raw(&binary);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Binary data truncated"));
+    }
+
+    #[test]
+    fn unpack_bars_raw_count_claims_more_than_available() {
+        // Header says 5 bars but only 1 bar of data follows
+        let mut buf = Vec::new();
+        buf.extend_from_slice(BAR_BINARY_MAGIC);
+        buf.extend_from_slice(&5u32.to_le_bytes()); // claim 5 bars
+        // Only write 1 bar worth of data
+        buf.extend_from_slice(&0i64.to_le_bytes());
+        for _ in 0..5 {
+            buf.extend_from_slice(&1.0f64.to_le_bytes());
+        }
+        let result = unpack_bars_raw(&buf);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Binary data truncated"));
+    }
+
+    #[test]
+    fn unpack_bars_raw_preserves_negative_values() {
+        let bars = vec![(0, -10.5, -5.0, -20.0, -15.0, 0.0)];
+        let binary = make_binary_bars(&bars);
+        let result = unpack_bars_raw(&binary).unwrap();
+        assert_eq!(result[0], (0, -10.5, -5.0, -20.0, -15.0, 0.0));
+    }
+
+    #[test]
+    fn unpack_bars_raw_preserves_zero_volume() {
+        let bars = vec![(1_000, 1.0, 2.0, 0.5, 1.5, 0.0)];
+        let binary = make_binary_bars(&bars);
+        let result = unpack_bars_raw(&binary).unwrap();
+        assert_eq!(result[0].5, 0.0);
+    }
+
+    // ---- pack_bars / unpack_bars roundtrip tests ----
+
+    #[test]
+    fn pack_unpack_roundtrip() {
+        let json = r#"[
+            {"timestamp":"2024-01-15T12:00:00+00:00","open":100.0,"high":105.0,"low":99.0,"close":103.0,"volume":5000.0},
+            {"timestamp":"2024-01-15T13:00:00+00:00","open":103.0,"high":107.0,"low":102.0,"close":106.0,"volume":6000.0}
+        ]"#;
+        let binary = pack_bars(json).unwrap();
+        // Verify magic + count header
+        assert_eq!(&binary[0..4], BAR_BINARY_MAGIC);
+        assert_eq!(u32::from_le_bytes(binary[4..8].try_into().unwrap()), 2);
+        // Roundtrip through unpack_bars
+        let result_json = unpack_bars(&binary).unwrap();
+        let result: Vec<serde_json::Value> = serde_json::from_str(&result_json).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0]["open"].as_f64().unwrap(), 100.0);
+        assert_eq!(result[1]["close"].as_f64().unwrap(), 106.0);
+    }
+
+    #[test]
+    fn pack_unpack_raw_roundtrip() {
+        let json = r#"[
+            {"timestamp":"2024-01-15T12:00:00+00:00","open":1.2345,"high":1.2400,"low":1.2300,"close":1.2380,"volume":12345.0}
+        ]"#;
+        let binary = pack_bars(json).unwrap();
+        let raw = unpack_bars_raw(&binary).unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].1, 1.2345); // open
+        assert_eq!(raw[0].2, 1.2400); // high
+        assert_eq!(raw[0].3, 1.2300); // low
+        assert_eq!(raw[0].4, 1.2380); // close
+        assert_eq!(raw[0].5, 12345.0); // volume
+    }
+
+    #[test]
+    fn pack_bars_empty_array() {
+        let binary = pack_bars("[]").unwrap();
+        assert_eq!(&binary[0..4], BAR_BINARY_MAGIC);
+        assert_eq!(u32::from_le_bytes(binary[4..8].try_into().unwrap()), 0);
+        assert_eq!(binary.len(), 8); // just header, no bar data
+    }
+
+    #[test]
+    fn pack_bars_invalid_json() {
+        let result = pack_bars("not json");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("JSON parse failed"));
+    }
+
+    // ---- unpack_bars tests ----
+
+    #[test]
+    fn unpack_bars_wrong_magic() {
+        let result = unpack_bars(&[0, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Not binary bar format");
+    }
+
+    #[test]
+    fn unpack_bars_truncated() {
+        let bars = vec![(1_700_000_000_000, 50.0, 55.0, 49.0, 53.0, 1000.0)];
+        let mut binary = make_binary_bars(&bars);
+        binary.truncate(20); // corrupt: not enough data for 1 bar
+        let result = unpack_bars(&binary);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Binary data truncated"));
+    }
+
+    // ---- unpack_bars_tail tests ----
+
+    #[test]
+    fn unpack_bars_tail_returns_last_n() {
+        let json = r#"[
+            {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0},
+            {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":200.0},
+            {"timestamp":"2024-01-03T00:00:00+00:00","open":3.0,"high":4.0,"low":2.5,"close":3.5,"volume":300.0}
+        ]"#;
+        let binary = pack_bars(json).unwrap();
+        let tail_json = unpack_bars_tail(&binary, 2).unwrap();
+        let tail: Vec<serde_json::Value> = serde_json::from_str(&tail_json).unwrap();
+        assert_eq!(tail.len(), 2);
+        assert_eq!(tail[0]["open"].as_f64().unwrap(), 2.0);
+        assert_eq!(tail[1]["open"].as_f64().unwrap(), 3.0);
+    }
+
+    #[test]
+    fn unpack_bars_tail_zero_returns_all() {
+        let json = r#"[
+            {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}
+        ]"#;
+        let binary = pack_bars(json).unwrap();
+        let tail_json = unpack_bars_tail(&binary, 0).unwrap();
+        let tail: Vec<serde_json::Value> = serde_json::from_str(&tail_json).unwrap();
+        assert_eq!(tail.len(), 1);
+    }
+
+    #[test]
+    fn unpack_bars_tail_exceeding_count_returns_all() {
+        let json = r#"[
+            {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}
+        ]"#;
+        let binary = pack_bars(json).unwrap();
+        let tail_json = unpack_bars_tail(&binary, 999).unwrap();
+        let tail: Vec<serde_json::Value> = serde_json::from_str(&tail_json).unwrap();
+        assert_eq!(tail.len(), 1);
+    }
+
+    // ---- extract_tail_timestamps tests ----
+
+    #[test]
+    fn extract_tail_timestamps_two_bars() {
+        let bars = vec![
+            (1_705_000_000_000i64, 1.0, 2.0, 0.5, 1.5, 100.0),
+            (1_705_100_000_000i64, 2.0, 3.0, 1.5, 2.5, 200.0),
+        ];
+        let binary = make_binary_bars(&bars);
+        let (second, last) = extract_tail_timestamps(&binary, 2);
+        assert!(second.is_some());
+        assert!(last.is_some());
+        // second_last should correspond to first bar's timestamp
+        let second_dt = chrono::DateTime::parse_from_rfc3339(&second.unwrap()).unwrap();
+        assert_eq!(second_dt.timestamp_millis(), 1_705_000_000_000);
+        let last_dt = chrono::DateTime::parse_from_rfc3339(&last.unwrap()).unwrap();
+        assert_eq!(last_dt.timestamp_millis(), 1_705_100_000_000);
+    }
+
+    #[test]
+    fn extract_tail_timestamps_single_bar_returns_none() {
+        let bars = vec![(1_705_000_000_000i64, 1.0, 2.0, 0.5, 1.5, 100.0)];
+        let binary = make_binary_bars(&bars);
+        let (second, last) = extract_tail_timestamps(&binary, 1);
+        assert!(second.is_none());
+        assert!(last.is_none());
+    }
+
+    #[test]
+    fn extract_tail_timestamps_empty_returns_none() {
+        let binary = make_binary_bars(&[]);
+        let (second, last) = extract_tail_timestamps(&binary, 0);
+        assert!(second.is_none());
+        assert!(last.is_none());
+    }
+
+    // ---- binary format size tests ----
+
+    #[test]
+    fn binary_format_size_is_correct() {
+        assert_eq!(BYTES_PER_BAR, 48); // i64 + 5*f64
+        let bars = vec![
+            (0, 1.0, 2.0, 3.0, 4.0, 5.0),
+            (1, 6.0, 7.0, 8.0, 9.0, 10.0),
+        ];
+        let binary = make_binary_bars(&bars);
+        // 4 (magic) + 4 (count) + 2 * 48 (bars) = 104
+        assert_eq!(binary.len(), 4 + 4 + 2 * 48);
+    }
+
+    // ---- SqliteCache integration tests ----
+
+    #[test]
+    fn sqlite_cache_put_get_bars() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[{"timestamp":"2024-06-01T00:00:00+00:00","open":50.0,"high":55.0,"low":49.0,"close":53.0,"volume":1000.0}]"#;
+        cache.put_bars("TEST:1Hour", json).unwrap();
+
+        let result = cache.get_bars("TEST:1Hour").unwrap();
+        assert!(result.is_some());
+        let (returned_json, _ts) = result.unwrap();
+        let bars: Vec<serde_json::Value> = serde_json::from_str(&returned_json).unwrap();
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0]["open"].as_f64().unwrap(), 50.0);
+    }
+
+    #[test]
+    fn sqlite_cache_get_bars_raw_roundtrip() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[
+            {"timestamp":"2024-06-01T00:00:00+00:00","open":1.1,"high":1.2,"low":1.0,"close":1.15,"volume":500.0},
+            {"timestamp":"2024-06-01T01:00:00+00:00","open":1.15,"high":1.3,"low":1.1,"close":1.25,"volume":600.0}
+        ]"#;
+        cache.put_bars("EURUSD:1Hour", json).unwrap();
+
+        let raw = cache.get_bars_raw("EURUSD:1Hour").unwrap().unwrap();
+        assert_eq!(raw.len(), 2);
+        assert_eq!(raw[0].1, 1.1);  // open
+        assert_eq!(raw[1].4, 1.25); // close
+    }
+
+    #[test]
+    fn sqlite_cache_missing_key_returns_none() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        assert!(cache.get_bars("NONEXISTENT").unwrap().is_none());
+        assert!(cache.get_bars_raw("NONEXISTENT").unwrap().is_none());
+    }
+
+    #[test]
+    fn sqlite_cache_kv_roundtrip() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        cache.put_kv("fundamentals:AAPL", r#"{"pe":25.0}"#).unwrap();
+        let result = cache.get_kv("fundamentals:AAPL").unwrap();
+        assert_eq!(result.unwrap(), r#"{"pe":25.0}"#);
+    }
+
+    #[test]
+    fn sqlite_cache_kv_missing_returns_none() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        assert!(cache.get_kv("missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn sqlite_cache_stats() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+        cache.put_bars("A:1D", json).unwrap();
+        cache.put_kv("k1", "v1").unwrap();
+
+        let (bar_count, kv_count, _size) = cache.stats().unwrap();
+        assert_eq!(bar_count, 1);
+        assert_eq!(kv_count, 1);
+    }
+
+    #[test]
+    fn sqlite_cache_delete_key() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+        cache.put_bars("DEL:1D", json).unwrap();
+        assert!(cache.get_bars("DEL:1D").unwrap().is_some());
+
+        let deleted = cache.delete_key("DEL:1D").unwrap();
+        assert!(deleted);
+        assert!(cache.get_bars("DEL:1D").unwrap().is_none());
+    }
+
+    #[test]
+    fn sqlite_cache_delete_nonexistent_key() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let deleted = cache.delete_key("NOPE").unwrap();
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn sqlite_cache_bar_count() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[
+            {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0},
+            {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":200.0}
+        ]"#;
+        cache.put_bars("CNT:1D", json).unwrap();
+        assert_eq!(cache.get_bar_count("CNT:1D").unwrap(), Some(2));
+        assert_eq!(cache.get_bar_count("MISSING").unwrap(), None);
+    }
+
+    #[test]
+    fn sqlite_cache_merge_bars_dedup() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json1 = r#"[
+            {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0},
+            {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":200.0}
+        ]"#;
+        cache.put_bars("MRG:1D", json1).unwrap();
+
+        // Merge with overlapping + new bar
+        let json2 = r#"[
+            {"timestamp":"2024-01-02T00:00:00+00:00","open":2.1,"high":3.1,"low":1.6,"close":2.6,"volume":210.0},
+            {"timestamp":"2024-01-03T00:00:00+00:00","open":3.0,"high":4.0,"low":2.5,"close":3.5,"volume":300.0}
+        ]"#;
+        let merged_json = cache.merge_bars("MRG:1D", json2, 10000).unwrap();
+        let merged: Vec<serde_json::Value> = serde_json::from_str(&merged_json).unwrap();
+        // Should have 3 bars (deduped on timestamp, newer wins via dedup_by which keeps first)
+        assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn sqlite_cache_get_bars_tail() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[
+            {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0},
+            {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":200.0},
+            {"timestamp":"2024-01-03T00:00:00+00:00","open":3.0,"high":4.0,"low":2.5,"close":3.5,"volume":300.0}
+        ]"#;
+        cache.put_bars("TAIL:1D", json).unwrap();
+
+        let result = cache.get_bars_tail("TAIL:1D", 1).unwrap().unwrap();
+        let bars: Vec<serde_json::Value> = serde_json::from_str(&result.0).unwrap();
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0]["open"].as_f64().unwrap(), 3.0);
+    }
+
+    #[test]
+    fn sqlite_cache_incremental_start() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[
+            {"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0},
+            {"timestamp":"2024-01-02T00:00:00+00:00","open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":200.0},
+            {"timestamp":"2024-01-03T00:00:00+00:00","open":3.0,"high":4.0,"low":2.5,"close":3.5,"volume":300.0}
+        ]"#;
+        cache.put_bars("INC:1D", json).unwrap();
+
+        let result = cache.get_incremental_start("INC:1D").unwrap();
+        assert!(result.is_some());
+        let (ts, count) = result.unwrap();
+        assert_eq!(count, 3);
+        // Should be the second-to-last bar's timestamp
+        let dt = chrono::DateTime::parse_from_rfc3339(&ts).unwrap();
+        assert_eq!(dt.format("%Y-%m-%d").to_string(), "2024-01-02");
+    }
+
+    #[test]
+    fn sqlite_cache_list_kv_keys() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        cache.put_kv("cred:alpaca", "{}").unwrap();
+        cache.put_kv("cred:darwinex", "{}").unwrap();
+        cache.put_kv("other:thing", "{}").unwrap();
+
+        let keys = cache.list_kv_keys("cred:").unwrap();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&"cred:alpaca".to_string()));
+        assert!(keys.contains(&"cred:darwinex".to_string()));
+    }
+
+    #[test]
+    fn sqlite_cache_delete_symbol() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+        cache.put_bars("AAPL:1Hour", json).unwrap();
+        cache.put_bars("AAPL:1Day", json).unwrap();
+        cache.put_bars("MSFT:1Hour", json).unwrap();
+
+        let deleted = cache.delete_symbol("AAPL").unwrap();
+        assert_eq!(deleted, 2);
+        assert!(cache.get_bars("AAPL:1Hour").unwrap().is_none());
+        assert!(cache.get_bars("MSFT:1Hour").unwrap().is_some());
+    }
+}

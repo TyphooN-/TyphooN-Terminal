@@ -1,6 +1,6 @@
 # ADR-057: Symbol Specs Tracking & Radar Export
 
-**Status:** Proposed
+**Status:** Implemented (via BarCacheWriter v1.420 __SPECS__ export)
 **Date:** 2026-03-26
 
 ## Context

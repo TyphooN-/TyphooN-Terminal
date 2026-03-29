@@ -1004,30 +1004,13 @@ impl GpuCompute {
     pub fn bar_count(&self) -> u32 { self.bar_count }
 }
 
-// Utility: cast &[f32] to &[u8] for wgpu buffer writes
-fn bytemuck_cast_slice(data: &[impl bytemuck_compatible::Pod]) -> &[u8] {
-    unsafe {
-        std::slice::from_raw_parts(
-            data.as_ptr() as *const u8,
-            data.len() * std::mem::size_of_val(&data[0]),
-        )
-    }
+// Safe byte casting via bytemuck crate — eliminates all unsafe pointer casts
+fn bytemuck_cast_slice<T: bytemuck::NoUninit>(data: &[T]) -> &[u8] {
+    bytemuck::cast_slice(data)
 }
 
 fn bytemuck_cast_slice_to_f32(data: &[u8]) -> Vec<f32> {
-    let count = data.len() / 4;
-    let mut result = vec![0.0_f32; count];
-    unsafe {
-        std::ptr::copy_nonoverlapping(data.as_ptr(), result.as_mut_ptr() as *mut u8, data.len());
-    }
-    result
-}
-
-// Trait for zero-copy casting (replaces bytemuck dependency)
-mod bytemuck_compatible {
-    pub unsafe trait Pod: Copy + 'static {}
-    unsafe impl Pod for f32 {}
-    unsafe impl Pod for u32 {}
+    bytemuck::cast_slice::<u8, f32>(data).to_vec()
 }
 
 // ─── DARWIN GPU Analytics ─────────────────────────────────────────────────────

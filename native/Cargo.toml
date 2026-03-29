@@ -34,6 +34,9 @@ rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Safe byte casting for GPU buffer I/O (replaces unsafe custom Pod trait)
+bytemuck = { version = "1", features = ["derive"] }
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

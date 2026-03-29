@@ -1,6 +1,6 @@
 # ADR-058: GPU Strategy Optimizer & MQL5 Export Pipeline
 
-**Status:** Proposed
+**Status:** Implemented
 **Date:** 2026-03-26
 
 ## Context
