@@ -3863,6 +3863,7 @@ fn draw_chart(
     let dot_len = 3.0_f32;
     let dot_gap = 3.0_f32;
     let grid_col = egui::Color32::from_rgb(33, 33, 33);
+    let mut label_buf = String::with_capacity(16); // reuse buffer across grid labels (avoids heap alloc per label per frame)
     for i in 0..=grid_steps {
         let p   = price_min + (price_max - price_min) * (i as f64 / grid_steps as f64);
         let y   = price_to_y(p);
@@ -3876,11 +3877,11 @@ fn draw_chart(
             );
             gx += dot_len + dot_gap;
         }
-        let label = format_price(p);
+        format_price_buf(p, &mut label_buf);
         painter.text(
             egui::pos2(chart_rect.right() + 4.0, y),
             egui::Align2::LEFT_CENTER,
-            &label,
+            &label_buf,
             egui::FontId::monospace(10.0),
             AXIS_TEXT,
         );
@@ -3901,11 +3902,11 @@ fn draw_chart(
             );
             gy += dot_len + dot_gap;
         }
-        let label = format_ts(bar.ts_ms, chart.timeframe);
+        format_ts_buf(bar.ts_ms, chart.timeframe, &mut label_buf);
         painter.text(
             egui::pos2(x, chart_rect.bottom() + 2.0),
             egui::Align2::CENTER_TOP,
-            &label,
+            &label_buf,
             egui::FontId::monospace(9.0),
             AXIS_TEXT,
         );
@@ -3941,6 +3942,7 @@ fn draw_chart(
 
     // ── Bollinger Band fill ──────────────────────────────────────────────────
     if flags.bollinger {
+        // Build polygon directly: upper points forward, lower points reversed — no clone needed
         let mut fill_points_upper: Vec<egui::Pos2> = Vec::new();
         let mut fill_points_lower: Vec<egui::Pos2> = Vec::new();
         for (rel_idx, _) in bars.iter().enumerate() {
@@ -3956,9 +3958,9 @@ fn draw_chart(
                 }
             }
         }
-        // Draw fill as a polygon: upper forward + lower reversed
         if fill_points_upper.len() > 1 {
-            let mut poly = fill_points_upper.clone();
+            let mut poly = Vec::with_capacity(fill_points_upper.len() + fill_points_lower.len());
+            poly.extend_from_slice(&fill_points_upper);
             poly.extend(fill_points_lower.iter().rev());
             painter.add(egui::Shape::convex_polygon(poly, BB_FILL, egui::Stroke::NONE));
         }
@@ -6072,23 +6074,41 @@ fn format_price(p: f64) -> String {
     else                { format!("{:.6}", p) }
 }
 
+/// Buffer-reusing variant of format_price — writes into caller's String to avoid heap alloc per call.
+fn format_price_buf(p: f64, buf: &mut String) {
+    use std::fmt::Write;
+    buf.clear();
+    if p == 0.0 { buf.push('0'); return; }
+    let abs = p.abs();
+    if abs >= 10_000.0 { write!(buf, "{:.2}", p).ok(); }
+    else if abs >= 1.0  { write!(buf, "{:.4}", p).ok(); }
+    else                { write!(buf, "{:.6}", p).ok(); }
+}
+
 fn format_ts(ts_ms: i64, tf: Timeframe) -> String {
-    use chrono::TimeZone;
+    let mut buf = String::with_capacity(12);
+    format_ts_buf(ts_ms, tf, &mut buf);
+    buf
+}
+
+/// Buffer-reusing variant of format_ts — writes into caller's String to avoid heap alloc per call.
+fn format_ts_buf(ts_ms: i64, tf: Timeframe, buf: &mut String) {
+    use chrono::{TimeZone, Timelike};
+    buf.clear();
     let dt = chrono::Utc.timestamp_millis_opt(ts_ms).single().unwrap_or_default();
+    use std::fmt::Write;
     match tf {
-        Timeframe::MN1 => dt.format("%b'%y").to_string(),
-        Timeframe::W1  => dt.format("%d %b").to_string(),
-        Timeframe::D1  => dt.format("%d %b").to_string(),
+        Timeframe::MN1 => { write!(buf, "{}", dt.format("%b'%y")).ok(); }
+        Timeframe::W1 | Timeframe::D1 => { write!(buf, "{}", dt.format("%d %b")).ok(); }
         Timeframe::H4 | Timeframe::H1 => {
-            // Show date + time for H1/H4
-            if dt.format("%H").to_string() == "00" {
-                dt.format("%d %b").to_string()
+            if dt.hour() == 0 {
+                write!(buf, "{}", dt.format("%d %b")).ok();
             } else {
-                dt.format("%H:%M").to_string()
+                write!(buf, "{}", dt.format("%H:%M")).ok();
             }
         }
-        _              => dt.format("%H:%M").to_string(),
-    }
+        _ => { write!(buf, "{}", dt.format("%H:%M")).ok(); }
+    };
 }
 
 // ─── command palette ─────────────────────────────────────────────────────────
