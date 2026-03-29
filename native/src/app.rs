@@ -14416,6 +14416,11 @@ impl TyphooNApp {
                                     self.log.push_back(LogEntry::warn("Set a passphrase for LAN sync"));
                                 } else {
                                     self.lan_sync_mode = "server".into();
+                                    // Persist passphrase for server restart
+                                    let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &self.lan_sync_passphrase);
+                                    if let Some(ref cache) = self.cache {
+                                        let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &self.lan_sync_passphrase);
+                                    }
                                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                                     let _ = self.broker_tx.send(BrokerCmd::LanSyncStart { port, passphrase: self.lan_sync_passphrase.clone(), db_path });
                                     self.log.push_back(LogEntry::info(format!("LAN sync server starting on wss://0.0.0.0:{} (TLS encrypted)", port)));
@@ -14439,6 +14444,11 @@ impl TyphooNApp {
                                     // Save for auto-reconnect on next startup
                                     self.lan_client_enabled = true;
                                     self.lan_server_ip = self.lan_sync_host.clone();
+                                    // Persist passphrase immediately
+                                    let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &self.lan_sync_passphrase);
+                                    if let Some(ref cache) = self.cache {
+                                        let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &self.lan_sync_passphrase);
+                                    }
                                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                                     let _ = self.broker_tx.send(BrokerCmd::LanSyncConnect { host: self.lan_sync_host.clone(), port, passphrase: self.lan_sync_passphrase.clone(), db_path });
                                     self.log.push_back(LogEntry::info(format!("LAN client mode enabled — auto-connect to {}:{} on startup", self.lan_sync_host, port)));
@@ -14984,6 +14994,58 @@ impl eframe::App for TyphooNApp {
             self.cache_loaded = true;
             // Load session (rebuilds chart tabs from saved state)
             self.load_session();
+            // Load credentials FIRST (needed for LAN auto-connect passphrase)
+            {
+                let mut keyring_ok = true;
+                let cache_ref = self.cache.clone();
+                let cred_keys = [
+                    (keyring::keys::ALPACA_API_KEY, "alpaca_api_key"),
+                    (keyring::keys::ALPACA_SECRET, "alpaca_secret"),
+                    (keyring::keys::FINNHUB_KEY, "finnhub_key"),
+                    (keyring::keys::FRED_KEY, "fred_key"),
+                    (keyring::keys::TT_USERNAME, "tt_username"),
+                    (keyring::keys::TT_PASSWORD, "tt_password"),
+                    (keyring::keys::LAN_SYNC_PASS, "lan_sync_pass"),
+                ];
+                let mut loaded_values: Vec<(String, String)> = Vec::new();
+                for (kr_key, _label) in &cred_keys {
+                    match keyring::load(kr_key) {
+                        Ok(Some(v)) if !v.is_empty() => { loaded_values.push((kr_key.to_string(), v)); }
+                        Ok(_) => {
+                            if let Some(ref cache) = cache_ref {
+                                if let Ok(Some(v)) = cache.get_kv(&format!("cred:{}", kr_key)) {
+                                    if !v.is_empty() { loaded_values.push((kr_key.to_string(), v)); }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            keyring_ok = false;
+                            self.log.push_back(LogEntry::warn(format!("Keyring load '{}' failed: {}", kr_key, e)));
+                            if let Some(ref cache) = cache_ref {
+                                if let Ok(Some(v)) = cache.get_kv(&format!("cred:{}", kr_key)) {
+                                    if !v.is_empty() { loaded_values.push((kr_key.to_string(), v)); }
+                                }
+                            }
+                        }
+                    }
+                }
+                for (key, val) in &loaded_values {
+                    match key.as_str() {
+                        k if k == keyring::keys::ALPACA_API_KEY => self.broker_api_key = val.clone(),
+                        k if k == keyring::keys::ALPACA_SECRET => self.broker_secret = val.clone(),
+                        k if k == keyring::keys::FINNHUB_KEY => self.finnhub_key = val.clone(),
+                        k if k == keyring::keys::FRED_KEY => self.fred_key = val.clone(),
+                        k if k == keyring::keys::TT_USERNAME => self.tt_username = val.clone(),
+                        k if k == keyring::keys::TT_PASSWORD => self.tt_password = val.clone(),
+                        k if k == keyring::keys::LAN_SYNC_PASS => self.lan_sync_passphrase = val.clone(),
+                        _ => {}
+                    }
+                }
+                if !loaded_values.is_empty() {
+                    let src = if keyring_ok { "system keyring" } else { "SQLite fallback" };
+                    self.log.push_back(LogEntry::info(format!("Credentials loaded from {} ({} keys)", src, loaded_values.len())));
+                }
+            }
             // LAN client auto-connect: if saved as LAN client, connect immediately
             if self.lan_client_enabled && !self.lan_server_ip.is_empty() {
                 let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
@@ -15011,65 +15073,8 @@ impl eframe::App for TyphooNApp {
                 }
             }
             {
-                // Load credentials: try system keyring first, fall back to SQLite kv_cache
-                let mut keyring_ok = true;
-                let cache_ref = self.cache.clone();
-                let cred_keys = [
-                    (keyring::keys::ALPACA_API_KEY, "alpaca_api_key"),
-                    (keyring::keys::ALPACA_SECRET, "alpaca_secret"),
-                    (keyring::keys::FINNHUB_KEY, "finnhub_key"),
-                    (keyring::keys::FRED_KEY, "fred_key"),
-                    (keyring::keys::TT_USERNAME, "tt_username"),
-                    (keyring::keys::TT_PASSWORD, "tt_password"),
-                    (keyring::keys::LAN_SYNC_PASS, "lan_sync_pass"),
-                ];
-                let mut loaded_values: Vec<(String, String)> = Vec::new();
-                for (kr_key, _label) in &cred_keys {
-                    match keyring::load(kr_key) {
-                        Ok(Some(v)) if !v.is_empty() => {
-                            loaded_values.push((kr_key.to_string(), v));
-                        }
-                        Ok(_) => {
-                            // Try SQLite kv_cache fallback
-                            if let Some(ref cache) = cache_ref {
-                                if let Ok(Some(v)) = cache.get_kv(&format!("cred:{}", kr_key)) {
-                                    if !v.is_empty() {
-                                        loaded_values.push((kr_key.to_string(), v));
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            keyring_ok = false;
-                            self.log.push_back(LogEntry::warn(format!("Keyring load '{}' failed: {}", kr_key, e)));
-                            if let Some(ref cache) = cache_ref {
-                                if let Ok(Some(v)) = cache.get_kv(&format!("cred:{}", kr_key)) {
-                                    if !v.is_empty() {
-                                        loaded_values.push((kr_key.to_string(), v));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                for (key, val) in &loaded_values {
-                    match key.as_str() {
-                        k if k == keyring::keys::ALPACA_API_KEY => self.broker_api_key = val.clone(),
-                        k if k == keyring::keys::ALPACA_SECRET => self.broker_secret = val.clone(),
-                        k if k == keyring::keys::FINNHUB_KEY => self.finnhub_key = val.clone(),
-                        k if k == keyring::keys::FRED_KEY => self.fred_key = val.clone(),
-                        k if k == keyring::keys::TT_USERNAME => self.tt_username = val.clone(),
-                        k if k == keyring::keys::TT_PASSWORD => self.tt_password = val.clone(),
-                        k if k == keyring::keys::LAN_SYNC_PASS => self.lan_sync_passphrase = val.clone(),
-                        _ => {}
-                    }
-                }
-                if !loaded_values.is_empty() {
-                    let src = if keyring_ok { "system keyring" } else { "SQLite fallback" };
-                    self.log.push_back(LogEntry::info(format!("Credentials loaded from {} ({} keys)", src, loaded_values.len())));
-                }
-                // Auto-import DARWIN XLSX if needed
-                if !self.darwin_xlsx_dir.is_empty() {
+                // Auto-import DARWIN XLSX if needed (not on LAN client)
+                if !self.darwin_xlsx_dir.is_empty() && !self.lan_client_enabled {
                     let dir = std::path::PathBuf::from(&self.darwin_xlsx_dir);
                     if dir.is_dir() {
                         let has_accounts = self.cache.as_ref().and_then(|c| {
@@ -15089,34 +15094,39 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                 }
-                // Auto MT5SYNC on startup if data dirs are configured
-                {
-                    let paths: Vec<String> = self.mt5_db_paths.iter()
-                        .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
-                        .cloned().collect();
-                    if !paths.is_empty() {
+                // ── Startup data fetching (disabled for LAN client — server provides all data) ──
+                if !self.lan_client_enabled {
+                    // Auto MT5SYNC on startup if data dirs are configured
+                    {
+                        let paths: Vec<String> = self.mt5_db_paths.iter()
+                            .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
+                            .cloned().collect();
+                        if !paths.is_empty() {
+                            let mut db_path = dirs_home();
+                            db_path.push("cache");
+                            db_path.push("typhoon_cache.db");
+                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths.clone(), target: db_path });
+                            self.log.push_back(LogEntry::info(format!("Auto MT5SYNC: {} sources", paths.len())));
+                        }
+                    }
+                    // Auto SEC scrape on startup
+                    {
                         let mut db_path = dirs_home();
                         db_path.push("cache");
                         db_path.push("typhoon_cache.db");
-                        let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths.clone(), target: db_path });
-                        self.log.push_back(LogEntry::info(format!("Auto MT5SYNC: {} sources", paths.len())));
+                        let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
+                        self.log.push_back(LogEntry::info("SEC EDGAR scrape started..."));
                     }
-                }
-                // Auto SEC scrape on startup
-                {
-                    let mut db_path = dirs_home();
-                    db_path.push("cache");
-                    db_path.push("typhoon_cache.db");
-                    let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
-                    self.log.push_back(LogEntry::info("SEC EDGAR scrape started..."));
-                }
-                // Auto EVSCRAPE on startup (fundamentals, skips if updated <24h)
-                {
-                    let mut db_path = dirs_home();
-                    db_path.push("cache");
-                    db_path.push("typhoon_cache.db");
-                    let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path });
-                    self.log.push_back(LogEntry::info("Fundamentals scrape started for all MT5 symbols..."));
+                    // Auto EVSCRAPE on startup (fundamentals, skips if updated <24h)
+                    {
+                        let mut db_path = dirs_home();
+                        db_path.push("cache");
+                        db_path.push("typhoon_cache.db");
+                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path });
+                        self.log.push_back(LogEntry::info("Fundamentals scrape started for all MT5 symbols..."));
+                    }
+                } else {
+                    self.log.push_back(LogEntry::info("LAN client mode: all data fetching disabled (server provides everything)"));
                 }
             }
         }
@@ -17647,8 +17657,8 @@ impl eframe::App for TyphooNApp {
             sync_key(keyring::keys::TT_PASSWORD, &self.tt_password);
         }
 
-        // Poll watchlist quotes every ~15 seconds (60 frames at 250ms repaint)
-        if self.frame_count % 60 == 5 && !self.user_watchlist.is_empty() && self.broker_connected {
+        // Poll watchlist quotes every ~15 seconds (disabled for LAN client)
+        if self.frame_count % 60 == 5 && !self.user_watchlist.is_empty() && self.broker_connected && !self.lan_client_enabled {
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
         }
 
