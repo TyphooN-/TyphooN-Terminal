@@ -2402,8 +2402,9 @@ fn detect_harmonic_patterns(bars: &[Bar], fractals_up: &[bool], fractals_down: &
     // Need at least 5 swing points for XABCD
     if swings.len() < 5 { return patterns; }
 
-    // Check the most recent swing combinations (limit to last 20 swings for performance)
-    let start = swings.len().saturating_sub(20);
+    // Check the most recent swing combinations (limit to last 12 swings for performance)
+    // C(20,5)=15504 vs C(12,5)=792 — 20× fewer pattern checks
+    let start = swings.len().saturating_sub(12);
     let recent = &swings[start..];
 
     for i in 0..recent.len().saturating_sub(4) {
@@ -3825,54 +3826,34 @@ fn draw_chart(
     let half_body = candle_w * 0.5;
 
     // ── session highlighting (Asian / London / New York) ────────────────────
+    // Batched: find contiguous session blocks and draw one rect per block (not per bar).
     if flags.sessions {
-        // Session hours in UTC:
-        // Asian (Tokyo):  00:00 – 09:00
-        // London:         07:00 – 16:00
-        // New York:       13:30 – 20:00
         let session_asian  = egui::Color32::from_rgba_premultiplied(40, 60, 120, 18);
         let session_london = egui::Color32::from_rgba_premultiplied(60, 120, 60, 18);
         let session_ny     = egui::Color32::from_rgba_premultiplied(120, 60, 40, 18);
-
-        // We iterate bars and paint vertical strips for each session a bar falls in.
-        // For H4/D1/W1/MN1 timeframes, skip (sessions only make sense on intraday).
         let tf_minutes = chart.timeframe.minutes();
         if tf_minutes < 240 {
-            let mut i = 0usize;
-            while i < bars.len() {
-                let bar = &bars[i];
-                // Convert ts_ms to UTC hour/minute
-                let secs = bar.ts_ms / 1000;
-                let day_secs = ((secs % 86400) + 86400) % 86400; // handle negative
-                let hour = (day_secs / 3600) as u32;
-                let minute = ((day_secs % 3600) / 60) as u32;
-                let hm = hour * 60 + minute; // minutes since midnight UTC
-
-                let x_left = chart_rect.left() + (i as f32) * bar_w;
-                let x_right = (x_left + bar_w).min(chart_rect.right());
-
-                // Asian: 00:00 – 09:00 (0..540)
-                if hm < 540 {
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(egui::pos2(x_left, chart_rect.top()), egui::pos2(x_right, chart_rect.bottom())),
-                        0.0, session_asian,
-                    );
+            // For each session, find contiguous blocks and draw one rect per block
+            let sessions: &[(u32, u32, egui::Color32)] = &[(0, 540, session_asian), (420, 960, session_london), (810, 1200, session_ny)];
+            for &(start_hm, end_hm, color) in sessions {
+                let mut block_start: Option<usize> = None;
+                for i in 0..=bars.len() {
+                    let in_session = if i < bars.len() {
+                        let secs = bars[i].ts_ms / 1000;
+                        let day_secs = ((secs % 86400) + 86400) % 86400;
+                        let hm = (day_secs / 60) as u32;
+                        hm >= start_hm && hm < end_hm
+                    } else { false };
+                    if in_session && block_start.is_none() {
+                        block_start = Some(i);
+                    } else if !in_session && block_start.is_some() {
+                        let bs = block_start.unwrap();
+                        let x1 = chart_rect.left() + bs as f32 * bar_w;
+                        let x2 = (chart_rect.left() + i as f32 * bar_w).min(chart_rect.right());
+                        painter.rect_filled(egui::Rect::from_min_max(egui::pos2(x1, chart_rect.top()), egui::pos2(x2, chart_rect.bottom())), 0.0, color);
+                        block_start = None;
+                    }
                 }
-                // London: 07:00 – 16:00 (420..960)
-                if hm >= 420 && hm < 960 {
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(egui::pos2(x_left, chart_rect.top()), egui::pos2(x_right, chart_rect.bottom())),
-                        0.0, session_london,
-                    );
-                }
-                // New York: 13:30 – 20:00 (810..1200)
-                if hm >= 810 && hm < 1200 {
-                    painter.rect_filled(
-                        egui::Rect::from_min_max(egui::pos2(x_left, chart_rect.top()), egui::pos2(x_right, chart_rect.bottom())),
-                        0.0, session_ny,
-                    );
-                }
-                i += 1;
             }
         }
     }
@@ -8701,7 +8682,7 @@ impl TyphooNApp {
     }
 
     /// Compute MTF Grid indicator status for all timeframes from cache.
-    /// Lightweight: loads bars, computes SMA200/KAMA/Fisher for last bar only.
+    /// Parallel: spawns threads for TFs not already loaded in chart tabs.
     fn compute_mtf_grid_status(&mut self) {
         self.mtf_grid_status.clear();
         let cache = match &self.cache {
@@ -8711,36 +8692,56 @@ impl TyphooNApp {
         let sym = self.symbol_input.trim().to_string();
         if sym.is_empty() { return; }
 
-        let all_tfs: &[(&str, Timeframe)] = &[
+        let all_tfs: &[(&'static str, Timeframe)] = &[
             ("M1", Timeframe::M1), ("M5", Timeframe::M5), ("M15", Timeframe::M15), ("M30", Timeframe::M30),
             ("H1", Timeframe::H1), ("H4", Timeframe::H4), ("D1", Timeframe::D1), ("W1", Timeframe::W1),
         ];
 
+        // Collect results from already-loaded charts (no thread needed)
+        let mut preloaded: Vec<(&'static str, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> = Vec::new();
+        let mut need_load: Vec<(&'static str, Timeframe)> = Vec::new();
+
         for &(label, tf) in all_tfs {
-            // First check if we already have a loaded chart for this TF
             if let Some(c) = self.charts.iter().find(|c| c.timeframe == tf && !c.bars.is_empty()) {
                 let close = c.bars.last().map(|b| b.close);
                 let sma = c.sma200.last().and_then(|v| *v);
                 let kama = c.kama.last().and_then(|v| *v);
                 let fisher = c.fisher.last().and_then(|v| *v);
                 let fsig = c.fisher_signal.last().and_then(|v| *v);
-                self.mtf_grid_status.push((label, close, sma, kama, fisher, fsig));
-                continue;
+                preloaded.push((label, close, sma, kama, fisher, fsig));
+            } else {
+                need_load.push((label, tf));
             }
-            // Load from cache and compute indicators
-            let mut temp = ChartState::new(&sym, tf);
-            temp.load(&cache, &mut std::collections::VecDeque::new(), None);
-            if temp.bars.is_empty() {
-                self.mtf_grid_status.push((label, None, None, None, None, None));
-                continue;
-            }
-            let close = temp.bars.last().map(|b| b.close);
-            let sma = temp.sma200.last().and_then(|v| *v);
-            let kama = temp.kama.last().and_then(|v| *v);
-            let fisher = temp.fisher.last().and_then(|v| *v);
-            let fsig = temp.fisher_signal.last().and_then(|v| *v);
-            self.mtf_grid_status.push((label, close, sma, kama, fisher, fsig));
         }
+
+        // Parallel load TFs that need cache access
+        let loaded: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = need_load.iter().map(|&(label, tf)| {
+                let cache_ref = &cache;
+                let sym_ref = &sym;
+                s.spawn(move || {
+                    let mut temp = ChartState::new(sym_ref, tf);
+                    temp.load(cache_ref, &mut std::collections::VecDeque::new(), None);
+                    if temp.bars.is_empty() {
+                        (label, None, None, None, None, None)
+                    } else {
+                        let close = temp.bars.last().map(|b| b.close);
+                        let sma = temp.sma200.last().and_then(|v| *v);
+                        let kama = temp.kama.last().and_then(|v| *v);
+                        let fisher = temp.fisher.last().and_then(|v| *v);
+                        let fsig = temp.fisher_signal.last().and_then(|v| *v);
+                        (label, close, sma, kama, fisher, fsig)
+                    }
+                })
+            }).collect();
+            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        });
+
+        // Merge preloaded + loaded, sorted by TF order
+        let mut all_results: Vec<_> = preloaded.into_iter().chain(loaded.into_iter()).collect();
+        let tf_order: Vec<&str> = all_tfs.iter().map(|&(l, _)| l).collect();
+        all_results.sort_by_key(|r| tf_order.iter().position(|&l| l == r.0).unwrap_or(99));
+        self.mtf_grid_status = all_results;
     }
 
     /// Set up MTF grid with N columns and target chart count.

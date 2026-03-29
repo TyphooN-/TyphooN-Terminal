@@ -228,6 +228,13 @@ fn fix_utf16_xlsx(xlsx_path: &str) -> Result<String, String> {
 
     // Rewrite to temp file with all UTF-16 entries converted to UTF-8
     let tmp_path = format!("{}.utf8.xlsx", xlsx_path);
+    #[cfg(unix)]
+    let out_file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600)
+            .open(&tmp_path).map_err(|e| format!("Create tmp failed: {e}"))?
+    };
+    #[cfg(not(unix))]
     let out_file = std::fs::File::create(&tmp_path).map_err(|e| format!("Create tmp failed: {e}"))?;
     let mut writer = zip::ZipWriter::new(out_file);
     let mut archive = zip::ZipArchive::new(Cursor::new(&data))

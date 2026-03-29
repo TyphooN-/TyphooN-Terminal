@@ -425,12 +425,26 @@ async fn handle_client_tls(
                 tracing::info!("LAN sync: sent {} KV entries to client", count);
             }
             SyncMessage::RemoteRequest { cmd, args } => {
-                tracing::info!("LAN sync: client requested remote '{}' (args: {})", cmd, &args[..args.len().min(100)]);
-                // Server-side: execute the request, then send updated data back
-                // For now, acknowledge and tell client to re-sync affected data
-                let msg_text = format!("Remote '{}' queued on server", cmd);
-                if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone { cmd, message: msg_text }) {
-                    let _ = sink.send(msg).await;
+                // Whitelist allowed remote commands — reject unknown commands
+                const ALLOWED_REMOTE_CMDS: &[&str] = &[
+                    "SEC_SCRAPE", "FUNDAMENTALS", "FUNDAMENTALS_ONE",
+                    "KRAKEN_BACKFILL", "CRYPTOCOMPARE",
+                    "MT5_SYNC", "DARWIN_IMPORT",
+                    "FINNHUB_NEWS", "ECON_CALENDAR", "CONGRESS_TRADES", "FRED_DATA",
+                    "SEC_FILING", "EVSCRAPE",
+                ];
+                if !ALLOWED_REMOTE_CMDS.contains(&cmd.as_str()) {
+                    tracing::warn!("LAN sync: rejected unknown remote command '{}'", cmd);
+                    let msg_text = format!("Rejected: '{}' not in allowed command list", cmd);
+                    if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone { cmd, message: msg_text }) {
+                        let _ = sink.send(msg).await;
+                    }
+                } else {
+                    tracing::info!("LAN sync: client requested remote '{}' (args: {})", cmd, &args[..args.len().min(100)]);
+                    let msg_text = format!("Remote '{}' queued on server", cmd);
+                    if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone { cmd, message: msg_text }) {
+                        let _ = sink.send(msg).await;
+                    }
                 }
             }
             SyncMessage::Ping => {
