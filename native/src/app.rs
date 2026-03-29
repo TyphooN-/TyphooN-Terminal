@@ -14061,39 +14061,39 @@ impl TyphooNApp {
                     ui.label(egui::RichText::new("CryptoCompare deep history — no API key needed").color(AXIS_TEXT).small());
                     ui.add_space(4.0);
 
-                    // Table header (matching old WebKit)
-                    egui::Grid::new("backfill_grid").striped(true).num_columns(6).show(ui, |ui| {
-                        ui.strong("Symbol");
-                        ui.strong("TF");
-                        ui.strong("Bars");
-                        ui.strong("First");
-                        ui.strong("Last");
-                        ui.strong("Status");
-                        ui.end_row();
-                        {
-                            let stats = &self.bg.detailed_stats;
-                                for (key, count, ts) in stats {
-                                    if key.starts_with("cryptocompare:") || key.starts_with("kraken:") || key.starts_with("CC:") {
-                                        let parts: Vec<&str> = key.rsplitn(2, ':').collect();
-                                        let (tf_part, sym_part) = if parts.len() == 2 { (parts[0], parts[1]) } else { ("—", key.as_str()) };
-                                        // Use timestamp from detailed_stats (no per-frame DB query!)
-                                        // ts is the cache entry timestamp; first/last bar times need bg cache
-                                        let (first_ts, last_ts) = self.bg.crypto_ts_cache.get(key.as_str())
-                                            .copied().unwrap_or((0, *ts));
-                                        let fmt_ts = |ts: i64| -> String {
-                                            if ts == 0 { "—".to_string() }
-                                            else { chrono::DateTime::from_timestamp(ts / 1000, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default() }
-                                        };
-                                        ui.label(egui::RichText::new(sym_part).small().monospace());
-                                        ui.label(egui::RichText::new(tf_part).color(AXIS_TEXT).small());
-                                        ui.label(egui::RichText::new(format!("{}", count)).small());
-                                        ui.label(egui::RichText::new(fmt_ts(first_ts)).color(AXIS_TEXT).small());
-                                        ui.label(egui::RichText::new(fmt_ts(last_ts)).color(AXIS_TEXT).small());
-                                        ui.label(egui::RichText::new("cached").color(ACCENT).small());
-                                        ui.end_row();
+                    // Table with scroll area
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        egui::Grid::new("backfill_grid").striped(true).num_columns(6).show(ui, |ui| {
+                            ui.strong("Symbol");
+                            ui.strong("TF");
+                            ui.strong("Bars");
+                            ui.strong("First");
+                            ui.strong("Last");
+                            ui.strong("Status");
+                            ui.end_row();
+                            {
+                                let stats = &self.bg.detailed_stats;
+                                    for (key, count, ts) in stats {
+                                        if key.starts_with("cryptocompare:") || key.starts_with("kraken:") || key.starts_with("CC:") {
+                                            let parts: Vec<&str> = key.rsplitn(2, ':').collect();
+                                            let (tf_part, sym_part) = if parts.len() == 2 { (parts[0], parts[1]) } else { ("—", key.as_str()) };
+                                            let (first_ts, last_ts) = self.bg.crypto_ts_cache.get(key.as_str())
+                                                .copied().unwrap_or((0, *ts));
+                                            let fmt_ts = |ts: i64| -> String {
+                                                if ts == 0 { "—".to_string() }
+                                                else { chrono::DateTime::from_timestamp(ts / 1000, 0).map(|d| d.format("%Y-%m-%d").to_string()).unwrap_or_default() }
+                                            };
+                                            ui.label(egui::RichText::new(sym_part).small().monospace());
+                                            ui.label(egui::RichText::new(tf_part).color(AXIS_TEXT).small());
+                                            ui.label(egui::RichText::new(format!("{}", count)).small());
+                                            ui.label(egui::RichText::new(fmt_ts(first_ts)).color(AXIS_TEXT).small());
+                                            ui.label(egui::RichText::new(fmt_ts(last_ts)).color(AXIS_TEXT).small());
+                                            ui.label(egui::RichText::new("cached").color(ACCENT).small());
+                                            ui.end_row();
+                                        }
                                     }
-                                }
-                        }
+                            }
+                        });
                     });
                 });
         }
