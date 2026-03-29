@@ -10577,6 +10577,7 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_prev_levels, "Previous Candle Levels (H1/H4/D1/W1/MN1)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (Classic)");
                     ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
+                    ui.checkbox(&mut self.show_fvg,            "Fair Value Gaps (3-bar imbalance)");
 
                     // ── Chart Overlays ──
                     ui.add_space(4.0);
@@ -17248,6 +17249,7 @@ impl eframe::App for TyphooNApp {
                     ui.checkbox(&mut self.show_prev_levels, "Prev Candle Levels (D/W)");
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (P/R1/R2/S1/S2)");
                     ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
+                    ui.checkbox(&mut self.show_fvg,            "Fair Value Gaps (FVG)");
                     ui.separator();
                     ui.label(egui::RichText::new("Pattern Recognition").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
