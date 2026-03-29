@@ -3776,8 +3776,8 @@ fn draw_chart(
         );
     }
 
-    // ── MA ribbon fill (KAMA vs SMA200) ─────────────────────────────────────
-    if flags.sma200 && flags.kama {
+    // ── MA ribbon fill (KAMA vs SMA200) — only when single-TF lines are visible ──
+    if flags.sma200 && flags.kama && chart.mtf_sma.is_empty() && chart.multi_kama.is_empty() {
         for (rel_idx, _) in bars.iter().enumerate() {
             let abs_idx = start_idx + rel_idx;
             if abs_idx >= chart.sma200.len() || abs_idx >= chart.kama.len() { continue; }
@@ -17962,13 +17962,12 @@ impl eframe::App for TyphooNApp {
 
         // ── central panel (chart area) ────────────────────────────────────────
         // ── Drawing toolbar (left-side, TradingView style) ─────────────────────
-        egui::Window::new("draw_toolbar")
-            .title_bar(false)
+        egui::Window::new("Drawing")
             .resizable(false)
-            .collapsible(false)
-            .anchor(egui::Align2::LEFT_TOP, egui::vec2(2.0, 40.0))
-            .max_width(28.0)
-            .frame(egui::Frame::NONE.fill(egui::Color32::from_rgba_premultiplied(20, 20, 30, 200)).inner_margin(2.0).corner_radius(4.0))
+            .collapsible(true)
+            .default_pos(egui::pos2(2.0, 40.0))
+            .max_width(32.0)
+            .frame(egui::Frame::window(&ctx.style()).fill(egui::Color32::from_rgba_premultiplied(20, 20, 30, 230)).inner_margin(3.0))
             .show(ctx, |ui: &mut egui::Ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
                 let dm = self.draw_mode;
