@@ -376,7 +376,7 @@ impl GpuCompute {
 
         // Output buffers (reusable — allocate max size needed)
         let out_size = (bar_count as u64) * 4;
-        let out_size_3x = (bar_count as u64) * 12; // for Bollinger, MACD, ADX (3 outputs per bar)
+        let out_size_4x = (bar_count as u64) * 16; // for Ichimoku (4 outputs per bar), also covers 3-output indicators
         self.sma_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sma_output"), size: out_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
@@ -386,9 +386,9 @@ impl GpuCompute {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
         }));
 
-        // Readback staging buffer (large enough for 3x output)
+        // Readback staging buffer (large enough for 4x output — Ichimoku uses 4 outputs/bar)
         self.readback_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback"), size: out_size_3x,
+            label: Some("readback"), size: out_size_4x,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         }));
     }
