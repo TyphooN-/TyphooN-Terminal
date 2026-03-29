@@ -771,31 +771,89 @@ impl ChartState {
     /// Load bars from the shared cache, re-compute indicators.
     fn load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>, gpu: Option<&mut gpu_compute::GpuCompute>) {
         let key = self.find_cache_key(cache);
+        let tf = self.timeframe.cache_suffix();
+
+        // Extract bare symbol for multi-source lookup
+        let bare_sym = {
+            let parts: Vec<&str> = self.symbol.split(':').collect();
+            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
+            let sym_parts = if is_tf && parts.len() > 1 { &parts[..parts.len()-1] } else { &parts[..] };
+            let s = sym_parts.last().copied().unwrap_or(&self.symbol);
+            // Strip known prefixes
+            let known = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:"];
+            let mut r = s;
+            for pfx in &known { if r.starts_with(pfx) { r = &r[pfx.len()..]; break; } }
+            r.split(':').last().unwrap_or(r).to_string()
+        };
+
+        // Load primary source
         match cache.get_bars_raw(&key) {
             Ok(Some(raw)) => {
                 self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                     ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                 }).collect();
-                self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
-                self.compute_indicators_gpu(gpu);
-                // MTF indicators: load higher TF bars, compute, project onto chart
-                self.compute_mtf_sma(cache);
-                self.compute_multi_kama(cache);
-                log.push_back(LogEntry::info(format!(
-                    "Loaded {} bars for {} [{}]",
-                    self.bars.len(), self.symbol, self.timeframe.label()
-                )));
             }
-            Ok(None) => {
-                self.bars.clear();
-                log.push_back(LogEntry::warn(format!(
-                    "No data found for key '{}' — run the MT5 XML import pipeline first", key
-                )));
-            }
+            Ok(None) => { self.bars.clear(); }
             Err(e) => {
                 self.bars.clear();
                 log.push_back(LogEntry::err(format!("Cache read error: {e}")));
             }
+        }
+
+        // Merge gap-fill sources: CryptoCompare then Kraken (append newer bars only)
+        let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+            "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
+        let sym_upper = bare_sym.to_uppercase();
+        let is_crypto = crypto_bases.iter().any(|b| sym_upper.starts_with(b) && sym_upper.ends_with("USD"));
+
+        if is_crypto && !self.bars.is_empty() {
+            let last_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+
+            // Try CryptoCompare gap-fill
+            let cc_key = format!("cryptocompare:{}:{}", bare_sym, tf);
+            if let Ok(Some(raw)) = cache.get_bars_raw(&cc_key) {
+                let mut appended = 0;
+                for (ts, o, h, l, c, v) in raw {
+                    if ts > last_ts {
+                        self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
+                        appended += 1;
+                    }
+                }
+                if appended > 0 {
+                    log.push_back(LogEntry::info(format!("  +{} bars from CryptoCompare gap-fill", appended)));
+                }
+            }
+
+            // Try Kraken gap-fill (most recent, weekend live data)
+            let kr_key = format!("kraken:{}:{}", bare_sym, tf);
+            if let Ok(Some(raw)) = cache.get_bars_raw(&kr_key) {
+                let last_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+                let mut appended = 0;
+                for (ts, o, h, l, c, v) in raw {
+                    if ts > last_ts {
+                        self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
+                        appended += 1;
+                    }
+                }
+                if appended > 0 {
+                    log.push_back(LogEntry::info(format!("  +{} bars from Kraken weekend fill", appended)));
+                }
+            }
+        }
+
+        if self.bars.is_empty() {
+            log.push_back(LogEntry::warn(format!(
+                "No data found for key '{}' — run the MT5 XML import pipeline first", key
+            )));
+        } else {
+            self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+            self.compute_indicators_gpu(gpu);
+            self.compute_mtf_sma(cache);
+            self.compute_multi_kama(cache);
+            log.push_back(LogEntry::info(format!(
+                "Loaded {} bars for {} [{}]",
+                self.bars.len(), self.symbol, self.timeframe.label()
+            )));
         }
         while log.len() > 500 { log.pop_front(); }
     }
@@ -17567,12 +17625,35 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Auto MT5 sync every ~5 minutes
-            if self.frame_count % 1200 == 100 && self.frame_count > 0 {
+            // Auto MT5 sync every ~30 seconds (matches BarCacheWriter update interval)
+            if self.frame_count % 120 == 100 && self.frame_count > 0 {
                 let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
                 if !paths.is_empty() {
                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                     let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths, target: db_path });
+                }
+            }
+
+            // Monday auto-cleanup: purge Kraken weekend bars (MT5 will provide fresh data)
+            if self.frame_count == 1800 && self.frame_count > 0 {
+                let now_utc = chrono::Utc::now();
+                let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
+                use chrono::Datelike;
+                if eastern.weekday() == chrono::Weekday::Mon {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(stats) = cache.detailed_stats() {
+                            let mut deleted = 0;
+                            for (key, _, _) in &stats {
+                                if key.starts_with("kraken:") {
+                                    let _ = cache.delete_key(key);
+                                    deleted += 1;
+                                }
+                            }
+                            if deleted > 0 {
+                                self.log.push_back(LogEntry::info(format!("Monday cleanup: purged {} Kraken weekend entries", deleted)));
+                            }
+                        }
+                    }
                 }
             }
 
