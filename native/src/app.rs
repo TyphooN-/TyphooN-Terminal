@@ -17969,35 +17969,84 @@ impl eframe::App for TyphooNApp {
         self.draw_floating_windows(ctx);
 
         // ── central panel (chart area) ────────────────────────────────────────
-        // ── Drawing toolbar (left-side, TradingView style) ─────────────────────
-        egui::Window::new("Drawing")
-            .resizable(false)
-            .collapsible(true)
-            .default_pos(egui::pos2(2.0, 40.0))
-            .max_width(32.0)
-            .frame(egui::Frame::window(&ctx.style()).fill(egui::Color32::from_rgba_premultiplied(20, 20, 30, 230)).inner_margin(3.0))
-            .show(ctx, |ui: &mut egui::Ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
-                let dm = self.draw_mode;
-                let btn = |ui: &mut egui::Ui, label: &str, tip: &str, active: bool| -> bool {
-                    let text = egui::RichText::new(label).monospace().size(14.0);
-                    let text = if active { text.color(egui::Color32::from_rgb(80, 200, 255)) } else { text.color(egui::Color32::from_rgb(160, 160, 180)) };
-                    let r = ui.add(egui::Button::new(text).min_size(egui::vec2(24.0, 22.0)).frame(false));
-                    r.clone().on_hover_text(tip);
-                    r.clicked()
-                };
-                if btn(ui, "─", "Horizontal Line", matches!(dm, DrawMode::PlacingHLine)) { self.draw_mode = DrawMode::PlacingHLine; }
-                if btn(ui, "│", "Vertical Line", matches!(dm, DrawMode::PlacingVLine)) { self.draw_mode = DrawMode::PlacingVLine; }
-                if btn(ui, "╲", "Trendline", matches!(dm, DrawMode::PlacingTrendP1 | DrawMode::PlacingTrendP2 { .. })) { self.draw_mode = DrawMode::PlacingTrendP1; }
-                if btn(ui, "╱", "Ray", matches!(dm, DrawMode::PlacingRayP1 | DrawMode::PlacingRayP2 { .. })) { self.draw_mode = DrawMode::PlacingRayP1; }
-                if btn(ui, "▭", "Rectangle", matches!(dm, DrawMode::PlacingRectP1 | DrawMode::PlacingRectP2 { .. })) { self.draw_mode = DrawMode::PlacingRectP1; }
-                if btn(ui, "═", "Channel", matches!(dm, DrawMode::PlacingChannelP1 | DrawMode::PlacingChannelP2 { .. } | DrawMode::PlacingChannelP3 { .. })) { self.draw_mode = DrawMode::PlacingChannelP1; }
-                if btn(ui, "F", "Fibonacci Retracement", matches!(dm, DrawMode::PlacingFiboP1 | DrawMode::PlacingFiboP2 { .. })) { self.draw_mode = DrawMode::PlacingFiboP1; }
-                ui.separator();
-                if btn(ui, "✕", "Cancel / Clear Mode", false) { self.draw_mode = DrawMode::None; }
-                if btn(ui, "🗑", "Clear All Drawings", false) {
-                    if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); }
-                }
+        // ── Drawing toolbar (horizontal top bar, TradingView style) ─────────
+        egui::Panel::top("drawing_toolbar")
+            .max_height(24.0)
+            .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(18, 18, 25)).inner_margin(egui::Margin::symmetric(4, 1)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+                    let dm = self.draw_mode;
+                    let active_col = egui::Color32::from_rgb(80, 200, 255);
+                    let normal_col = egui::Color32::from_rgb(140, 140, 160);
+                    let drawing_count = self.charts.get(self.active_tab).map(|c| c.drawings.len()).unwrap_or(0);
+
+                    // ── Lines group ──
+                    let lines_active = matches!(dm, DrawMode::PlacingHLine | DrawMode::PlacingVLine | DrawMode::PlacingTrendP1 | DrawMode::PlacingTrendP2 { .. });
+                    ui.menu_button(egui::RichText::new("Lines").small().color(if lines_active { active_col } else { normal_col }), |ui| {
+                        if ui.button("─  Horizontal Line").clicked() { self.draw_mode = DrawMode::PlacingHLine; ui.close(); }
+                        if ui.button("│  Vertical Line").clicked() { self.draw_mode = DrawMode::PlacingVLine; ui.close(); }
+                        if ui.button("╲  Trendline (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingTrendP1; ui.close(); }
+                        if ui.button("╱  Ray (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingRayP1; ui.close(); }
+                    });
+                    ui.separator();
+
+                    // ── Shapes group ──
+                    let shapes_active = matches!(dm, DrawMode::PlacingRectP1 | DrawMode::PlacingRectP2 { .. } | DrawMode::PlacingChannelP1 | DrawMode::PlacingChannelP2 { .. } | DrawMode::PlacingChannelP3 { .. });
+                    ui.menu_button(egui::RichText::new("Shapes").small().color(if shapes_active { active_col } else { normal_col }), |ui| {
+                        if ui.button("▭  Rectangle (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingRectP1; ui.close(); }
+                        if ui.button("═  Channel (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingChannelP1; ui.close(); }
+                    });
+                    ui.separator();
+
+                    // ── Fibo group ──
+                    let fibo_active = matches!(dm, DrawMode::PlacingFiboP1 | DrawMode::PlacingFiboP2 { .. });
+                    let fibo_label = egui::RichText::new("Fibo").small().color(if fibo_active { active_col } else { normal_col });
+                    if ui.add(egui::Button::new(fibo_label).frame(false)).clicked() { self.draw_mode = DrawMode::PlacingFiboP1; }
+                    ui.separator();
+
+                    // ── Manage group ──
+                    ui.menu_button(egui::RichText::new("Manage").small().color(normal_col), |ui| {
+                        if ui.button("Delete Last Drawing").clicked() {
+                            if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.pop(); }
+                            ui.close();
+                        }
+                        if ui.button("Clear All Drawings").clicked() {
+                            if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); }
+                            ui.close();
+                        }
+                    });
+
+                    // ── Status ──
+                    if dm != DrawMode::None {
+                        ui.separator();
+                        let mode_name = match dm {
+                            DrawMode::PlacingHLine => "H-Line: click to place",
+                            DrawMode::PlacingVLine => "V-Line: click to place",
+                            DrawMode::PlacingTrendP1 => "Trendline: click start point",
+                            DrawMode::PlacingTrendP2 { .. } => "Trendline: click end point",
+                            DrawMode::PlacingRayP1 => "Ray: click origin",
+                            DrawMode::PlacingRayP2 { .. } => "Ray: click direction",
+                            DrawMode::PlacingRectP1 => "Rectangle: click corner 1",
+                            DrawMode::PlacingRectP2 { .. } => "Rectangle: click corner 2",
+                            DrawMode::PlacingChannelP1 => "Channel: click point 1",
+                            DrawMode::PlacingChannelP2 { .. } => "Channel: click point 2",
+                            DrawMode::PlacingChannelP3 { .. } => "Channel: click width",
+                            DrawMode::PlacingFiboP1 => "Fibo: click high/low",
+                            DrawMode::PlacingFiboP2 { .. } => "Fibo: click other end",
+                            DrawMode::None => "",
+                        };
+                        ui.label(egui::RichText::new(mode_name).small().color(active_col));
+                        if ui.small_button("Esc").clicked() { self.draw_mode = DrawMode::None; }
+                    }
+
+                    // ── Drawing count ──
+                    if drawing_count > 0 {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(egui::RichText::new(format!("{} drawings", drawing_count)).small().color(egui::Color32::from_rgb(80, 80, 100)));
+                        });
+                    }
+                });
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {

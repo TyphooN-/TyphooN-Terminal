@@ -1003,6 +1003,10 @@ pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>
 
             let sym_upper = sym.to_uppercase();
 
+            // Skip internal/meta keys (BarCacheWriter stores __SERVER__, __SPECS__, __SYMBOLS__)
+            if sym.starts_with("__") || sym.starts_with("_") && sym.ends_with("_") {
+                continue;
+            }
             // Skip forex (pairs like EURUSD, GBPJPY, NZDUSD — any length ending in currency code)
             if forex_suffixes.iter().any(|s| sym_upper.ends_with(s) && sym_upper.len() >= 5 && sym_upper.len() <= 7) {
                 continue;
