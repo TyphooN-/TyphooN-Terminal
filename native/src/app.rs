@@ -6649,6 +6649,9 @@ pub struct TyphooNApp {
     mtf_focused: Option<usize>,
     /// Which tabs are visible in MTF grid (true = shown, per chart index).
     mtf_visible: Vec<bool>,
+    /// MTF Grid indicator status: (tf_label, close, sma200, kama, fisher, fisher_signal) per TF.
+    /// Computed on symbol load for the MTF Grid panel. Lightweight — no full ChartState needed.
+    mtf_grid_status: Vec<(&'static str, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>,
 
     /// Command palette open state.
     command_open: bool,
@@ -8055,6 +8058,7 @@ impl TyphooNApp {
             charts,
             mtf_cols: 2,
             mtf_enabled: false,
+            mtf_grid_status: Vec::new(),
             mtf_focused: None,
             mtf_visible: Vec::new(),
             command_open: false,
@@ -8686,8 +8690,53 @@ impl TyphooNApp {
             if let Some(target) = self.charts.get_mut(self.active_tab) {
                 *target = chart;
             }
+            // Refresh MTF Grid status for all timeframes
+            self.compute_mtf_grid_status();
         } else {
             self.log.push_back(LogEntry::warn("Cache not available"));
+        }
+    }
+
+    /// Compute MTF Grid indicator status for all timeframes from cache.
+    /// Lightweight: loads bars, computes SMA200/KAMA/Fisher for last bar only.
+    fn compute_mtf_grid_status(&mut self) {
+        self.mtf_grid_status.clear();
+        let cache = match &self.cache {
+            Some(c) => Arc::clone(c),
+            None => return,
+        };
+        let sym = self.symbol_input.trim().to_string();
+        if sym.is_empty() { return; }
+
+        let all_tfs: &[(&str, Timeframe)] = &[
+            ("M1", Timeframe::M1), ("M5", Timeframe::M5), ("M15", Timeframe::M15), ("M30", Timeframe::M30),
+            ("H1", Timeframe::H1), ("H4", Timeframe::H4), ("D1", Timeframe::D1), ("W1", Timeframe::W1),
+        ];
+
+        for &(label, tf) in all_tfs {
+            // First check if we already have a loaded chart for this TF
+            if let Some(c) = self.charts.iter().find(|c| c.timeframe == tf && !c.bars.is_empty()) {
+                let close = c.bars.last().map(|b| b.close);
+                let sma = c.sma200.last().and_then(|v| *v);
+                let kama = c.kama.last().and_then(|v| *v);
+                let fisher = c.fisher.last().and_then(|v| *v);
+                let fsig = c.fisher_signal.last().and_then(|v| *v);
+                self.mtf_grid_status.push((label, close, sma, kama, fisher, fsig));
+                continue;
+            }
+            // Load from cache and compute indicators
+            let mut temp = ChartState::new(&sym, tf);
+            temp.load(&cache, &mut std::collections::VecDeque::new(), None);
+            if temp.bars.is_empty() {
+                self.mtf_grid_status.push((label, None, None, None, None, None));
+                continue;
+            }
+            let close = temp.bars.last().map(|b| b.close);
+            let sma = temp.sma200.last().and_then(|v| *v);
+            let kama = temp.kama.last().and_then(|v| *v);
+            let fisher = temp.fisher.last().and_then(|v| *v);
+            let fsig = temp.fisher_signal.last().and_then(|v| *v);
+            self.mtf_grid_status.push((label, close, sma, kama, fisher, fsig));
         }
     }
 
@@ -18283,7 +18332,6 @@ impl eframe::App for TyphooNApp {
                     ui.label(egui::RichText::new("MTF Grid").color(AXIS_TEXT).small().strong());
                     let tf_labels = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
                     let ma_labels = ["SMA200", "KAMA", "Fisher"];
-                    let chart_ref = self.charts.get(self.active_tab);
                     egui::Grid::new("mtf_ma_grid").spacing(egui::vec2(4.0, 2.0)).show(ui, |ui| {
                         // Header row
                         ui.label(egui::RichText::new("").small());
@@ -18291,46 +18339,23 @@ impl eframe::App for TyphooNApp {
                             ui.label(egui::RichText::new(*tf).color(AXIS_TEXT).small());
                         }
                         ui.end_row();
-                        // Data rows — green if bullish, red if bearish, gray if no data
-                        let active_tf_label = chart_ref.map(|c| c.timeframe.label()).unwrap_or("");
+                        // Data rows from mtf_grid_status
                         for ma in &ma_labels {
                             ui.label(egui::RichText::new(*ma).color(AXIS_TEXT).small());
                             for tf in &tf_labels {
-                                let dot_color = if *tf == active_tf_label {
-                                    if let Some(c) = chart_ref {
-                                        let last_bar = c.bars.last();
-                                        let bullish = match *ma {
-                                            "SMA200" => {
-                                                let sma = c.sma200.last().and_then(|v| *v);
-                                                match (last_bar, sma) {
-                                                    (Some(b), Some(s)) => Some(b.close > s),
-                                                    _ => None,
-                                                }
-                                            }
-                                            "KAMA" => {
-                                                let kama = c.kama.last().and_then(|v| *v);
-                                                match (last_bar, kama) {
-                                                    (Some(b), Some(k)) => Some(b.close > k),
-                                                    _ => None,
-                                                }
-                                            }
-                                            "Fisher" => {
-                                                let fisher = c.fisher.last().and_then(|v| *v);
-                                                let signal = c.fisher_signal.last().and_then(|v| *v);
-                                                match (fisher, signal) {
-                                                    (Some(f), Some(s)) => Some(f > s),
-                                                    _ => None,
-                                                }
-                                            }
-                                            _ => None,
-                                        };
-                                        match bullish {
-                                            Some(true) => UP,
-                                            Some(false) => DOWN,
-                                            None => AXIS_TEXT,
-                                        }
-                                    } else {
-                                        AXIS_TEXT
+                                // Find status for this TF
+                                let status = self.mtf_grid_status.iter().find(|s| s.0 == *tf);
+                                let dot_color = if let Some(&(_, close, sma, kama, fisher, fsig)) = status {
+                                    let bullish = match *ma {
+                                        "SMA200" => match (close, sma) { (Some(c), Some(s)) => Some(c > s), _ => None },
+                                        "KAMA" => match (close, kama) { (Some(c), Some(k)) => Some(c > k), _ => None },
+                                        "Fisher" => match (fisher, fsig) { (Some(f), Some(s)) => Some(f > s), _ => None },
+                                        _ => None,
+                                    };
+                                    match bullish {
+                                        Some(true) => UP,
+                                        Some(false) => DOWN,
+                                        None => AXIS_TEXT,
                                     }
                                 } else {
                                     egui::Color32::from_rgb(50, 50, 60)
