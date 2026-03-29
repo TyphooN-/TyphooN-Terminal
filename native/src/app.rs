@@ -997,44 +997,52 @@ impl ChartState {
             }
         }
 
-        // Merge gap-fill sources: CryptoCompare then Kraken (append newer bars only)
+        // Merge gap-fill sources: CryptoCompare then Kraken
+        // For crypto: merge ALL bars (fill gaps anywhere, not just append to end)
         let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
             "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
         let sym_upper = bare_sym.to_uppercase();
         let is_crypto = crypto_bases.iter().any(|b| sym_upper.starts_with(b) && sym_upper.ends_with("USD"));
 
-        if is_crypto && !self.bars.is_empty() {
-            let last_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+        if is_crypto {
+            // Build a set of existing timestamps for O(1) lookup
+            let mut existing_ts: std::collections::HashSet<i64> = self.bars.iter().map(|b| b.ts_ms).collect();
 
-            // Try CryptoCompare gap-fill
+            // Try CryptoCompare: merge into gaps (any timestamp not already present)
             let cc_key = format!("cryptocompare:{}:{}", bare_sym, tf);
             if let Ok(Some(raw)) = cache.get_bars_raw(&cc_key) {
-                let mut appended = 0;
+                let mut merged = 0;
                 for (ts, o, h, l, c, v) in raw {
-                    if ts > last_ts {
+                    if !existing_ts.contains(&ts) {
                         self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
-                        appended += 1;
+                        existing_ts.insert(ts);
+                        merged += 1;
                     }
                 }
-                if appended > 0 {
-                    log.push_back(LogEntry::info(format!("  +{} bars from CryptoCompare gap-fill", appended)));
+                if merged > 0 {
+                    log.push_back(LogEntry::info(format!("  +{} bars from CryptoCompare gap-fill", merged)));
                 }
             }
 
             // Try Kraken gap-fill (most recent, weekend live data)
             let kr_key = format!("kraken:{}:{}", bare_sym, tf);
             if let Ok(Some(raw)) = cache.get_bars_raw(&kr_key) {
-                let last_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
-                let mut appended = 0;
+                let mut merged = 0;
                 for (ts, o, h, l, c, v) in raw {
-                    if ts > last_ts {
+                    if !existing_ts.contains(&ts) {
                         self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
-                        appended += 1;
+                        existing_ts.insert(ts);
+                        merged += 1;
                     }
                 }
-                if appended > 0 {
-                    log.push_back(LogEntry::info(format!("  +{} bars from Kraken weekend fill", appended)));
+                if merged > 0 {
+                    log.push_back(LogEntry::info(format!("  +{} bars from Kraken weekend fill", merged)));
                 }
+            }
+
+            // Sort merged bars by timestamp (CryptoCompare + Kraken may interleave with MT5)
+            if !self.bars.is_empty() {
+                self.bars.sort_by_key(|b| b.ts_ms);
             }
         }
 
