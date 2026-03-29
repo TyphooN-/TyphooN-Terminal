@@ -316,25 +316,41 @@ async fn handle_client_tls(
                 }
             }
             SyncMessage::RequestEntries { keys } => {
-                let mut count = 0;
+                // Fast binary transfer: batch entries into large binary WebSocket frames
+                // Format per entry: [u32 key_len][key_bytes][i64 timestamp][u32 data_len][data_bytes]
+                let mut count = 0u32;
+                let mut batch_buf: Vec<u8> = Vec::with_capacity(4 * 1024 * 1024); // 4MB batch buffer
+                let flush_threshold = 2 * 1024 * 1024; // flush every 2MB
+
                 for key in &keys {
                     if let Ok(Some((data, ts))) = cache.get_raw_bar_entry(key) {
-                        let encoded = base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            &data,
-                        );
-                        if let Ok(msg) = send_msg(&SyncMessage::EntryData {
-                            key: key.clone(),
-                            data: encoded,
-                            timestamp: ts,
-                        }) {
-                            let _ = sink.send(msg).await;
-                        }
+                        let key_bytes = key.as_bytes();
+                        batch_buf.extend_from_slice(&(key_bytes.len() as u32).to_le_bytes());
+                        batch_buf.extend_from_slice(key_bytes);
+                        batch_buf.extend_from_slice(&ts.to_le_bytes());
+                        batch_buf.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                        batch_buf.extend_from_slice(&data);
                         count += 1;
+
+                        // Flush when batch is large enough
+                        if batch_buf.len() >= flush_threshold {
+                            let _ = sink.send(Message::Binary(batch_buf.clone().into())).await;
+                            batch_buf.clear();
+                        }
                     }
                 }
-                if let Ok(msg) = send_msg(&SyncMessage::BatchComplete { count }) {
+                // Flush remaining
+                if !batch_buf.is_empty() {
+                    let _ = sink.send(Message::Binary(batch_buf.into())).await;
+                }
+                // Send completion marker as text
+                if let Ok(msg) = send_msg(&SyncMessage::BatchComplete { count: count as usize }) {
                     let _ = sink.send(msg).await;
+                }
+                {
+                    let mut s = status.lock().await;
+                    s.entries_synced += count as usize;
+                    s.bytes_sent += count as u64; // approximate
                 }
             }
             SyncMessage::Ping => {
@@ -518,28 +534,47 @@ async fn client_sync_loop(
             .map_err(|e| format!("Send RequestEntries failed: {e}"))?;
 
         // 8. Receive entries until BatchComplete
+        // Server sends binary frames (fast, no base64/JSON overhead) + text BatchComplete
+        let total_received = 0usize;
+        let mut total_bytes = 0usize;
         loop {
-            match read_next(stream).await? {
-                SyncMessage::EntryData { key, data, timestamp } => {
-                    let decoded = base64::Engine::decode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &data,
-                    ).map_err(|e| format!("Base64 decode failed for {key}: {e}"))?;
+            match stream.next().await {
+                Some(Ok(msg)) if msg.is_binary() => {
+                    // Parse binary batch: [u32 key_len][key][i64 ts][u32 data_len][data] repeated
+                    let buf = msg.into_data();
+                    total_bytes += buf.len();
+                    let mut pos = 0;
+                    while pos + 4 <= buf.len() {
+                        let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                        pos += 4;
+                        if pos + key_len + 8 + 4 > buf.len() { break; }
+                        let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
+                        pos += key_len;
+                        let ts = i64::from_le_bytes(buf[pos..pos+8].try_into().unwrap_or([0;8]));
+                        pos += 8;
+                        let data_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                        pos += 4;
+                        if pos + data_len > buf.len() { break; }
+                        let data = &buf[pos..pos+data_len];
+                        pos += data_len;
 
-                    // Get bar_count from the compressed data by decompressing header
-                    let bar_count = extract_bar_count(&decoded);
-
-                    if let Err(e) = cache.put_raw_bar_entry(&key, &decoded, timestamp, bar_count) {
-                        tracing::warn!("LAN sync: failed to write {key}: {e}");
+                        let bar_count = extract_bar_count(data);
+                        if let Err(e) = cache.put_raw_bar_entry(&key, data, ts, bar_count) {
+                            tracing::warn!("LAN sync: failed to write {key}: {e}");
+                        }
+                        let _ = total_received;
                     }
                 }
-                SyncMessage::BatchComplete { count } => {
-                    tracing::info!("LAN sync: received {count} entries");
-                    break;
+                Some(Ok(msg)) if msg.is_text() => {
+                    // Check for BatchComplete
+                    if let Ok(SyncMessage::BatchComplete { count }) = parse_msg(&msg) {
+                        tracing::info!("LAN sync: received {} entries ({:.1} MB)", count, total_bytes as f64 / 1024.0 / 1024.0);
+                        break;
+                    }
                 }
-                other => {
-                    tracing::warn!("LAN sync: unexpected message during transfer: {:?}", other);
-                }
+                Some(Ok(_)) => continue,
+                Some(Err(e)) => return Err(format!("WebSocket error: {e}")),
+                None => return Err("Connection closed during sync".into()),
             }
         }
     }
@@ -553,21 +588,35 @@ async fn client_sync_loop(
                     Some(Ok(msg)) => {
                         if msg.is_close() { break; }
                         if msg.is_pong() { continue; }
-                        match parse_msg(&msg) {
-                            Ok(SyncMessage::IncrementalUpdate { key, data, timestamp }) => {
-                                let decoded = base64::Engine::decode(
-                                    &base64::engine::general_purpose::STANDARD,
-                                    &data,
-                                ).map_err(|e| format!("Base64 decode failed: {e}"))?;
-                                let bar_count = extract_bar_count(&decoded);
-                                let _ = cache.put_raw_bar_entry(&key, &decoded, timestamp, bar_count);
+                        if msg.is_binary() {
+                            // Binary incremental update (same format as batch)
+                            let buf = msg.into_data();
+                            let mut pos = 0;
+                            while pos + 4 <= buf.len() {
+                                let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                                pos += 4;
+                                if pos + key_len + 8 + 4 > buf.len() { break; }
+                                let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
+                                pos += key_len;
+                                let ts = i64::from_le_bytes(buf[pos..pos+8].try_into().unwrap_or([0;8]));
+                                pos += 8;
+                                let data_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                                pos += 4;
+                                if pos + data_len > buf.len() { break; }
+                                let data = &buf[pos..pos+data_len];
+                                pos += data_len;
+                                let bar_count = extract_bar_count(data);
+                                let _ = cache.put_raw_bar_entry(&key, data, ts, bar_count);
                                 tracing::debug!("LAN sync: incremental update for {key}");
                             }
-                            Ok(SyncMessage::Pong) => {}
-                            Ok(SyncMessage::Ping) => {
-                                let _ = sink.send(send_msg(&SyncMessage::Pong)?).await;
+                        } else if msg.is_text() {
+                            match parse_msg(&msg) {
+                                Ok(SyncMessage::Pong) => {}
+                                Ok(SyncMessage::Ping) => {
+                                    let _ = sink.send(send_msg(&SyncMessage::Pong)?).await;
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
                     }
                     Some(Err(e)) => {
