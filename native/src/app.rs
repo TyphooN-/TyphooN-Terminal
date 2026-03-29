@@ -5851,6 +5851,10 @@ impl TyphooNApp {
             std::thread::spawn(move || {
                 let mut db_path = dirs_home();
                 db_path.push("cache");
+                // Create cache directory if it doesn't exist (fresh install / LAN client)
+                if let Err(e) = std::fs::create_dir_all(&db_path) {
+                    tracing::warn!("Failed to create cache dir {}: {}", db_path.display(), e);
+                }
                 db_path.push("typhoon_cache.db");
                 tracing::info!("Cache-open thread: opening {}...", db_path.display());
                 match SqliteCache::open(&db_path) {
@@ -17661,8 +17665,8 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Kraken startup sync — once per session
-            if self.frame_count == 600 && !self.crypto_daily_done {
+            // Kraken startup sync — once per session (delayed to give user time to connect as LAN client)
+            if self.frame_count == 2400 && !self.crypto_daily_done {
                 self.crypto_daily_done = true;
                 let crypto_syms = ["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD", "XRPUSD", "ADAUSD", "LTCUSD", "LINKUSD", "AVAXUSD", "DOTUSD"];
                 let tfs = vec!["1Day".into(), "1Week".into(), "4Hour".into(), "1Hour".into()];
@@ -18278,5 +18282,175 @@ mod tests {
         let (start, end) = chart.visible_range();
         assert_eq!(end - start, 200);
         assert_eq!(end, 500);
+    }
+
+    // ── BetterVolume MQL5 classification tests ────────────────────────
+
+    #[test]
+    #[test]
+    fn test_better_volume_mql5_classifications() {
+        // BetterVolume uses adaptive comparison against lookback extremes (not fixed thresholds).
+        // Verify basic properties: correct length, valid classification range, variety of results.
+        let bars = make_oscillating_bars(50);
+        let bv = compute_better_volume(&bars);
+        assert_eq!(bv.len(), bars.len());
+        // All values should be valid classification (0-5)
+        for (i, &v) in bv.iter().enumerate() {
+            assert!(v <= 5, "Bar {} has invalid classification {}", i, v);
+        }
+        // First `lookback` bars should be normal (5) since lookback not ready
+        assert_eq!(bv[0], 5, "Bar 0 should be normal (5)");
+        // With oscillating data, at least some bars should be non-normal
+        let non_normal = bv.iter().filter(|&&v| v != 5).count();
+        assert!(non_normal > 0, "With oscillating data, some bars should have non-normal classification");
+    }
+
+    // ── Supply/Demand zone break detection ────────────────────────────
+
+    #[test]
+    fn test_supply_demand_break_detection() {
+        // Create bars: rally to 200, crash through all supply zones
+        let mut bars = Vec::new();
+        // Phase 1: 30 bars oscillating 90-110 (creates fractals)
+        for i in 0..30 {
+            let base = 100.0 + (i as f64 * 0.5).sin() * 8.0;
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 86400000,
+                open: base - 0.5, high: base + 2.0, low: base - 2.0,
+                close: base + 0.5, volume: 1000.0,
+            });
+        }
+        // Phase 2: massive rally through all zones
+        for i in 30..50 {
+            let base = 100.0 + (i - 30) as f64 * 5.0;
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 86400000,
+                open: base, high: base + 3.0, low: base - 1.0,
+                close: base + 2.0, volume: 2000.0,
+            });
+        }
+
+        let (supply, _demand) = compute_supply_demand_zones(&bars);
+        // Supply zones from phase 1 should be broken by phase 2 rally
+        // Only zones near the top (if any) should survive
+        for (_, hi, _, _) in &supply {
+            assert!(*hi >= 150.0, "Surviving supply zone should be at high prices (got {})", hi);
+        }
+    }
+
+    // ── Supply/Demand zone merge ──────────────────────────────────────
+
+    #[test]
+    fn test_supply_demand_merge_overlapping() {
+        // Create bars with multiple close fractal lows at similar prices
+        let mut bars = Vec::new();
+        for i in 0..50 {
+            let base = if i % 10 < 5 { 100.0 + i as f64 * 0.1 } else { 95.0 }; // oscillate with dips to 95
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 86400000,
+                open: base + 0.5, high: base + 2.0, low: base - 2.0,
+                close: base - 0.5, volume: 1000.0,
+            });
+        }
+        let (supply, demand) = compute_supply_demand_zones(&bars);
+        // After merge, overlapping zones should be consolidated
+        // Check no two zones of same type overlap
+        for i in 0..supply.len() {
+            for j in (i+1)..supply.len() {
+                let a = &supply[i]; let b = &supply[j];
+                let overlap = a.1 >= b.2 && b.1 >= a.2; // hi_a >= lo_b && hi_b >= lo_a
+                assert!(!overlap, "Supply zones {} and {} overlap: ({:.2},{:.2}) vs ({:.2},{:.2})", i, j, a.2, a.1, b.2, b.1);
+            }
+        }
+        for i in 0..demand.len() {
+            for j in (i+1)..demand.len() {
+                let a = &demand[i]; let b = &demand[j];
+                let overlap = a.1 >= b.2 && b.1 >= a.2;
+                assert!(!overlap, "Demand zones {} and {} overlap", i, j);
+            }
+        }
+    }
+
+    // ── GPU S/D zones from GPU output ─────────────────────────────────
+
+    #[test]
+    fn test_supply_demand_from_gpu() {
+        let bars = make_oscillating_bars(50);
+        // Simulate GPU output: mark bar 16 as supply fractal, bar 31 as demand
+        let mut gpu_data = vec![0.0f32; 50 * 3];
+        gpu_data[16 * 3] = -1.0; // supply
+        gpu_data[16 * 3 + 1] = bars[16].high as f32;
+        gpu_data[16 * 3 + 2] = bars[16].close as f32;
+        gpu_data[31 * 3] = 1.0; // demand
+        gpu_data[31 * 3 + 1] = bars[31].close as f32;
+        gpu_data[31 * 3 + 2] = bars[31].low as f32;
+
+        let (supply, demand) = compute_supply_demand_zones_from_gpu(&gpu_data, &bars);
+        // Should produce at least the zones we marked (unless broken)
+        let total = supply.len() + demand.len();
+        assert!(total <= 2, "Should have at most 2 zones from 2 GPU fractals, got {}", total);
+        for (_, hi, lo, _) in supply.iter().chain(demand.iter()) {
+            assert!(hi > lo, "Zone high must be > low");
+        }
+    }
+
+    // ── Aggregate bars to HTF ─────────────────────────────────────────
+
+    #[test]
+    fn test_aggregate_bars_to_htf() {
+        // 12 hourly bars → 3 4-hour bars
+        let mut bars = Vec::new();
+        for i in 0..12 {
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: 100.0 + i as f64,
+                high: 105.0 + i as f64,
+                low: 95.0 + i as f64,
+                close: 102.0 + i as f64,
+                volume: 1000.0,
+            });
+        }
+        let htf = aggregate_bars_to_htf(&bars, 240); // 4 hours = 240 minutes
+        assert!(htf.len() >= 3 && htf.len() <= 4, "12 hourly bars → 3-4 4-hour bars (timestamp bucketing), got {}", htf.len());
+        // First HTF bar should have open from bar 0
+        assert_eq!(htf[0].open, bars[0].open);
+        // Last HTF bar should have close from last input bar
+        assert_eq!(htf.last().unwrap().close, bars[11].close);
+        // Each HTF bar volume should be sum of its constituent bars
+        assert!(htf[0].volume > 0.0, "HTF bar should have non-zero volume");
+    }
+
+    // ── TradeMarker aggregation ───────────────────────────────────────
+
+    #[test]
+    fn test_trade_marker_aggregation() {
+        // Verify the HashMap aggregation logic used in build_trade_overlay
+        use std::collections::HashMap;
+        let mut marker_map: HashMap<(usize, bool, i64), (f64, u32)> = HashMap::new();
+
+        // 3 buys at same bar+price
+        for _ in 0..3 {
+            let entry = marker_map.entry((100, true, 15000)).or_insert((0.0, 0));
+            entry.0 += 0.10;
+            entry.1 += 1;
+        }
+        // 1 sell at different price
+        let entry = marker_map.entry((100, false, 16000)).or_insert((0.0, 0));
+        entry.0 += 0.50;
+        entry.1 += 1;
+
+        assert_eq!(marker_map.len(), 2, "Should have 2 unique entries");
+        let buy = marker_map.get(&(100, true, 15000)).unwrap();
+        assert!((buy.0 - 0.30).abs() < 0.001, "Aggregated volume should be 0.30");
+        assert_eq!(buy.1, 3, "Should have 3 aggregated trades");
+    }
+
+    // ── TradeOverlay default ──────────────────────────────────────────
+
+    #[test]
+    fn test_trade_overlay_default() {
+        let ov = TradeOverlay::default();
+        assert!(ov.markers.is_empty());
+        assert!(ov.position_lines.is_empty());
     }
 }

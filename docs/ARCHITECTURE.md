@@ -71,7 +71,7 @@ MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter 
 | Plots | egui_plot | Analytics charts (equity curves, histograms) |
 | Async | tokio | Shared with engine for broker WebSocket |
 | Cache | SQLite + zstd | TTBR binary format, ~3-5x compression |
-| Analytics | darwin.rs (6,800+ lines) | 80 functions, 47 unit tests |
+| Analytics | darwin.rs (6,800+ lines) | 80 functions, 59 unit tests |
 | Risk | risk.rs + margin.rs + var.rs | Full port of TyphooN EA v1.420 |
 
 ## Project Structure
