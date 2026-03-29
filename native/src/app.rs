@@ -1795,8 +1795,8 @@ fn compute_supertrend(bars: &[Bar], atr: &[Option<f64>], period: usize, multipli
     let mut bull = vec![true; n];
     if n <= period { return (st, bull); }
 
-    let mut upper_band = 0.0_f64;
-    let mut lower_band = 0.0_f64;
+    let mut upper_band;
+    let mut lower_band;
     let mut prev_upper = 0.0_f64;
     let mut prev_lower = 0.0_f64;
     let mut prev_st = 0.0_f64;
@@ -4949,7 +4949,7 @@ fn draw_chart(
     // ── Squeeze Momentum sub-pane ──────────────────────────────────────────
     if show_squeeze {
         let sr = egui::Rect::from_min_max(egui::pos2(rect.left(), sub_y), egui::pos2(rect.right() - price_axis_w, sub_y + 80.0));
-        sub_y += 80.0;
+        #[allow(unused_assignments)] { sub_y += 80.0; } // last sub-pane
         painter.rect_filled(sr, 0.0, egui::Color32::from_rgb(0, 0, 0));
         painter.line_segment([egui::pos2(sr.left(), sr.top()), egui::pos2(sr.right(), sr.top())], egui::Stroke::new(1.0, egui::Color32::from_rgb(68, 68, 68)));
         // Find momentum range
