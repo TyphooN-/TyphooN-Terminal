@@ -353,6 +353,28 @@ async fn handle_client_tls(
                     s.bytes_sent += count as u64; // approximate
                 }
             }
+            SyncMessage::RequestDarwinData => {
+                // Export DARWIN tables — run synchronously (Connection is not Send)
+                let cache_clone = cache.clone();
+                let darwin_result = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = cache_clone.connection() {
+                        crate::core::darwin::export_darwin_data(&conn).ok()
+                    } else { None }
+                }).await.ok().flatten();
+
+                if let Some((json, n_acct, n_deals, n_pos)) = darwin_result {
+                    let compressed = zstd::encode_all(json.as_bytes(), 3).unwrap_or_else(|_| json.into_bytes());
+                    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &compressed);
+                    if let Ok(msg) = send_msg(&SyncMessage::DarwinData {
+                        data: encoded, accounts: n_acct, deals: n_deals, positions: n_pos,
+                    }) {
+                        let _ = sink.send(msg).await;
+                    }
+                    tracing::info!("LAN sync: sent DARWIN data ({} accounts, {} deals, {} positions)", n_acct, n_deals, n_pos);
+                } else {
+                    tracing::warn!("LAN sync: DARWIN export failed or cache unavailable");
+                }
+            }
             SyncMessage::Ping => {
                 if let Ok(msg) = send_msg(&SyncMessage::Pong) {
                     let _ = sink.send(msg).await;
@@ -577,6 +599,36 @@ async fn client_sync_loop(
                 None => return Err("Connection closed during sync".into()),
             }
         }
+    }
+
+    // 8b. Request DARWIN data (accounts, deals, positions)
+    sink.send(send_msg(&SyncMessage::RequestDarwinData)?)
+        .await.map_err(|e| format!("Send RequestDarwinData failed: {e}"))?;
+
+    match read_next(stream).await? {
+        SyncMessage::DarwinData { data, accounts, deals, positions } => {
+            // Decompress and import
+            let compressed = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data)
+                .map_err(|e| format!("Base64 decode DARWIN data failed: {e}"))?;
+            let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
+                .unwrap_or_else(|_| compressed.clone());
+            let json = String::from_utf8_lossy(&json_bytes);
+
+            let cache_clone = cache.clone();
+            let json_owned = json.to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Ok(conn) = cache_clone.connection() {
+                    match crate::core::darwin::import_darwin_data(&conn, &json_owned) {
+                        Ok((na, nd, np)) => {
+                            tracing::info!("LAN sync: imported DARWIN data — {} accounts, {} deals, {} positions", na, nd, np);
+                        }
+                        Err(e) => { tracing::warn!("LAN sync: DARWIN import failed: {e}"); }
+                    }
+                }
+            }).await;
+            tracing::info!("LAN sync: DARWIN data received ({} accounts, {} deals, {} positions)", accounts, deals, positions);
+        }
+        other => { tracing::warn!("LAN sync: expected DarwinData, got {:?}", other); }
     }
 
     // 9. Listen for incremental updates (server pushes + ping/pong keepalive)

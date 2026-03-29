@@ -6271,6 +6271,123 @@ pub fn compute_performance_attribution(conn: &Connection, darwin_ticker: &str) -
     Ok(result)
 }
 
+// ── LAN Sync: DARWIN data export/import ──────────────────────────────
+
+/// Export all DARWIN data (accounts, deals, positions) as compressed JSON for LAN sync.
+pub fn export_darwin_data(conn: &Connection) -> Result<(String, usize, usize, usize), String> {
+    let accounts = list_darwin_accounts(conn)?;
+    let mut all_deals: Vec<DarwinDeal> = Vec::new();
+    let mut all_positions: Vec<DarwinPosition> = Vec::new();
+    for acct in &accounts {
+        if let Ok(deals) = get_darwin_deals(conn, &acct.darwin_ticker, None, None) {
+            all_deals.extend(deals);
+        }
+        if let Ok(positions) = get_darwin_positions(conn, &acct.darwin_ticker, None, None) {
+            all_positions.extend(positions);
+        }
+    }
+    let payload = serde_json::json!({
+        "accounts": accounts,
+        "deals": all_deals,
+        "positions": all_positions,
+    });
+    let json = serde_json::to_string(&payload).map_err(|e| format!("JSON serialize failed: {e}"))?;
+    let n_acct = accounts.len();
+    let n_deals = all_deals.len();
+    let n_pos = all_positions.len();
+    Ok((json, n_acct, n_deals, n_pos))
+}
+
+/// Import DARWIN data from JSON (received via LAN sync).
+/// Merges into existing tables (INSERT OR REPLACE).
+pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize, usize), String> {
+    let payload: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| format!("JSON parse failed: {e}"))?;
+
+    // Ensure tables exist
+    create_darwin_tables(conn)?;
+
+    let mut n_acct = 0usize;
+    let mut n_deals = 0usize;
+    let mut n_pos = 0usize;
+
+    // Import accounts
+    if let Some(accounts) = payload["accounts"].as_array() {
+        for a in accounts {
+            let ticker = a["darwin_ticker"].as_str().unwrap_or("");
+            if ticker.is_empty() { continue; }
+            conn.execute(
+                "INSERT OR REPLACE INTO darwin_accounts (darwin_ticker, name, mt5_account, initial_balance, created_at, deal_count, position_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    ticker,
+                    a["name"].as_str().unwrap_or(""),
+                    a["mt5_account"].as_str().unwrap_or(""),
+                    a["initial_balance"].as_f64().unwrap_or(0.0),
+                    a["created_at"].as_i64().unwrap_or(0),
+                    a["deal_count"].as_i64().unwrap_or(0),
+                    a["position_count"].as_i64().unwrap_or(0),
+                ],
+            ).map_err(|e| format!("Insert account failed: {e}"))?;
+            n_acct += 1;
+        }
+    }
+
+    // Import deals
+    if let Some(deals) = payload["deals"].as_array() {
+        for d in deals {
+            conn.execute(
+                "INSERT OR REPLACE INTO darwin_deals (account, time, deal_ticket, symbol, deal_type, direction, volume, price, order_ticket, commission, fee, swap, profit, balance, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    d["account"].as_str().unwrap_or(""),
+                    d["time"].as_str().unwrap_or(""),
+                    d["deal_ticket"].as_i64().unwrap_or(0),
+                    d["symbol"].as_str().unwrap_or(""),
+                    d["deal_type"].as_str().unwrap_or(""),
+                    d["direction"].as_str().unwrap_or(""),
+                    d["volume"].as_f64().unwrap_or(0.0),
+                    d["price"].as_f64().unwrap_or(0.0),
+                    d["order_ticket"].as_i64().unwrap_or(0),
+                    d["commission"].as_f64().unwrap_or(0.0),
+                    d["fee"].as_f64().unwrap_or(0.0),
+                    d["swap"].as_f64().unwrap_or(0.0),
+                    d["profit"].as_f64().unwrap_or(0.0),
+                    d["balance"].as_f64().unwrap_or(0.0),
+                    d["comment"].as_str().unwrap_or(""),
+                ],
+            ).map_err(|e| format!("Insert deal failed: {e}"))?;
+            n_deals += 1;
+        }
+    }
+
+    // Import positions
+    if let Some(positions) = payload["positions"].as_array() {
+        for p in positions {
+            conn.execute(
+                "INSERT OR REPLACE INTO darwin_positions (account, open_time, position_ticket, symbol, pos_type, volume, open_price, sl, tp, close_time, close_price, commission, swap, profit) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                rusqlite::params![
+                    p["account"].as_str().unwrap_or(""),
+                    p["open_time"].as_str().unwrap_or(""),
+                    p["position_ticket"].as_i64().unwrap_or(0),
+                    p["symbol"].as_str().unwrap_or(""),
+                    p["pos_type"].as_str().unwrap_or(""),
+                    p["volume"].as_f64().unwrap_or(0.0),
+                    p["open_price"].as_f64().unwrap_or(0.0),
+                    p["sl"].as_f64().unwrap_or(0.0),
+                    p["tp"].as_f64().unwrap_or(0.0),
+                    p["close_time"].as_str().unwrap_or(""),
+                    p["close_price"].as_f64().unwrap_or(0.0),
+                    p["commission"].as_f64().unwrap_or(0.0),
+                    p["swap"].as_f64().unwrap_or(0.0),
+                    p["profit"].as_f64().unwrap_or(0.0),
+                ],
+            ).map_err(|e| format!("Insert position failed: {e}"))?;
+            n_pos += 1;
+        }
+    }
+
+    Ok((n_acct, n_deals, n_pos))
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
