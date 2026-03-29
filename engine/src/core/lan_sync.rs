@@ -16,19 +16,19 @@ use crate::core::cache::SqliteCache;
 // ── TLS Certificate Generation ────────────────────────────────────
 
 /// Generate an ephemeral self-signed TLS certificate for LAN sync server.
-/// Returns (DER certificate, DER private key) for native-tls.
+/// Returns (PEM certificate, PEM private key) for native-tls.
 fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>), String> {
     let cert = rcgen::generate_simple_self_signed(vec!["typhoon-lan-sync".into(), "localhost".into()])
         .map_err(|e| format!("Certificate generation failed: {e}"))?;
-    let cert_der = cert.cert.der().to_vec();
-    let key_der = cert.key_pair.serialize_der();
-    Ok((cert_der, key_der))
+    let cert_pem = cert.cert.pem().into_bytes();
+    let key_pem = cert.key_pair.serialize_pem().into_bytes();
+    Ok((cert_pem, key_pem))
 }
 
-/// Build a native-tls TLS acceptor from self-signed cert.
-fn build_tls_acceptor(cert_der: &[u8], key_der: &[u8]) -> Result<native_tls::TlsAcceptor, String> {
-    let identity = native_tls::Identity::from_pkcs8(cert_der, key_der)
-        .map_err(|e| format!("TLS identity from PKCS8 failed: {e}"))?;
+/// Build a native-tls TLS acceptor from PEM cert + key.
+fn build_tls_acceptor(cert_pem: &[u8], key_pem: &[u8]) -> Result<native_tls::TlsAcceptor, String> {
+    let identity = native_tls::Identity::from_pkcs8(cert_pem, key_pem)
+        .map_err(|e| format!("TLS identity failed: {e}"))?;
     native_tls::TlsAcceptor::new(identity)
         .map_err(|e| format!("TLS acceptor build failed: {e}"))
 }

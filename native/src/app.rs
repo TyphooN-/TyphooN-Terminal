@@ -5675,6 +5675,10 @@ pub struct TyphooNApp {
     lan_sync_host: String,         // client: server IP to connect to
     lan_sync_port: String,         // port (default 9847)
     lan_sync_passphrase: String,   // shared secret for auth
+    /// Persistent: this instance is a LAN client (auto-connect on startup, no outbound syncing)
+    lan_client_enabled: bool,
+    /// Persistent: saved LAN server IP for auto-connect
+    lan_server_ip: String,
     show_help: bool,
     show_connect: bool,
     show_indicators_panel: bool,
@@ -6888,12 +6892,7 @@ impl TyphooNApp {
             draw_mode: DrawMode::None,
             darwin_import_ticker: String::new(),
             darwin_xlsx_dir: String::new(),
-            mt5_db_paths: [
-                "/home/typhoon/.mt5_7/drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon_mt5_cache.db".into(),
-                "/home/typhoon/.mt5_10/drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon_mt5_cache.db".into(),
-                "/home/typhoon/.mt5_11/drive_c/Program Files/Darwinex MetaTrader 5/MQL5/Files/typhoon_mt5_cache.db".into(),
-                String::new(),
-            ],
+            mt5_db_paths: [String::new(), String::new(), String::new(), String::new()],
             darwin_ftp_dir: String::new(),
             shared_ftp_dir: shared_ftp_dir.clone(),
             broker_api_key: String::new(),
@@ -6989,6 +6988,8 @@ impl TyphooNApp {
             lan_sync_host: String::new(),
             lan_sync_port: "9847".into(),
             lan_sync_passphrase: String::new(),
+            lan_client_enabled: false,
+            lan_server_ip: String::new(),
             show_help: false,
             show_connect: false,
             show_indicators_panel: false,
@@ -8159,6 +8160,9 @@ impl TyphooNApp {
                 RightTab::Risk => "risk",
             },
             "user_watchlist": self.user_watchlist,
+            "lan_client_enabled": self.lan_client_enabled,
+            "lan_server_ip": self.lan_server_ip,
+            "lan_sync_port": self.lan_sync_port,
             "darwin_view": self.darwin_view,
             "darwin_xlsx_dir": self.darwin_xlsx_dir,
             "mt5_db_paths": self.mt5_db_paths,
@@ -8359,6 +8363,10 @@ impl TyphooNApp {
                 if let Some(wl) = v["user_watchlist"].as_array() {
                     self.user_watchlist = wl.iter().filter_map(|s| s.as_str().map(String::from)).collect();
                 }
+                // Restore LAN client config
+                if let Some(b) = v["lan_client_enabled"].as_bool() { self.lan_client_enabled = b; }
+                if let Some(s) = v["lan_server_ip"].as_str() { self.lan_server_ip = s.to_string(); }
+                if let Some(s) = v["lan_sync_port"].as_str() { self.lan_sync_port = s.to_string(); }
                 // Restore SL/TP state
                 if let Some(sl) = v["sl_enabled"].as_bool() { self.sl_enabled = sl; }
                 if let Some(tp) = v["tp_enabled"].as_bool() { self.tp_enabled = tp; }
@@ -8689,6 +8697,23 @@ impl TyphooNApp {
                     ui.label(format!("tastytrade: REST API — {}", tt_status));
                     ui.label("Finnhub: News, Analyst, Insider Sentiment, Short Interest");
                     ui.label("SEC EDGAR: Filing scraper + Form 4 insider trades");
+                    ui.add_space(6.0);
+                    ui.separator();
+                    // LAN Client mode toggle
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.lan_client_enabled, "LAN Client Mode");
+                        if self.lan_client_enabled {
+                            ui.label(egui::RichText::new("(all local syncing disabled — data from server)").color(AXIS_TEXT).small());
+                        }
+                    });
+                    if self.lan_client_enabled {
+                        ui.horizontal(|ui| {
+                            ui.label("Server IP:");
+                            ui.add(egui::TextEdit::singleline(&mut self.lan_server_ip).desired_width(140.0).hint_text("192.168.1.100").font(egui::TextStyle::Monospace));
+                            ui.label("Port:");
+                            ui.add(egui::TextEdit::singleline(&mut self.lan_sync_port).desired_width(50.0).font(egui::TextStyle::Monospace));
+                        });
+                    }
 
                     ui.add_space(10.0);
                     ui.heading("MT5 BarCacheWriter Sources");
@@ -14409,9 +14434,12 @@ impl TyphooNApp {
                                 } else {
                                     let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
                                     self.lan_sync_mode = "client".into();
+                                    // Save for auto-reconnect on next startup
+                                    self.lan_client_enabled = true;
+                                    self.lan_server_ip = self.lan_sync_host.clone();
                                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                                     let _ = self.broker_tx.send(BrokerCmd::LanSyncConnect { host: self.lan_sync_host.clone(), port, passphrase: self.lan_sync_passphrase.clone(), db_path });
-                                    self.log.push_back(LogEntry::info(format!("LAN sync connecting to wss://{}:{} (TLS encrypted)...", self.lan_sync_host, port)));
+                                    self.log.push_back(LogEntry::info(format!("LAN client mode enabled — auto-connect to {}:{} on startup", self.lan_sync_host, port)));
                                 }
                             }
                         });
@@ -14427,8 +14455,9 @@ impl TyphooNApp {
                         ui.add_space(8.0);
                         if ui.add(egui::Button::new(egui::RichText::new("Stop").strong()).fill(egui::Color32::from_rgb(180, 40, 40)).min_size(egui::vec2(80.0, 28.0))).clicked() {
                             self.lan_sync_mode = "idle".into();
+                            self.lan_client_enabled = false; // disable auto-reconnect
                             let _ = self.broker_tx.send(BrokerCmd::LanSyncStop);
-                            self.log.push_back(LogEntry::info("LAN sync stopped"));
+                            self.log.push_back(LogEntry::info("LAN sync stopped — LAN client mode disabled"));
                         }
                     }
 
@@ -14953,6 +14982,18 @@ impl eframe::App for TyphooNApp {
             self.cache_loaded = true;
             // Load session (rebuilds chart tabs from saved state)
             self.load_session();
+            // LAN client auto-connect: if saved as LAN client, connect immediately
+            if self.lan_client_enabled && !self.lan_server_ip.is_empty() {
+                let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
+                self.lan_sync_mode = "client".into();
+                self.lan_sync_host = self.lan_server_ip.clone();
+                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                let _ = self.broker_tx.send(BrokerCmd::LanSyncConnect {
+                    host: self.lan_server_ip.clone(), port,
+                    passphrase: self.lan_sync_passphrase.clone(), db_path,
+                });
+                self.log.push_back(LogEntry::info(format!("LAN client auto-connecting to {}:{}...", self.lan_server_ip, port)));
+            }
             // Load charts: if MTF grid is active, load ALL; otherwise just active tab
             if let Some(cache) = self.cache.clone() {
                 if self.mtf_enabled {
@@ -17608,7 +17649,7 @@ impl eframe::App for TyphooNApp {
         }
 
         // ── Data sync (disabled when LAN client — server provides all data) ──
-        let is_lan_client = self.lan_sync_mode == "client";
+        let is_lan_client = self.lan_client_enabled || self.lan_sync_mode == "client";
 
         if !is_lan_client {
             // Weekend crypto sync via Kraken — every 60 seconds, rotate through symbols
