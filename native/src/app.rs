@@ -555,6 +555,7 @@ struct IndicatorFlags {
     donchian: bool,
     keltner: bool,
     regression: bool,
+    fvg: bool,
 }
 
 /// All state for one chart viewport.
@@ -4510,6 +4511,77 @@ fn draw_chart(
         }
     }
 
+    // ── Fair Value Gaps (3-bar imbalance zones) ────────────────────────────
+    if flags.fvg && bars.len() >= 3 {
+        let fvg_bull = egui::Color32::from_rgba_premultiplied(0, 180, 80, 30);
+        let fvg_bear = egui::Color32::from_rgba_premultiplied(220, 50, 50, 30);
+        let fvg_bull_edge = egui::Color32::from_rgba_premultiplied(0, 180, 80, 80);
+        let fvg_bear_edge = egui::Color32::from_rgba_premultiplied(220, 50, 50, 80);
+        for i in 1..bars.len().saturating_sub(1) {
+            let prev = &bars[i - 1];
+            let next = &bars[i + 1];
+            let x_start = chart_rect.left() + ((i + 1) as f32 + 0.5) * bar_w;
+            let x_end = chart_rect.right();
+            // Bullish FVG: bar[i+1].low > bar[i-1].high (gap up)
+            if next.low > prev.high {
+                let gap_top = price_to_y(next.low);
+                let gap_bot = price_to_y(prev.high);
+                if gap_top <= chart_rect.bottom() && gap_bot >= chart_rect.top() {
+                    // Check if gap has been filled by subsequent bars
+                    let mut filled = false;
+                    for j in (i + 2)..bars.len() {
+                        if bars[j].low <= prev.high { filled = true; break; }
+                    }
+                    if !filled {
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(x_start, gap_top.max(chart_rect.top())),
+                                egui::pos2(x_end, gap_bot.min(chart_rect.bottom())),
+                            ),
+                            0.0, fvg_bull,
+                        );
+                        painter.line_segment(
+                            [egui::pos2(x_start, gap_top), egui::pos2(x_end, gap_top)],
+                            egui::Stroke::new(0.5, fvg_bull_edge),
+                        );
+                        painter.line_segment(
+                            [egui::pos2(x_start, gap_bot), egui::pos2(x_end, gap_bot)],
+                            egui::Stroke::new(0.5, fvg_bull_edge),
+                        );
+                    }
+                }
+            }
+            // Bearish FVG: bar[i+1].high < bar[i-1].low (gap down)
+            if next.high < prev.low {
+                let gap_top = price_to_y(prev.low);
+                let gap_bot = price_to_y(next.high);
+                if gap_top <= chart_rect.bottom() && gap_bot >= chart_rect.top() {
+                    let mut filled = false;
+                    for j in (i + 2)..bars.len() {
+                        if bars[j].high >= prev.low { filled = true; break; }
+                    }
+                    if !filled {
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(x_start, gap_top.max(chart_rect.top())),
+                                egui::pos2(x_end, gap_bot.min(chart_rect.bottom())),
+                            ),
+                            0.0, fvg_bear,
+                        );
+                        painter.line_segment(
+                            [egui::pos2(x_start, gap_top), egui::pos2(x_end, gap_top)],
+                            egui::Stroke::new(0.5, fvg_bear_edge),
+                        );
+                        painter.line_segment(
+                            [egui::pos2(x_start, gap_bot), egui::pos2(x_end, gap_bot)],
+                            egui::Stroke::new(0.5, fvg_bear_edge),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // ── Auto Fibonacci levels (matching AutoFibonacci.mqh) ─────────────────
     if flags.auto_fib && !chart.auto_fib_levels.is_empty() {
         for (price, label, is_ext) in &chart.auto_fib_levels {
@@ -6332,6 +6404,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "KELTNER",       desc: "Toggle Keltner Channels (EMA ± ATR)" },
     Command { name: "REGRESSION",    desc: "Toggle Regression Channel (linear regression ± 2σ)" },
     Command { name: "SQUEEZE",       desc: "Toggle Squeeze Momentum (BB inside KC)" },
+    Command { name: "FVG",           desc: "Toggle Fair Value Gaps (3-bar imbalance zones)" },
     Command { name: "OBJECTS",       desc: "Open drawing object list (manage/delete drawings)" },
     // Timeframes (direct switch)
     Command { name: "M1",            desc: "Switch to 1-minute timeframe" },
@@ -6824,6 +6897,7 @@ pub struct TyphooNApp {
     show_keltner: bool,
     show_regression: bool,
     show_squeeze: bool,
+    show_fvg: bool,
 
     /// Drawing interaction mode.
     draw_mode: DrawMode,
@@ -8229,6 +8303,7 @@ impl TyphooNApp {
             show_keltner: false,
             show_regression: false,
             show_squeeze: false,
+            show_fvg: false,
             draw_mode: DrawMode::None,
             darwin_import_ticker: String::new(),
             darwin_xlsx_dir: String::new(),
@@ -9094,6 +9169,7 @@ impl TyphooNApp {
             donchian: self.show_donchian,
             keltner: self.show_keltner,
             regression: self.show_regression,
+            fvg: self.show_fvg,
         }
     }
 
@@ -9394,6 +9470,7 @@ impl TyphooNApp {
             "KELTNER" => { self.show_keltner = !self.show_keltner; self.log.push_back(LogEntry::info(format!("Keltner: {}", if self.show_keltner { "ON" } else { "OFF" }))); }
             "REGRESSION" => { self.show_regression = !self.show_regression; self.log.push_back(LogEntry::info(format!("Regression: {}", if self.show_regression { "ON" } else { "OFF" }))); }
             "SQUEEZE" => { self.show_squeeze = !self.show_squeeze; self.log.push_back(LogEntry::info(format!("Squeeze: {}", if self.show_squeeze { "ON" } else { "OFF" }))); }
+            "FVG" | "FAIR_VALUE_GAP" => { self.show_fvg = !self.show_fvg; self.log.push_back(LogEntry::info(format!("FVG: {}", if self.show_fvg { "ON" } else { "OFF" }))); }
             "OBJECTS" | "OBJECT_LIST" => { self.show_object_list = !self.show_object_list; }
             // Timeframe shortcuts
             "M1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M1); }
@@ -9580,6 +9657,7 @@ impl TyphooNApp {
                 "price_histogram": self.show_price_histogram,
                 "supertrend": self.show_supertrend, "donchian": self.show_donchian, "keltner": self.show_keltner,
                 "regression": self.show_regression, "squeeze": self.show_squeeze,
+                "fvg": self.show_fvg,
             },
             "mtf_enabled": self.mtf_enabled,
             "mtf_cols": self.mtf_cols,
@@ -9746,6 +9824,7 @@ impl TyphooNApp {
                         ("price_histogram", &mut self.show_price_histogram),
                         ("supertrend", &mut self.show_supertrend), ("donchian", &mut self.show_donchian), ("keltner", &mut self.show_keltner),
                         ("regression", &mut self.show_regression), ("squeeze", &mut self.show_squeeze),
+                        ("fvg", &mut self.show_fvg),
                     ] {
                         if let Some(b) = ind[key].as_bool() { *field = b; }
                     }
@@ -10531,6 +10610,7 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_better_volume,  "Better Volume");
                     ui.checkbox(&mut self.show_volume_pane,    "Volume");
                     ui.checkbox(&mut self.show_squeeze,        "Squeeze Momentum (BB inside KC)");
+                    ui.checkbox(&mut self.show_fvg,            "Fair Value Gaps (3-bar imbalance)");
 
                     // ── Ehlers DSP Indicators ──
                     ui.add_space(4.0);
