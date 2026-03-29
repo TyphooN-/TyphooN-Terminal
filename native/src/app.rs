@@ -8493,108 +8493,106 @@ impl TyphooNApp {
                         }
 
                         // Phase 5: per-account detailed analytics (DARWIN Accounts window)
-                        // Release conn between each account to let UI thread acquire for chart loading
+                        // Parallel: each account runs on its own thread with its own SQLite connection.
+                        // SQLite WAL mode supports concurrent readers.
                         {
-                            let mut details = Vec::new();
-                            for acct in &data.accounts {
-                                let ticker = &acct.darwin_ticker;
-                                let t = std::time::Instant::now();
-                                let mut det = AccountDetailCache {
-                                    ticker: ticker.clone(),
-                                    ..Default::default()
-                                };
-                                if let Ok(conn) = cache.connection() {
-                                    det.summary = darwin::get_darwin_summary(&conn, ticker).ok();
-                                    det.streaks = darwin::get_streak_analysis(&conn, ticker).ok();
-                                    det.hourly_pnl = darwin::get_hourly_pnl(&conn, ticker).unwrap_or_default();
-                                    det.equity_curve = darwin::get_darwin_equity_curve(&conn, ticker).unwrap_or_default();
-                                    det.pnl_by_symbol = darwin::get_darwin_pnl_by_symbol(&conn, ticker).unwrap_or_default();
-                                } // release conn — let UI thread load charts
-                                if let Ok(conn) = cache.connection() {
-                                    det.day_of_week = darwin::get_day_of_week_pnl(&conn, ticker).unwrap_or_default();
-                                    det.hold_time = darwin::get_hold_time_stats(&conn, ticker).ok();
-                                    det.kelly = darwin::compute_kelly(&conn, ticker).ok();
-                                    det.cost_analysis = darwin::get_cost_analysis(&conn, ticker).ok();
-                                    det.dscore = darwin::estimate_dscore(&conn, ticker).ok();
-                                    det.slippage = darwin::analyze_slippage(&conn, ticker).ok();
-                                    det.mae_mfe = darwin::estimate_mae_mfe(&conn, ticker).ok();
-                                } // release conn
-                                if let Ok(conn) = cache.connection() {
-                                    det.sizing_efficiency = darwin::get_sizing_efficiency(&conn, ticker).unwrap_or_default();
-                                    det.symbol_rotation = darwin::get_symbol_rotation(&conn, ticker).unwrap_or_default();
-                                    det.open_positions = darwin::get_darwin_open_positions(&conn, ticker).unwrap_or_default();
-                                    det.pyramiding = darwin::analyze_pyramiding(&conn, ticker).unwrap_or_default();
-                                    det.bursts = darwin::detect_trading_bursts(&conn, ticker).unwrap_or_default();
-                                    det.autocorrelation = darwin::compute_trade_autocorrelation(&conn, ticker).ok();
-                                    det.recent_deals = darwin::get_darwin_deals(&conn, ticker, None, None).unwrap_or_default();
-                                    det.closed_positions = darwin::get_darwin_positions(&conn, ticker, None, None).unwrap_or_default();
-                                    det.equity_snapshots = darwin::get_equity_history(&conn, ticker, 10).unwrap_or_default();
-                                    det.benchmark = darwin::compare_to_benchmark(&conn, ticker, &data.daily_returns).ok();
-                                    if let Some(ref summary) = det.summary {
-                                        let _ = darwin::record_equity_snapshot(&conn, ticker, summary.final_balance, 0.0, 0);
-                                    }
-                                    det.sector_classification = det.pnl_by_symbol.iter().take(10)
-                                        .map(|(sym, _, _, _, _)| (sym.clone(), darwin::classify_sector(sym).to_string()))
-                                        .collect();
-                                } // release conn
-                                if let Ok(conn) = cache.connection() {
-                                    if let Ok(daily) = darwin::get_daily_returns(&conn, ticker) {
-                                        if !daily.is_empty() {
-                                            det.var_stats = Some(darwin::compute_var(&daily));
-                                            det.monthly_returns = darwin::get_monthly_returns(&daily);
-                                            det.rolling_var = darwin::get_rolling_var(&daily, 30);
-                                            // Advanced DARWIN metrics
-                                            det.cagr = darwin::compute_cagr(&daily);
-                                            det.recovery_factor = darwin::compute_recovery_factor(&daily);
-                                            det.dd_duration = darwin::compute_drawdown_duration(&daily);
-                                            // Store daily returns for drawdown analytics (weekly best/worst)
-                                            det.daily_returns = daily.clone();
-                                        }
-                                    }
-                                } // release conn
-                                // Load FTP DARWIN quote data (investor product performance)
-                                let ftp_dir_str = shared_ftp_dir_bg.lock().ok().map(|d| d.clone()).unwrap_or_default();
-                                if !ftp_dir_str.is_empty() {
-                                    let ftp_path = std::path::Path::new(&ftp_dir_str);
-                                    if ftp_path.is_dir() {
-                                        if let Ok(returns) = darwin_ftp::read_return_file(ftp_path, ticker) {
-                                            let summary = darwin_ftp::compute_return_summary(ticker, &returns);
-                                            // Build equity curve from cumulative returns (DARWIN quote starts at 100)
-                                            let eq: Vec<(f64, f64)> = returns.iter().enumerate()
-                                                .filter_map(|(i, r)| r.cumulative_returns.last().map(|&v| (i as f64, v * 100.0)))
-                                                .collect();
-                                            // Build drawdown curve
-                                            let mut peak = 100.0_f64;
-                                            let dd: Vec<(f64, f64)> = eq.iter().map(|&(x, price)| {
-                                                if price > peak { peak = price; }
-                                                let dd_pct = if peak > 0.0 { (peak - price) / peak * 100.0 } else { 0.0 };
-                                                (x, -dd_pct) // negative for plotting below zero
-                                            }).collect();
-                                            det.ftp_summary = Some(summary);
-                                            det.ftp_equity_curve = eq;
-                                            det.ftp_drawdown_curve = dd;
-                                        }
-                                    }
-                                }
+                            let accounts_snapshot: Vec<String> = data.accounts.iter().map(|a| a.darwin_ticker.clone()).collect();
+                            let daily_returns_ref = &data.daily_returns;
+                            let ftp_dir_str = shared_ftp_dir_bg.lock().ok().map(|d| d.clone()).unwrap_or_default();
 
-                                // Compute divergence index (needs both daily returns + FTP equity curve)
-                                if !det.ftp_equity_curve.is_empty() {
-                                    if let Ok(conn) = cache.connection() {
-                                        if let Ok(daily) = darwin::get_daily_returns(&conn, ticker) {
-                                            if !daily.is_empty() {
-                                                det.divergence = darwin::compute_divergence_index(&daily, &det.ftp_equity_curve);
+                            let details: Vec<AccountDetailCache> = std::thread::scope(|s| {
+                                let handles: Vec<_> = accounts_snapshot.iter().map(|ticker| {
+                                    let cache_ref = &cache;
+                                    let ticker = ticker.clone();
+                                    let ftp_dir = ftp_dir_str.clone();
+                                    let daily_rets = daily_returns_ref;
+                                    s.spawn(move || {
+                                        let t = std::time::Instant::now();
+                                        let mut det = AccountDetailCache {
+                                            ticker: ticker.clone(),
+                                            ..Default::default()
+                                        };
+                                        if let Ok(conn) = cache_ref.connection() {
+                                            det.summary = darwin::get_darwin_summary(&conn, &ticker).ok();
+                                            det.streaks = darwin::get_streak_analysis(&conn, &ticker).ok();
+                                            det.hourly_pnl = darwin::get_hourly_pnl(&conn, &ticker).unwrap_or_default();
+                                            det.equity_curve = darwin::get_darwin_equity_curve(&conn, &ticker).unwrap_or_default();
+                                            det.pnl_by_symbol = darwin::get_darwin_pnl_by_symbol(&conn, &ticker).unwrap_or_default();
+                                            det.day_of_week = darwin::get_day_of_week_pnl(&conn, &ticker).unwrap_or_default();
+                                            det.hold_time = darwin::get_hold_time_stats(&conn, &ticker).ok();
+                                            det.kelly = darwin::compute_kelly(&conn, &ticker).ok();
+                                            det.cost_analysis = darwin::get_cost_analysis(&conn, &ticker).ok();
+                                            det.dscore = darwin::estimate_dscore(&conn, &ticker).ok();
+                                            det.slippage = darwin::analyze_slippage(&conn, &ticker).ok();
+                                            det.mae_mfe = darwin::estimate_mae_mfe(&conn, &ticker).ok();
+                                            det.sizing_efficiency = darwin::get_sizing_efficiency(&conn, &ticker).unwrap_or_default();
+                                            det.symbol_rotation = darwin::get_symbol_rotation(&conn, &ticker).unwrap_or_default();
+                                            det.open_positions = darwin::get_darwin_open_positions(&conn, &ticker).unwrap_or_default();
+                                            det.pyramiding = darwin::analyze_pyramiding(&conn, &ticker).unwrap_or_default();
+                                            det.bursts = darwin::detect_trading_bursts(&conn, &ticker).unwrap_or_default();
+                                            det.autocorrelation = darwin::compute_trade_autocorrelation(&conn, &ticker).ok();
+                                            det.recent_deals = darwin::get_darwin_deals(&conn, &ticker, None, None).unwrap_or_default();
+                                            det.closed_positions = darwin::get_darwin_positions(&conn, &ticker, None, None).unwrap_or_default();
+                                            det.equity_snapshots = darwin::get_equity_history(&conn, &ticker, 10).unwrap_or_default();
+                                            det.benchmark = darwin::compare_to_benchmark(&conn, &ticker, daily_rets).ok();
+                                            if let Some(ref summary) = det.summary {
+                                                let _ = darwin::record_equity_snapshot(&conn, &ticker, summary.final_balance, 0.0, 0);
+                                            }
+                                            det.sector_classification = det.pnl_by_symbol.iter().take(10)
+                                                .map(|(sym, _, _, _, _)| (sym.clone(), darwin::classify_sector(sym).to_string()))
+                                                .collect();
+                                            if let Ok(daily) = darwin::get_daily_returns(&conn, &ticker) {
+                                                if !daily.is_empty() {
+                                                    det.var_stats = Some(darwin::compute_var(&daily));
+                                                    det.monthly_returns = darwin::get_monthly_returns(&daily);
+                                                    det.rolling_var = darwin::get_rolling_var(&daily, 30);
+                                                    det.cagr = darwin::compute_cagr(&daily);
+                                                    det.recovery_factor = darwin::compute_recovery_factor(&daily);
+                                                    det.dd_duration = darwin::compute_drawdown_duration(&daily);
+                                                    det.daily_returns = daily;
+                                                }
                                             }
                                         }
-                                    }
-                                }
+                                        // FTP DARWIN quote data
+                                        if !ftp_dir.is_empty() {
+                                            let ftp_path = std::path::Path::new(&ftp_dir);
+                                            if ftp_path.is_dir() {
+                                                if let Ok(returns) = darwin_ftp::read_return_file(ftp_path, &ticker) {
+                                                    let summary = darwin_ftp::compute_return_summary(&ticker, &returns);
+                                                    let eq: Vec<(f64, f64)> = returns.iter().enumerate()
+                                                        .filter_map(|(i, r)| r.cumulative_returns.last().map(|&v| (i as f64, v * 100.0)))
+                                                        .collect();
+                                                    let mut peak = 100.0_f64;
+                                                    let dd: Vec<(f64, f64)> = eq.iter().map(|&(x, price)| {
+                                                        if price > peak { peak = price; }
+                                                        let dd_pct = if peak > 0.0 { (peak - price) / peak * 100.0 } else { 0.0 };
+                                                        (x, -dd_pct)
+                                                    }).collect();
+                                                    det.ftp_summary = Some(summary);
+                                                    det.ftp_equity_curve = eq;
+                                                    det.ftp_drawdown_curve = dd;
+                                                }
+                                            }
+                                        }
+                                        // Divergence index
+                                        if !det.ftp_equity_curve.is_empty() {
+                                            if let Ok(conn) = cache_ref.connection() {
+                                                if let Ok(daily) = darwin::get_daily_returns(&conn, &ticker) {
+                                                    if !daily.is_empty() {
+                                                        det.divergence = darwin::compute_divergence_index(&daily, &det.ftp_equity_curve);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        tracing::info!("BG: account {} detail {}ms", ticker, t.elapsed().as_millis());
+                                        det
+                                    })
+                                }).collect();
+                                handles.into_iter().filter_map(|h| h.join().ok()).collect()
+                            });
 
-                                tracing::info!("BG: account {} detail {}ms", ticker, t.elapsed().as_millis());
-                                details.push(det);
-                                // Send incrementally after each account so UI updates progressively
-                                data.account_details = details.clone();
-                                let _ = bg_tx.send(data.clone());
-                            }
                             data.account_details = details;
+                            let _ = bg_tx.send(data.clone());
                         }
 
                         // Phase 6: DARWIN risk alerts
