@@ -9459,7 +9459,7 @@ impl TyphooNApp {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         let connect_label = if self.broker_connected {
-                            egui::RichText::new("Connected").color(UP)
+                            egui::RichText::new("Alpaca Connected").color(UP)
                         } else {
                             egui::RichText::new("Connect Alpaca")
                         };
@@ -9693,7 +9693,7 @@ impl TyphooNApp {
                     });
                     ui.add_space(5.0);
                     let connect_label = if self.broker_connected {
-                        egui::RichText::new("Connected").color(UP)
+                        egui::RichText::new("Alpaca Connected").color(UP)
                     } else {
                         egui::RichText::new("Connect")
                     };
