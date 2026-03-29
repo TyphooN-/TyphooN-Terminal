@@ -5898,19 +5898,58 @@ impl TyphooNApp {
 
         // Flag: true while DARWIN XLSX import is running — background thread skips DB queries
         let importing_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let lan_client_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let shared_ftp_dir: std::sync::Arc<std::sync::Mutex<String>> = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
 
         // Spawn broker message processor
         let broker_msg_tx_clone = broker_msg_tx.clone();
         let importing_flag_broker = importing_flag.clone();
         let importing_flag_bg = importing_flag.clone();
+        let lan_client_broker = lan_client_flag.clone();
         let rt = rt_handle.clone();
         let shared_cache_broker = shared_cache.clone(); // shared DB connection for LAN sync
         rt_handle.spawn(async move {
             let mut cmd_rx = _broker_cmd_rx;
             let mut broker: Option<AlpacaBroker> = None;
             let importing_flag = importing_flag_broker;
+            let lan_client = lan_client_broker;
+            // Shared sender for forwarding requests to LAN sync WebSocket
+            let lan_remote_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>> =
+                Arc::new(tokio::sync::Mutex::new(None));
+            let lan_remote_tx_ref = lan_remote_tx.clone();
             while let Some(cmd) = cmd_rx.recv().await {
+                // LAN client: forward external data-fetching commands to server
+                if lan_client.load(std::sync::atomic::Ordering::Relaxed) {
+                    let remote_cmd = match &cmd {
+                        BrokerCmd::SecScrape { .. } => Some("SEC_SCRAPE"),
+                        BrokerCmd::FundamentalsScrape { .. } => Some("FUNDAMENTALS"),
+                        BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
+                        BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
+                        BrokerCmd::CryptoCompareBackfill { .. } => Some("CRYPTOCOMPARE"),
+                        BrokerCmd::Mt5Sync { .. } => Some("MT5_SYNC"),
+                        BrokerCmd::FinnhubNews { .. } => Some("FINNHUB_NEWS"),
+                        BrokerCmd::FetchEconCalendar { .. } => Some("ECON_CALENDAR"),
+                        BrokerCmd::FetchCongressTrades => Some("CONGRESS_TRADES"),
+                        BrokerCmd::FredFetch { .. } => Some("FRED_DATA"),
+                        BrokerCmd::DarwinImportAll { .. } => Some("DARWIN_IMPORT"),
+                        BrokerCmd::FetchFilingContent { .. } => Some("SEC_FILING"),
+                        _ => None,
+                    };
+                    if let Some(cmd_name) = remote_cmd {
+                        let guard = lan_remote_tx_ref.lock().await;
+                        if let Some(ref tx) = *guard {
+                            let _ = tx.send(cmd_name.to_string());
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                format!("LAN client: '{}' forwarded to server", cmd_name)
+                            ));
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                format!("LAN client: '{}' — not connected to server", cmd_name)
+                            ));
+                        }
+                        continue;
+                    }
+                }
                 match cmd {
                     BrokerCmd::Connect { api_key, secret, paper } => {
                         let b = AlpacaBroker::new(api_key, secret, paper);
@@ -6813,7 +6852,10 @@ impl TyphooNApp {
                         use typhoon_engine::core::lan_sync::LanSyncClient;
                         if let Some(cache_arc) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
                             match LanSyncClient::connect(cache_arc, &host, port, &passphrase).await {
-                                Ok(_client) => {
+                                Ok((_client, remote_tx)) => {
+                                    // Store the remote request channel for forwarding
+                                    { let mut guard = lan_remote_tx_ref.lock().await; *guard = Some(remote_tx); }
+                                    lan_client.store(true, std::sync::atomic::Ordering::Relaxed);
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync connected to wss://{}:{}", host, port)));
                                 }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync connect failed: {}", e))); }

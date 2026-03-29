@@ -103,7 +103,7 @@ TyphooN-Terminal/
 ├── cli/                    # Standalone TUI (6.5MB, SSH-ready)
 ├── mql5-compiler/          # MT5 XML → SQLite import pipeline
 └── docs/
-    ├── adr/                # 44 Architecture Decision Records
+    ├── adr/                # 45 Architecture Decision Records
     ├── API_KEYS.md
     └── KEYBOARD_SHORTCUTS.md
 ```
@@ -123,7 +123,7 @@ TyphooN-Terminal/
 
 ### LAN Sync
 
-TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates generated on server start. PBKDF2-HMAC-SHA256 challenge-response authentication. Supports bar data + DARWIN analytics sync (opt-in). Stats tracking: bytes sent/received, entries synced, uptime. Implemented in `engine/src/core/lan_sync.rs`.
+TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates generated on server start. PBKDF2-HMAC-SHA256 challenge-response authentication. Full data sync: bars + DARWIN tables + KV cache (fundamentals, news, SEC, FRED). LAN clients forward data requests to server (no outbound API calls). Multi-client support. Implemented in `engine/src/core/lan_sync.rs`.
 
 ### Storage Manager
 

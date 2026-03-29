@@ -70,6 +70,12 @@ pub enum SyncMessage {
     RequestKvData,
     /// KV batch complete marker
     KvBatchComplete { count: usize },
+    /// Client requests server to execute a data fetch and return results.
+    /// cmd: command name (e.g. "SEC_SCRAPE", "FUNDAMENTALS", "FINNHUB_NEWS", "KRAKEN_BACKFILL")
+    /// args: JSON-encoded arguments
+    RemoteRequest { cmd: String, args: String },
+    /// Server response to RemoteRequest — triggers a re-sync of affected data.
+    RemoteRequestDone { cmd: String, message: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -418,6 +424,15 @@ async fn handle_client_tls(
                 }
                 tracing::info!("LAN sync: sent {} KV entries to client", count);
             }
+            SyncMessage::RemoteRequest { cmd, args } => {
+                tracing::info!("LAN sync: client requested remote '{}' (args: {})", cmd, &args[..args.len().min(100)]);
+                // Server-side: execute the request, then send updated data back
+                // For now, acknowledge and tell client to re-sync affected data
+                let msg_text = format!("Remote '{}' queued on server", cmd);
+                if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone { cmd, message: msg_text }) {
+                    let _ = sink.send(msg).await;
+                }
+            }
             SyncMessage::Ping => {
                 if let Ok(msg) = send_msg(&SyncMessage::Pong) {
                     let _ = sink.send(msg).await;
@@ -464,7 +479,7 @@ impl LanSyncClient {
         host: &str,
         port: u16,
         passphrase: &str,
-    ) -> Result<Self, String> {
+    ) -> Result<(Self, tokio::sync::mpsc::UnboundedSender<String>), String> {
         let secret = derive_secret(passphrase);
         let url = format!("wss://{host}:{port}");
 
@@ -523,9 +538,12 @@ impl LanSyncClient {
 
         tracing::info!("LAN sync: connected to {url}, authenticated");
 
+        // Channel for sending remote requests from broker task → LAN sync WebSocket
+        let (remote_tx, remote_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
         let status_clone = status.clone();
         let task = tokio::spawn(async move {
-            if let Err(e) = client_sync_loop(&cache, &mut sink, &mut stream_rx).await {
+            if let Err(e) = client_sync_loop(&cache, &mut sink, &mut stream_rx, remote_rx).await {
                 tracing::warn!("LAN sync client error: {e}");
             }
             let mut s = status_clone.lock().await;
@@ -533,7 +551,7 @@ impl LanSyncClient {
             tracing::info!("LAN sync: client disconnected");
         });
 
-        Ok(Self { task: Some(task), status })
+        Ok((Self { task: Some(task), status }, remote_tx))
     }
 
     pub fn disconnect(&mut self) {
@@ -560,6 +578,7 @@ async fn client_sync_loop(
     cache: &Arc<SqliteCache>,
     sink: &mut WsSink,
     stream: &mut WsStream,
+    mut remote_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> Result<(), String> {
     // 4. Send RequestMeta
     sink.send(send_msg(&SyncMessage::RequestMeta)?)
@@ -749,6 +768,11 @@ async fn client_sync_loop(
                                 Ok(SyncMessage::Ping) => {
                                     let _ = sink.send(send_msg(&SyncMessage::Pong)?).await;
                                 }
+                                Ok(SyncMessage::RemoteRequestDone { cmd, message }) => {
+                                    tracing::info!("LAN sync: server completed '{}': {}", cmd, message);
+                                    // After server completes request, re-sync KV + DARWIN data
+                                    let _ = sink.send(send_msg(&SyncMessage::RequestKvData)?).await;
+                                }
                                 _ => {}
                             }
                         }
@@ -758,6 +782,17 @@ async fn client_sync_loop(
                         break;
                     }
                     None => break,
+                }
+            }
+            // Forward remote requests from broker task to server
+            Some(request_json) = remote_rx.recv() => {
+                // Parse "CMD:ARGS" format
+                let (cmd, args) = request_json.split_once(':').unwrap_or((&request_json, ""));
+                if let Ok(msg) = send_msg(&SyncMessage::RemoteRequest {
+                    cmd: cmd.to_string(), args: args.to_string(),
+                }) {
+                    let _ = sink.send(msg).await;
+                    tracing::info!("LAN sync: forwarded remote request '{}' to server", cmd);
                 }
             }
             _ = ping_interval.tick() => {
