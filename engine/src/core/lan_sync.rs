@@ -66,6 +66,10 @@ pub enum SyncMessage {
     DarwinData { data: String, accounts: usize, deals: usize, positions: usize },
     /// Server stats pushed to client on connect and periodically.
     SyncStats { bytes_sent: u64, bytes_received: u64, entries_synced: usize, uptime_secs: u64 },
+    /// Request all KV cache entries (fundamentals, news, SEC, FRED, etc.)
+    RequestKvData,
+    /// KV batch complete marker
+    KvBatchComplete { count: usize },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -375,6 +379,45 @@ async fn handle_client_tls(
                     tracing::warn!("LAN sync: DARWIN export failed or cache unavailable");
                 }
             }
+            SyncMessage::RequestKvData => {
+                // Send all KV cache entries as binary batch
+                let cache_clone = cache.clone();
+                let kv_data = tokio::task::spawn_blocking(move || {
+                    let mut entries: Vec<(String, String)> = Vec::new();
+                    if let Ok(keys) = cache_clone.list_kv_keys("") {
+                        for key in &keys {
+                            if let Ok(Some(val)) = cache_clone.get_kv(key) {
+                                entries.push((key.clone(), val));
+                            }
+                        }
+                    }
+                    entries
+                }).await.unwrap_or_default();
+
+                // Send as binary batch: [u32 key_len][key][u32 val_len][val] repeated
+                let mut count = 0u32;
+                let mut batch_buf: Vec<u8> = Vec::with_capacity(2 * 1024 * 1024);
+                for (key, val) in &kv_data {
+                    let kb = key.as_bytes();
+                    let vb = val.as_bytes();
+                    batch_buf.extend_from_slice(&(kb.len() as u32).to_le_bytes());
+                    batch_buf.extend_from_slice(kb);
+                    batch_buf.extend_from_slice(&(vb.len() as u32).to_le_bytes());
+                    batch_buf.extend_from_slice(vb);
+                    count += 1;
+                    if batch_buf.len() >= 2 * 1024 * 1024 {
+                        let _ = sink.send(Message::Binary(batch_buf.clone().into())).await;
+                        batch_buf.clear();
+                    }
+                }
+                if !batch_buf.is_empty() {
+                    let _ = sink.send(Message::Binary(batch_buf.into())).await;
+                }
+                if let Ok(msg) = send_msg(&SyncMessage::KvBatchComplete { count: count as usize }) {
+                    let _ = sink.send(msg).await;
+                }
+                tracing::info!("LAN sync: sent {} KV entries to client", count);
+            }
             SyncMessage::Ping => {
                 if let Ok(msg) = send_msg(&SyncMessage::Pong) {
                     let _ = sink.send(msg).await;
@@ -630,6 +673,45 @@ async fn client_sync_loop(
         }
         other => { tracing::warn!("LAN sync: expected DarwinData, got {:?}", other); }
     }
+
+    // 8c. Request KV cache entries (fundamentals, news, SEC filings, FRED, etc.)
+    sink.send(send_msg(&SyncMessage::RequestKvData)?)
+        .await.map_err(|e| format!("Send RequestKvData failed: {e}"))?;
+
+    let mut kv_count = 0usize;
+    loop {
+        match stream.next().await {
+            Some(Ok(msg)) if msg.is_binary() => {
+                // Parse KV batch: [u32 key_len][key][u32 val_len][val] repeated
+                let buf = msg.into_data();
+                let mut pos = 0;
+                while pos + 4 <= buf.len() {
+                    let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                    pos += 4;
+                    if pos + key_len + 4 > buf.len() { break; }
+                    let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
+                    pos += key_len;
+                    let val_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                    pos += 4;
+                    if pos + val_len > buf.len() { break; }
+                    let val = String::from_utf8_lossy(&buf[pos..pos+val_len]).to_string();
+                    pos += val_len;
+                    let _ = cache.put_kv(&key, &val);
+                    kv_count += 1;
+                }
+            }
+            Some(Ok(msg)) if msg.is_text() => {
+                if let Ok(SyncMessage::KvBatchComplete { count }) = parse_msg(&msg) {
+                    tracing::info!("LAN sync: received {} KV entries", count);
+                    break;
+                }
+            }
+            Some(Ok(_)) => continue,
+            Some(Err(e)) => return Err(format!("KV sync error: {e}")),
+            None => return Err("Connection closed during KV sync".into()),
+        }
+    }
+    tracing::info!("LAN sync: imported {} KV cache entries (fundamentals, news, SEC, FRED, etc.)", kv_count);
 
     // 9. Listen for incremental updates (server pushes + ping/pong keepalive)
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
