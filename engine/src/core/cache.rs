@@ -206,7 +206,8 @@ impl SqliteCache {
                 key TEXT PRIMARY KEY,
                 data BLOB NOT NULL,
                 timestamp INTEGER NOT NULL,
-                bar_count INTEGER NOT NULL DEFAULT 0
+                bar_count INTEGER NOT NULL DEFAULT 0,
+                zstd_level INTEGER NOT NULL DEFAULT 3
             );
             CREATE TABLE IF NOT EXISTS kv_cache (
                 key TEXT PRIMARY KEY,
@@ -222,6 +223,8 @@ impl SqliteCache {
         // (avoids decompressing full binary blob just to read 2 timestamps)
         let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN last_ts TEXT", []);
         let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN second_last_ts TEXT", []);
+        // Schema migration: track zstd compression level per entry (compact skips already-compacted)
+        let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN zstd_level INTEGER NOT NULL DEFAULT 3", []);
 
         Ok(Self { conn: Mutex::new(conn) })
     }
@@ -235,16 +238,16 @@ impl SqliteCache {
         let bar_count = u32::from_le_bytes(
             binary[4..8].try_into().map_err(|_| "bar_count header slice failed")?
         ) as i64;
-        // Extract last and second-to-last timestamps for fast incremental start lookup
         let (second_last_ts, last_ts) = extract_tail_timestamps(&binary, bar_count as usize);
-        let compressed = zstd::encode_all(binary.as_slice(), 3)
+        let zstd_level = 3i32;
+        let compressed = zstd::encode_all(binary.as_slice(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
 
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         conn.execute(
-            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![key, compressed, timestamp, bar_count, last_ts, second_last_ts],
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![key, compressed, timestamp, bar_count, last_ts, second_last_ts, zstd_level],
         ).map_err(|e| format!("SQLite insert failed: {e}"))?;
         Ok(())
     }
@@ -570,14 +573,15 @@ impl SqliteCache {
             binary[4..8].try_into().map_err(|_| "bar_count header slice failed in put_bars_fast")?
         ) as i64;
         let (second_last_ts, last_ts) = extract_tail_timestamps(&binary, bar_count as usize);
-        let compressed = zstd::encode_all(binary.as_slice(), 3)
+        let zstd_level = 3i32;
+        let compressed = zstd::encode_all(binary.as_slice(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
         let timestamp = chrono::Utc::now().timestamp();
 
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         conn.execute(
-            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![key, compressed, timestamp, bar_count, last_ts, second_last_ts],
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, last_ts, second_last_ts, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![key, compressed, timestamp, bar_count, last_ts, second_last_ts, zstd_level],
         ).map_err(|e| format!("SQLite insert failed: {e}"))?;
         Ok(())
     }
@@ -621,8 +625,8 @@ impl SqliteCache {
         let mut count = 0;
         for (key, compressed, bar_count) in entries {
             match conn.execute(
-                "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
-                params![key, compressed, timestamp, bar_count],
+                "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![key, compressed, timestamp, bar_count, 3],
             ) {
                 Ok(_) => count += 1,
                 Err(e) => tracing::warn!("Batch write skip {}: {}", key, e),
@@ -712,8 +716,8 @@ impl SqliteCache {
 
         // Merge bar_cache: import entries where backup has newer timestamp or key doesn't exist
         let bar_count = conn.execute(
-            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count)
-             SELECT b.key, b.data, b.timestamp, b.bar_count
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level)
+             SELECT b.key, b.data, b.timestamp, b.bar_count, COALESCE(b.zstd_level, 3)
              FROM backup_db.bar_cache b
              LEFT JOIN main.bar_cache c ON c.key = b.key
              WHERE c.key IS NULL OR b.timestamp > c.timestamp",
@@ -833,8 +837,8 @@ impl SqliteCache {
     pub fn put_raw_bar_entry(&self, key: &str, data: &[u8], timestamp: i64, bar_count: i64) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         conn.execute(
-            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
-            params![key, data, timestamp, bar_count],
+            "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![key, data, timestamp, bar_count, 3],
         ).map_err(|e| format!("SQLite insert failed: {e}"))?;
         Ok(())
     }
@@ -900,18 +904,25 @@ impl SqliteCache {
     /// Returns (entries_processed, bytes_saved).
     /// Progress callback: (processed, total, key, old_size, new_size)
     pub fn compact_storage(&self, level: i32, progress: Option<&dyn Fn(usize, usize, &str, usize, usize)>) -> Result<(usize, i64), String> {
-        // Phase 1: Read all entries (hold lock briefly for SELECT only)
+        // Phase 1: Read entries that need compaction (skip already at target level)
         let entries: Vec<(String, Vec<u8>)>;
         let kv_entries: Vec<(String, Vec<u8>)>;
+        let _skipped_count: usize;
         {
             let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-            let mut stmt = conn.prepare("SELECT key, data FROM bar_cache")
+            // Only select entries where zstd_level < target — skip already-compacted
+            let mut stmt = conn.prepare("SELECT key, data FROM bar_cache WHERE zstd_level < ?1")
                 .map_err(|e| format!("Prepare failed: {e}"))?;
-            entries = stmt.query_map([], |row| {
+            entries = stmt.query_map(params![level], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
             }).map_err(|e| format!("Query failed: {e}"))?
               .filter_map(|r| r.ok())
               .collect();
+            // Count how many were skipped (already at target level)
+            _skipped_count = conn.query_row(
+                "SELECT COUNT(*) FROM bar_cache WHERE zstd_level >= ?1",
+                params![level], |r| r.get::<_, i64>(0),
+            ).unwrap_or(0) as usize;
             drop(stmt);
             kv_entries = match conn.prepare("SELECT key, data FROM kv_store") {
                 Ok(mut kv_stmt) => {
@@ -967,12 +978,13 @@ impl SqliteCache {
         }
 
         // Phase 3: Write updates in batches (brief lock per batch, UI stays responsive)
+        // Also updates zstd_level so subsequent compacts skip already-processed entries
         {
             let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
             for chunk in bar_updates.chunks(50) {
                 let _ = conn.execute_batch("BEGIN;");
                 for (key, data) in chunk {
-                    let _ = conn.execute("UPDATE bar_cache SET data = ?1 WHERE key = ?2", params![data, key]);
+                    let _ = conn.execute("UPDATE bar_cache SET data = ?1, zstd_level = ?2 WHERE key = ?3", params![data, level, key]);
                 }
                 let _ = conn.execute_batch("COMMIT;");
             }
@@ -1075,8 +1087,8 @@ impl SqliteCache {
             offset += 8;
 
             conn.execute(
-                "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count) VALUES (?1, ?2, ?3, ?4)",
-                params![key, data, timestamp, bar_count],
+                "INSERT OR REPLACE INTO bar_cache (key, data, timestamp, bar_count, zstd_level) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![key, data, timestamp, bar_count, 3],
             ).map_err(|e| format!("Insert failed: {e}"))?;
             imported += 1;
         }
