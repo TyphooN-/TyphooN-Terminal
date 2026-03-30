@@ -16075,11 +16075,15 @@ impl TyphooNApp {
                                     self.log.push_back(LogEntry::warn("Set a passphrase for LAN sync"));
                                 } else {
                                     self.lan_sync_mode = "server".into();
-                                    // Persist passphrase for server restart
-                                    let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &self.lan_sync_passphrase);
-                                    if let Some(ref cache) = self.cache {
-                                        let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &self.lan_sync_passphrase);
-                                    }
+                                    // Persist passphrase off UI thread (keyring + cache writes can block)
+                                    let pass_clone = self.lan_sync_passphrase.clone();
+                                    let cache_clone = self.cache.clone();
+                                    std::thread::spawn(move || {
+                                        let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &pass_clone);
+                                        if let Some(ref cache) = cache_clone {
+                                            let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &pass_clone);
+                                        }
+                                    });
                                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                                     let _ = self.broker_tx.send(BrokerCmd::LanSyncStart { port, passphrase: self.lan_sync_passphrase.clone(), db_path });
                                     self.log.push_back(LogEntry::info(format!("LAN sync server starting on wss://0.0.0.0:{} (TLS encrypted)", port)));
@@ -16103,11 +16107,15 @@ impl TyphooNApp {
                                     // Save for auto-reconnect on next startup
                                     self.lan_client_enabled = true;
                                     self.lan_server_ip = self.lan_sync_host.clone();
-                                    // Persist passphrase immediately
-                                    let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &self.lan_sync_passphrase);
-                                    if let Some(ref cache) = self.cache {
-                                        let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &self.lan_sync_passphrase);
-                                    }
+                                    // Persist passphrase off UI thread
+                                    let pass_clone = self.lan_sync_passphrase.clone();
+                                    let cache_clone = self.cache.clone();
+                                    std::thread::spawn(move || {
+                                        let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &pass_clone);
+                                        if let Some(ref cache) = cache_clone {
+                                            let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &pass_clone);
+                                        }
+                                    });
                                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                                     let _ = self.broker_tx.send(BrokerCmd::LanSyncConnect { host: self.lan_sync_host.clone(), port, passphrase: self.lan_sync_passphrase.clone(), db_path });
                                     self.log.push_back(LogEntry::info(format!("LAN client mode enabled — auto-connect to {}:{} on startup", self.lan_sync_host, port)));
