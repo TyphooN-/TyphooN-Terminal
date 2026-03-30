@@ -7208,6 +7208,12 @@ pub struct TyphooNApp {
     /// GPU DARWIN analytics engine (compute shaders for batch stats/correlation).
     gpu_darwin: Option<gpu_compute::GpuDarwinAnalytics>,
     gpu_indicators: Option<gpu_compute::GpuCompute>,
+
+    // ── Prometheus metrics ───────────────────────────────────────────────
+    /// Shared metrics registry (updated periodically, served via HTTP).
+    metrics_registry: Option<std::sync::Arc<crate::metrics::MetricsRegistry>>,
+    /// App start time for uptime calculation.
+    metrics_start: std::time::Instant,
 }
 
 impl TyphooNApp {
@@ -8508,7 +8514,21 @@ impl TyphooNApp {
             },
             gpu_darwin: None,
             gpu_indicators: None,
+            metrics_registry: None,
+            metrics_start: std::time::Instant::now(),
         };
+
+        // ── Prometheus metrics server ────────────────────────────────────────
+        {
+            let registry = std::sync::Arc::new(crate::metrics::MetricsRegistry::new());
+            let metrics_port: u16 = std::env::var("TYPHOON_METRICS_PORT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(9090);
+            crate::metrics::start_metrics_server(&app.rt_handle, registry.clone(), metrics_port);
+            app.metrics_registry = Some(registry);
+            app.log.push_back(LogEntry::info(format!("Prometheus metrics on :{}", metrics_port)));
+        }
 
         // Spawn background DARWIN data refresh thread (mpsc channel, capacity 1)
         {
@@ -19623,6 +19643,53 @@ impl eframe::App for TyphooNApp {
             sync_key(keyring::keys::FRED_KEY, &self.fred_key);
             sync_key(keyring::keys::TT_USERNAME, &self.tt_username);
             sync_key(keyring::keys::TT_PASSWORD, &self.tt_password);
+        }
+
+        // Update Prometheus metrics every ~5 seconds (20 frames at 250ms idle repaint)
+        if self.frame_count % 20 == 3 {
+            if let Some(ref reg) = self.metrics_registry {
+                let mut snap = crate::metrics::MetricsSnapshot::default();
+
+                // Uptime
+                snap.uptime_seconds = self.metrics_start.elapsed().as_secs_f64();
+
+                // Broker connection
+                snap.broker_connected.push(("alpaca".to_string(), if self.broker_connected { 1.0 } else { 0.0 }));
+                snap.broker_connected.push(("tt".to_string(), if self.tt_connected { 1.0 } else { 0.0 }));
+
+                // Account equity from live account
+                if let Some(ref acct) = self.live_account {
+                    snap.account_equity.push(("alpaca".to_string(), acct.equity));
+                }
+
+                // Open positions count
+                snap.positions_open.push(("alpaca".to_string(), self.live_positions.len() as f64));
+
+                // DARWIN portfolio open positions count
+                if !self.bg.open_positions.is_empty() {
+                    snap.positions_open.push(("darwin".to_string(), self.bg.open_positions.len() as f64));
+                }
+
+                // Price alerts
+                snap.alerts_active = self.alerts.len() as f64 + self.indicator_alerts.len() as f64;
+
+                // Cache stats: (rows, kv_entries, size_bytes)
+                if let Some((rows, _kv, size)) = self.bg.cache_stats {
+                    snap.cache_size_bytes = size as f64;
+                    snap.cache_symbols_total = rows as f64;
+                }
+
+                // Detailed stats: bar counts per symbol/TF
+                for (key, count, _size) in &self.bg.detailed_stats {
+                    // key format: "source:SYMBOL:TF" or "SYMBOL:TF"
+                    let parts: Vec<&str> = key.rsplitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        snap.bars.push((parts[1].to_string(), parts[0].to_string(), *count as f64));
+                    }
+                }
+
+                reg.update(&snap);
+            }
         }
 
         // Poll watchlist quotes every ~15 seconds (disabled for LAN client)

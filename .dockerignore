@@ -1,0 +1,37 @@
+# Build artifacts
+target/
+
+# Version control
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+LICENSE*
+NOTICE
+CLA.md
+CONTRIBUTING.md
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node (if any)
+node_modules/
+
+# Environment / secrets
+.env
+.env.*
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Scripts not needed in image
+scripts/
+build-windows.sh
+launch.sh

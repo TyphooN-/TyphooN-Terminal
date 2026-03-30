@@ -1,0 +1,40 @@
+services:
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: typhoon-cli
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      # Set to "true" for paper trading (default), "false" for live
+      - ALPACA_PAPER=${ALPACA_PAPER:-true}
+    volumes:
+      # Persistent storage for SQLite cache and account registry
+      - cli-data:/data
+    ports:
+      # Future Prometheus metrics endpoint
+      - "9090:9090"
+    networks:
+      - typhoon
+    healthcheck:
+      # Verify the binary exists and can print help (non-interactive check)
+      test: ["CMD", "typhoon-cli", "--help"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    # Interactive TUI needs a TTY
+    tty: true
+    stdin_open: true
+
+volumes:
+  cli-data:
+    driver: local
+
+networks:
+  typhoon:
+    driver: bridge

@@ -37,6 +37,10 @@ serde_json = "1"
 # Safe byte casting for GPU buffer I/O (replaces unsafe custom Pod trait)
 bytemuck = { version = "1", features = ["derive"] }
 
+# Prometheus metrics
+prometheus = "0.13"
+axum = "0.8"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

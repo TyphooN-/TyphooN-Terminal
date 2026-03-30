@@ -7,6 +7,7 @@
 
 mod app;
 mod gpu_compute;
+mod metrics;
 
 fn dirs_home() -> std::path::PathBuf {
     let mut p = if let Ok(home) = std::env::var("HOME") {
