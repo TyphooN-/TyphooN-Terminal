@@ -1942,8 +1942,9 @@ impl AlpacaBroker {
             let snap = &json["snapshots"][symbol];
             let last = snap["latestTrade"]["p"].as_f64().unwrap_or(0.0);
             let daily_volume = snap["dailyBar"]["v"].as_f64().unwrap_or(0.0);
+            let regular_close = snap["dailyBar"]["c"].as_f64().unwrap_or(0.0);
             let prev_close = snap["prevDailyBar"]["c"].as_f64().unwrap_or(0.0);
-            Ok(SnapshotData { symbol: symbol.to_string(), last, prev_close, daily_volume })
+            Ok(SnapshotData { symbol: symbol.to_string(), last, prev_close, daily_volume, regular_close })
         } else {
             // Stock/ETF: v2/stocks/{symbol}/snapshot
             let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
@@ -1964,8 +1965,9 @@ impl AlpacaBroker {
             // prevDailyBar.c = yesterday's close
             let prev_close = json["prevDailyBar"]["c"].as_f64().unwrap_or(0.0);
             // Use trade price for "last" (includes pre/post market)
-            let last = if trade_price > 0.0 { trade_price } else { json["dailyBar"]["c"].as_f64().unwrap_or(0.0) };
-            Ok(SnapshotData { symbol: symbol.to_string(), last, prev_close, daily_volume })
+            let regular_close = json["dailyBar"]["c"].as_f64().unwrap_or(0.0);
+            let last = if trade_price > 0.0 { trade_price } else { regular_close };
+            Ok(SnapshotData { symbol: symbol.to_string(), last, prev_close, daily_volume, regular_close })
         }
     }
 
@@ -2474,6 +2476,7 @@ pub struct SnapshotData {
     pub last: f64,
     pub prev_close: f64,
     pub daily_volume: f64,
+    pub regular_close: f64,  // Regular session close (dailyBar.c) — for extended hours change calc
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

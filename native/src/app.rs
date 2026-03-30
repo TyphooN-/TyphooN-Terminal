@@ -7452,6 +7452,10 @@ impl TyphooNApp {
                                     Ok(Ok(snap)) => {
                                         let change = snap.last - snap.prev_close;
                                         let change_pct = if snap.prev_close > 0.0 { (snap.last / snap.prev_close - 1.0) * 100.0 } else { 0.0 };
+                                        // Extended hours change: last trade vs regular session close
+                                        let ext_change_pct = if snap.regular_close > 0.0 && (snap.last - snap.regular_close).abs() > 1e-10 {
+                                            (snap.last / snap.regular_close - 1.0) * 100.0
+                                        } else { 0.0 };
                                         rows.push(WatchlistRow {
                                             symbol: sym.clone(),
                                             cache_key: sym.clone(),
@@ -7460,7 +7464,7 @@ impl TyphooNApp {
                                             change,
                                             change_pct,
                                             volume: snap.daily_volume,
-                                            ext_change_pct: 0.0,
+                                            ext_change_pct,
                                         });
                                     }
                                     _ => {
@@ -18553,13 +18557,13 @@ impl eframe::App for TyphooNApp {
                                 let hdr_font = egui::FontId::monospace(9.0);
                                 let avail_w = ui.available_width();
 
-                                // Column layout: Symbol(left) | Last(right) | Chg(right) | Chg%(right) | Vol(right) | x
-                                // TradingView style: symbol left-aligned, numbers right-aligned
-                                let col_last = avail_w * 0.32;  // Last price column start
-                                let col_chg = avail_w * 0.52;   // Change column start
-                                let col_pct = avail_w * 0.68;   // Change% column start
-                                let col_vol = avail_w * 0.84;   // Volume column start
-                                let col_x = avail_w - 14.0;     // Remove button
+                                // Column layout: Symbol | Last | Chg | Chg% | Ext% | Vol | x
+                                let col_last = avail_w * 0.26;
+                                let col_chg = avail_w * 0.42;
+                                let col_pct = avail_w * 0.56;
+                                let col_ext = avail_w * 0.70;   // Extended hours change%
+                                let col_vol = avail_w * 0.84;
+                                let col_x = avail_w - 14.0;
 
                                 // Sortable header row
                                 let (hdr_rect, hdr_resp) = ui.allocate_exact_size(egui::vec2(avail_w, row_h), egui::Sense::click());
@@ -18573,6 +18577,7 @@ impl eframe::App for TyphooNApp {
                                 hp.text(egui::pos2(hdr_rect.left() + col_last - 2.0, hy), egui::Align2::RIGHT_CENTER, &format!("Last{}", sort_arrow(1)), hdr_font.clone(), hdr_col);
                                 hp.text(egui::pos2(hdr_rect.left() + col_chg - 2.0, hy), egui::Align2::RIGHT_CENTER, &format!("Chg{}", sort_arrow(2)), hdr_font.clone(), hdr_col);
                                 hp.text(egui::pos2(hdr_rect.left() + col_pct - 2.0, hy), egui::Align2::RIGHT_CENTER, &format!("Chg%{}", sort_arrow(3)), hdr_font.clone(), hdr_col);
+                                hp.text(egui::pos2(hdr_rect.left() + col_ext - 2.0, hy), egui::Align2::RIGHT_CENTER, &format!("Ext%{}", sort_arrow(5)), hdr_font.clone(), hdr_col);
                                 hp.text(egui::pos2(hdr_rect.left() + col_vol - 2.0, hy), egui::Align2::RIGHT_CENTER, &format!("Vol{}", sort_arrow(4)), hdr_font.clone(), hdr_col);
                                 // Click header to sort
                                 if hdr_resp.clicked() {
@@ -18581,7 +18586,8 @@ impl eframe::App for TyphooNApp {
                                         let col = if rx < col_last * 0.5 { 0 }
                                             else if rx < (col_last + col_chg) * 0.5 { 1 }
                                             else if rx < (col_chg + col_pct) * 0.5 { 2 }
-                                            else if rx < (col_pct + col_vol) * 0.5 { 3 }
+                                            else if rx < (col_pct + col_ext) * 0.5 { 3 }
+                                            else if rx < (col_ext + col_vol) * 0.5 { 5 }
                                             else { 4 };
                                         self.watchlist_sort.toggle(col);
                                     }
@@ -18630,6 +18636,14 @@ impl eframe::App for TyphooNApp {
 
                                     // Change % (right-aligned, colored)
                                     rp.text(egui::pos2(rx + col_pct - 2.0, ry), egui::Align2::RIGHT_CENTER, &format!("{:.2}%", wl.change_pct), font.clone(), chg_color);
+
+                                    // Extended hours change % (right-aligned, colored, dimmed if zero)
+                                    if wl.ext_change_pct.abs() > 0.001 {
+                                        let ext_color = if wl.ext_change_pct >= 0.0 { UP } else { DOWN };
+                                        rp.text(egui::pos2(rx + col_ext - 2.0, ry), egui::Align2::RIGHT_CENTER, &format!("{:+.2}%", wl.ext_change_pct), font.clone(), ext_color);
+                                    } else {
+                                        rp.text(egui::pos2(rx + col_ext - 2.0, ry), egui::Align2::RIGHT_CENTER, "-", font.clone(), egui::Color32::from_rgb(60, 60, 70));
+                                    }
 
                                     // Volume (right-aligned, dimmed)
                                     let vol_str = if wl.volume >= 1_000_000.0 {
