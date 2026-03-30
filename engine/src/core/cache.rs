@@ -287,7 +287,16 @@ impl SqliteCache {
     /// Get bars as raw OHLCV tuples (no JSON serialization).
     /// Zero-serialization hot path for native GPU renderer: cache → f64 → GPU vertex buffer.
     pub fn get_bars_raw(&self, key: &str) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        // Use try_lock first — if Mutex is held (compaction, MT5 sync), wait up to 50ms
+        // then fail gracefully instead of blocking the UI thread indefinitely.
+        let conn = match self.conn.try_lock() {
+            Ok(c) => c,
+            Err(_) => {
+                // Brief retry — compaction releases lock between batches
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                self.conn.try_lock().map_err(|_| "Cache busy (compaction/sync in progress)".to_string())?
+            }
+        };
         let mut stmt = conn.prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let row: Option<Vec<u8>> = stmt.query_row(rusqlite::params![key], |r| r.get(0)).ok();
@@ -423,7 +432,13 @@ impl SqliteCache {
     /// Get detailed per-key cache stats: returns JSON array of {key, compressed_bytes, timestamp}.
     /// Keys are "symbol:timeframe" format (e.g., "AAPL:1Hour").
     pub fn detailed_stats(&self) -> Result<Vec<(String, i64, i64)>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = match self.conn.try_lock() {
+            Ok(c) => c,
+            Err(_) => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                self.conn.try_lock().map_err(|_| "Cache busy".to_string())?
+            }
+        };
         // Use bar_count instead of LENGTH(data) — avoids reading blob headers on 3.9GB DB
         let mut stmt = conn.prepare(
             "SELECT key, bar_count, timestamp FROM bar_cache ORDER BY key"
