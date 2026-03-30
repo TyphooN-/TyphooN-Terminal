@@ -7440,7 +7440,6 @@ impl TyphooNApp {
                         if let Some(ref b) = broker {
                             let mut rows = Vec::new();
                             for sym in &symbols {
-                                // Normalize crypto: SOLUSD → SOL/USD for Alpaca
                                 let api_sym = {
                                     let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
                                     let su = sym.to_uppercase();
@@ -7450,8 +7449,9 @@ impl TyphooNApp {
                                         } else { None }
                                     }).unwrap_or_else(|| sym.clone())
                                 };
-                                match b.get_snapshot(&api_sym).await {
-                                    Ok(snap) => {
+                                // 3s timeout per symbol — don't let one stale symbol block the entire watchlist
+                                match tokio::time::timeout(std::time::Duration::from_secs(3), b.get_snapshot(&api_sym)).await {
+                                    Ok(Ok(snap)) => {
                                         let change = snap.last - snap.prev_close;
                                         let change_pct = if snap.prev_close > 0.0 { (snap.last / snap.prev_close - 1.0) * 100.0 } else { 0.0 };
                                         rows.push(WatchlistRow {
@@ -7465,7 +7465,7 @@ impl TyphooNApp {
                                             ext_change_pct: 0.0,
                                         });
                                     }
-                                    Err(_) => {
+                                    _ => {
                                         rows.push(WatchlistRow {
                                             symbol: sym.clone(),
                                             cache_key: sym.clone(),
@@ -8265,38 +8265,52 @@ impl TyphooNApp {
                     }
                     BrokerCmd::LanSyncStart { port, passphrase, .. } => {
                         use typhoon_engine::core::lan_sync::LanSyncServer;
-                        // Use shared cache — no duplicate DB open (prevents DB locking)
-                        if let Some(cache_arc) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                            match LanSyncServer::start(cache_arc, port, &passphrase).await {
-                                Ok(_server) => {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync server running on wss://0.0.0.0:{}", port)));
+                        // Spawn as independent task — cert generation is CPU-heavy (100-500ms)
+                        // and must not block the broker command loop
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared = shared_cache_broker.clone();
+                        tokio::spawn(async move {
+                            if let Some(cache_arc) = shared.read().ok().and_then(|g| g.clone()) {
+                                match LanSyncServer::start(cache_arc, port, &passphrase).await {
+                                    Ok(_server) => {
+                                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!("LAN sync server running on wss://0.0.0.0:{}", port)));
+                                        // Keep server alive — don't let _server drop
+                                        // The accept loop runs inside a spawned task, so it survives
+                                        // even after _server is dropped (JoinHandle detaches on drop)
+                                    }
+                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("LAN sync server failed: {}", e))); }
                                 }
-                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync server failed: {}", e))); }
+                            } else {
+                                let _ = msg_tx.send(BrokerMsg::Error("LAN sync: cache not ready yet".into()));
                             }
-                        } else {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("LAN sync: cache not ready yet".into()));
-                        }
+                        });
                     }
                     BrokerCmd::LanSyncConnect { host, port, passphrase, .. } => {
                         use typhoon_engine::core::lan_sync::LanSyncClient;
-                        if let Some(cache_arc) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                            // 10s timeout on TCP+TLS connect — prevents broker loop from hanging
-                            // if server is unreachable (firewall, wrong IP, server down)
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(10),
-                                LanSyncClient::connect(cache_arc, &host, port, &passphrase),
-                            ).await {
-                                Ok(Ok((_client, remote_tx))) => {
-                                    { let mut guard = lan_remote_tx_ref.lock().await; *guard = Some(remote_tx); }
-                                    lan_client.store(true, std::sync::atomic::Ordering::Relaxed);
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync connected to wss://{}:{}", host, port)));
+                        // Spawn as independent task — connect can take up to 10s on unreachable hosts
+                        // and must not block the broker command loop
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared = shared_cache_broker.clone();
+                        let lan_remote = lan_remote_tx_ref.clone();
+                        let lan_flag = lan_client.clone();
+                        tokio::spawn(async move {
+                            if let Some(cache_arc) = shared.read().ok().and_then(|g| g.clone()) {
+                                match tokio::time::timeout(
+                                    std::time::Duration::from_secs(10),
+                                    LanSyncClient::connect(cache_arc, &host, port, &passphrase),
+                                ).await {
+                                    Ok(Ok((_client, remote_tx))) => {
+                                        { let mut guard = lan_remote.lock().await; *guard = Some(remote_tx); }
+                                        lan_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!("LAN sync connected to wss://{}:{}", host, port)));
+                                    }
+                                    Ok(Err(e)) => { let _ = msg_tx.send(BrokerMsg::Error(format!("LAN sync connect failed: {}", e))); }
+                                    Err(_) => { let _ = msg_tx.send(BrokerMsg::Error(format!("LAN sync connect timed out (10s) — is {}:{} reachable?", host, port))); }
                                 }
-                                Ok(Err(e)) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync connect failed: {}", e))); }
-                                Err(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync connect timed out (10s) — is {}:{} reachable?", host, port))); }
+                            } else {
+                                let _ = msg_tx.send(BrokerMsg::Error("LAN sync: cache not ready yet".into()));
                             }
-                        } else {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("LAN sync: cache not ready yet".into()));
-                        }
+                        });
                     }
                     BrokerCmd::LanSyncStop => {
                         let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("LAN sync stopped".into()));
