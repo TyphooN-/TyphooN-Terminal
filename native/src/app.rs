@@ -8271,14 +8271,19 @@ impl TyphooNApp {
                     BrokerCmd::LanSyncConnect { host, port, passphrase, .. } => {
                         use typhoon_engine::core::lan_sync::LanSyncClient;
                         if let Some(cache_arc) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                            match LanSyncClient::connect(cache_arc, &host, port, &passphrase).await {
-                                Ok((_client, remote_tx)) => {
-                                    // Store the remote request channel for forwarding
+                            // 10s timeout on TCP+TLS connect — prevents broker loop from hanging
+                            // if server is unreachable (firewall, wrong IP, server down)
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(10),
+                                LanSyncClient::connect(cache_arc, &host, port, &passphrase),
+                            ).await {
+                                Ok(Ok((_client, remote_tx))) => {
                                     { let mut guard = lan_remote_tx_ref.lock().await; *guard = Some(remote_tx); }
                                     lan_client.store(true, std::sync::atomic::Ordering::Relaxed);
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("LAN sync connected to wss://{}:{}", host, port)));
                                 }
-                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync connect failed: {}", e))); }
+                                Ok(Err(e)) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync connect failed: {}", e))); }
+                                Err(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("LAN sync connect timed out (10s) — is {}:{} reachable?", host, port))); }
                             }
                         } else {
                             let _ = broker_msg_tx_clone.send(BrokerMsg::Error("LAN sync: cache not ready yet".into()));
