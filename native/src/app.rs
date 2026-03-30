@@ -943,7 +943,8 @@ impl ChartState {
     /// Try to load bars without blocking. Returns false if lock is contended.
     /// Use this from the UI thread render loop to avoid freezing.
     fn try_load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>, gpu: Option<&mut gpu_compute::GpuCompute>) -> bool {
-        // Use the default key pattern directly — avoid find_cache_key which does blocking probes
+        // Non-blocking: uses try_lock() — returns false if cache Mutex is contended
+        // (compaction, MT5 sync, etc.) so UI thread never blocks.
         let key = self.default_cache_key();
         match cache.try_get_bars_raw(&key) {
             Ok(Some(raw)) => {
@@ -952,15 +953,11 @@ impl ChartState {
                 }).collect();
                 self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                 self.compute_indicators_gpu(gpu);
-                // MTF indicators: load HTF bars from cache, compute, project onto chart
-                self.compute_mtf_sma(cache);
-                self.compute_multi_kama(cache);
-                let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
-                    format!(" | MTF_MA: {} lines, MultiKAMA: {} TFs", self.mtf_sma.len(), self.multi_kama.len())
-                } else { String::new() };
+                // Skip MTF indicator loading here — it does blocking cache reads.
+                // MTF SMA/KAMA will be computed on the NEXT full reload (user action / symbol change).
                 log.push_back(LogEntry::info(format!(
-                    "Loaded {} bars for {} [{}]{}",
-                    self.bars.len(), self.symbol, self.timeframe.label(), mtf_info
+                    "Loaded {} bars for {} [{}]",
+                    self.bars.len(), self.symbol, self.timeframe.label()
                 )));
                 true
             }
@@ -9686,25 +9683,14 @@ impl TyphooNApp {
         }
     }
 
-    fn save_session(&self) {
-        // Persist credentials to keyring + SQLite fallback on quit
-        let creds = [
-            (keyring::keys::ALPACA_API_KEY, self.broker_api_key.as_str()),
-            (keyring::keys::ALPACA_SECRET, self.broker_secret.as_str()),
-            (keyring::keys::FINNHUB_KEY, self.finnhub_key.as_str()),
-            (keyring::keys::FRED_KEY, self.fred_key.as_str()),
-            (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
-            (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
-            (keyring::keys::LAN_SYNC_PASS, self.lan_sync_passphrase.as_str()),
-        ];
-        for (key, val) in &creds {
-            let _ = keyring::store(key, val);
-            if let Some(ref cache) = self.cache {
-                let _ = cache.put_kv(&format!("cred:{}", key), val);
-            }
-        }
+    /// Build session JSON string (pure data, no I/O — safe to call from UI thread).
+    fn build_session_json(&self) -> String {
+        let session = self.build_session_value();
+        serde_json::to_string_pretty(&session).unwrap_or_default()
+    }
 
-        let session = serde_json::json!({
+    fn build_session_value(&self) -> serde_json::Value {
+        serde_json::json!({
             "symbol": self.symbol_input,
             "active_tab": self.active_tab,
             "tabs": self.charts.iter().map(|c| serde_json::json!({
@@ -9819,12 +9805,30 @@ impl TyphooNApp {
                 }).collect::<Vec<_>>()
             }).unwrap_or_default(),
             "alerts": self.alerts.iter().map(|(p, l)| serde_json::json!({"price": p, "label": l})).collect::<Vec<_>>(),
-        });
+        })
+    }
+
+    fn save_session(&self) {
+        // Persist credentials to keyring + SQLite fallback on quit
+        let creds = [
+            (keyring::keys::ALPACA_API_KEY, self.broker_api_key.as_str()),
+            (keyring::keys::ALPACA_SECRET, self.broker_secret.as_str()),
+            (keyring::keys::FINNHUB_KEY, self.finnhub_key.as_str()),
+            (keyring::keys::FRED_KEY, self.fred_key.as_str()),
+            (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
+            (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
+            (keyring::keys::LAN_SYNC_PASS, self.lan_sync_passphrase.as_str()),
+        ];
+        for (key, val) in &creds {
+            let _ = keyring::store(key, val);
+            if let Some(ref cache) = self.cache {
+                let _ = cache.put_kv(&format!("cred:{}", key), val);
+            }
+        }
+        let json = self.build_session_json();
         let mut path = dirs_home();
         path.push("session.json");
-        if let Ok(json) = serde_json::to_string_pretty(&session) {
-            let _ = std::fs::write(&path, json);
-        }
+        let _ = std::fs::write(&path, json);
     }
 
     fn load_session(&mut self) {
@@ -16892,18 +16896,29 @@ impl eframe::App for TyphooNApp {
             self.bg = data;
         }
 
-        // ── deferred chart loading: one chart per frame to avoid startup freeze ──
+        // ── deferred chart loading: non-blocking, one attempt per frame ──
+        // Uses try_load() which returns false if cache Mutex is contended (compaction, MT5 sync).
+        // Failed loads go back to the queue and retry next frame — UI never blocks.
         if !self.deferred_chart_loads.is_empty() {
-            let idx = self.deferred_chart_loads.remove(0);
+            let idx = self.deferred_chart_loads[0];
+            let mut loaded = false;
             if let Some(cache) = self.cache.clone() {
                 if let Some(chart) = self.charts.get_mut(idx) {
                     if chart.bars.is_empty() {
                         let mut gpu = self.gpu_indicators.take();
-                        chart.load(&cache, &mut self.log, gpu.as_mut());
+                        loaded = chart.try_load(&cache, &mut self.log, gpu.as_mut());
                         self.gpu_indicators = gpu;
+                    } else {
+                        loaded = true; // already has data
                     }
+                } else {
+                    loaded = true; // invalid index, skip
                 }
             }
+            if loaded {
+                self.deferred_chart_loads.remove(0);
+            }
+            // If !loaded, leave in queue — will retry next frame when Mutex is free
         }
 
         // ── receive MTF grid status from background thread (non-blocking) ──
@@ -19707,24 +19722,35 @@ impl eframe::App for TyphooNApp {
                 });
         }
 
-        // Request continuous repainting for real-time tick updates
-        // Auto-save session + keyring sync every 60 seconds (240 frames at 250ms repaint)
+        // Auto-save session + keyring sync every 60 seconds — runs off UI thread
         if self.frame_count % 240 == 0 && self.frame_count > 0 {
-            self.save_session();
-            // Sync credentials to OS keyring — only write if value changed (prevents corruption)
-            let sync_key = |key: &str, val: &str| {
-                if val.is_empty() { return; }
-                if let Ok(Some(existing)) = keyring::load(key) {
-                    if existing == val { return; } // unchanged, skip write
+            // Collect all state needed for save (cheap copies of strings + JSON)
+            let session_json = self.build_session_json();
+            let creds: Vec<(String, String)> = [
+                (keyring::keys::ALPACA_API_KEY, &self.broker_api_key),
+                (keyring::keys::ALPACA_SECRET, &self.broker_secret),
+                (keyring::keys::FINNHUB_KEY, &self.finnhub_key),
+                (keyring::keys::FRED_KEY, &self.fred_key),
+                (keyring::keys::TT_USERNAME, &self.tt_username),
+                (keyring::keys::TT_PASSWORD, &self.tt_password),
+            ].iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let cache_clone = self.cache.clone();
+            std::thread::spawn(move || {
+                // Write session JSON to disk
+                let mut path = dirs_home(); path.push("session.json");
+                let _ = std::fs::write(&path, session_json);
+                // Sync credentials to keyring (only if changed)
+                for (key, val) in &creds {
+                    if let Ok(Some(existing)) = keyring::load(key) {
+                        if &existing == val { continue; }
+                    }
+                    let _ = keyring::store(key, val);
+                    // Also write to cache fallback
+                    if let Some(ref cache) = cache_clone {
+                        let _ = cache.put_kv(&format!("cred:{}", key), val);
+                    }
                 }
-                let _ = keyring::store(key, val);
-            };
-            sync_key(keyring::keys::ALPACA_API_KEY, &self.broker_api_key);
-            sync_key(keyring::keys::ALPACA_SECRET, &self.broker_secret);
-            sync_key(keyring::keys::FINNHUB_KEY, &self.finnhub_key);
-            sync_key(keyring::keys::FRED_KEY, &self.fred_key);
-            sync_key(keyring::keys::TT_USERNAME, &self.tt_username);
-            sync_key(keyring::keys::TT_PASSWORD, &self.tt_password);
+            });
         }
 
         // Update Prometheus metrics every ~5 seconds (20 frames at 250ms idle repaint)
@@ -19821,24 +19847,27 @@ impl eframe::App for TyphooNApp {
             }
 
             // Monday auto-cleanup: purge Kraken weekend bars (MT5 will provide fresh data)
+            // Runs on background thread to avoid blocking UI with detailed_stats + delete_key
             if self.frame_count == 1800 && self.frame_count > 0 {
                 let now_utc = chrono::Utc::now();
                 let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
                 use chrono::Datelike;
                 if eastern.weekday() == chrono::Weekday::Mon {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(stats) = cache.detailed_stats() {
-                            let mut deleted = 0;
-                            for (key, _, _) in &stats {
-                                if key.starts_with("kraken:") {
-                                    let _ = cache.delete_key(key);
-                                    deleted += 1;
+                    if let Some(cache) = self.cache.clone() {
+                        std::thread::spawn(move || {
+                            if let Ok(stats) = cache.detailed_stats() {
+                                let mut deleted = 0;
+                                for (key, _, _) in &stats {
+                                    if key.starts_with("kraken:") {
+                                        let _ = cache.delete_key(key);
+                                        deleted += 1;
+                                    }
+                                }
+                                if deleted > 0 {
+                                    tracing::info!("Monday cleanup: purged {} Kraken weekend entries", deleted);
                                 }
                             }
-                            if deleted > 0 {
-                                self.log.push_back(LogEntry::info(format!("Monday cleanup: purged {} Kraken weekend entries", deleted)));
-                            }
-                        }
+                        });
                     }
                 }
             }
