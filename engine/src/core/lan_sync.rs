@@ -13,6 +13,20 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::core::cache::SqliteCache;
 
+/// Maximum key length from network input (16 KB).
+const MAX_KEY_LEN: usize = 16384;
+/// Maximum data length from network input (256 MB — reasonable for bar data).
+const MAX_DATA_LEN: usize = 256 * 1024 * 1024;
+/// Maximum WebSocket message size (512 MB).
+const MAX_WS_MESSAGE_SIZE: usize = 512 * 1024 * 1024;
+
+fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+    let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+    config.max_message_size = Some(MAX_WS_MESSAGE_SIZE);
+    config.max_frame_size = Some(MAX_WS_MESSAGE_SIZE);
+    config
+}
+
 // ── TLS Certificate Generation ────────────────────────────────────
 
 /// Generate an ephemeral self-signed TLS certificate for LAN sync server.
@@ -249,7 +263,7 @@ async fn handle_client_tls(
     secret: [u8; 32],
     status: Arc<TokioMutex<SyncStatus>>,
 ) {
-    let ws = match tokio_tungstenite::accept_async(tls_stream).await {
+    let ws = match tokio_tungstenite::accept_async_with_config(tls_stream, Some(ws_config())).await {
         Ok(ws) => ws,
         Err(e) => {
             tracing::warn!("LAN sync WebSocket handshake failed: {e}");
@@ -502,7 +516,7 @@ impl LanSyncClient {
         let connector = tokio_tungstenite::Connector::NativeTls(tls_connector);
 
         let (ws, _) = tokio_tungstenite::connect_async_tls_with_config(
-            &url, None, false, Some(connector),
+            &url, Some(ws_config()), false, Some(connector),
         )
             .await
             .map_err(|e| format!("Connect to {url} failed: {e}"))?;
@@ -645,6 +659,7 @@ async fn client_sync_loop(
                     while pos + 4 <= buf.len() {
                         let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                         pos += 4;
+                        if key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: key_len {key_len} exceeds limit"); break; }
                         if pos + key_len + 8 + 4 > buf.len() { break; }
                         let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
                         pos += key_len;
@@ -652,6 +667,7 @@ async fn client_sync_loop(
                         pos += 8;
                         let data_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                         pos += 4;
+                        if data_len > MAX_DATA_LEN { tracing::warn!("LAN sync: data_len {data_len} exceeds limit"); break; }
                         if pos + data_len > buf.len() { break; }
                         let data = &buf[pos..pos+data_len];
                         pos += data_len;
@@ -721,11 +737,13 @@ async fn client_sync_loop(
                 while pos + 4 <= buf.len() {
                     let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                     pos += 4;
+                    if key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: KV key_len {key_len} exceeds limit"); break; }
                     if pos + key_len + 4 > buf.len() { break; }
                     let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
                     pos += key_len;
                     let val_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                     pos += 4;
+                    if val_len > MAX_DATA_LEN { tracing::warn!("LAN sync: KV val_len {val_len} exceeds limit"); break; }
                     if pos + val_len > buf.len() { break; }
                     let val = String::from_utf8_lossy(&buf[pos..pos+val_len]).to_string();
                     pos += val_len;
@@ -762,6 +780,7 @@ async fn client_sync_loop(
                             while pos + 4 <= buf.len() {
                                 let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                                 pos += 4;
+                                if key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: incremental key_len {key_len} exceeds limit"); break; }
                                 if pos + key_len + 8 + 4 > buf.len() { break; }
                                 let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
                                 pos += key_len;
@@ -769,6 +788,7 @@ async fn client_sync_loop(
                                 pos += 8;
                                 let data_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                                 pos += 4;
+                                if data_len > MAX_DATA_LEN { tracing::warn!("LAN sync: incremental data_len {data_len} exceeds limit"); break; }
                                 if pos + data_len > buf.len() { break; }
                                 let data = &buf[pos..pos+data_len];
                                 pos += data_len;

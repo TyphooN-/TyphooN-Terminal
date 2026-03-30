@@ -47,7 +47,9 @@ fn unpack_bars(data: &[u8]) -> Result<String, String> {
     let count = u32::from_le_bytes(
         data[4..8].try_into().map_err(|_| "Failed to read bar_count from binary header")?
     ) as usize;
-    let expected = 8 + count * BYTES_PER_BAR;
+    let expected = count.checked_mul(BYTES_PER_BAR)
+        .and_then(|n| n.checked_add(8))
+        .ok_or("Integer overflow computing bar data size")?;
     if data.len() < expected {
         return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
     }
@@ -96,7 +98,9 @@ pub fn unpack_bars_raw(data: &[u8]) -> Result<Vec<(i64, f64, f64, f64, f64, f64)
     let count = u32::from_le_bytes(
         data[4..8].try_into().map_err(|_| "Failed to read bar_count")?
     ) as usize;
-    let expected = 8 + count * BYTES_PER_BAR;
+    let expected = count.checked_mul(BYTES_PER_BAR)
+        .and_then(|n| n.checked_add(8))
+        .ok_or("Integer overflow computing bar data size")?;
     if data.len() < expected {
         return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
     }
@@ -117,7 +121,11 @@ pub fn unpack_bars_raw(data: &[u8]) -> Result<Vec<(i64, f64, f64, f64, f64, f64)
 /// Extract last and second-to-last bar timestamps from binary data (for metadata columns).
 /// Returns (second_last_ts_rfc3339, last_ts_rfc3339) or empty strings if not enough bars.
 fn extract_tail_timestamps(binary: &[u8], count: usize) -> (Option<String>, Option<String>) {
-    if count < 2 || binary.len() < 8 + count * BYTES_PER_BAR {
+    let required = match count.checked_mul(BYTES_PER_BAR).and_then(|n| n.checked_add(8)) {
+        Some(n) => n,
+        None => return (None, None),
+    };
+    if count < 2 || binary.len() < required {
         return (None, None);
     }
     let last_offset = 8 + (count - 1) * BYTES_PER_BAR;
@@ -139,7 +147,9 @@ fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
     let count = u32::from_le_bytes(
         data[4..8].try_into().map_err(|_| "Failed to read bar_count from binary header")?
     ) as usize;
-    let expected = 8 + count * BYTES_PER_BAR;
+    let expected = count.checked_mul(BYTES_PER_BAR)
+        .and_then(|n| n.checked_add(8))
+        .ok_or("Integer overflow computing bar data size")?;
     if data.len() < expected {
         return Err(format!("Binary data truncated: expected {expected}, got {}", data.len()));
     }
@@ -480,7 +490,10 @@ impl SqliteCache {
                         decompressed[4..8].try_into().unwrap_or([0;4])
                     ) as usize;
                     if bc < 2 { return Ok(None); }
-                    let target_offset = 8 + (bc - 2) * BYTES_PER_BAR;
+                    let target_offset = match (bc - 2).checked_mul(BYTES_PER_BAR).and_then(|n| n.checked_add(8)) {
+                        Some(n) => n,
+                        None => return Ok(None),
+                    };
                     if decompressed.len() < target_offset + 8 { return Ok(None); }
                     let ts_ms = i64::from_le_bytes(
                         decompressed[target_offset..target_offset+8].try_into().unwrap_or([0;8])

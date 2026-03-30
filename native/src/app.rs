@@ -6751,6 +6751,8 @@ enum BrokerCmd {
     LanSyncConnect { host: String, port: u16, passphrase: String, db_path: std::path::PathBuf },
     /// Stop LAN sync server or client.
     LanSyncStop,
+    /// Scan unusual volume (background, heavy DB reads).
+    ScanUnusualVolume { keys: Vec<(String, i64)> },
 }
 
 /// Messages sent from async broker task → UI.
@@ -6788,6 +6790,8 @@ enum BrokerMsg {
     EconCalendarData(Vec<(String, String, String, String, String)>),
     /// Congressional stock trades (date, rep, ticker, type, amount, party).
     CongressData(Vec<(String, String, String, String, String, String)>),
+    /// Unusual volume scan results (symbol, today_vol, avg_vol, ratio).
+    UnusualVolumeResults(Vec<(String, f64, f64, f64)>),
 }
 
 /// Reusable sort state for clickable column headers.
@@ -7767,7 +7771,9 @@ impl TyphooNApp {
                     BrokerCmd::CompactStorage { db_path: _, level } => {
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared_cache_broker = shared_cache_broker.clone();
+                        let importing = importing_flag.clone();
                         std::thread::spawn(move || {
+                            importing.store(true, std::sync::atomic::Ordering::Relaxed);
                             match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
                                 Ok(cache) => {
                                     let msg_tx2 = msg_tx.clone();
@@ -7780,16 +7786,52 @@ impl TyphooNApp {
                                         }
                                     })) {
                                         Ok((count, saved)) => {
+                                            importing.store(false, std::sync::atomic::Ordering::Relaxed);
                                             let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
                                                 "Compact complete: {} entries, {:.1} MB saved. Run VACUUM in SQLite for full effect.",
                                                 count, saved as f64 / 1024.0 / 1024.0
                                             )));
                                         }
-                                        Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Compact failed: {}", e))); }
+                                        Err(e) => {
+                                            importing.store(false, std::sync::atomic::Ordering::Relaxed);
+                                            let _ = msg_tx.send(BrokerMsg::Error(format!("Compact failed: {}", e)));
+                                        }
                                     }
                                 }
-                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Cannot open cache: {e}"))); }
+                                Err(e) => {
+                                    importing.store(false, std::sync::atomic::Ordering::Relaxed);
+                                    let _ = msg_tx.send(BrokerMsg::Error(format!("Cannot open cache: {e}")));
+                                }
                             }
+                        });
+                    }
+                    BrokerCmd::ScanUnusualVolume { keys } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        std::thread::spawn(move || {
+                            let mut results: Vec<(String, f64, f64, f64)> = Vec::new();
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                for (key, count) in &keys {
+                                    if *count < 30 { continue; }
+                                    if !key.contains(":1Day") { continue; }
+                                    if let Ok(Some(raw)) = cache.get_bars_raw(key) {
+                                        let n = raw.len();
+                                        if n < 21 { continue; }
+                                        let today_vol = raw[n-1].5;
+                                        let avg_vol: f64 = raw[n-21..n-1].iter().map(|r| r.5).sum::<f64>() / 20.0;
+                                        if avg_vol > 0.0 {
+                                            let ratio = today_vol / avg_vol;
+                                            if ratio > 1.5 {
+                                                let parts: Vec<&str> = key.split(':').collect();
+                                                let sym = if parts.len() >= 3 { parts[parts.len()-2] } else { key.as_str() };
+                                                results.push((sym.to_string(), today_vol, avg_vol, ratio));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            results.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+                            let _ = msg_tx.send(BrokerMsg::UnusualVolumeResults(results));
                         });
                     }
                     BrokerCmd::Mt5Sync { sources, target } => {
@@ -9291,31 +9333,12 @@ impl TyphooNApp {
             "LAN_SYNC"      => self.show_lan_sync = true,
             "UNUSUAL_VOLUME" => {
                 self.show_unusual_volume = true;
-                // Scan from cache
-                if let Some(ref cache) = self.cache {
-                    let mut results: Vec<(String, f64, f64, f64)> = Vec::new();
-                    for (key, count, _) in &self.bg.detailed_stats {
-                        if *count < 30 { continue; }
-                        if !key.contains(":1Day") { continue; }
-                        if let Ok(Some(raw)) = cache.get_bars_raw(key) {
-                            let n = raw.len();
-                            if n < 21 { continue; }
-                            let today_vol = raw[n-1].5;
-                            let avg_vol: f64 = raw[n-21..n-1].iter().map(|r| r.5).sum::<f64>() / 20.0;
-                            if avg_vol > 0.0 {
-                                let ratio = today_vol / avg_vol;
-                                if ratio > 1.5 {
-                                    let parts: Vec<&str> = key.split(':').collect();
-                                    let sym = if parts.len() >= 3 { parts[parts.len()-2] } else { key };
-                                    results.push((sym.to_string(), today_vol, avg_vol, ratio));
-                                }
-                            }
-                        }
-                    }
-                    results.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
-                    self.unusual_volume_results = results;
-                    self.log.push_back(LogEntry::info(format!("Unusual volume: {} symbols flagged", self.unusual_volume_results.len())));
-                }
+                // Send scan to background thread (avoids blocking UI with DB reads)
+                let keys: Vec<(String, i64)> = self.bg.detailed_stats.iter()
+                    .map(|(k, c, _)| (k.clone(), *c))
+                    .collect();
+                let _ = self.broker_tx.send(BrokerCmd::ScanUnusualVolume { keys });
+                self.log.push_back(LogEntry::info("Scanning unusual volume..."));
             }
             "SECTOR_ROTATION" => self.show_sector_rotation = true,
             "ECON_CALENDAR" => {
@@ -16912,6 +16935,10 @@ impl eframe::App for TyphooNApp {
                     self.congress_trades = trades;
                     self.log.push_back(LogEntry::info(format!("Congressional trades: {} loaded", self.congress_trades.len())));
                 }
+                BrokerMsg::UnusualVolumeResults(results) => {
+                    self.log.push_back(LogEntry::info(format!("Unusual volume: {} symbols flagged", results.len())));
+                    self.unusual_volume_results = results;
+                }
                 BrokerMsg::MarketClock(msg) => {
                     self.log.push_back(LogEntry::info(msg));
                 }
@@ -18348,10 +18375,11 @@ impl eframe::App for TyphooNApp {
                                     }
                                 }
                                 if !found {
-                                    if let Ok(stats) = cache.detailed_stats() {
+                                    {
+                                        let stats = &self.bg.detailed_stats;
                                         let sym_lower = sym.to_lowercase();
                                         let tf_lower = tf.to_lowercase();
-                                        for (k, _, _) in &stats {
+                                        for (k, _, _) in stats {
                                             let kl = k.to_lowercase();
                                             if kl.contains(&sym_lower) && kl.ends_with(&tf_lower) {
                                                 if let Ok(Some(raw)) = cache.get_bars_raw(k) {

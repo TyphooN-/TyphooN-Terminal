@@ -120,16 +120,17 @@ impl RateLimiter {
 
     /// Wait until we can make another request without hitting rate limit.
     pub async fn wait(&self) -> bool {
-        // Check cooldown
-        {
+        // Check cooldown — read value and drop lock before sleeping
+        let cooldown_remaining = {
             let cooldown = self.cooldown_until.lock().await;
-            if let Some(until) = *cooldown {
-                if std::time::Instant::now() < until {
-                    let remaining = until - std::time::Instant::now();
-                    tracing::debug!("Rate limiter in cooldown for {}ms", remaining.as_millis());
-                    tokio::time::sleep(remaining).await;
-                }
+            match *cooldown {
+                Some(until) if std::time::Instant::now() < until => Some(until - std::time::Instant::now()),
+                _ => None,
             }
+        };
+        if let Some(remaining) = cooldown_remaining {
+            tracing::debug!("Rate limiter in cooldown for {}ms", remaining.as_millis());
+            tokio::time::sleep(remaining).await;
         }
         // Adaptive pacing
         let interval_ms = { *self.adaptive_ms.lock().await };

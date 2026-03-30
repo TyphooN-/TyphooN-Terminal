@@ -1156,9 +1156,7 @@ impl GpuDarwinAnalytics {
         }
 
         // Upload returns
-        let returns_bytes = unsafe {
-            std::slice::from_raw_parts(flat.as_ptr() as *const u8, flat.len() * 4)
-        };
+        let returns_bytes: &[u8] = bytemuck_cast_slice(&flat);
         self.returns_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("darwin_returns"), size: returns_bytes.len() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
@@ -1166,9 +1164,7 @@ impl GpuDarwinAnalytics {
         self.queue.write_buffer(self.returns_buffer.as_ref().unwrap(), 0, returns_bytes);
 
         // Upload lengths
-        let lengths_bytes = unsafe {
-            std::slice::from_raw_parts(lengths.as_ptr() as *const u8, lengths.len() * 4)
-        };
+        let lengths_bytes: &[u8] = bytemuck_cast_slice(&lengths);
         self.lengths_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("darwin_lengths"), size: lengths_bytes.len() as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
@@ -1202,9 +1198,7 @@ impl GpuDarwinAnalytics {
         // Params: [batch_darwin_count, max_days]
         let batch_count = (self.darwin_count as usize).min(self.chunk_size as usize) as u32;
         let params = [batch_count, self.max_days];
-        let params_bytes = unsafe {
-            std::slice::from_raw_parts(params.as_ptr() as *const u8, 8)
-        };
+        let params_bytes: &[u8] = bytemuck_cast_slice(&params);
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("stats_params"), size: 8,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
@@ -1310,18 +1304,14 @@ impl GpuDarwinAnalytics {
             }
 
             // Upload
-            let returns_bytes = unsafe {
-                std::slice::from_raw_parts(flat.as_ptr() as *const u8, flat.len() * 4)
-            };
+            let returns_bytes: &[u8] = bytemuck_cast_slice(&flat);
             self.returns_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("darwin_returns"), size: returns_bytes.len() as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
             }));
             self.queue.write_buffer(self.returns_buffer.as_ref().unwrap(), 0, returns_bytes);
 
-            let lengths_bytes = unsafe {
-                std::slice::from_raw_parts(lengths.as_ptr() as *const u8, lengths.len() * 4)
-            };
+            let lengths_bytes: &[u8] = bytemuck_cast_slice(&lengths);
             self.lengths_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("darwin_lengths"), size: lengths_bytes.len() as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
@@ -1377,9 +1367,7 @@ impl GpuDarwinAnalytics {
 
         // Params: [darwin_count, max_days, row_start, col_start, tile_size, 0, 0, 0]
         let params = [self.darwin_count, self.max_days, row_start, col_start, tile_size, 0u32, 0u32, 0u32];
-        let params_bytes = unsafe {
-            std::slice::from_raw_parts(params.as_ptr() as *const u8, 32)
-        };
+        let params_bytes: &[u8] = bytemuck_cast_slice(&params);
         let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("corr_params"), size: 32,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
