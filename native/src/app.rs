@@ -1293,8 +1293,9 @@ impl ChartState {
                 // ATR Projection MTF levels (matching ATR_Projection.mqh)
                 self.atr_proj_levels = compute_atr_projection_levels(&self.bars, self.timeframe.minutes());
 
-                // BetterVolume — GPU with CPU fallback
-                if let Some(data) = gpu.compute_better_volume_gpu(20) {
+                // BetterVolume — GPU (full Emini-Watch algorithm with OHLCV)
+                let opens: Vec<f32> = self.bars.iter().map(|b| b.open as f32).collect();
+                if let Some(data) = gpu.compute_better_volume_gpu_full(&opens, &highs, &lows, &closes, &volumes, 20) {
                     self.better_vol_type = data.iter().map(|&v| v as u8).collect();
                 } else {
                     self.better_vol_type = compute_better_volume(&self.bars);

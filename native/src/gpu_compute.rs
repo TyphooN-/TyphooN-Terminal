@@ -715,10 +715,75 @@ impl GpuCompute {
         Some(result)
     }
 
-    /// Compute BetterVolume classification on GPU from OHLC. Parallel.
-    /// Returns f32 per bar: 0=normal, 1=climax_up, 2=climax_down, 3=high, 4=low, 5=churn
-    pub fn compute_better_volume_gpu(&self, lookback: u32) -> Option<Vec<f32>> {
-        self.dispatch_ohlc_indicator(&self.better_vol_pipeline, lookback, 1)
+    /// Full BetterVolume GPU dispatch with all OHLCV data.
+    /// Accepts all 5 arrays directly from CPU to build proper interleaved buffer.
+    pub fn compute_better_volume_gpu_full(&self, opens: &[f32], highs: &[f32], lows: &[f32], closes: &[f32], volumes: &[f32], lookback: u32) -> Option<Vec<f32>> {
+        let n = self.bar_count;
+        if n == 0 || opens.len() != n as usize { return None; }
+        let rb_buf = self.readback_buffer.as_ref()?;
+
+        // Build OHLCV interleaved: [O,H,L,C,V] × 5 per bar
+        let mut ohlcv = Vec::with_capacity(n as usize * 5);
+        for i in 0..n as usize {
+            ohlcv.push(opens[i]);
+            ohlcv.push(highs[i]);
+            ohlcv.push(lows[i]);
+            ohlcv.push(closes[i]);
+            ohlcv.push(volumes[i]);
+        }
+
+        let input_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bvol_ohlcv"), size: (n as u64) * 20, // 5 × f32 per bar
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&input_buf, 0, bytemuck_cast_slice(&ohlcv));
+
+        let out_size = (n as u64) * 4;
+        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bvol_out"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let params = [lookback, n];
+        let params_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bvol_params"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buf, 0, bytemuck_cast_slice(&params));
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bvol_bg"), layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: input_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: params_buf.as_entire_binding() },
+            ],
+        });
+
+        let workgroups = (n + 255) / 256;
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("bvol_pass"), timestamp_writes: None });
+            pass.set_pipeline(&self.better_vol_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+        let read_size = out_size.min(rb_buf.size());
+        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, read_size);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = rb_buf.slice(0..read_size);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None }).ok();
+        if rx.recv().ok()?.is_err() { return None; }
+        let data = slice.get_mapped_range();
+        let result = bytemuck_cast_slice_to_f32(&data);
+        drop(data);
+        rb_buf.unmap();
+        Some(result)
     }
 
     /// Compute Supply/Demand zones on GPU. Returns [type, high, low] × bar_count. Parallel.
@@ -2837,47 +2902,167 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 "#;
 
 const BETTER_VOLUME_SHADER: &str = r#"
-// BetterVolume classification — parallel per-bar
-// Input: [high, low, close, open, volume] per bar = 5 floats (uses OHLC + volume)
-// Output: classification u32 as f32: 0=normal, 1=climax_up, 2=climax_down, 3=high_vol, 4=low_vol, 5=churn
-struct Params { period: u32, bar_count: u32, }  // period = lookback for averages (20)
-@group(0) @binding(0) var<storage, read> bars: array<f32>;  // [h,l,c] interleaved (3 per bar)
+// BetterVolume — Full Emini-Watch algorithm (1:1 parity with CPU/MQL5)
+// Input: [O,H,L,C,V] interleaved = 5 floats per bar
+// Output: classification f32: 0=low_vol, 1=climax_up, 2=climax_dn, 3=churn, 4=climax_churn, 5=normal
+struct Params { period: u32, bar_count: u32, }
+@group(0) @binding(0) var<storage, read> bars: array<f32>;
 @group(0) @binding(1) var<storage, read_write> output: array<f32>;
 @group(0) @binding(2) var<uniform> params: Params;
+
+// Estimate buy/sell volume from candle structure (matching MQL5 EstimateBuySell)
+fn estimate_buy(o: f32, h: f32, l: f32, c: f32, vol: f32) -> f32 {
+    let range = h - l;
+    if (range <= 0.0) { return vol * 0.5; }
+    if (c > o) {
+        let denom = 2.0 * range + o - c;
+        let d = select(denom, range, denom <= 0.0);
+        return (range / d) * vol;
+    } else if (c < o) {
+        let denom = 2.0 * range + c - o;
+        let d = select(denom, range, denom <= 0.0);
+        return ((range + c - o) / d) * vol;
+    }
+    return vol * 0.5;
+}
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
-    if (i >= params.bar_count || i < params.period) { output[i] = 0.0; return; }
+    let lb = params.period; // lookback (20)
+    if (i >= params.bar_count) { output[i] = 5.0; return; }
+    if (i < lb) { output[i] = 5.0; return; } // not enough history
 
-    // Compute average range over lookback
-    var avg_range: f32 = 0.0;
-    for (var j: u32 = 0u; j < params.period; j = j + 1u) {
-        let idx = i - j - 1u;
-        avg_range = avg_range + bars[idx * 3u] - bars[idx * 3u + 1u];
+    let min_range: f32 = 0.0000000001;
+
+    // Current bar OHLCV
+    let o = bars[i * 5u];
+    let h = bars[i * 5u + 1u];
+    let l = bars[i * 5u + 2u];
+    let c = bars[i * 5u + 3u];
+    let vol = bars[i * 5u + 4u];
+    let range = max(h - l, min_range);
+
+    let buy_vol = estimate_buy(o, h, l, c, vol);
+    let sell_vol = vol - buy_vol;
+
+    let buy_range = buy_vol * range;
+    let sell_range = sell_vol * range;
+    let vol_div_r = vol / range;
+    let sell_div_r = sell_vol / range;
+    let buy_div_r = buy_vol / range;
+
+    // Lookback extremes (previous lb bars)
+    var high_buy_range: f32 = 0.0;
+    var high_sell_range: f32 = 0.0;
+    var high_vol_div_r: f32 = 0.0;
+    var low_sell_div_r: f32 = 999999999.0;
+    var low_buy_div_r: f32 = 999999999.0;
+    var low_total_vol: f32 = 999999999.0;
+
+    for (var j: u32 = 1u; j <= lb; j = j + 1u) {
+        let bi = i - j;
+        let bo = bars[bi * 5u];
+        let bh = bars[bi * 5u + 1u];
+        let bl = bars[bi * 5u + 2u];
+        let bc = bars[bi * 5u + 3u];
+        let bv = bars[bi * 5u + 4u];
+        let br = max(bh - bl, min_range);
+
+        let bbuy = estimate_buy(bo, bh, bl, bc, bv);
+        let bsell = bv - bbuy;
+
+        let bbr = bbuy * br;
+        let bsr = bsell * br;
+        let bvr = bv / br;
+        let bsdr = bsell / br;
+        let bbdr = bbuy / br;
+
+        high_buy_range = max(high_buy_range, bbr);
+        high_sell_range = max(high_sell_range, bsr);
+        high_vol_div_r = max(high_vol_div_r, bvr);
+        low_sell_div_r = min(low_sell_div_r, bsdr);
+        low_buy_div_r = min(low_buy_div_r, bbdr);
+        low_total_vol = min(low_total_vol, bv);
     }
-    avg_range = avg_range / f32(params.period);
 
-    let h = bars[i * 3u];
-    let l = bars[i * 3u + 1u];
-    let c = bars[i * 3u + 2u];
-    let range = h - l;
-    let range_ratio = select(range / avg_range, 1.0, avg_range < 0.000001);
+    // 1-bar classification
+    var is_climax_up: bool = false;
+    var is_climax_dn: bool = false;
+    var is_churn: bool = false;
+    var is_low_vol: bool = false;
 
-    // Use range as volume proxy (we don't have separate volume buffer in OHLC layout)
-    // Classification based on range ratios
-    let prev_c = bars[(i - 1u) * 3u + 2u];
-    let is_up = c >= prev_c;
+    if (vol <= low_total_vol) { is_low_vol = true; }
+    if (c > o && (buy_range >= high_buy_range || sell_div_r <= low_sell_div_r)) { is_climax_up = true; }
+    if (c < o && (sell_range >= high_sell_range || buy_div_r <= low_buy_div_r)) { is_climax_dn = true; }
+    if (vol_div_r >= high_vol_div_r) { is_churn = true; }
 
-    if (range_ratio > 2.0) {
-        output[i] = select(2.0, 1.0, is_up);  // climax up/down
-    } else if (range_ratio < 0.4) {
-        output[i] = 4.0;  // low range (proxy for low volume)
-    } else if (range_ratio > 1.5) {
-        output[i] = 3.0;  // high range
-    } else {
-        output[i] = 0.0;  // normal
+    // 2-bar analysis (matching MQL5 InpUse2Bars=true)
+    if (i >= lb + 1u) {
+        let pi = i - 1u;
+        let po = bars[pi * 5u];
+        let ph = bars[pi * 5u + 1u];
+        let pl = bars[pi * 5u + 2u];
+        let pc = bars[pi * 5u + 3u];
+        let pv = bars[pi * 5u + 4u];
+
+        let pbuy = estimate_buy(po, ph, pl, pc, pv);
+        let psell = pv - pbuy;
+        let total_buy = buy_vol + pbuy;
+        let total_sell = sell_vol + psell;
+        let total_vol2 = vol + pv;
+        let range2 = max(max(h, ph) - min(l, pl), min_range);
+
+        let buy_range2 = total_buy * range2;
+        let sell_range2 = total_sell * range2;
+        let vol_div_r2 = total_vol2 / range2;
+        let sell_div_r2 = total_sell / range2;
+        let buy_div_r2 = total_buy / range2;
+
+        // 2-bar lookback extremes
+        var h_br2: f32 = 0.0;
+        var h_sr2: f32 = 0.0;
+        var h_vr2: f32 = 0.0;
+        var l_sdr2: f32 = 999999999.0;
+        var l_bdr2: f32 = 999999999.0;
+        var l_vol2: f32 = 999999999.0;
+
+        for (var j: u32 = 1u; j <= lb; j = j + 1u) {
+            let b1i = i - j;
+            if (b1i == 0u) { break; }
+            let b2i = b1i - 1u;
+
+            let o1 = bars[b1i * 5u]; let h1 = bars[b1i * 5u + 1u]; let l1 = bars[b1i * 5u + 2u];
+            let c1 = bars[b1i * 5u + 3u]; let v1 = bars[b1i * 5u + 4u];
+            let o2 = bars[b2i * 5u]; let h2 = bars[b2i * 5u + 1u]; let l2 = bars[b2i * 5u + 2u];
+            let c2 = bars[b2i * 5u + 3u]; let v2 = bars[b2i * 5u + 4u];
+
+            let tb = estimate_buy(o1, h1, l1, c1, v1) + estimate_buy(o2, h2, l2, c2, v2);
+            let ts = (v1 - estimate_buy(o1, h1, l1, c1, v1)) + (v2 - estimate_buy(o2, h2, l2, c2, v2));
+            let tv = v1 + v2;
+            let r2 = max(max(h1, h2) - min(l1, l2), min_range);
+
+            h_br2 = max(h_br2, tb * r2);
+            h_sr2 = max(h_sr2, ts * r2);
+            h_vr2 = max(h_vr2, tv / r2);
+            l_sdr2 = min(l_sdr2, ts / r2);
+            l_bdr2 = min(l_bdr2, tb / r2);
+            l_vol2 = min(l_vol2, tv);
+        }
+
+        if (total_vol2 <= l_vol2) { is_low_vol = true; }
+        if (c > o && (buy_range2 >= h_br2 || sell_div_r2 <= l_sdr2)) { is_climax_up = true; }
+        if (c < o && (sell_range2 >= h_sr2 || buy_div_r2 <= l_bdr2)) { is_climax_dn = true; }
+        if (vol_div_r2 >= h_vr2) { is_churn = true; }
     }
+
+    // Priority: ClimaxChurn > LowVol > ClimaxUp > ClimaxDown > Churn > Normal
+    if ((is_climax_up || is_climax_dn) && is_churn) { output[i] = 4.0; }  // climax+churn (magenta)
+    else if (is_low_vol) { output[i] = 0.0; }     // low volume (yellow)
+    else if (is_climax_up) { output[i] = 1.0; }   // climax up (red)
+    else if (is_climax_dn) { output[i] = 2.0; }   // climax down (white)
+    else if (is_churn) { output[i] = 3.0; }       // churn (green)
+    else { output[i] = 5.0; }                     // normal (steelblue)
 }
 "#;
 
