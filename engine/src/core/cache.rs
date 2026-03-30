@@ -900,46 +900,48 @@ impl SqliteCache {
     /// Returns (entries_processed, bytes_saved).
     /// Progress callback: (processed, total, key, old_size, new_size)
     pub fn compact_storage(&self, level: i32, progress: Option<&dyn Fn(usize, usize, &str, usize, usize)>) -> Result<(usize, i64), String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
-        // Get all keys and their compressed data
-        let mut stmt = conn.prepare("SELECT key, data, timestamp, bar_count, last_ts, second_last_ts FROM bar_cache")
-            .map_err(|e| format!("Prepare failed: {e}"))?;
-        let entries: Vec<(String, Vec<u8>, i64, i64, i64, i64)> = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, Vec<u8>>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, i64>(4).unwrap_or(0),
-                row.get::<_, i64>(5).unwrap_or(0),
-            ))
-        }).map_err(|e| format!("Query failed: {e}"))?
-          .filter_map(|r| r.ok())
-          .collect();
-        drop(stmt);
+        // Phase 1: Read all entries (hold lock briefly for SELECT only)
+        let entries: Vec<(String, Vec<u8>)>;
+        let kv_entries: Vec<(String, Vec<u8>)>;
+        {
+            let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+            let mut stmt = conn.prepare("SELECT key, data FROM bar_cache")
+                .map_err(|e| format!("Prepare failed: {e}"))?;
+            entries = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            }).map_err(|e| format!("Query failed: {e}"))?
+              .filter_map(|r| r.ok())
+              .collect();
+            drop(stmt);
+            kv_entries = match conn.prepare("SELECT key, data FROM kv_store") {
+                Ok(mut kv_stmt) => {
+                    kv_stmt.query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+                    }).ok().map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default()
+                }
+                Err(_) => Vec::new(),
+            };
+        } // Lock released — UI thread can read cache freely during recompression
 
-        let total = entries.len();
+        // Phase 2: Recompress on CPU (no lock held — this is the slow part)
+        let total = entries.len() + kv_entries.len();
         let mut processed = 0usize;
         let mut bytes_saved = 0i64;
+        let mut bar_updates: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut kv_updates: Vec<(String, Vec<u8>)> = Vec::new();
 
-        for (key, compressed, _timestamp, _bar_count, _last_ts, _second_last_ts) in &entries {
-            // Decompress
+        for (key, compressed) in &entries {
             let decompressed = match zstd::decode_all(compressed.as_slice()) {
                 Ok(d) => d,
-                Err(_) => { processed += 1; continue; } // skip corrupt entries
+                Err(_) => { processed += 1; continue; }
             };
-            // Recompress at target level
             let recompressed = match zstd::encode_all(decompressed.as_slice(), level) {
                 Ok(r) => r,
                 Err(_) => { processed += 1; continue; }
             };
-            // Only write if actually smaller
             let saved = compressed.len() as i64 - recompressed.len() as i64;
             if saved > 0 {
-                conn.execute(
-                    "UPDATE bar_cache SET data = ?1 WHERE key = ?2",
-                    params![recompressed, key],
-                ).map_err(|e| format!("Update failed: {e}"))?;
+                bar_updates.push((key.clone(), recompressed.clone()));
                 bytes_saved += saved;
             }
             processed += 1;
@@ -948,31 +950,46 @@ impl SqliteCache {
             }
         }
 
-        // Also compact KV entries (table may not exist in all DBs)
-        let kv_entries: Vec<(String, Vec<u8>)> = match conn.prepare("SELECT key, data FROM kv_store") {
-            Ok(mut kv_stmt) => {
-                let entries: Vec<_> = kv_stmt.query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-                }).ok().map(|rows| rows.filter_map(|r| r.ok()).collect()).unwrap_or_default();
-                entries
-            }
-            Err(_) => Vec::new(), // table doesn't exist — skip
-        };
-
         for (key, compressed) in &kv_entries {
             if let Ok(decompressed) = zstd::decode_all(compressed.as_slice()) {
                 if let Ok(recompressed) = zstd::encode_all(decompressed.as_slice(), level) {
                     let saved = compressed.len() as i64 - recompressed.len() as i64;
                     if saved > 0 {
-                        let _ = conn.execute("UPDATE kv_store SET data = ?1 WHERE key = ?2", params![recompressed, key]);
+                        kv_updates.push((key.clone(), recompressed));
                         bytes_saved += saved;
                     }
                 }
             }
+            processed += 1;
+            if let Some(cb) = progress {
+                cb(processed, total, key, compressed.len(), compressed.len());
+            }
         }
 
-        // VACUUM to reclaim freed space in SQLite file
-        let _ = conn.execute_batch("VACUUM;");
+        // Phase 3: Write updates in batches (brief lock per batch, UI stays responsive)
+        {
+            let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+            for chunk in bar_updates.chunks(50) {
+                let _ = conn.execute_batch("BEGIN;");
+                for (key, data) in chunk {
+                    let _ = conn.execute("UPDATE bar_cache SET data = ?1 WHERE key = ?2", params![data, key]);
+                }
+                let _ = conn.execute_batch("COMMIT;");
+            }
+            for chunk in kv_updates.chunks(50) {
+                let _ = conn.execute_batch("BEGIN;");
+                for (key, data) in chunk {
+                    let _ = conn.execute("UPDATE kv_store SET data = ?1 WHERE key = ?2", params![data, key]);
+                }
+                let _ = conn.execute_batch("COMMIT;");
+            }
+        }
+
+        // Phase 4: VACUUM (brief lock, reclaims space)
+        {
+            let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+            let _ = conn.execute_batch("VACUUM;");
+        }
 
         Ok((processed, bytes_saved))
     }
