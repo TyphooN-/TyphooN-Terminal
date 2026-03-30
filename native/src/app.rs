@@ -6848,6 +6848,10 @@ pub struct TyphooNApp {
     /// MTF Grid indicator status: (tf_label, close, sma200, kama, fisher, fisher_signal) per TF.
     /// Computed on symbol load for the MTF Grid panel. Lightweight — no full ChartState needed.
     mtf_grid_status: Vec<(&'static str, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>,
+    /// Receiver for async MTF grid status results (computed in background thread).
+    mtf_grid_rx: Option<std::sync::mpsc::Receiver<Vec<(&'static str, Option<f64>, Option<f64>, Option<f64>, Option<f64>, Option<f64>)>>>,
+    /// Deferred chart loads: indices of charts to load, one per frame (avoids startup freeze).
+    deferred_chart_loads: Vec<usize>,
 
     /// Command palette open state.
     command_open: bool,
@@ -7390,15 +7394,20 @@ impl TyphooNApp {
                         }
                     }
                     BrokerCmd::SecScrape { db_path } => {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("SEC scrape started...".into()));
-                        match sec_filing::scrape_all_portfolio_symbols(db_path).await {
-                            Ok(stats) => {
-                                let _ = broker_msg_tx_clone.send(BrokerMsg::SecScrapeResult(
-                                    format!("SEC scrape complete: {} tickers, {} filings, {} insider trades, {} alerts", stats.tickers_scanned, stats.new_filings, stats.new_insider_trades, stats.new_alerts)
-                                ));
+                        // Spawn as independent task — SEC scraping can take 10-60s and must not
+                        // block the broker command loop (would freeze trading, data fetch, etc.)
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let _ = msg_tx.send(BrokerMsg::OrderResult("SEC scrape started...".into()));
+                            match sec_filing::scrape_all_portfolio_symbols(db_path).await {
+                                Ok(stats) => {
+                                    let _ = msg_tx.send(BrokerMsg::SecScrapeResult(
+                                        format!("SEC scrape complete: {} tickers, {} filings, {} insider trades, {} alerts", stats.tickers_scanned, stats.new_filings, stats.new_insider_trades, stats.new_alerts)
+                                    ));
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("SEC scrape error: {}", e))); }
                             }
-                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("SEC scrape error: {}", e))); }
-                        }
+                        });
                     }
                     // scrape_filings_for_ticker is called internally by scrape_all_portfolio_symbols
                     BrokerCmd::FinnhubNews { symbol, api_key } => {
@@ -8306,6 +8315,8 @@ impl TyphooNApp {
             mtf_cols: 2,
             mtf_enabled: false,
             mtf_grid_status: Vec::new(),
+            mtf_grid_rx: None,
+            deferred_chart_loads: Vec::new(),
             mtf_focused: None,
             mtf_visible: Vec::new(),
             command_open: false,
@@ -8991,34 +9002,38 @@ impl TyphooNApp {
             }
         }
 
-        // Parallel load TFs that need cache access
-        let loaded: Vec<_> = std::thread::scope(|s| {
-            let handles: Vec<_> = need_load.iter().map(|&(label, tf)| {
-                let cache_ref = &cache;
-                let sym_ref = &sym;
-                s.spawn(move || {
-                    let mut temp = ChartState::new(sym_ref, tf);
-                    temp.load(cache_ref, &mut std::collections::VecDeque::new(), None);
+        if need_load.is_empty() {
+            // All TFs already loaded — just use preloaded data, no blocking work needed
+            let tf_order: Vec<&str> = all_tfs.iter().map(|&(l, _)| l).collect();
+            preloaded.sort_by_key(|r| tf_order.iter().position(|&l| l == r.0).unwrap_or(99));
+            self.mtf_grid_status = preloaded;
+        } else {
+            // Spawn background thread for TFs that need cache loading — don't block UI
+            self.mtf_grid_status = preloaded; // show what we have immediately
+            let (tx, rx) = std::sync::mpsc::channel();
+            let need_load_owned: Vec<(&'static str, Timeframe)> = need_load;
+            let all_tfs_order: Vec<&'static str> = all_tfs.iter().map(|&(l, _)| l).collect();
+            std::thread::spawn(move || {
+                let mut results: Vec<_> = Vec::new();
+                for (label, tf) in need_load_owned {
+                    let mut temp = ChartState::new(&sym, tf);
+                    temp.load(&cache, &mut std::collections::VecDeque::new(), None);
                     if temp.bars.is_empty() {
-                        (label, None, None, None, None, None)
+                        results.push((label, None, None, None, None, None));
                     } else {
                         let close = temp.bars.last().map(|b| b.close);
                         let sma = temp.sma200.last().and_then(|v| *v);
                         let kama = temp.kama.last().and_then(|v| *v);
                         let fisher = temp.fisher.last().and_then(|v| *v);
                         let fsig = temp.fisher_signal.last().and_then(|v| *v);
-                        (label, close, sma, kama, fisher, fsig)
+                        results.push((label, close, sma, kama, fisher, fsig));
                     }
-                })
-            }).collect();
-            handles.into_iter().filter_map(|h| h.join().ok()).collect()
-        });
-
-        // Merge preloaded + loaded, sorted by TF order
-        let mut all_results: Vec<_> = preloaded.into_iter().chain(loaded.into_iter()).collect();
-        let tf_order: Vec<&str> = all_tfs.iter().map(|&(l, _)| l).collect();
-        all_results.sort_by_key(|r| tf_order.iter().position(|&l| l == r.0).unwrap_or(99));
-        self.mtf_grid_status = all_results;
+                }
+                results.sort_by_key(|r| all_tfs_order.iter().position(|&l| l == r.0).unwrap_or(99));
+                let _ = tx.send(results);
+            });
+            self.mtf_grid_rx = Some(rx);
+        }
     }
 
     /// Set up MTF grid with N columns and target chart count.
@@ -16760,20 +16775,14 @@ impl eframe::App for TyphooNApp {
                 });
                 self.log.push_back(LogEntry::info(format!("LAN client auto-connecting to {}:{}...", self.lan_server_ip, port)));
             }
-            // Load charts: if MTF grid is active, load ALL; otherwise just active tab
-            if let Some(cache) = self.cache.clone() {
-                if self.mtf_enabled {
-                    for chart in &mut self.charts {
-                        if chart.bars.is_empty() {
-                            { let mut gpu = self.gpu_indicators.take(); chart.load(&cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
-                        }
-                    }
-                } else if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                    if chart.bars.is_empty() {
-                        { let mut gpu = self.gpu_indicators.take(); chart.load(&cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
-                    }
-                }
-            }
+            // Defer chart loading to subsequent frames — don't block the first frame
+            // Charts will load progressively (one per frame) via the deferred_chart_loads mechanism
+            self.deferred_chart_loads = if self.mtf_enabled {
+                self.charts.iter().enumerate().filter(|(_, c)| c.bars.is_empty()).map(|(i, _)| i).collect()
+            } else {
+                let idx = self.active_tab;
+                if self.charts.get(idx).map(|c| c.bars.is_empty()).unwrap_or(false) { vec![idx] } else { vec![] }
+            };
             {
                 // Auto-import DARWIN XLSX if needed (not on LAN client)
                 if !self.darwin_xlsx_dir.is_empty() && !self.lan_client_enabled {
@@ -16867,6 +16876,32 @@ impl eframe::App for TyphooNApp {
         // ── drain background DARWIN data ─────────────────────────────────
         while let Ok(data) = self.bg_rx.try_recv() {
             self.bg = data;
+        }
+
+        // ── deferred chart loading: one chart per frame to avoid startup freeze ──
+        if !self.deferred_chart_loads.is_empty() {
+            let idx = self.deferred_chart_loads.remove(0);
+            if let Some(cache) = self.cache.clone() {
+                if let Some(chart) = self.charts.get_mut(idx) {
+                    if chart.bars.is_empty() {
+                        let mut gpu = self.gpu_indicators.take();
+                        chart.load(&cache, &mut self.log, gpu.as_mut());
+                        self.gpu_indicators = gpu;
+                    }
+                }
+            }
+        }
+
+        // ── receive MTF grid status from background thread (non-blocking) ──
+        if let Some(ref rx) = self.mtf_grid_rx {
+            if let Ok(results) = rx.try_recv() {
+                // Merge with any preloaded data already in mtf_grid_status
+                self.mtf_grid_status.extend(results);
+                self.mtf_grid_status.sort_by_key(|r| {
+                    ["M1","M5","M15","M30","H1","H4","D1","W1","MN1"].iter().position(|&l| l == r.0).unwrap_or(99)
+                });
+                self.mtf_grid_rx = None; // done
+            }
         }
 
         // ── poll async broker messages ───────────────────────────────────
