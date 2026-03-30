@@ -76,11 +76,12 @@ impl TradeReport {
         let gross_loss: f64 = losses.iter().map(|l| l.abs()).sum();
         let total_pnl: f64 = trades.iter().map(|t| t.pnl).sum();
 
-        let win_rate = wins.len() as f64 / trades.len() as f64 * 100.0;
+        let n_trades = trades.len() as f64;
+        let win_rate = if n_trades > 0.0 { wins.len() as f64 / n_trades * 100.0 } else { 0.0 };
         let profit_factor = if gross_loss > 0.0 { gross_profit / gross_loss } else { f64::INFINITY };
         let avg_win = if wins.is_empty() { 0.0 } else { gross_profit / wins.len() as f64 };
         let avg_loss = if losses.is_empty() { 0.0 } else { gross_loss / losses.len() as f64 };
-        let avg_trade = total_pnl / trades.len() as f64;
+        let avg_trade = if n_trades > 0.0 { total_pnl / n_trades } else { 0.0 };
 
         // Max consecutive wins/losses
         let mut max_con_wins: u32 = 0;
@@ -115,8 +116,9 @@ impl TradeReport {
 
         // Sharpe ratio (annualized, assuming daily returns)
         let returns: Vec<f64> = trades.iter().map(|t| t.pnl_pct / 100.0).collect();
-        let mean_ret = returns.iter().sum::<f64>() / returns.len() as f64;
-        let variance = returns.iter().map(|r| (r - mean_ret).powi(2)).sum::<f64>() / returns.len() as f64;
+        let n_returns = returns.len() as f64;
+        let mean_ret = if n_returns > 0.0 { returns.iter().sum::<f64>() / n_returns } else { 0.0 };
+        let variance = if n_returns > 0.0 { returns.iter().map(|r| (r - mean_ret).powi(2)).sum::<f64>() / n_returns } else { 0.0 };
         let std_dev = variance.sqrt();
         let sharpe = if std_dev > 1e-10 { (mean_ret / std_dev) * (252.0_f64).sqrt() } else { 0.0 };
 

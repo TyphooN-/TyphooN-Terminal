@@ -93,17 +93,22 @@ impl MetricsRegistry {
         let alerts = Gauge::new("typhoon_alerts_active", "Number of active price alerts").unwrap();
         let uptime = Gauge::new("typhoon_uptime_seconds", "Application uptime in seconds").unwrap();
 
-        registry.register(Box::new(equity.clone())).unwrap();
-        registry.register(Box::new(positions.clone())).unwrap();
-        registry.register(Box::new(var.clone())).unwrap();
-        registry.register(Box::new(drawdown.clone())).unwrap();
-        registry.register(Box::new(cache_size.clone())).unwrap();
-        registry.register(Box::new(cache_symbols.clone())).unwrap();
-        registry.register(Box::new(bars.clone())).unwrap();
-        registry.register(Box::new(sync_ts.clone())).unwrap();
-        registry.register(Box::new(broker.clone())).unwrap();
-        registry.register(Box::new(alerts.clone())).unwrap();
-        registry.register(Box::new(uptime.clone())).unwrap();
+        let reg = |collector: Box<dyn prometheus::core::Collector>| {
+            if let Err(e) = registry.register(collector) {
+                tracing::warn!("Metric registration failed (may be duplicate): {}", e);
+            }
+        };
+        reg(Box::new(equity.clone()));
+        reg(Box::new(positions.clone()));
+        reg(Box::new(var.clone()));
+        reg(Box::new(drawdown.clone()));
+        reg(Box::new(cache_size.clone()));
+        reg(Box::new(cache_symbols.clone()));
+        reg(Box::new(bars.clone()));
+        reg(Box::new(sync_ts.clone()));
+        reg(Box::new(broker.clone()));
+        reg(Box::new(alerts.clone()));
+        reg(Box::new(uptime.clone()));
 
         Self {
             registry,

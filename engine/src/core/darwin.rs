@@ -1953,7 +1953,10 @@ pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir:
         // table/col are hardcoded constants, not user input — safe to format into SQL
         let (col, tbl) = if table == "bar_cache" { ("data", "bar_cache") } else { ("value", "kv_cache") };
         let sql = format!("SELECT {col} FROM {tbl} WHERE key LIKE '%__SPECS__%' LIMIT 1");
-        let mut stmt = cache_conn.prepare(&sql).ok()?;
+        let mut stmt = cache_conn.prepare(&sql).map_err(|e| {
+            tracing::debug!("Failed to prepare specs query on {}: {}", table, e);
+            e
+        }).ok()?;
         let result = stmt.query_row([], |row| {
             row.get::<_, Vec<u8>>(0).or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))
         });
@@ -3705,7 +3708,10 @@ pub fn get_dscore_components(
 
     // Read a score file and return the last line's value (second field in "timestamp,value")
     fn read_last_value(path: &std::path::Path) -> Option<f64> {
-        let content = std::fs::read_to_string(path).ok()?;
+        let content = std::fs::read_to_string(path).map_err(|e| {
+            tracing::debug!("Failed to read D-Score file {}: {}", path.display(), e);
+            e
+        }).ok()?;
         let last_line = content.lines().last()?;
         let parts: Vec<&str> = last_line.splitn(2, ',').collect();
         if parts.len() == 2 {

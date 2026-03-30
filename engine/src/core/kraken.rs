@@ -137,6 +137,7 @@ pub async fn fetch_binance_klines(
             if let Some(arr) = val.as_array() {
                 for kline in arr {
                     if let Some(k) = kline.as_array() {
+                        // Kraken OHLCVT: [timestamp, open, high, low, close, vwap, volume, count]
                         if k.len() < 7 { continue; }
                         let ts = k[0].as_i64().unwrap_or(0);
                         if ts == 0 { continue; }

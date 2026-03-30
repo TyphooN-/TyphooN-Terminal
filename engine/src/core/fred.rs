@@ -19,6 +19,10 @@ pub struct FredSeries {
 }
 
 /// Fetch a FRED series (e.g., "DFF" for Fed Funds Rate).
+///
+/// NOTE: FRED requires the API key as a URL query parameter — there is no
+/// header-based auth option.  We intentionally avoid logging the full URL
+/// to prevent key leakage in traces.
 pub async fn fetch_series(
     client: &reqwest::Client,
     api_key: &str,
@@ -29,6 +33,7 @@ pub async fn fetch_series(
         "{}/series/observations?series_id={}&api_key={}&file_type=json&sort_order=desc&limit={}",
         FRED_BASE, series_id, api_key, limit
     );
+    tracing::debug!("FRED fetch series_id={} limit={}", series_id, limit);
     let resp = client.get(&url)
         .timeout(std::time::Duration::from_secs(15))
         .send().await
@@ -51,7 +56,7 @@ pub async fn fetch_series(
     }
     observations.reverse(); // chronological order
 
-    // Get series title
+    // Get series title (URL contains API key — do not log it)
     let title_url = format!("{}/series?series_id={}&api_key={}&file_type=json", FRED_BASE, series_id, api_key);
     let title = if let Ok(resp) = client.get(&title_url).send().await {
         if let Ok(body) = resp.json::<serde_json::Value>().await {

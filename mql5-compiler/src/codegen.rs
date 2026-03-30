@@ -243,6 +243,7 @@ fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(),
                 "set_buffer" => { func.instruction(&Instruction::Call(11)); }
                 _ => {
                     // Unknown function — emit a NaN placeholder
+                    tracing::warn!("Unknown MQL5 function: {}", name);
                     func.instruction(&Instruction::F64Const(f64::NAN.into()));
                 }
             }

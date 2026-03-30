@@ -657,8 +657,11 @@ impl SqliteCache {
     pub fn export_backup(&self, path: &str) -> Result<String, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
 
-        // Use SQLite's VACUUM INTO to create a consistent snapshot
-        let backup_path = format!("{}.tmp", path);
+        // Use SQLite's VACUUM INTO to create a consistent snapshot.
+        // Use a unique temp file name to avoid TOCTOU races with concurrent exports.
+        let backup_path = format!("{}.tmp.{}", path, std::process::id());
+        // Remove any stale leftover from a previous crash
+        let _ = std::fs::remove_file(&backup_path);
         conn.execute("VACUUM INTO ?1", [&backup_path])
             .map_err(|e| format!("VACUUM INTO failed: {e}"))?;
 
@@ -682,10 +685,21 @@ impl SqliteCache {
         let data = zstd::decode_all(compressed.as_slice())
             .map_err(|e| format!("Decompress failed: {e}"))?;
 
-        // Write to temp file
-        let tmp_path = format!("{}.import.tmp", path);
-        std::fs::write(&tmp_path, &data)
-            .map_err(|e| format!("Write temp failed: {e}"))?;
+        // Write to temp file with exclusive creation to avoid TOCTOU races
+        let tmp_path = format!("{}.import.tmp.{}", path, std::process::id());
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp_path)
+                .map_err(|e| format!("Create temp file failed (may already exist): {e}"))?;
+            f.write_all(&data)
+                .map_err(|e| {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    format!("Write temp failed: {e}")
+                })?;
+        }
 
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
 

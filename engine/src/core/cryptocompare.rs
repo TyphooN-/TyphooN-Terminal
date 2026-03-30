@@ -150,29 +150,34 @@ pub async fn fetch_ohlcv(
 }
 
 /// Aggregate N bars into 1 (e.g., 4 hourly bars → 1 4-hour bar).
+/// The last chunk may be incomplete (fewer than `period` bars); this is fine —
+/// it produces a shorter-period bar for the most recent partial window.
 fn aggregate_bars(bars: &[serde_json::Value], period: usize) -> Vec<serde_json::Value> {
-    bars.chunks(period).map(|chunk| {
+    bars.chunks(period).filter_map(|chunk| {
         let first = &chunk[0];
         let mut high = f64::MIN;
         let mut low = f64::MAX;
         let mut vol = 0.0_f64;
+        let mut valid = false;
         for b in chunk {
-            let h = b["high"].as_f64().unwrap_or(0.0);
-            let l = b["low"].as_f64().unwrap_or(f64::MAX);
+            let h = b["high"].as_f64()?;
+            let l = b["low"].as_f64()?;
             let v = b["volume"].as_f64().unwrap_or(0.0);
             if h > high { high = h; }
             if l < low { low = l; }
             vol += v;
+            valid = true;
         }
+        if !valid { return None; }
         let last = chunk.last().unwrap_or(first);
-        serde_json::json!({
+        Some(serde_json::json!({
             "timestamp": first["timestamp"],
             "open": first["open"],
             "high": high,
             "low": low,
             "close": last["close"],
             "volume": vol,
-        })
+        }))
     }).collect()
 }
 

@@ -109,14 +109,31 @@ pub struct DarwinDataAvailability {
 
 // ── File Reading ────────────────────────────────────────────────────
 
+/// Validate that a ticker/component string is safe for path construction.
+/// Only allows alphanumeric, dots, underscores, and hyphens — blocks path traversal.
+fn validate_path_component(s: &str) -> Result<(), String> {
+    if s.is_empty() {
+        return Err("Empty path component".into());
+    }
+    if s.contains("..") || s.contains('/') || s.contains('\\') {
+        return Err(format!("Path traversal blocked: {}", s));
+    }
+    if !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
+        return Err(format!("Invalid characters in path component: {}", s));
+    }
+    Ok(())
+}
+
 /// Construct the path to a DARWIN's component file.
-fn component_path(ftp_dir: &Path, ticker: &str, component: &str) -> PathBuf {
-    ftp_dir.join(ticker).join(component)
+fn component_path(ftp_dir: &Path, ticker: &str, component: &str) -> Result<PathBuf, String> {
+    validate_path_component(ticker)?;
+    validate_path_component(component)?;
+    Ok(ftp_dir.join(ticker).join(component))
 }
 
 /// Read a raw D-Score component file. Returns (timestamp_ms, score, extra_data) tuples.
 pub fn read_component_file(ftp_dir: &Path, ticker: &str, component: &str) -> Result<Vec<DScorePoint>, String> {
-    let path = component_path(ftp_dir, ticker, component);
+    let path = component_path(ftp_dir, ticker, component)?;
     if !path.is_file() {
         return Err(format!("{}/{} not found", ticker, component));
     }
@@ -344,6 +361,7 @@ fn parse_experience_extra(extra: &str) -> (i32, f64) {
 
 /// List available quote months for a DARWIN.
 pub fn list_quote_months(ftp_dir: &Path, ticker: &str) -> Vec<String> {
+    if validate_path_component(ticker).is_err() { return Vec::new(); }
     let quotes_dir = ftp_dir.join(ticker).join("quotes");
     if !quotes_dir.is_dir() { return Vec::new(); }
 
@@ -360,6 +378,8 @@ pub fn list_quote_months(ftp_dir: &Path, ticker: &str) -> Vec<String> {
 
 /// Read quote ticks for a specific month. Decompresses all .csv.gz files in the month dir.
 pub fn read_quotes_month(ftp_dir: &Path, ticker: &str, month: &str) -> Result<Vec<QuoteTick>, String> {
+    validate_path_component(ticker)?;
+    validate_path_component(month)?;
     let month_dir = ftp_dir.join(ticker).join("quotes").join(month);
     if !month_dir.is_dir() {
         return Err(format!("Quote month dir not found: {}/{}/quotes/{}", ftp_dir.display(), ticker, month));
@@ -428,6 +448,9 @@ pub fn quotes_to_daily_ohlc(ticks: &[QuoteTick]) -> Vec<(i64, f64, f64, f64, f64
 
 /// Check what data is available for a DARWIN on the FTP.
 pub fn check_availability(ftp_dir: &Path, ticker: &str) -> DarwinDataAvailability {
+    if validate_path_component(ticker).is_err() {
+        return DarwinDataAvailability { ticker: ticker.to_string(), ..Default::default() };
+    }
     let darwin_dir = ftp_dir.join(ticker);
     if !darwin_dir.is_dir() {
         return DarwinDataAvailability { ticker: ticker.to_string(), ..Default::default() };
