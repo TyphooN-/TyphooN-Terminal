@@ -19,3 +19,14 @@ Use SQLite as the local bar cache with zstd-compressed TTBR (TyphooN Terminal Bi
 - JSON session file is human-readable and easy to debug; schema changes are backward-compatible with serde defaults
 - Trade-off: SQLite single-writer lock means bar cache writes are serialized; acceptable since writes are infrequent batch inserts from broker fetches
 - Trade-off: JSON session file is not crash-safe; a mid-write crash could lose the last session snapshot
+
+### BarCacheWriter Incremental Sync (v1.426, 2026-03-30)
+
+The MQL5 BarCacheWriter EA now uses **incremental sync** instead of full re-export:
+
+- **Initial sync:** Full export of 100K bars per symbol/TF (one-time, captures complete history)
+- **Subsequent syncs:** Dynamic fetch — calculates `(elapsed_seconds / tf_period) + 2` to determine exactly how many bars to fetch (usually 3). Reads existing TTBR blob from DB, merges by timestamp, appends only truly new bars.
+- **Merge logic:** Finds merge point by comparing timestamps. Updates last bar's close in-place (for live price updates). Appends only bars with timestamps newer than the last existing bar.
+- **Fallback:** If existing blob is missing/corrupt, falls back to full export automatically.
+- **Performance:** 10,000x reduction in steady-state data volume (480 bytes vs 4.8MB per symbol/TF per cycle). Memory usage drops from 36.7GB/cycle (851 sym × 9 TF × 4.8MB) to 3.6MB/cycle.
+- **Cap:** Maximum 200 bars per incremental fetch (long offline periods catch up over multiple cycles)
