@@ -1,10 +1,10 @@
 # ADR-061: GPU/CPU Indicator Audit — Parity Verification
 
-**Status:** Implemented | **Date:** 2026-03-28
+**Status:** Implemented | **Date:** 2026-03-28 | **Updated:** 2026-03-30
 
 ## Context
 
-Several GPU compute shaders were using different algorithms than their CPU fallbacks, producing incorrect results when the GPU path was active. An audit of all 28 GPU indicators was performed to verify parity.
+Several GPU compute shaders were using different algorithms than their CPU fallbacks, producing incorrect results when the GPU path was active. An audit of all 29 GPU indicators was performed to verify parity.
 
 ## Issues Found and Fixed
 
@@ -33,10 +33,20 @@ All other 25 GPU/CPU pairs produce identical results:
 - Fractals (Bill Williams, 2-bar lookback — GPU returns price, CPU returns bool, conversion verified)
 - All 8 Ehlers DSP indicators (SuperSmoother, Decycler, ITL, MAMA/FAMA, EBSW, CyberCycle, CG, Roofing)
 
+## New Chart Features (2026-03-30)
+
+- **Fair Value Gaps (FVG)**: Automatic detection and rendering of price imbalance zones
+- **Market Structure Labels**: Swing high/low labels with Break of Structure (BOS) and Change of Character (CHoCH) annotations
+- **Volume Profile upgrade**: Enhanced histogram rendering with POC, value area, and configurable row count
+
+## Test Coverage
+
+261 tests across engine, GPU shaders, and integration (up from initial audit count).
+
 ## Consequences
 
 - **Pro**: All indicators now produce correct, consistent results regardless of GPU availability
-- **Pro**: GPU acceleration maintained for 25 of 28 indicators
+- **Pro**: GPU acceleration maintained for 26 of 29 indicators (BetterVolume wired to GPU)
 - **Pro**: CPU fallback path verified functional for all indicators
-- **Con**: BetterVolume is CPU-only (buy/sell estimation not parallelizable without open prices in VRAM)
+- **Pro**: FVG, market structure, and Volume Profile expand chart analysis capabilities
 - **Con**: S/D zone testing/merging remains CPU (inherently sequential)

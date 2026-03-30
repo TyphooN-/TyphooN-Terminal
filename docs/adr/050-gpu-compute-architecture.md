@@ -1,12 +1,12 @@
 # ADR-050: GPU Compute Architecture — wgpu Compute Shaders for All Numerical Work
 
-**Status:** Implemented | **Date:** 2026-03-24 | **Updated:** 2026-03-26
+**Status:** Implemented | **Date:** 2026-03-24 | **Updated:** 2026-03-30
 
 ## Context
 
 With the WebKit/JS layer eliminated, we have direct access to wgpu from Rust. GPU parallelism provides 100-5000× speedup for batch numerical work on the GTX 1080 (2560 CUDA cores) vs the E5-2696 v4 (44 threads).
 
-## Implementation Status: 28 GPU Compute Shaders (~98% coverage)
+## Implementation Status: 29 GPU Compute Shaders (~98% coverage)
 
 ### Chart Indicators on GPU (23 shaders)
 
@@ -128,6 +128,7 @@ This ensures the GPU path works for arbitrarily large DarwinIA datasets without 
 
 ### Positive
 - Near-total GPU coverage (98%) with automatic CPU fallback
+- Zero `unsafe` code in entire codebase — all GPU buffer marshalling via `bytemuck` (Pod/Zeroable derives, `cast_slice`)
 - Zero-copy bar data path: cache → VRAM → compute → render
 - Strategy optimizer tests thousands of parameter combinations simultaneously
 - All 8 Ehlers DSP filters on GPU (first trading terminal to do this)

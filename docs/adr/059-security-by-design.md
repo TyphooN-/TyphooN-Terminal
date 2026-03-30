@@ -1,6 +1,6 @@
 # ADR-059: Security by Design — Credential & Data Protection
 
-**Status:** Implemented | **Date:** 2026-03-27
+**Status:** Implemented | **Date:** 2026-03-27 | **Updated:** 2026-03-30
 
 ## Context
 
@@ -44,6 +44,7 @@ Stored credentials:
 
 - SQLite cache: WAL mode, parameterized queries only (no SQL injection)
 - Bar data: zstd-compressed binary (not human-readable)
+- Integer overflow checks on binary data parsing (prevents malformed data from causing UB)
 - No credentials stored in SQLite
 
 ### 5. MQL5 Compiler Security
@@ -52,10 +53,23 @@ Stored credentials:
 - Indicators can only read bar data through imported functions
 - No network access from compiled indicators
 
+### 6. LAN Sync Message Bounds
+
+- `MAX_KEY_LEN`, `MAX_DATA_LEN`, `MAX_WS_MESSAGE_SIZE` constants enforce strict size limits on all LAN sync WebSocket messages
+- Oversized messages rejected before parsing (prevents memory exhaustion attacks)
+
+### 7. Zero Unsafe Code
+
+- Zero `unsafe` blocks in the entire codebase
+- All GPU buffer marshalling uses `bytemuck` (Pod/Zeroable derives, `cast_slice`) instead of raw pointer casts
+- Mutex-across-await fix in broker rate limiter (was holding `MutexGuard` across `.await`, now drops guard before await point)
+
 ## Consequences
 
 - **Pro:** Credentials never touch disk in plaintext
 - **Pro:** OS keyring provides hardware-backed security on supported systems
 - **Pro:** Zeroized memory prevents credential leakage from memory dumps
+- **Pro:** Zero `unsafe` code — no undefined behavior surface
+- **Pro:** LAN sync bounded message sizes prevent resource exhaustion
 - **Con:** Requires running keyring daemon on Linux (GNOME Keyring / KDE Wallet)
 - **Con:** Keyring failures require re-entering credentials (logged as warnings)

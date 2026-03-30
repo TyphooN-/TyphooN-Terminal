@@ -1,6 +1,6 @@
 # ADR-064: Performance & Security Audit
 
-**Status:** Complete | **Date:** 2026-03-28
+**Status:** Complete | **Date:** 2026-03-28 | **Updated:** 2026-03-30
 
 ## Context
 
@@ -69,3 +69,18 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - **Pro:** LAN sync encrypted with TLS (wss://) — ephemeral self-signed certs, no plaintext transmission
 - **Pro:** Broker auth failures handled gracefully (auto-disconnect, no log spam)
 - **Pro:** Credentials persist across sessions (keyring save on settings close + quit)
+
+## 2026-03-30 Follow-Up Audit
+
+### UI Thread Unblocking
+- **Compaction flag**: DB compaction moved off UI thread, driven by background flag
+- **Unusual volume scanner**: Moved to background thread, no longer blocks UI during scan
+- **Watchlist stats caching**: Stats computed once and cached, not recomputed per-frame
+
+### Infrastructure
+- **Prometheus metrics endpoint**: Exposed on port 9090 for external monitoring
+- **Docker containerization**: Dockerfile added for reproducible builds and deployment
+
+### Code Quality
+- **261 tests** (up from initial count) — comprehensive coverage across engine, GPU shaders, and integration
+- **bytemuck migration**: All `unsafe` transmute/pointer-cast blocks replaced with `bytemuck` Pod/Zeroable derives — zero `unsafe` in entire codebase
