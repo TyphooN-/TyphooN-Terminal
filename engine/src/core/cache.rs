@@ -217,6 +217,10 @@ impl SqliteCache {
             CREATE INDEX IF NOT EXISTS idx_bar_cache_ts ON bar_cache(timestamp);
             CREATE INDEX IF NOT EXISTS idx_bar_meta ON bar_cache(key, timestamp, bar_count);
             CREATE INDEX IF NOT EXISTS idx_kv_cache_ts ON kv_cache(timestamp);
+            CREATE TABLE IF NOT EXISTS sync_state (
+                key TEXT PRIMARY KEY,
+                last_sync_ts INTEGER NOT NULL DEFAULT 0
+            );
         ").map_err(|e| format!("SQLite create tables failed: {e}"))?;
 
         // Schema migration: add last_ts column for fast incremental start lookup
@@ -827,6 +831,76 @@ impl SqliteCache {
             if let Ok(k) = row { keys.push(k); }
         }
         Ok(keys)
+    }
+
+    // ── Sync State (LAN incremental sync tracking) ──────────────────
+
+    /// Get the last sync timestamp for a given sync key.
+    /// Returns 0 if no sync has been recorded (triggers full sync).
+    pub fn get_sync_ts(&self, key: &str) -> i64 {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => return 0,
+        };
+        conn.query_row(
+            "SELECT last_sync_ts FROM sync_state WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, i64>(0),
+        ).unwrap_or(0)
+    }
+
+    /// Set the last sync timestamp for a given sync key.
+    pub fn set_sync_ts(&self, key: &str, ts: i64) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_state (key, last_sync_ts) VALUES (?1, ?2)",
+            params![key, ts],
+        ).map_err(|e| format!("SQLite insert sync_state failed: {e}"))?;
+        Ok(())
+    }
+
+    // ── KV cache incremental queries (LAN sync) ─────────────────────
+
+    /// List KV entries updated since a given timestamp.
+    /// Returns (key, compressed_value) pairs for entries with timestamp > since_ts.
+    /// Used by LAN sync server to send only new/updated KV entries.
+    pub fn list_kv_entries_since(&self, since_ts: i64) -> Result<Vec<(String, Vec<u8>, i64)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT key, value, timestamp FROM kv_cache WHERE timestamp > ?1 ORDER BY timestamp ASC"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let rows = stmt.query_map(params![since_ts], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        let mut entries = Vec::new();
+        for row in rows {
+            if let Ok(entry) = row { entries.push(entry); }
+        }
+        Ok(entries)
+    }
+
+    /// Get the max timestamp in kv_cache (for sync state tracking).
+    pub fn kv_max_timestamp(&self) -> i64 {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => return 0,
+        };
+        conn.query_row("SELECT COALESCE(MAX(timestamp), 0) FROM kv_cache", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+    }
+
+    /// Count rows in kv_cache.
+    pub fn kv_count(&self) -> i64 {
+        let conn = match self.conn.lock() {
+            Ok(c) => c,
+            Err(_) => return 0,
+        };
+        conn.query_row("SELECT COUNT(*) FROM kv_cache", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
     }
 
     /// Get raw bar cache entry without decompression (for LAN sync transfer).

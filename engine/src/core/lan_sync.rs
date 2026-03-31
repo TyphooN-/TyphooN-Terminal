@@ -80,8 +80,9 @@ pub enum SyncMessage {
     DarwinData { data: String, accounts: usize, deals: usize, positions: usize },
     /// Server stats pushed to client on connect and periodically.
     SyncStats { bytes_sent: u64, bytes_received: u64, entries_synced: usize, uptime_secs: u64 },
-    /// Request all KV cache entries (fundamentals, news, SEC, FRED, etc.)
-    RequestKvData,
+    /// Request KV cache entries (fundamentals, news, SEC, FRED, etc.)
+    /// since_ts: only return entries with timestamp > since_ts (0 = full sync).
+    RequestKvData { since_ts: i64 },
     /// KV batch complete marker
     KvBatchComplete { count: usize },
     /// Client requests server to execute a data fetch and return results.
@@ -92,7 +93,8 @@ pub enum SyncMessage {
     RemoteRequestDone { cmd: String, message: String },
     // ── Generic table sync ──
     /// Client requests bulk sync of SQLite tables (by whitelist name).
-    RequestTableSync { tables: Vec<String> },
+    /// Each entry is (table_name, since_ts). since_ts=0 means full sync.
+    RequestTableSync { tables: Vec<(String, i64)> },
     /// Server sends one table's rows as zstd-compressed + base64-encoded JSON.
     TableSyncData { table: String, rows_json: String },
     /// Server signals all requested tables have been sent.
@@ -254,22 +256,51 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
     }
 }
 
-/// Export all rows from a table as a JSON array of objects (column-name → value).
-/// Returns the JSON string, or an error.
-fn export_table_as_json(conn: &rusqlite::Connection, table: &str) -> Result<String, String> {
-    // Validate against whitelist
+/// Returns the timestamp column name for incremental sync, if available.
+/// Tables without a usable timestamp column return None and fall back to full sync.
+fn table_timestamp_column(table: &str) -> Option<&'static str> {
+    match table {
+        "sec_filings" => Some("created_at"),
+        "sec_insider_trades" => Some("created_at"),
+        "sec_filing_alerts" => Some("created_at"),
+        "darwin_equity_snapshots" => Some("timestamp"),
+        // Tables without usable timestamp columns — always full sync:
+        // "sec_scrape_index", "fundamentals", "quarterly_financials", "institutional_holders"
+        _ => None,
+    }
+}
+
+/// Export rows from a table as JSON, optionally filtered by timestamp.
+/// If since_ts > 0 and the table has a timestamp column, only rows newer than since_ts are returned.
+/// Falls back to full export if since_ts == 0 or no timestamp column exists.
+fn export_table_as_json_since(conn: &rusqlite::Connection, table: &str, since_ts: i64) -> Result<(String, usize), String> {
     if !SYNCABLE_TABLES.contains(&table) {
         return Err(format!("Table '{}' not in whitelist", table));
     }
-    let sql = format!("SELECT * FROM {}", table);
-    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Prepare SELECT * FROM {table}: {e}"))?;
+
+    let use_filter = since_ts > 0 && table_timestamp_column(table).is_some();
+    let sql = if use_filter {
+        format!("SELECT * FROM {} WHERE {} > ?1", table, table_timestamp_column(table).unwrap())
+    } else {
+        format!("SELECT * FROM {}", table)
+    };
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Prepare SELECT from {table}: {e}"))?;
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count).map(|i| stmt.column_name(i).unwrap_or("?").to_string()).collect();
 
-    let rows = stmt.query_map([], |row| {
+    // Use query() with manual row iteration to avoid closure type mismatch
+    let mut rows = if use_filter {
+        stmt.query(rusqlite::params![since_ts]).map_err(|e| format!("Query {table}: {e}"))?
+    } else {
+        stmt.query([]).map_err(|e| format!("Query {table}: {e}"))?
+    };
+
+    let mut arr = Vec::new();
+    while let Some(row) = rows.next().map_err(|e| format!("Row iter {table}: {e}"))? {
         let mut map = serde_json::Map::new();
         for (i, name) in col_names.iter().enumerate() {
-            let val: rusqlite::types::Value = row.get(i)?;
+            let val: rusqlite::types::Value = row.get(i).map_err(|e| format!("Get col {name}: {e}"))?;
             let json_val = match val {
                 rusqlite::types::Value::Null => serde_json::Value::Null,
                 rusqlite::types::Value::Integer(n) => serde_json::Value::Number(n.into()),
@@ -283,17 +314,12 @@ fn export_table_as_json(conn: &rusqlite::Connection, table: &str) -> Result<Stri
             };
             map.insert(name.clone(), json_val);
         }
-        Ok(serde_json::Value::Object(map))
-    }).map_err(|e| format!("Query {table}: {e}"))?;
-
-    let mut arr = Vec::new();
-    for row in rows {
-        match row {
-            Ok(v) => arr.push(v),
-            Err(e) => tracing::warn!("LAN sync: row error in {table}: {e}"),
-        }
+        arr.push(serde_json::Value::Object(map));
     }
-    serde_json::to_string(&arr).map_err(|e| format!("Serialize {table}: {e}"))
+
+    let count = arr.len();
+    let json = serde_json::to_string(&arr).map_err(|e| format!("Serialize {table}: {e}"))?;
+    Ok((json, count))
 }
 
 /// Import JSON rows into a table. Creates the table if it doesn't exist.
@@ -659,19 +685,46 @@ async fn handle_client_tls(
                     tracing::warn!("LAN sync: DARWIN export failed or cache unavailable");
                 }
             }
-            SyncMessage::RequestKvData => {
-                // Send all KV cache entries as binary batch
+            SyncMessage::RequestKvData { since_ts } => {
+                // Send KV cache entries as binary batch (incremental if since_ts > 0)
                 let cache_clone = cache.clone();
                 let kv_data = tokio::task::spawn_blocking(move || {
-                    let mut entries: Vec<(String, String)> = Vec::new();
-                    if let Ok(keys) = cache_clone.list_kv_keys("") {
-                        for key in &keys {
-                            if let Ok(Some(val)) = cache_clone.get_kv(key) {
-                                entries.push((key.clone(), val));
+                    if since_ts > 0 {
+                        // Incremental: only entries updated since since_ts
+                        // list_kv_entries_since returns (key, compressed_value, timestamp)
+                        // We need to decompress for the client
+                        match cache_clone.list_kv_entries_since(since_ts) {
+                            Ok(entries) => {
+                                let mut result = Vec::new();
+                                for (key, compressed, _ts) in entries {
+                                    match zstd::decode_all(compressed.as_slice()) {
+                                        Ok(decompressed) => {
+                                            if let Ok(val) = String::from_utf8(decompressed) {
+                                                result.push((key, val));
+                                            }
+                                        }
+                                        Err(_) => {} // skip corrupt entries
+                                    }
+                                }
+                                result
+                            }
+                            Err(e) => {
+                                tracing::warn!("LAN sync: list_kv_entries_since failed: {e}");
+                                Vec::new()
                             }
                         }
+                    } else {
+                        // Full sync: all entries
+                        let mut entries: Vec<(String, String)> = Vec::new();
+                        if let Ok(keys) = cache_clone.list_kv_keys("") {
+                            for key in &keys {
+                                if let Ok(Some(val)) = cache_clone.get_kv(key) {
+                                    entries.push((key.clone(), val));
+                                }
+                            }
+                        }
+                        entries
                     }
-                    entries
                 }).await.unwrap_or_default();
 
                 // Send as binary batch: [u32 key_len][key][u32 val_len][val] repeated
@@ -696,7 +749,7 @@ async fn handle_client_tls(
                 if let Ok(msg) = send_msg(&SyncMessage::KvBatchComplete { count: count as usize }) {
                     let _ = sink.send(msg).await;
                 }
-                tracing::info!("LAN sync: sent {} KV entries to client", count);
+                tracing::info!("LAN sync: sent {} KV entries to client (since_ts={})", count, since_ts);
             }
             SyncMessage::RemoteRequest { cmd, args } => {
                 // Whitelist allowed remote commands — reject unknown commands
@@ -723,23 +776,24 @@ async fn handle_client_tls(
             }
             SyncMessage::RequestTableSync { tables } => {
                 // Generic table sync: export each requested table as zstd-compressed JSON
+                // tables is Vec<(table_name, since_ts)> — since_ts=0 means full sync
                 let cache_clone = cache.clone();
                 let table_results = tokio::task::spawn_blocking(move || {
-                    let mut results: Vec<(String, String)> = Vec::new();
+                    let mut results: Vec<(String, String, usize)> = Vec::new();
                     if let Ok(conn) = cache_clone.connection() {
-                        for tbl in &tables {
+                        for (tbl, since_ts) in &tables {
                             if !SYNCABLE_TABLES.contains(&tbl.as_str()) {
                                 tracing::warn!("LAN sync: table '{}' not in whitelist, skipping", tbl);
                                 continue;
                             }
-                            match export_table_as_json(&conn, tbl) {
-                                Ok(json) => {
+                            match export_table_as_json_since(&conn, tbl, *since_ts) {
+                                Ok((json, row_count)) => {
                                     let compressed = zstd::encode_all(json.as_bytes(), 3)
                                         .unwrap_or_else(|_| json.into_bytes());
                                     let encoded = base64::Engine::encode(
                                         &base64::engine::general_purpose::STANDARD, &compressed,
                                     );
-                                    results.push((tbl.clone(), encoded));
+                                    results.push((tbl.clone(), encoded, row_count));
                                 }
                                 Err(e) => {
                                     tracing::warn!("LAN sync: export table '{}' failed: {}", tbl, e);
@@ -750,20 +804,19 @@ async fn handle_client_tls(
                     results
                 }).await.unwrap_or_default();
 
-                let mut total_rows_hint = 0usize;
-                for (tbl, encoded) in &table_results {
+                for (tbl, encoded, row_count) in &table_results {
                     if let Ok(msg) = send_msg(&SyncMessage::TableSyncData {
                         table: tbl.clone(),
                         rows_json: encoded.clone(),
                     }) {
                         let _ = sink.send(msg).await;
                     }
-                    total_rows_hint += 1;
+                    tracing::info!("LAN sync: sent table '{}' ({} rows)", tbl, row_count);
                 }
                 if let Ok(msg) = send_msg(&SyncMessage::TableSyncDone) {
                     let _ = sink.send(msg).await;
                 }
-                tracing::info!("LAN sync: sent {} table(s) to client", total_rows_hint);
+                tracing::info!("LAN sync: sent {} table(s) to client", table_results.len());
             }
             SyncMessage::Ping => {
                 if let Ok(msg) = send_msg(&SyncMessage::Pong) {
@@ -1028,7 +1081,11 @@ async fn client_sync_loop(
     }
 
     // 8c. Request KV cache entries (fundamentals, news, SEC filings, FRED, etc.)
-    sink.send(send_msg(&SyncMessage::RequestKvData)?)
+    // Incremental: send last known KV sync timestamp; 0 = full sync
+    let kv_since_ts = cache.get_sync_ts("kv_cache");
+    let kv_local_count = cache.kv_count();
+    tracing::info!("LAN sync: requesting KV data (since_ts={}, local_count={})", kv_since_ts, kv_local_count);
+    sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: kv_since_ts })?)
         .await.map_err(|e| format!("Send RequestKvData failed: {e}"))?;
 
     let mut kv_count = 0usize;
@@ -1057,7 +1114,7 @@ async fn client_sync_loop(
             }
             Some(Ok(msg)) if msg.is_text() => {
                 if let Ok(SyncMessage::KvBatchComplete { count }) = parse_msg(&msg) {
-                    tracing::info!("LAN sync: received {} KV entries", count);
+                    tracing::info!("LAN sync: received {} KV entries (incremental since_ts={})", count, kv_since_ts);
                     break;
                 }
             }
@@ -1066,14 +1123,64 @@ async fn client_sync_loop(
             None => return Err("Connection closed during KV sync".into()),
         }
     }
+    // Safety: if incremental returned 0 but client table is empty, do full re-sync
+    if kv_count == 0 && kv_since_ts > 0 && kv_local_count == 0 {
+        tracing::warn!("LAN sync: KV incremental returned 0 rows but local is empty — triggering full sync");
+        sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: 0 })?)
+            .await.map_err(|e| format!("Send RequestKvData (full) failed: {e}"))?;
+        loop {
+            match stream.next().await {
+                Some(Ok(msg)) if msg.is_binary() => {
+                    let buf = msg.into_data();
+                    let mut pos = 0;
+                    while pos + 4 <= buf.len() {
+                        let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                        pos += 4;
+                        if key_len > MAX_KEY_LEN { break; }
+                        if pos + key_len + 4 > buf.len() { break; }
+                        let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
+                        pos += key_len;
+                        let val_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                        pos += 4;
+                        if val_len > MAX_DATA_LEN { break; }
+                        if pos + val_len > buf.len() { break; }
+                        let val = String::from_utf8_lossy(&buf[pos..pos+val_len]).to_string();
+                        pos += val_len;
+                        let _ = cache.put_kv(&key, &val);
+                        kv_count += 1;
+                    }
+                }
+                Some(Ok(msg)) if msg.is_text() => {
+                    if let Ok(SyncMessage::KvBatchComplete { count }) = parse_msg(&msg) {
+                        tracing::info!("LAN sync: full KV re-sync received {} entries", count);
+                        break;
+                    }
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(e)) => return Err(format!("KV full sync error: {e}")),
+                None => return Err("Connection closed during KV full sync".into()),
+            }
+        }
+    }
+    // Update sync_state timestamp after successful KV import
+    let new_kv_ts = chrono::Utc::now().timestamp();
+    let _ = cache.set_sync_ts("kv_cache", new_kv_ts);
     tracing::info!("LAN sync: imported {} KV cache entries (fundamentals, news, SEC, FRED, etc.)", kv_count);
 
     // 8d. Request generic table sync (SEC, fundamentals, equity snapshots, etc.)
+    // Build incremental request: each table gets its last sync timestamp
+    let table_requests: Vec<(String, i64)> = SYNCABLE_TABLES.iter().map(|tbl| {
+        let since_ts = cache.get_sync_ts(&format!("table:{}", tbl));
+        tracing::info!("LAN sync: table '{}' since_ts={}", tbl, since_ts);
+        (tbl.to_string(), since_ts)
+    }).collect();
     sink.send(send_msg(&SyncMessage::RequestTableSync {
-        tables: SYNCABLE_TABLES.iter().map(|s| s.to_string()).collect(),
+        tables: table_requests,
     })?)
         .await.map_err(|e| format!("Send RequestTableSync failed: {e}"))?;
 
+    // Track which tables need full re-sync (incremental returned 0 but local is empty)
+    let mut tables_needing_full_sync: Vec<String> = Vec::new();
     let mut table_count = 0usize;
     loop {
         match read_next(stream).await? {
@@ -1085,16 +1192,46 @@ async fn client_sync_loop(
                     .unwrap_or_else(|_| compressed.clone());
                 let json = String::from_utf8_lossy(&json_bytes).to_string();
 
-                let cache_clone = cache.clone();
-                let tbl = table.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    if let Ok(conn) = cache_clone.connection() {
-                        match import_table_from_json(&conn, &tbl, &json) {
-                            Ok(n) => tracing::info!("LAN sync: imported {} rows into '{}'", n, tbl),
-                            Err(e) => tracing::warn!("LAN sync: import '{}' failed: {}", tbl, e),
-                        }
+                // Check if this was an incremental sync that returned empty
+                let tbl_since_ts = cache.get_sync_ts(&format!("table:{}", table));
+                let rows: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
+                let row_count = rows.len();
+
+                if row_count == 0 && tbl_since_ts > 0 {
+                    // Check if local table is empty — if so, need full sync
+                    let local_count = {
+                        let cache_clone = cache.clone();
+                        let tbl = table.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if let Ok(conn) = cache_clone.connection() {
+                                conn.query_row(
+                                    &format!("SELECT COUNT(*) FROM {}", tbl),
+                                    [], |r| r.get::<_, i64>(0)
+                                ).unwrap_or(-1) // -1 means table doesn't exist
+                            } else { 0 }
+                        }).await.unwrap_or(0)
+                    };
+                    if local_count <= 0 {
+                        tracing::warn!("LAN sync: table '{}' incremental returned 0 but local is empty — will full sync", table);
+                        tables_needing_full_sync.push(table.clone());
+                    } else {
+                        tracing::info!("LAN sync: table '{}' up to date ({} local rows)", table, local_count);
                     }
-                }).await;
+                } else {
+                    let cache_clone = cache.clone();
+                    let tbl = table.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        if let Ok(conn) = cache_clone.connection() {
+                            match import_table_from_json(&conn, &tbl, &json) {
+                                Ok(n) => tracing::info!("LAN sync: imported {} rows into '{}'", n, tbl),
+                                Err(e) => tracing::warn!("LAN sync: import '{}' failed: {}", tbl, e),
+                            }
+                        }
+                    }).await;
+                }
+                // Update sync_state for this table
+                let new_ts = chrono::Utc::now().timestamp();
+                let _ = cache.set_sync_ts(&format!("table:{}", table), new_ts);
                 table_count += 1;
             }
             SyncMessage::TableSyncDone => {
@@ -1108,7 +1245,54 @@ async fn client_sync_loop(
         }
     }
 
+    // Full re-sync for tables that returned 0 rows but have empty local data
+    if !tables_needing_full_sync.is_empty() {
+        tracing::info!("LAN sync: triggering full sync for {} table(s): {:?}", tables_needing_full_sync.len(), tables_needing_full_sync);
+        let full_sync_requests: Vec<(String, i64)> = tables_needing_full_sync.iter()
+            .map(|tbl| (tbl.clone(), 0i64))
+            .collect();
+        sink.send(send_msg(&SyncMessage::RequestTableSync {
+            tables: full_sync_requests,
+        })?)
+            .await.map_err(|e| format!("Send RequestTableSync (full) failed: {e}"))?;
+
+        loop {
+            match read_next(stream).await? {
+                SyncMessage::TableSyncData { table, rows_json } => {
+                    let compressed = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rows_json)
+                        .map_err(|e| format!("Base64 decode table '{}': {e}", table))?;
+                    let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
+                        .unwrap_or_else(|_| compressed.clone());
+                    let json = String::from_utf8_lossy(&json_bytes).to_string();
+
+                    let cache_clone = cache.clone();
+                    let tbl = table.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        if let Ok(conn) = cache_clone.connection() {
+                            match import_table_from_json(&conn, &tbl, &json) {
+                                Ok(n) => tracing::info!("LAN sync: full re-sync imported {} rows into '{}'", n, tbl),
+                                Err(e) => tracing::warn!("LAN sync: full re-sync import '{}' failed: {}", tbl, e),
+                            }
+                        }
+                    }).await;
+                    let new_ts = chrono::Utc::now().timestamp();
+                    let _ = cache.set_sync_ts(&format!("table:{}", table), new_ts);
+                }
+                SyncMessage::TableSyncDone => {
+                    tracing::info!("LAN sync: full table re-sync complete");
+                    break;
+                }
+                other => {
+                    tracing::warn!("LAN sync: full re-sync unexpected: {:?}", other);
+                    break;
+                }
+            }
+        }
+    }
+
     // 9. Listen for incremental updates (server pushes + ping/pong keepalive)
+    // State flag: when true, binary frames are KV data (key+val); when false, bar data (key+ts+data)
+    let mut expecting_kv_binary = false;
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
     loop {
         tokio::select! {
@@ -1118,27 +1302,47 @@ async fn client_sync_loop(
                         if msg.is_close() { break; }
                         if msg.is_pong() { continue; }
                         if msg.is_binary() {
-                            // Binary incremental update (same format as batch)
                             let buf = msg.into_data();
-                            let mut pos = 0;
-                            while pos + 4 <= buf.len() {
-                                let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
-                                pos += 4;
-                                if key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: incremental key_len {key_len} exceeds limit"); break; }
-                                if pos + key_len + 8 + 4 > buf.len() { break; }
-                                let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
-                                pos += key_len;
-                                let ts = i64::from_le_bytes(buf[pos..pos+8].try_into().unwrap_or([0;8]));
-                                pos += 8;
-                                let data_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
-                                pos += 4;
-                                if data_len > MAX_DATA_LEN { tracing::warn!("LAN sync: incremental data_len {data_len} exceeds limit"); break; }
-                                if pos + data_len > buf.len() { break; }
-                                let data = &buf[pos..pos+data_len];
-                                pos += data_len;
-                                let bar_count = extract_bar_count(data);
-                                let _ = cache.put_raw_bar_entry(&key, data, ts, bar_count);
-                                tracing::debug!("LAN sync: incremental update for {key}");
+                            if expecting_kv_binary {
+                                // KV binary: [u32 key_len][key][u32 val_len][val] repeated
+                                let mut pos = 0;
+                                while pos + 4 <= buf.len() {
+                                    let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                                    pos += 4;
+                                    if key_len > MAX_KEY_LEN { break; }
+                                    if pos + key_len + 4 > buf.len() { break; }
+                                    let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
+                                    pos += key_len;
+                                    let val_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                                    pos += 4;
+                                    if val_len > MAX_DATA_LEN { break; }
+                                    if pos + val_len > buf.len() { break; }
+                                    let val = String::from_utf8_lossy(&buf[pos..pos+val_len]).to_string();
+                                    pos += val_len;
+                                    let _ = cache.put_kv(&key, &val);
+                                }
+                            } else {
+                                // Bar binary: [u32 key_len][key][i64 ts][u32 data_len][data] repeated
+                                let mut pos = 0;
+                                while pos + 4 <= buf.len() {
+                                    let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                                    pos += 4;
+                                    if key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: incremental key_len {key_len} exceeds limit"); break; }
+                                    if pos + key_len + 8 + 4 > buf.len() { break; }
+                                    let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
+                                    pos += key_len;
+                                    let ts = i64::from_le_bytes(buf[pos..pos+8].try_into().unwrap_or([0;8]));
+                                    pos += 8;
+                                    let data_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
+                                    pos += 4;
+                                    if data_len > MAX_DATA_LEN { tracing::warn!("LAN sync: incremental data_len {data_len} exceeds limit"); break; }
+                                    if pos + data_len > buf.len() { break; }
+                                    let data = &buf[pos..pos+data_len];
+                                    pos += data_len;
+                                    let bar_count = extract_bar_count(data);
+                                    let _ = cache.put_raw_bar_entry(&key, data, ts, bar_count);
+                                    tracing::debug!("LAN sync: incremental update for {key}");
+                                }
                             }
                         } else if msg.is_text() {
                             match parse_msg(&msg) {
@@ -1148,25 +1352,50 @@ async fn client_sync_loop(
                                 }
                                 Ok(SyncMessage::RemoteRequestDone { cmd, message }) => {
                                     tracing::info!("LAN sync: server completed '{}': {}", cmd, message);
-                                    // Re-sync research tables (SEC, fundamentals, institutional, DARWIN equity)
-                                    // These are the tables populated by remote commands (SEC_SCRAPE, FUNDAMENTALS, etc.)
+                                    // Re-sync research tables incrementally
+                                    let table_requests: Vec<(String, i64)> = SYNCABLE_TABLES.iter().map(|tbl| {
+                                        let since_ts = cache.get_sync_ts(&format!("table:{}", tbl));
+                                        (tbl.to_string(), since_ts)
+                                    }).collect();
                                     let _ = sink.send(send_msg(&SyncMessage::RequestTableSync {
-                                        tables: SYNCABLE_TABLES.iter().map(|s| s.to_string()).collect(),
+                                        tables: table_requests,
                                     })?).await;
-                                    // Re-sync DARWIN data (accounts, deals, positions)
+                                    // Re-sync KV data incrementally — set flag so binary frames parse as KV
+                                    expecting_kv_binary = true;
+                                    let kv_since = cache.get_sync_ts("kv_cache");
+                                    let _ = sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: kv_since })?).await;
+                                    // Re-sync DARWIN data (full sync — always)
                                     let _ = sink.send(send_msg(&SyncMessage::RequestDarwinData)?).await;
-                                    tracing::info!("LAN sync: re-sync triggered after '{}' completion", cmd);
+                                    tracing::info!("LAN sync: incremental re-sync triggered after '{}' completion", cmd);
                                 }
                                 Ok(SyncMessage::TableSyncData { table, rows_json }) => {
-                                    if let Ok(conn) = cache.connection() {
-                                        match import_table_from_json(&conn, &table, &rows_json) {
-                                            Ok(n) => tracing::info!("LAN sync: imported {n} rows into {table}"),
-                                            Err(e) => tracing::warn!("LAN sync: table import {table} failed: {e}"),
+                                    // Decompress zstd + base64 (same as initial sync)
+                                    if let Ok(compressed) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rows_json) {
+                                        let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
+                                            .unwrap_or_else(|_| compressed.clone());
+                                        let json = String::from_utf8_lossy(&json_bytes).to_string();
+                                        if let Ok(conn) = cache.connection() {
+                                            match import_table_from_json(&conn, &table, &json) {
+                                                Ok(n) => tracing::info!("LAN sync: re-sync imported {n} rows into {table}"),
+                                                Err(e) => tracing::warn!("LAN sync: table re-import {table} failed: {e}"),
+                                            }
                                         }
+                                    } else {
+                                        tracing::warn!("LAN sync: table re-sync base64 decode failed for {table}");
                                     }
+                                    // Update sync_state for this table
+                                    let new_ts = chrono::Utc::now().timestamp();
+                                    let _ = cache.set_sync_ts(&format!("table:{}", table), new_ts);
                                 }
                                 Ok(SyncMessage::TableSyncDone) => {
                                     tracing::info!("LAN sync: table re-sync complete");
+                                }
+                                Ok(SyncMessage::KvBatchComplete { count }) => {
+                                    // KV re-sync complete — update sync_state, reset binary mode
+                                    expecting_kv_binary = false;
+                                    let new_ts = chrono::Utc::now().timestamp();
+                                    let _ = cache.set_sync_ts("kv_cache", new_ts);
+                                    tracing::info!("LAN sync: KV re-sync received {} entries", count);
                                 }
                                 Ok(SyncMessage::DarwinData { data, accounts: _, deals: _, positions: _ }) => {
                                     // Decode: base64 → zstd decompress → JSON (same as initial sync)
