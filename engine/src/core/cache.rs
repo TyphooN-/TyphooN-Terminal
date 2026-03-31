@@ -972,9 +972,16 @@ impl SqliteCache {
         let mut stmt = conn.prepare("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let result = stmt.query_row(params![key], |row| {
-            // Try BLOB first, fall back to TEXT→bytes for older BarCacheWriter schemas
-            let data: Vec<u8> = row.get::<_, Vec<u8>>(0)
-                .or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))?;
+            // Use get_ref to accept both BLOB and TEXT without UTF-8 validation.
+            // MQL5's DatabaseBindArray can bind uchar[] as TEXT type, making SQLite
+            // store the result of BLOB || TEXT concatenation as TEXT. A String fallback
+            // fails with "invalid utf-8 sequence" because binary bar data is not UTF-8.
+            // get_ref returns the raw SQLite value regardless of type.
+            let data: Vec<u8> = match row.get_ref(0)? {
+                rusqlite::types::ValueRef::Blob(b) => b.to_vec(),
+                rusqlite::types::ValueRef::Text(t) => t.to_vec(),
+                _ => return Err(rusqlite::Error::InvalidColumnType(0, "data".into(), rusqlite::types::Type::Blob)),
+            };
             Ok((data, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
         });
         match result {
