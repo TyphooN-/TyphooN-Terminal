@@ -5,7 +5,7 @@
 //! KV data uses JSON + zstd compression.
 //! Binary format: [u32 bar_count][per bar: i64 timestamp_ms, f64 OHLCV]
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -189,8 +189,12 @@ impl SqliteCache {
         let conn = Connection::open(path)
             .map_err(|e| format!("SQLite open failed: {e}"))?;
 
-        // WAL mode for concurrent reads + single writer performance
-        // mmap_size=256MB for memory-mapped I/O (faster reads, OS manages pages)
+        // WAL mode for concurrent reads + single writer performance.
+        // This is used for the main typhoon_cache.db which is accessed only by
+        // TyphooN-Terminal (Linux native). WAL shared memory works fine here.
+        // busy_timeout=5000ms: retry for 5s on SQLITE_BUSY instead of failing
+        // immediately. Critical when compact_storage() holds the write lock in
+        // batches and other threads (e.g. Mt5Sync) need to write concurrently.
         conn.execute_batch("
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
@@ -198,6 +202,7 @@ impl SqliteCache {
             PRAGMA temp_store=MEMORY;
             PRAGMA mmap_size=268435456;
             PRAGMA auto_vacuum=INCREMENTAL;
+            PRAGMA busy_timeout=5000;
         ").map_err(|e| format!("SQLite pragma failed: {e}"))?;
 
         // Create tables
@@ -230,6 +235,23 @@ impl SqliteCache {
         // Schema migration: track zstd compression level per entry (compact skips already-compacted)
         let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN zstd_level INTEGER NOT NULL DEFAULT 3", []);
 
+        Ok(Self { conn: Mutex::new(conn) })
+    }
+
+    /// Open an existing database read-only — for reading source MT5 cache files.
+    ///
+    /// Does NOT change journal_mode (avoids conflicting with BarCacheWriter which
+    /// uses DELETE mode on the same file). Read-only mode means SQLite never needs
+    /// a write lock, so BarCacheWriter can continue writing concurrently without
+    /// any "database is locked" errors.
+    pub fn open_readonly(path: &PathBuf) -> Result<Self, String> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .map_err(|e| format!("SQLite read-only open failed: {e}"))?;
+        conn.execute_batch("
+            PRAGMA cache_size=-16000;
+            PRAGMA temp_store=MEMORY;
+            PRAGMA busy_timeout=5000;
+        ").map_err(|e| format!("SQLite pragma failed: {e}"))?;
         Ok(Self { conn: Mutex::new(conn) })
     }
 

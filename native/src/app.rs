@@ -8335,7 +8335,8 @@ enum BrokerCmd {
     /// Ticker is derived from filename: e.g. "THA.xlsx" → "THA", "THB_history.xlsx" → "THB".
     DarwinImportAll { dir: PathBuf, db_path: PathBuf },
     /// Sync bar data from MT5 BarCacheWriter databases into main cache.
-    Mt5Sync { sources: Vec<String>, target: PathBuf },
+    /// Uses shared Arc<SqliteCache> — no second connection opened.
+    Mt5Sync { sources: Vec<String> },
     /// Recompress cache at target zstd level (e.g. 22 for max compression).
     CompactStorage { db_path: PathBuf, level: i32 },
     /// Scrape fundamentals for all MT5 stock symbols (non-blocking).
@@ -9477,31 +9478,39 @@ impl TyphooNApp {
                             let _ = msg_tx.send(BrokerMsg::UnusualVolumeResults(results));
                         });
                     }
-                    BrokerCmd::Mt5Sync { sources, target } => {
-                        // Spawn dedicated thread for MT5 sync (heavy I/O)
+                    BrokerCmd::Mt5Sync { sources, .. } => {
+                        // Reuse the shared cache Arc — avoids opening a second connection
+                        // to typhoon_cache.db. Two separate connections competing for the
+                        // same WAL write slot caused "database is locked" under compaction.
+                        // With a shared Arc<SqliteCache> all writes go through the same
+                        // Mutex<Connection> and are serialized at the Rust level, never
+                        // hitting an SQLite-level SQLITE_BUSY.
+                        let target_arc = shared_cache_broker.read().ok().and_then(|g| g.clone());
                         let msg_tx = broker_msg_tx_clone.clone();
                         std::thread::spawn(move || {
-                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("MT5 sync: {} sources → {}", sources.len(), target.display())));
-                            let target_cache = match typhoon_engine::core::cache::SqliteCache::open(&target) {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    let _ = msg_tx.send(BrokerMsg::Error(format!("Cannot open target cache: {e}")));
+                            let target_cache = match target_arc {
+                                Some(c) => c,
+                                None => {
+                                    let _ = msg_tx.send(BrokerMsg::Error("MT5 sync: cache not ready yet, retry after startup".into()));
                                     return;
                                 }
                             };
+                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("MT5 sync: {} sources → main cache", sources.len())));
                             let mut total_keys = 0usize;
                             let mut total_synced = 0usize;
                             for src_path in &sources {
                                 let src = std::path::PathBuf::from(src_path);
                                 let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Syncing from {}...", src.display())));
-                                match typhoon_engine::core::cache::SqliteCache::open(&src) {
+                                // open_readonly: no journal_mode change — BarCacheWriter uses DELETE
+                                // mode on this file and WAL shared memory doesn't work across the
+                                // Wine/Linux boundary. Read-only means zero write locks, so
+                                // BarCacheWriter can keep writing concurrently without contention.
+                                match typhoon_engine::core::cache::SqliteCache::open_readonly(&src) {
                                     Ok(src_cache) => {
-                                        // Get all keys from source
                                         match src_cache.all_keys() {
                                             Ok(keys) => {
                                                 total_keys += keys.len();
                                                 for key in &keys {
-                                                    // Copy raw compressed binary from source to target
                                                     match src_cache.get_raw_blob(key) {
                                                         Ok(Some((blob, ts, count))) => {
                                                             if let Err(e) = target_cache.put_raw_blob(key, &blob, ts, count) {
@@ -10992,10 +11001,7 @@ impl TyphooNApp {
                 if paths.is_empty() {
                     self.log.push_back(LogEntry::warn("No valid MT5 database paths configured — set them in Settings"));
                 } else {
-                    let mut db_path = dirs_home();
-                    db_path.push("cache");
-                    db_path.push("typhoon_cache.db");
-                    let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths.clone(), target: db_path });
+                    let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths.clone() });
                     self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", paths.len())));
                 }
             }
@@ -12374,10 +12380,7 @@ impl TyphooNApp {
                         if paths.is_empty() {
                             self.log.push_back(LogEntry::warn("No valid MT5 database paths configured"));
                         } else {
-                            let mut db_path = dirs_home();
-                            db_path.push("cache");
-                            db_path.push("typhoon_cache.db");
-                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths, target: db_path });
+                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths });
                             self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", self.mt5_db_paths.iter().filter(|p| !p.is_empty()).count())));
                         }
                     }
@@ -18921,10 +18924,7 @@ impl eframe::App for TyphooNApp {
                             .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
                             .cloned().collect();
                         if !paths.is_empty() {
-                            let mut db_path = dirs_home();
-                            db_path.push("cache");
-                            db_path.push("typhoon_cache.db");
-                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths.clone(), target: db_path });
+                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths.clone() });
                             self.log.push_back(LogEntry::info(format!("Auto MT5SYNC: {} sources", paths.len())));
                         }
                     }
@@ -22497,8 +22497,7 @@ impl eframe::App for TyphooNApp {
                 if is_weekday {
                     let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
                     if !paths.is_empty() {
-                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                        let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths, target: db_path });
+                        let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths });
                     }
                 }
             }
