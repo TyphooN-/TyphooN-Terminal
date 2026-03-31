@@ -354,14 +354,32 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
                         result = Expr::Assign { target: Box::new(result), op, value: Box::new(rhs) };
                     }
                     _ => {
-                        // Binary operator inferred from parent rule + operand
-                        let rhs = parse_expr(op_or_next)?;
-                        // Determine operator from parent context
-                        result = Expr::BinOp {
-                            op: BinOp::Add, // placeholder — refined by context
-                            left: Box::new(result),
-                            right: Box::new(rhs),
+                        // Check if this is an operator token (plain string like "+", "-", "<", etc.)
+                        let token_str = op_or_next.as_str();
+                        let maybe_op = match token_str {
+                            "+" => Some(BinOp::Add), "-" => Some(BinOp::Sub),
+                            "*" => Some(BinOp::Mul), "/" => Some(BinOp::Div), "%" => Some(BinOp::Mod),
+                            "==" => Some(BinOp::Eq), "!=" => Some(BinOp::Ne),
+                            "<" => Some(BinOp::Lt), "<=" => Some(BinOp::Le),
+                            ">" => Some(BinOp::Gt), ">=" => Some(BinOp::Ge),
+                            "&&" => Some(BinOp::And), "||" => Some(BinOp::Or),
+                            "&" => Some(BinOp::BitAnd), "|" => Some(BinOp::BitOr),
+                            "^" => Some(BinOp::BitXor), "<<" => Some(BinOp::Shl), ">>" => Some(BinOp::Shr),
+                            _ => None,
                         };
+                        if let Some(op) = maybe_op {
+                            // Next token is the right-hand operand
+                            let rhs = parse_expr(inner.next().unwrap())?;
+                            result = Expr::BinOp { op, left: Box::new(result), right: Box::new(rhs) };
+                        } else {
+                            // Not an operator — treat as operand (fallback for nested expression rules)
+                            let rhs = parse_expr(op_or_next)?;
+                            result = Expr::BinOp {
+                                op: BinOp::Add, // fallback for unknown structure
+                                left: Box::new(result),
+                                right: Box::new(rhs),
+                            };
+                        }
                     }
                 }
             }

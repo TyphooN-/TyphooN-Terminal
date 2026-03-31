@@ -9,6 +9,7 @@ pub mod parser;
 pub mod ast;
 pub mod ir;
 pub mod codegen;
+pub mod wgsl_codegen;
 pub mod error;
 pub mod runtime;
 
@@ -142,6 +143,11 @@ pub fn compile_mql5(source: &str) -> CompileResult {
             CompileResult { wasm: None, diagnostics, metadata: Some(metadata) }
         }
     }
+}
+
+/// Compile MQL5 source to a WGSL compute shader string.
+pub fn compile_to_wgsl(source: &str) -> Result<String, error::CompileError> {
+    wgsl_codegen::compile_to_wgsl(source)
 }
 
 /// Compile PineScript source to WASM.
