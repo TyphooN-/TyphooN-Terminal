@@ -1148,8 +1148,33 @@ async fn client_sync_loop(
                                 }
                                 Ok(SyncMessage::RemoteRequestDone { cmd, message }) => {
                                     tracing::info!("LAN sync: server completed '{}': {}", cmd, message);
-                                    // After server completes request, re-sync KV + DARWIN data
-                                    let _ = sink.send(send_msg(&SyncMessage::RequestKvData)?).await;
+                                    // Re-sync research tables (SEC, fundamentals, institutional, DARWIN equity)
+                                    // These are the tables populated by remote commands (SEC_SCRAPE, FUNDAMENTALS, etc.)
+                                    let _ = sink.send(send_msg(&SyncMessage::RequestTableSync {
+                                        tables: SYNCABLE_TABLES.iter().map(|s| s.to_string()).collect(),
+                                    })?).await;
+                                    // Re-sync DARWIN data (accounts, deals, positions)
+                                    let _ = sink.send(send_msg(&SyncMessage::RequestDarwinData)?).await;
+                                    tracing::info!("LAN sync: re-sync triggered after '{}' completion", cmd);
+                                }
+                                Ok(SyncMessage::TableSyncData { table, rows_json }) => {
+                                    if let Ok(conn) = cache.connection() {
+                                        match import_table_from_json(&conn, &table, &rows_json) {
+                                            Ok(n) => tracing::info!("LAN sync: imported {n} rows into {table}"),
+                                            Err(e) => tracing::warn!("LAN sync: table import {table} failed: {e}"),
+                                        }
+                                    }
+                                }
+                                Ok(SyncMessage::TableSyncDone) => {
+                                    tracing::info!("LAN sync: table re-sync complete");
+                                }
+                                Ok(SyncMessage::DarwinData { data, accounts: _, deals: _, positions: _ }) => {
+                                    if let Ok(conn) = cache.connection() {
+                                        match crate::core::darwin::import_darwin_data(&conn, &data) {
+                                            Ok((a, d, p)) => tracing::info!("LAN sync: DARWIN re-sync: {a} accounts, {d} deals, {p} positions"),
+                                            Err(e) => tracing::warn!("LAN sync: DARWIN re-import failed: {e}"),
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }

@@ -6324,11 +6324,15 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
     let mut n_deals = 0usize;
     let mut n_pos = 0usize;
 
-    // Import accounts
+    // Import accounts — clear deals/positions first to prevent duplicates
+    // (AUTOINCREMENT id means INSERT OR REPLACE creates new rows instead of updating)
     if let Some(accounts) = payload["accounts"].as_array() {
         for a in accounts {
             let ticker = a["darwin_ticker"].as_str().unwrap_or("");
             if ticker.is_empty() { continue; }
+            // Delete existing deals/positions for this account before reimporting
+            let _ = conn.execute("DELETE FROM darwin_deals WHERE account = ?1", rusqlite::params![ticker]);
+            let _ = conn.execute("DELETE FROM darwin_positions WHERE account = ?1", rusqlite::params![ticker]);
             conn.execute(
                 "INSERT OR REPLACE INTO darwin_accounts (darwin_ticker, name, mt5_account, initial_balance, created_at, deal_count, position_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
@@ -6345,7 +6349,7 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
         }
     }
 
-    // Import deals
+    // Import deals (table was cleared per-account above, no duplicates)
     if let Some(deals) = payload["deals"].as_array() {
         for d in deals {
             conn.execute(
