@@ -90,6 +90,13 @@ pub enum SyncMessage {
     RemoteRequest { cmd: String, args: String },
     /// Server response to RemoteRequest — triggers a re-sync of affected data.
     RemoteRequestDone { cmd: String, message: String },
+    // ── Generic table sync ──
+    /// Client requests bulk sync of SQLite tables (by whitelist name).
+    RequestTableSync { tables: Vec<String> },
+    /// Server sends one table's rows as zstd-compressed + base64-encoded JSON.
+    TableSyncData { table: String, rows_json: String },
+    /// Server signals all requested tables have been sent.
+    TableSyncDone,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -97,6 +104,259 @@ pub struct CacheMeta {
     pub key: String,
     pub timestamp: i64,
     pub bar_count: Option<i64>,
+}
+
+// ── Syncable Tables (whitelist) ────────────────────────────────────
+
+const SYNCABLE_TABLES: &[&str] = &[
+    "darwin_equity_snapshots",
+    "sec_filings",
+    "sec_insider_trades",
+    "sec_filing_alerts",
+    "sec_scrape_index",
+    "fundamentals",
+    "quarterly_financials",
+    "institutional_holders",
+];
+
+/// Returns the CREATE TABLE statement for a syncable table (whitelist only).
+fn create_table_sql(table: &str) -> Option<&'static str> {
+    match table {
+        "darwin_equity_snapshots" => Some(
+            "CREATE TABLE IF NOT EXISTS darwin_equity_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                darwin_ticker TEXT NOT NULL,
+                closed_balance REAL NOT NULL DEFAULT 0,
+                unrealized_pnl REAL NOT NULL DEFAULT 0,
+                floating_equity REAL NOT NULL DEFAULT 0,
+                open_position_count INTEGER NOT NULL DEFAULT 0
+            )"
+        ),
+        "sec_filings" => Some(
+            "CREATE TABLE IF NOT EXISTS sec_filings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                form_type TEXT NOT NULL,
+                accession_number TEXT UNIQUE NOT NULL,
+                filing_date TEXT NOT NULL,
+                url TEXT NOT NULL,
+                company_name TEXT DEFAULT '',
+                importance_score INTEGER DEFAULT 50,
+                category TEXT DEFAULT 'OTHER',
+                summary TEXT DEFAULT '',
+                insider_flag BOOLEAN DEFAULT FALSE,
+                created_at INTEGER NOT NULL
+            )"
+        ),
+        "sec_insider_trades" => Some(
+            "CREATE TABLE IF NOT EXISTS sec_insider_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                accession_number TEXT NOT NULL,
+                insider_name TEXT NOT NULL,
+                insider_title TEXT DEFAULT '',
+                transaction_date TEXT NOT NULL,
+                transaction_type TEXT NOT NULL,
+                shares REAL DEFAULT 0,
+                price REAL DEFAULT 0,
+                aggregate_value REAL DEFAULT 0,
+                is_officer BOOLEAN DEFAULT FALSE,
+                is_director BOOLEAN DEFAULT FALSE,
+                created_at INTEGER NOT NULL
+            )"
+        ),
+        "sec_filing_alerts" => Some(
+            "CREATE TABLE IF NOT EXISTS sec_filing_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                alert_type TEXT NOT NULL,
+                message TEXT NOT NULL,
+                filing_accession TEXT,
+                importance INTEGER DEFAULT 50,
+                created_at INTEGER NOT NULL,
+                dismissed BOOLEAN DEFAULT FALSE,
+                dismissed_reason TEXT
+            )"
+        ),
+        "sec_scrape_index" => Some(
+            "CREATE TABLE IF NOT EXISTS sec_scrape_index (
+                ticker TEXT PRIMARY KEY,
+                last_scrape_date TEXT,
+                filing_count INTEGER DEFAULT 0,
+                cik TEXT
+            )"
+        ),
+        "fundamentals" => Some(
+            "CREATE TABLE IF NOT EXISTS fundamentals (
+                symbol TEXT PRIMARY KEY,
+                cik TEXT,
+                company_name TEXT NOT NULL DEFAULT '',
+                sector TEXT NOT NULL DEFAULT '',
+                industry TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                market_cap REAL,
+                enterprise_value REAL,
+                total_debt REAL,
+                cash_and_equivalents REAL,
+                shares_outstanding REAL,
+                stock_price REAL,
+                mcap_ev_ratio REAL,
+                next_earnings_date TEXT,
+                previous_earnings_date TEXT,
+                next_ex_dividend_date TEXT,
+                next_dividend_payment_date TEXT,
+                last_dividend_payment_date TEXT,
+                is_dividend_stock INTEGER NOT NULL DEFAULT 0,
+                dividend_yield REAL,
+                pe_ratio REAL,
+                forward_pe REAL,
+                peg_ratio REAL,
+                price_to_book REAL,
+                price_to_sales REAL,
+                ev_to_ebitda REAL,
+                profit_margin REAL,
+                operating_margin REAL,
+                roe REAL,
+                roa REAL,
+                beta REAL,
+                short_ratio REAL,
+                short_percent_of_float REAL,
+                last_updated TEXT NOT NULL DEFAULT ''
+            )"
+        ),
+        "quarterly_financials" => Some(
+            "CREATE TABLE IF NOT EXISTS quarterly_financials (
+                symbol TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                total_revenue REAL,
+                net_income REAL,
+                free_cash_flow REAL,
+                gross_profit REAL,
+                operating_income REAL,
+                ebitda REAL,
+                eps REAL,
+                PRIMARY KEY (symbol, period_end)
+            )"
+        ),
+        "institutional_holders" => Some(
+            "CREATE TABLE IF NOT EXISTS institutional_holders (
+                symbol TEXT NOT NULL,
+                holder_name TEXT NOT NULL,
+                shares INTEGER NOT NULL DEFAULT 0,
+                pct_held REAL NOT NULL DEFAULT 0.0,
+                value REAL NOT NULL DEFAULT 0.0,
+                date_reported TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (symbol, holder_name)
+            )"
+        ),
+        _ => None,
+    }
+}
+
+/// Export all rows from a table as a JSON array of objects (column-name → value).
+/// Returns the JSON string, or an error.
+fn export_table_as_json(conn: &rusqlite::Connection, table: &str) -> Result<String, String> {
+    // Validate against whitelist
+    if !SYNCABLE_TABLES.contains(&table) {
+        return Err(format!("Table '{}' not in whitelist", table));
+    }
+    let sql = format!("SELECT * FROM {}", table);
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("Prepare SELECT * FROM {table}: {e}"))?;
+    let col_count = stmt.column_count();
+    let col_names: Vec<String> = (0..col_count).map(|i| stmt.column_name(i).unwrap_or("?").to_string()).collect();
+
+    let rows = stmt.query_map([], |row| {
+        let mut map = serde_json::Map::new();
+        for (i, name) in col_names.iter().enumerate() {
+            let val: rusqlite::types::Value = row.get(i)?;
+            let json_val = match val {
+                rusqlite::types::Value::Null => serde_json::Value::Null,
+                rusqlite::types::Value::Integer(n) => serde_json::Value::Number(n.into()),
+                rusqlite::types::Value::Real(f) => serde_json::Value::Number(
+                    serde_json::Number::from_f64(f).unwrap_or_else(|| 0.into())
+                ),
+                rusqlite::types::Value::Text(s) => serde_json::Value::String(s),
+                rusqlite::types::Value::Blob(b) => serde_json::Value::String(
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &b)
+                ),
+            };
+            map.insert(name.clone(), json_val);
+        }
+        Ok(serde_json::Value::Object(map))
+    }).map_err(|e| format!("Query {table}: {e}"))?;
+
+    let mut arr = Vec::new();
+    for row in rows {
+        match row {
+            Ok(v) => arr.push(v),
+            Err(e) => tracing::warn!("LAN sync: row error in {table}: {e}"),
+        }
+    }
+    serde_json::to_string(&arr).map_err(|e| format!("Serialize {table}: {e}"))
+}
+
+/// Import JSON rows into a table. Creates the table if it doesn't exist.
+/// Uses INSERT OR REPLACE to handle duplicates.
+fn import_table_from_json(conn: &rusqlite::Connection, table: &str, json: &str) -> Result<usize, String> {
+    // Create table if needed
+    let ddl = create_table_sql(table).ok_or_else(|| format!("No DDL for table '{}'", table))?;
+    conn.execute_batch(ddl).map_err(|e| format!("Create table {table}: {e}"))?;
+
+    let rows: Vec<serde_json::Value> = serde_json::from_str(json)
+        .map_err(|e| format!("Parse JSON for {table}: {e}"))?;
+    if rows.is_empty() { return Ok(0); }
+
+    // Get column names from first row
+    let first = rows[0].as_object().ok_or("Expected JSON object row")?;
+    // Filter out AUTOINCREMENT 'id' column — let SQLite assign new IDs on import
+    // to avoid UNIQUE constraint conflicts across different databases.
+    let has_autoincrement_id = ddl.contains("id INTEGER PRIMARY KEY AUTOINCREMENT");
+    let col_names: Vec<String> = first.keys()
+        .filter(|k| !(has_autoincrement_id && *k == "id"))
+        .cloned()
+        .collect();
+    let placeholders: Vec<&str> = col_names.iter().map(|_| "?").collect();
+    let sql = format!(
+        "INSERT OR REPLACE INTO {} ({}) VALUES ({})",
+        table,
+        col_names.join(", "),
+        placeholders.join(", ")
+    );
+
+    let mut count = 0usize;
+    let tx = conn.unchecked_transaction().map_err(|e| format!("Begin tx for {table}: {e}"))?;
+    {
+        let mut stmt = tx.prepare(&sql).map_err(|e| format!("Prepare INSERT for {table}: {e}"))?;
+        for row in &rows {
+            if let Some(obj) = row.as_object() {
+                let params: Vec<rusqlite::types::Value> = col_names.iter().map(|col| {
+                    match obj.get(col) {
+                        Some(serde_json::Value::Null) | None => rusqlite::types::Value::Null,
+                        Some(serde_json::Value::Number(n)) => {
+                            if let Some(i) = n.as_i64() {
+                                rusqlite::types::Value::Integer(i)
+                            } else if let Some(f) = n.as_f64() {
+                                rusqlite::types::Value::Real(f)
+                            } else {
+                                rusqlite::types::Value::Null
+                            }
+                        }
+                        Some(serde_json::Value::String(s)) => rusqlite::types::Value::Text(s.clone()),
+                        Some(serde_json::Value::Bool(b)) => rusqlite::types::Value::Integer(if *b { 1 } else { 0 }),
+                        Some(other) => rusqlite::types::Value::Text(other.to_string()),
+                    }
+                }).collect();
+                let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
+                match stmt.execute(param_refs.as_slice()) {
+                    Ok(_) => count += 1,
+                    Err(e) => tracing::warn!("LAN sync: insert into {table} failed: {e}"),
+                }
+            }
+        }
+    }
+    tx.commit().map_err(|e| format!("Commit {table}: {e}"))?;
+    Ok(count)
 }
 
 // ── Key Derivation ─────────────────────────────────────────────────
@@ -461,6 +721,50 @@ async fn handle_client_tls(
                     }
                 }
             }
+            SyncMessage::RequestTableSync { tables } => {
+                // Generic table sync: export each requested table as zstd-compressed JSON
+                let cache_clone = cache.clone();
+                let table_results = tokio::task::spawn_blocking(move || {
+                    let mut results: Vec<(String, String)> = Vec::new();
+                    if let Ok(conn) = cache_clone.connection() {
+                        for tbl in &tables {
+                            if !SYNCABLE_TABLES.contains(&tbl.as_str()) {
+                                tracing::warn!("LAN sync: table '{}' not in whitelist, skipping", tbl);
+                                continue;
+                            }
+                            match export_table_as_json(&conn, tbl) {
+                                Ok(json) => {
+                                    let compressed = zstd::encode_all(json.as_bytes(), 3)
+                                        .unwrap_or_else(|_| json.into_bytes());
+                                    let encoded = base64::Engine::encode(
+                                        &base64::engine::general_purpose::STANDARD, &compressed,
+                                    );
+                                    results.push((tbl.clone(), encoded));
+                                }
+                                Err(e) => {
+                                    tracing::warn!("LAN sync: export table '{}' failed: {}", tbl, e);
+                                }
+                            }
+                        }
+                    }
+                    results
+                }).await.unwrap_or_default();
+
+                let mut total_rows_hint = 0usize;
+                for (tbl, encoded) in &table_results {
+                    if let Ok(msg) = send_msg(&SyncMessage::TableSyncData {
+                        table: tbl.clone(),
+                        rows_json: encoded.clone(),
+                    }) {
+                        let _ = sink.send(msg).await;
+                    }
+                    total_rows_hint += 1;
+                }
+                if let Ok(msg) = send_msg(&SyncMessage::TableSyncDone) {
+                    let _ = sink.send(msg).await;
+                }
+                tracing::info!("LAN sync: sent {} table(s) to client", total_rows_hint);
+            }
             SyncMessage::Ping => {
                 if let Ok(msg) = send_msg(&SyncMessage::Pong) {
                     let _ = sink.send(msg).await;
@@ -763,6 +1067,46 @@ async fn client_sync_loop(
         }
     }
     tracing::info!("LAN sync: imported {} KV cache entries (fundamentals, news, SEC, FRED, etc.)", kv_count);
+
+    // 8d. Request generic table sync (SEC, fundamentals, equity snapshots, etc.)
+    sink.send(send_msg(&SyncMessage::RequestTableSync {
+        tables: SYNCABLE_TABLES.iter().map(|s| s.to_string()).collect(),
+    })?)
+        .await.map_err(|e| format!("Send RequestTableSync failed: {e}"))?;
+
+    let mut table_count = 0usize;
+    loop {
+        match read_next(stream).await? {
+            SyncMessage::TableSyncData { table, rows_json } => {
+                // Decompress zstd + base64
+                let compressed = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &rows_json)
+                    .map_err(|e| format!("Base64 decode table '{}': {e}", table))?;
+                let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
+                    .unwrap_or_else(|_| compressed.clone());
+                let json = String::from_utf8_lossy(&json_bytes).to_string();
+
+                let cache_clone = cache.clone();
+                let tbl = table.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Ok(conn) = cache_clone.connection() {
+                        match import_table_from_json(&conn, &tbl, &json) {
+                            Ok(n) => tracing::info!("LAN sync: imported {} rows into '{}'", n, tbl),
+                            Err(e) => tracing::warn!("LAN sync: import '{}' failed: {}", tbl, e),
+                        }
+                    }
+                }).await;
+                table_count += 1;
+            }
+            SyncMessage::TableSyncDone => {
+                tracing::info!("LAN sync: table sync complete ({} tables)", table_count);
+                break;
+            }
+            other => {
+                tracing::warn!("LAN sync: expected TableSyncData/TableSyncDone, got {:?}", other);
+                break;
+            }
+        }
+    }
 
     // 9. Listen for incremental updates (server pushes + ping/pong keepalive)
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
