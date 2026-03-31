@@ -556,6 +556,7 @@ struct IndicatorFlags {
     keltner: bool,
     regression: bool,
     fvg: bool,
+    order_blocks: bool,
 }
 
 /// All state for one chart viewport.
@@ -4580,6 +4581,109 @@ fn draw_chart(
         }
     }
 
+    // ── Order Blocks (ICT/Smart Money) ──────────────────────────────────────
+    // Bullish OB: last bearish candle before a strong bullish move (next close > current high + 1 ATR)
+    // Bearish OB: last bullish candle before a strong bearish move (next close < current low - 1 ATR)
+    if flags.order_blocks && bars.len() >= 3 {
+        let ob_bull_fill = egui::Color32::from_rgba_premultiplied(0, 180, 160, 25);
+        let ob_bull_edge = egui::Color32::from_rgba_premultiplied(0, 180, 160, 100);
+        let ob_bear_fill = egui::Color32::from_rgba_premultiplied(220, 50, 50, 25);
+        let ob_bear_edge = egui::Color32::from_rgba_premultiplied(220, 50, 50, 100);
+        let ob_label_col = egui::Color32::from_rgba_premultiplied(200, 200, 200, 180);
+
+        // Compute rolling ATR(14) for impulsive move threshold
+        let atr_period = 14usize;
+        let mut local_atr: Vec<f64> = Vec::with_capacity(bars.len());
+        for i in 0..bars.len() {
+            if i < atr_period {
+                local_atr.push(bars[i].high - bars[i].low);
+            } else {
+                let mut sum = 0.0;
+                for j in (i + 1 - atr_period)..=i {
+                    let tr = if j == 0 {
+                        bars[j].high - bars[j].low
+                    } else {
+                        let hl = bars[j].high - bars[j].low;
+                        let hc = (bars[j].high - bars[j - 1].close).abs();
+                        let lc = (bars[j].low - bars[j - 1].close).abs();
+                        hl.max(hc).max(lc)
+                    };
+                    sum += tr;
+                }
+                local_atr.push(sum / atr_period as f64);
+            }
+        }
+
+        // Collect order blocks (limit to most recent 20)
+        struct OBZone { high: f64, low: f64, bar_idx: usize, is_bull: bool, end_idx: usize }
+        let mut zones: Vec<OBZone> = Vec::new();
+
+        for i in 0..bars.len().saturating_sub(1) {
+            let cur = &bars[i];
+            let nxt = &bars[i + 1];
+            let atr = local_atr[i];
+            if atr <= 0.0 { continue; }
+
+            // Bullish OB: bearish candle, then next close breaks above current high by >= 1 ATR
+            if cur.close < cur.open && nxt.close > cur.high + atr {
+                let mut end = bars.len();
+                for j in (i + 2)..bars.len() {
+                    if bars[j].low <= cur.high { end = j; break; }
+                }
+                zones.push(OBZone { high: cur.high, low: cur.low, bar_idx: i, is_bull: true, end_idx: end });
+            }
+
+            // Bearish OB: bullish candle, then next close breaks below current low by >= 1 ATR
+            if cur.close > cur.open && nxt.close < cur.low - atr {
+                let mut end = bars.len();
+                for j in (i + 2)..bars.len() {
+                    if bars[j].high >= cur.low { end = j; break; }
+                }
+                zones.push(OBZone { high: cur.high, low: cur.low, bar_idx: i, is_bull: false, end_idx: end });
+            }
+        }
+
+        // Keep only most recent 20
+        if zones.len() > 20 { zones.drain(0..zones.len() - 20); }
+
+        for ob in &zones {
+            let x_start = chart_rect.left() + (ob.bar_idx as f32 + 0.5) * bar_w;
+            let x_end = if ob.end_idx >= bars.len() {
+                chart_rect.right()
+            } else {
+                chart_rect.left() + (ob.end_idx as f32 + 0.5) * bar_w
+            };
+            if x_end < chart_rect.left() || x_start > chart_rect.right() { continue; }
+
+            let y_top = price_to_y(ob.high);
+            let y_bot = price_to_y(ob.low);
+            if y_top > chart_rect.bottom() || y_bot < chart_rect.top() { continue; }
+
+            let (fill, edge) = if ob.is_bull { (ob_bull_fill, ob_bull_edge) } else { (ob_bear_fill, ob_bear_edge) };
+            let ct = y_top.max(chart_rect.top());
+            let cb = y_bot.min(chart_rect.bottom());
+            let cl = x_start.max(chart_rect.left());
+            let cr = x_end.min(chart_rect.right());
+
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(cl, ct), egui::pos2(cr, cb)),
+                0.0, fill,
+            );
+            painter.line_segment([egui::pos2(cl, ct), egui::pos2(cr, ct)], egui::Stroke::new(0.7, edge));
+            painter.line_segment([egui::pos2(cl, cb), egui::pos2(cr, cb)], egui::Stroke::new(0.7, edge));
+            // "OB" label
+            if cr - cl > 20.0 {
+                painter.text(
+                    egui::pos2(cl + 3.0, ct + 1.0),
+                    egui::Align2::LEFT_TOP,
+                    if ob.is_bull { "OB+" } else { "OB-" },
+                    egui::FontId::monospace(9.0),
+                    ob_label_col,
+                );
+            }
+        }
+    }
+
     // ── Auto Fibonacci levels (matching AutoFibonacci.mqh) ─────────────────
     if flags.auto_fib && !chart.auto_fib_levels.is_empty() {
         for (price, label, is_ext) in &chart.auto_fib_levels {
@@ -6403,6 +6507,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "REGRESSION",    desc: "Toggle Regression Channel (linear regression ± 2σ)" },
     Command { name: "SQUEEZE",       desc: "Toggle Squeeze Momentum (BB inside KC)" },
     Command { name: "FVG",           desc: "Toggle Fair Value Gaps (3-bar imbalance zones)" },
+    Command { name: "ORDER_BLOCKS",  desc: "Toggle Order Blocks (ICT/Smart Money last opposite candle)" },
+    Command { name: "COPY_CHART",    desc: "Copy visible chart bars to clipboard as CSV" },
     Command { name: "OBJECTS",       desc: "Open drawing object list (manage/delete drawings)" },
     // Timeframes (direct switch)
     Command { name: "M1",            desc: "Switch to 1-minute timeframe" },
@@ -6453,6 +6559,10 @@ const COMMANDS: &[Command] = &[
     Command { name: "SECTOR_ROTATION", desc: "Sector ETF relative performance (11 SPDR sectors)" },
     Command { name: "ECON_CALENDAR", desc: "Economic calendar — upcoming FOMC, NFP, CPI, PMI releases" },
     Command { name: "CONGRESS", desc: "Congressional stock trades (House Stock Watcher)" },
+    // Chart templates
+    Command { name: "SAVE_TEMPLATE", desc: "Save current indicators as named template (SAVE_TEMPLATE <name>)" },
+    Command { name: "LOAD_TEMPLATE", desc: "Load a saved indicator template (LOAD_TEMPLATE <name>)" },
+    Command { name: "TEMPLATES",     desc: "List all available chart templates" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -6904,6 +7014,10 @@ pub struct TyphooNApp {
     show_regression: bool,
     show_squeeze: bool,
     show_fvg: bool,
+    show_order_blocks: bool,
+
+    /// Saved chart templates: name → indicator JSON snapshot.
+    chart_templates: std::collections::HashMap<String, serde_json::Value>,
 
     /// Drawing interaction mode.
     draw_mode: DrawMode,
@@ -8384,6 +8498,8 @@ impl TyphooNApp {
             show_regression: false,
             show_squeeze: false,
             show_fvg: false,
+            show_order_blocks: false,
+            chart_templates: std::collections::HashMap::new(),
             draw_mode: DrawMode::None,
             darwin_import_ticker: String::new(),
             darwin_xlsx_dir: String::new(),
@@ -9274,6 +9390,7 @@ impl TyphooNApp {
             keltner: self.show_keltner,
             regression: self.show_regression,
             fvg: self.show_fvg,
+            order_blocks: self.show_order_blocks,
         }
     }
 
@@ -9556,6 +9673,26 @@ impl TyphooNApp {
             "REGRESSION" => { self.show_regression = !self.show_regression; self.log.push_back(LogEntry::info(format!("Regression: {}", if self.show_regression { "ON" } else { "OFF" }))); }
             "SQUEEZE" => { self.show_squeeze = !self.show_squeeze; self.log.push_back(LogEntry::info(format!("Squeeze: {}", if self.show_squeeze { "ON" } else { "OFF" }))); }
             "FVG" | "FAIR_VALUE_GAP" => { self.show_fvg = !self.show_fvg; self.log.push_back(LogEntry::info(format!("FVG: {}", if self.show_fvg { "ON" } else { "OFF" }))); }
+            "ORDER_BLOCKS" | "OB" => { self.show_order_blocks = !self.show_order_blocks; self.log.push_back(LogEntry::info(format!("Order Blocks: {}", if self.show_order_blocks { "ON" } else { "OFF" }))); }
+            "COPY_CHART" => {
+                if let Some(chart) = self.charts.get(self.active_tab) {
+                    let (vs, ve) = chart.visible_range();
+                    let visible = &chart.bars[vs..ve];
+                    if visible.is_empty() {
+                        self.log.push_back(LogEntry::warn("No visible bars to copy"));
+                    } else {
+                        let mut csv = String::from("Date,Open,High,Low,Close,Volume\n");
+                        for bar in visible {
+                            let dt = chrono::DateTime::from_timestamp_millis(bar.ts_ms)
+                                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                                .unwrap_or_else(|| bar.ts_ms.to_string());
+                            csv.push_str(&format!("{},{},{},{},{},{}\n", dt, bar.open, bar.high, bar.low, bar.close, bar.volume));
+                        }
+                        ctx.copy_text(csv);
+                        self.log.push_back(LogEntry::info(format!("Copied {} bars to clipboard as CSV", visible.len())));
+                    }
+                }
+            }
             "OBJECTS" | "OBJECT_LIST" => { self.show_object_list = !self.show_object_list; }
             // Timeframe shortcuts
             "M1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M1); }
@@ -9635,6 +9772,7 @@ impl TyphooNApp {
                 self.show_stochastic = false; self.show_adx = false; self.show_cci = false;
                 self.show_williams_r = false; self.show_obv = false; self.show_momentum = false;
                 self.show_better_volume = false; self.show_volume_pane = false;
+                self.show_fvg = false; self.show_order_blocks = false;
                 self.log.push_back(LogEntry::info("All indicators disabled"));
             }
             "DATA_WINDOW"    => self.show_data_window = true,
@@ -9688,10 +9826,177 @@ impl TyphooNApp {
                 self.draw_mode = DrawMode::PlacingHLine;
                 self.log.push_back(LogEntry::info(format!("Click chart to place {} reference line", cmd)));
             }
+            "TEMPLATES" | "LIST_TEMPLATES" => {
+                let builtins = ["NNFX", "CLEAN", "FULL"];
+                let mut names: Vec<String> = builtins.iter().map(|s| format!("{} (built-in)", s)).collect();
+                for k in self.chart_templates.keys() {
+                    if !builtins.contains(&k.as_str()) {
+                        names.push(k.clone());
+                    }
+                }
+                names.sort();
+                self.log.push_back(LogEntry::info(format!("Templates: {}", names.join(", "))));
+            }
             other => {
-                self.log.push_back(LogEntry::warn(format!("Unknown command: {}", other)));
+                // Commands with arguments: SAVE_TEMPLATE <name>, LOAD_TEMPLATE <name>, TEMPLATE <name>
+                if other.starts_with("SAVE_TEMPLATE ") || other.starts_with("TEMPLATE_SAVE ") {
+                    let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
+                    if name.is_empty() {
+                        self.log.push_back(LogEntry::warn("Usage: SAVE_TEMPLATE <name>"));
+                    } else {
+                        let snap = self.capture_indicator_snapshot();
+                        self.chart_templates.insert(name.clone(), snap);
+                        self.save_session();
+                        self.log.push_back(LogEntry::info(format!("Template '{}' saved", name)));
+                    }
+                } else if other.starts_with("LOAD_TEMPLATE ") || other.starts_with("TEMPLATE ") {
+                    let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
+                    if name.is_empty() {
+                        self.log.push_back(LogEntry::warn("Usage: LOAD_TEMPLATE <name>"));
+                    } else {
+                        // Check built-in presets first
+                        let template = match name.as_str() {
+                            "NNFX" => Some(Self::builtin_template_nnfx()),
+                            "CLEAN" => Some(Self::builtin_template_clean()),
+                            "FULL" => Some(Self::builtin_template_full()),
+                            _ => self.chart_templates.get(&name).cloned(),
+                        };
+                        if let Some(snap) = template {
+                            self.apply_indicator_snapshot(&snap);
+                            self.log.push_back(LogEntry::info(format!("Template '{}' loaded", name)));
+                        } else {
+                            self.log.push_back(LogEntry::warn(format!("Template '{}' not found", name)));
+                        }
+                    }
+                } else if other.starts_with("DELETE_TEMPLATE ") {
+                    let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
+                    if self.chart_templates.remove(&name).is_some() {
+                        self.save_session();
+                        self.log.push_back(LogEntry::info(format!("Template '{}' deleted", name)));
+                    } else {
+                        self.log.push_back(LogEntry::warn(format!("Template '{}' not found", name)));
+                    }
+                } else {
+                    self.log.push_back(LogEntry::warn(format!("Unknown command: {}", other)));
+                }
             }
         }
+    }
+
+    // ── Chart template helpers ────────────────────────────────────────────────
+
+    /// Capture current indicator show_* flags as a JSON value (same schema as session "indicators").
+    fn capture_indicator_snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "sma200": self.show_sma200, "sma100": self.show_sma100,
+            "kama": self.show_kama, "ema21": self.show_ema21,
+            "bollinger": self.show_bollinger, "ichimoku": self.show_ichimoku,
+            "wma": self.show_wma, "hma": self.show_hma,
+            "psar": self.show_psar, "atr_proj": self.show_atr_proj,
+            "prev_levels": self.show_prev_levels, "pivots": self.show_pivots,
+            "fractals": self.show_fractals, "harmonics": self.show_harmonics,
+            "auto_fib": self.show_auto_fib, "supply_demand": self.show_supply_demand,
+            "ehlers_ss": self.show_ehlers_ss, "ehlers_decycler": self.show_ehlers_decycler,
+            "ehlers_itl": self.show_ehlers_itl, "ehlers_mama": self.show_ehlers_mama,
+            "ehlers_ebsw": self.show_ehlers_ebsw, "ehlers_cyber": self.show_ehlers_cyber,
+            "ehlers_cg": self.show_ehlers_cg, "ehlers_roof": self.show_ehlers_roof,
+            "rsi": self.show_rsi, "fisher": self.show_fisher,
+            "macd": self.show_macd, "stochastic": self.show_stochastic,
+            "adx": self.show_adx, "cci": self.show_cci,
+            "williams_r": self.show_williams_r, "obv": self.show_obv,
+            "momentum": self.show_momentum, "better_volume": self.show_better_volume,
+            "volume_pane": self.show_volume_pane, "sessions": self.show_sessions,
+            "vol_heatmap": self.show_vol_heatmap, "vwap": self.show_vwap,
+            "price_histogram": self.show_price_histogram,
+            "supertrend": self.show_supertrend, "donchian": self.show_donchian,
+            "keltner": self.show_keltner, "regression": self.show_regression,
+            "squeeze": self.show_squeeze, "fvg": self.show_fvg,
+        })
+    }
+
+    /// Apply a JSON indicator snapshot to all show_* flags.
+    fn apply_indicator_snapshot(&mut self, snap: &serde_json::Value) {
+        for (key, field) in [
+            ("sma200", &mut self.show_sma200), ("sma100", &mut self.show_sma100),
+            ("kama", &mut self.show_kama), ("ema21", &mut self.show_ema21),
+            ("bollinger", &mut self.show_bollinger), ("ichimoku", &mut self.show_ichimoku),
+            ("wma", &mut self.show_wma), ("hma", &mut self.show_hma),
+            ("psar", &mut self.show_psar), ("atr_proj", &mut self.show_atr_proj),
+            ("prev_levels", &mut self.show_prev_levels), ("pivots", &mut self.show_pivots),
+            ("fractals", &mut self.show_fractals), ("harmonics", &mut self.show_harmonics),
+            ("auto_fib", &mut self.show_auto_fib), ("supply_demand", &mut self.show_supply_demand),
+            ("ehlers_ss", &mut self.show_ehlers_ss), ("ehlers_decycler", &mut self.show_ehlers_decycler),
+            ("ehlers_itl", &mut self.show_ehlers_itl), ("ehlers_mama", &mut self.show_ehlers_mama),
+            ("ehlers_ebsw", &mut self.show_ehlers_ebsw), ("ehlers_cyber", &mut self.show_ehlers_cyber),
+            ("ehlers_cg", &mut self.show_ehlers_cg), ("ehlers_roof", &mut self.show_ehlers_roof),
+            ("rsi", &mut self.show_rsi), ("fisher", &mut self.show_fisher),
+            ("macd", &mut self.show_macd), ("stochastic", &mut self.show_stochastic),
+            ("adx", &mut self.show_adx), ("cci", &mut self.show_cci),
+            ("williams_r", &mut self.show_williams_r), ("obv", &mut self.show_obv),
+            ("momentum", &mut self.show_momentum), ("better_volume", &mut self.show_better_volume),
+            ("volume_pane", &mut self.show_volume_pane), ("sessions", &mut self.show_sessions),
+            ("vol_heatmap", &mut self.show_vol_heatmap), ("vwap", &mut self.show_vwap),
+            ("price_histogram", &mut self.show_price_histogram),
+            ("supertrend", &mut self.show_supertrend), ("donchian", &mut self.show_donchian),
+            ("keltner", &mut self.show_keltner), ("regression", &mut self.show_regression),
+            ("squeeze", &mut self.show_squeeze), ("fvg", &mut self.show_fvg),
+        ] {
+            if let Some(b) = snap[key].as_bool() { *field = b; }
+        }
+    }
+
+    /// Built-in template: NNFX (KAMA+Fisher+ATR+BVol+S/D+AutoFib+PrevLevels+SMA200).
+    fn builtin_template_nnfx() -> serde_json::Value {
+        serde_json::json!({
+            "sma200": true, "sma100": false, "kama": true, "ema21": false,
+            "bollinger": false, "ichimoku": false, "wma": false, "hma": false,
+            "psar": false, "atr_proj": true, "prev_levels": true, "pivots": false,
+            "fractals": false, "harmonics": false, "auto_fib": true, "supply_demand": true,
+            "ehlers_ss": false, "ehlers_decycler": false, "ehlers_itl": false, "ehlers_mama": false,
+            "ehlers_ebsw": false, "ehlers_cyber": false, "ehlers_cg": false, "ehlers_roof": false,
+            "rsi": false, "fisher": true, "macd": false, "stochastic": false,
+            "adx": false, "cci": false, "williams_r": false, "obv": false,
+            "momentum": false, "better_volume": true, "volume_pane": false, "sessions": true,
+            "vol_heatmap": false, "vwap": false, "price_histogram": false,
+            "supertrend": false, "donchian": false, "keltner": false,
+            "regression": false, "squeeze": false, "fvg": false,
+        })
+    }
+
+    /// Built-in template: CLEAN (everything off except volume_pane).
+    fn builtin_template_clean() -> serde_json::Value {
+        serde_json::json!({
+            "sma200": false, "sma100": false, "kama": false, "ema21": false,
+            "bollinger": false, "ichimoku": false, "wma": false, "hma": false,
+            "psar": false, "atr_proj": false, "prev_levels": false, "pivots": false,
+            "fractals": false, "harmonics": false, "auto_fib": false, "supply_demand": false,
+            "ehlers_ss": false, "ehlers_decycler": false, "ehlers_itl": false, "ehlers_mama": false,
+            "ehlers_ebsw": false, "ehlers_cyber": false, "ehlers_cg": false, "ehlers_roof": false,
+            "rsi": false, "fisher": false, "macd": false, "stochastic": false,
+            "adx": false, "cci": false, "williams_r": false, "obv": false,
+            "momentum": false, "better_volume": false, "volume_pane": true, "sessions": false,
+            "vol_heatmap": false, "vwap": false, "price_histogram": false,
+            "supertrend": false, "donchian": false, "keltner": false,
+            "regression": false, "squeeze": false, "fvg": false,
+        })
+    }
+
+    /// Built-in template: FULL (everything on).
+    fn builtin_template_full() -> serde_json::Value {
+        serde_json::json!({
+            "sma200": true, "sma100": true, "kama": true, "ema21": true,
+            "bollinger": true, "ichimoku": true, "wma": true, "hma": true,
+            "psar": true, "atr_proj": true, "prev_levels": true, "pivots": true,
+            "fractals": true, "harmonics": true, "auto_fib": true, "supply_demand": true,
+            "ehlers_ss": true, "ehlers_decycler": true, "ehlers_itl": true, "ehlers_mama": true,
+            "ehlers_ebsw": true, "ehlers_cyber": true, "ehlers_cg": true, "ehlers_roof": true,
+            "rsi": true, "fisher": true, "macd": true, "stochastic": true,
+            "adx": true, "cci": true, "williams_r": true, "obv": true,
+            "momentum": true, "better_volume": true, "volume_pane": true, "sessions": true,
+            "vol_heatmap": true, "vwap": true, "price_histogram": true,
+            "supertrend": true, "donchian": true, "keltner": true,
+            "regression": true, "squeeze": true, "fvg": true,
+        })
     }
 
     /// Build session JSON string (pure data, no I/O — safe to call from UI thread).
@@ -9731,7 +10036,7 @@ impl TyphooNApp {
                 "price_histogram": self.show_price_histogram,
                 "supertrend": self.show_supertrend, "donchian": self.show_donchian, "keltner": self.show_keltner,
                 "regression": self.show_regression, "squeeze": self.show_squeeze,
-                "fvg": self.show_fvg,
+                "fvg": self.show_fvg, "order_blocks": self.show_order_blocks,
             },
             "mtf_enabled": self.mtf_enabled,
             "mtf_cols": self.mtf_cols,
@@ -9816,6 +10121,7 @@ impl TyphooNApp {
                 }).collect::<Vec<_>>()
             }).unwrap_or_default(),
             "alerts": self.alerts.iter().map(|(p, l)| serde_json::json!({"price": p, "label": l})).collect::<Vec<_>>(),
+            "chart_templates": self.chart_templates.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<serde_json::Map<String, serde_json::Value>>(),
         })
     }
 
@@ -9916,7 +10222,7 @@ impl TyphooNApp {
                         ("price_histogram", &mut self.show_price_histogram),
                         ("supertrend", &mut self.show_supertrend), ("donchian", &mut self.show_donchian), ("keltner", &mut self.show_keltner),
                         ("regression", &mut self.show_regression), ("squeeze", &mut self.show_squeeze),
-                        ("fvg", &mut self.show_fvg),
+                        ("fvg", &mut self.show_fvg), ("order_blocks", &mut self.show_order_blocks),
                     ] {
                         if let Some(b) = ind[key].as_bool() { *field = b; }
                     }
@@ -9967,6 +10273,12 @@ impl TyphooNApp {
                         if let (Some(p), Some(l)) = (a["price"].as_f64(), a["label"].as_str()) {
                             self.alerts.push((p, l.to_string()));
                         }
+                    }
+                }
+                // Restore chart templates
+                if let Some(templates) = v["chart_templates"].as_object() {
+                    for (name, snap) in templates {
+                        self.chart_templates.insert(name.clone(), snap.clone());
                     }
                 }
                 // Restore MTF cols
@@ -10670,6 +10982,7 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (Classic)");
                     ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
                     ui.checkbox(&mut self.show_fvg,            "Fair Value Gaps (3-bar imbalance)");
+                    ui.checkbox(&mut self.show_order_blocks,    "Order Blocks (ICT/Smart Money)");
 
                     // ── Chart Overlays ──
                     ui.add_space(4.0);
@@ -10704,6 +11017,7 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_volume_pane,    "Volume");
                     ui.checkbox(&mut self.show_squeeze,        "Squeeze Momentum (BB inside KC)");
                     ui.checkbox(&mut self.show_fvg,            "Fair Value Gaps (3-bar imbalance)");
+                    ui.checkbox(&mut self.show_order_blocks,    "Order Blocks (ICT/Smart Money)");
 
                     // ── Ehlers DSP Indicators ──
                     ui.add_space(4.0);
@@ -17385,6 +17699,7 @@ impl eframe::App for TyphooNApp {
                     ui.checkbox(&mut self.show_pivots,      "Pivot Points (P/R1/R2/S1/S2)");
                     ui.checkbox(&mut self.show_supply_demand, "Supply/Demand Zones");
                     ui.checkbox(&mut self.show_fvg,            "Fair Value Gaps (FVG)");
+                    ui.checkbox(&mut self.show_order_blocks,    "Order Blocks (ICT/SMC)");
                     ui.separator();
                     ui.label(egui::RichText::new("Pattern Recognition").color(AXIS_TEXT).small());
                     ui.checkbox(&mut self.show_fractals,    "Fractals (Bill Williams)");
