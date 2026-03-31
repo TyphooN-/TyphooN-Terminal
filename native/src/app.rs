@@ -402,6 +402,68 @@ enum Drawing {
         p2: (usize, f64),
         color: egui::Color32,
     },
+    /// Parallel Channel (two parallel trendlines, 2 clicks + width from midpoint offset).
+    ParallelChannel {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        offset: f64, // price offset for the parallel line (half-width above & below)
+        color: egui::Color32,
+    },
+    /// Fib Channel (Fibonacci levels applied to a channel, 3 clicks).
+    FibChannel {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        p3: (usize, f64), // defines channel width direction
+        color: egui::Color32,
+    },
+    /// Fib Time Zones (vertical lines at Fibonacci intervals from a start bar).
+    FibTimeZones {
+        bar_idx: usize,
+        color: egui::Color32,
+    },
+    /// Price Label (horizontal line with price badge at a specific point).
+    PriceLabel {
+        bar_idx: usize,
+        price: f64,
+        color: egui::Color32,
+    },
+    /// Callout (text box with arrow pointing to chart location, 2 clicks).
+    Callout {
+        anchor: (usize, f64),  // point the arrow points to
+        label_pos: (usize, f64), // where the text box sits
+        text: String,
+        color: egui::Color32,
+    },
+    /// Highlighter (semi-transparent colored rectangle for marking zones).
+    Highlighter {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Cross Marker (+ marker at a specific point).
+    CrossMarker {
+        bar_idx: usize,
+        price: f64,
+        color: egui::Color32,
+    },
+    /// Polyline (multi-segment line, series of connected points).
+    Polyline {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// Anchor Note (note pinned to a bar with background box).
+    AnchorNote {
+        bar_idx: usize,
+        price: f64,
+        text: String,
+        color: egui::Color32,
+    },
+    /// Regression Channel (linear regression line with standard deviation bands, 2 clicks).
+    RegressionChannel {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
 }
 
 /// Trade marker for chart overlay (DARWIN deals, broker fills).
@@ -481,6 +543,22 @@ enum DrawMode {
     PlacingTriangleP3 { bar1: usize, price1: f64, bar2: usize, price2: f64 },
     PlacingTrendAngleP1,
     PlacingTrendAngleP2 { bar1: usize, price1: f64 },
+    PlacingParallelChP1,
+    PlacingParallelChP2 { bar1: usize, price1: f64 },
+    PlacingFibChannelP1,
+    PlacingFibChannelP2 { bar1: usize, price1: f64 },
+    PlacingFibChannelP3 { bar1: usize, price1: f64, bar2: usize, price2: f64 },
+    PlacingFibTimeZones,
+    PlacingPriceLabel,
+    PlacingCalloutP1,
+    PlacingCalloutP2 { bar1: usize, price1: f64 },
+    PlacingHighlighterP1,
+    PlacingHighlighterP2 { bar1: usize, price1: f64 },
+    PlacingCrossMarker,
+    PlacingPolyline,
+    PlacingAnchorNote,
+    PlacingRegressionChP1,
+    PlacingRegressionChP2 { bar1: usize, price1: f64 },
 }
 
 // ─── Ichimoku data ───────────────────────────────────────────────────────────
@@ -5858,6 +5936,236 @@ fn draw_chart(
                         &format!("{:.1}°", angle_deg), egui::FontId::monospace(10.0), *color);
                 }
             }
+            Drawing::ParallelChannel { p1, p2, offset, color } => {
+                let x1 = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2 = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1, x2) {
+                    let y1 = price_to_y(p1.1);
+                    let y2 = price_to_y(p2.1);
+                    let y1u = price_to_y(p1.1 + offset);
+                    let y2u = price_to_y(p2.1 + offset);
+                    let y1d = price_to_y(p1.1 - offset);
+                    let y2d = price_to_y(p2.1 - offset);
+                    // Center line (dashed-style: thinner)
+                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(0.8, *color));
+                    // Upper boundary
+                    painter.line_segment([egui::pos2(x1, y1u), egui::pos2(x2, y2u)], egui::Stroke::new(1.5, *color));
+                    // Lower boundary
+                    painter.line_segment([egui::pos2(x1, y1d), egui::pos2(x2, y2d)], egui::Stroke::new(1.5, *color));
+                    // Fill between upper and lower
+                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 15);
+                    let poly = vec![egui::pos2(x1, y1u), egui::pos2(x2, y2u), egui::pos2(x2, y2d), egui::pos2(x1, y1d)];
+                    painter.add(egui::Shape::convex_polygon(poly, fill, egui::Stroke::NONE));
+                }
+            }
+            Drawing::FibChannel { p1, p2, p3, color } => {
+                let to_x = |idx: usize| -> Option<f32> {
+                    if idx >= start_idx && idx < end_idx { Some(chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w) } else { None }
+                };
+                if let (Some(x1), Some(x2)) = (to_x(p1.0), to_x(p2.0)) {
+                    // Channel width from p3 offset perpendicular to the trendline
+                    let ch_offset = p3.1 - p1.1; // price offset defining full channel width
+                    let levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
+                    let names = ["0%", "23.6%", "38.2%", "50%", "61.8%", "78.6%", "100%"];
+                    for (i, &lvl) in levels.iter().enumerate() {
+                        let off = ch_offset * lvl;
+                        let ly1 = price_to_y(p1.1 + off);
+                        let ly2 = price_to_y(p2.1 + off);
+                        let alpha = if lvl == 0.0 || lvl == 0.5 || lvl == 1.0 { 180 } else { 100 };
+                        let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
+                        let w = if lvl == 0.0 || lvl == 1.0 { 1.5 } else { 0.8 };
+                        painter.line_segment([egui::pos2(x1, ly1), egui::pos2(x2, ly2)], egui::Stroke::new(w, c));
+                        painter.text(egui::pos2(x2 + 4.0, ly2), egui::Align2::LEFT_CENTER, names[i], egui::FontId::monospace(8.0), c);
+                    }
+                    // Fill 0-100%
+                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 10);
+                    let poly = vec![
+                        egui::pos2(x1, price_to_y(p1.1)),
+                        egui::pos2(x2, price_to_y(p2.1)),
+                        egui::pos2(x2, price_to_y(p2.1 + ch_offset)),
+                        egui::pos2(x1, price_to_y(p1.1 + ch_offset)),
+                    ];
+                    painter.add(egui::Shape::convex_polygon(poly, fill, egui::Stroke::NONE));
+                }
+            }
+            Drawing::FibTimeZones { bar_idx, color } => {
+                // Draw vertical lines at Fibonacci intervals: 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144
+                let fibs = [1usize, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233];
+                let mut cumulative = 0usize;
+                for &f in &fibs {
+                    cumulative += f;
+                    let idx = bar_idx + cumulative;
+                    if idx >= start_idx && idx < end_idx {
+                        let x = chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w;
+                        let alpha = if f <= 3 { 120 } else { 80 };
+                        let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
+                        painter.line_segment([egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom())], egui::Stroke::new(1.0, c));
+                        painter.text(egui::pos2(x + 2.0, chart_rect.top() + 2.0), egui::Align2::LEFT_TOP, &format!("{}", cumulative), egui::FontId::monospace(8.0), c);
+                    }
+                }
+            }
+            Drawing::PriceLabel { bar_idx, price, color } => {
+                let y = price_to_y(*price);
+                if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                    // Horizontal line from bar to right edge
+                    let x_start = if *bar_idx >= start_idx && *bar_idx < end_idx {
+                        chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w
+                    } else if *bar_idx < start_idx {
+                        chart_rect.left()
+                    } else {
+                        return; // bar beyond visible range
+                    };
+                    painter.line_segment([egui::pos2(x_start, y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, *color));
+                    // Price badge on the right
+                    let label = format!("{:.5}", price);
+                    let badge_w = 65.0_f32;
+                    let badge_h = 14.0_f32;
+                    let badge_rect = egui::Rect::from_min_size(egui::pos2(chart_rect.right() - badge_w, y - badge_h / 2.0), egui::vec2(badge_w, badge_h));
+                    painter.rect_filled(badge_rect, 2.0, *color);
+                    let text_col = if (color.r() as u16 + color.g() as u16 + color.b() as u16) > 384 { egui::Color32::BLACK } else { egui::Color32::WHITE };
+                    painter.text(badge_rect.center(), egui::Align2::CENTER_CENTER, &label, egui::FontId::monospace(9.0), text_col);
+                }
+            }
+            Drawing::Callout { anchor, label_pos, text, color } => {
+                let to_x = |idx: usize| -> Option<f32> {
+                    if idx >= start_idx && idx < end_idx { Some(chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w) } else { None }
+                };
+                if let (Some(ax), Some(lx)) = (to_x(anchor.0), to_x(label_pos.0)) {
+                    let ay = price_to_y(anchor.1);
+                    let ly = price_to_y(label_pos.1);
+                    // Arrow line from label to anchor
+                    painter.line_segment([egui::pos2(lx, ly), egui::pos2(ax, ay)], egui::Stroke::new(1.0, *color));
+                    // Arrowhead at anchor
+                    let dx = ax - lx; let dy = ay - ly;
+                    let len = (dx * dx + dy * dy).sqrt().max(1.0);
+                    let ux = dx / len; let uy = dy / len;
+                    let sz = 6.0_f32;
+                    let a1 = egui::pos2(ax - ux * sz + uy * sz * 0.4, ay - uy * sz - ux * sz * 0.4);
+                    let a2 = egui::pos2(ax - ux * sz - uy * sz * 0.4, ay - uy * sz + ux * sz * 0.4);
+                    painter.add(egui::Shape::convex_polygon(vec![egui::pos2(ax, ay), a1, a2], *color, egui::Stroke::NONE));
+                    // Text box at label_pos
+                    let pad = 4.0_f32;
+                    let galley = painter.layout_no_wrap(text.clone(), egui::FontId::monospace(10.0), *color);
+                    let tw = galley.rect.width();
+                    let th = galley.rect.height();
+                    let box_rect = egui::Rect::from_min_size(egui::pos2(lx - tw / 2.0 - pad, ly - th / 2.0 - pad), egui::vec2(tw + pad * 2.0, th + pad * 2.0));
+                    let bg = egui::Color32::from_rgba_premultiplied(20, 20, 30, 220);
+                    painter.rect_filled(box_rect, 3.0, bg);
+                    painter.rect_stroke(box_rect, 3.0, egui::Stroke::new(1.0, *color), egui::StrokeKind::Outside);
+                    painter.galley(egui::pos2(lx - tw / 2.0, ly - th / 2.0), galley, *color);
+                }
+            }
+            Drawing::Highlighter { p1, p2, color } => {
+                let x1 = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2 = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1, x2) {
+                    let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
+                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 40);
+                    painter.rect_filled(egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2)), 0.0, fill);
+                    // Border
+                    painter.rect_stroke(egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2)), 0.0, egui::Stroke::new(1.0, *color), egui::StrokeKind::Outside);
+                }
+            }
+            Drawing::CrossMarker { bar_idx, price, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    let sz = 6.0_f32;
+                    // + shape
+                    painter.line_segment([egui::pos2(x - sz, y), egui::pos2(x + sz, y)], egui::Stroke::new(2.0, *color));
+                    painter.line_segment([egui::pos2(x, y - sz), egui::pos2(x, y + sz)], egui::Stroke::new(2.0, *color));
+                }
+            }
+            Drawing::Polyline { points, color } => {
+                let mut screen_pts: Vec<egui::Pos2> = Vec::with_capacity(points.len());
+                for &(idx, price) in points.iter() {
+                    if idx >= start_idx && idx < end_idx {
+                        let x = chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w;
+                        screen_pts.push(egui::pos2(x, price_to_y(price)));
+                    }
+                }
+                if screen_pts.len() > 1 {
+                    painter.add(egui::Shape::line(screen_pts, egui::Stroke::new(1.5, *color)));
+                }
+            }
+            Drawing::AnchorNote { bar_idx, price, text, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    let pad = 4.0_f32;
+                    let galley = painter.layout_no_wrap(text.clone(), egui::FontId::monospace(10.0), *color);
+                    let tw = galley.rect.width();
+                    let th = galley.rect.height();
+                    let box_rect = egui::Rect::from_min_size(egui::pos2(x - pad, y - th - pad * 2.0), egui::vec2(tw + pad * 2.0, th + pad * 2.0));
+                    let bg = egui::Color32::from_rgba_premultiplied(15, 15, 25, 230);
+                    painter.rect_filled(box_rect, 3.0, bg);
+                    painter.rect_stroke(box_rect, 3.0, egui::Stroke::new(1.0, *color), egui::StrokeKind::Outside);
+                    painter.galley(egui::pos2(x, y - th - pad), galley, *color);
+                    // Small triangle pointer down to the anchor point
+                    let tri = vec![egui::pos2(x + 4.0, y - pad), egui::pos2(x + 10.0, y - pad), egui::pos2(x + 7.0, y)];
+                    painter.add(egui::Shape::convex_polygon(tri, *color, egui::Stroke::NONE));
+                }
+            }
+            Drawing::RegressionChannel { p1, p2, color } => {
+                // Linear regression of close prices between p1 and p2 bars
+                let b1 = p1.0.min(p2.0);
+                let b2 = p1.0.max(p2.0);
+                if b2 > b1 && b1 < end_idx && b2 >= start_idx {
+                    // Compute regression from bar data
+                    let n = (b2 - b1 + 1) as f64;
+                    let mut sum_x = 0.0_f64;
+                    let mut sum_y = 0.0_f64;
+                    let mut sum_xy = 0.0_f64;
+                    let mut sum_xx = 0.0_f64;
+                    let mut count = 0u32;
+                    for idx in b1..=b2 {
+                        if idx < bars.len() {
+                            let xi = (idx - b1) as f64;
+                            let yi = bars[idx].close;
+                            sum_x += xi;
+                            sum_y += yi;
+                            sum_xy += xi * yi;
+                            sum_xx += xi * xi;
+                            count += 1;
+                        }
+                    }
+                    if count > 1 {
+                        let cn = count as f64;
+                        let slope = (cn * sum_xy - sum_x * sum_y) / (cn * sum_xx - sum_x * sum_x);
+                        let intercept = (sum_y - slope * sum_x) / cn;
+                        // Standard deviation from regression line
+                        let mut sum_sq = 0.0_f64;
+                        for idx in b1..=b2 {
+                            if idx < bars.len() {
+                                let xi = (idx - b1) as f64;
+                                let predicted = intercept + slope * xi;
+                                let diff = bars[idx].close - predicted;
+                                sum_sq += diff * diff;
+                            }
+                        }
+                        let std_dev = (sum_sq / cn).sqrt();
+                        // Draw regression line + 1 StdDev bands
+                        let x_start = if b1 >= start_idx && b1 < end_idx { chart_rect.left() + ((b1 - start_idx) as f32 + 0.5) * bar_w } else { chart_rect.left() };
+                        let x_end = if b2 >= start_idx && b2 < end_idx { chart_rect.left() + ((b2 - start_idx) as f32 + 0.5) * bar_w } else { chart_rect.right() };
+                        let reg_y1 = price_to_y(intercept);
+                        let reg_y2 = price_to_y(intercept + slope * n);
+                        // Center line
+                        painter.line_segment([egui::pos2(x_start, reg_y1), egui::pos2(x_end, reg_y2)], egui::Stroke::new(1.5, *color));
+                        // Upper band (+1 StdDev)
+                        let uy1 = price_to_y(intercept + std_dev);
+                        let uy2 = price_to_y(intercept + slope * n + std_dev);
+                        painter.line_segment([egui::pos2(x_start, uy1), egui::pos2(x_end, uy2)], egui::Stroke::new(0.8, *color));
+                        // Lower band (-1 StdDev)
+                        let dy1 = price_to_y(intercept - std_dev);
+                        let dy2 = price_to_y(intercept + slope * n - std_dev);
+                        painter.line_segment([egui::pos2(x_start, dy1), egui::pos2(x_end, dy2)], egui::Stroke::new(0.8, *color));
+                        // Fill between bands
+                        let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 15);
+                        let poly = vec![egui::pos2(x_start, uy1), egui::pos2(x_end, uy2), egui::pos2(x_end, dy2), egui::pos2(x_start, dy1)];
+                        painter.add(egui::Shape::convex_polygon(poly, fill, egui::Stroke::NONE));
+                    }
+                }
+            }
         }
     }
 }
@@ -6495,7 +6803,17 @@ const COMMANDS: &[Command] = &[
     Command { name: "DRAW_VLINE",    desc: "Draw vertical line" },
     Command { name: "DRAW_RECT",     desc: "Draw rectangle zone" },
     Command { name: "DRAW_RAY",      desc: "Draw ray (extends right)" },
-    Command { name: "DRAW_CHANNEL",  desc: "Draw parallel channel" },
+    Command { name: "DRAW_CHANNEL",  desc: "Draw parallel channel (3 clicks)" },
+    Command { name: "DRAW_PARALLEL_CH", desc: "Draw parallel channel (2 clicks)" },
+    Command { name: "DRAW_FIB_CHANNEL", desc: "Draw Fibonacci channel (3 clicks)" },
+    Command { name: "DRAW_FIB_TIME",    desc: "Draw Fibonacci time zones" },
+    Command { name: "DRAW_PRICE_LABEL", desc: "Draw price label with badge" },
+    Command { name: "DRAW_CALLOUT",     desc: "Draw callout with arrow (2 clicks)" },
+    Command { name: "DRAW_HIGHLIGHTER", desc: "Draw highlighter zone (2 clicks)" },
+    Command { name: "DRAW_CROSS_MARKER",desc: "Draw cross marker (+)" },
+    Command { name: "DRAW_POLYLINE",    desc: "Draw polyline (multi-click, dbl-click end)" },
+    Command { name: "DRAW_ANCHOR_NOTE", desc: "Draw anchor note with text box" },
+    Command { name: "DRAW_REGRESSION",  desc: "Draw regression channel with StdDev bands" },
     Command { name: "CLEAR_DRAWINGS",desc: "Clear all drawings on chart" },
     Command { name: "SESSIONS",      desc: "Toggle trading session highlighting (Asian/London/NY)" },
     Command { name: "VOL_HEATMAP",   desc: "Toggle volume heatmap candle coloring" },
@@ -7021,6 +7339,8 @@ pub struct TyphooNApp {
 
     /// Drawing interaction mode.
     draw_mode: DrawMode,
+    /// In-progress polyline points (used during PlacingPolyline mode).
+    polyline_points: Vec<(usize, f64)>,
 
     /// DARWIN XLSX import ticker input.
     darwin_import_ticker: String,
@@ -8501,6 +8821,7 @@ impl TyphooNApp {
             show_order_blocks: false,
             chart_templates: std::collections::HashMap::new(),
             draw_mode: DrawMode::None,
+            polyline_points: Vec::new(),
             darwin_import_ticker: String::new(),
             darwin_xlsx_dir: String::new(),
             mt5_db_paths: [String::new(), String::new(), String::new(), String::new()],
@@ -9662,6 +9983,16 @@ impl TyphooNApp {
             "DRAW_RECT"      => self.draw_mode = DrawMode::PlacingRectP1,
             "DRAW_RAY"       => self.draw_mode = DrawMode::PlacingRayP1,
             "DRAW_CHANNEL"   => self.draw_mode = DrawMode::PlacingChannelP1,
+            "DRAW_PARALLEL_CH" => self.draw_mode = DrawMode::PlacingParallelChP1,
+            "DRAW_FIB_CHANNEL" => self.draw_mode = DrawMode::PlacingFibChannelP1,
+            "DRAW_FIB_TIME" => self.draw_mode = DrawMode::PlacingFibTimeZones,
+            "DRAW_PRICE_LABEL" => self.draw_mode = DrawMode::PlacingPriceLabel,
+            "DRAW_CALLOUT" => self.draw_mode = DrawMode::PlacingCalloutP1,
+            "DRAW_HIGHLIGHTER" => self.draw_mode = DrawMode::PlacingHighlighterP1,
+            "DRAW_CROSS_MARKER" => self.draw_mode = DrawMode::PlacingCrossMarker,
+            "DRAW_POLYLINE" => { self.draw_mode = DrawMode::PlacingPolyline; self.polyline_points.clear(); },
+            "DRAW_ANCHOR_NOTE" => self.draw_mode = DrawMode::PlacingAnchorNote,
+            "DRAW_REGRESSION" => self.draw_mode = DrawMode::PlacingRegressionChP1,
             "CLEAR_DRAWINGS" => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); } }
             "SESSIONS" => { self.show_sessions = !self.show_sessions; self.log.push_back(LogEntry::info(format!("Sessions: {}", if self.show_sessions { "ON" } else { "OFF" }))); }
             "VOL_HEATMAP" => { self.show_vol_heatmap = !self.show_vol_heatmap; self.log.push_back(LogEntry::info(format!("Volume heatmap: {}", if self.show_vol_heatmap { "ON" } else { "OFF" }))); }
@@ -10118,6 +10449,16 @@ impl TyphooNApp {
                     Drawing::Ellipse { p1, p2, color } => Some(serde_json::json!({"type":"ellipse","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
                     Drawing::Triangle { p1, p2, p3, color } => Some(serde_json::json!({"type":"triangle","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
                     Drawing::TrendAngle { p1, p2, color } => Some(serde_json::json!({"type":"trendangle","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ParallelChannel { p1, p2, offset, color } => Some(serde_json::json!({"type":"parallelch","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"offset":offset,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FibChannel { p1, p2, p3, color } => Some(serde_json::json!({"type":"fibchannel","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::FibTimeZones { bar_idx, color } => Some(serde_json::json!({"type":"fibtimezones","bar_idx":bar_idx,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::PriceLabel { bar_idx, price, color } => Some(serde_json::json!({"type":"pricelabel","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Callout { anchor, label_pos, text, color } => Some(serde_json::json!({"type":"callout","anchor":[anchor.0,anchor.1],"label_pos":[label_pos.0,label_pos.1],"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Highlighter { p1, p2, color } => Some(serde_json::json!({"type":"highlighter","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::CrossMarker { bar_idx, price, color } => Some(serde_json::json!({"type":"crossmarker","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Polyline { points, color } => Some(serde_json::json!({"type":"polyline","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::AnchorNote { bar_idx, price, text, color } => Some(serde_json::json!({"type":"anchornote","bar_idx":bar_idx,"price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::RegressionChannel { p1, p2, color } => Some(serde_json::json!({"type":"regressionch","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
                 }).collect::<Vec<_>>()
             }).unwrap_or_default(),
             "alerts": self.alerts.iter().map(|(p, l)| serde_json::json!({"price": p, "label": l})).collect::<Vec<_>>(),
@@ -10262,6 +10603,16 @@ impl TyphooNApp {
                                 Some("ellipse") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::Ellipse { p1, p2, color: parse_col(d) }); } }
                                 Some("triangle") => { if let (Some(p1), Some(p2), Some(p3)) = (parse_pt(d,"p1"), parse_pt(d,"p2"), parse_pt(d,"p3")) { chart.drawings.push(Drawing::Triangle { p1, p2, p3, color: parse_col(d) }); } }
                                 Some("trendangle") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::TrendAngle { p1, p2, color: parse_col(d) }); } }
+                                Some("parallelch") => { if let (Some(p1), Some(p2), Some(off)) = (parse_pt(d,"p1"), parse_pt(d,"p2"), d["offset"].as_f64()) { chart.drawings.push(Drawing::ParallelChannel { p1, p2, offset: off, color: parse_col(d) }); } }
+                                Some("fibchannel") => { if let (Some(p1), Some(p2), Some(p3)) = (parse_pt(d,"p1"), parse_pt(d,"p2"), parse_pt(d,"p3")) { chart.drawings.push(Drawing::FibChannel { p1, p2, p3, color: parse_col(d) }); } }
+                                Some("fibtimezones") => { if let Some(idx) = d["bar_idx"].as_u64() { chart.drawings.push(Drawing::FibTimeZones { bar_idx: idx as usize, color: parse_col(d) }); } }
+                                Some("pricelabel") => { if let (Some(idx), Some(p)) = (d["bar_idx"].as_u64(), d["price"].as_f64()) { chart.drawings.push(Drawing::PriceLabel { bar_idx: idx as usize, price: p, color: parse_col(d) }); } }
+                                Some("callout") => { if let (Some(a), Some(lp), Some(t)) = (parse_pt(d,"anchor"), parse_pt(d,"label_pos"), d["text"].as_str()) { chart.drawings.push(Drawing::Callout { anchor: a, label_pos: lp, text: t.to_string(), color: parse_col(d) }); } }
+                                Some("highlighter") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::Highlighter { p1, p2, color: parse_col(d) }); } }
+                                Some("crossmarker") => { if let (Some(idx), Some(p)) = (d["bar_idx"].as_u64(), d["price"].as_f64()) { chart.drawings.push(Drawing::CrossMarker { bar_idx: idx as usize, price: p, color: parse_col(d) }); } }
+                                Some("polyline") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::Polyline { points, color: parse_col(d) }); } } }
+                                Some("anchornote") => { if let (Some(idx), Some(p), Some(t)) = (d["bar_idx"].as_u64(), d["price"].as_f64(), d["text"].as_str()) { chart.drawings.push(Drawing::AnchorNote { bar_idx: idx as usize, price: p, text: t.to_string(), color: parse_col(d) }); } }
+                                Some("regressionch") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::RegressionChannel { p1, p2, color: parse_col(d) }); } }
                                 _ => {}
                             }
                         }
@@ -16518,6 +16869,16 @@ impl TyphooNApp {
                                             Drawing::Ellipse { .. } => ("Ellipse", String::new()),
                                             Drawing::Triangle { .. } => ("Triangle", String::new()),
                                             Drawing::TrendAngle { .. } => ("Trend Angle", String::new()),
+                                            Drawing::ParallelChannel { .. } => ("Parallel Ch", String::new()),
+                                            Drawing::FibChannel { .. } => ("Fib Channel", String::new()),
+                                            Drawing::FibTimeZones { bar_idx, .. } => ("Fib Time", format!("bar {}", bar_idx)),
+                                            Drawing::PriceLabel { price, .. } => ("Price Label", format!("{:.5}", price)),
+                                            Drawing::Callout { text, .. } => ("Callout", text.clone()),
+                                            Drawing::Highlighter { .. } => ("Highlighter", String::new()),
+                                            Drawing::CrossMarker { price, .. } => ("Cross", format!("{:.5}", price)),
+                                            Drawing::Polyline { points, .. } => ("Polyline", format!("{} pts", points.len())),
+                                            Drawing::AnchorNote { text, .. } => ("Note", text.clone()),
+                                            Drawing::RegressionChannel { .. } => ("Regression", String::new()),
                                         };
                                         ui.label(egui::RichText::new(type_name).small());
                                         ui.label(egui::RichText::new(details).small().color(AXIS_TEXT));
@@ -19210,6 +19571,8 @@ impl eframe::App for TyphooNApp {
                         if ui.button("➤  Arrow Line").clicked() { self.draw_mode = DrawMode::PlacingArrowP1; ui.close(); }
                         if ui.button("ℹ  Info Line").clicked() { self.draw_mode = DrawMode::PlacingInfoLineP1; ui.close(); }
                         if ui.button("∠  Trend Angle").clicked() { self.draw_mode = DrawMode::PlacingTrendAngleP1; ui.close(); }
+                        if ui.button("⫼  Parallel Channel").clicked() { self.draw_mode = DrawMode::PlacingParallelChP1; ui.close(); }
+                        if ui.button("~  Polyline (dbl-click end)").clicked() { self.draw_mode = DrawMode::PlacingPolyline; self.polyline_points.clear(); ui.close(); }
                     });
                     ui.separator();
 
@@ -19217,6 +19580,8 @@ impl eframe::App for TyphooNApp {
                     ui.menu_button(egui::RichText::new("Fib/Gann").small().color(normal_col), |ui| {
                         if ui.button("Fib Retracement").clicked() { self.draw_mode = DrawMode::PlacingFiboP1; ui.close(); }
                         if ui.button("Fib Extension (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingFiboExtP1; ui.close(); }
+                        if ui.button("Fib Channel (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingFibChannelP1; ui.close(); }
+                        if ui.button("Fib Time Zones").clicked() { self.draw_mode = DrawMode::PlacingFibTimeZones; ui.close(); }
                         if ui.button("Andrews Pitchfork (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingPitchforkP1; ui.close(); }
                         if ui.button("Gann Fan").clicked() { self.draw_mode = DrawMode::PlacingGannFan; ui.close(); }
                     });
@@ -19228,6 +19593,8 @@ impl eframe::App for TyphooNApp {
                         if ui.button("═  Channel (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingChannelP1; ui.close(); }
                         if ui.button("◯  Ellipse").clicked() { self.draw_mode = DrawMode::PlacingEllipseP1; ui.close(); }
                         if ui.button("△  Triangle (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingTriangleP1; ui.close(); }
+                        if ui.button("▮  Highlighter").clicked() { self.draw_mode = DrawMode::PlacingHighlighterP1; ui.close(); }
+                        if ui.button("⊞  Regression Channel").clicked() { self.draw_mode = DrawMode::PlacingRegressionChP1; ui.close(); }
                     });
                     ui.separator();
 
@@ -19236,6 +19603,10 @@ impl eframe::App for TyphooNApp {
                         if ui.button("T  Text Label").clicked() { self.draw_mode = DrawMode::PlacingTextLabel; ui.close(); }
                         if ui.button("▲  Arrow Up").clicked() { self.draw_mode = DrawMode::PlacingArrowMarkerUp; ui.close(); }
                         if ui.button("▼  Arrow Down").clicked() { self.draw_mode = DrawMode::PlacingArrowMarkerDown; ui.close(); }
+                        if ui.button("+  Cross Marker").clicked() { self.draw_mode = DrawMode::PlacingCrossMarker; ui.close(); }
+                        if ui.button("$  Price Label").clicked() { self.draw_mode = DrawMode::PlacingPriceLabel; ui.close(); }
+                        if ui.button("⌐  Callout").clicked() { self.draw_mode = DrawMode::PlacingCalloutP1; ui.close(); }
+                        if ui.button("☰  Anchor Note").clicked() { self.draw_mode = DrawMode::PlacingAnchorNote; ui.close(); }
                     });
                     ui.separator();
 
@@ -19314,6 +19685,22 @@ impl eframe::App for TyphooNApp {
                             DrawMode::PlacingTriangleP3 { .. } => "Triangle: click P3",
                             DrawMode::PlacingTrendAngleP1 => "Angle: click start",
                             DrawMode::PlacingTrendAngleP2 { .. } => "Angle: click end",
+                            DrawMode::PlacingParallelChP1 => "Parallel Ch: click P1",
+                            DrawMode::PlacingParallelChP2 { .. } => "Parallel Ch: click P2 (offset from midline)",
+                            DrawMode::PlacingFibChannelP1 => "Fib Ch: click P1",
+                            DrawMode::PlacingFibChannelP2 { .. } => "Fib Ch: click P2",
+                            DrawMode::PlacingFibChannelP3 { .. } => "Fib Ch: click width",
+                            DrawMode::PlacingFibTimeZones => "Fib Time: click start",
+                            DrawMode::PlacingPriceLabel => "Price Label: click",
+                            DrawMode::PlacingCalloutP1 => "Callout: click anchor",
+                            DrawMode::PlacingCalloutP2 { .. } => "Callout: click label pos",
+                            DrawMode::PlacingHighlighterP1 => "Highlighter: click corner 1",
+                            DrawMode::PlacingHighlighterP2 { .. } => "Highlighter: click corner 2",
+                            DrawMode::PlacingCrossMarker => "Cross: click to place",
+                            DrawMode::PlacingPolyline => "Polyline: click points, dbl-click end",
+                            DrawMode::PlacingAnchorNote => "Note: click to place",
+                            DrawMode::PlacingRegressionChP1 => "Regression: click start",
+                            DrawMode::PlacingRegressionChP2 { .. } => "Regression: click end",
                             DrawMode::None => "",
                         };
                         ui.label(egui::RichText::new(mode_name).small().color(active_col));
@@ -19379,8 +19766,20 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
+            // Double-click while placing polyline → finalize it
+            if ctx.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) && self.draw_mode == DrawMode::PlacingPolyline {
+                if self.polyline_points.len() >= 2 {
+                    let pts = std::mem::take(&mut self.polyline_points);
+                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                        chart.drawings.push(Drawing::Polyline { points: pts, color: egui::Color32::from_rgb(100, 200, 255) });
+                    }
+                }
+                self.polyline_points.clear();
+                self.draw_mode = DrawMode::None;
+            }
+
             // Double-click → reset zoom/pan
-            if ctx.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) {
+            if ctx.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) && self.draw_mode == DrawMode::None {
                 if on_price_axis {
                     // Double-click price axis → auto-fit vertical only
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
@@ -19870,6 +20269,71 @@ impl eframe::App for TyphooNApp {
                                     }
                                     DrawMode::PlacingTrendAngleP2 { bar1, price1 } => {
                                         chart.drawings.push(Drawing::TrendAngle { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 200, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingParallelChP1 => {
+                                        self.draw_mode = DrawMode::PlacingParallelChP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingParallelChP2 { bar1, price1 } => {
+                                        // Offset = half the vertical distance between p1 and p2 (user clicks define center + one edge)
+                                        let offset = (price - (price1 + (price - price1) * 0.5)).abs().max(0.0001);
+                                        let mid_price2 = (price1 + price) / 2.0;
+                                        chart.drawings.push(Drawing::ParallelChannel {
+                                            p1: (bar1, price1), p2: (abs_idx, mid_price2),
+                                            offset,
+                                            color: egui::Color32::from_rgb(150, 200, 100),
+                                        });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingFibChannelP1 => {
+                                        self.draw_mode = DrawMode::PlacingFibChannelP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingFibChannelP2 { bar1, price1 } => {
+                                        self.draw_mode = DrawMode::PlacingFibChannelP3 { bar1, price1, bar2: abs_idx, price2: price };
+                                    }
+                                    DrawMode::PlacingFibChannelP3 { bar1, price1, bar2, price2 } => {
+                                        chart.drawings.push(Drawing::FibChannel { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(255, 200, 50) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingFibTimeZones => {
+                                        chart.drawings.push(Drawing::FibTimeZones { bar_idx: abs_idx, color: egui::Color32::from_rgb(200, 160, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingPriceLabel => {
+                                        chart.drawings.push(Drawing::PriceLabel { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(255, 200, 80) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingCalloutP1 => {
+                                        self.draw_mode = DrawMode::PlacingCalloutP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingCalloutP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::Callout { anchor: (bar1, price1), label_pos: (abs_idx, price), text: "Note".to_string(), color: egui::Color32::WHITE });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingHighlighterP1 => {
+                                        self.draw_mode = DrawMode::PlacingHighlighterP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingHighlighterP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::Highlighter { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(255, 255, 0) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingCrossMarker => {
+                                        chart.drawings.push(Drawing::CrossMarker { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(255, 100, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingPolyline => {
+                                        self.polyline_points.push((abs_idx, price));
+                                        // Don't change draw_mode — keep collecting points
+                                    }
+                                    DrawMode::PlacingAnchorNote => {
+                                        chart.drawings.push(Drawing::AnchorNote { bar_idx: abs_idx, price, text: "Note".to_string(), color: egui::Color32::WHITE });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingRegressionChP1 => {
+                                        self.draw_mode = DrawMode::PlacingRegressionChP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingRegressionChP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::RegressionChannel { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 180, 255) });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::None => {}
