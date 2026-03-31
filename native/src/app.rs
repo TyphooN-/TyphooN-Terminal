@@ -7333,7 +7333,6 @@ fn draw_chart(
                     painter.circle_filled(egui::pos2(x2, y2), 3.0, *color);
                 }
             }
-            _ => {}
         }
     }
 }
@@ -9479,19 +9478,22 @@ impl TyphooNApp {
                         });
                     }
                     BrokerCmd::Mt5Sync { sources, .. } => {
-                        // Reuse the shared cache Arc — avoids opening a second connection
-                        // to typhoon_cache.db. Two separate connections competing for the
-                        // same WAL write slot caused "database is locked" under compaction.
-                        // With a shared Arc<SqliteCache> all writes go through the same
-                        // Mutex<Connection> and are serialized at the Rust level, never
-                        // hitting an SQLite-level SQLITE_BUSY.
-                        let target_arc = shared_cache_broker.read().ok().and_then(|g| g.clone());
+                        // Open a SEPARATE connection for the target — NOT the shared Arc.
+                        // Using the shared Arc caused Rust Mutex contention: Mt5Sync's tight
+                        // put_raw_blob loop starved try_lock callers (UI try_load, bg detailed_stats),
+                        // causing "Cache busy" and empty Storage Manager.
+                        // A separate connection with WAL + busy_timeout=5000 lets SQLite handle
+                        // write contention at the database level (retry for 5s) while the main
+                        // connection remains free for UI reads.
                         let msg_tx = broker_msg_tx_clone.clone();
                         std::thread::spawn(move || {
-                            let target_cache = match target_arc {
-                                Some(c) => c,
-                                None => {
-                                    let _ = msg_tx.send(BrokerMsg::Error("MT5 sync: cache not ready yet, retry after startup".into()));
+                            let mut target_path = dirs_home();
+                            target_path.push("cache");
+                            target_path.push("typhoon_cache.db");
+                            let target_cache = match typhoon_engine::core::cache::SqliteCache::open(&target_path) {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    let _ = msg_tx.send(BrokerMsg::Error(format!("MT5 sync: cannot open target cache: {e}")));
                                     return;
                                 }
                             };
@@ -10298,7 +10300,7 @@ impl TyphooNApp {
                             data.sec_filings = sec_filing::get_recent_filings(&conn, None, 100).unwrap_or_default();
                             data.sec_alerts = sec_filing::get_filing_alerts(&conn, false).unwrap_or_default();
                         }
-                        data.cache_stats = cache.stats().ok();
+                        if let Ok(s) = cache.stats() { data.cache_stats = Some(s); }
                         let _ = bg_tx.send(data.clone());
 
                         if let Ok(conn) = cache.connection() {
@@ -10313,7 +10315,10 @@ impl TyphooNApp {
                         // Phase 1c: heavier queries — release conn between each to avoid blocking UI
                         {
                             let t = std::time::Instant::now();
-                            data.detailed_stats = cache.detailed_stats().unwrap_or_default();
+                            // Keep previous data on failure — don't overwrite with empty when cache is busy
+                            if let Ok(stats) = cache.detailed_stats() {
+                                data.detailed_stats = stats;
+                            }
                             tracing::trace!("BG: detailed_stats {}ms (n={})", t.elapsed().as_millis(), data.detailed_stats.len());
                             // Cache first/last bar timestamps for crypto entries (avoid per-frame DB queries)
                             let mut ts_cache = std::collections::HashMap::new();
@@ -22546,6 +22551,7 @@ impl eframe::App for TyphooNApp {
 }
 
 // ─── Testable detection helpers (extracted from render logic) ────────────────
+#[allow(dead_code)]
 
 /// Detected order block zone.
 #[derive(Debug, Clone)]
@@ -22558,9 +22564,7 @@ struct OrderBlock {
     end_idx: usize,
 }
 
-/// Detect order blocks from bars (pure logic, no rendering).
-/// Bullish OB: bearish candle where next close > current high + ATR.
-/// Bearish OB: bullish candle where next close < current low - ATR.
+#[allow(dead_code)]
 fn detect_order_blocks(bars: &[Bar]) -> Vec<OrderBlock> {
     if bars.len() < 3 { return Vec::new(); }
 
@@ -22615,7 +22619,7 @@ fn detect_order_blocks(bars: &[Bar]) -> Vec<OrderBlock> {
     zones
 }
 
-/// Detected Fair Value Gap.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct FairValueGap {
     /// Index of the middle bar (the gap is between bar[i-1] and bar[i+1]).
@@ -22630,7 +22634,7 @@ struct FairValueGap {
     filled: bool,
 }
 
-/// Detect Fair Value Gaps from bars (pure logic, no rendering).
+#[allow(dead_code)]
 fn detect_fair_value_gaps(bars: &[Bar]) -> Vec<FairValueGap> {
     if bars.len() < 3 { return Vec::new(); }
     let mut gaps = Vec::new();
@@ -22665,12 +22669,11 @@ fn detect_fair_value_gaps(bars: &[Bar]) -> Vec<FairValueGap> {
     gaps
 }
 
-/// Market structure label at a fractal point.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 enum MarketStructureLabel { HH, HL, LH, LL }
 
-/// Detect market structure labels from fractal data (pure logic).
-/// Returns (swing_high_labels, swing_low_labels) where each is (bar_idx, label).
+#[allow(dead_code)]
 fn detect_market_structure(bars: &[Bar], fractal_up: &[bool], fractal_down: &[bool])
     -> (Vec<(usize, MarketStructureLabel)>, Vec<(usize, MarketStructureLabel)>)
 {
