@@ -8964,9 +8964,15 @@ impl TyphooNApp {
             let mut chart = ChartState::new(symbol, tf);
             chart.chart_type = chart_type;
             let cache_ref = Arc::as_ref(cache);
-            { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache_ref, &mut self.log, gpu.as_mut()) { self.log.push_back(LogEntry::info("Cache busy — chart will load when available")); } self.gpu_indicators = gpu; }
-            // If chart loaded 0 bars, trigger live fetch from Alpaca
-            if chart.bars.is_empty() {
+            let mut gpu = self.gpu_indicators.take();
+            let load_succeeded = chart.try_load(cache_ref, &mut self.log, gpu.as_mut());
+            self.gpu_indicators = gpu;
+            if !load_succeeded {
+                // Cache Mutex contended (compaction/sync) — defer load, do NOT fetch from Alpaca
+                self.log.push_back(LogEntry::info("Cache busy — chart will load when available"));
+                self.deferred_chart_loads.push(self.active_tab);
+            } else if chart.bars.is_empty() {
+                // Mutex acquired but no data in cache — fetch from Alpaca
                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                 let _ = self.broker_tx.send(BrokerCmd::FetchBars {
                     symbol: symbol.to_string(),
@@ -18683,7 +18689,7 @@ impl eframe::App for TyphooNApp {
                                     let mut loaded = false;
                                     if let Some(ref cache) = self.cache {
                                         if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                                            match cache.get_bars_raw(&key) {
+                                            match cache.try_get_bars_raw(&key) {
                                                 Ok(Some(raw)) => {
                                                     chart.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                                                         ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
@@ -18694,13 +18700,17 @@ impl eframe::App for TyphooNApp {
                                                     self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
                                                     loaded = true;
                                                 }
-                                                Ok(None) => {}
+                                                Ok(None) => {
+                                                    // Cache busy (Mutex contended) or key not found
+                                                    // Don't fetch from Alpaca — data may exist, just can't read right now
+                                                    self.log.push_back(LogEntry::info("Cache busy — try again in a moment"));
+                                                }
                                                 Err(e) => { self.log.push_back(LogEntry::err(format!("Load error: {}", e))); }
                                             }
                                         }
                                     }
-                                    // If not in cache and broker connected, fetch from Alpaca
-                                    if !loaded && self.broker_connected {
+                                    // Only fetch from Alpaca if we successfully read cache and found nothing
+                                    if !loaded && self.broker_connected && !self.cache.as_ref().map(|c| c.try_connection().is_none()).unwrap_or(true) {
                                         let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                                         let tf = self.charts.get(self.active_tab).map(|c| c.timeframe.label().to_string()).unwrap_or_else(|| "1Day".to_string());
                                         let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: key.clone(), timeframe: tf, db_path });
