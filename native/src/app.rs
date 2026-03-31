@@ -8964,7 +8964,7 @@ impl TyphooNApp {
             let mut chart = ChartState::new(symbol, tf);
             chart.chart_type = chart_type;
             let cache_ref = Arc::as_ref(cache);
-            { let mut gpu = self.gpu_indicators.take(); chart.load(cache_ref, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+            { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache_ref, &mut self.log, gpu.as_mut()) { self.log.push_back(LogEntry::info("Cache busy — chart will load when available")); } self.gpu_indicators = gpu; }
             // If chart loaded 0 bars, trigger live fetch from Alpaca
             if chart.bars.is_empty() {
                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
@@ -9065,7 +9065,7 @@ impl TyphooNApp {
             let tf_idx = self.charts.len() % all_tfs.len();
             let mut chart = ChartState::new(&sym, all_tfs[tf_idx]);
             if let Some(ref cache) = self.cache {
-                { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
             }
             self.charts.push(chart);
         }
@@ -9073,7 +9073,7 @@ impl TyphooNApp {
         if let Some(ref cache) = self.cache {
             for chart in &mut self.charts {
                 if chart.bars.is_empty() {
-                    { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                    { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
                 }
             }
         }
@@ -9286,7 +9286,7 @@ impl TyphooNApp {
                     if let Some(ref cache) = self.cache.clone() {
                         for chart in &mut self.charts {
                             if chart.bars.is_empty() {
-                                { let mut gpu = self.gpu_indicators.take(); chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
                             }
                         }
                     }
@@ -9300,7 +9300,7 @@ impl TyphooNApp {
             "RELOAD" => {
                 if let Some(ref cache) = self.cache.clone() {
                     for chart in &mut self.charts {
-                        { let mut gpu = self.gpu_indicators.take(); chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                        { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
                     }
                 }
             }
@@ -9411,7 +9411,7 @@ impl TyphooNApp {
                 let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
                 let mut new_chart = ChartState::new(&self.symbol_input, tf);
                 if let Some(ref cache) = self.cache.clone() {
-                    { let mut gpu = self.gpu_indicators.take(); new_chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                    { let mut gpu = self.gpu_indicators.take(); new_chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                 }
                 self.charts.push(new_chart);
                 self.active_tab = self.charts.len() - 1;
@@ -9878,11 +9878,11 @@ impl TyphooNApp {
                             if self.mtf_enabled {
                                 for chart in &mut self.charts {
                                     if chart.bars.is_empty() {
-                                        { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                                        { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
                                     }
                                 }
                             } else if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                                { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
                             }
                         }
                     }
@@ -17193,7 +17193,7 @@ impl eframe::App for TyphooNApp {
                 let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
                 let mut new_chart = ChartState::new(&self.symbol_input, tf);
                 if let Some(ref cache) = self.cache.clone() {
-                    { let mut gpu = self.gpu_indicators.take(); new_chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                    { let mut gpu = self.gpu_indicators.take(); new_chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                 }
                 self.charts.push(new_chart);
                 self.active_tab = self.charts.len() - 1;
@@ -17979,7 +17979,7 @@ impl eframe::App for TyphooNApp {
                     let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
                     let mut new_chart = ChartState::new(&self.symbol_input, tf);
                     if let Some(ref cache) = self.cache.clone() {
-                        { let mut gpu = self.gpu_indicators.take(); new_chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                        { let mut gpu = self.gpu_indicators.take(); new_chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
                     }
                     self.charts.push(new_chart);
                     self.active_tab = self.charts.len() - 1;
@@ -17999,7 +17999,7 @@ impl eframe::App for TyphooNApp {
                     if let Some(chart) = self.charts.get_mut(idx) {
                         if chart.bars.is_empty() {
                             if let Some(ref cache) = self.cache {
-                                { let mut gpu = self.gpu_indicators.take(); chart.load(cache, &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                                { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(cache, &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
                             }
                         }
                     }
@@ -19076,7 +19076,7 @@ impl eframe::App for TyphooNApp {
                         if let Some(ref cache) = self.cache.clone() {
                             for chart in &mut self.charts {
                                 if chart.bars.is_empty() {
-                                    { let mut gpu = self.gpu_indicators.take(); chart.load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()); self.gpu_indicators = gpu; }
+                                    { let mut gpu = self.gpu_indicators.take(); if !chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut()) { self.deferred_chart_loads.push(0); } self.gpu_indicators = gpu; }
                                 }
                             }
                         }
