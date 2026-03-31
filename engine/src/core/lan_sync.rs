@@ -32,10 +32,10 @@ fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
 /// Generate an ephemeral self-signed TLS certificate for LAN sync server.
 /// Returns (PEM certificate, PEM private key) for native-tls.
 fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>), String> {
-    let cert = rcgen::generate_simple_self_signed(vec!["typhoon-lan-sync".into(), "localhost".into()])
+    let certified_key = rcgen::generate_simple_self_signed(vec!["typhoon-lan-sync".into(), "localhost".into()])
         .map_err(|e| format!("Certificate generation failed: {e}"))?;
-    let cert_pem = cert.cert.pem().into_bytes();
-    let key_pem = cert.key_pair.serialize_pem().into_bytes();
+    let cert_pem = certified_key.cert.pem().into_bytes();
+    let key_pem = certified_key.signing_key.serialize_pem().into_bytes();
     Ok((cert_pem, key_pem))
 }
 

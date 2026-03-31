@@ -38,7 +38,7 @@ serde_json = "1"
 bytemuck = { version = "1", features = ["derive"] }
 
 # Prometheus metrics
-prometheus = "0.13"
+prometheus = "0.14"
 axum = "0.8"
 
 # Image encoding (screenshot export)
