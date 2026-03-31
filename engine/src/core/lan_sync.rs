@@ -1169,11 +1169,19 @@ async fn client_sync_loop(
                                     tracing::info!("LAN sync: table re-sync complete");
                                 }
                                 Ok(SyncMessage::DarwinData { data, accounts: _, deals: _, positions: _ }) => {
-                                    if let Ok(conn) = cache.connection() {
-                                        match crate::core::darwin::import_darwin_data(&conn, &data) {
-                                            Ok((a, d, p)) => tracing::info!("LAN sync: DARWIN re-sync: {a} accounts, {d} deals, {p} positions"),
-                                            Err(e) => tracing::warn!("LAN sync: DARWIN re-import failed: {e}"),
+                                    // Decode: base64 → zstd decompress → JSON (same as initial sync)
+                                    if let Ok(compressed) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data) {
+                                        let json_bytes = zstd::decode_all(std::io::Cursor::new(&compressed))
+                                            .unwrap_or_else(|_| compressed.clone());
+                                        let json = String::from_utf8_lossy(&json_bytes);
+                                        if let Ok(conn) = cache.connection() {
+                                            match crate::core::darwin::import_darwin_data(&conn, &json) {
+                                                Ok((a, d, p)) => tracing::info!("LAN sync: DARWIN re-sync: {a} accounts, {d} deals, {p} positions"),
+                                                Err(e) => tracing::warn!("LAN sync: DARWIN re-import failed: {e}"),
+                                            }
                                         }
+                                    } else {
+                                        tracing::warn!("LAN sync: DARWIN re-sync base64 decode failed");
                                     }
                                 }
                                 _ => {}
