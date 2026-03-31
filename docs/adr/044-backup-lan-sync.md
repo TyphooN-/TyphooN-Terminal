@@ -76,6 +76,30 @@ WebSocket messages over TCP, authenticated with PBKDF2-derived shared secret + H
 - Receives incremental pushes for live sync
 - Reconnects automatically on connection loss
 
+#### Full Data Sync Protocol (13 tables)
+
+The LAN sync transfers all SQLite tables in phases:
+
+1. **Bar cache** (`bar_cache`): Binary batch, all symbols x timeframes
+2. **DARWIN tables** (4): `darwin_accounts`, `darwin_deals`, `darwin_positions`, `darwin_equity_snapshots` — always full sync (deal data is static XLSX import)
+3. **KV cache** (`kv_cache`): Fundamentals, news, SEC, FRED, etc.
+4. **Research tables** (8 via `SYNCABLE_TABLES` whitelist): `darwin_equity_snapshots`, `sec_filings`, `sec_insider_trades`, `sec_filing_alerts`, `sec_scrape_index`, `fundamentals`, `quarterly_financials`, `institutional_holders`
+5. **Sync state** (`sync_state`): Tracks `last_sync_ts` per table for incremental sync
+
+#### Incremental Sync Protocol
+
+All data sync uses timestamp-based incremental transfer via the `sync_state` table:
+
+- Each table's last sync timestamp is stored as `sync_state[table:<name>]`
+- Client sends `RequestKvData { since_ts }` and `RequestTableSync { tables: [(name, since_ts), ...] }`
+- Server filters rows by `updated_at > since_ts` (or full export when `since_ts == 0`)
+- Safety: if incremental returns 0 rows but local table is empty, client auto-triggers full re-sync
+- DARWIN data always uses full sync (static deal data, no incremental benefit)
+
+#### Auto Re-Sync After Remote Requests
+
+When a `RemoteRequestDone` message arrives from the server (after SEC scrape, backfill, etc.), the client automatically triggers an incremental re-sync of all research tables, KV cache, and DARWIN data. This ensures freshly fetched data propagates to clients without manual intervention.
+
 #### Frontend Integration
 
 - Command palette: `LAN-SYNC` to configure server/client mode

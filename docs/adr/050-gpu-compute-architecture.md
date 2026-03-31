@@ -6,9 +6,9 @@
 
 With the WebKit/JS layer eliminated, we have direct access to wgpu from Rust. GPU parallelism provides 100-5000× speedup for batch numerical work on the GTX 1080 (2560 CUDA cores) vs the E5-2696 v4 (44 threads).
 
-## Implementation Status: 29 GPU Compute Shaders (~98% coverage)
+## Implementation Status: 33 GPU Chart Indicator Shaders + 2 DARWIN + 5 Backtest = 40 Pipelines (~98% coverage)
 
-### Chart Indicators on GPU (23 shaders)
+### Chart Indicators on GPU (33 shaders)
 
 | # | Shader | Dispatch | Output | Category |
 |---|--------|----------|--------|----------|
@@ -30,30 +30,38 @@ With the WebKit/JS layer eliminated, we have direct access to wgpu from Rust. GP
 | 16 | ATR Projection | Parallel 256 | [upper,lower]/bar | Volatility |
 | 17 | Fisher | Sequential (midpoints) | [fisher,trigger]/bar | Oscillator |
 | 18 | OBV | Sequential | f32/bar | Volume |
-| 19 | BetterVolume | Parallel 256 (OHLC) | u8 class/bar | Volume |
-| 20 | Parabolic SAR | Sequential (OHLC) | f32/bar | Other |
-| 21 | Fractals | Parallel 256 (OHLC) | [up,down]/bar | Pattern |
-| 22 | Supply/Demand Zones | Parallel 256 (OHLC) | [type,high,low]/bar | Pattern |
-| 23 | Ehlers SuperSmoother | Sequential | f32/bar | DSP |
-| 24 | Ehlers Decycler | Sequential | f32/bar | DSP |
-| 25 | Ehlers ITL | Sequential | f32/bar | DSP |
-| 26 | Ehlers Cyber Cycle | Sequential | f32/bar | DSP |
-| 27 | Ehlers CG Oscillator | Parallel 256 | f32/bar | DSP |
-| 28 | Ehlers Roofing Filter | Sequential | f32/bar | DSP |
-| 29 | Ehlers EBSW | Sequential | f32/bar | DSP |
-| 30 | Ehlers MAMA/FAMA | Sequential | [mama,fama]/bar | DSP |
-| 31 | DARWIN Batch Stats | Parallel 256 | 10 metrics × 50K series | Analytics |
-| 32 | DARWIN Correlation | Parallel 16×16 tiles | Pearson × N×N pairs | Analytics |
+| 19 | BetterVolume | Parallel 256 (OHLCV) | u8 class/bar | Volume |
+| 20 | Anchored VWAP | Sequential per-day dispatch | f32/bar | Volume |
+| 21 | Parabolic SAR | Sequential (OHLC) | f32/bar | Other |
+| 22 | Fractals | Parallel 256 (OHLC) | [up,down]/bar | Pattern |
+| 23 | Supply/Demand Zones | Parallel 256 (OHLC) | [type,high,low]/bar | Pattern |
+| 24 | Ehlers SuperSmoother | Sequential | f32/bar | DSP |
+| 25 | Ehlers Decycler | Sequential | f32/bar | DSP |
+| 26 | Ehlers ITL | Sequential | f32/bar | DSP |
+| 27 | Ehlers Cyber Cycle | Sequential | f32/bar | DSP |
+| 28 | Ehlers CG Oscillator | Parallel 256 | f32/bar | DSP |
+| 29 | Ehlers Roofing Filter | Sequential | f32/bar | DSP |
+| 30 | Ehlers EBSW | Sequential | f32/bar | DSP |
+| 31 | Ehlers MAMA/FAMA | Sequential | [mama,fama]/bar | DSP |
+| 32 | OBV (volume buffer) | Sequential | f32/bar | Volume |
+| 33 | CCI (OHLC variant) | Parallel 256 (OHLC) | f32/bar | Momentum |
+
+### DARWIN Analytics (2 shaders)
+
+| # | Shader | Dispatch | Output | Category |
+|---|--------|----------|--------|----------|
+| 34 | DARWIN Batch Stats | Parallel 256 | 10 metrics × 50K series | Analytics |
+| 35 | DARWIN Correlation | Parallel 16×16 tiles | Pearson × N×N pairs | Analytics |
 
 ### Backtest/Optimizer Shaders (5 shaders)
 
 | # | Shader | Dispatch | Purpose |
 |---|--------|----------|---------|
-| 33 | SMA Cross Strategy Eval | Parallel 256 | 1 thread per param combo, SMA cross + RSI + ATR |
-| 34 | NNFX Strategy Eval | Parallel 256 | Fisher + KAMA + ATR + ADX inline per thread |
-| 35 | Walk-Forward Validation | Parallel 256 | Out-of-sample window evaluation |
-| 36 | Robustness Scoring | Parallel 256 | Neighbor stability analysis |
-| 37 | Monte Carlo VaR | Parallel 256 | PCG PRNG random walk simulation |
+| 36 | SMA Cross Strategy Eval | Parallel 256 | 1 thread per param combo, SMA cross + RSI + ATR |
+| 37 | NNFX Strategy Eval | Parallel 256 | Fisher + KAMA + ATR + ADX inline per thread |
+| 38 | Walk-Forward Validation | Parallel 256 | Out-of-sample window evaluation |
+| 39 | Robustness Scoring | Parallel 256 | Neighbor stability analysis |
+| 40 | Monte Carlo VaR | Parallel 256 | PCG PRNG random walk simulation |
 
 ### CPU-Only (3 indicators, ~2%)
 
@@ -62,6 +70,11 @@ With the WebKit/JS layer eliminated, we have direct access to wgpu from Rust. GP
 | Previous Candle Levels | Groups bars by calendar day using `ts_ms` timestamps. GPU has no timestamp buffer; sequential day-boundary detection is O(n) and trivial. |
 | Auto Fibonacci | Reduction search over GPU-computed fractal results for highest/lowest swing points. O(n) argmax — GPU dispatch overhead exceeds computation. |
 | Harmonic Patterns | 5-point XABCD geometry matching with Fibonacci ratio validation. Deeply branching pattern search that would underperform on GPU. |
+
+### Recent GPU Additions (2026-03-30)
+
+- **BetterVolume**: Full Emini-Watch algorithm rewritten as WGSL shader. Input: `[O,H,L,C,V]` interleaved (5 floats/bar). Output: classification (0=low_vol through 5=normal). Buy/sell pressure estimation, lookback extremes, and 2-bar analysis all run on GPU. 1:1 parity with CPU/MQL5.
+- **Anchored VWAP**: GPU per-day dispatch. CPU detects day boundaries from timestamps, then dispatches one GPU compute pass per trading day segment. GPU computes cumulative `(TP x Volume) / Volume` from anchor. CPU handles deviation bands post-GPU. Falls back to full CPU `compute_vwap()` if GPU path fails.
 
 ## Architecture
 
@@ -127,7 +140,7 @@ This ensures the GPU path works for arbitrarily large DarwinIA datasets without 
 ## Consequences
 
 ### Positive
-- Near-total GPU coverage (98%) with automatic CPU fallback
+- Near-total GPU coverage (33/36 chart indicators = 92%, 40 total pipelines) with automatic CPU fallback
 - Zero `unsafe` code in entire codebase — all GPU buffer marshalling via `bytemuck` (Pod/Zeroable derives, `cast_slice`)
 - Zero-copy bar data path: cache → VRAM → compute → render
 - Strategy optimizer tests thousands of parameter combinations simultaneously

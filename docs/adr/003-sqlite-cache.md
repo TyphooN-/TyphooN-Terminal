@@ -30,3 +30,16 @@ The MQL5 BarCacheWriter EA now uses **incremental sync** instead of full re-expo
 - **Fallback:** If existing blob is missing/corrupt, falls back to full export automatically.
 - **Performance:** 10,000x reduction in steady-state data volume (480 bytes vs 4.8MB per symbol/TF per cycle). Memory usage drops from 36.7GB/cycle (851 sym × 9 TF × 4.8MB) to 3.6MB/cycle.
 - **Cap:** Maximum 200 bars per incremental fetch (long offline periods catch up over multiple cycles)
+
+### Sync State Table
+
+A `sync_state` table tracks incremental sync progress for LAN sync and data refresh:
+
+```sql
+CREATE TABLE IF NOT EXISTS sync_state (
+    key TEXT PRIMARY KEY,
+    last_sync_ts INTEGER NOT NULL DEFAULT 0
+);
+```
+
+Keys follow the pattern `kv_cache`, `table:<table_name>` (e.g. `table:sec_filings`). All data tables (`bar_cache`, `kv_cache`, `sec_filings`, `fundamentals`, etc.) carry `updated_at` / `timestamp` columns, enabling incremental sync: the client sends its last known `since_ts` and the server returns only rows newer than that timestamp. Full re-sync is triggered automatically when an incremental response returns 0 rows but the local table is empty.

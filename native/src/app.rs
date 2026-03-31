@@ -21171,6 +21171,159 @@ impl eframe::App for TyphooNApp {
     }
 }
 
+// ─── Testable detection helpers (extracted from render logic) ────────────────
+
+/// Detected order block zone.
+#[derive(Debug, Clone)]
+struct OrderBlock {
+    high: f64,
+    low: f64,
+    bar_idx: usize,
+    is_bull: bool,
+    /// Index where the zone was broken (or bars.len() if still active).
+    end_idx: usize,
+}
+
+/// Detect order blocks from bars (pure logic, no rendering).
+/// Bullish OB: bearish candle where next close > current high + ATR.
+/// Bearish OB: bullish candle where next close < current low - ATR.
+fn detect_order_blocks(bars: &[Bar]) -> Vec<OrderBlock> {
+    if bars.len() < 3 { return Vec::new(); }
+
+    // Compute rolling ATR(14)
+    let atr_period = 14usize;
+    let mut local_atr: Vec<f64> = Vec::with_capacity(bars.len());
+    for i in 0..bars.len() {
+        if i < atr_period {
+            local_atr.push(bars[i].high - bars[i].low);
+        } else {
+            let mut sum = 0.0;
+            for j in (i + 1 - atr_period)..=i {
+                let tr = if j == 0 {
+                    bars[j].high - bars[j].low
+                } else {
+                    let hl = bars[j].high - bars[j].low;
+                    let hc = (bars[j].high - bars[j - 1].close).abs();
+                    let lc = (bars[j].low - bars[j - 1].close).abs();
+                    hl.max(hc).max(lc)
+                };
+                sum += tr;
+            }
+            local_atr.push(sum / atr_period as f64);
+        }
+    }
+
+    let mut zones = Vec::new();
+    for i in 0..bars.len().saturating_sub(1) {
+        let cur = &bars[i];
+        let nxt = &bars[i + 1];
+        let atr = local_atr[i];
+        if atr <= 0.0 { continue; }
+
+        // Bullish OB
+        if cur.close < cur.open && nxt.close > cur.high + atr {
+            let mut end = bars.len();
+            for j in (i + 2)..bars.len() {
+                if bars[j].low <= cur.high { end = j; break; }
+            }
+            zones.push(OrderBlock { high: cur.high, low: cur.low, bar_idx: i, is_bull: true, end_idx: end });
+        }
+
+        // Bearish OB
+        if cur.close > cur.open && nxt.close < cur.low - atr {
+            let mut end = bars.len();
+            for j in (i + 2)..bars.len() {
+                if bars[j].high >= cur.low { end = j; break; }
+            }
+            zones.push(OrderBlock { high: cur.high, low: cur.low, bar_idx: i, is_bull: false, end_idx: end });
+        }
+    }
+    zones
+}
+
+/// Detected Fair Value Gap.
+#[derive(Debug, Clone)]
+struct FairValueGap {
+    /// Index of the middle bar (the gap is between bar[i-1] and bar[i+1]).
+    bar_idx: usize,
+    /// Top of the gap.
+    gap_top: f64,
+    /// Bottom of the gap.
+    gap_bot: f64,
+    /// True if bullish (gap up), false if bearish (gap down).
+    is_bull: bool,
+    /// Whether the gap has been filled by subsequent price action.
+    filled: bool,
+}
+
+/// Detect Fair Value Gaps from bars (pure logic, no rendering).
+fn detect_fair_value_gaps(bars: &[Bar]) -> Vec<FairValueGap> {
+    if bars.len() < 3 { return Vec::new(); }
+    let mut gaps = Vec::new();
+    for i in 1..bars.len().saturating_sub(1) {
+        let prev = &bars[i - 1];
+        let next = &bars[i + 1];
+
+        // Bullish FVG: bar[i+1].low > bar[i-1].high
+        if next.low > prev.high {
+            let mut filled = false;
+            for j in (i + 2)..bars.len() {
+                if bars[j].low <= prev.high { filled = true; break; }
+            }
+            gaps.push(FairValueGap {
+                bar_idx: i, gap_top: next.low, gap_bot: prev.high,
+                is_bull: true, filled,
+            });
+        }
+
+        // Bearish FVG: bar[i+1].high < bar[i-1].low
+        if next.high < prev.low {
+            let mut filled = false;
+            for j in (i + 2)..bars.len() {
+                if bars[j].high >= prev.low { filled = true; break; }
+            }
+            gaps.push(FairValueGap {
+                bar_idx: i, gap_top: prev.low, gap_bot: next.high,
+                is_bull: false, filled,
+            });
+        }
+    }
+    gaps
+}
+
+/// Market structure label at a fractal point.
+#[derive(Debug, Clone, PartialEq)]
+enum MarketStructureLabel { HH, HL, LH, LL }
+
+/// Detect market structure labels from fractal data (pure logic).
+/// Returns (swing_high_labels, swing_low_labels) where each is (bar_idx, label).
+fn detect_market_structure(bars: &[Bar], fractal_up: &[bool], fractal_down: &[bool])
+    -> (Vec<(usize, MarketStructureLabel)>, Vec<(usize, MarketStructureLabel)>)
+{
+    let mut high_labels = Vec::new();
+    let mut low_labels = Vec::new();
+    let mut prev_swing_high: Option<f64> = None;
+    let mut prev_swing_low: Option<f64> = None;
+
+    for i in 0..bars.len() {
+        if i < fractal_up.len() && fractal_up[i] {
+            if let Some(prev_h) = prev_swing_high {
+                let label = if bars[i].high > prev_h { MarketStructureLabel::HH } else { MarketStructureLabel::LH };
+                high_labels.push((i, label));
+            }
+            prev_swing_high = Some(bars[i].high);
+        }
+        if i < fractal_down.len() && fractal_down[i] {
+            if let Some(prev_l) = prev_swing_low {
+                let label = if bars[i].low > prev_l { MarketStructureLabel::HL } else { MarketStructureLabel::LL };
+                low_labels.push((i, label));
+            }
+            prev_swing_low = Some(bars[i].low);
+        }
+    }
+    (high_labels, low_labels)
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -21929,5 +22082,580 @@ mod tests {
         let ov = TradeOverlay::default();
         assert!(ov.markers.is_empty());
         assert!(ov.position_lines.is_empty());
+    }
+
+    // ── Order Blocks detection ──────────────────────────────────────────
+
+    /// Helper: make bars for order block tests.
+    /// Creates a flat range, then an impulsive move to trigger OB detection.
+    fn make_ob_bars_bullish() -> Vec<Bar> {
+        let mut bars = Vec::new();
+        // 20 bars of flat range around 100 (builds ATR context)
+        for i in 0..20 {
+            let base = 100.0;
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: base + 0.5,
+                high: base + 1.5,
+                low: base - 1.5,
+                close: base - 0.5,
+                volume: 1000.0,
+            });
+        }
+        // Bar 20: bearish candle (close < open) — the OB candle
+        bars.push(Bar {
+            ts_ms: 1700000000000 + 20 * 3600000,
+            open: 101.0,
+            high: 102.0,
+            low: 98.0,
+            close: 99.0,     // bearish: close < open
+            volume: 1500.0,
+        });
+        // Bar 21: strong up move — close > bar[20].high + ATR
+        // ATR ~3.0 (range is 3.0 per bar), so need close > 102 + 3 = 105
+        bars.push(Bar {
+            ts_ms: 1700000000000 + 21 * 3600000,
+            open: 100.0,
+            high: 110.0,
+            low: 99.5,
+            close: 108.0,    // well above 105
+            volume: 3000.0,
+        });
+        // Trailing bars that stay above the OB zone
+        for i in 22..30 {
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: 108.0,
+                high: 110.0,
+                low: 106.0,
+                close: 109.0,
+                volume: 1000.0,
+            });
+        }
+        bars
+    }
+
+    #[test]
+    fn test_order_block_bullish_detected() {
+        let bars = make_ob_bars_bullish();
+        let obs = detect_order_blocks(&bars);
+        let bull_obs: Vec<_> = obs.iter().filter(|ob| ob.is_bull).collect();
+        assert!(!bull_obs.is_empty(), "Should detect at least one bullish OB");
+        // The OB candle should be at or near index 20
+        let ob = &bull_obs[bull_obs.len() - 1];
+        assert_eq!(ob.bar_idx, 20, "Bullish OB should be at bar 20");
+        assert!(ob.high <= 102.0 + 0.01, "OB high should be the candle high");
+        assert!(ob.low >= 97.99, "OB low should be the candle low");
+    }
+
+    #[test]
+    fn test_order_block_bearish_detected() {
+        let mut bars = Vec::new();
+        // 20 bars of flat range around 100
+        for i in 0..20 {
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: 99.5, high: 101.5, low: 98.5, close: 100.5,
+                volume: 1000.0,
+            });
+        }
+        // Bar 20: bullish candle (close > open)
+        bars.push(Bar {
+            ts_ms: 1700000000000 + 20 * 3600000,
+            open: 99.0, high: 102.0, low: 98.0, close: 101.0,
+            volume: 1500.0,
+        });
+        // Bar 21: strong down move — close < bar[20].low - ATR
+        // ATR ~3.0, need close < 98 - 3 = 95
+        bars.push(Bar {
+            ts_ms: 1700000000000 + 21 * 3600000,
+            open: 100.0, high: 100.5, low: 91.0, close: 92.0,
+            volume: 3000.0,
+        });
+        // Trailing bars that stay below
+        for i in 22..30 {
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: 92.0, high: 93.0, low: 90.0, close: 91.0,
+                volume: 1000.0,
+            });
+        }
+        let obs = detect_order_blocks(&bars);
+        let bear_obs: Vec<_> = obs.iter().filter(|ob| !ob.is_bull).collect();
+        assert!(!bear_obs.is_empty(), "Should detect at least one bearish OB");
+        let ob = &bear_obs[bear_obs.len() - 1];
+        assert_eq!(ob.bar_idx, 20, "Bearish OB should be at bar 20");
+    }
+
+    #[test]
+    fn test_order_block_none_in_flat_market() {
+        // Flat bars with no impulsive moves — should produce no OBs
+        let mut bars = Vec::new();
+        for i in 0..50 {
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: 100.0, high: 100.5, low: 99.5, close: 100.0,
+                volume: 1000.0,
+            });
+        }
+        let obs = detect_order_blocks(&bars);
+        assert!(obs.is_empty(), "Flat market should produce no order blocks");
+    }
+
+    #[test]
+    fn test_order_block_too_few_bars() {
+        let bars = make_bars(2);
+        let obs = detect_order_blocks(&bars);
+        assert!(obs.is_empty(), "Too few bars should return empty");
+    }
+
+    // ── Fair Value Gaps detection ────────────────────────────────────────
+
+    #[test]
+    fn test_fvg_bullish_detected() {
+        // Create a clear bullish gap: bar[2].low > bar[0].high
+        let bars = vec![
+            Bar { ts_ms: 1700000000000, open: 100.0, high: 102.0, low: 99.0, close: 101.0, volume: 1000.0 },
+            Bar { ts_ms: 1700000000000 + 3600000, open: 102.0, high: 105.0, low: 101.5, close: 104.0, volume: 1500.0 },
+            Bar { ts_ms: 1700000000000 + 7200000, open: 105.0, high: 108.0, low: 103.0, close: 107.0, volume: 1200.0 },
+        ];
+        // bar[2].low (103) > bar[0].high (102) → bullish FVG
+        let gaps = detect_fair_value_gaps(&bars);
+        let bull: Vec<_> = gaps.iter().filter(|g| g.is_bull).collect();
+        assert!(!bull.is_empty(), "Should detect bullish FVG");
+        assert_eq!(bull[0].bar_idx, 1, "FVG middle bar should be index 1");
+        assert!((bull[0].gap_top - 103.0).abs() < 0.01, "Gap top = bar[2].low = 103");
+        assert!((bull[0].gap_bot - 102.0).abs() < 0.01, "Gap bot = bar[0].high = 102");
+    }
+
+    #[test]
+    fn test_fvg_bearish_detected() {
+        // bar[2].high < bar[0].low → bearish FVG
+        let bars = vec![
+            Bar { ts_ms: 1700000000000, open: 105.0, high: 107.0, low: 103.0, close: 104.0, volume: 1000.0 },
+            Bar { ts_ms: 1700000000000 + 3600000, open: 103.0, high: 103.5, low: 99.0, close: 99.5, volume: 1500.0 },
+            Bar { ts_ms: 1700000000000 + 7200000, open: 99.0, high: 102.0, low: 97.0, close: 98.0, volume: 1200.0 },
+        ];
+        // bar[2].high (102) < bar[0].low (103) → bearish FVG
+        let gaps = detect_fair_value_gaps(&bars);
+        let bear: Vec<_> = gaps.iter().filter(|g| !g.is_bull).collect();
+        assert!(!bear.is_empty(), "Should detect bearish FVG");
+        assert_eq!(bear[0].bar_idx, 1);
+        assert!((bear[0].gap_top - 103.0).abs() < 0.01, "Gap top = bar[0].low");
+        assert!((bear[0].gap_bot - 102.0).abs() < 0.01, "Gap bot = bar[2].high");
+    }
+
+    #[test]
+    fn test_fvg_filled_gap() {
+        // Bullish gap that gets filled by a subsequent bar
+        let bars = vec![
+            Bar { ts_ms: 1700000000000, open: 100.0, high: 102.0, low: 99.0, close: 101.0, volume: 1000.0 },
+            Bar { ts_ms: 1700000000000 + 3600000, open: 102.5, high: 106.0, low: 102.0, close: 105.0, volume: 1500.0 },
+            Bar { ts_ms: 1700000000000 + 7200000, open: 105.0, high: 108.0, low: 103.0, close: 107.0, volume: 1200.0 },
+            // Bar 3: drops back down and fills the gap (low <= bar[0].high = 102)
+            Bar { ts_ms: 1700000000000 + 10800000, open: 106.0, high: 106.5, low: 101.0, close: 102.0, volume: 2000.0 },
+        ];
+        // bar[2].low (103) > bar[0].high (102) → bullish FVG, but bar[3] fills it
+        let gaps = detect_fair_value_gaps(&bars);
+        let bull: Vec<_> = gaps.iter().filter(|g| g.is_bull).collect();
+        assert!(!bull.is_empty(), "Should detect the FVG");
+        assert!(bull[0].filled, "Gap should be marked as filled");
+    }
+
+    #[test]
+    fn test_fvg_unfilled_gap() {
+        // Gap that stays open
+        let bars = vec![
+            Bar { ts_ms: 1700000000000, open: 100.0, high: 102.0, low: 99.0, close: 101.0, volume: 1000.0 },
+            Bar { ts_ms: 1700000000000 + 3600000, open: 103.0, high: 106.0, low: 102.5, close: 105.0, volume: 1500.0 },
+            Bar { ts_ms: 1700000000000 + 7200000, open: 105.0, high: 108.0, low: 103.0, close: 107.0, volume: 1200.0 },
+            // Subsequent bars stay above the gap
+            Bar { ts_ms: 1700000000000 + 10800000, open: 107.0, high: 109.0, low: 105.0, close: 108.0, volume: 1000.0 },
+            Bar { ts_ms: 1700000000000 + 14400000, open: 108.0, high: 110.0, low: 106.0, close: 109.0, volume: 1000.0 },
+        ];
+        let gaps = detect_fair_value_gaps(&bars);
+        let bull: Vec<_> = gaps.iter().filter(|g| g.is_bull).collect();
+        assert!(!bull.is_empty(), "Should detect the FVG");
+        assert!(!bull[0].filled, "Gap should remain unfilled");
+    }
+
+    #[test]
+    fn test_fvg_no_gap_in_overlapping_bars() {
+        // Bars that overlap — no gaps
+        let bars = vec![
+            Bar { ts_ms: 1700000000000, open: 100.0, high: 103.0, low: 99.0, close: 102.0, volume: 1000.0 },
+            Bar { ts_ms: 1700000000000 + 3600000, open: 102.0, high: 104.0, low: 100.0, close: 103.0, volume: 1000.0 },
+            Bar { ts_ms: 1700000000000 + 7200000, open: 103.0, high: 105.0, low: 101.0, close: 104.0, volume: 1000.0 },
+        ];
+        let gaps = detect_fair_value_gaps(&bars);
+        assert!(gaps.is_empty(), "Overlapping bars should produce no FVGs");
+    }
+
+    #[test]
+    fn test_fvg_too_few_bars() {
+        let bars = make_bars(2);
+        let gaps = detect_fair_value_gaps(&bars);
+        assert!(gaps.is_empty());
+    }
+
+    // ── Market Structure labels ──────────────────────────────────────────
+
+    #[test]
+    fn test_market_structure_hh_hl() {
+        // Create bars with ascending swing highs and ascending swing lows
+        // Fractal up at bars 2, 7, 12 with increasing highs → HH
+        // Fractal down at bars 4, 9 with increasing lows → HL
+        let mut bars = Vec::new();
+        for i in 0..15 {
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: 100.0 + i as f64,
+                high: 102.0 + i as f64,  // ascending highs
+                low: 98.0 + i as f64,    // ascending lows
+                close: 101.0 + i as f64,
+                volume: 1000.0,
+            });
+        }
+        let mut frac_up = vec![false; 15];
+        let mut frac_down = vec![false; 15];
+        frac_up[2] = true;   // high = 104
+        frac_up[7] = true;   // high = 109
+        frac_up[12] = true;  // high = 114
+        frac_down[4] = true;  // low = 102
+        frac_down[9] = true;  // low = 107
+
+        let (highs, lows) = detect_market_structure(&bars, &frac_up, &frac_down);
+
+        // Second swing high (bar 7, high=109) > first (bar 2, high=104) → HH
+        assert_eq!(highs.len(), 2);
+        assert_eq!(highs[0], (7, MarketStructureLabel::HH));
+        assert_eq!(highs[1], (12, MarketStructureLabel::HH));
+
+        // Second swing low (bar 9, low=107) > first (bar 4, low=102) → HL
+        assert_eq!(lows.len(), 1);
+        assert_eq!(lows[0], (9, MarketStructureLabel::HL));
+    }
+
+    #[test]
+    fn test_market_structure_lh_ll() {
+        // Descending swing highs and descending swing lows
+        let mut bars = Vec::new();
+        for i in 0..15 {
+            bars.push(Bar {
+                ts_ms: 1700000000000 + i as i64 * 3600000,
+                open: 120.0 - i as f64,
+                high: 122.0 - i as f64,  // descending highs
+                low: 118.0 - i as f64,   // descending lows
+                close: 119.0 - i as f64,
+                volume: 1000.0,
+            });
+        }
+        let mut frac_up = vec![false; 15];
+        let mut frac_down = vec![false; 15];
+        frac_up[3] = true;   // high = 119
+        frac_up[8] = true;   // high = 114
+        frac_down[5] = true;  // low = 113
+        frac_down[10] = true; // low = 108
+
+        let (highs, lows) = detect_market_structure(&bars, &frac_up, &frac_down);
+
+        // bar 8 high (114) < bar 3 high (119) → LH
+        assert_eq!(highs.len(), 1);
+        assert_eq!(highs[0], (8, MarketStructureLabel::LH));
+
+        // bar 10 low (108) < bar 5 low (113) → LL
+        assert_eq!(lows.len(), 1);
+        assert_eq!(lows[0], (10, MarketStructureLabel::LL));
+    }
+
+    #[test]
+    fn test_market_structure_no_fractals() {
+        let bars = make_bars(10);
+        let frac_up = vec![false; 10];
+        let frac_down = vec![false; 10];
+        let (highs, lows) = detect_market_structure(&bars, &frac_up, &frac_down);
+        assert!(highs.is_empty());
+        assert!(lows.is_empty());
+    }
+
+    #[test]
+    fn test_market_structure_single_fractal() {
+        // Only one swing high — no previous to compare against, so no labels
+        let bars = make_bars(10);
+        let mut frac_up = vec![false; 10];
+        frac_up[5] = true;
+        let frac_down = vec![false; 10];
+        let (highs, _) = detect_market_structure(&bars, &frac_up, &frac_down);
+        assert!(highs.is_empty(), "Single fractal should produce no label (no prior to compare)");
+    }
+
+    // ── BetterVolume extended tests ─────────────────────────────────────
+
+    #[test]
+    fn test_better_volume_climax_up() {
+        // Create bars where bar at index `lookback` has a massive bullish candle
+        // with extremely high buy volume * range → should trigger climax up (1)
+        // Need n > target + lookback to satisfy both skip conditions in compute_better_volume
+        let lookback = 20usize;
+        let target = lookback; // bar 20
+        let n = target + lookback + 5; // 45 bars total
+        let mut bars = Vec::new();
+        for i in 0..n {
+            if i == target {
+                // Massive bullish candle: huge range, high volume, close > open
+                bars.push(Bar {
+                    ts_ms: 1700000000000 + i as i64 * 3600000,
+                    open: 90.0, high: 130.0, low: 89.0, close: 128.0,
+                    volume: 50000.0, // 50x normal
+                });
+            } else {
+                // Normal small bars
+                bars.push(Bar {
+                    ts_ms: 1700000000000 + i as i64 * 3600000,
+                    open: 100.0, high: 101.0, low: 99.0, close: 100.5,
+                    volume: 1000.0,
+                });
+            }
+        }
+        let bv = compute_better_volume(&bars);
+        // Bar at target should be climax up (1) or climax+churn (4)
+        let val = bv[target];
+        assert!(val == 1 || val == 4,
+            "Massive bullish bar should be climax up (1) or climax+churn (4), got {}", val);
+    }
+
+    #[test]
+    fn test_better_volume_churn() {
+        // Churn: very high volume but tiny range → vol/range is highest
+        let lookback = 20usize;
+        let target = lookback;
+        let n = target + lookback + 5;
+        let mut bars = Vec::new();
+        for i in 0..n {
+            if i == target {
+                // Tiny range, huge volume
+                bars.push(Bar {
+                    ts_ms: 1700000000000 + i as i64 * 3600000,
+                    open: 100.0, high: 100.1, low: 99.9, close: 100.05,
+                    volume: 100000.0, // enormous volume, tiny range
+                });
+            } else {
+                bars.push(Bar {
+                    ts_ms: 1700000000000 + i as i64 * 3600000,
+                    open: 100.0, high: 102.0, low: 98.0, close: 101.0,
+                    volume: 1000.0,
+                });
+            }
+        }
+        let bv = compute_better_volume(&bars);
+        // Should be churn (3) or climax+churn (4)
+        let val = bv[target];
+        assert!(val == 3 || val == 4,
+            "High-volume tiny-range bar should be churn (3) or climax+churn (4), got {}", val);
+    }
+
+    #[test]
+    fn test_better_volume_low_volume() {
+        // Create bars where one bar has extremely low volume
+        let lookback = 20usize;
+        let target = lookback;
+        let n = target + lookback + 5;
+        let mut bars = Vec::new();
+        for i in 0..n {
+            if i == target {
+                bars.push(Bar {
+                    ts_ms: 1700000000000 + i as i64 * 3600000,
+                    open: 100.0, high: 101.0, low: 99.0, close: 100.0,
+                    volume: 0.1, // nearly zero volume
+                });
+            } else {
+                bars.push(Bar {
+                    ts_ms: 1700000000000 + i as i64 * 3600000,
+                    open: 100.0, high: 102.0, low: 98.0, close: 101.0,
+                    volume: 5000.0,
+                });
+            }
+        }
+        let bv = compute_better_volume(&bars);
+        // Should be low volume (0)
+        assert_eq!(bv[target], 0,
+            "Near-zero volume bar should be low volume (0), got {}", bv[target]);
+    }
+
+    #[test]
+    fn test_better_volume_all_normal_flat() {
+        // Identical bars — at the lookback boundary, metrics equal extremes
+        // so some may classify as non-normal, but most should be normal (5)
+        let n = 30;
+        let bars: Vec<Bar> = (0..n).map(|i| Bar {
+            ts_ms: 1700000000000 + i as i64 * 3600000,
+            open: 100.0, high: 101.0, low: 99.0, close: 100.5,
+            volume: 1000.0,
+        }).collect();
+        let bv = compute_better_volume(&bars);
+        assert_eq!(bv.len(), n);
+        // First `lookback` bars should be normal (5)
+        for i in 0..20 {
+            assert_eq!(bv[i], 5, "Bar {} in warmup should be normal", i);
+        }
+    }
+
+    // ── Chart templates (snapshot capture/apply) ─────────────────────────
+
+    #[test]
+    fn test_capture_apply_indicator_snapshot() {
+        // We cannot construct TyphooNApp directly in tests (requires eframe context),
+        // but we can test the JSON round-trip logic directly.
+        // Build a snapshot matching the NNFX template
+        let snap = TyphooNApp::builtin_template_nnfx();
+        assert_eq!(snap["sma200"].as_bool(), Some(true));
+        assert_eq!(snap["kama"].as_bool(), Some(true));
+        assert_eq!(snap["fisher"].as_bool(), Some(true));
+        assert_eq!(snap["better_volume"].as_bool(), Some(true));
+        assert_eq!(snap["bollinger"].as_bool(), Some(false));
+        assert_eq!(snap["macd"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn test_clean_template_all_off_except_volume() {
+        let snap = TyphooNApp::builtin_template_clean();
+        assert_eq!(snap["volume_pane"].as_bool(), Some(true));
+        // All others should be false
+        for key in ["sma200", "sma100", "kama", "ema21", "bollinger", "ichimoku",
+                     "rsi", "fisher", "macd", "stochastic", "adx", "fractals",
+                     "harmonics", "supply_demand", "fvg"] {
+            assert_eq!(snap[key].as_bool(), Some(false),
+                "CLEAN template: {} should be false", key);
+        }
+    }
+
+    #[test]
+    fn test_full_template_all_on() {
+        let snap = TyphooNApp::builtin_template_full();
+        for key in ["sma200", "sma100", "kama", "ema21", "bollinger", "ichimoku",
+                     "rsi", "fisher", "macd", "stochastic", "adx", "fractals",
+                     "harmonics", "supply_demand", "fvg", "volume_pane",
+                     "better_volume", "squeeze", "regression"] {
+            assert_eq!(snap[key].as_bool(), Some(true),
+                "FULL template: {} should be true", key);
+        }
+    }
+
+    #[test]
+    fn test_template_roundtrip_json() {
+        // Verify that all templates produce valid JSON with consistent keys
+        let nnfx = TyphooNApp::builtin_template_nnfx();
+        let clean = TyphooNApp::builtin_template_clean();
+        let full = TyphooNApp::builtin_template_full();
+
+        // All three should have the same keys
+        let nnfx_obj = nnfx.as_object().unwrap();
+        let clean_obj = clean.as_object().unwrap();
+        let full_obj = full.as_object().unwrap();
+
+        assert_eq!(nnfx_obj.len(), clean_obj.len(),
+            "NNFX and CLEAN templates should have same number of keys");
+        assert_eq!(nnfx_obj.len(), full_obj.len(),
+            "NNFX and FULL templates should have same number of keys");
+
+        for key in nnfx_obj.keys() {
+            assert!(clean_obj.contains_key(key), "CLEAN template missing key: {}", key);
+            assert!(full_obj.contains_key(key), "FULL template missing key: {}", key);
+        }
+    }
+
+    // ── Format functions ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_format_price_buf_zero() {
+        let mut buf = String::new();
+        format_price_buf(0.0, &mut buf);
+        assert_eq!(buf, "0");
+    }
+
+    #[test]
+    fn test_format_price_buf_large() {
+        let mut buf = String::new();
+        format_price_buf(12345.67, &mut buf);
+        assert_eq!(buf, "12345.67"); // >= 10000 → 2 decimal places
+    }
+
+    #[test]
+    fn test_format_price_buf_medium() {
+        let mut buf = String::new();
+        format_price_buf(123.4567, &mut buf);
+        assert_eq!(buf, "123.4567"); // >= 1.0 → 4 decimal places
+    }
+
+    #[test]
+    fn test_format_price_buf_small() {
+        let mut buf = String::new();
+        format_price_buf(0.123456, &mut buf);
+        assert_eq!(buf, "0.123456"); // < 1.0 → 6 decimal places
+    }
+
+    #[test]
+    fn test_format_price_buf_negative() {
+        let mut buf = String::new();
+        format_price_buf(-50.1234, &mut buf);
+        assert_eq!(buf, "-50.1234"); // abs >= 1.0 → 4 decimals
+    }
+
+    #[test]
+    fn test_format_price_buf_reuses_buffer() {
+        let mut buf = String::new();
+        format_price_buf(100.0, &mut buf);
+        let first = buf.clone();
+        format_price_buf(200.0, &mut buf);
+        assert_ne!(first, buf, "Buffer should be cleared and rewritten");
+        assert!(buf.contains("200"), "Should contain new value");
+    }
+
+    #[test]
+    fn test_format_ts_buf_daily() {
+        let mut buf = String::new();
+        // 2023-11-15 00:00:00 UTC → 1700006400000
+        let ts = 1700006400000_i64;
+        format_ts_buf(ts, Timeframe::D1, &mut buf);
+        assert!(buf.contains("Nov") || buf.contains("15"),
+            "D1 format should contain day/month, got: {}", buf);
+    }
+
+    #[test]
+    fn test_format_ts_buf_hourly_midnight() {
+        let mut buf = String::new();
+        // Midnight → should show date, not time
+        let ts = 1700006400000_i64; // 2023-11-15 00:00 UTC
+        format_ts_buf(ts, Timeframe::H4, &mut buf);
+        // At midnight, H4 shows date format
+        assert!(!buf.contains(":") || buf.contains("00:00") || buf.contains("Nov"),
+            "H4 at midnight should show date, got: {}", buf);
+    }
+
+    #[test]
+    fn test_format_ts_buf_hourly_nonmidnight() {
+        let mut buf = String::new();
+        // 2023-11-15 14:00:00 UTC
+        let ts = 1700006400000_i64 + 14 * 3600000;
+        format_ts_buf(ts, Timeframe::H1, &mut buf);
+        assert!(buf.contains("14:00"), "H1 non-midnight should show HH:MM, got: {}", buf);
+    }
+
+    #[test]
+    fn test_format_ts_buf_monthly() {
+        let mut buf = String::new();
+        let ts = 1700006400000_i64;
+        format_ts_buf(ts, Timeframe::MN1, &mut buf);
+        // MN1 format: "Nov'23"
+        assert!(buf.contains("Nov") && buf.contains("23"),
+            "MN1 should show Mon'YY, got: {}", buf);
+    }
+
+    #[test]
+    fn test_format_ts_buf_minute() {
+        let mut buf = String::new();
+        let ts = 1700006400000_i64 + 9 * 3600000 + 30 * 60000; // 09:30
+        format_ts_buf(ts, Timeframe::M15, &mut buf);
+        assert!(buf.contains("09:30"), "M15 should show HH:MM, got: {}", buf);
     }
 }

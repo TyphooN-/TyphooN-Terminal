@@ -82,5 +82,14 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - **Docker containerization**: Dockerfile added for reproducible builds and deployment
 
 ### Code Quality
-- **261 tests** (up from initial count) — comprehensive coverage across engine, GPU shaders, and integration
-- **bytemuck migration**: All `unsafe` transmute/pointer-cast blocks replaced with `bytemuck` Pod/Zeroable derives — zero `unsafe` in entire codebase
+- **344 tests** (up from 261) — comprehensive coverage across engine, GPU shaders, integration, and MQL5 compiler
+- **bytemuck migration**: All `unsafe` transmute/pointer-cast blocks replaced with `bytemuck` Pod/Zeroable derives — zero `unsafe` blocks in entire codebase
+
+### 2026-03-31 Session: UI Freeze Elimination
+
+- **UI thread fully unblocked**: All remaining blocking operations moved off the UI thread
+  - DB compaction: driven by background flag, no longer stalls render loop
+  - Unusual volume scanner: runs in background thread, results cached
+  - Watchlist stats: computed once and cached, not recomputed per-frame
+- **Zero unsafe blocks** confirmed across entire codebase (engine + native + compiler)
+- **344 tests** passing (engine: cache, darwin, fundamentals, SEC, crypto, var, risk, margin, backtest; native: GPU shaders, app integration; mql5-compiler: parser, codegen)

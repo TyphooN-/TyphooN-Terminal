@@ -50,11 +50,29 @@ The server accepts multiple concurrent WebSocket connections. Each client gets:
 - LAN clients do NOT need API keys for data access
 - Broker API keys (Alpaca, tastytrade) remain per-machine
 
+### Table Sync After Remote Commands
+
+When the client receives `RemoteRequestDone`, it automatically triggers an incremental re-sync of all data:
+
+1. **Research tables**: All 8 `SYNCABLE_TABLES` re-synced with `since_ts` from `sync_state`
+2. **KV cache**: Incremental re-sync using `RequestKvData { since_ts }`
+3. **DARWIN data**: Full re-sync (always, since deal data is static XLSX import)
+
+This ensures that any data fetched by the server (SEC filings, fundamentals, crypto backfill, etc.) propagates to all connected clients without manual intervention. The incremental protocol means only new/changed rows are transferred.
+
+```
+Client receives RemoteRequestDone { cmd: "SEC_SCRAPE" }
+  → RequestTableSync { [("sec_filings", since_ts), ("sec_insider_trades", since_ts), ...] }
+  → RequestKvData { since_ts }
+  → RequestDarwinData (full)
+```
+
 ## Consequences
 
 - **Pro:** LAN client works behind firewall — only needs wss:// to server
 - **Pro:** Single point of API key management (server only)
 - **Pro:** Data cached on server benefits all clients
 - **Pro:** Multiple clients supported simultaneously
+- **Pro:** Automatic incremental re-sync after remote commands — zero manual steps
 - **Con:** Remote request latency (client → server → API → cache → re-sync)
 - **Con:** Server must be running for clients to get fresh data
