@@ -603,3 +603,285 @@ pub fn ms_to_date(ts_ms: i64) -> String {
         .map(|dt| dt.format("%Y-%m-%d").to_string())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── validate_path_component ─────────────────────────────────────
+
+    #[test]
+    fn valid_ticker() {
+        assert!(validate_path_component("THA").is_ok());
+        assert!(validate_path_component("ABC123").is_ok());
+        assert!(validate_path_component("MY-DARWIN").is_ok());
+        assert!(validate_path_component("data_file.csv").is_ok());
+    }
+
+    #[test]
+    fn rejects_empty() {
+        assert!(validate_path_component("").is_err());
+    }
+
+    #[test]
+    fn rejects_path_traversal() {
+        assert!(validate_path_component("..").is_err());
+        assert!(validate_path_component("../etc/passwd").is_err());
+        assert!(validate_path_component("foo/bar").is_err());
+        assert!(validate_path_component("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn rejects_special_chars() {
+        assert!(validate_path_component("foo bar").is_err());
+        assert!(validate_path_component("foo;rm -rf").is_err());
+        assert!(validate_path_component("$HOME").is_err());
+    }
+
+    // ── component_path ──────────────────────────────────────────────
+
+    #[test]
+    fn component_path_valid() {
+        let p = component_path(Path::new("/data/ftp"), "THA", "RETURN").unwrap();
+        assert_eq!(p, PathBuf::from("/data/ftp/THA/RETURN"));
+    }
+
+    #[test]
+    fn component_path_rejects_bad_ticker() {
+        assert!(component_path(Path::new("/data"), "../etc", "RETURN").is_err());
+    }
+
+    #[test]
+    fn component_path_rejects_bad_component() {
+        assert!(component_path(Path::new("/data"), "THA", "../../passwd").is_err());
+    }
+
+    // ── parse_dscore_line ───────────────────────────────────────────
+
+    #[test]
+    fn parse_dscore_line_basic() {
+        let (ts, score, extra) = parse_dscore_line("1700000000000,7.5,[1.0, 1.002]");
+        assert_eq!(ts, 1700000000000);
+        assert!((score - 7.5).abs() < 1e-10);
+        assert_eq!(extra, "[1.0, 1.002]");
+    }
+
+    #[test]
+    fn parse_dscore_line_no_extra() {
+        let (ts, score, extra) = parse_dscore_line("1600000000000,5.2");
+        assert_eq!(ts, 1600000000000);
+        assert!((score - 5.2).abs() < 1e-10);
+        assert!(extra.is_empty());
+    }
+
+    #[test]
+    fn parse_dscore_line_empty() {
+        let (ts, score, extra) = parse_dscore_line("");
+        assert_eq!(ts, 0);
+        assert_eq!(score, 0.0);
+        assert!(extra.is_empty());
+    }
+
+    #[test]
+    fn parse_dscore_line_extra_with_commas() {
+        // Extra data may contain commas (Python lists)
+        let (ts, score, extra) = parse_dscore_line("1700000000000,8.0,[1.0, 1.001, 1.003, 0.998]");
+        assert_eq!(ts, 1700000000000);
+        assert!((score - 8.0).abs() < 1e-10);
+        assert_eq!(extra, "[1.0, 1.001, 1.003, 0.998]");
+    }
+
+    // ── parse_float_array ───────────────────────────────────────────
+
+    #[test]
+    fn parse_float_array_basic() {
+        let v = parse_float_array("[1.0, 1.002, 0.998]");
+        assert_eq!(v.len(), 3);
+        assert!((v[0] - 1.0).abs() < 1e-10);
+        assert!((v[1] - 1.002).abs() < 1e-10);
+        assert!((v[2] - 0.998).abs() < 1e-10);
+    }
+
+    #[test]
+    fn parse_float_array_empty() {
+        assert!(parse_float_array("[]").is_empty());
+        assert!(parse_float_array("").is_empty());
+    }
+
+    #[test]
+    fn parse_float_array_single() {
+        let v = parse_float_array("[42.5]");
+        assert_eq!(v.len(), 1);
+        assert!((v[0] - 42.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn parse_float_array_skips_bad_values() {
+        let v = parse_float_array("[1.0, None, 2.0]");
+        assert_eq!(v.len(), 2); // "None" is skipped
+    }
+
+    // ── parse_experience_extra ──────────────────────────────────────
+
+    #[test]
+    fn parse_experience_extra_basic() {
+        let (count, months) = parse_experience_extra("[150, 24.5]");
+        assert_eq!(count, 150);
+        assert!((months - 24.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn parse_experience_extra_empty() {
+        let (count, months) = parse_experience_extra("");
+        assert_eq!(count, 0);
+        assert_eq!(months, 0.0);
+    }
+
+    // ── parse_positions_extra ───────────────────────────────────────
+
+    #[test]
+    fn parse_positions_extra_basic() {
+        let extra = "[['EURUSD', 5, 2, 3, 1.02, 0.99, 22582957, 63028797]],5,4";
+        let (positions, open, closed) = parse_positions_extra(extra);
+        assert_eq!(open, 5);
+        assert_eq!(closed, 4);
+        assert!(!positions.is_empty());
+        assert_eq!(positions[0].symbol, "EURUSD");
+        assert_eq!(positions[0].total_trades, 5);
+        assert_eq!(positions[0].wins, 2);
+        assert_eq!(positions[0].losses, 3);
+    }
+
+    #[test]
+    fn parse_positions_extra_empty() {
+        let (positions, open, closed) = parse_positions_extra("");
+        assert!(positions.is_empty());
+        assert_eq!(open, 0);
+        assert_eq!(closed, 0);
+    }
+
+    #[test]
+    fn parse_positions_extra_no_array() {
+        // Just trailing numbers, no position array
+        let (positions, open, closed) = parse_positions_extra("3,2");
+        assert!(positions.is_empty());
+        assert_eq!(open, 3);
+        assert_eq!(closed, 2);
+    }
+
+    // ── compute_daily_returns_from_ftp ──────────────────────────────
+
+    #[test]
+    fn compute_daily_returns_increasing() {
+        let returns = vec![
+            ReturnPoint { timestamp_ms: 1000, score: 5.0, cumulative_returns: vec![1.0] },
+            ReturnPoint { timestamp_ms: 2000, score: 5.0, cumulative_returns: vec![1.0, 1.01] },
+            ReturnPoint { timestamp_ms: 3000, score: 5.0, cumulative_returns: vec![1.0, 1.01, 1.03] },
+        ];
+        let daily = compute_daily_returns_from_ftp(&returns);
+        assert_eq!(daily.len(), 3);
+        // Day 1: 1.0/1.0 - 1 = 0
+        assert!((daily[0]).abs() < 1e-10);
+        // Day 2: 1.01/1.0 - 1 = 0.01
+        assert!((daily[1] - 0.01).abs() < 1e-10);
+        // Day 3: 1.03/1.01 - 1 ≈ 0.0198
+        assert!((daily[2] - 0.019801980).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_daily_returns_empty() {
+        let daily = compute_daily_returns_from_ftp(&[]);
+        assert!(daily.is_empty());
+    }
+
+    // ── compute_return_summary ──────────────────────────────────────
+
+    #[test]
+    fn return_summary_basic() {
+        let returns = vec![
+            ReturnPoint { timestamp_ms: 1000, score: 5.0, cumulative_returns: vec![1.0] },
+            ReturnPoint { timestamp_ms: 2000, score: 6.0, cumulative_returns: vec![1.0, 1.02] },
+            ReturnPoint { timestamp_ms: 3000, score: 7.0, cumulative_returns: vec![1.0, 1.02, 1.05] },
+            ReturnPoint { timestamp_ms: 4000, score: 7.5, cumulative_returns: vec![1.0, 1.02, 1.05, 1.03] },
+        ];
+        let summary = compute_return_summary("THA", &returns);
+        assert_eq!(summary.ticker, "THA");
+        assert_eq!(summary.trading_days, 4);
+        // Total return: (1.03 - 1.0) * 100 = 3.0%
+        assert!((summary.total_return_pct - 3.0).abs() < 1e-10);
+        // Max drawdown: peak was 1.05, then dropped to 1.03 → dd = (1.05-1.03)/1.05*100
+        let expected_dd = (1.05 - 1.03) / 1.05 * 100.0;
+        assert!((summary.max_drawdown_pct - expected_dd).abs() < 1e-6);
+        // DARWIN price starts at 100
+        assert!((summary.last_quote - 103.0).abs() < 1e-10);
+        // Experience score = last point's score
+        assert!((summary.experience_score - 7.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn return_summary_empty() {
+        let summary = compute_return_summary("EMPTY", &[]);
+        assert_eq!(summary.trading_days, 0);
+        assert_eq!(summary.total_return_pct, 0.0);
+        assert_eq!(summary.sharpe, 0.0);
+    }
+
+    // ── quotes_to_daily_ohlc ────────────────────────────────────────
+
+    #[test]
+    fn quotes_to_daily_ohlc_single_day() {
+        let ticks = vec![
+            QuoteTick { timestamp_ms: 86_400_000 + 1000, quote: 100.0 },
+            QuoteTick { timestamp_ms: 86_400_000 + 2000, quote: 105.0 },
+            QuoteTick { timestamp_ms: 86_400_000 + 3000, quote: 98.0 },
+            QuoteTick { timestamp_ms: 86_400_000 + 4000, quote: 102.0 },
+        ];
+        let ohlc = quotes_to_daily_ohlc(&ticks);
+        assert_eq!(ohlc.len(), 1);
+        let (_, o, h, l, c) = ohlc[0];
+        assert_eq!(o, 100.0);
+        assert_eq!(h, 105.0);
+        assert_eq!(l, 98.0);
+        assert_eq!(c, 102.0);
+    }
+
+    #[test]
+    fn quotes_to_daily_ohlc_multiple_days() {
+        let day1 = 86_400_000;
+        let day2 = 86_400_000 * 2;
+        let ticks = vec![
+            QuoteTick { timestamp_ms: day1 + 100, quote: 50.0 },
+            QuoteTick { timestamp_ms: day1 + 200, quote: 55.0 },
+            QuoteTick { timestamp_ms: day2 + 100, quote: 60.0 },
+            QuoteTick { timestamp_ms: day2 + 200, quote: 58.0 },
+        ];
+        let ohlc = quotes_to_daily_ohlc(&ticks);
+        assert_eq!(ohlc.len(), 2);
+    }
+
+    #[test]
+    fn quotes_to_daily_ohlc_empty() {
+        let ohlc = quotes_to_daily_ohlc(&[]);
+        assert!(ohlc.is_empty());
+    }
+
+    // ── ms_to_date ──────────────────────────────────────────────────
+
+    #[test]
+    fn ms_to_date_valid() {
+        // 2023-11-14 = 1699920000000 ms (UTC midnight)
+        assert_eq!(ms_to_date(1699920000000), "2023-11-14");
+    }
+
+    #[test]
+    fn ms_to_date_epoch() {
+        assert_eq!(ms_to_date(0), "1970-01-01");
+    }
+
+    #[test]
+    fn ms_to_date_negative() {
+        // Before epoch — should still work
+        let result = ms_to_date(-86_400_000);
+        assert_eq!(result, "1969-12-31");
+    }
+}

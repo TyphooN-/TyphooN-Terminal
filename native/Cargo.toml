@@ -41,6 +41,9 @@ bytemuck = { version = "1", features = ["derive"] }
 prometheus = "0.13"
 axum = "0.8"
 
+# Image encoding (screenshot export)
+image = "0.25"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

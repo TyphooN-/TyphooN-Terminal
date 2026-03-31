@@ -7074,6 +7074,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "OHLC",          desc: "Switch to OHLC bars chart" },
     Command { name: "RENKO",         desc: "Switch to Renko chart" },
     Command { name: "EXPORT_CSV",    desc: "Export chart data to CSV" },
+    Command { name: "SCREENSHOT",    desc: "Save chart as PNG screenshot" },
     Command { name: "NEW_TAB",       desc: "Open new chart tab" },
     Command { name: "CLOSE_TAB",     desc: "Close current chart tab" },
     // DARWIN-specific
@@ -7959,6 +7960,9 @@ pub struct TyphooNApp {
     metrics_registry: Option<std::sync::Arc<crate::metrics::MetricsRegistry>>,
     /// App start time for uptime calculation.
     metrics_start: std::time::Instant,
+
+    /// Screenshot requested via SCREENSHOT command (triggers ViewportCommand::Screenshot next frame).
+    screenshot_requested: bool,
 }
 
 impl TyphooNApp {
@@ -9334,6 +9338,7 @@ impl TyphooNApp {
             gpu_indicators: None,
             metrics_registry: None,
             metrics_start: std::time::Instant::now(),
+            screenshot_requested: false,
         };
 
         // ── Prometheus metrics server ────────────────────────────────────────
@@ -10157,6 +10162,10 @@ impl TyphooNApp {
             "OHLC"       => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.chart_type = ChartType::OhlcBars; } }
             "RENKO"      => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.chart_type = ChartType::Renko; } }
             "EXPORT_CSV" => { self.export_csv(); }
+            "SCREENSHOT" => {
+                self.screenshot_requested = true;
+                self.log.push_back(LogEntry::info("Screenshot requested — capturing next frame..."));
+            }
             // Tabs
             "NEW_TAB" => {
                 let tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
@@ -17746,6 +17755,49 @@ impl eframe::App for TyphooNApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
         ctx.set_visuals(Self::dark_visuals());
+
+        // ── Screenshot: issue capture command ────────────────────────────
+        if self.screenshot_requested {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            self.screenshot_requested = false;
+        }
+
+        // ── Screenshot: handle captured image ────────────────────────────
+        {
+            let screenshot_result: Option<Result<String, String>> = ctx.input(|i| {
+                for event in &i.events {
+                    if let egui::Event::Screenshot { image, .. } = event {
+                        let sym = "chart";
+                        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                        let pictures_dir = if let Ok(home) = std::env::var("HOME") {
+                            let p = std::path::PathBuf::from(home).join("Pictures");
+                            let _ = std::fs::create_dir_all(&p);
+                            p
+                        } else {
+                            std::path::PathBuf::from("/tmp")
+                        };
+                        let path = pictures_dir.join(format!("typhoon_{}_{}.png", sym, ts));
+
+                        let w = image.width();
+                        let h = image.height();
+                        let rgba: Vec<u8> = image.pixels.iter()
+                            .flat_map(|c| [c.r(), c.g(), c.b(), c.a()])
+                            .collect();
+
+                        return match image::save_buffer(&path, &rgba, w as u32, h as u32, image::ColorType::Rgba8) {
+                            Ok(()) => Some(Ok(format!("Screenshot saved: {}", path.display()))),
+                            Err(e) => Some(Err(format!("Screenshot save failed: {}", e))),
+                        };
+                    }
+                }
+                None
+            });
+            match screenshot_result {
+                Some(Ok(msg)) => self.log.push_back(LogEntry::info(msg)),
+                Some(Err(msg)) => self.log.push_back(LogEntry::err(msg)),
+                None => {}
+            }
+        }
 
         // ── Receive async cache open result ──────────────────────────────
         if self.cache.is_none() {
