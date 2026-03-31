@@ -11,7 +11,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ Chart Renderer (egui Painter)               ││
 │  │ - Candle/HeikinAshi/Line/Bars/Renko         ││
 │  │ - 32+ indicators (GPU + CPU fallback)        ││
-│  │ - 7 drawing tools + 10 harmonic patterns     ││
+│  │ - 56 drawing tools + 10 harmonic patterns     ││
 │  │ - DARWIN trade arrows + position lines       ││
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│

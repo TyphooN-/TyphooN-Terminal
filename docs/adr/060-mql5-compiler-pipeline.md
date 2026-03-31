@@ -1,6 +1,6 @@
 # ADR-060: MQL5 Compiler Pipeline — Source to GPU/CPU Execution
 
-**Status:** Phase 1 Implemented (WASM), Phase 2 Proposed (WGSL) | **Date:** 2026-03-27
+**Status:** Phase 1 Implemented (WASM), Phase 2 Implemented (WGSL) | **Date:** 2026-03-27 | **Updated:** 2026-03-31
 
 ## Context
 
@@ -25,8 +25,8 @@ IR (Intermediate Representation)
     │
     ├──────────────────┐
     ▼                  ▼
-WASM Backend       WGSL Backend (Proposed)
-(Phase 1 ✓)        (Phase 2 — Future)
+WASM Backend       WGSL Backend
+(Phase 1 ✓)        (Phase 2 ✓)
     │                  │
     ▼                  ▼
 CPU Execution      GPU Execution
@@ -43,20 +43,22 @@ The `emit_wasm()` codegen produces a valid WebAssembly module:
 
 **Status:** Parser handles core MQL5 syntax. Codegen produces working WASM. Runtime executes with bar data from SQLite cache.
 
-## Phase 2: WGSL Backend (Proposed)
+## Phase 2: WGSL Backend (Implemented)
 
-Add `emit_wgsl()` to generate GPU compute shaders:
-- Each indicator buffer becomes a GPU storage buffer
-- OnCalculate loop parallelized across workgroups
-- iSeries functions map to buffer reads
-- Math functions use WGSL built-ins
+The `emit_wgsl()` codegen (1100 lines) produces valid WGSL compute shaders:
+- Each indicator buffer becomes a `storage` binding
+- OnCalculate loop maps to `@compute @workgroup_size(256)` main function
+- iSeries functions map to bar data buffer reads (iOpen/iHigh/iLow/iClose/iVolume)
+- Math functions use WGSL built-ins (`sqrt`, `log`, `abs`, `max`, `min`)
+- Input parameters gathered into a `Params` uniform struct with `bar_count`
+- Ternary expressions compiled to WGSL `select()`
+- 26 WGSL-specific tests covering codegen output
 
-**Benefits:**
-- Custom MQL5 indicators run on GPU automatically
-- Same source compiles to both CPU (WASM) and GPU (WGSL)
-- 100-1000× speedup for indicators on large datasets
+**Parser bug fix (postfix_op unwrapping):** `postfix_op` rule now correctly distinguishes between `++`/`--` operators (which ARE the operator) and wrapped `call_args`/`index_access`/`member_access` (which contain an inner child). Previously unwrapping `postfix_op` unconditionally caused panics on increment/decrement expressions.
 
-**Challenges:**
+**Status:** Same MQL5 source compiles to both CPU (WASM) and GPU (WGSL). 75 compiler tests passing (parser + WASM codegen + WGSL codegen).
+
+**Constraints:**
 - WGSL has no recursion, limited control flow
 - Sequential indicators (EMA, KAMA) need scan/prefix-sum patterns
 - Not all MQL5 constructs map to GPU (file I/O, network, GlobalVariables)
@@ -82,8 +84,9 @@ Add `emit_wgsl()` to generate GPU compute shaders:
 ## Consequences
 
 - **Pro:** Users can run MQL5 indicators without MetaTrader
-- **Pro:** GPU compilation path provides massive speedup
-- **Pro:** Same source works on CPU (WASM) and GPU (WGSL)
+- **Pro:** GPU compilation path provides massive speedup (both backends implemented)
+- **Pro:** Same source compiles to CPU (WASM) and GPU (WGSL) from single AST
 - **Pro:** Sandboxed execution prevents malicious indicator code
+- **Pro:** 75 tests covering parser, WASM codegen, and WGSL codegen
 - **Con:** Not 100% MQL5 compatible (trading functions excluded)
 - **Con:** GPU path limited to parallelizable indicators

@@ -37,9 +37,12 @@ type_name = {
     "ENUM_PLOT_PROPERTY_DOUBLE" | "ENUM_PLOT_PROPERTY_STRING" |
     "ENUM_INDICATOR_PROPERTY_INTEGER" | "ENUM_INDICATOR_PROPERTY_STRING" |
     "ENUM_TRADE_REQUEST_ACTIONS" | "ENUM_ORDER_TYPE" | "ENUM_POSITION_TYPE" |
+    "ENUM_ORDER_TYPE_FILLING" | "ENUM_ORDER_TYPE_TIME" |
+    "ENUM_SYMBOL_INFO_INTEGER" | "ENUM_SYMBOL_INFO_DOUBLE" | "ENUM_SYMBOL_INFO_STRING" |
+    "ENUM_ACCOUNT_INFO_INTEGER" | "ENUM_ACCOUNT_INFO_DOUBLE" | "ENUM_ACCOUNT_INFO_STRING" |
+    "ENUM_POSITION_PROPERTY_INTEGER" | "ENUM_POSITION_PROPERTY_DOUBLE" | "ENUM_POSITION_PROPERTY_STRING" |
     "MqlTradeRequest" | "MqlTradeResult" | "MqlRates" | "MqlDateTime" |
-    "MqlTick" | "MqlParam" |
-    ident
+    "MqlTick" | "MqlParam" | "MqlTradeCheckResult"
 }
 array_suffix = { "[" ~ expr? ~ "]" }
 type_spec    = { "const"? ~ type_name ~ "&"? ~ array_suffix* }

@@ -51,7 +51,7 @@ All other GPU/CPU pairs produce identical results:
 
 ## Test Coverage
 
-344 tests across engine, GPU shaders, integration, and MQL5 compiler (up from 261 at initial audit).
+480 tests (75 compiler + 319 engine + 86 native) across engine, GPU shaders, integration, and MQL5 compiler (up from 261 at initial audit).
 
 ## Consequences
 

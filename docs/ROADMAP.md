@@ -30,7 +30,7 @@
 - [x] Bottom panel: log + volume bars
 - [x] 29 floating windows
 - [x] Right-click context menu with drawing tools + chart type switcher
-- [x] 7 drawing tools: HLine, TrendLine, Fibonacci, VLine, Rectangle, Ray, Channel
+- [x] 56 drawing tools (lines, channels, Fibonacci, shapes, Gann, Elliott, measurement, patterns, annotations, position, cycles, projection, curves)
 - [x] Session persistence (save/restore on quit/startup)
 - [x] CSV export with file dialog
 
@@ -101,7 +101,7 @@
 ## Future
 
 ### Phase 10: Advanced Features
-- [ ] More drawing tools (pitchfork, Elliott, Gann)
+- [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 56 total)
 - [x] Price alerts system (indicator-based: RSI, MACD, Fisher, Price conditions)
 - [x] Trade journal (log trades with notes, ~ → JOURNAL)
 - [ ] Pattern recognition (double top/bottom, H&S)

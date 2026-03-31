@@ -48,7 +48,7 @@ No per-frame throttling by window state — expensive operations eliminated inst
 | Path Traversal | **SAFE** | MT5 paths from config, DARWIN dirs validated with is_dir() |
 | Session Deserialization | **SAFE** | Defensive parsing with type checks (.as_str(), .as_bool(), .as_u64()) |
 | LAN Sync Auth | **SAFE** | PBKDF2-HMAC-SHA256 (100K iterations) challenge-response |
-| LAN Sync Transport | **SAFE** | TLS encrypted (wss://) with ephemeral self-signed certificate (rcgen + native-tls) |
+| LAN Sync Transport | **SAFE** | TLS encrypted (wss://) with ephemeral self-signed certificate (rcgen + native-tls) + TOFU SHA-256 cert pinning |
 | External Data | **SAFE** | All API responses parsed through typed serde structs |
 
 ### Additional Fixes (Late Session)
@@ -82,7 +82,7 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - **Docker containerization**: Dockerfile added for reproducible builds and deployment
 
 ### Code Quality
-- **344 tests** (up from 261) — comprehensive coverage across engine, GPU shaders, integration, and MQL5 compiler
+- **480 tests** (75 compiler + 319 engine + 86 native) — comprehensive coverage across engine, GPU shaders, integration, and MQL5 compiler
 - **bytemuck migration**: All `unsafe` transmute/pointer-cast blocks replaced with `bytemuck` Pod/Zeroable derives — zero `unsafe` blocks in entire codebase
 
 ### 2026-03-31 Session: UI Freeze Elimination
@@ -92,4 +92,6 @@ No per-frame throttling by window state — expensive operations eliminated inst
   - Unusual volume scanner: runs in background thread, results cached
   - Watchlist stats: computed once and cached, not recomputed per-frame
 - **Zero unsafe blocks** confirmed across entire codebase (engine + native + compiler)
-- **344 tests** passing (engine: cache, darwin, fundamentals, SEC, crypto, var, risk, margin, backtest; native: GPU shaders, app integration; mql5-compiler: parser, codegen)
+- **480 tests** passing (75 compiler + 319 engine + 86 native): cache, darwin, fundamentals, SEC, crypto, var, risk, margin, backtest, GPU shaders, app integration, parser, WASM codegen, WGSL codegen
+- **TLS cert pinning (TOFU)**: LAN sync client extracts peer certificate, computes SHA-256 fingerprint, stores on first use, verifies on subsequent connections. Certificate mismatch aborts connection with explicit error.
+- **MQL5 compiler parser bug fix**: postfix_op unwrapping now correctly distinguishes `++`/`--` from wrapped call_args/index_access/member_access

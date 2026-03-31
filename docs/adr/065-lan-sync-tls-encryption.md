@@ -1,6 +1,6 @@
 # ADR-065: LAN Sync TLS Encryption
 
-**Status:** Implemented | **Date:** 2026-03-28
+**Status:** Implemented | **Date:** 2026-03-28 | **Updated:** 2026-03-31
 
 ## Context
 
@@ -22,12 +22,14 @@ Upgrade LAN sync transport from `ws://` to `wss://` (WebSocket over TLS).
 1. Connects to `wss://host:port` instead of `ws://host:port`
 2. Uses `native-tls::TlsConnector` with `danger_accept_invalid_certs(true)` for self-signed LAN certs
 3. `tokio-tungstenite::connect_async_tls_with_config` handles the TLS upgrade
+4. **TOFU certificate pinning**: After TLS handshake, extracts peer certificate DER, computes SHA-256 fingerprint. On first connection to a host:port, stores fingerprint in SQLite KV (`lan_sync_cert_pin:{host}:{port}`). On subsequent connections, verifies fingerprint matches stored pin — rejects on mismatch with explicit error message
 
 ### Security Layers (Defense in Depth)
 ```
 Layer 1: TLS encryption (all data encrypted in transit)
-Layer 2: HMAC-SHA256 challenge-response authentication (PBKDF2 100K iterations)
-Layer 3: Application-level data validation (typed serde deserialization)
+Layer 2: TOFU certificate pinning (SHA-256 fingerprint stored on first use, verified on reconnect)
+Layer 3: HMAC-SHA256 challenge-response authentication (PBKDF2 100K iterations)
+Layer 4: Application-level data validation (typed serde deserialization)
 ```
 
 ### Dependencies Added
@@ -40,5 +42,6 @@ Layer 3: Application-level data validation (typed serde deserialization)
 - **Pro:** All LAN sync traffic encrypted — no plaintext bar data or DARWIN analytics
 - **Pro:** Ephemeral certificates — no key management burden
 - **Pro:** Backward compatible — authentication protocol unchanged
-- **Con:** Client accepts any self-signed cert (`danger_accept_invalid_certs`) — suitable for LAN, not internet
+- **Pro:** TOFU certificate pinning detects server impersonation after initial trust establishment
+- **Con:** Client uses `danger_accept_invalid_certs` for TLS handshake (required for self-signed), but TOFU fingerprint layer provides server identity verification
 - **Con:** Small latency overhead from TLS handshake (~5ms per connection)
