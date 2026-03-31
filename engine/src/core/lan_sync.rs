@@ -186,7 +186,8 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 ticker TEXT PRIMARY KEY,
                 last_scrape_date TEXT,
                 filing_count INTEGER DEFAULT 0,
-                cik TEXT
+                cik TEXT,
+                updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
         "fundamentals" => Some(
@@ -224,7 +225,8 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 beta REAL,
                 short_ratio REAL,
                 short_percent_of_float REAL,
-                last_updated TEXT NOT NULL DEFAULT ''
+                last_updated TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL DEFAULT 0
             )"
         ),
         "quarterly_financials" => Some(
@@ -238,6 +240,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 operating_income REAL,
                 ebitda REAL,
                 eps REAL,
+                updated_at INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (symbol, period_end)
             )"
         ),
@@ -249,6 +252,7 @@ fn create_table_sql(table: &str) -> Option<&'static str> {
                 pct_held REAL NOT NULL DEFAULT 0.0,
                 value REAL NOT NULL DEFAULT 0.0,
                 date_reported TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (symbol, holder_name)
             )"
         ),
@@ -264,8 +268,10 @@ fn table_timestamp_column(table: &str) -> Option<&'static str> {
         "sec_insider_trades" => Some("created_at"),
         "sec_filing_alerts" => Some("created_at"),
         "darwin_equity_snapshots" => Some("timestamp"),
-        // Tables without usable timestamp columns — always full sync:
-        // "sec_scrape_index", "fundamentals", "quarterly_financials", "institutional_holders"
+        "fundamentals" => Some("updated_at"),
+        "quarterly_financials" => Some("updated_at"),
+        "institutional_holders" => Some("updated_at"),
+        "sec_scrape_index" => Some("updated_at"),
         _ => None,
     }
 }

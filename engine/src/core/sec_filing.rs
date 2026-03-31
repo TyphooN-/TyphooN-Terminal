@@ -182,7 +182,12 @@ pub fn create_sec_tables(conn: &Connection) -> Result<(), String> {
             filing_count INTEGER DEFAULT 0,
             cik TEXT
         );
-    ").map_err(|e| format!("Failed to create SEC tables: {e}"))
+    ").map_err(|e| format!("Failed to create SEC tables: {e}"))?;
+
+    // Schema migration: add updated_at column for incremental LAN sync
+    let _ = conn.execute("ALTER TABLE sec_scrape_index ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0", []);
+
+    Ok(())
 }
 
 // ── Importance Scoring ──────────────────────────────────────────────
@@ -292,10 +297,10 @@ async fn get_cik(db_path: &Path, client: &reqwest::Client, ticker: &str) -> Resu
         tokio::task::spawn_blocking(move || {
             let conn = open_conn(&db2)?;
             conn.execute(
-                "INSERT OR REPLACE INTO sec_scrape_index (ticker, cik, last_scrape_date, filing_count)
+                "INSERT OR REPLACE INTO sec_scrape_index (ticker, cik, last_scrape_date, filing_count, updated_at)
                  VALUES (?1, ?2, COALESCE((SELECT last_scrape_date FROM sec_scrape_index WHERE ticker = ?1), NULL),
-                         COALESCE((SELECT filing_count FROM sec_scrape_index WHERE ticker = ?1), 0))",
-                params![t2, cik2],
+                         COALESCE((SELECT filing_count FROM sec_scrape_index WHERE ticker = ?1), 0), ?3)",
+                params![t2, cik2, chrono::Utc::now().timestamp()],
             ).map_err(|e| format!("Cache CIK failed: {e}"))?;
             Ok::<_, String>(())
         }).await.map_err(|e| format!("spawn_blocking: {e}"))??;
@@ -480,9 +485,9 @@ pub async fn scrape_filings_for_ticker(
                 |row| row.get(0),
             ).unwrap_or(0);
             conn.execute(
-                "INSERT OR REPLACE INTO sec_scrape_index (ticker, last_scrape_date, filing_count, cik)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![t, today, total_count, cik_str],
+                "INSERT OR REPLACE INTO sec_scrape_index (ticker, last_scrape_date, filing_count, cik, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![t, today, total_count, cik_str, chrono::Utc::now().timestamp()],
             ).map_err(|e| format!("Update scrape index failed: {e}"))?;
             Ok::<_, String>(())
         }).await.map_err(|e| format!("spawn_blocking: {e}"))??;

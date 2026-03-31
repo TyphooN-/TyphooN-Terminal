@@ -209,3 +209,204 @@ pub fn is_supported(symbol: &str) -> bool {
     let s = symbol.to_uppercase().replace('/', "");
     s.ends_with("USD") && s.len() >= 6
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── endpoint_for_tf ────────────────────────────────────
+
+    #[test]
+    fn endpoint_for_supported_timeframes() {
+        assert_eq!(endpoint_for_tf("1Min"), Some(("histominute", 1)));
+        assert_eq!(endpoint_for_tf("1Hour"), Some(("histohour", 1)));
+        assert_eq!(endpoint_for_tf("1Day"), Some(("histoday", 1)));
+    }
+
+    #[test]
+    fn endpoint_for_aggregate_timeframes() {
+        // These require aggregation and return None
+        assert_eq!(endpoint_for_tf("5Min"), None);
+        assert_eq!(endpoint_for_tf("15Min"), None);
+        assert_eq!(endpoint_for_tf("30Min"), None);
+        assert_eq!(endpoint_for_tf("4Hour"), None);
+        assert_eq!(endpoint_for_tf("1Week"), None);
+        assert_eq!(endpoint_for_tf("1Month"), None);
+    }
+
+    #[test]
+    fn endpoint_for_unknown_timeframe() {
+        assert_eq!(endpoint_for_tf("2Hour"), None);
+        assert_eq!(endpoint_for_tf(""), None);
+        assert_eq!(endpoint_for_tf("garbage"), None);
+    }
+
+    // ── is_supported ───────────────────────────────────────
+
+    #[test]
+    fn supported_symbols() {
+        assert!(is_supported("BTCUSD"));
+        assert!(is_supported("ETHUSD"));
+        assert!(is_supported("SOLUSD"));
+        assert!(is_supported("BTC/USD"));
+        assert!(is_supported("btcusd"));
+    }
+
+    #[test]
+    fn unsupported_symbols() {
+        // Too short after normalization
+        assert!(!is_supported("USD"));
+        assert!(!is_supported("XAUSD")); // only 5 chars
+        // Wrong quote currency
+        assert!(!is_supported("BTCEUR"));
+        // Note: EURUSD (6 chars, ends with USD) passes — the function
+        // only checks suffix + length, not a crypto whitelist
+    }
+
+    #[test]
+    fn supported_edge_cases() {
+        assert!(!is_supported(""));
+        // "EURUSD" has 6 chars and ends with USD, so it is_supported returns true
+        // (the function only checks suffix + length, not a whitelist)
+        assert!(is_supported("EURUSD"));
+    }
+
+    // ── aggregate_bars ─────────────────────────────────────
+
+    fn make_bar(ts: &str, o: f64, h: f64, l: f64, c: f64, v: f64) -> serde_json::Value {
+        json!({
+            "timestamp": ts,
+            "open": o,
+            "high": h,
+            "low": l,
+            "close": c,
+            "volume": v,
+        })
+    }
+
+    #[test]
+    fn aggregate_bars_simple() {
+        let bars = vec![
+            make_bar("2024-01-01T00:00:00Z", 100.0, 110.0, 90.0, 105.0, 1000.0),
+            make_bar("2024-01-01T01:00:00Z", 105.0, 120.0, 95.0, 115.0, 2000.0),
+            make_bar("2024-01-01T02:00:00Z", 115.0, 130.0, 100.0, 125.0, 1500.0),
+            make_bar("2024-01-01T03:00:00Z", 125.0, 140.0, 110.0, 135.0, 500.0),
+        ];
+        let result = aggregate_bars(&bars, 2);
+        assert_eq!(result.len(), 2);
+
+        // First aggregated bar: bars[0..2]
+        let b0 = &result[0];
+        assert_eq!(b0["open"].as_f64().unwrap(), 100.0);
+        assert_eq!(b0["high"].as_f64().unwrap(), 120.0); // max of 110, 120
+        assert_eq!(b0["low"].as_f64().unwrap(), 90.0);   // min of 90, 95
+        assert_eq!(b0["close"].as_f64().unwrap(), 115.0); // last bar close
+        assert!((b0["volume"].as_f64().unwrap() - 3000.0).abs() < 1e-10);
+
+        // Second aggregated bar: bars[2..4]
+        let b1 = &result[1];
+        assert_eq!(b1["open"].as_f64().unwrap(), 115.0);
+        assert_eq!(b1["high"].as_f64().unwrap(), 140.0);
+        assert_eq!(b1["low"].as_f64().unwrap(), 100.0);
+        assert_eq!(b1["close"].as_f64().unwrap(), 135.0);
+        assert!((b1["volume"].as_f64().unwrap() - 2000.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn aggregate_bars_incomplete_last_chunk() {
+        // 3 bars aggregated by 2 → 2 output bars (last has 1 bar)
+        let bars = vec![
+            make_bar("2024-01-01T00:00:00Z", 100.0, 110.0, 90.0, 105.0, 1000.0),
+            make_bar("2024-01-01T01:00:00Z", 105.0, 120.0, 95.0, 115.0, 2000.0),
+            make_bar("2024-01-01T02:00:00Z", 115.0, 130.0, 100.0, 125.0, 1500.0),
+        ];
+        let result = aggregate_bars(&bars, 2);
+        assert_eq!(result.len(), 2);
+        // Last bar is a single-bar "aggregation"
+        let last = &result[1];
+        assert_eq!(last["open"].as_f64().unwrap(), 115.0);
+        assert_eq!(last["close"].as_f64().unwrap(), 125.0);
+    }
+
+    #[test]
+    fn aggregate_bars_empty_input() {
+        let bars: Vec<serde_json::Value> = vec![];
+        let result = aggregate_bars(&bars, 4);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn aggregate_bars_single_bar() {
+        let bars = vec![
+            make_bar("2024-01-01T00:00:00Z", 100.0, 110.0, 90.0, 105.0, 1000.0),
+        ];
+        let result = aggregate_bars(&bars, 4);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["open"].as_f64().unwrap(), 100.0);
+    }
+
+    #[test]
+    fn aggregate_bars_period_one() {
+        // period=1 should return same number of bars
+        let bars = vec![
+            make_bar("2024-01-01T00:00:00Z", 100.0, 110.0, 90.0, 105.0, 500.0),
+            make_bar("2024-01-01T01:00:00Z", 105.0, 120.0, 95.0, 115.0, 600.0),
+        ];
+        let result = aggregate_bars(&bars, 1);
+        assert_eq!(result.len(), 2);
+    }
+
+    // ── aggregate_to_monthly ───────────────────────────────
+
+    #[test]
+    fn aggregate_to_monthly_basic() {
+        let daily = vec![
+            make_bar("2024-01-02T00:00:00Z", 100.0, 110.0, 90.0, 105.0, 1000.0),
+            make_bar("2024-01-15T00:00:00Z", 105.0, 150.0, 85.0, 140.0, 2000.0),
+            make_bar("2024-01-31T00:00:00Z", 140.0, 145.0, 130.0, 135.0, 1500.0),
+            make_bar("2024-02-01T00:00:00Z", 135.0, 160.0, 120.0, 155.0, 3000.0),
+        ];
+        let result = aggregate_to_monthly(&daily);
+        assert_eq!(result.len(), 2);
+
+        // January
+        let jan = &result[0];
+        assert_eq!(jan["open"].as_f64().unwrap(), 100.0);
+        assert_eq!(jan["high"].as_f64().unwrap(), 150.0);
+        assert_eq!(jan["low"].as_f64().unwrap(), 85.0);
+        assert_eq!(jan["close"].as_f64().unwrap(), 135.0);
+        assert!((jan["volume"].as_f64().unwrap() - 4500.0).abs() < 1e-10);
+
+        // February
+        let feb = &result[1];
+        assert_eq!(feb["open"].as_f64().unwrap(), 135.0);
+        assert_eq!(feb["close"].as_f64().unwrap(), 155.0);
+    }
+
+    #[test]
+    fn aggregate_to_monthly_empty() {
+        let result = aggregate_to_monthly(&[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn aggregate_to_monthly_single_day() {
+        let daily = vec![
+            make_bar("2024-06-15T00:00:00Z", 50.0, 55.0, 45.0, 52.0, 100.0),
+        ];
+        let result = aggregate_to_monthly(&daily);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["open"].as_f64().unwrap(), 50.0);
+    }
+
+    #[test]
+    fn aggregate_to_monthly_short_timestamp_skipped() {
+        // Timestamps shorter than 7 chars should be skipped
+        let daily = vec![
+            json!({"timestamp": "short", "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100.0}),
+        ];
+        let result = aggregate_to_monthly(&daily);
+        assert!(result.is_empty());
+    }
+}

@@ -164,7 +164,14 @@ pub fn create_fundamentals_tables(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_fundamentals_earnings ON fundamentals(next_earnings_date);
         CREATE INDEX IF NOT EXISTS idx_fundamentals_dividend ON fundamentals(next_ex_dividend_date);
         CREATE INDEX IF NOT EXISTS idx_quarterly_symbol ON quarterly_financials(symbol);
-    ").map_err(|e| format!("Create fundamentals tables failed: {e}"))
+    ").map_err(|e| format!("Create fundamentals tables failed: {e}"))?;
+
+    // Schema migration: add updated_at columns for incremental LAN sync
+    let _ = conn.execute("ALTER TABLE fundamentals ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE quarterly_financials ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE institutional_holders ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0", []);
+
+    Ok(())
 }
 
 // ── CIK Lookup ──────────────────────────────────────────────────────
@@ -561,13 +568,13 @@ pub fn upsert_fundamentals(conn: &Connection, f: &Fundamentals) -> Result<(), St
             is_dividend_stock, dividend_yield,
             pe_ratio, forward_pe, peg_ratio, price_to_book, price_to_sales,
             ev_to_ebitda, profit_margin, operating_margin, roe, roa,
-            beta, short_ratio, short_percent_of_float, last_updated
+            beta, short_ratio, short_percent_of_float, last_updated, updated_at
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6,
             ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20,
             ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-            ?31, ?32, ?33, ?34
+            ?31, ?32, ?33, ?34, ?35
         ) ON CONFLICT(symbol) DO UPDATE SET
             cik=excluded.cik, company_name=excluded.company_name,
             sector=excluded.sector, industry=excluded.industry,
@@ -589,7 +596,7 @@ pub fn upsert_fundamentals(conn: &Connection, f: &Fundamentals) -> Result<(), St
             profit_margin=excluded.profit_margin, operating_margin=excluded.operating_margin,
             roe=excluded.roe, roa=excluded.roa, beta=excluded.beta,
             short_ratio=excluded.short_ratio, short_percent_of_float=excluded.short_percent_of_float,
-            last_updated=excluded.last_updated",
+            last_updated=excluded.last_updated, updated_at=excluded.updated_at",
         params![
             f.symbol, f.cik, f.company_name, f.sector, f.industry, f.description,
             f.market_cap, f.enterprise_value, f.total_debt, f.cash_and_equivalents,
@@ -600,6 +607,7 @@ pub fn upsert_fundamentals(conn: &Connection, f: &Fundamentals) -> Result<(), St
             f.pe_ratio, f.forward_pe, f.peg_ratio, f.price_to_book, f.price_to_sales,
             f.ev_to_ebitda, f.profit_margin, f.operating_margin, f.roe, f.roa,
             f.beta, f.short_ratio, f.short_percent_of_float, f.last_updated,
+            chrono::Utc::now().timestamp(),
         ],
     ).map_err(|e| format!("Upsert fundamentals failed: {e}"))?;
     Ok(())
@@ -610,16 +618,17 @@ pub fn upsert_quarterly(conn: &Connection, quarters: &[QuarterlyFinancial]) -> R
     for q in quarters {
         conn.execute(
             "INSERT INTO quarterly_financials (symbol, period_end, total_revenue, net_income,
-             free_cash_flow, gross_profit, operating_income, ebitda, eps)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             free_cash_flow, gross_profit, operating_income, ebitda, eps, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(symbol, period_end) DO UPDATE SET
                 total_revenue=excluded.total_revenue, net_income=excluded.net_income,
                 free_cash_flow=excluded.free_cash_flow, gross_profit=excluded.gross_profit,
                 operating_income=excluded.operating_income, ebitda=excluded.ebitda,
-                eps=excluded.eps",
+                eps=excluded.eps, updated_at=excluded.updated_at",
             params![
                 q.symbol, q.period_end, q.total_revenue, q.net_income,
                 q.free_cash_flow, q.gross_profit, q.operating_income, q.ebitda, q.eps,
+                chrono::Utc::now().timestamp(),
             ],
         ).map_err(|e| format!("Upsert quarterly failed: {e}"))?;
     }
@@ -634,9 +643,10 @@ pub fn upsert_holders(conn: &Connection, holders: &[InstitutionalHolder]) -> Res
     }
     for h in holders {
         conn.execute(
-            "INSERT INTO institutional_holders (symbol, holder_name, shares, pct_held, value, date_reported)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![h.symbol, h.holder_name, h.shares, h.pct_held, h.value, h.date_reported],
+            "INSERT INTO institutional_holders (symbol, holder_name, shares, pct_held, value, date_reported, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![h.symbol, h.holder_name, h.shares, h.pct_held, h.value, h.date_reported,
+                    chrono::Utc::now().timestamp()],
         ).map_err(|e| format!("Insert holder failed: {e}"))?;
     }
     Ok(())
