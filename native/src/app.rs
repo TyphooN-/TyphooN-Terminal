@@ -464,6 +464,47 @@ enum Drawing {
         p2: (usize, f64),
         color: egui::Color32,
     },
+    /// Gann Box (rectangle with Gann grid lines, 2 clicks).
+    GannBox {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Elliott Wave Labels (5 swing points connected by lines, labeled 1-5).
+    ElliottWave {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// ABC Correction Labels (3 swing points connected by lines, labeled A-B-C).
+    AbcCorrection {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// Date Range measurement (bars/days between two points).
+    DateRange {
+        p1: (usize, f64),
+        p2: (usize, f64),
+    },
+    /// Date & Price Range combined measurement (bars, price, % change).
+    DatePriceRange {
+        p1: (usize, f64),
+        p2: (usize, f64),
+    },
+    /// Head & Shoulders pattern markup (5 points: LS, Head, RS + neckline).
+    HeadShoulders {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// XABCD Harmonic Pattern (5 labeled points connected by lines).
+    XabcdPattern {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// Brush/Freehand (series of closely-spaced dots following mouse drag).
+    Brush {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
 }
 
 /// Trade marker for chart overlay (DARWIN deals, broker fills).
@@ -559,6 +600,17 @@ enum DrawMode {
     PlacingAnchorNote,
     PlacingRegressionChP1,
     PlacingRegressionChP2 { bar1: usize, price1: f64 },
+    PlacingGannBoxP1,
+    PlacingGannBoxP2 { bar1: usize, price1: f64 },
+    PlacingElliottWave,
+    PlacingAbcCorrection,
+    PlacingDateRangeP1,
+    PlacingDateRangeP2 { bar1: usize, price1: f64 },
+    PlacingDatePriceRangeP1,
+    PlacingDatePriceRangeP2 { bar1: usize, price1: f64 },
+    PlacingHeadShoulders,
+    PlacingXabcdPattern,
+    PlacingBrush,
 }
 
 // ─── Ichimoku data ───────────────────────────────────────────────────────────
@@ -1428,10 +1480,89 @@ impl ChartState {
                     self.supply_zones = sz; self.demand_zones = dz;
                 }
                 self.compute_auto_fibonacci(); // CPU (fractal-based swing detection)
-                // VWAP — CPU (daily anchored, inherently sequential)
-                let (vw, vu1, vu2, vu3, vl1, vl2, vl3) = compute_vwap(&self.bars);
-                self.vwap = vw; self.vwap_upper1 = vu1; self.vwap_upper2 = vu2; self.vwap_upper3 = vu3;
-                self.vwap_lower1 = vl1; self.vwap_lower2 = vl2; self.vwap_lower3 = vl3;
+                // VWAP — GPU per-day segments with CPU deviation bands
+                let gpu_vwap_ok = 'vwap_gpu: {
+                    let n = self.bars.len();
+                    if n == 0 { break 'vwap_gpu false; }
+
+                    // Find day boundaries: indices where a new trading day starts
+                    let mut day_starts: Vec<usize> = vec![0];
+                    for i in 1..n {
+                        let prev_day = self.bars[i - 1].ts_ms / 1000 / 86400;
+                        let curr_day = self.bars[i].ts_ms / 1000 / 86400;
+                        if curr_day != prev_day {
+                            day_starts.push(i);
+                        }
+                    }
+
+                    // Allocate output vectors
+                    let mut vw = vec![None; n];
+                    let mut vu1 = vec![None; n];
+                    let mut vu2 = vec![None; n];
+                    let mut vu3 = vec![None; n];
+                    let mut vl1 = vec![None; n];
+                    let mut vl2 = vec![None; n];
+                    let mut vl3 = vec![None; n];
+
+                    // Process each day segment on GPU
+                    for seg_idx in 0..day_starts.len() {
+                        let start = day_starts[seg_idx];
+                        let end = if seg_idx + 1 < day_starts.len() { day_starts[seg_idx + 1] } else { n };
+                        let seg_len = end - start;
+
+                        // Build typical-price and volume arrays for this day
+                        let mut tp_arr = Vec::with_capacity(seg_len);
+                        let mut vol_arr = Vec::with_capacity(seg_len);
+                        for i in start..end {
+                            let b = &self.bars[i];
+                            let tp = ((b.high + b.low + b.close) / 3.0) as f32;
+                            let vol = b.volume.max(1.0) as f32;
+                            tp_arr.push(tp);
+                            vol_arr.push(vol);
+                        }
+
+                        // GPU: compute anchored VWAP for this day segment (anchor=0)
+                        let gpu_result = gpu.compute_anchored_vwap(&tp_arr, &vol_arr, 0);
+                        let gpu_vwap = match gpu_result {
+                            Some(v) if v.len() >= seg_len => v,
+                            _ => { break 'vwap_gpu false; }
+                        };
+
+                        // CPU: compute deviation bands from GPU VWAP values
+                        // σ = sqrt( Σ(tp²·vol)/Σ(vol) - vwap² )
+                        let mut cum_vol = 0.0_f64;
+                        let mut cum_tp2_vol = 0.0_f64;
+                        for j in 0..seg_len {
+                            let tp = tp_arr[j] as f64;
+                            let vol = vol_arr[j] as f64;
+                            cum_vol += vol;
+                            cum_tp2_vol += tp * tp * vol;
+
+                            let vwap_val = gpu_vwap[j] as f64;
+                            let variance = (cum_tp2_vol / cum_vol - vwap_val * vwap_val).max(0.0);
+                            let sd = variance.sqrt();
+
+                            let idx = start + j;
+                            vw[idx] = Some(vwap_val);
+                            vu1[idx] = Some(vwap_val + sd);
+                            vu2[idx] = Some(vwap_val + 2.0 * sd);
+                            vu3[idx] = Some(vwap_val + 3.0 * sd);
+                            vl1[idx] = Some(vwap_val - sd);
+                            vl2[idx] = Some(vwap_val - 2.0 * sd);
+                            vl3[idx] = Some(vwap_val - 3.0 * sd);
+                        }
+                    }
+
+                    self.vwap = vw; self.vwap_upper1 = vu1; self.vwap_upper2 = vu2; self.vwap_upper3 = vu3;
+                    self.vwap_lower1 = vl1; self.vwap_lower2 = vl2; self.vwap_lower3 = vl3;
+                    true
+                };
+                if !gpu_vwap_ok {
+                    // GPU VWAP failed — fall back to full CPU compute_vwap()
+                    let (vw, vu1, vu2, vu3, vl1, vl2, vl3) = compute_vwap(&self.bars);
+                    self.vwap = vw; self.vwap_upper1 = vu1; self.vwap_upper2 = vu2; self.vwap_upper3 = vu3;
+                    self.vwap_lower1 = vl1; self.vwap_lower2 = vl2; self.vwap_lower3 = vl3;
+                }
                 // Supertrend, Donchian, Keltner — CPU (simple, fast)
                 let (st, st_bull) = compute_supertrend(&self.bars, &self.atr, 10, 3.0);
                 self.supertrend = st; self.supertrend_bull = st_bull;
@@ -6166,6 +6297,168 @@ fn draw_chart(
                     }
                 }
             }
+            Drawing::GannBox { p1, p2, color } => {
+                let x1o = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2o = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1o, x2o) {
+                    let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
+                    let rect_d = egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2));
+                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 12);
+                    painter.rect_filled(rect_d, 0.0, fill);
+                    painter.rect_stroke(rect_d, 0.0, egui::Stroke::new(1.0, *color), egui::StrokeKind::Outside);
+                    // Gann grid: horizontal levels at Gann ratios
+                    let gann_h: &[f64] = &[0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+                    for &ratio in gann_h {
+                        let p = p1.1 + (p2.1 - p1.1) * ratio;
+                        let yy = price_to_y(p);
+                        let alpha = if ratio == 0.5 { 120 } else { 50 };
+                        let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
+                        painter.line_segment([egui::pos2(x1, yy), egui::pos2(x2, yy)], egui::Stroke::new(0.5, c));
+                    }
+                    // Vertical grid at same ratios
+                    for &ratio in gann_h {
+                        let xx = x1 + (x2 - x1) * ratio as f32;
+                        let alpha = if ratio == 0.5 { 120 } else { 50 };
+                        let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
+                        painter.line_segment([egui::pos2(xx, y1), egui::pos2(xx, y2)], egui::Stroke::new(0.5, c));
+                    }
+                    // Diagonal 1×1 from corners
+                    let c_diag = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 80);
+                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(0.8, c_diag));
+                    painter.line_segment([egui::pos2(x2, y1), egui::pos2(x1, y2)], egui::Stroke::new(0.8, c_diag));
+                }
+            }
+            Drawing::ElliottWave { points, color } => {
+                let mut screen_pts: Vec<(f32, f32)> = Vec::new();
+                for &(bi, pr) in points.iter() {
+                    if bi >= start_idx && bi < end_idx {
+                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let y = price_to_y(pr);
+                        screen_pts.push((x, y));
+                    }
+                }
+                let labels = ["1", "2", "3", "4", "5"];
+                for i in 0..screen_pts.len() {
+                    if i + 1 < screen_pts.len() {
+                        painter.line_segment([egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1)], egui::Stroke::new(1.2, *color));
+                    }
+                    if i < labels.len() {
+                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(11.0), *color);
+                    }
+                }
+            }
+            Drawing::AbcCorrection { points, color } => {
+                let mut screen_pts: Vec<(f32, f32)> = Vec::new();
+                for &(bi, pr) in points.iter() {
+                    if bi >= start_idx && bi < end_idx {
+                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let y = price_to_y(pr);
+                        screen_pts.push((x, y));
+                    }
+                }
+                let labels = ["A", "B", "C"];
+                for i in 0..screen_pts.len() {
+                    if i + 1 < screen_pts.len() {
+                        painter.line_segment([egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1)], egui::Stroke::new(1.2, *color));
+                    }
+                    if i < labels.len() {
+                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(11.0), *color);
+                    }
+                }
+            }
+            Drawing::DateRange { p1, p2 } => {
+                let x1o = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2o = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1o, x2o) {
+                    let mid_y = (price_to_y(p1.1) + price_to_y(p2.1)) / 2.0;
+                    let col = egui::Color32::from_rgb(100, 200, 255);
+                    // Vertical markers
+                    painter.line_segment([egui::pos2(x1, mid_y - 12.0), egui::pos2(x1, mid_y + 12.0)], egui::Stroke::new(1.0, col));
+                    painter.line_segment([egui::pos2(x2, mid_y - 12.0), egui::pos2(x2, mid_y + 12.0)], egui::Stroke::new(1.0, col));
+                    // Connecting line
+                    painter.line_segment([egui::pos2(x1, mid_y), egui::pos2(x2, mid_y)], egui::Stroke::new(1.0, col));
+                    let bar_count = if p2.0 > p1.0 { p2.0 - p1.0 } else { p1.0 - p2.0 };
+                    let label = format!("{} bars", bar_count);
+                    painter.text(egui::pos2((x1 + x2) / 2.0, mid_y - 6.0), egui::Align2::CENTER_BOTTOM, &label, egui::FontId::monospace(10.0), col);
+                }
+            }
+            Drawing::DatePriceRange { p1, p2 } => {
+                let x1o = if p1.0 >= start_idx && p1.0 < end_idx { Some(chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                let x2o = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
+                if let (Some(x1), Some(x2)) = (x1o, x2o) {
+                    let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
+                    let fill = egui::Color32::from_rgba_premultiplied(100, 200, 150, 15);
+                    painter.rect_filled(egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2)), 0.0, fill);
+                    painter.rect_stroke(egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2)), 0.0, egui::Stroke::new(0.8, egui::Color32::from_rgb(100, 200, 150)), egui::StrokeKind::Outside);
+                    let bars = if p2.0 > p1.0 { p2.0 - p1.0 } else { p1.0 - p2.0 };
+                    let dist = p2.1 - p1.1;
+                    let pct = if p1.1.abs() > f64::EPSILON { dist / p1.1 * 100.0 } else { 0.0 };
+                    let label = format!("{} bars | {:.2} ({:+.2}%)", bars, dist, pct);
+                    let col = egui::Color32::from_rgb(100, 200, 150);
+                    painter.text(egui::pos2((x1 + x2) / 2.0, y1.min(y2) - 4.0), egui::Align2::CENTER_BOTTOM, &label, egui::FontId::monospace(10.0), col);
+                }
+            }
+            Drawing::HeadShoulders { points, color } => {
+                // 5 points: 0=LS bottom, 1=LS top, 2=Head top, 3=RS top, 4=RS bottom
+                // Connect all in order, draw neckline between 0 and 4
+                let mut screen_pts: Vec<(f32, f32)> = Vec::new();
+                for &(bi, pr) in points.iter() {
+                    if bi >= start_idx && bi < end_idx {
+                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let y = price_to_y(pr);
+                        screen_pts.push((x, y));
+                    }
+                }
+                let labels = ["LS", "L", "H", "R", "RS"];
+                for i in 0..screen_pts.len() {
+                    if i + 1 < screen_pts.len() {
+                        painter.line_segment([egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1)], egui::Stroke::new(1.2, *color));
+                    }
+                    if i < labels.len() {
+                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(9.0), *color);
+                    }
+                }
+                // Neckline: dashed line between point 0 and point 4
+                if screen_pts.len() >= 5 {
+                    let nk_col = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 150);
+                    painter.line_segment([egui::pos2(screen_pts[0].0, screen_pts[0].1), egui::pos2(screen_pts[4].0, screen_pts[4].1)], egui::Stroke::new(1.5, nk_col));
+                    painter.text(egui::pos2((screen_pts[0].0 + screen_pts[4].0) / 2.0, (screen_pts[0].1 + screen_pts[4].1) / 2.0 + 12.0), egui::Align2::CENTER_TOP, "Neckline", egui::FontId::monospace(9.0), nk_col);
+                }
+            }
+            Drawing::XabcdPattern { points, color } => {
+                let mut screen_pts: Vec<(f32, f32)> = Vec::new();
+                for &(bi, pr) in points.iter() {
+                    if bi >= start_idx && bi < end_idx {
+                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let y = price_to_y(pr);
+                        screen_pts.push((x, y));
+                    }
+                }
+                let labels = ["X", "A", "B", "C", "D"];
+                for i in 0..screen_pts.len() {
+                    if i + 1 < screen_pts.len() {
+                        painter.line_segment([egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1)], egui::Stroke::new(1.2, *color));
+                    }
+                    if i < labels.len() {
+                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(11.0), *color);
+                    }
+                }
+                // XA→BD dashed line (harmonic diagonal)
+                if screen_pts.len() >= 5 {
+                    let diag = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 80);
+                    painter.line_segment([egui::pos2(screen_pts[0].0, screen_pts[0].1), egui::pos2(screen_pts[3].0, screen_pts[3].1)], egui::Stroke::new(0.6, diag));
+                    painter.line_segment([egui::pos2(screen_pts[1].0, screen_pts[1].1), egui::pos2(screen_pts[4].0, screen_pts[4].1)], egui::Stroke::new(0.6, diag));
+                }
+            }
+            Drawing::Brush { points, color } => {
+                for &(bi, pr) in points.iter() {
+                    if bi >= start_idx && bi < end_idx {
+                        let x = chart_rect.left() + ((bi - start_idx) as f32 + 0.5) * bar_w;
+                        let y = price_to_y(pr);
+                        painter.circle_filled(egui::pos2(x, y), 2.0, *color);
+                    }
+                }
+            }
         }
     }
 }
@@ -6814,6 +7107,14 @@ const COMMANDS: &[Command] = &[
     Command { name: "DRAW_POLYLINE",    desc: "Draw polyline (multi-click, dbl-click end)" },
     Command { name: "DRAW_ANCHOR_NOTE", desc: "Draw anchor note with text box" },
     Command { name: "DRAW_REGRESSION",  desc: "Draw regression channel with StdDev bands" },
+    Command { name: "DRAW_GANN_BOX",   desc: "Draw Gann Box with grid lines (2 clicks)" },
+    Command { name: "DRAW_ELLIOTT",     desc: "Draw Elliott Wave labels 1-5 (5 clicks)" },
+    Command { name: "DRAW_ABC",         desc: "Draw ABC correction labels (3 clicks)" },
+    Command { name: "DRAW_DATE_RANGE",  desc: "Draw date range measurement (2 clicks)" },
+    Command { name: "DRAW_DATE_PRICE",  desc: "Draw date & price range measurement (2 clicks)" },
+    Command { name: "DRAW_HEAD_SHOULDERS", desc: "Draw Head & Shoulders pattern (5 clicks)" },
+    Command { name: "DRAW_XABCD",      desc: "Draw XABCD harmonic pattern (5 clicks)" },
+    Command { name: "DRAW_BRUSH",       desc: "Draw freehand brush (click-drag)" },
     Command { name: "CLEAR_DRAWINGS",desc: "Clear all drawings on chart" },
     Command { name: "SESSIONS",      desc: "Toggle trading session highlighting (Asian/London/NY)" },
     Command { name: "VOL_HEATMAP",   desc: "Toggle volume heatmap candle coloring" },
@@ -7341,6 +7642,10 @@ pub struct TyphooNApp {
     draw_mode: DrawMode,
     /// In-progress polyline points (used during PlacingPolyline mode).
     polyline_points: Vec<(usize, f64)>,
+    /// In-progress Elliott Wave / ABC / H&S / XABCD multi-click points.
+    multi_click_points: Vec<(usize, f64)>,
+    /// In-progress brush/freehand points (accumulated while mouse held down).
+    brush_points: Vec<(usize, f64)>,
 
     /// DARWIN XLSX import ticker input.
     darwin_import_ticker: String,
@@ -8822,6 +9127,8 @@ impl TyphooNApp {
             chart_templates: std::collections::HashMap::new(),
             draw_mode: DrawMode::None,
             polyline_points: Vec::new(),
+            multi_click_points: Vec::new(),
+            brush_points: Vec::new(),
             darwin_import_ticker: String::new(),
             darwin_xlsx_dir: String::new(),
             mt5_db_paths: [String::new(), String::new(), String::new(), String::new()],
@@ -9993,6 +10300,14 @@ impl TyphooNApp {
             "DRAW_POLYLINE" => { self.draw_mode = DrawMode::PlacingPolyline; self.polyline_points.clear(); },
             "DRAW_ANCHOR_NOTE" => self.draw_mode = DrawMode::PlacingAnchorNote,
             "DRAW_REGRESSION" => self.draw_mode = DrawMode::PlacingRegressionChP1,
+            "DRAW_GANN_BOX" => self.draw_mode = DrawMode::PlacingGannBoxP1,
+            "DRAW_ELLIOTT" => { self.draw_mode = DrawMode::PlacingElliottWave; self.multi_click_points.clear(); },
+            "DRAW_ABC" => { self.draw_mode = DrawMode::PlacingAbcCorrection; self.multi_click_points.clear(); },
+            "DRAW_DATE_RANGE" => self.draw_mode = DrawMode::PlacingDateRangeP1,
+            "DRAW_DATE_PRICE" => self.draw_mode = DrawMode::PlacingDatePriceRangeP1,
+            "DRAW_HEAD_SHOULDERS" => { self.draw_mode = DrawMode::PlacingHeadShoulders; self.multi_click_points.clear(); },
+            "DRAW_XABCD" => { self.draw_mode = DrawMode::PlacingXabcdPattern; self.multi_click_points.clear(); },
+            "DRAW_BRUSH" => { self.draw_mode = DrawMode::PlacingBrush; self.brush_points.clear(); },
             "CLEAR_DRAWINGS" => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); } }
             "SESSIONS" => { self.show_sessions = !self.show_sessions; self.log.push_back(LogEntry::info(format!("Sessions: {}", if self.show_sessions { "ON" } else { "OFF" }))); }
             "VOL_HEATMAP" => { self.show_vol_heatmap = !self.show_vol_heatmap; self.log.push_back(LogEntry::info(format!("Volume heatmap: {}", if self.show_vol_heatmap { "ON" } else { "OFF" }))); }
@@ -10459,6 +10774,14 @@ impl TyphooNApp {
                     Drawing::Polyline { points, color } => Some(serde_json::json!({"type":"polyline","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
                     Drawing::AnchorNote { bar_idx, price, text, color } => Some(serde_json::json!({"type":"anchornote","bar_idx":bar_idx,"price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
                     Drawing::RegressionChannel { p1, p2, color } => Some(serde_json::json!({"type":"regressionch","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::GannBox { p1, p2, color } => Some(serde_json::json!({"type":"gannbox","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ElliottWave { points, color } => Some(serde_json::json!({"type":"elliott","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::AbcCorrection { points, color } => Some(serde_json::json!({"type":"abc","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::DateRange { p1, p2 } => Some(serde_json::json!({"type":"daterange","p1":[p1.0,p1.1],"p2":[p2.0,p2.1]})),
+                    Drawing::DatePriceRange { p1, p2 } => Some(serde_json::json!({"type":"datepricerange","p1":[p1.0,p1.1],"p2":[p2.0,p2.1]})),
+                    Drawing::HeadShoulders { points, color } => Some(serde_json::json!({"type":"headshoulders","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::XabcdPattern { points, color } => Some(serde_json::json!({"type":"xabcd","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Brush { points, color } => Some(serde_json::json!({"type":"brush","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
                 }).collect::<Vec<_>>()
             }).unwrap_or_default(),
             "alerts": self.alerts.iter().map(|(p, l)| serde_json::json!({"price": p, "label": l})).collect::<Vec<_>>(),
@@ -10613,6 +10936,14 @@ impl TyphooNApp {
                                 Some("polyline") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::Polyline { points, color: parse_col(d) }); } } }
                                 Some("anchornote") => { if let (Some(idx), Some(p), Some(t)) = (d["bar_idx"].as_u64(), d["price"].as_f64(), d["text"].as_str()) { chart.drawings.push(Drawing::AnchorNote { bar_idx: idx as usize, price: p, text: t.to_string(), color: parse_col(d) }); } }
                                 Some("regressionch") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::RegressionChannel { p1, p2, color: parse_col(d) }); } }
+                                Some("gannbox") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::GannBox { p1, p2, color: parse_col(d) }); } }
+                                Some("elliott") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::ElliottWave { points, color: parse_col(d) }); } } }
+                                Some("abc") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::AbcCorrection { points, color: parse_col(d) }); } } }
+                                Some("daterange") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::DateRange { p1, p2 }); } }
+                                Some("datepricerange") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::DatePriceRange { p1, p2 }); } }
+                                Some("headshoulders") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::HeadShoulders { points, color: parse_col(d) }); } } }
+                                Some("xabcd") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::XabcdPattern { points, color: parse_col(d) }); } } }
+                                Some("brush") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::Brush { points, color: parse_col(d) }); } } }
                                 _ => {}
                             }
                         }
@@ -16879,6 +17210,14 @@ impl TyphooNApp {
                                             Drawing::Polyline { points, .. } => ("Polyline", format!("{} pts", points.len())),
                                             Drawing::AnchorNote { text, .. } => ("Note", text.clone()),
                                             Drawing::RegressionChannel { .. } => ("Regression", String::new()),
+                                            Drawing::GannBox { .. } => ("Gann Box", String::new()),
+                                            Drawing::ElliottWave { points, .. } => ("Elliott Wave", format!("{} pts", points.len())),
+                                            Drawing::AbcCorrection { .. } => ("ABC Correction", String::new()),
+                                            Drawing::DateRange { p1, p2, .. } => ("Date Range", format!("{} bars", if p2.0 > p1.0 { p2.0 - p1.0 } else { p1.0 - p2.0 })),
+                                            Drawing::DatePriceRange { p1, p2, .. } => ("Date+Price", format!("{} bars", if p2.0 > p1.0 { p2.0 - p1.0 } else { p1.0 - p2.0 })),
+                                            Drawing::HeadShoulders { .. } => ("H&S Pattern", String::new()),
+                                            Drawing::XabcdPattern { .. } => ("XABCD", String::new()),
+                                            Drawing::Brush { points, .. } => ("Brush", format!("{} pts", points.len())),
                                         };
                                         ui.label(egui::RichText::new(type_name).small());
                                         ui.label(egui::RichText::new(details).small().color(AXIS_TEXT));
@@ -19584,6 +19923,29 @@ impl eframe::App for TyphooNApp {
                         if ui.button("Fib Time Zones").clicked() { self.draw_mode = DrawMode::PlacingFibTimeZones; ui.close(); }
                         if ui.button("Andrews Pitchfork (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingPitchforkP1; ui.close(); }
                         if ui.button("Gann Fan").clicked() { self.draw_mode = DrawMode::PlacingGannFan; ui.close(); }
+                        if ui.button("Gann Box (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingGannBoxP1; ui.close(); }
+                    });
+                    ui.separator();
+
+                    // ── Elliott Wave group ──
+                    ui.menu_button(egui::RichText::new("Elliott").small().color(normal_col), |ui| {
+                        if ui.button("Elliott Wave 1-5 (5 clicks)").clicked() { self.draw_mode = DrawMode::PlacingElliottWave; self.multi_click_points.clear(); ui.close(); }
+                        if ui.button("ABC Correction (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingAbcCorrection; self.multi_click_points.clear(); ui.close(); }
+                    });
+                    ui.separator();
+
+                    // ── Measurement group ──
+                    ui.menu_button(egui::RichText::new("Measure").small().color(normal_col), |ui| {
+                        if ui.button("Date Range (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingDateRangeP1; ui.close(); }
+                        if ui.button("Price Range (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingPriceRangeP1; ui.close(); }
+                        if ui.button("Date & Price Range (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingDatePriceRangeP1; ui.close(); }
+                    });
+                    ui.separator();
+
+                    // ── Patterns group ──
+                    ui.menu_button(egui::RichText::new("Patterns").small().color(normal_col), |ui| {
+                        if ui.button("Head & Shoulders (5 clicks)").clicked() { self.draw_mode = DrawMode::PlacingHeadShoulders; self.multi_click_points.clear(); ui.close(); }
+                        if ui.button("XABCD Pattern (5 clicks)").clicked() { self.draw_mode = DrawMode::PlacingXabcdPattern; self.multi_click_points.clear(); ui.close(); }
                     });
                     ui.separator();
 
@@ -19607,6 +19969,7 @@ impl eframe::App for TyphooNApp {
                         if ui.button("$  Price Label").clicked() { self.draw_mode = DrawMode::PlacingPriceLabel; ui.close(); }
                         if ui.button("⌐  Callout").clicked() { self.draw_mode = DrawMode::PlacingCalloutP1; ui.close(); }
                         if ui.button("☰  Anchor Note").clicked() { self.draw_mode = DrawMode::PlacingAnchorNote; ui.close(); }
+                        if ui.button("✎  Brush/Freehand").clicked() { self.draw_mode = DrawMode::PlacingBrush; self.brush_points.clear(); ui.close(); }
                     });
                     ui.separator();
 
@@ -19701,6 +20064,17 @@ impl eframe::App for TyphooNApp {
                             DrawMode::PlacingAnchorNote => "Note: click to place",
                             DrawMode::PlacingRegressionChP1 => "Regression: click start",
                             DrawMode::PlacingRegressionChP2 { .. } => "Regression: click end",
+                            DrawMode::PlacingGannBoxP1 => "Gann Box: click corner 1",
+                            DrawMode::PlacingGannBoxP2 { .. } => "Gann Box: click corner 2",
+                            DrawMode::PlacingElliottWave => "Elliott: click swing points (5)",
+                            DrawMode::PlacingAbcCorrection => "ABC: click swing points (3)",
+                            DrawMode::PlacingDateRangeP1 => "Date Range: click start",
+                            DrawMode::PlacingDateRangeP2 { .. } => "Date Range: click end",
+                            DrawMode::PlacingDatePriceRangeP1 => "Date+Price: click start",
+                            DrawMode::PlacingDatePriceRangeP2 { .. } => "Date+Price: click end",
+                            DrawMode::PlacingHeadShoulders => "H&S: click points (5)",
+                            DrawMode::PlacingXabcdPattern => "XABCD: click points (5)",
+                            DrawMode::PlacingBrush => "Brush: click-drag to draw",
                             DrawMode::None => "",
                         };
                         ui.label(egui::RichText::new(mode_name).small().color(active_col));
@@ -19776,6 +20150,45 @@ impl eframe::App for TyphooNApp {
                 }
                 self.polyline_points.clear();
                 self.draw_mode = DrawMode::None;
+            }
+
+            // Brush: accumulate points while dragging, finalize on mouse release
+            if self.draw_mode == DrawMode::PlacingBrush {
+                let is_down = ctx.input(|i| i.pointer.primary_down());
+                if is_down {
+                    if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                        if on_chart_body {
+                            if let Some(chart) = self.charts.get(self.active_tab) {
+                                let (si, ei) = chart.visible_range();
+                                let bar_w_f = if ei > si { chart_body_rect.width() / (ei - si) as f32 } else { 1.0 };
+                                let rel_x = pos.x - chart_body_rect.left();
+                                let bar_float = rel_x / bar_w_f;
+                                let bar_local = bar_float as usize;
+                                let abs_idx = si + bar_local;
+                                let vis = &chart.bars[si..ei];
+                                if !vis.is_empty() {
+                                    let hi = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                                    let lo = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                                    let pad = (hi - lo) * 0.05;
+                                    let top = hi + pad;
+                                    let bot = lo - pad;
+                                    let frac = ((pos.y - chart_body_rect.top()) / chart_body_rect.height()) as f64;
+                                    let price = top - frac * (top - bot);
+                                    self.brush_points.push((abs_idx, price));
+                                }
+                            }
+                        }
+                    }
+                } else if !self.brush_points.is_empty() {
+                    // Mouse released → finalize brush
+                    let pts = std::mem::take(&mut self.brush_points);
+                    if pts.len() >= 2 {
+                        if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                            chart.drawings.push(Drawing::Brush { points: pts, color: egui::Color32::from_rgb(255, 200, 100) });
+                        }
+                    }
+                    self.draw_mode = DrawMode::None;
+                }
             }
 
             // Double-click → reset zoom/pan
@@ -20335,6 +20748,63 @@ impl eframe::App for TyphooNApp {
                                     DrawMode::PlacingRegressionChP2 { bar1, price1 } => {
                                         chart.drawings.push(Drawing::RegressionChannel { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 180, 255) });
                                         self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingGannBoxP1 => {
+                                        self.draw_mode = DrawMode::PlacingGannBoxP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingGannBoxP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::GannBox { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 150, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingElliottWave => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 5 {
+                                            let pts = std::mem::take(&mut self.multi_click_points);
+                                            chart.drawings.push(Drawing::ElliottWave { points: pts, color: egui::Color32::from_rgb(100, 200, 255) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingAbcCorrection => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 3 {
+                                            let pts = std::mem::take(&mut self.multi_click_points);
+                                            chart.drawings.push(Drawing::AbcCorrection { points: pts, color: egui::Color32::from_rgb(255, 180, 80) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingDateRangeP1 => {
+                                        self.draw_mode = DrawMode::PlacingDateRangeP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingDateRangeP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::DateRange { p1: (bar1, price1), p2: (abs_idx, price) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingDatePriceRangeP1 => {
+                                        self.draw_mode = DrawMode::PlacingDatePriceRangeP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingDatePriceRangeP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::DatePriceRange { p1: (bar1, price1), p2: (abs_idx, price) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingHeadShoulders => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 5 {
+                                            let pts = std::mem::take(&mut self.multi_click_points);
+                                            chart.drawings.push(Drawing::HeadShoulders { points: pts, color: egui::Color32::from_rgb(220, 100, 255) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingXabcdPattern => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 5 {
+                                            let pts = std::mem::take(&mut self.multi_click_points);
+                                            chart.drawings.push(Drawing::XabcdPattern { points: pts, color: egui::Color32::from_rgb(255, 200, 50) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingBrush => {
+                                        // Single click adds a point; drag handling below adds more
+                                        self.brush_points.push((abs_idx, price));
                                     }
                                     DrawMode::None => {}
                                 }
