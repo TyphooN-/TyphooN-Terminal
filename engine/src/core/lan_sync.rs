@@ -30,13 +30,21 @@ fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
 // ── TLS Certificate Generation ────────────────────────────────────
 
 /// Generate an ephemeral self-signed TLS certificate for LAN sync server.
-/// Returns (PEM certificate, PEM private key) for native-tls.
-fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>), String> {
+/// Returns (PEM certificate, PEM private key, SHA-256 fingerprint hex) for native-tls.
+fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>, String), String> {
     let certified_key = rcgen::generate_simple_self_signed(vec!["typhoon-lan-sync".into(), "localhost".into()])
         .map_err(|e| format!("Certificate generation failed: {e}"))?;
     let cert_pem = certified_key.cert.pem().into_bytes();
     let key_pem = certified_key.signing_key.serialize_pem().into_bytes();
-    Ok((cert_pem, key_pem))
+    let fingerprint = compute_sha256_fingerprint(&certified_key.cert.der().to_vec());
+    Ok((cert_pem, key_pem, fingerprint))
+}
+
+/// Compute SHA-256 fingerprint of DER-encoded certificate bytes. Returns lowercase hex string.
+fn compute_sha256_fingerprint(der_bytes: &[u8]) -> String {
+    use sha2::{Sha256, Digest};
+    let hash = Sha256::digest(der_bytes);
+    hex_encode(&hash)
 }
 
 /// Build a native-tls TLS acceptor from PEM cert + key.
@@ -454,6 +462,7 @@ pub struct SyncStatus {
     pub darwin_synced: bool,    // whether DARWIN data has been synced
     pub uptime_secs: u64,       // seconds since start
     pub send_darwin: bool,      // server: opt-in to send DARWIN data to clients
+    pub cert_fingerprint: String, // SHA-256 fingerprint of the TLS certificate (hex)
 }
 
 impl Default for SyncStatus {
@@ -463,6 +472,7 @@ impl Default for SyncStatus {
             host: String::new(), port: 0,
             bytes_sent: 0, bytes_received: 0, entries_synced: 0,
             darwin_synced: false, uptime_secs: 0, send_darwin: false,
+            cert_fingerprint: String::new(),
         }
     }
 }
@@ -483,7 +493,7 @@ impl LanSyncServer {
         let secret = derive_secret(passphrase);
 
         // Generate ephemeral self-signed TLS certificate
-        let (cert_der, key_der) = generate_self_signed_cert()?;
+        let (cert_der, key_der, cert_fingerprint) = generate_self_signed_cert()?;
         let tls_acceptor = build_tls_acceptor(&cert_der, &key_der)?;
         let tls_acceptor_tokio = tokio_native_tls::TlsAcceptor::from(tls_acceptor);
 
@@ -497,12 +507,13 @@ impl LanSyncServer {
             clients: 0,
             host: "0.0.0.0".into(),
             port,
+            cert_fingerprint: cert_fingerprint.clone(),
             ..Default::default()
         }));
 
         let status_clone = status.clone();
         let task = tokio::spawn(async move {
-            tracing::info!("LAN sync server listening on wss://0.0.0.0:{port} (TLS encrypted)");
+            tracing::info!("LAN sync server listening on wss://0.0.0.0:{port} (TLS encrypted, fingerprint: {cert_fingerprint})");
             loop {
                 match listener.accept().await {
                     Ok((stream, addr)) => {
@@ -884,11 +895,63 @@ impl LanSyncClient {
             .await
             .map_err(|e| format!("Connect to {url} failed: {e}"))?;
 
+        // ── TOFU certificate fingerprint pinning ──────────────────────
+        // Extract peer certificate from TLS stream, compute SHA-256 fingerprint,
+        // and verify against stored pin (or store on first use).
+        let peer_fingerprint = match ws.get_ref() {
+            tokio_tungstenite::MaybeTlsStream::NativeTls(tls_stream) => {
+                match tls_stream.get_ref().peer_certificate() {
+                    Ok(Some(cert)) => {
+                        match cert.to_der() {
+                            Ok(der) => Some(compute_sha256_fingerprint(&der)),
+                            Err(e) => {
+                                tracing::warn!("LAN sync: failed to get cert DER: {e}");
+                                None
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        tracing::warn!("LAN sync: server presented no certificate");
+                        None
+                    }
+                    Err(e) => {
+                        tracing::warn!("LAN sync: failed to get peer certificate: {e}");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        // TOFU: check stored pin or store new fingerprint
+        if let Some(ref fp) = peer_fingerprint {
+            let pin_key = format!("lan_sync_cert_pin:{}:{}", host, port);
+            match cache.get_kv(&pin_key) {
+                Ok(Some(stored_fp)) => {
+                    if stored_fp == *fp {
+                        tracing::info!("LAN sync: certificate verified (fingerprint matches stored pin)");
+                    } else {
+                        return Err(format!(
+                            "CERTIFICATE MISMATCH — expected {}, got {}. \
+                             If the server was restarted, delete the pin with key '{}'",
+                            stored_fp, fp, pin_key
+                        ));
+                    }
+                }
+                _ => {
+                    // First connection: trust and store
+                    let _ = cache.put_kv(&pin_key, fp);
+                    tracing::info!("LAN sync: new server fingerprint: {} — trusted (TOFU)", fp);
+                }
+            }
+        }
+
         let status = Arc::new(TokioMutex::new(SyncStatus {
             mode: "client".into(),
             connected: true,
             host: host.to_string(),
             port,
+            cert_fingerprint: peer_fingerprint.unwrap_or_default(),
             ..Default::default()
         }));
 

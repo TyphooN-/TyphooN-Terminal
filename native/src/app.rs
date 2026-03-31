@@ -505,6 +505,77 @@ enum Drawing {
         points: Vec<(usize, f64)>,
         color: egui::Color32,
     },
+    /// Schiff Pitchfork (pivot shifted to midpoint of pivot-endpoint1).
+    #[allow(dead_code)]
+    SchiffPitchfork {
+        pivot: (usize, f64),
+        p2: (usize, f64),
+        p3: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Modified Schiff Pitchfork (pivot shifted to midpoint of both pivot-endpoint pairs).
+    #[allow(dead_code)]
+    ModSchiffPitchfork {
+        pivot: (usize, f64),
+        p2: (usize, f64),
+        p3: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Cyclic Lines (vertical lines at regular intervals from two click points).
+    #[allow(dead_code)]
+    CyclicLines {
+        bar_start: usize,
+        bar_end: usize,
+        color: egui::Color32,
+    },
+    /// Sine Wave (sine curve from two click points defining period/amplitude).
+    #[allow(dead_code)]
+    SineWave {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Emoji annotation (single character placed at a chart point).
+    #[allow(dead_code)]
+    Emoji {
+        bar_idx: usize,
+        price: f64,
+        emoji: String,
+    },
+    /// Flag marker at a chart point.
+    #[allow(dead_code)]
+    Flag {
+        bar_idx: usize,
+        price: f64,
+        color: egui::Color32,
+    },
+    /// Balloon / speech bubble (anchor + box position with text).
+    #[allow(dead_code)]
+    Balloon {
+        anchor: (usize, f64),
+        label_pos: (usize, f64),
+        text: String,
+        color: egui::Color32,
+    },
+    /// Session Break (vertical dashed line with label).
+    #[allow(dead_code)]
+    SessionBreak {
+        bar_idx: usize,
+        color: egui::Color32,
+    },
+    /// Magnet Level (horizontal line that glows when price is within 0.5%).
+    #[allow(dead_code)]
+    MagnetLevel {
+        price: f64,
+        color: egui::Color32,
+    },
+    /// Risk/Reward Box (entry, SL, TP with green/red zones and R:R ratio).
+    #[allow(dead_code)]
+    RiskRewardBox {
+        entry: (usize, f64),
+        stop: f64,
+        target: f64,
+    },
 }
 
 /// Trade marker for chart overlay (DARWIN deals, broker fills).
@@ -611,6 +682,25 @@ enum DrawMode {
     PlacingHeadShoulders,
     PlacingXabcdPattern,
     PlacingBrush,
+    PlacingSchiffPitchforkP1,
+    PlacingSchiffPitchforkP2 { bar1: usize, price1: f64 },
+    PlacingSchiffPitchforkP3 { bar1: usize, price1: f64, bar2: usize, price2: f64 },
+    PlacingModSchiffPitchforkP1,
+    PlacingModSchiffPitchforkP2 { bar1: usize, price1: f64 },
+    PlacingModSchiffPitchforkP3 { bar1: usize, price1: f64, bar2: usize, price2: f64 },
+    PlacingCyclicLinesP1,
+    PlacingCyclicLinesP2 { bar1: usize },
+    PlacingSineWaveP1,
+    PlacingSineWaveP2 { bar1: usize, price1: f64 },
+    PlacingEmoji,
+    PlacingFlag,
+    PlacingBalloonP1,
+    PlacingBalloonP2 { bar1: usize, price1: f64 },
+    PlacingSessionBreak,
+    PlacingMagnetLevel,
+    PlacingRiskRewardP1,
+    PlacingRiskRewardP2 { bar1: usize, entry: f64 },
+    PlacingRiskRewardP3 { bar1: usize, entry: f64, stop: f64 },
 }
 
 // ─── Ichimoku data ───────────────────────────────────────────────────────────
@@ -6459,6 +6549,173 @@ fn draw_chart(
                     }
                 }
             }
+            Drawing::SchiffPitchfork { pivot, p2, p3, color } | Drawing::ModSchiffPitchfork { pivot, p2, p3, color } => {
+                // Schiff: shifted pivot = midpoint(pivot, p2) on bar-axis, midpoint(pivot, p2) on price
+                // Modified Schiff: shifted pivot = (mid(pivot.bar, p2.bar), mid(pivot.price, p3.price))
+                let is_mod = matches!(drawing, Drawing::ModSchiffPitchfork { .. });
+                let shifted_bar = if is_mod {
+                    ((pivot.0 as f64 + p2.0 as f64) / 2.0) as usize
+                } else {
+                    ((pivot.0 as f64 + p2.0 as f64) / 2.0) as usize
+                };
+                let shifted_price = if is_mod {
+                    (pivot.1 + p2.1) / 2.0 * 0.5 + (pivot.1 + p3.1) / 2.0 * 0.5
+                } else {
+                    (pivot.1 + p2.1) / 2.0
+                };
+                let mid_bar = ((p2.0 as f64 + p3.0 as f64) / 2.0) as usize;
+                let mid_price = (p2.1 + p3.1) / 2.0;
+                let bar_to_x = |b: usize| -> Option<f32> {
+                    if b >= start_idx && b < end_idx { Some(chart_rect.left() + ((b - start_idx) as f32 + 0.5) * bar_w) } else { None }
+                };
+                // Median line: shifted pivot → midpoint of p2,p3
+                if let (Some(sx), Some(mx)) = (bar_to_x(shifted_bar), bar_to_x(mid_bar)) {
+                    painter.line_segment([egui::pos2(sx, price_to_y(shifted_price)), egui::pos2(mx, price_to_y(mid_price))], egui::Stroke::new(1.5, *color));
+                }
+                // Parallel lines through p2 and p3
+                if let (Some(sx), Some(mx), Some(x2), Some(x3)) = (bar_to_x(shifted_bar), bar_to_x(mid_bar), bar_to_x(p2.0), bar_to_x(p3.0)) {
+                    let dx = mx - sx;
+                    let dy = price_to_y(mid_price) - price_to_y(shifted_price);
+                    let y2 = price_to_y(p2.1);
+                    let y3 = price_to_y(p3.1);
+                    painter.line_segment([egui::pos2(x2, y2), egui::pos2(x2 + dx, y2 + dy)], egui::Stroke::new(1.0, *color));
+                    painter.line_segment([egui::pos2(x3, y3), egui::pos2(x3 + dx, y3 + dy)], egui::Stroke::new(1.0, *color));
+                }
+            }
+            Drawing::CyclicLines { bar_start, bar_end, color } => {
+                let interval = if *bar_end > *bar_start { bar_end - bar_start } else { 1 };
+                let mut b = *bar_start;
+                while b < start_idx + (end_idx - start_idx) + interval * 20 {
+                    if b >= start_idx && b < end_idx {
+                        let x = chart_rect.left() + ((b - start_idx) as f32 + 0.5) * bar_w;
+                        painter.line_segment([egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom())], egui::Stroke::new(0.8, *color));
+                    }
+                    b += interval;
+                }
+            }
+            Drawing::SineWave { p1, p2, color } => {
+                let bar_to_x = |b: usize| -> f32 {
+                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                };
+                let period = ((p2.0 as f64 - p1.0 as f64).abs()).max(1.0);
+                let amplitude = (p2.1 - p1.1).abs() / 2.0;
+                let mid_price = (p1.1 + p2.1) / 2.0;
+                let start_bar = p1.0;
+                let mut prev: Option<egui::Pos2> = None;
+                for b in start_idx..end_idx {
+                    let phase = (b as f64 - start_bar as f64) / period * 2.0 * std::f64::consts::PI;
+                    let price_val = mid_price + amplitude * phase.sin();
+                    let x = bar_to_x(b);
+                    let y = price_to_y(price_val);
+                    let pt = egui::pos2(x, y);
+                    if let Some(p) = prev {
+                        painter.line_segment([p, pt], egui::Stroke::new(1.2, *color));
+                    }
+                    prev = Some(pt);
+                }
+            }
+            Drawing::Emoji { bar_idx, price, emoji } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    painter.text(egui::pos2(x, y), egui::Align2::CENTER_CENTER, emoji, egui::FontId::proportional(16.0), egui::Color32::WHITE);
+                }
+            }
+            Drawing::Flag { bar_idx, price, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    // Pole
+                    painter.line_segment([egui::pos2(x, y), egui::pos2(x, y - 20.0)], egui::Stroke::new(1.5, *color));
+                    // Flag triangle
+                    let tri = vec![egui::pos2(x, y - 20.0), egui::pos2(x + 12.0, y - 15.0), egui::pos2(x, y - 10.0)];
+                    painter.add(egui::Shape::convex_polygon(tri, *color, egui::Stroke::NONE));
+                }
+            }
+            Drawing::Balloon { anchor, label_pos, text, color } => {
+                let bar_to_x = |b: usize| -> Option<f32> {
+                    if b >= start_idx && b < end_idx { Some(chart_rect.left() + ((b - start_idx) as f32 + 0.5) * bar_w) } else { None }
+                };
+                if let (Some(ax), Some(lx)) = (bar_to_x(anchor.0), bar_to_x(label_pos.0)) {
+                    let ay = price_to_y(anchor.1);
+                    let ly = price_to_y(label_pos.1);
+                    // Line from anchor to label
+                    painter.line_segment([egui::pos2(ax, ay), egui::pos2(lx, ly)], egui::Stroke::new(1.0, *color));
+                    // Bubble background
+                    let text_rect = egui::Rect::from_center_size(egui::pos2(lx, ly), egui::vec2(80.0, 24.0));
+                    painter.rect_filled(text_rect, 6.0, egui::Color32::from_rgba_premultiplied(40, 40, 60, 200));
+                    painter.rect_stroke(text_rect, 6.0, egui::Stroke::new(1.0, *color), egui::StrokeKind::Outside);
+                    painter.text(egui::pos2(lx, ly), egui::Align2::CENTER_CENTER, text, egui::FontId::monospace(10.0), *color);
+                }
+            }
+            Drawing::SessionBreak { bar_idx, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    // Dashed vertical line (draw segments with gaps)
+                    let mut y = chart_rect.top();
+                    while y < chart_rect.bottom() {
+                        let y_end = (y + 6.0).min(chart_rect.bottom());
+                        painter.line_segment([egui::pos2(x, y), egui::pos2(x, y_end)], egui::Stroke::new(1.0, *color));
+                        y += 10.0;
+                    }
+                    painter.text(egui::pos2(x + 4.0, chart_rect.top() + 2.0), egui::Align2::LEFT_TOP, "Session", egui::FontId::monospace(8.0), *color);
+                }
+            }
+            Drawing::MagnetLevel { price, color } => {
+                let y = price_to_y(*price);
+                if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                    // Check if last bar's close is within 0.5% of this level
+                    let glow = if end_idx > start_idx {
+                        let last_close = chart.bars.get(end_idx - 1).map(|b| b.close).unwrap_or(0.0);
+                        (last_close - price).abs() / price.abs().max(0.0001) < 0.005
+                    } else { false };
+                    let stroke_w = if glow { 2.5 } else { 1.0 };
+                    let draw_color = if glow {
+                        egui::Color32::from_rgb(255, 255, 100)
+                    } else {
+                        *color
+                    };
+                    painter.line_segment(
+                        [egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)],
+                        egui::Stroke::new(stroke_w, draw_color),
+                    );
+                    if glow {
+                        // Glow effect: semi-transparent wider line
+                        let glow_col = egui::Color32::from_rgba_premultiplied(255, 255, 100, 40);
+                        painter.line_segment(
+                            [egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)],
+                            egui::Stroke::new(6.0, glow_col),
+                        );
+                    }
+                    painter.text(egui::pos2(chart_rect.right() - 80.0, y - 10.0), egui::Align2::LEFT_TOP, &format!("M {}", &format_price(*price)), egui::FontId::monospace(9.0), draw_color);
+                }
+            }
+            Drawing::RiskRewardBox { entry, stop, target } => {
+                let bar_to_x = |b: usize| -> f32 {
+                    chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w
+                };
+                let entry_x = bar_to_x(entry.0);
+                let entry_y = price_to_y(entry.1);
+                let stop_y = price_to_y(*stop);
+                let target_y = price_to_y(*target);
+                let box_width = bar_w * 20.0;
+                let right_x = entry_x + box_width;
+                // Risk zone (entry to stop) — red
+                let risk_rect = egui::Rect::from_two_pos(egui::pos2(entry_x, entry_y), egui::pos2(right_x, stop_y));
+                painter.rect_filled(risk_rect, 0.0, egui::Color32::from_rgba_premultiplied(220, 40, 40, 30));
+                painter.rect_stroke(risk_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(220, 40, 40)), egui::StrokeKind::Outside);
+                // Reward zone (entry to target) — green
+                let reward_rect = egui::Rect::from_two_pos(egui::pos2(entry_x, entry_y), egui::pos2(right_x, target_y));
+                painter.rect_filled(reward_rect, 0.0, egui::Color32::from_rgba_premultiplied(0, 200, 80, 30));
+                painter.rect_stroke(reward_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 200, 80)), egui::StrokeKind::Outside);
+                // Entry line
+                painter.line_segment([egui::pos2(entry_x, entry_y), egui::pos2(right_x, entry_y)], egui::Stroke::new(1.5, egui::Color32::WHITE));
+                // R:R ratio
+                let risk = (entry.1 - stop).abs();
+                let reward = (target - entry.1).abs();
+                let rr = if risk > 0.0 { reward / risk } else { 0.0 };
+                painter.text(egui::pos2(right_x + 4.0, entry_y), egui::Align2::LEFT_CENTER, &format!("R:R {:.1}", rr), egui::FontId::monospace(10.0), egui::Color32::WHITE);
+            }
         }
     }
 }
@@ -10317,6 +10574,16 @@ impl TyphooNApp {
             "DRAW_HEAD_SHOULDERS" => { self.draw_mode = DrawMode::PlacingHeadShoulders; self.multi_click_points.clear(); },
             "DRAW_XABCD" => { self.draw_mode = DrawMode::PlacingXabcdPattern; self.multi_click_points.clear(); },
             "DRAW_BRUSH" => { self.draw_mode = DrawMode::PlacingBrush; self.brush_points.clear(); },
+            "DRAW_SCHIFF_FORK" => self.draw_mode = DrawMode::PlacingSchiffPitchforkP1,
+            "DRAW_MOD_SCHIFF_FORK" => self.draw_mode = DrawMode::PlacingModSchiffPitchforkP1,
+            "DRAW_CYCLIC_LINES" => self.draw_mode = DrawMode::PlacingCyclicLinesP1,
+            "DRAW_SINE_WAVE" => self.draw_mode = DrawMode::PlacingSineWaveP1,
+            "DRAW_EMOJI" => self.draw_mode = DrawMode::PlacingEmoji,
+            "DRAW_FLAG" => self.draw_mode = DrawMode::PlacingFlag,
+            "DRAW_BALLOON" => self.draw_mode = DrawMode::PlacingBalloonP1,
+            "DRAW_SESSION_BREAK" => self.draw_mode = DrawMode::PlacingSessionBreak,
+            "DRAW_MAGNET_LEVEL" => self.draw_mode = DrawMode::PlacingMagnetLevel,
+            "DRAW_RISK_REWARD" => self.draw_mode = DrawMode::PlacingRiskRewardP1,
             "CLEAR_DRAWINGS" => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); } }
             "SESSIONS" => { self.show_sessions = !self.show_sessions; self.log.push_back(LogEntry::info(format!("Sessions: {}", if self.show_sessions { "ON" } else { "OFF" }))); }
             "VOL_HEATMAP" => { self.show_vol_heatmap = !self.show_vol_heatmap; self.log.push_back(LogEntry::info(format!("Volume heatmap: {}", if self.show_vol_heatmap { "ON" } else { "OFF" }))); }
@@ -10791,6 +11058,16 @@ impl TyphooNApp {
                     Drawing::HeadShoulders { points, color } => Some(serde_json::json!({"type":"headshoulders","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
                     Drawing::XabcdPattern { points, color } => Some(serde_json::json!({"type":"xabcd","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
                     Drawing::Brush { points, color } => Some(serde_json::json!({"type":"brush","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::SchiffPitchfork { pivot, p2, p3, color } => Some(serde_json::json!({"type":"schiffpitchfork","pivot":[pivot.0,pivot.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ModSchiffPitchfork { pivot, p2, p3, color } => Some(serde_json::json!({"type":"modschiffpitchfork","pivot":[pivot.0,pivot.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::CyclicLines { bar_start, bar_end, color } => Some(serde_json::json!({"type":"cycliclines","bar_start":bar_start,"bar_end":bar_end,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::SineWave { p1, p2, color } => Some(serde_json::json!({"type":"sinewave","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Emoji { bar_idx, price, emoji } => Some(serde_json::json!({"type":"emoji","bar_idx":bar_idx,"price":price,"emoji":emoji})),
+                    Drawing::Flag { bar_idx, price, color } => Some(serde_json::json!({"type":"flag","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Balloon { anchor, label_pos, text, color } => Some(serde_json::json!({"type":"balloon","anchor":[anchor.0,anchor.1],"label_pos":[label_pos.0,label_pos.1],"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::SessionBreak { bar_idx, color } => Some(serde_json::json!({"type":"sessionbreak","bar_idx":bar_idx,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::MagnetLevel { price, color } => Some(serde_json::json!({"type":"magnetlevel","price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::RiskRewardBox { entry, stop, target } => Some(serde_json::json!({"type":"riskreward","entry":[entry.0,entry.1],"stop":stop,"target":target})),
                 }).collect::<Vec<_>>()
             }).unwrap_or_default(),
             "alerts": self.alerts.iter().map(|(p, l)| serde_json::json!({"price": p, "label": l})).collect::<Vec<_>>(),
@@ -10953,6 +11230,16 @@ impl TyphooNApp {
                                 Some("headshoulders") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::HeadShoulders { points, color: parse_col(d) }); } } }
                                 Some("xabcd") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::XabcdPattern { points, color: parse_col(d) }); } } }
                                 Some("brush") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::Brush { points, color: parse_col(d) }); } } }
+                                Some("schiffpitchfork") => { if let (Some(pv), Some(p2), Some(p3)) = (parse_pt(d,"pivot"), parse_pt(d,"p2"), parse_pt(d,"p3")) { chart.drawings.push(Drawing::SchiffPitchfork { pivot: pv, p2, p3, color: parse_col(d) }); } }
+                                Some("modschiffpitchfork") => { if let (Some(pv), Some(p2), Some(p3)) = (parse_pt(d,"pivot"), parse_pt(d,"p2"), parse_pt(d,"p3")) { chart.drawings.push(Drawing::ModSchiffPitchfork { pivot: pv, p2, p3, color: parse_col(d) }); } }
+                                Some("cycliclines") => { if let (Some(bs), Some(be)) = (d["bar_start"].as_u64(), d["bar_end"].as_u64()) { chart.drawings.push(Drawing::CyclicLines { bar_start: bs as usize, bar_end: be as usize, color: parse_col(d) }); } }
+                                Some("sinewave") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::SineWave { p1, p2, color: parse_col(d) }); } }
+                                Some("emoji") => { if let (Some(idx), Some(p)) = (d["bar_idx"].as_u64(), d["price"].as_f64()) { let emoji = d["emoji"].as_str().unwrap_or("\u{1F3AF}").to_string(); chart.drawings.push(Drawing::Emoji { bar_idx: idx as usize, price: p, emoji }); } }
+                                Some("flag") => { if let (Some(idx), Some(p)) = (d["bar_idx"].as_u64(), d["price"].as_f64()) { chart.drawings.push(Drawing::Flag { bar_idx: idx as usize, price: p, color: parse_col(d) }); } }
+                                Some("balloon") => { if let (Some(a), Some(lp), Some(t)) = (parse_pt(d,"anchor"), parse_pt(d,"label_pos"), d["text"].as_str()) { chart.drawings.push(Drawing::Balloon { anchor: a, label_pos: lp, text: t.to_string(), color: parse_col(d) }); } }
+                                Some("sessionbreak") => { if let Some(idx) = d["bar_idx"].as_u64() { chart.drawings.push(Drawing::SessionBreak { bar_idx: idx as usize, color: parse_col(d) }); } }
+                                Some("magnetlevel") => { if let Some(price) = d["price"].as_f64() { chart.drawings.push(Drawing::MagnetLevel { price, color: parse_col(d) }); } }
+                                Some("riskreward") => { if let (Some(e), Some(s), Some(t)) = (parse_pt(d,"entry"), d["stop"].as_f64(), d["target"].as_f64()) { chart.drawings.push(Drawing::RiskRewardBox { entry: e, stop: s, target: t }); } }
                                 _ => {}
                             }
                         }
@@ -17227,6 +17514,16 @@ impl TyphooNApp {
                                             Drawing::HeadShoulders { .. } => ("H&S Pattern", String::new()),
                                             Drawing::XabcdPattern { .. } => ("XABCD", String::new()),
                                             Drawing::Brush { points, .. } => ("Brush", format!("{} pts", points.len())),
+                                            Drawing::SchiffPitchfork { .. } => ("Schiff Fork", String::new()),
+                                            Drawing::ModSchiffPitchfork { .. } => ("Mod Schiff", String::new()),
+                                            Drawing::CyclicLines { bar_start, bar_end, .. } => ("Cyclic Lines", format!("{} interval", if *bar_end > *bar_start { bar_end - bar_start } else { 1 })),
+                                            Drawing::SineWave { .. } => ("Sine Wave", String::new()),
+                                            Drawing::Emoji { emoji, .. } => ("Emoji", emoji.clone()),
+                                            Drawing::Flag { .. } => ("Flag", String::new()),
+                                            Drawing::Balloon { text, .. } => ("Balloon", text.clone()),
+                                            Drawing::SessionBreak { bar_idx, .. } => ("Session Break", format!("bar {}", bar_idx)),
+                                            Drawing::MagnetLevel { price, .. } => ("Magnet Level", format!("{:.5}", price)),
+                                            Drawing::RiskRewardBox { entry, stop, target } => ("R:R Box", format!("E:{:.4} S:{:.4} T:{:.4}", entry.1, stop, target)),
                                         };
                                         ui.label(egui::RichText::new(type_name).small());
                                         ui.label(egui::RichText::new(details).small().color(AXIS_TEXT));
@@ -19974,8 +20271,12 @@ impl eframe::App for TyphooNApp {
                         if ui.button("Fib Channel (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingFibChannelP1; ui.close(); }
                         if ui.button("Fib Time Zones").clicked() { self.draw_mode = DrawMode::PlacingFibTimeZones; ui.close(); }
                         if ui.button("Andrews Pitchfork (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingPitchforkP1; ui.close(); }
+                        if ui.button("Schiff Pitchfork (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingSchiffPitchforkP1; ui.close(); }
+                        if ui.button("Mod Schiff Pitchfork (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingModSchiffPitchforkP1; ui.close(); }
                         if ui.button("Gann Fan").clicked() { self.draw_mode = DrawMode::PlacingGannFan; ui.close(); }
                         if ui.button("Gann Box (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingGannBoxP1; ui.close(); }
+                        if ui.button("Cyclic Lines (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingCyclicLinesP1; ui.close(); }
+                        if ui.button("Sine Wave (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingSineWaveP1; ui.close(); }
                     });
                     ui.separator();
 
@@ -20022,6 +20323,11 @@ impl eframe::App for TyphooNApp {
                         if ui.button("⌐  Callout").clicked() { self.draw_mode = DrawMode::PlacingCalloutP1; ui.close(); }
                         if ui.button("☰  Anchor Note").clicked() { self.draw_mode = DrawMode::PlacingAnchorNote; ui.close(); }
                         if ui.button("✎  Brush/Freehand").clicked() { self.draw_mode = DrawMode::PlacingBrush; self.brush_points.clear(); ui.close(); }
+                        if ui.button("\u{1F3AF}  Emoji").clicked() { self.draw_mode = DrawMode::PlacingEmoji; ui.close(); }
+                        if ui.button("\u{1F6A9}  Flag").clicked() { self.draw_mode = DrawMode::PlacingFlag; ui.close(); }
+                        if ui.button("\u{1F4AC}  Balloon (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingBalloonP1; ui.close(); }
+                        if ui.button("|  Session Break").clicked() { self.draw_mode = DrawMode::PlacingSessionBreak; ui.close(); }
+                        if ui.button("\u{1F9F2}  Magnet Level").clicked() { self.draw_mode = DrawMode::PlacingMagnetLevel; ui.close(); }
                     });
                     ui.separator();
 
@@ -20030,6 +20336,7 @@ impl eframe::App for TyphooNApp {
                         if ui.button("Long Position (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingLongPosP1; ui.close(); }
                         if ui.button("Short Position (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingShortPosP1; ui.close(); }
                         if ui.button("Price Range (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingPriceRangeP1; ui.close(); }
+                        if ui.button("Risk/Reward Box (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingRiskRewardP1; ui.close(); }
                     });
                     ui.separator();
 
@@ -20127,6 +20434,25 @@ impl eframe::App for TyphooNApp {
                             DrawMode::PlacingHeadShoulders => "H&S: click points (5)",
                             DrawMode::PlacingXabcdPattern => "XABCD: click points (5)",
                             DrawMode::PlacingBrush => "Brush: click-drag to draw",
+                            DrawMode::PlacingSchiffPitchforkP1 => "Schiff Fork: click pivot",
+                            DrawMode::PlacingSchiffPitchforkP2 { .. } => "Schiff Fork: click P2",
+                            DrawMode::PlacingSchiffPitchforkP3 { .. } => "Schiff Fork: click P3",
+                            DrawMode::PlacingModSchiffPitchforkP1 => "Mod Schiff: click pivot",
+                            DrawMode::PlacingModSchiffPitchforkP2 { .. } => "Mod Schiff: click P2",
+                            DrawMode::PlacingModSchiffPitchforkP3 { .. } => "Mod Schiff: click P3",
+                            DrawMode::PlacingCyclicLinesP1 => "Cyclic: click start",
+                            DrawMode::PlacingCyclicLinesP2 { .. } => "Cyclic: click end (interval)",
+                            DrawMode::PlacingSineWaveP1 => "Sine: click start",
+                            DrawMode::PlacingSineWaveP2 { .. } => "Sine: click end (period/amp)",
+                            DrawMode::PlacingEmoji => "Emoji: click to place",
+                            DrawMode::PlacingFlag => "Flag: click to place",
+                            DrawMode::PlacingBalloonP1 => "Balloon: click anchor",
+                            DrawMode::PlacingBalloonP2 { .. } => "Balloon: click label pos",
+                            DrawMode::PlacingSessionBreak => "Session Break: click",
+                            DrawMode::PlacingMagnetLevel => "Magnet: click price level",
+                            DrawMode::PlacingRiskRewardP1 => "R:R Box: click entry",
+                            DrawMode::PlacingRiskRewardP2 { .. } => "R:R Box: click stop",
+                            DrawMode::PlacingRiskRewardP3 { .. } => "R:R Box: click target",
                             DrawMode::None => "",
                         };
                         ui.label(egui::RichText::new(mode_name).small().color(active_col));
@@ -20857,6 +21183,73 @@ impl eframe::App for TyphooNApp {
                                     DrawMode::PlacingBrush => {
                                         // Single click adds a point; drag handling below adds more
                                         self.brush_points.push((abs_idx, price));
+                                    }
+                                    DrawMode::PlacingSchiffPitchforkP1 => {
+                                        self.draw_mode = DrawMode::PlacingSchiffPitchforkP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingSchiffPitchforkP2 { bar1, price1 } => {
+                                        self.draw_mode = DrawMode::PlacingSchiffPitchforkP3 { bar1, price1, bar2: abs_idx, price2: price };
+                                    }
+                                    DrawMode::PlacingSchiffPitchforkP3 { bar1, price1, bar2, price2 } => {
+                                        chart.drawings.push(Drawing::SchiffPitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingModSchiffPitchforkP1 => {
+                                        self.draw_mode = DrawMode::PlacingModSchiffPitchforkP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingModSchiffPitchforkP2 { bar1, price1 } => {
+                                        self.draw_mode = DrawMode::PlacingModSchiffPitchforkP3 { bar1, price1, bar2: abs_idx, price2: price };
+                                    }
+                                    DrawMode::PlacingModSchiffPitchforkP3 { bar1, price1, bar2, price2 } => {
+                                        chart.drawings.push(Drawing::ModSchiffPitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(150, 200, 255) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingCyclicLinesP1 => {
+                                        self.draw_mode = DrawMode::PlacingCyclicLinesP2 { bar1: abs_idx };
+                                    }
+                                    DrawMode::PlacingCyclicLinesP2 { bar1 } => {
+                                        chart.drawings.push(Drawing::CyclicLines { bar_start: bar1, bar_end: abs_idx, color: egui::Color32::from_rgb(200, 160, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingSineWaveP1 => {
+                                        self.draw_mode = DrawMode::PlacingSineWaveP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingSineWaveP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::SineWave { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingEmoji => {
+                                        chart.drawings.push(Drawing::Emoji { bar_idx: abs_idx, price, emoji: "\u{1F3AF}".to_string() });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingFlag => {
+                                        chart.drawings.push(Drawing::Flag { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(255, 100, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingBalloonP1 => {
+                                        self.draw_mode = DrawMode::PlacingBalloonP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingBalloonP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::Balloon { anchor: (bar1, price1), label_pos: (abs_idx, price), text: "Note".to_string(), color: egui::Color32::WHITE });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingSessionBreak => {
+                                        chart.drawings.push(Drawing::SessionBreak { bar_idx: abs_idx, color: egui::Color32::from_rgb(200, 200, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingMagnetLevel => {
+                                        chart.drawings.push(Drawing::MagnetLevel { price, color: egui::Color32::from_rgb(255, 200, 50) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingRiskRewardP1 => {
+                                        self.draw_mode = DrawMode::PlacingRiskRewardP2 { bar1: abs_idx, entry: price };
+                                    }
+                                    DrawMode::PlacingRiskRewardP2 { bar1, entry } => {
+                                        self.draw_mode = DrawMode::PlacingRiskRewardP3 { bar1, entry, stop: price };
+                                    }
+                                    DrawMode::PlacingRiskRewardP3 { bar1, entry, stop } => {
+                                        chart.drawings.push(Drawing::RiskRewardBox { entry: (bar1, entry), stop, target: price });
+                                        self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::None => {}
                                 }
