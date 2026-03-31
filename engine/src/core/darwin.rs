@@ -6324,15 +6324,18 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
     let mut n_deals = 0usize;
     let mut n_pos = 0usize;
 
-    // Import accounts — clear deals/positions first to prevent duplicates
-    // (AUTOINCREMENT id means INSERT OR REPLACE creates new rows instead of updating)
+    // Clear ALL deals and positions before reimporting — this is a full snapshot from the server.
+    // Without this, AUTOINCREMENT ids cause duplicates on every sync (INSERT OR REPLACE
+    // creates new rows when PK is auto-generated). Also prevents stale data from
+    // accounts that may have been removed on the server.
+    let _ = conn.execute("DELETE FROM darwin_deals", []);
+    let _ = conn.execute("DELETE FROM darwin_positions", []);
+    let _ = conn.execute("DELETE FROM darwin_accounts", []);
+
     if let Some(accounts) = payload["accounts"].as_array() {
         for a in accounts {
             let ticker = a["darwin_ticker"].as_str().unwrap_or("");
             if ticker.is_empty() { continue; }
-            // Delete existing deals/positions for this account before reimporting
-            let _ = conn.execute("DELETE FROM darwin_deals WHERE account = ?1", rusqlite::params![ticker]);
-            let _ = conn.execute("DELETE FROM darwin_positions WHERE account = ?1", rusqlite::params![ticker]);
             conn.execute(
                 "INSERT OR REPLACE INTO darwin_accounts (darwin_ticker, name, mt5_account, initial_balance, created_at, deal_count, position_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
