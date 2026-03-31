@@ -407,30 +407,42 @@ fn parse_expr(pair: pest::iterators::Pair<'_, Rule>) -> Result<Expr, CompileErro
             let mut inner = pair.into_inner();
             let mut result = parse_expr(inner.next().unwrap())?;
             for op in inner {
-                match op.as_rule() {
+                // postfix_op wraps call_args/index_access/member_access or IS ++/--
+                // For ++/--, the postfix_op has no inner children — it IS the operator
+                let actual_op = if op.as_rule() == Rule::postfix_op {
+                    let op_str = op.as_str();
+                    if op_str == "++" || op_str == "--" {
+                        op // ++/-- are leaf tokens, use directly
+                    } else {
+                        op.into_inner().next().unwrap() // unwrap call_args/index_access/member_access
+                    }
+                } else {
+                    op
+                };
+                match actual_op.as_rule() {
                     Rule::call_args => {
                         let func_name = match &result {
                             Expr::Ident(name) => name.clone(),
                             Expr::Member { field, .. } => field.clone(),
                             _ => "unknown".to_string(),
                         };
-                        let args: Vec<Expr> = op.into_inner()
+                        let args: Vec<Expr> = actual_op.into_inner()
                             .map(|p| parse_expr(p))
                             .collect::<Result<_, _>>()?;
                         result = Expr::Call { func: func_name, args };
                     }
                     Rule::index_access => {
-                        let idx = parse_expr(op.into_inner().next().unwrap())?;
+                        let idx = parse_expr(actual_op.into_inner().next().unwrap())?;
                         result = Expr::Index { array: Box::new(result), index: Box::new(idx) };
                     }
                     Rule::member_access => {
-                        let field = op.into_inner().next().unwrap().as_str().to_string();
+                        let field = actual_op.into_inner().next().unwrap().as_str().to_string();
                         result = Expr::Member { object: Box::new(result), field };
                     }
-                    _ if op.as_str() == "++" => {
+                    _ if actual_op.as_str() == "++" => {
                         result = Expr::PostIncr(Box::new(result));
                     }
-                    _ if op.as_str() == "--" => {
+                    _ if actual_op.as_str() == "--" => {
                         result = Expr::PostDecr(Box::new(result));
                     }
                     _ => {}
@@ -794,6 +806,68 @@ mod tests {
     }
 
     #[test]
+    fn parse_var_decl_with_function_call_init() {
+        // Regression: `double x = MathSqrt(4.0);` used to parse as `double x = MathSqrt;`
+        // because `ident` in type_name would match MathSqrt as a type, then (4.0) would
+        // fail as var_init, causing args to be dropped on backtrack.
+        let src = r#"
+            void Test() {
+                double x = MathSqrt(4.0);
+            }
+        "#;
+        let program = parse_mql5(src).expect("should parse var decl with call init");
+        match &program.items[0] {
+            TopLevel::Function(func) => {
+                match &func.body[0] {
+                    Stmt::VarDecl(decl) => {
+                        assert_eq!(decl.type_name, "double");
+                        assert_eq!(decl.name, "x");
+                        match &decl.init {
+                            Some(Expr::Call { func: name, args }) => {
+                                assert_eq!(name, "MathSqrt");
+                                assert_eq!(args.len(), 1);
+                                match &args[0] {
+                                    Expr::FloatLit(f) => assert!((*f - 4.0).abs() < 1e-10),
+                                    other => panic!("expected FloatLit(4.0), got {:?}", other),
+                                }
+                            }
+                            other => panic!("expected Call(MathSqrt, [4.0]), got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected VarDecl, got {:?}", other),
+                }
+            }
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_function_call_stmt_not_misread_as_var_decl() {
+        // MathSqrt(4.0); as a standalone expression should parse as expr_stmt, not var_decl
+        let src = r#"
+            void Test() {
+                MathSqrt(4.0);
+                Print("hello");
+            }
+        "#;
+        let program = parse_mql5(src).expect("should parse function call as expr_stmt");
+        match &program.items[0] {
+            TopLevel::Function(func) => {
+                eprintln!("body[0] = {:?}", &func.body[0]);
+                eprintln!("body[1] = {:?}", &func.body[1]);
+                match &func.body[0] {
+                    Stmt::Expr(Expr::Call { func: name, args }) => {
+                        assert_eq!(name, "MathSqrt");
+                        assert_eq!(args.len(), 1);
+                    }
+                    other => panic!("expected Expr(Call(MathSqrt)), got {:?}", other),
+                }
+            }
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn parse_syntax_error_returns_err() {
         let result = parse_mql5("int = ;");
         assert!(result.is_err());
@@ -908,6 +982,35 @@ mod tests {
                         }
                     }
                     other => panic!("expected Expr stmt, got {:?}", other),
+                }
+            }
+            other => panic!("expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_call_in_var_init() {
+        // This is the known parser bug — function call args in var_decl initializers
+        let src = r#"
+            void Test() {
+                double x = MathSqrt(4.0);
+            }
+        "#;
+        let program = parse_mql5(src).expect("should parse var decl with call init");
+        match &program.items[0] {
+            TopLevel::Function(func) => {
+                match &func.body[0] {
+                    Stmt::VarDecl(decl) => {
+                        assert_eq!(decl.name, "x");
+                        match &decl.init {
+                            Some(Expr::Call { func: name, args }) => {
+                                assert_eq!(name, "MathSqrt");
+                                assert_eq!(args.len(), 1);
+                            }
+                            other => panic!("expected Call init, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected VarDecl, got {:?}", other),
                 }
             }
             other => panic!("expected Function, got {:?}", other),
