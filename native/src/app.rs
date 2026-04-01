@@ -10271,7 +10271,7 @@ impl TyphooNApp {
                 let _last_full_refresh = std::time::Instant::now();
                 let mut last_vacuum = std::time::Instant::now();
                 const FULL_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
-                const VACUUM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1800); // 30 minutes
+                const VACUUM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(21600); // 6 hours
                 // Persist data across loops so lightweight refreshes keep expensive Phase 2-8 results
                 let mut data = BgDarwinData::default();
                 loop {
