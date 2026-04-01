@@ -9518,22 +9518,29 @@ impl TyphooNApp {
                                         match src_cache.all_keys() {
                                             Ok(keys) => {
                                                 total_keys += keys.len();
+                                                let mut read_errors = 0usize;
                                                 for key in &keys {
                                                     match src_cache.get_raw_blob(key) {
                                                         Ok(Some((blob, ts, count))) => {
-                                                            if let Err(e) = target_cache.put_raw_blob(key, &blob, ts, count) {
-                                                                let _ = msg_tx.send(BrokerMsg::Error(format!("Sync {} failed: {e}", key)));
+                                                            if let Err(_e) = target_cache.put_raw_blob(key, &blob, ts, count) {
+                                                                read_errors += 1;
                                                             } else {
                                                                 total_synced += 1;
                                                             }
                                                         }
                                                         Ok(None) => {}
-                                                        Err(e) => {
-                                                            let _ = msg_tx.send(BrokerMsg::Error(format!("Read {} failed: {e}", key)));
-                                                        }
+                                                        Err(_) => { read_errors += 1; }
                                                     }
                                                 }
-                                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("  {} keys synced from {}", keys.len(), src.file_name().unwrap_or_default().to_string_lossy())));
+                                                let src_name = src.file_name().unwrap_or_default().to_string_lossy();
+                                                if read_errors > 0 {
+                                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                                        "  {} keys synced from {} ({} skipped — DB locked by BarCacheWriter)",
+                                                        keys.len() - read_errors, src_name, read_errors
+                                                    )));
+                                                } else {
+                                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!("  {} keys synced from {}", keys.len(), src_name)));
+                                                }
                                             }
                                             Err(e) => {
                                                 let _ = msg_tx.send(BrokerMsg::Error(format!("List keys failed: {e}")));
@@ -9541,7 +9548,12 @@ impl TyphooNApp {
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = msg_tx.send(BrokerMsg::Error(format!("Cannot open {}: {e}", src.display())));
+                                        // Log once per source, not per key
+                                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                            "  Skipping {} — locked by BarCacheWriter (will retry next cycle)",
+                                            src.file_name().unwrap_or_default().to_string_lossy()
+                                        )));
+                                        tracing::debug!("Mt5Sync: cannot open {}: {e}", src.display());
                                     }
                                 }
                             }

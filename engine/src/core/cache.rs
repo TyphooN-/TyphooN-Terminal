@@ -265,12 +265,13 @@ impl SqliteCache {
         let read_conn = Connection::open_with_flags(path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
             .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
-        read_conn.execute_batch("
+        read_conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("SQLite read conn busy_timeout failed: {e}"))?;
+        let _ = read_conn.execute_batch("
             PRAGMA cache_size=-32000;
             PRAGMA temp_store=MEMORY;
             PRAGMA mmap_size=268435456;
-            PRAGMA busy_timeout=5000;
-        ").map_err(|e| format!("SQLite read conn pragma failed: {e}"))?;
+        ");
 
         Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
     }
@@ -284,11 +285,18 @@ impl SqliteCache {
     pub fn open_readonly(path: &PathBuf) -> Result<Self, String> {
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
             .map_err(|e| format!("SQLite read-only open failed: {e}"))?;
-        conn.execute_batch("
+        // busy_timeout MUST be set first — BarCacheWriter uses DELETE journal mode
+        // (WAL doesn't work across Wine/Linux boundary) which takes an exclusive lock
+        // during write transactions. Without busy_timeout, all reads fail instantly
+        // with SQLITE_BUSY when BarCacheWriter is mid-transaction.
+        // Use rusqlite's built-in method (doesn't require a DB lock to execute).
+        conn.busy_timeout(std::time::Duration::from_secs(10))
+            .map_err(|e| format!("SQLite busy_timeout failed: {e}"))?;
+        // Non-critical optimizations — ignore failures (DB may be locked briefly)
+        let _ = conn.execute_batch("
             PRAGMA cache_size=-16000;
             PRAGMA temp_store=MEMORY;
-            PRAGMA busy_timeout=5000;
-        ").map_err(|e| format!("SQLite pragma failed: {e}"))?;
+        ");
         // Read-only source: use the same connection for both read and write paths
         // (open_readonly is only used for reading MT5 source files, no concurrent access)
         let read_conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
@@ -868,12 +876,13 @@ impl SqliteCache {
         let conn = Connection::open_with_flags(&self.db_path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
             .map_err(|e| format!("BG read conn open failed: {e}"))?;
-        conn.execute_batch("
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("BG read conn busy_timeout failed: {e}"))?;
+        let _ = conn.execute_batch("
             PRAGMA cache_size=-32000;
             PRAGMA temp_store=MEMORY;
             PRAGMA mmap_size=268435456;
-            PRAGMA busy_timeout=5000;
-        ").map_err(|e| format!("BG read conn pragma failed: {e}"))?;
+        ");
         Ok(conn)
     }
 
