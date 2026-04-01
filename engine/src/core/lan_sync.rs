@@ -895,55 +895,22 @@ impl LanSyncClient {
             .await
             .map_err(|e| format!("Connect to {url} failed: {e}"))?;
 
-        // ── TOFU certificate fingerprint pinning ──────────────────────
-        // Extract peer certificate from TLS stream, compute SHA-256 fingerprint,
-        // and verify against stored pin (or store on first use).
+        // Log peer certificate fingerprint for diagnostics (no pinning).
+        // The server generates a new ephemeral self-signed cert on every startup,
+        // so TOFU pinning would break on every normal server restart. Authentication
+        // is handled by the PBKDF2-HMAC-SHA256 passphrase challenge — the TLS layer
+        // provides transport encryption, not identity verification.
         let peer_fingerprint = match ws.get_ref() {
             tokio_tungstenite::MaybeTlsStream::NativeTls(tls_stream) => {
                 match tls_stream.get_ref().peer_certificate() {
-                    Ok(Some(cert)) => {
-                        match cert.to_der() {
-                            Ok(der) => Some(compute_sha256_fingerprint(&der)),
-                            Err(e) => {
-                                tracing::warn!("LAN sync: failed to get cert DER: {e}");
-                                None
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        tracing::warn!("LAN sync: server presented no certificate");
-                        None
-                    }
-                    Err(e) => {
-                        tracing::warn!("LAN sync: failed to get peer certificate: {e}");
-                        None
-                    }
+                    Ok(Some(cert)) => cert.to_der().ok().map(|der| compute_sha256_fingerprint(&der)),
+                    _ => None,
                 }
             }
             _ => None,
         };
-
-        // TOFU: check stored pin or store new fingerprint
         if let Some(ref fp) = peer_fingerprint {
-            let pin_key = format!("lan_sync_cert_pin:{}:{}", host, port);
-            match cache.get_kv(&pin_key) {
-                Ok(Some(stored_fp)) => {
-                    if stored_fp == *fp {
-                        tracing::info!("LAN sync: certificate verified (fingerprint matches stored pin)");
-                    } else {
-                        return Err(format!(
-                            "CERTIFICATE MISMATCH — expected {}, got {}. \
-                             If the server was restarted, delete the pin with key '{}'",
-                            stored_fp, fp, pin_key
-                        ));
-                    }
-                }
-                _ => {
-                    // First connection: trust and store
-                    let _ = cache.put_kv(&pin_key, fp);
-                    tracing::info!("LAN sync: new server fingerprint: {} — trusted (TOFU)", fp);
-                }
-            }
+            tracing::info!("LAN sync: server certificate fingerprint: {fp}");
         }
 
         let status = Arc::new(TokioMutex::new(SyncStatus {
