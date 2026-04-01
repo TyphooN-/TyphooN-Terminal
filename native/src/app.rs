@@ -1346,27 +1346,29 @@ impl ChartState {
 
     /// Try to load bars without blocking. Returns false if lock is contended.
     /// Use this from the UI thread render loop to avoid freezing.
+    /// Load bars from cache. read_conn is exclusively owned by the UI thread,
+    /// so lock() always succeeds immediately — no contention possible.
+    /// Returns true if data was loaded (even if empty), false only on error.
     fn try_load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>, gpu: Option<&mut gpu_compute::GpuCompute>) -> bool {
-        // Non-blocking: uses try_lock() — returns false if cache Mutex is contended
-        // (compaction, MT5 sync, etc.) so UI thread never blocks.
         let key = self.default_cache_key();
-        match cache.try_get_bars_raw(&key) {
+        match cache.get_bars_raw(&key) {
             Ok(Some(raw)) => {
                 self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                     ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                 }).collect();
                 self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                 self.compute_indicators_gpu(gpu);
-                // Skip MTF indicator loading here — it does blocking cache reads.
-                // MTF SMA/KAMA will be computed on the NEXT full reload (user action / symbol change).
                 log.push_back(LogEntry::info(format!(
                     "Loaded {} bars for {} [{}]",
                     self.bars.len(), self.symbol, self.timeframe.label()
                 )));
                 true
             }
-            Ok(None) => false, // lock contended or no data — try again next frame
-            Err(_) => false,
+            Ok(None) => true, // key not in cache — not an error, just empty
+            Err(e) => {
+                log.push_back(LogEntry::err(format!("Cache read error: {e}")));
+                false
+            }
         }
     }
 
@@ -10642,9 +10644,8 @@ impl TyphooNApp {
             let load_succeeded = chart.try_load(cache_ref, &mut self.log, gpu.as_mut());
             self.gpu_indicators = gpu;
             if !load_succeeded {
-                // Cache Mutex contended (compaction/sync) — defer load, do NOT fetch from Alpaca
-                self.log.push_back(LogEntry::info("Cache busy — chart will load when available"));
-                self.deferred_chart_loads.push(self.active_tab);
+                // Read error (not contention — read_conn is UI-exclusive)
+                self.log.push_back(LogEntry::err("Cache read error — check logs"));
             } else if chart.bars.is_empty() {
                 // Mutex acquired but no data in cache — fetch from Alpaca
                 let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
@@ -20834,8 +20835,8 @@ impl eframe::App for TyphooNApp {
                                     let mut loaded = false;
                                     if let Some(ref cache) = self.cache {
                                         if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                                            match cache.try_get_bars_raw(&key) {
-                                                Ok(Some(raw)) => {
+                                            match cache.get_bars_raw(&key) {
+                                                Ok(Some(raw)) if !raw.is_empty() => {
                                                     chart.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                                                         ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
                                                     }).collect();
@@ -20845,17 +20846,15 @@ impl eframe::App for TyphooNApp {
                                                     self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
                                                     loaded = true;
                                                 }
-                                                Ok(None) => {
-                                                    // Cache busy (Mutex contended) or key not found
-                                                    // Don't fetch from Alpaca — data may exist, just can't read right now
-                                                    self.log.push_back(LogEntry::info("Cache busy — try again in a moment"));
+                                                Ok(_) => {
+                                                    // Key not found or empty — will try Alpaca below
                                                 }
                                                 Err(e) => { self.log.push_back(LogEntry::err(format!("Load error: {}", e))); }
                                             }
                                         }
                                     }
-                                    // Only fetch from Alpaca if we successfully read cache and found nothing
-                                    if !loaded && self.broker_connected && !self.cache.as_ref().map(|c| c.try_connection().is_none()).unwrap_or(true) {
+                                    // Fetch from Alpaca if no cached data and broker is connected
+                                    if !loaded && self.broker_connected {
                                         let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                                         let tf = self.charts.get(self.active_tab).map(|c| c.timeframe.label().to_string()).unwrap_or_else(|| "1Day".to_string());
                                         let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: key.clone(), timeframe: tf, db_path });
