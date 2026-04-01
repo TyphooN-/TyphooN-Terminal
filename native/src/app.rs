@@ -19929,14 +19929,23 @@ impl eframe::App for TyphooNApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new("~").color(AXIS_TEXT).small());
                     ui.separator();
-                    if self.broker_connected || self.tt_connected {
-                        // Show connected data sources + market status
-                        let mut sources: Vec<&str> = Vec::new();
-                        if self.broker_connected { sources.push("Alpaca"); }
-                        if self.tt_connected { sources.push("tastytrade"); }
-                        if !self.mt5_db_paths.iter().all(|p| p.is_empty()) { sources.push("MT5"); }
-                        if !self.finnhub_key.is_empty() { sources.push("Finnhub"); }
-                        if !self.fred_key.is_empty() { sources.push("FRED"); }
+                    // Determine if we have any live data source
+                    let has_broker = self.broker_connected || self.tt_connected;
+                    let has_lan = self.lan_sync_mode == "client" || self.lan_sync_mode == "server";
+                    if has_broker || has_lan {
+                        let mut sources: Vec<String> = Vec::new();
+                        if self.broker_connected { sources.push("Alpaca".into()); }
+                        if self.tt_connected { sources.push("tastytrade".into()); }
+                        if !self.mt5_db_paths.iter().all(|p| p.is_empty()) { sources.push("MT5".into()); }
+                        if !self.finnhub_key.is_empty() { sources.push("Finnhub".into()); }
+                        if !self.fred_key.is_empty() { sources.push("FRED".into()); }
+                        // LAN sync status with IP
+                        if self.lan_sync_mode == "client" {
+                            let ip = if self.lan_server_ip.is_empty() { self.lan_sync_host.clone() } else { self.lan_server_ip.clone() };
+                            sources.push(format!("LAN {}", ip));
+                        } else if self.lan_sync_mode == "server" {
+                            sources.push("LAN Server".into());
+                        }
                         let src_text = sources.join(" + ");
                         // Market hours check (US Eastern: 9:30-16:00 Mon-Fri)
                         let now_utc = chrono::Utc::now();
@@ -19952,7 +19961,9 @@ impl eframe::App for TyphooNApp {
                         let (status, color) = if is_market_hours {
                             ("LIVE", UP)
                         } else if is_extended {
-                            ("EXT", egui::Color32::from_rgb(241, 196, 15)) // yellow for extended
+                            ("EXT", egui::Color32::from_rgb(241, 196, 15))
+                        } else if has_lan && !has_broker {
+                            ("ONLINE", egui::Color32::from_rgb(26, 188, 156)) // teal for LAN-only
                         } else {
                             ("CLOSED", egui::Color32::from_rgb(100, 100, 120))
                         };
