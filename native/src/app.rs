@@ -10332,18 +10332,16 @@ impl TyphooNApp {
                         continue;
                     }
 
-                    // Open BG's own read connection on first successful cache access
-                    if bg_conn.is_none() {
-                        if let Some(ref cache) = cache_arc {
-                            match cache.open_bg_read_connection() {
-                                Ok(c) => {
-                                    bg_conn = Some(c);
-                                    tracing::info!("BG thread: opened own read-only SQLite connection");
-                                }
-                                Err(e) => {
-                                    tracing::warn!("BG thread: failed to open read connection: {e}");
-                                    continue;
-                                }
+                    // Reopen BG read connection EVERY cycle so it always sees the latest
+                    // WAL writes from import_darwin_data, Mt5Sync, LAN sync, etc.
+                    // A persistent read-only connection may hold a stale WAL snapshot.
+                    // Opening is cheap (~1ms) compared to the 3s sleep between cycles.
+                    if let Some(ref cache) = cache_arc {
+                        match cache.open_bg_read_connection() {
+                            Ok(c) => { bg_conn = Some(c); }
+                            Err(e) => {
+                                tracing::warn!("BG thread: failed to open read connection: {e}");
+                                continue;
                             }
                         }
                     }
@@ -10376,10 +10374,6 @@ impl TyphooNApp {
                         }
                         let _ = bg_tx.send(data.clone());
 
-                        // Reset WAL read snapshot so bg_conn sees latest writes
-                        // (import_darwin_data writes via the write conn; a persistent
-                        // read-only connection may hold a stale WAL snapshot).
-                        let _ = conn.execute_batch("BEGIN; END;");
                         data.portfolio = darwin::get_portfolio_summary(conn).ok();
                         data.daily_returns = darwin::get_portfolio_daily_returns(conn).unwrap_or_default();
                         data.correlations = darwin::get_darwin_correlations(conn).unwrap_or_default();
