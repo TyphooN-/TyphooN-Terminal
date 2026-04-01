@@ -8671,6 +8671,8 @@ pub struct TyphooNApp {
     show_storage: bool,
     storage_filter: String,
     storage_delete_confirm: Option<String>,
+    storage_purge_bars_confirm: bool,
+    storage_purge_darwin_confirm: bool,
     storage_page: usize,
     show_lan_sync: bool,
     lan_sync_mode: String,        // "idle", "server", "client"
@@ -10125,6 +10127,8 @@ impl TyphooNApp {
             show_storage: false,
             storage_filter: String::new(),
             storage_delete_confirm: None,
+            storage_purge_bars_confirm: false,
+            storage_purge_darwin_confirm: false,
             storage_page: 0,
             show_lan_sync: false,
             lan_sync_mode: "idle".into(),
@@ -17942,6 +17946,52 @@ impl TyphooNApp {
                                 )));
                             }
                             ui.label(egui::RichText::new("Recompress all data at max level. No impact on load speed.").color(AXIS_TEXT).small());
+                        });
+                        // Purge All Bar Data
+                        ui.horizontal(|ui| {
+                            if self.storage_purge_bars_confirm {
+                                ui.label(egui::RichText::new("This will delete ALL cached bar data. This is NOT reversible!").color(egui::Color32::from_rgb(231, 76, 60)).small());
+                                if ui.button(egui::RichText::new("Yes, Delete All Bars").color(egui::Color32::from_rgb(231, 76, 60)).small()).clicked() {
+                                    self.storage_purge_bars_confirm = false;
+                                    if let Some(ref cache) = self.cache {
+                                        match cache.delete_all_bars() {
+                                            Ok(n) => self.log.push_back(LogEntry::info(format!("Purged all bar data: {} entries deleted", n))),
+                                            Err(e) => self.log.push_back(LogEntry::err(format!("Purge bars failed: {}", e))),
+                                        }
+                                    }
+                                }
+                                if ui.small_button(egui::RichText::new("Cancel").small()).clicked() {
+                                    self.storage_purge_bars_confirm = false;
+                                }
+                            } else {
+                                if ui.button(egui::RichText::new("Purge All Bar Data").color(egui::Color32::from_rgb(231, 76, 60)).small()).clicked() {
+                                    self.storage_purge_bars_confirm = true;
+                                    self.storage_purge_darwin_confirm = false;
+                                }
+                            }
+                        });
+                        // Purge All DARWIN Data
+                        ui.horizontal(|ui| {
+                            if self.storage_purge_darwin_confirm {
+                                ui.label(egui::RichText::new("This will delete ALL DARWIN accounts, deals, positions & equity. This is NOT reversible!").color(egui::Color32::from_rgb(231, 76, 60)).small());
+                                if ui.button(egui::RichText::new("Yes, Delete All DARWIN Data").color(egui::Color32::from_rgb(231, 76, 60)).small()).clicked() {
+                                    self.storage_purge_darwin_confirm = false;
+                                    if let Some(ref cache) = self.cache {
+                                        match cache.delete_all_darwin() {
+                                            Ok(n) => self.log.push_back(LogEntry::info(format!("Purged all DARWIN data: {} rows deleted", n))),
+                                            Err(e) => self.log.push_back(LogEntry::err(format!("Purge DARWIN failed: {}", e))),
+                                        }
+                                    }
+                                }
+                                if ui.small_button(egui::RichText::new("Cancel").small()).clicked() {
+                                    self.storage_purge_darwin_confirm = false;
+                                }
+                            } else {
+                                if ui.button(egui::RichText::new("Purge All DARWIN Data").color(egui::Color32::from_rgb(231, 76, 60)).small()).clicked() {
+                                    self.storage_purge_darwin_confirm = true;
+                                    self.storage_purge_bars_confirm = false;
+                                }
+                            }
                         });
                     }
                     ui.separator();

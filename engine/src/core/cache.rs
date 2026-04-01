@@ -1017,6 +1017,28 @@ impl SqliteCache {
         Ok(deleted)
     }
 
+    /// Delete ALL bar data from the cache. Returns the number of rows deleted.
+    pub fn delete_all_bars(&self) -> Result<u64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let deleted = conn.execute("DELETE FROM bar_cache", [])
+            .map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
+        // Also clear the tracking table if it exists (BarCacheWriter incremental state)
+        let _ = conn.execute("DELETE FROM bar_track", []);
+        Ok(deleted)
+    }
+
+    /// Delete ALL DARWIN data (accounts, deals, positions, equity snapshots).
+    /// Returns the total number of rows deleted across all tables.
+    pub fn delete_all_darwin(&self) -> Result<u64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut total = 0u64;
+        for table in &["darwin_deals", "darwin_positions", "darwin_equity_snapshots", "darwin_accounts"] {
+            let deleted = conn.execute(&format!("DELETE FROM {}", table), []).unwrap_or(0) as u64;
+            total += deleted;
+        }
+        Ok(total)
+    }
+
     /// Recompress all bar_cache entries at target zstd level (e.g. 19 for max compression).
     /// Decompression speed is identical regardless of compression level — only storage shrinks.
     /// Returns (entries_processed, bytes_saved).
