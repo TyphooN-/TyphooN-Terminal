@@ -179,8 +179,19 @@ fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
 }
 
 /// Thread-safe SQLite cache manager.
+///
+/// Uses two connections for concurrency under WAL mode:
+/// - `conn` (Mutex): exclusive write path — put_bars, put_kv, delete, compact, etc.
+///   Also used by the bg thread for DARWIN queries (which do CREATE TABLE IF NOT EXISTS).
+/// - `read_conn` (Mutex): dedicated read path — get_bars_raw, detailed_stats, stats, etc.
+///   Never blocked by writes. The bg thread and UI thread can read simultaneously with
+///   the write connection held by Mt5Sync or compaction.
+///
+/// SQLite WAL mode allows unlimited concurrent readers + one writer. The two Mutexes
+/// are independent — a write lock on `conn` does NOT block reads on `read_conn`.
 pub struct SqliteCache {
     conn: Mutex<Connection>,
+    read_conn: Mutex<Connection>,
 }
 
 impl SqliteCache {
@@ -235,7 +246,19 @@ impl SqliteCache {
         // Schema migration: track zstd compression level per entry (compact skips already-compacted)
         let _ = conn.execute("ALTER TABLE bar_cache ADD COLUMN zstd_level INTEGER NOT NULL DEFAULT 3", []);
 
-        Ok(Self { conn: Mutex::new(conn) })
+        // Open a second read-only connection for the read path.
+        // WAL mode allows this to read concurrently while conn writes.
+        let read_conn = Connection::open_with_flags(path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
+        read_conn.execute_batch("
+            PRAGMA cache_size=-32000;
+            PRAGMA temp_store=MEMORY;
+            PRAGMA mmap_size=268435456;
+            PRAGMA busy_timeout=5000;
+        ").map_err(|e| format!("SQLite read conn pragma failed: {e}"))?;
+
+        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn) })
     }
 
     /// Open an existing database read-only — for reading source MT5 cache files.
@@ -252,7 +275,16 @@ impl SqliteCache {
             PRAGMA temp_store=MEMORY;
             PRAGMA busy_timeout=5000;
         ").map_err(|e| format!("SQLite pragma failed: {e}"))?;
-        Ok(Self { conn: Mutex::new(conn) })
+        // Read-only source: use the same connection for both read and write paths
+        // (open_readonly is only used for reading MT5 source files, no concurrent access)
+        let read_conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
+        read_conn.execute_batch("
+            PRAGMA cache_size=-16000;
+            PRAGMA temp_store=MEMORY;
+            PRAGMA busy_timeout=5000;
+        ").map_err(|e| format!("SQLite read conn pragma failed: {e}"))?;
+        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn) })
     }
 
     /// Store bar data in packed binary format + zstd compression.
@@ -280,7 +312,7 @@ impl SqliteCache {
 
     /// Load bar data — handles both binary (new) and JSON (legacy) formats.
     pub fn get_bars(&self, key: &str) -> Result<Option<(String, i64)>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut stmt = conn.prepare_cached(
             "SELECT data, timestamp FROM bar_cache WHERE key = ?1"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
@@ -313,16 +345,7 @@ impl SqliteCache {
     /// Get bars as raw OHLCV tuples (no JSON serialization).
     /// Zero-serialization hot path for native GPU renderer: cache → f64 → GPU vertex buffer.
     pub fn get_bars_raw(&self, key: &str) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
-        // Use try_lock first — if Mutex is held (compaction, MT5 sync), wait up to 50ms
-        // then fail gracefully instead of blocking the UI thread indefinitely.
-        let conn = match self.conn.try_lock() {
-            Ok(c) => c,
-            Err(_) => {
-                // Brief retry — compaction releases lock between batches
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                self.conn.try_lock().map_err(|_| "Cache busy (compaction/sync in progress)".to_string())?
-            }
-        };
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         let mut stmt = conn.prepare_cached("SELECT data FROM bar_cache WHERE key = ?1")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let row: Option<Vec<u8>> = stmt.query_row(rusqlite::params![key], |r| r.get(0)).ok();
@@ -354,7 +377,7 @@ impl SqliteCache {
     /// For 500 bars from a 50K-bar cache: converts only 500 bars to JSON instead of 50K.
     /// Decompression overhead is unchanged (zstd doesn't support seeking).
     pub fn get_bars_tail(&self, key: &str, tail: usize) -> Result<Option<(String, i64)>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         let mut stmt = conn.prepare_cached(
             "SELECT data, timestamp FROM bar_cache WHERE key = ?1"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
@@ -406,7 +429,7 @@ impl SqliteCache {
 
     /// Load key-value data.
     pub fn get_kv(&self, key: &str) -> Result<Option<String>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         let mut stmt = conn.prepare_cached(
             "SELECT value FROM kv_cache WHERE key = ?1"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
@@ -444,7 +467,7 @@ impl SqliteCache {
 
     /// Get cache stats.
     pub fn stats(&self) -> Result<(i64, i64, i64), String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         let bar_count: i64 = conn.query_row("SELECT COUNT(*) FROM bar_cache", [], |r| r.get(0))
             .unwrap_or(0);
         let kv_count: i64 = conn.query_row("SELECT COUNT(*) FROM kv_cache", [], |r| r.get(0))
@@ -458,13 +481,7 @@ impl SqliteCache {
     /// Get detailed per-key cache stats: returns JSON array of {key, compressed_bytes, timestamp}.
     /// Keys are "symbol:timeframe" format (e.g., "AAPL:1Hour").
     pub fn detailed_stats(&self) -> Result<Vec<(String, i64, i64)>, String> {
-        let conn = match self.conn.try_lock() {
-            Ok(c) => c,
-            Err(_) => {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                self.conn.try_lock().map_err(|_| "Cache busy".to_string())?
-            }
-        };
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         // Use bar_count instead of LENGTH(data) — avoids reading blob headers on 3.9GB DB
         let mut stmt = conn.prepare(
             "SELECT key, bar_count, timestamp FROM bar_cache ORDER BY key"
@@ -797,15 +814,21 @@ impl SqliteCache {
         self.conn.lock().map_err(|e| format!("Lock failed: {e}"))
     }
 
-    /// Try to get a lock without blocking. Returns None if the lock is held.
-    /// Use this from the UI thread to avoid freezing when the bg thread holds the lock.
+    /// Get a read-only connection for queries that don't mutate.
+    /// Uses the dedicated read connection — never blocked by write operations.
+    pub fn read_connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))
+    }
+
+    /// Try to get a read connection without blocking. Returns None if the read_conn lock is held.
+    /// Used from UI thread to avoid any chance of freezing.
     pub fn try_connection(&self) -> Option<std::sync::MutexGuard<'_, Connection>> {
-        self.conn.try_lock().ok()
+        self.read_conn.try_lock().ok()
     }
 
     /// Non-blocking version of get_bars_raw. Returns Ok(None) if lock is contended.
     pub fn try_get_bars_raw(&self, key: &str) -> Result<Option<Vec<(i64, f64, f64, f64, f64, f64)>>, String> {
-        let conn = match self.conn.try_lock() {
+        let conn = match self.read_conn.try_lock() {
             Ok(c) => c,
             Err(_) => return Ok(None), // lock contended — skip this frame
         };
@@ -956,7 +979,7 @@ impl SqliteCache {
 
     /// List all keys in bar_cache.
     pub fn all_keys(&self) -> Result<Vec<String>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         let mut stmt = conn.prepare("SELECT key FROM bar_cache")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))
@@ -968,7 +991,7 @@ impl SqliteCache {
     /// Get the raw compressed blob, timestamp, and bar_count for a key.
     /// Used for zero-copy sync between databases.
     pub fn get_raw_blob(&self, key: &str) -> Result<Option<(Vec<u8>, i64, i64)>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         let mut stmt = conn.prepare("SELECT data, timestamp, bar_count FROM bar_cache WHERE key = ?1")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let result = stmt.query_row(params![key], |row| {

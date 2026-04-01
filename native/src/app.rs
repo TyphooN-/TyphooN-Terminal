@@ -10290,24 +10290,26 @@ impl TyphooNApp {
 
                         // Phase 1a: ONLY list accounts (no table creation, no scans)
                         // Table creation moved to Phase 1b — even IF NOT EXISTS can be slow on 3.9GB DB
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.accounts = darwin::list_darwin_accounts(&conn).unwrap_or_default();
                         }
                         tracing::trace!("BG: Phase 1a done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
-                        // Phase 1b: table creation + SEC data + cache stats
+                        // Phase 1b: table creation (write conn) + SEC data + cache stats (read conn)
                         if let Ok(conn) = cache.connection() {
                             let _ = darwin::create_darwin_tables(&conn);
                             let _ = sec_filing::create_sec_tables(&conn);
                             let _ = fundamentals::create_fundamentals_tables(&conn);
+                        }
+                        if let Ok(conn) = cache.read_connection() {
                             data.sec_filings = sec_filing::get_recent_filings(&conn, None, 100).unwrap_or_default();
                             data.sec_alerts = sec_filing::get_filing_alerts(&conn, false).unwrap_or_default();
                         }
                         if let Ok(s) = cache.stats() { data.cache_stats = Some(s); }
                         let _ = bg_tx.send(data.clone());
 
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.portfolio = darwin::get_portfolio_summary(&conn).ok();
                             data.daily_returns = darwin::get_portfolio_daily_returns(&conn).unwrap_or_default();
                             data.correlations = darwin::get_darwin_correlations(&conn).unwrap_or_default();
@@ -10316,7 +10318,7 @@ impl TyphooNApp {
                         }
                         let _ = bg_tx.send(data.clone());
 
-                        // Phase 1c: heavier queries — release conn between each to avoid blocking UI
+                        // Phase 1c: heavier queries — all reads use read_connection
                         {
                             let t = std::time::Instant::now();
                             // Keep previous data on failure — don't overwrite with empty when cache is busy
@@ -10337,23 +10339,23 @@ impl TyphooNApp {
                             }
                             data.crypto_ts_cache = ts_cache;
                         }
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.equity_curve = darwin::get_portfolio_equity_curve(&conn).unwrap_or_default();
                             data.trade_overlaps = darwin::get_trade_overlaps(&conn).unwrap_or_default();
                             data.symbol_overlaps = darwin::get_symbol_overlap(&conn).unwrap_or_default();
-                        } // release conn
-                        if let Ok(conn) = cache.connection() {
+                        }
+                        if let Ok(conn) = cache.read_connection() {
                             data.sector_exposure = darwin::get_sector_exposure(&conn).unwrap_or_default();
                             data.liquidity_risk = darwin::get_liquidity_risk(&conn).unwrap_or_default();
                             data.exposure_treemap = darwin::get_exposure_treemap(&conn).ok();
                             data.timing_divergences = darwin::get_timing_divergences(&conn).unwrap_or_default();
                             data.regime_performance = darwin::get_regime_performance(&conn).unwrap_or_default();
-                        } // release conn
-                        if let Ok(conn) = cache.connection() {
+                        }
+                        if let Ok(conn) = cache.read_connection() {
                             data.all_fundamentals = fundamentals::get_all_fundamentals(&conn).unwrap_or_default();
                             data.upcoming_earnings = fundamentals::get_upcoming_earnings(&conn, 50).unwrap_or_default();
                             data.upcoming_dividends = fundamentals::get_upcoming_dividends(&conn, 50).unwrap_or_default();
-                        } // release conn
+                        }
                         tracing::trace!("BG: Phase 1c done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
@@ -10378,30 +10380,30 @@ impl TyphooNApp {
                             data.seasonal_analysis = darwin::get_seasonal_analysis(&data.daily_returns);
                         }
 
-                        // Phase 3: heavy DB queries (one at a time, releasing conn between each)
-                        if let Ok(conn) = cache.connection() {
+                        // Phase 3: heavy DB queries (all reads — use read_connection)
+                        if let Ok(conn) = cache.read_connection() {
                             data.optimal_allocation = darwin::compute_optimal_allocation(&conn).unwrap_or_default();
                         }
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             let prices = std::collections::HashMap::new();
                             data.rebalance = darwin::compute_rebalance_suggestions(&conn, &prices).ok();
                         }
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.stress_tests = darwin::run_stress_tests(&conn).unwrap_or_default();
                         }
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.margin_call_sim = darwin::simulate_margin_call(&conn).ok();
                         }
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.drawdown_dashboard = darwin::get_combined_drawdown_dashboard(&conn, 5).ok();
                         }
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.drawdown_attribution = darwin::compute_drawdown_attribution(&conn).unwrap_or_default();
                         }
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.risk_budget = darwin::compute_risk_budget(&conn).unwrap_or_default();
                         }
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             let mut decays = Vec::new();
                             for acct in &data.accounts {
                                 if let Ok(decay) = darwin::compute_signal_decay(&conn, &acct.darwin_ticker, 90) {
@@ -10410,18 +10412,16 @@ impl TyphooNApp {
                             }
                             data.signal_decay = decays;
                         }
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.var_multipliers = darwin::compute_var_multipliers(&conn).unwrap_or_default();
                         }
-                        if let Ok(conn) = cache.connection() {
-                            // No live prices available in BG thread — pass empty map
-                            // Closed balance still populated from deals; unrealized = 0 without live feed
+                        if let Ok(conn) = cache.read_connection() {
                             let prices = std::collections::HashMap::new();
                             data.floating_equity = darwin::compute_floating_equity(&conn, &prices).ok();
                         }
 
                         // Phase 4: per-DARWIN VaR (for VaR Multiplier window)
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             let mut per_var = Vec::new();
                             for acct in &data.accounts {
                                 if let Ok(daily) = darwin::get_daily_returns(&conn, &acct.darwin_ticker) {
@@ -10453,7 +10453,7 @@ impl TyphooNApp {
                                             ticker: ticker.clone(),
                                             ..Default::default()
                                         };
-                                        if let Ok(conn) = cache_ref.connection() {
+                                        if let Ok(conn) = cache_ref.read_connection() {
                                             det.summary = darwin::get_darwin_summary(&conn, &ticker).ok();
                                             det.streaks = darwin::get_streak_analysis(&conn, &ticker).ok();
                                             det.hourly_pnl = darwin::get_hourly_pnl(&conn, &ticker).unwrap_or_default();
@@ -10476,9 +10476,6 @@ impl TyphooNApp {
                                             det.closed_positions = darwin::get_darwin_positions(&conn, &ticker, None, None).unwrap_or_default();
                                             det.equity_snapshots = darwin::get_equity_history(&conn, &ticker, 10).unwrap_or_default();
                                             det.benchmark = darwin::compare_to_benchmark(&conn, &ticker, daily_rets).ok();
-                                            if let Some(ref summary) = det.summary {
-                                                let _ = darwin::record_equity_snapshot(&conn, &ticker, summary.final_balance, 0.0, 0);
-                                            }
                                             det.sector_classification = det.pnl_by_symbol.iter().take(10)
                                                 .map(|(sym, _, _, _, _)| (sym.clone(), darwin::classify_sector(sym).to_string()))
                                                 .collect();
@@ -10492,6 +10489,12 @@ impl TyphooNApp {
                                                     det.dd_duration = darwin::compute_drawdown_duration(&daily);
                                                     det.daily_returns = daily;
                                                 }
+                                            }
+                                        }
+                                        // Equity snapshot write uses the write connection (separate lock)
+                                        if let Some(ref summary) = det.summary {
+                                            if let Ok(conn) = cache_ref.connection() {
+                                                let _ = darwin::record_equity_snapshot(&conn, &ticker, summary.final_balance, 0.0, 0);
                                             }
                                         }
                                         // FTP DARWIN quote data
@@ -10537,12 +10540,12 @@ impl TyphooNApp {
                         }
 
                         // Phase 6: DARWIN risk alerts
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             data.darwin_alerts = darwin::check_alerts(&conn).unwrap_or_default();
                         }
 
                         // Phase 8: SEC insider trades for portfolio symbols
-                        if let Ok(conn) = cache.connection() {
+                        if let Ok(conn) = cache.read_connection() {
                             let mut insider_map = std::collections::HashMap::new();
                             // Gather all symbols from exposure
                             let syms: Vec<String> = data.exposure.iter().map(|e| e.symbol.clone()).collect();
@@ -16034,7 +16037,7 @@ impl TyphooNApp {
                                 }
                                 if let Some(id) = dismiss_id {
                                     if let Some(ref cache) = self.cache {
-                                        if let Some(conn) = cache.try_connection() { let _ = sec_filing::dismiss_alert(&conn, id, "dismissed"); }
+                                        if let Ok(conn) = cache.connection() { let _ = sec_filing::dismiss_alert(&conn, id, "dismissed"); }
                                     }
                                 }
                             }
