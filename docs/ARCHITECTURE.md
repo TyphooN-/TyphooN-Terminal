@@ -123,11 +123,19 @@ TyphooN-Terminal/
 
 ### LAN Sync
 
-TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates generated on server start. PBKDF2-HMAC-SHA256 challenge-response authentication. Full data sync: bars + DARWIN tables + KV cache (fundamentals, news, SEC, FRED). LAN clients forward data requests to server (no outbound API calls). Multi-client support. Implemented in `engine/src/core/lan_sync.rs`.
+TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates generated on server start (no pinning — PBKDF2 passphrase handles authentication). PBKDF2-HMAC-SHA256 challenge-response authentication (100K iterations). Full data sync: bars + DARWIN tables + KV cache (fundamentals, news, SEC, FRED). LAN clients forward data requests to server (no outbound API calls). Multi-client support. Implemented in `engine/src/core/lan_sync.rs`.
 
 ### Storage Manager
 
-The `STORAGE` command opens a cache storage manager that allows viewing and deleting data by symbol/source. Includes a compact function that recompresses all bar_cache entries at zstd level 22 for maximum on-disk compression (decompression speed is unaffected).
+The `STORAGE` command opens a cache storage manager with:
+- View and delete data by symbol/source (color-coded by prefix: MT5/Kraken/Alpaca)
+- **Compact (zstd-22):** Recompress all bar_cache entries at maximum compression (decompression speed unaffected)
+- **Purge All Bar Data:** Delete all bar_cache + bar_track entries (with red confirmation prompt)
+- **Purge All DARWIN Data:** Delete all DARWIN accounts, deals, positions, equity snapshots (with red confirmation prompt)
+
+### SQLite Dual-Connection Architecture
+
+`SqliteCache` opens two connections under WAL mode: `conn` (write path — put_bars, compact, Mt5Sync, create_tables) and `read_conn` (read path — get_bars_raw, stats, detailed_stats). The two Mutexes are independent: writes never block reads. All connections use `busy_timeout=5000` for SQLite-level retry. Mt5Sync opens its own separate connection; MT5 source databases are opened via `open_readonly()` (no journal_mode conflict with BarCacheWriter's DELETE mode on Wine).
 
 ### Multi-Window Support
 
@@ -139,10 +147,7 @@ The right panel sections (Trade, Positions, Orders, Watchlist, Risk) are individ
 
 ### GPU Indicator Compute
 
-28 indicators run on GPU (wgpu compute shaders) with CPU fallback for compatibility. Three indicators use CPU-only due to algorithmic requirements:
-- **Supply/Demand Zones**: GPU does fractal detection (parallel), CPU does zone testing/merging/break detection
-- **BetterVolume**: Requires buy/sell pressure estimation from OHLC (inherently sequential)
-- **OBV**: Uses real volume data via interleaved [close, volume] GPU buffer
+28 indicators run on GPU (wgpu compute shaders) with CPU fallback for compatibility. GPU/CPU parity is mandatory — GPU shaders must produce identical output to CPU implementations. BetterVolume GPU uses the full Emini-Watch algorithm with OHLCV interleaved input (5 floats/bar). VWAP GPU uses per-day dispatch via anchored compute calls per trading day. Supply/Demand Zones: GPU does fractal detection (parallel), CPU does zone testing/merging/break detection.
 
 ### DARWIN Trade Overlay
 

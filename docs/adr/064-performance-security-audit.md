@@ -48,7 +48,7 @@ No per-frame throttling by window state — expensive operations eliminated inst
 | Path Traversal | **SAFE** | MT5 paths from config, DARWIN dirs validated with is_dir() |
 | Session Deserialization | **SAFE** | Defensive parsing with type checks (.as_str(), .as_bool(), .as_u64()) |
 | LAN Sync Auth | **SAFE** | PBKDF2-HMAC-SHA256 (100K iterations) challenge-response |
-| LAN Sync Transport | **SAFE** | TLS encrypted (wss://) with ephemeral self-signed certificate (rcgen + native-tls) + TOFU SHA-256 cert pinning |
+| LAN Sync Transport | **SAFE** | TLS encrypted (wss://) with ephemeral self-signed certificate (rcgen + native-tls). PBKDF2 passphrase authenticates server identity |
 | External Data | **SAFE** | All API responses parsed through typed serde structs |
 
 ### Additional Fixes (Late Session)
@@ -93,5 +93,13 @@ No per-frame throttling by window state — expensive operations eliminated inst
   - Watchlist stats: computed once and cached, not recomputed per-frame
 - **Zero unsafe blocks** confirmed across entire codebase (engine + native + compiler)
 - **480 tests** passing (75 compiler + 319 engine + 86 native): cache, darwin, fundamentals, SEC, crypto, var, risk, margin, backtest, GPU shaders, app integration, parser, WASM codegen, WGSL codegen
-- **TLS cert pinning (TOFU)**: LAN sync client extracts peer certificate, computes SHA-256 fingerprint, stores on first use, verifies on subsequent connections. Certificate mismatch aborts connection with explicit error.
 - **MQL5 compiler parser bug fix**: postfix_op unwrapping now correctly distinguishes `++`/`--` from wrapped call_args/index_access/member_access
+
+### 2026-03-31 Session: SQLite Concurrency & BarCacheWriter
+
+- **Dual-connection SqliteCache**: `conn` (write) + `read_conn` (read) under WAL mode. Reads never blocked by writes. Eliminates "Cache busy" permanently. BG thread uses `read_connection()` for all DARWIN/SEC/fundamentals queries.
+- **busy_timeout=5000**: All SQLite connections retry for 5s on SQLITE_BUSY instead of failing immediately.
+- **Mt5Sync connection isolation**: Opens its own `SqliteCache::open()` for target writes + `open_readonly()` for source reads. No shared Mutex contention with UI/bg threads.
+- **TOFU cert pinning removed**: Ephemeral certs regenerated on every server restart made TOFU pinning unusable. PBKDF2 passphrase challenge handles authentication; TLS provides transport encryption only.
+- **BarCacheWriter v1.429**: SQL BLOB append (only delta bytes cross MQL5/SQLite boundary), CAST AS BLOB for type safety, batch sleep (50ms), incremental_vacuum every ~30min, 100K bar cap per key.
+- **Storage Manager**: Added "Purge All Bar Data" and "Purge All DARWIN Data" buttons with red confirmation prompts.

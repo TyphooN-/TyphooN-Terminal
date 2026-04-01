@@ -42,7 +42,7 @@ Desktop (Server)                    Laptop (Client)
 
 #### Protocol (`core/lan_sync.rs`)
 
-WebSocket messages over TCP, authenticated with PBKDF2-derived shared secret + HMAC-SHA256 challenge-response:
+WebSocket messages over TLS-encrypted TCP (wss://), authenticated with PBKDF2-derived shared secret + HMAC-SHA256 challenge-response. See [ADR-065](065-lan-sync-tls-encryption.md) for TLS implementation details (ephemeral self-signed certs, no pinning).
 
 1. **AuthChallenge**: Server sends random challenge bytes
 2. **Auth**: Client responds with HMAC-SHA256(challenge, shared_secret)

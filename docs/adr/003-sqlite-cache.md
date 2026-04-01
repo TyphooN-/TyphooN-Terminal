@@ -20,16 +20,33 @@ Use SQLite as the local bar cache with zstd-compressed TTBR (TyphooN Terminal Bi
 - Trade-off: SQLite single-writer lock means bar cache writes are serialized; acceptable since writes are infrequent batch inserts from broker fetches
 - Trade-off: JSON session file is not crash-safe; a mid-write crash could lose the last session snapshot
 
-### BarCacheWriter Incremental Sync (v1.426, 2026-03-30)
+### Dual-Connection Architecture (2026-03-31)
 
-The MQL5 BarCacheWriter EA now uses **incremental sync** instead of full re-export:
+`SqliteCache` opens **two connections** under WAL mode for concurrent access:
+
+| Connection | Mutex | Purpose |
+|------------|-------|---------|
+| `conn` | Write lock | put_bars, put_kv, delete, compact, create_tables |
+| `read_conn` | Read lock | get_bars_raw, get_kv, stats, detailed_stats, all_keys |
+
+WAL mode allows unlimited concurrent readers + one writer. The two Mutexes are independent — write operations on `conn` (Mt5Sync, compaction) never block reads on `read_conn` (UI chart loading, background thread queries). All connections use `PRAGMA busy_timeout=5000` to retry on SQLite-level SQLITE_BUSY for 5 seconds.
+
+**Mt5Sync** opens its own separate `SqliteCache::open()` connection for writing to the main cache. Source MT5 databases are opened via `SqliteCache::open_readonly()` (no journal_mode change, compatible with BarCacheWriter's DELETE mode on the Wine/Linux boundary).
+
+### BarCacheWriter (v1.429, 2026-03-31)
+
+The MQL5 BarCacheWriter EA uses **SQL BLOB manipulation** for incremental sync:
 
 - **Initial sync:** Full export of 100K bars per symbol/TF (one-time, captures complete history)
-- **Subsequent syncs:** Dynamic fetch — calculates `(elapsed_seconds / tf_period) + 2` to determine exactly how many bars to fetch (usually 3). Reads existing TTBR blob from DB, merges by timestamp, appends only truly new bars.
-- **Merge logic:** Finds merge point by comparing timestamps. Updates last bar's close in-place (for live price updates). Appends only bars with timestamps newer than the last existing bar.
-- **Fallback:** If existing blob is missing/corrupt, falls back to full export automatically.
-- **Performance:** 10,000x reduction in steady-state data volume (480 bytes vs 4.8MB per symbol/TF per cycle). Memory usage drops from 36.7GB/cycle (851 sym × 9 TF × 4.8MB) to 3.6MB/cycle.
-- **Cap:** Maximum 200 bars per incremental fetch (long offline periods catch up over multiple cycles)
+- **Subsequent syncs:** Three pre-prepared SQL UPDATE statements manipulate BLOBs server-side. Only the delta (48 bytes × new bars + 4-byte count) crosses the MQL5/SQLite boundary — the full blob never enters MQL5 memory.
+  - `UpdateLastBar`: replaces last 48 bytes (forming bar close update)
+  - `ReplaceLastAndAppend`: SUBSTR splice — updates last bar + appends new bars
+  - `AppendOnly`: SUBSTR splice — appends new bars past existing last timestamp
+- **CAST AS BLOB:** All bound parameters wrapped in `CAST(?N AS BLOB)` — MQL5's `DatabaseBindArray` may bind `uchar[]` as TEXT type, which would corrupt binary concatenation.
+- **Bar count cap:** `MAX_BARS_PER_KEY = 100,000`. When exceeded, falls back to full re-export capped at 100K. Only triggers once per key at the threshold.
+- **Batch sleep:** 50ms between BatchSize commits — prevents Wine CPU thrashing.
+- **Periodic vacuum:** `PRAGMA incremental_vacuum(100)` every ~30 minutes — reclaims freed pages from DELETE mode fragmentation.
+- **Performance:** Only 48×N bytes cross MQL5/SQLite boundary vs 4.8MB full blob round-trip per key per cycle.
 
 ### Sync State Table
 
