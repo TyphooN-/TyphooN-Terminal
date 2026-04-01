@@ -10324,10 +10324,16 @@ impl TyphooNApp {
                             let _ = sec_filing::create_sec_tables(&wconn);
                             let _ = fundamentals::create_fundamentals_tables(&wconn);
                         }
-                        // SEC data + cache stats use BG's own connection
+                        // SEC data + cache stats — all via BG's own connection
                         data.sec_filings = sec_filing::get_recent_filings(conn, None, 100).unwrap_or_default();
                         data.sec_alerts = sec_filing::get_filing_alerts(conn, false).unwrap_or_default();
-                        if let Ok(s) = cache.stats() { data.cache_stats = Some(s); }
+                        // Stats via BG's own connection (avoids read_conn contention)
+                        {
+                            let bar_count: i64 = conn.query_row("SELECT COUNT(*) FROM bar_cache", [], |r| r.get(0)).unwrap_or(0);
+                            let kv_count: i64 = conn.query_row("SELECT COUNT(*) FROM kv_cache", [], |r| r.get(0)).unwrap_or(0);
+                            let file_size = std::fs::metadata(cache.db_path()).map(|m| m.len() as i64).unwrap_or(0);
+                            data.cache_stats = Some((bar_count, kv_count, file_size));
+                        }
                         let _ = bg_tx.send(data.clone());
 
                         data.portfolio = darwin::get_portfolio_summary(conn).ok();
@@ -10351,13 +10357,11 @@ impl TyphooNApp {
                                 }
                             }
                             tracing::trace!("BG: detailed_stats {}ms (n={})", t.elapsed().as_millis(), data.detailed_stats.len());
-                            // Cache first/last bar timestamps for crypto entries
+                            // Cache first/last bar timestamps for crypto entries via BG's own conn.
                             let mut ts_cache = std::collections::HashMap::new();
                             for (key, _, _) in &data.detailed_stats {
                                 if key.starts_with("cryptocompare:") || key.starts_with("kraken:") {
-                                    if let Ok(Some(raw)) = cache.get_bars_raw(key) {
-                                        let first = raw.first().map(|b| b.0).unwrap_or(0);
-                                        let last = raw.last().map(|b| b.0).unwrap_or(0);
+                                    if let Some((first, last)) = SqliteCache::get_bar_timestamp_range_with_conn(conn, key) {
                                         ts_cache.insert(key.clone(), (first, last));
                                     }
                                 }

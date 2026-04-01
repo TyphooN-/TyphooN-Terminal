@@ -815,6 +815,27 @@ impl SqliteCache {
         Ok(format!("{{\"bars_imported\":{},\"kv_imported\":{}}}", bar_count, kv_count))
     }
 
+    /// Get the database file path.
+    pub fn db_path(&self) -> &PathBuf {
+        &self.db_path
+    }
+
+    /// Get first and last bar timestamps for a key using a caller-provided connection.
+    /// Used by the BG thread with its own connection to avoid read_conn contention.
+    pub fn get_bar_timestamp_range_with_conn(conn: &Connection, key: &str) -> Option<(i64, i64)> {
+        let blob: Vec<u8> = conn.query_row(
+            "SELECT data FROM bar_cache WHERE key = ?1", params![key], |r| r.get(0)
+        ).ok()?;
+        let decompressed = zstd::decode_all(blob.as_slice()).ok()?;
+        if decompressed.len() < 8 || &decompressed[0..4] != BAR_BINARY_MAGIC { return None; }
+        let count = u32::from_le_bytes(decompressed[4..8].try_into().ok()?) as usize;
+        if count == 0 || decompressed.len() < 8 + count * 48 { return None; }
+        let first_ts = i64::from_le_bytes(decompressed[8..16].try_into().ok()?);
+        let last_off = 8 + (count - 1) * 48;
+        let last_ts = i64::from_le_bytes(decompressed[last_off..last_off + 8].try_into().ok()?);
+        Some((first_ts, last_ts))
+    }
+
     /// Get a lock on the underlying connection for direct SQL operations.
     /// Used by darwin import to run table creation and batch inserts.
     pub fn connection(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
