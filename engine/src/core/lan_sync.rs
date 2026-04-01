@@ -1326,10 +1326,15 @@ async fn client_sync_loop(
         }
     }
 
-    // 9. Listen for incremental updates (server pushes + ping/pong keepalive)
+    // 9. Listen for incremental updates + periodic re-sync
     // State flag: when true, binary frames are KV data (key+val); when false, bar data (key+ts+data)
     let mut expecting_kv_binary = false;
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    // Periodic re-sync: pull new bars/KV/DARWIN/tables every 60s.
+    // Server may have received new MT5 data, Alpaca bars, fundamentals, etc.
+    // since the initial sync — this keeps the client up-to-date automatically.
+    let mut resync_interval = tokio::time::interval(std::time::Duration::from_secs(60));
+    resync_interval.tick().await; // skip the first immediate tick (initial sync just completed)
     loop {
         tokio::select! {
             msg = stream.next() => {
@@ -1489,6 +1494,24 @@ async fn client_sync_loop(
                 if sink.send(Message::Ping(vec![].into())).await.is_err() {
                     break;
                 }
+            }
+            _ = resync_interval.tick() => {
+                // Periodic re-sync: pull any new data from server since last sync.
+                // Bars: request metadata, server sends entries with newer timestamps.
+                tracing::debug!("LAN sync: periodic re-sync — requesting updated bars + KV + DARWIN + tables");
+                let _ = sink.send(send_msg(&SyncMessage::RequestMeta)?).await;
+                // KV: incremental since last sync timestamp
+                expecting_kv_binary = true;
+                let kv_since = cache.get_sync_ts("kv_cache");
+                let _ = sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: kv_since })?).await;
+                // Research tables: incremental
+                let table_requests: Vec<(String, i64)> = SYNCABLE_TABLES.iter().map(|tbl| {
+                    let since_ts = cache.get_sync_ts(&format!("table:{}", tbl));
+                    (tbl.to_string(), since_ts)
+                }).collect();
+                let _ = sink.send(send_msg(&SyncMessage::RequestTableSync { tables: table_requests })?).await;
+                // DARWIN: full snapshot (positions change frequently)
+                let _ = sink.send(send_msg(&SyncMessage::RequestDarwinData)?).await;
             }
         }
     }
