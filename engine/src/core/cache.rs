@@ -17,6 +17,16 @@ const BAR_BINARY_MAGIC: &[u8; 4] = b"TTBR"; // TyphooN Terminal Bar Record
 /// Bytes per bar in binary format: i64 timestamp + 5×f64 (OHLCV) = 48 bytes
 const BYTES_PER_BAR: usize = 8 + 5 * 8; // 48
 
+/// Decompress bar data if needed. BarCacheWriter stores raw TTBR (magic "TTBR" at byte 0).
+/// Rust put_bars() stores zstd-compressed (magic 0x28B52FFD). This function handles both.
+fn maybe_decompress(data: Vec<u8>) -> Result<Vec<u8>, String> {
+    if data.len() >= 4 && &data[0..4] == BAR_BINARY_MAGIC {
+        Ok(data) // Already raw TTBR — no decompression needed
+    } else {
+        zstd::decode_all(data.as_slice()).map_err(|e| format!("Decompress failed: {e}"))
+    }
+}
+
 /// Pack bars from JSON into binary format for efficient storage.
 /// Format: [4-byte magic][u32 count][per bar: i64 ts_ms, f64 O, f64 H, f64 L, f64 C, f64 V]
 fn pack_bars(json_data: &str) -> Result<Vec<u8>, String> {
@@ -328,10 +338,8 @@ impl SqliteCache {
         });
 
         match result {
-            Ok((compressed, timestamp)) => {
-                let decompressed = zstd::decode_all(compressed.as_slice())
-                    .map_err(|e| format!("zstd decompress failed: {e}"))?;
-                // Detect format: binary starts with TTBR magic, legacy is UTF-8 JSON
+            Ok((data, timestamp)) => {
+                let decompressed = maybe_decompress(data)?;
                 let json = if decompressed.len() >= 4 && &decompressed[0..4] == BAR_BINARY_MAGIC {
                     unpack_bars(&decompressed)?
                 } else {
@@ -355,13 +363,12 @@ impl SqliteCache {
         let row: Option<Vec<u8>> = stmt.query_row(rusqlite::params![key], |r| r.get(0)).ok();
         match row {
             None => Ok(None),
-            Some(compressed) => {
-                let decompressed = zstd::decode_all(compressed.as_slice())
-                    .map_err(|e| format!("Decompress failed: {e}"))?;
-                if decompressed.len() >= 4 && &decompressed[0..4] == BAR_BINARY_MAGIC {
-                    Ok(Some(unpack_bars_raw(&decompressed)?))
+            Some(data) => {
+                let bytes = maybe_decompress(data)?;
+                if bytes.len() >= 4 && &bytes[0..4] == BAR_BINARY_MAGIC {
+                    Ok(Some(unpack_bars_raw(&bytes)?))
                 } else {
-                    let text = String::from_utf8_lossy(&decompressed);
+                    let text = String::from_utf8_lossy(&bytes);
                     let bars: Vec<serde_json::Value> = serde_json::from_str(&text)
                         .map_err(|e| format!("JSON parse failed: {e}"))?;
                     let result = bars.iter().filter_map(|b| {
@@ -394,8 +401,7 @@ impl SqliteCache {
 
         match result {
             Ok((compressed, timestamp)) => {
-                let decompressed = zstd::decode_all(compressed.as_slice())
-                    .map_err(|e| format!("zstd decompress failed: {e}"))?;
+                let decompressed = maybe_decompress(compressed)?;
                 let json = if decompressed.len() >= 4 && &decompressed[0..4] == BAR_BINARY_MAGIC {
                     unpack_bars_tail(&decompressed, tail)?
                 } else {
@@ -826,7 +832,7 @@ impl SqliteCache {
         let blob: Vec<u8> = conn.query_row(
             "SELECT data FROM bar_cache WHERE key = ?1", params![key], |r| r.get(0)
         ).ok()?;
-        let decompressed = zstd::decode_all(blob.as_slice()).ok()?;
+        let decompressed = maybe_decompress(blob).ok()?;
         if decompressed.len() < 8 || &decompressed[0..4] != BAR_BINARY_MAGIC { return None; }
         let count = u32::from_le_bytes(decompressed[4..8].try_into().ok()?) as usize;
         if count == 0 || decompressed.len() < 8 + count * 48 { return None; }
@@ -882,13 +888,12 @@ impl SqliteCache {
         let row: Option<Vec<u8>> = stmt.query_row(params![key], |r| r.get(0)).ok();
         match row {
             None => Ok(None),
-            Some(compressed) => {
-                let decompressed = zstd::decode_all(compressed.as_slice())
-                    .map_err(|e| format!("Decompress failed: {e}"))?;
-                if decompressed.len() >= 4 && &decompressed[0..4] == BAR_BINARY_MAGIC {
-                    Ok(Some(unpack_bars_raw(&decompressed)?))
+            Some(data) => {
+                let bytes = maybe_decompress(data)?;
+                if bytes.len() >= 4 && &bytes[0..4] == BAR_BINARY_MAGIC {
+                    Ok(Some(unpack_bars_raw(&bytes)?))
                 } else {
-                    let text = String::from_utf8_lossy(&decompressed);
+                    let text = String::from_utf8_lossy(&bytes);
                     let bars: Vec<serde_json::Value> = serde_json::from_str(&text)
                         .map_err(|e| format!("JSON parse failed: {e}"))?;
                     let result = bars.iter().filter_map(|b| {
