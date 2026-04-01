@@ -192,6 +192,7 @@ fn unpack_bars_tail(data: &[u8], tail: usize) -> Result<String, String> {
 pub struct SqliteCache {
     conn: Mutex<Connection>,
     read_conn: Mutex<Connection>,
+    db_path: PathBuf,
 }
 
 impl SqliteCache {
@@ -258,7 +259,7 @@ impl SqliteCache {
             PRAGMA busy_timeout=5000;
         ").map_err(|e| format!("SQLite read conn pragma failed: {e}"))?;
 
-        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn) })
+        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
     }
 
     /// Open an existing database read-only — for reading source MT5 cache files.
@@ -284,7 +285,7 @@ impl SqliteCache {
             PRAGMA temp_store=MEMORY;
             PRAGMA busy_timeout=5000;
         ").map_err(|e| format!("SQLite read conn pragma failed: {e}"))?;
-        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn) })
+        Ok(Self { conn: Mutex::new(conn), read_conn: Mutex::new(read_conn), db_path: path.clone() })
     }
 
     /// Store bar data in packed binary format + zstd compression.
@@ -472,10 +473,13 @@ impl SqliteCache {
             .unwrap_or(0);
         let kv_count: i64 = conn.query_row("SELECT COUNT(*) FROM kv_cache", [], |r| r.get(0))
             .unwrap_or(0);
-        let total_size: i64 = conn.query_row(
-            "SELECT COALESCE(SUM(LENGTH(data)),0) FROM bar_cache", [], |r| r.get(0)
-        ).unwrap_or(0);
-        Ok((bar_count, kv_count, total_size))
+        // Report actual file size on disk (includes freed pages from DELETEs).
+        // SUM(LENGTH(data)) only counts live data — misleading after purge operations
+        // where the file stays large until VACUUM reclaims freed pages.
+        let file_size = std::fs::metadata(&self.db_path)
+            .map(|m| m.len() as i64)
+            .unwrap_or(0);
+        Ok((bar_count, kv_count, file_size))
     }
 
     /// Get detailed per-key cache stats: returns JSON array of {key, compressed_bytes, timestamp}.
@@ -1041,17 +1045,21 @@ impl SqliteCache {
     }
 
     /// Delete ALL bar data from the cache. Returns the number of rows deleted.
+    /// Runs VACUUM to reclaim freed pages and shrink the DB file on disk.
     pub fn delete_all_bars(&self) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let deleted = conn.execute("DELETE FROM bar_cache", [])
             .map_err(|e| format!("SQLite delete failed: {e}"))? as u64;
-        // Also clear the tracking table if it exists (BarCacheWriter incremental state)
         let _ = conn.execute("DELETE FROM bar_track", []);
+        // VACUUM reclaims freed pages — without this, the DB file stays the same
+        // size after DELETE (e.g., 56 GB file with only 14 GB of live data).
+        let _ = conn.execute_batch("VACUUM");
         Ok(deleted)
     }
 
     /// Delete ALL DARWIN data (accounts, deals, positions, equity snapshots).
     /// Returns the total number of rows deleted across all tables.
+    /// Runs VACUUM to reclaim freed pages and shrink the DB file on disk.
     pub fn delete_all_darwin(&self) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut total = 0u64;
@@ -1059,7 +1067,18 @@ impl SqliteCache {
             let deleted = conn.execute(&format!("DELETE FROM {}", table), []).unwrap_or(0) as u64;
             total += deleted;
         }
+        let _ = conn.execute_batch("VACUUM");
         Ok(total)
+    }
+
+    /// Run PRAGMA incremental_vacuum to reclaim freed pages without full VACUUM.
+    /// Lighter than VACUUM — doesn't rewrite the entire DB, just reclaims free pages.
+    /// Safe to call periodically (e.g., on shutdown, after compaction).
+    pub fn incremental_vacuum(&self, pages: i64) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        conn.execute(&format!("PRAGMA incremental_vacuum({})", pages), [])
+            .map_err(|e| format!("incremental_vacuum failed: {e}"))?;
+        Ok(())
     }
 
     /// Recompress all bar_cache entries at target zstd level (e.g. 19 for max compression).

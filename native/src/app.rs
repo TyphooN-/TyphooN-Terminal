@@ -9431,9 +9431,11 @@ impl TyphooNApp {
                                         }
                                     })) {
                                         Ok((count, saved)) => {
+                                            // Reclaim freed pages after compaction reduced blob sizes
+                                            let _ = cache.incremental_vacuum(10000);
                                             importing.store(false, std::sync::atomic::Ordering::Relaxed);
                                             let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                                "Compact complete: {} entries, {:.1} MB saved. Run VACUUM in SQLite for full effect.",
+                                                "Compact complete: {} entries, {:.1} MB saved",
                                                 count, saved as f64 / 1024.0 / 1024.0
                                             )));
                                         }
@@ -10267,7 +10269,9 @@ impl TyphooNApp {
                 let importing_flag_bg = importing_flag_bg;
                 let mut full_refresh_done = false;
                 let _last_full_refresh = std::time::Instant::now();
+                let mut last_vacuum = std::time::Instant::now();
                 const FULL_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
+                const VACUUM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1800); // 30 minutes
                 // Persist data across loops so lightweight refreshes keep expensive Phase 2-8 results
                 let mut data = BgDarwinData::default();
                 loop {
@@ -10358,6 +10362,14 @@ impl TyphooNApp {
                         }
                         tracing::trace!("BG: Phase 1c done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
+
+                        // Periodic DB maintenance: incremental_vacuum every 30 minutes.
+                        // Reclaims freed pages from DELETEs/compaction without full VACUUM.
+                        if last_vacuum.elapsed() >= VACUUM_INTERVAL {
+                            let _ = cache.incremental_vacuum(500);
+                            last_vacuum = std::time::Instant::now();
+                            tracing::info!("BG: incremental_vacuum(500) completed");
+                        }
 
                         // Phases 2-8: expensive DARWIN computation — once per startup only
                         // DARWIN trade data is static (imported from XLSX), no need to rescan repeatedly
