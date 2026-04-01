@@ -10274,63 +10274,84 @@ impl TyphooNApp {
                 const VACUUM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(21600); // 6 hours
                 // Persist data across loops so lightweight refreshes keep expensive Phase 2-8 results
                 let mut data = BgDarwinData::default();
+                // BG thread opens its OWN read-only SQLite connection via SqliteCache::open_bg_read_connection().
+                // This eliminates all Mutex contention with the UI thread's read_conn.
+                // WAL mode allows unlimited concurrent readers — each connection reads
+                // independently without blocking the others.
+                let mut bg_conn: Option<typhoon_engine::core::cache::BgConnection> = None;
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(3));
 
-                    // Skip DB queries while DARWIN import is running (avoid WAL contention on large DB)
                     if importing_flag_bg.load(std::sync::atomic::Ordering::Relaxed) {
                         continue;
                     }
 
-                    // Read cache from shared RwLock (populated async by cache-open thread)
                     let cache_arc = shared_cache_bg.read().ok().and_then(|g| g.clone());
                     if cache_arc.is_none() {
                         tracing::info!("BG thread: cache not yet available, waiting...");
                         continue;
                     }
+
+                    // Open BG's own read connection on first successful cache access
+                    if bg_conn.is_none() {
+                        if let Some(ref cache) = cache_arc {
+                            match cache.open_bg_read_connection() {
+                                Ok(c) => {
+                                    bg_conn = Some(c);
+                                    tracing::info!("BG thread: opened own read-only SQLite connection");
+                                }
+                                Err(e) => {
+                                    tracing::warn!("BG thread: failed to open read connection: {e}");
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    let conn = bg_conn.as_ref().unwrap();
+
                     if let Some(ref cache) = cache_arc {
                         let phase_start = std::time::Instant::now();
                         tracing::trace!("BG thread: lightweight refresh...");
 
-                        // Phase 1a: ONLY list accounts (no table creation, no scans)
-                        // Table creation moved to Phase 1b — even IF NOT EXISTS can be slow on 3.9GB DB
-                        if let Ok(conn) = cache.read_connection() {
-                            data.accounts = darwin::list_darwin_accounts(&conn).unwrap_or_default();
-                        }
+                        // Phase 1a: list accounts using BG thread's own read connection
+                        data.accounts = darwin::list_darwin_accounts(conn).unwrap_or_default();
                         tracing::trace!("BG: Phase 1a done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
-                        // Phase 1b: table creation (write conn) + SEC data + cache stats (read conn)
-                        if let Ok(conn) = cache.connection() {
-                            let _ = darwin::create_darwin_tables(&conn);
-                            let _ = sec_filing::create_sec_tables(&conn);
-                            let _ = fundamentals::create_fundamentals_tables(&conn);
+                        // Phase 1b: table creation needs write conn (CREATE TABLE IF NOT EXISTS)
+                        if let Ok(wconn) = cache.connection() {
+                            let _ = darwin::create_darwin_tables(&wconn);
+                            let _ = sec_filing::create_sec_tables(&wconn);
+                            let _ = fundamentals::create_fundamentals_tables(&wconn);
                         }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.sec_filings = sec_filing::get_recent_filings(&conn, None, 100).unwrap_or_default();
-                            data.sec_alerts = sec_filing::get_filing_alerts(&conn, false).unwrap_or_default();
-                        }
+                        // SEC data + cache stats use BG's own connection
+                        data.sec_filings = sec_filing::get_recent_filings(conn, None, 100).unwrap_or_default();
+                        data.sec_alerts = sec_filing::get_filing_alerts(conn, false).unwrap_or_default();
                         if let Ok(s) = cache.stats() { data.cache_stats = Some(s); }
                         let _ = bg_tx.send(data.clone());
 
-                        if let Ok(conn) = cache.read_connection() {
-                            data.portfolio = darwin::get_portfolio_summary(&conn).ok();
-                            data.daily_returns = darwin::get_portfolio_daily_returns(&conn).unwrap_or_default();
-                            data.correlations = darwin::get_darwin_correlations(&conn).unwrap_or_default();
-                            data.exposure = darwin::get_portfolio_exposure(&conn).unwrap_or_default();
-                            data.open_positions = darwin::get_portfolio_open_positions(&conn).unwrap_or_default();
-                        }
+                        data.portfolio = darwin::get_portfolio_summary(conn).ok();
+                        data.daily_returns = darwin::get_portfolio_daily_returns(conn).unwrap_or_default();
+                        data.correlations = darwin::get_darwin_correlations(conn).unwrap_or_default();
+                        data.exposure = darwin::get_portfolio_exposure(conn).unwrap_or_default();
+                        data.open_positions = darwin::get_portfolio_open_positions(conn).unwrap_or_default();
                         let _ = bg_tx.send(data.clone());
 
-                        // Phase 1c: heavier queries — all reads use read_connection
+                        // Phase 1c: heavier queries — all use BG's own connection (zero contention with UI)
                         {
                             let t = std::time::Instant::now();
-                            // Keep previous data on failure — don't overwrite with empty when cache is busy
-                            if let Ok(stats) = cache.detailed_stats() {
-                                data.detailed_stats = stats;
+                            // detailed_stats via BG's own connection
+                            let mut stmt = conn.prepare("SELECT key, bar_count, timestamp FROM bar_cache ORDER BY key").ok();
+                            if let Some(ref mut s) = stmt {
+                                let rows = s.query_map([], |row| {
+                                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+                                });
+                                if let Ok(rows) = rows {
+                                    data.detailed_stats = rows.filter_map(|r| r.ok()).collect();
+                                }
                             }
                             tracing::trace!("BG: detailed_stats {}ms (n={})", t.elapsed().as_millis(), data.detailed_stats.len());
-                            // Cache first/last bar timestamps for crypto entries (avoid per-frame DB queries)
+                            // Cache first/last bar timestamps for crypto entries
                             let mut ts_cache = std::collections::HashMap::new();
                             for (key, _, _) in &data.detailed_stats {
                                 if key.starts_with("cryptocompare:") || key.starts_with("kraken:") {
@@ -10343,23 +10364,17 @@ impl TyphooNApp {
                             }
                             data.crypto_ts_cache = ts_cache;
                         }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.equity_curve = darwin::get_portfolio_equity_curve(&conn).unwrap_or_default();
-                            data.trade_overlaps = darwin::get_trade_overlaps(&conn).unwrap_or_default();
-                            data.symbol_overlaps = darwin::get_symbol_overlap(&conn).unwrap_or_default();
-                        }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.sector_exposure = darwin::get_sector_exposure(&conn).unwrap_or_default();
-                            data.liquidity_risk = darwin::get_liquidity_risk(&conn).unwrap_or_default();
-                            data.exposure_treemap = darwin::get_exposure_treemap(&conn).ok();
-                            data.timing_divergences = darwin::get_timing_divergences(&conn).unwrap_or_default();
-                            data.regime_performance = darwin::get_regime_performance(&conn).unwrap_or_default();
-                        }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.all_fundamentals = fundamentals::get_all_fundamentals(&conn).unwrap_or_default();
-                            data.upcoming_earnings = fundamentals::get_upcoming_earnings(&conn, 50).unwrap_or_default();
-                            data.upcoming_dividends = fundamentals::get_upcoming_dividends(&conn, 50).unwrap_or_default();
-                        }
+                        data.equity_curve = darwin::get_portfolio_equity_curve(conn).unwrap_or_default();
+                        data.trade_overlaps = darwin::get_trade_overlaps(conn).unwrap_or_default();
+                        data.symbol_overlaps = darwin::get_symbol_overlap(conn).unwrap_or_default();
+                        data.sector_exposure = darwin::get_sector_exposure(conn).unwrap_or_default();
+                        data.liquidity_risk = darwin::get_liquidity_risk(conn).unwrap_or_default();
+                        data.exposure_treemap = darwin::get_exposure_treemap(conn).ok();
+                        data.timing_divergences = darwin::get_timing_divergences(conn).unwrap_or_default();
+                        data.regime_performance = darwin::get_regime_performance(conn).unwrap_or_default();
+                        data.all_fundamentals = fundamentals::get_all_fundamentals(conn).unwrap_or_default();
+                        data.upcoming_earnings = fundamentals::get_upcoming_earnings(conn, 50).unwrap_or_default();
+                        data.upcoming_dividends = fundamentals::get_upcoming_dividends(conn, 50).unwrap_or_default();
                         tracing::trace!("BG: Phase 1c done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
@@ -10392,51 +10407,37 @@ impl TyphooNApp {
                             data.seasonal_analysis = darwin::get_seasonal_analysis(&data.daily_returns);
                         }
 
-                        // Phase 3: heavy DB queries (all reads — use read_connection)
-                        if let Ok(conn) = cache.read_connection() {
-                            data.optimal_allocation = darwin::compute_optimal_allocation(&conn).unwrap_or_default();
-                        }
-                        if let Ok(conn) = cache.read_connection() {
+                        // Phase 3: heavy DB queries — all use BG's own connection
+                        data.optimal_allocation = darwin::compute_optimal_allocation(conn).unwrap_or_default();
+                        {
                             let prices = std::collections::HashMap::new();
-                            data.rebalance = darwin::compute_rebalance_suggestions(&conn, &prices).ok();
+                            data.rebalance = darwin::compute_rebalance_suggestions(conn, &prices).ok();
                         }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.stress_tests = darwin::run_stress_tests(&conn).unwrap_or_default();
-                        }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.margin_call_sim = darwin::simulate_margin_call(&conn).ok();
-                        }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.drawdown_dashboard = darwin::get_combined_drawdown_dashboard(&conn, 5).ok();
-                        }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.drawdown_attribution = darwin::compute_drawdown_attribution(&conn).unwrap_or_default();
-                        }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.risk_budget = darwin::compute_risk_budget(&conn).unwrap_or_default();
-                        }
-                        if let Ok(conn) = cache.read_connection() {
+                        data.stress_tests = darwin::run_stress_tests(conn).unwrap_or_default();
+                        data.margin_call_sim = darwin::simulate_margin_call(conn).ok();
+                        data.drawdown_dashboard = darwin::get_combined_drawdown_dashboard(conn, 5).ok();
+                        data.drawdown_attribution = darwin::compute_drawdown_attribution(conn).unwrap_or_default();
+                        data.risk_budget = darwin::compute_risk_budget(conn).unwrap_or_default();
+                        {
                             let mut decays = Vec::new();
                             for acct in &data.accounts {
-                                if let Ok(decay) = darwin::compute_signal_decay(&conn, &acct.darwin_ticker, 90) {
+                                if let Ok(decay) = darwin::compute_signal_decay(conn, &acct.darwin_ticker, 90) {
                                     decays.push(decay);
                                 }
                             }
                             data.signal_decay = decays;
                         }
-                        if let Ok(conn) = cache.read_connection() {
-                            data.var_multipliers = darwin::compute_var_multipliers(&conn).unwrap_or_default();
-                        }
-                        if let Ok(conn) = cache.read_connection() {
+                        data.var_multipliers = darwin::compute_var_multipliers(conn).unwrap_or_default();
+                        {
                             let prices = std::collections::HashMap::new();
-                            data.floating_equity = darwin::compute_floating_equity(&conn, &prices).ok();
+                            data.floating_equity = darwin::compute_floating_equity(conn, &prices).ok();
                         }
 
                         // Phase 4: per-DARWIN VaR (for VaR Multiplier window)
-                        if let Ok(conn) = cache.read_connection() {
+                        {
                             let mut per_var = Vec::new();
                             for acct in &data.accounts {
-                                if let Ok(daily) = darwin::get_daily_returns(&conn, &acct.darwin_ticker) {
+                                if let Ok(daily) = darwin::get_daily_returns(conn, &acct.darwin_ticker) {
                                     if !daily.is_empty() {
                                         per_var.push((acct.darwin_ticker.clone(), darwin::compute_var(&daily)));
                                     }
@@ -10465,7 +10466,8 @@ impl TyphooNApp {
                                             ticker: ticker.clone(),
                                             ..Default::default()
                                         };
-                                        if let Ok(conn) = cache_ref.read_connection() {
+                                        // Each scoped thread opens its own read connection — zero contention with UI
+                                        if let Ok(ref conn) = cache_ref.open_bg_read_connection() {
                                             det.summary = darwin::get_darwin_summary(&conn, &ticker).ok();
                                             det.streaks = darwin::get_streak_analysis(&conn, &ticker).ok();
                                             det.hourly_pnl = darwin::get_hourly_pnl(&conn, &ticker).unwrap_or_default();
@@ -10552,17 +10554,14 @@ impl TyphooNApp {
                         }
 
                         // Phase 6: DARWIN risk alerts
-                        if let Ok(conn) = cache.read_connection() {
-                            data.darwin_alerts = darwin::check_alerts(&conn).unwrap_or_default();
-                        }
+                        data.darwin_alerts = darwin::check_alerts(conn).unwrap_or_default();
 
                         // Phase 8: SEC insider trades for portfolio symbols
-                        if let Ok(conn) = cache.read_connection() {
+                        {
                             let mut insider_map = std::collections::HashMap::new();
-                            // Gather all symbols from exposure
                             let syms: Vec<String> = data.exposure.iter().map(|e| e.symbol.clone()).collect();
                             for sym in &syms {
-                                if let Ok(trades) = sec_filing::get_insider_trades(&conn, Some(sym), 90) {
+                                if let Ok(trades) = sec_filing::get_insider_trades(conn, Some(sym), 90) {
                                     if !trades.is_empty() {
                                         insider_map.insert(sym.clone(), trades);
                                     }

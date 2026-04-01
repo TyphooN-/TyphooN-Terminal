@@ -9,6 +9,9 @@ use rusqlite::{Connection, OpenFlags, params};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+/// Re-export rusqlite::Connection so callers can use BG connections without depending on rusqlite directly.
+pub type BgConnection = Connection;
+
 /// Magic bytes to identify binary bar format (vs legacy JSON).
 const BAR_BINARY_MAGIC: &[u8; 4] = b"TTBR"; // TyphooN Terminal Bar Record
 /// Bytes per bar in binary format: i64 timestamp + 5×f64 (OHLCV) = 48 bytes
@@ -828,6 +831,23 @@ impl SqliteCache {
     /// Used from UI thread to avoid any chance of freezing.
     pub fn try_connection(&self) -> Option<std::sync::MutexGuard<'_, Connection>> {
         self.read_conn.try_lock().ok()
+    }
+
+    /// Open an independent read-only Connection to the same database file.
+    /// The caller owns this connection — it is NOT shared via any Mutex.
+    /// Use this for long-running background threads that need to read without
+    /// contending with the UI thread's read_conn or the write conn.
+    pub fn open_bg_read_connection(&self) -> Result<Connection, String> {
+        let conn = Connection::open_with_flags(&self.db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .map_err(|e| format!("BG read conn open failed: {e}"))?;
+        conn.execute_batch("
+            PRAGMA cache_size=-32000;
+            PRAGMA temp_store=MEMORY;
+            PRAGMA mmap_size=268435456;
+            PRAGMA busy_timeout=5000;
+        ").map_err(|e| format!("BG read conn pragma failed: {e}"))?;
+        Ok(conn)
     }
 
     /// Non-blocking version of get_bars_raw. Returns Ok(None) if lock is contended.
