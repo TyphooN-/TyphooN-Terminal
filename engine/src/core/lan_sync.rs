@@ -659,10 +659,10 @@ async fn handle_client_tls(
                         batch_buf.extend_from_slice(&data);
                         count += 1;
 
-                        // Flush when batch is large enough
+                        // Flush when batch is large enough (swap to avoid clone)
                         if batch_buf.len() >= flush_threshold {
-                            let _ = sink.send(Message::Binary(batch_buf.clone().into())).await;
-                            batch_buf.clear();
+                            let send_buf = std::mem::replace(&mut batch_buf, Vec::with_capacity(4 * 1024 * 1024));
+                            let _ = sink.send(Message::Binary(send_buf.into())).await;
                         }
                     }
                 }

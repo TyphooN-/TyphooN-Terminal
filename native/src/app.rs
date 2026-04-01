@@ -9980,6 +9980,10 @@ impl TyphooNApp {
                         });
                     }
                     BrokerCmd::LanSyncStop => {
+                        // Clear the LAN remote channel so commands stop being forwarded
+                        { let mut guard = lan_remote_tx_ref.lock().await; *guard = None; }
+                        // Clear the LAN client flag so broker commands execute locally again
+                        lan_client.store(false, std::sync::atomic::Ordering::Relaxed);
                         let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("LAN sync stopped".into()));
                     }
                     BrokerCmd::LanResyncBars => {
