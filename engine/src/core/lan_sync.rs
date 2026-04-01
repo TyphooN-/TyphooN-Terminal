@@ -1460,15 +1460,29 @@ async fn client_sync_loop(
                     None => break,
                 }
             }
-            // Forward remote requests from broker task to server
+            // Forward remote requests from broker task to server (or handle client-side resyncs)
             Some(request_json) = remote_rx.recv() => {
-                // Parse "CMD:ARGS" format
                 let (cmd, args) = request_json.split_once(':').unwrap_or((&request_json, ""));
-                if let Ok(msg) = send_msg(&SyncMessage::RemoteRequest {
-                    cmd: cmd.to_string(), args: args.to_string(),
-                }) {
-                    let _ = sink.send(msg).await;
-                    tracing::info!("LAN sync: forwarded remote request '{}' to server", cmd);
+                match cmd {
+                    "RESYNC_BARS" => {
+                        // Client-side: re-request all bar metadata and entries from server
+                        tracing::info!("LAN sync: resync bars requested — sending RequestMeta");
+                        let _ = sink.send(send_msg(&SyncMessage::RequestMeta)?).await;
+                    }
+                    "RESYNC_DARWIN" => {
+                        // Client-side: re-request DARWIN data from server
+                        tracing::info!("LAN sync: resync DARWIN requested");
+                        let _ = sink.send(send_msg(&SyncMessage::RequestDarwinData)?).await;
+                    }
+                    _ => {
+                        // Forward to server as RemoteRequest
+                        if let Ok(msg) = send_msg(&SyncMessage::RemoteRequest {
+                            cmd: cmd.to_string(), args: args.to_string(),
+                        }) {
+                            let _ = sink.send(msg).await;
+                            tracing::info!("LAN sync: forwarded remote request '{}' to server", cmd);
+                        }
+                    }
                 }
             }
             _ = ping_interval.tick() => {

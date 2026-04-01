@@ -8370,6 +8370,10 @@ enum BrokerCmd {
     LanSyncConnect { host: String, port: u16, passphrase: String, db_path: std::path::PathBuf },
     /// Stop LAN sync server or client.
     LanSyncStop,
+    /// Request resync of bar data from LAN server.
+    LanResyncBars,
+    /// Request resync of DARWIN data from LAN server.
+    LanResyncDarwin,
     /// Scan unusual volume (background, heavy DB reads).
     ScanUnusualVolume { keys: Vec<(String, i64)> },
 }
@@ -9977,6 +9981,24 @@ impl TyphooNApp {
                     }
                     BrokerCmd::LanSyncStop => {
                         let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("LAN sync stopped".into()));
+                    }
+                    BrokerCmd::LanResyncBars => {
+                        let guard = lan_remote_tx_ref.lock().await;
+                        if let Some(ref tx) = *guard {
+                            let _ = tx.send("RESYNC_BARS".to_string());
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("LAN resync bars requested...".into()));
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Not connected to LAN server".into()));
+                        }
+                    }
+                    BrokerCmd::LanResyncDarwin => {
+                        let guard = lan_remote_tx_ref.lock().await;
+                        if let Some(ref tx) = *guard {
+                            let _ = tx.send("RESYNC_DARWIN".to_string());
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("LAN resync DARWIN requested...".into()));
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Not connected to LAN server".into()));
+                        }
                     }
                 }
             }
@@ -18215,6 +18237,25 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Clients connect using this machine's IP address.").color(AXIS_TEXT).small());
                         } else {
                             ui.label(egui::RichText::new(format!("Syncing from {}", self.lan_sync_host)).color(AXIS_TEXT).small());
+                            // Sync status: local vs remote
+                            if let Some((bar_count, kv_count, file_size)) = self.bg.cache_stats {
+                                ui.label(egui::RichText::new(format!(
+                                    "Local: {} bars | {} KV | {:.1} MB",
+                                    bar_count, kv_count, file_size as f64 / 1024.0 / 1024.0
+                                )).color(AXIS_TEXT).small());
+                            }
+                            ui.add_space(4.0);
+                            // Resync buttons
+                            ui.horizontal(|ui| {
+                                if ui.button(egui::RichText::new("Resync Bars").small()).clicked() {
+                                    let _ = self.broker_tx.send(BrokerCmd::LanResyncBars);
+                                    self.log.push_back(LogEntry::info("Requesting bar resync from LAN server..."));
+                                }
+                                if ui.button(egui::RichText::new("Resync DARWIN").small()).clicked() {
+                                    let _ = self.broker_tx.send(BrokerCmd::LanResyncDarwin);
+                                    self.log.push_back(LogEntry::info("Requesting DARWIN resync from LAN server..."));
+                                }
+                            });
                         }
                         ui.add_space(8.0);
                         if ui.add(egui::Button::new(egui::RichText::new("Stop").strong()).fill(egui::Color32::from_rgb(180, 40, 40)).min_size(egui::vec2(80.0, 28.0))).clicked() {
