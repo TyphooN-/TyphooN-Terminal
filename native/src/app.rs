@@ -10350,6 +10350,10 @@ impl TyphooNApp {
                         }
                         let _ = bg_tx.send(data.clone());
 
+                        // Reset WAL read snapshot so bg_conn sees latest writes
+                        // (import_darwin_data writes via the write conn; a persistent
+                        // read-only connection may hold a stale WAL snapshot).
+                        let _ = conn.execute_batch("BEGIN; END;");
                         data.portfolio = darwin::get_portfolio_summary(conn).ok();
                         data.daily_returns = darwin::get_portfolio_daily_returns(conn).unwrap_or_default();
                         data.correlations = darwin::get_darwin_correlations(conn).unwrap_or_default();
