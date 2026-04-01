@@ -537,7 +537,7 @@ impl SqliteCache {
     /// Also returns the total bar count for logging.
     /// Returns None if key doesn't exist or has fewer than 2 bars.
     pub fn get_incremental_start(&self, key: &str) -> Result<Option<(String, usize)>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
 
         // Fast path: read from metadata columns (no decompression needed)
         let mut stmt = conn.prepare_cached(
@@ -668,7 +668,7 @@ impl SqliteCache {
     /// Get cache timestamp (when bars were last stored) for a key.
     /// Returns None if key doesn't exist.
     pub fn get_cache_age_secs(&self, key: &str) -> Result<Option<i64>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut stmt = conn.prepare_cached(
             "SELECT timestamp FROM bar_cache WHERE key = ?1"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
@@ -682,7 +682,7 @@ impl SqliteCache {
 
     /// Get bar count for a cache entry. Returns None if key doesn't exist.
     pub fn get_bar_count(&self, key: &str) -> Result<Option<i64>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut stmt = conn.prepare_cached(
             "SELECT bar_count FROM bar_cache WHERE key = ?1"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
@@ -718,7 +718,7 @@ impl SqliteCache {
     /// Bulk-load cache metadata (age_secs, bar_count) for all entries.
     /// Returns HashMap<key, (age_secs, bar_count)> — one query instead of N individual lookups.
     pub fn get_all_cache_meta(&self) -> Result<std::collections::HashMap<String, (i64, i64)>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT key, timestamp, bar_count FROM bar_cache"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
@@ -921,7 +921,7 @@ impl SqliteCache {
     /// List all kv_cache keys matching a prefix (e.g., "cred:" returns all credential keys).
     /// LIKE wildcards in the prefix are escaped to prevent overly broad matches.
     pub fn list_kv_keys(&self, prefix: &str) -> Result<Vec<String>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let escaped = prefix.replace('%', "\\%").replace('_', "\\_");
         let pattern = format!("{}%", escaped);
         let mut stmt = conn.prepare(
@@ -942,7 +942,7 @@ impl SqliteCache {
     /// Get the last sync timestamp for a given sync key.
     /// Returns 0 if no sync has been recorded (triggers full sync).
     pub fn get_sync_ts(&self, key: &str) -> i64 {
-        let conn = match self.conn.lock() {
+        let conn = match self.read_conn.lock() {
             Ok(c) => c,
             Err(_) => return 0,
         };
@@ -969,7 +969,7 @@ impl SqliteCache {
     /// Returns (key, compressed_value) pairs for entries with timestamp > since_ts.
     /// Used by LAN sync server to send only new/updated KV entries.
     pub fn list_kv_entries_since(&self, since_ts: i64) -> Result<Vec<(String, Vec<u8>, i64)>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut stmt = conn.prepare(
             "SELECT key, value, timestamp FROM kv_cache WHERE timestamp > ?1 ORDER BY timestamp ASC"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
@@ -989,7 +989,7 @@ impl SqliteCache {
 
     /// Get the max timestamp in kv_cache (for sync state tracking).
     pub fn kv_max_timestamp(&self) -> i64 {
-        let conn = match self.conn.lock() {
+        let conn = match self.read_conn.lock() {
             Ok(c) => c,
             Err(_) => return 0,
         };
@@ -999,7 +999,7 @@ impl SqliteCache {
 
     /// Count rows in kv_cache.
     pub fn kv_count(&self) -> i64 {
-        let conn = match self.conn.lock() {
+        let conn = match self.read_conn.lock() {
             Ok(c) => c,
             Err(_) => return 0,
         };
@@ -1010,7 +1010,7 @@ impl SqliteCache {
     /// Get raw bar cache entry without decompression (for LAN sync transfer).
     /// Returns the compressed blob and its timestamp as stored in SQLite.
     pub fn get_raw_bar_entry(&self, key: &str) -> Result<Option<(Vec<u8>, i64)>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
         let mut stmt = conn.prepare_cached(
             "SELECT data, timestamp FROM bar_cache WHERE key = ?1"
         ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
@@ -1247,7 +1247,7 @@ impl SqliteCache {
     /// Bundle format: [u32 entry_count][per entry: u32 key_len, key_bytes, u32 data_len, data_bytes, i64 timestamp, i64 bar_count]
     /// Returns the serialized bundle bytes.
     pub fn export_keys(&self, key_patterns: &[&str]) -> Result<Vec<u8>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let all_keys = {
             let mut stmt = conn.prepare("SELECT key FROM bar_cache")
                 .map_err(|e| format!("Prepare failed: {e}"))?;
@@ -1336,7 +1336,7 @@ impl SqliteCache {
     /// List keys matching patterns with their sizes (for sync preview).
     /// Returns Vec of (key, bar_count, compressed_size_bytes).
     pub fn list_matching_keys(&self, patterns: &[&str]) -> Result<Vec<(String, i64, usize)>, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut stmt = conn.prepare("SELECT key, bar_count, length(data) FROM bar_cache")
             .map_err(|e| format!("Prepare failed: {e}"))?;
         let rows: Vec<(String, i64, usize)> = stmt.query_map([], |row| {
