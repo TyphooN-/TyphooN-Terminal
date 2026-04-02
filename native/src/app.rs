@@ -1358,13 +1358,19 @@ impl ChartState {
                 }).collect();
                 self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                 self.compute_indicators_gpu(gpu);
+                // MTF indicators: read_conn is UI-exclusive, reads are instant
+                self.compute_mtf_sma(cache);
+                self.compute_multi_kama(cache);
+                let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
+                    format!(" | MTF_MA: {} lines, MultiKAMA: {} TFs", self.mtf_sma.len(), self.multi_kama.len())
+                } else { String::new() };
                 log.push_back(LogEntry::info(format!(
-                    "Loaded {} bars for {} [{}]",
-                    self.bars.len(), self.symbol, self.timeframe.label()
+                    "Loaded {} bars for {} [{}]{}",
+                    self.bars.len(), self.symbol, self.timeframe.label(), mtf_info
                 )));
                 true
             }
-            Ok(None) => true, // key not in cache — not an error, just empty
+            Ok(None) => true,
             Err(e) => {
                 log.push_back(LogEntry::err(format!("Cache read error: {e}")));
                 false
@@ -8958,7 +8964,8 @@ impl TyphooNApp {
                         BrokerCmd::FetchCongressTrades => Some("CONGRESS_TRADES"),
                         BrokerCmd::FredFetch { .. } => Some("FRED_DATA"),
                         BrokerCmd::DarwinImportAll { .. } => Some("DARWIN_IMPORT"),
-                        BrokerCmd::FetchFilingContent { .. } => Some("SEC_FILING"),
+                        // FetchFilingContent NOT forwarded — SEC EDGAR is public, fetch directly
+                        // BrokerCmd::FetchFilingContent { .. } => Some("SEC_FILING"),
                         _ => None,
                     };
                     if let Some(cmd_name) = remote_cmd {
@@ -9013,7 +9020,7 @@ impl TyphooNApp {
                         if let Some(ref b) = broker {
                             match b.get_orders("open", 100).await {
                                 Ok(orders) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Orders(orders)); }
-                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                                Err(e) => { tracing::debug!("Orders request failed: {}", e); }
                             }
                         }
                     }
