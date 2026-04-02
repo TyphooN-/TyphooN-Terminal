@@ -8687,6 +8687,8 @@ pub struct TyphooNApp {
     lan_sync_passphrase: String,   // shared secret for auth
     /// Persistent: this instance is a LAN client (auto-connect on startup, no outbound syncing)
     lan_client_enabled: bool,
+    /// Persistent: this instance is a LAN server (auto-start on startup)
+    lan_server_enabled: bool,
     /// Persistent: saved LAN server IP for auto-connect
     lan_server_ip: String,
     show_help: bool,
@@ -10197,6 +10199,7 @@ impl TyphooNApp {
             lan_sync_port: "9847".into(),
             lan_sync_passphrase: String::new(),
             lan_client_enabled: false,
+            lan_server_enabled: false,
             lan_server_ip: String::new(),
             show_help: false,
             show_connect: false,
@@ -11711,6 +11714,7 @@ impl TyphooNApp {
             },
             "user_watchlist": self.user_watchlist,
             "lan_client_enabled": self.lan_client_enabled,
+            "lan_server_enabled": self.lan_server_enabled,
             "lan_server_ip": self.lan_server_ip,
             "lan_sync_port": self.lan_sync_port,
             "darwin_view": self.darwin_view,
@@ -12088,6 +12092,7 @@ impl TyphooNApp {
                 }
                 // Restore LAN client config
                 if let Some(b) = v["lan_client_enabled"].as_bool() { self.lan_client_enabled = b; }
+                if let Some(b) = v["lan_server_enabled"].as_bool() { self.lan_server_enabled = b; }
                 if let Some(s) = v["lan_server_ip"].as_str() { self.lan_server_ip = s.to_string(); }
                 if let Some(s) = v["lan_sync_port"].as_str() { self.lan_sync_port = s.to_string(); }
                 // Restore SL/TP state
@@ -18179,6 +18184,7 @@ impl TyphooNApp {
                                     self.log.push_back(LogEntry::warn("Set a passphrase for LAN sync"));
                                 } else {
                                     self.lan_sync_mode = "server".into();
+                                    self.lan_server_enabled = true; // auto-start on next startup
                                     // Persist passphrase off UI thread (keyring + cache writes can block)
                                     let pass_clone = self.lan_sync_passphrase.clone();
                                     let cache_clone = self.cache.clone();
@@ -18277,9 +18283,10 @@ impl TyphooNApp {
                         ui.add_space(8.0);
                         if ui.add(egui::Button::new(egui::RichText::new("Stop").strong()).fill(egui::Color32::from_rgb(180, 40, 40)).min_size(egui::vec2(80.0, 28.0))).clicked() {
                             self.lan_sync_mode = "idle".into();
-                            self.lan_client_enabled = false; // disable auto-reconnect
+                            self.lan_client_enabled = false;
+                            self.lan_server_enabled = false;
                             let _ = self.broker_tx.send(BrokerCmd::LanSyncStop);
-                            self.log.push_back(LogEntry::info("LAN sync stopped — LAN client mode disabled"));
+                            self.log.push_back(LogEntry::info("LAN sync stopped"));
                         }
                     }
 
@@ -19034,6 +19041,15 @@ impl eframe::App for TyphooNApp {
                     "Alpaca auto-connecting ({})...",
                     if self.broker_paper { "Paper" } else { "Live" }
                 )));
+            }
+
+            // LAN server auto-start: if was running when app last closed, restart it
+            if self.lan_server_enabled && !self.lan_sync_passphrase.is_empty() {
+                let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
+                self.lan_sync_mode = "server".into();
+                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                let _ = self.broker_tx.send(BrokerCmd::LanSyncStart { port, passphrase: self.lan_sync_passphrase.clone(), db_path });
+                self.log.push_back(LogEntry::info(format!("LAN server auto-starting on wss://0.0.0.0:{}...", port)));
             }
 
             // LAN client auto-connect: if saved as LAN client, connect immediately
