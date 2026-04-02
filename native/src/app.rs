@@ -1119,6 +1119,8 @@ struct ChartState {
     harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
     drawings: Vec<Drawing>,
+    /// Undo stack for drawings (Ctrl+Z pops from drawings into here, Ctrl+Shift+Z restores)
+    drawings_undo: Vec<Drawing>,
     /// Cached trade overlay (rebuilt when bg data changes, not every frame).
     cached_trade_overlay: TradeOverlay,
     cached_trade_overlay_frame: u64,
@@ -1237,6 +1239,7 @@ impl ChartState {
             multi_kama: Vec::new(),
             harmonics: Vec::new(),
             drawings: Vec::new(),
+            drawings_undo: Vec::new(),
             cached_trade_overlay: TradeOverlay::default(),
             cached_trade_overlay_frame: 0,
             visible_bars: 200,
@@ -19761,10 +19764,28 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Delete = remove last drawing from active chart
+            // Delete/Backspace = remove last drawing (push to undo stack)
             if delete {
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                    chart.drawings.pop();
+                    if let Some(d) = chart.drawings.pop() {
+                        chart.drawings_undo.push(d);
+                    }
+                }
+            }
+            // Ctrl+Z = undo last drawing (same as delete but explicit)
+            if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z) && !i.modifiers.shift) {
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    if let Some(d) = chart.drawings.pop() {
+                        chart.drawings_undo.push(d);
+                    }
+                }
+            }
+            // Ctrl+Shift+Z = redo (restore from undo stack)
+            if ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Z)) {
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    if let Some(d) = chart.drawings_undo.pop() {
+                        chart.drawings.push(d);
+                    }
                 }
             }
 
@@ -21533,15 +21554,33 @@ impl eframe::App for TyphooNApp {
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Delete Last Drawing").clicked() {
-                            if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.pop(); }
+                        if ui.button("Undo Last (Ctrl+Z)").clicked() {
+                            if let Some(c) = self.charts.get_mut(self.active_tab) {
+                                if let Some(d) = c.drawings.pop() { c.drawings_undo.push(d); }
+                            }
                             ui.close();
                         }
+                        if ui.button("Redo (Ctrl+Shift+Z)").clicked() {
+                            if let Some(c) = self.charts.get_mut(self.active_tab) {
+                                if let Some(d) = c.drawings_undo.pop() { c.drawings.push(d); }
+                            }
+                            ui.close();
+                        }
+                        ui.separator();
                         if ui.button("Clear All Drawings").clicked() {
-                            if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); }
+                            if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); c.drawings_undo.clear(); }
                             ui.close();
                         }
                     });
+
+                    // ── Quick trashcan button (always visible) ──
+                    if drawing_count > 0 {
+                        if ui.small_button(egui::RichText::new("\u{1F5D1}").small().color(egui::Color32::from_rgb(200, 80, 80))).on_hover_text("Delete last drawing (Ctrl+Z to undo)").clicked() {
+                            if let Some(c) = self.charts.get_mut(self.active_tab) {
+                                if let Some(d) = c.drawings.pop() { c.drawings_undo.push(d); }
+                            }
+                        }
+                    }
 
                     // ── Status ──
                     if dm != DrawMode::None {
@@ -21555,9 +21594,9 @@ impl eframe::App for TyphooNApp {
                             DrawMode::PlacingRayP2 { .. } => "Ray: click direction",
                             DrawMode::PlacingRectP1 => "Rect: click corner 1",
                             DrawMode::PlacingRectP2 { .. } => "Rect: click corner 2",
-                            DrawMode::PlacingChannelP1 => "Channel: click P1",
-                            DrawMode::PlacingChannelP2 { .. } => "Channel: click P2",
-                            DrawMode::PlacingChannelP3 { .. } => "Channel: click width",
+                            DrawMode::PlacingChannelP1 => "Channel: click point 1 of 3",
+                            DrawMode::PlacingChannelP2 { .. } => "Channel: click point 2 of 3",
+                            DrawMode::PlacingChannelP3 { .. } => "Channel: click point 3 of 3 (width)",
                             DrawMode::PlacingFiboP1 => "Fib: click start",
                             DrawMode::PlacingFiboP2 { .. } => "Fib: click end",
                             DrawMode::PlacingExtLineP1 => "Ext Line: click P1",
@@ -21568,11 +21607,11 @@ impl eframe::App for TyphooNApp {
                             DrawMode::PlacingArrowP2 { .. } => "Arrow: click end",
                             DrawMode::PlacingInfoLineP1 => "Info: click start",
                             DrawMode::PlacingInfoLineP2 { .. } => "Info: click end",
-                            DrawMode::PlacingPitchforkP1 => "Pitchfork: click pivot",
-                            DrawMode::PlacingPitchforkP2 { .. } => "Pitchfork: click P2",
-                            DrawMode::PlacingPitchforkP3 { .. } => "Pitchfork: click P3",
-                            DrawMode::PlacingFiboExtP1 => "Fib Ext: click P1",
-                            DrawMode::PlacingFiboExtP2 { .. } => "Fib Ext: click P2",
+                            DrawMode::PlacingPitchforkP1 => "Pitchfork: click point 1 of 3 (pivot)",
+                            DrawMode::PlacingPitchforkP2 { .. } => "Pitchfork: click point 2 of 3",
+                            DrawMode::PlacingPitchforkP3 { .. } => "Pitchfork: click point 3 of 3",
+                            DrawMode::PlacingFiboExtP1 => "Fib Ext: click point 1 of 3",
+                            DrawMode::PlacingFiboExtP2 { .. } => "Fib Ext: click point 2 of 3",
                             DrawMode::PlacingFiboExtP3 { .. } => "Fib Ext: click P3",
                             DrawMode::PlacingGannFan => "Gann: click origin",
                             DrawMode::PlacingLongPosP1 => "Long: click entry",
@@ -22693,12 +22732,37 @@ impl eframe::App for TyphooNApp {
                                 ];
                                 for (name, color) in &colors {
                                     if ui.button(egui::RichText::new(*name).color(*color)).clicked() {
+                                        // Apply color to ANY drawing type that has a color field
                                         if let Some(d) = chart.drawings.last_mut() {
-                                            match d {
-                                                Drawing::HLine { color: c, .. } => *c = *color,
-                                                Drawing::TrendLine { color: c, .. } => *c = *color,
-                                                _ => {}
+                                            // Generic: try setting color on common variants
+                                            macro_rules! set_color {
+                                                ($d:expr, $c:expr, $($variant:ident),+) => {
+                                                    match $d {
+                                                        $(Drawing::$variant { color: col, .. } => *col = $c,)+
+                                                        _ => {}
+                                                    }
+                                                };
                                             }
+                                            set_color!(d, *color,
+                                                HLine, TrendLine, Rectangle, Ray, Channel,
+                                                ExtendedLine, HRay, CrossLine, ArrowLine,
+                                                InfoLine, Pitchfork, FiboExtension, GannFan,
+                                                TextLabel, ArrowMarker, Ellipse, Triangle,
+                                                TrendAngle, ParallelChannel, FibChannel,
+                                                FibTimeZones, Callout, Highlighter, Polyline,
+                                                AnchorNote, RegressionChannel, GannBox,
+                                                ElliottWave, AbcCorrection, HeadShoulders,
+                                                XabcdPattern, Brush, SchiffPitchfork,
+                                                ModSchiffPitchfork, CyclicLines, SineWave,
+                                                Flag, Balloon, SessionBreak, MagnetLevel,
+                                                FibCircle, ArcDraw, CurveDraw, PathDraw,
+                                                Ruler, TimeCycle, SpeedResistanceFan,
+                                                SpeedResistanceArc, FibSpiral, RotatedRectangle,
+                                                AnchoredVwapLine, TrendChannel, InsidePitchfork,
+                                                FibWedge, PriceNote, MeasureTool, PriceLabel,
+                                                CrossMarker, Forecast, GhostFeed, Signpost,
+                                                VLine
+                                            );
                                         }
                                         ui.close();
                                     }
