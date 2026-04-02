@@ -20473,10 +20473,13 @@ impl eframe::App for TyphooNApp {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(egui::RichText::new("~").color(AXIS_TEXT).small());
                     ui.separator();
-                    // Determine if we have any live data source
+                    // Determine if we have any data source (broker, MT5, LAN, API keys)
                     let has_broker = self.broker_connected || self.tt_connected;
+                    let has_mt5 = !self.mt5_db_paths.iter().all(|p| p.is_empty());
                     let has_lan = self.lan_sync_mode == "client" || self.lan_sync_mode == "server";
-                    if has_broker || has_lan {
+                    let has_api = !self.finnhub_key.is_empty() || !self.fred_key.is_empty();
+                    let has_cache = self.cache.is_some() && self.bg.cache_stats.map(|(bars, _, _)| bars > 0).unwrap_or(false);
+                    if has_broker || has_mt5 || has_lan || has_api || has_cache {
                         let mut sources: Vec<String> = Vec::new();
                         if self.broker_connected { sources.push("Alpaca".into()); }
                         if self.tt_connected { sources.push("tastytrade".into()); }
