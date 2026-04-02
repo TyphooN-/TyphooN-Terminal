@@ -1136,6 +1136,41 @@ impl SqliteCache {
         Ok(())
     }
 
+    /// Scan bar_cache for entries with bar_count=0 and repair from TTBR header.
+    /// BarCacheWriter stores bar_count correctly, but LAN sync and earlier versions
+    /// may have left stale 0 values. Returns number of entries repaired.
+    pub fn repair_bar_counts(&self) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare("SELECT key, data FROM bar_cache WHERE bar_count = 0 OR bar_count IS NULL")
+            .map_err(|e| format!("Prepare failed: {e}"))?;
+        let mut updates: Vec<(String, i64)> = Vec::new();
+        let rows = stmt.query_map([], |row| {
+            let key: String = row.get(0)?;
+            let data: Vec<u8> = row.get(1)?;
+            Ok((key, data))
+        }).map_err(|e| format!("Query failed: {e}"))?;
+        for row in rows {
+            if let Ok((key, data)) = row {
+                let bytes = maybe_decompress(data).unwrap_or_default();
+                if bytes.len() >= 8 && &bytes[0..4] == BAR_BINARY_MAGIC {
+                    let count = u32::from_le_bytes(bytes[4..8].try_into().unwrap_or([0; 4])) as i64;
+                    if count > 0 {
+                        updates.push((key, count));
+                    }
+                }
+            }
+        }
+        drop(stmt);
+        let count = updates.len();
+        for (key, bar_count) in &updates {
+            let _ = conn.execute(
+                "UPDATE bar_cache SET bar_count = ?1 WHERE key = ?2",
+                params![bar_count, key],
+            );
+        }
+        Ok(count)
+    }
+
     /// Recompress all bar_cache entries at target zstd level (e.g. 19 for max compression).
     /// Decompression speed is identical regardless of compression level — only storage shrinks.
     /// Returns (entries_processed, bytes_saved).

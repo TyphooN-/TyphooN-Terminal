@@ -8894,6 +8894,12 @@ impl TyphooNApp {
                 match SqliteCache::open(&db_path) {
                     Ok(c) => {
                         tracing::info!("Cache-open thread: opened OK");
+                        // Repair bar_count=0 entries (from LAN sync or old versions)
+                        match c.repair_bar_counts() {
+                            Ok(n) if n > 0 => tracing::info!("Cache-open thread: repaired {} bar_count entries", n),
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!("Cache-open thread: repair_bar_counts failed: {e}"),
+                        }
                         let arc = Arc::new(c);
                         // Publish to both: RwLock for background thread, channel for UI
                         if let Ok(mut guard) = shared.write() {
@@ -22791,8 +22797,12 @@ impl eframe::App for TyphooNApp {
                     snap.cache_symbols_total = rows as f64;
                 }
 
-                // Detailed stats: bar counts per symbol/TF
+                // Detailed stats: bar counts per symbol/TF (skip metadata keys)
                 for (key, count, _size) in &self.bg.detailed_stats {
+                    // Skip metadata keys that aren't bar data
+                    if key.contains("__SERVER__") || key.contains("__SPECS__") || key.contains("__SYMBOLS__") { continue; }
+                    // Skip 0-count entries to reduce cardinality
+                    if *count == 0 { continue; }
                     // key format: "source:SYMBOL:TF" or "SYMBOL:TF"
                     let parts: Vec<&str> = key.rsplitn(2, ':').collect();
                     if parts.len() == 2 {
