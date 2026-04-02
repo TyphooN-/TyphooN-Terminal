@@ -9741,19 +9741,38 @@ impl TyphooNApp {
                                 }
                             }
                         }
-                        // Auto-delete old Kraken data for this symbol (superseded by CryptoCompare)
-                        if total_bars > 0 {
-                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
-                                let mut kraken_deleted = 0u64;
-                                for tf in &timeframes {
-                                    let kraken_key = format!("kraken:{}:{}", symbol, tf);
-                                    if let Ok(true) = cache.delete_key(&kraken_key) { kraken_deleted += 1; }
-                                }
-                                if kraken_deleted > 0 {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                                        "Cleaned up {} old Kraken entries for {} (superseded by CryptoCompare)",
-                                        kraken_deleted, symbol
-                                    )));
+                        // Kraken supplement: fetch sub-hourly TFs from Kraken (720 bars).
+                        // CryptoCompare only has 7 days of minute data. Kraken provides
+                        // additional recent bars (weekend gap-fill, extra lookback for indicators).
+                        // Stored under "kraken:" prefix — chart lookup checks both sources.
+                        let sub_hourly_tfs: Vec<&str> = timeframes.iter()
+                            .filter_map(|tf| match tf.as_str() {
+                                "5Min" | "15Min" | "30Min" | "1Min" => Some(tf.as_str()),
+                                _ => None,
+                            }).collect();
+                        if !sub_hourly_tfs.is_empty() {
+                            for tf in &sub_hourly_tfs {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                    "Kraken {} {} fetching (weekend gap-fill)...", symbol, tf
+                                )));
+                                match typhoon_engine::core::kraken::fetch_binance_klines(&client, &symbol, tf, 0, now_ms).await {
+                                    Ok(bars) => {
+                                        let count = bars.len();
+                                        total_bars += count;
+                                        if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                            let json = serde_json::to_string(&bars).unwrap_or_default();
+                                            let key = format!("kraken:{}:{}", symbol, tf);
+                                            let _ = cache.put_bars(&key, &json);
+                                        }
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                            "Kraken {} {}: {} bars cached", symbol, tf, count
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
+                                            "Kraken {} {}: {}", symbol, tf, e
+                                        )));
+                                    }
                                 }
                             }
                         }
