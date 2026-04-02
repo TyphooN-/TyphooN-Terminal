@@ -41,9 +41,11 @@ Implement `TastytradeBroker` in `src/broker/tastytrade.rs` with session-based au
 - Tastytrade uses username/password instead of API key/secret
 - Engine tracks `active_broker` for routing
 
-## Current State (2026-03-26)
+## Current State (2026-04-01)
 
 Phase 1 (auth) is complete: session login, account listing, balances, positions endpoints are wired. Market data via DXLink WebSocket is on the roadmap but not yet implemented — tastytrade is currently auth-only with no live quotes or streaming.
+
+**Connect button is disabled in the UI** (greyed out with "coming soon" label) until DXLink market data and order execution are fully implemented. Credentials fields remain visible for future use. Alpaca auto-connects on startup if credentials are saved in the system keyring.
 
 ## Consequences
 
@@ -51,4 +53,5 @@ Phase 1 (auth) is complete: session login, account listing, balances, positions 
 - **Pro**: Better options/futures support than Alpaca
 - **Pro**: Free paper trading for testing
 - **Con**: Different auth model (session vs API key) adds complexity
-- **Con**: Market data via DXLink WebSocket — roadmap (not yet implemented)
+- **Con**: Market data via DXLink WebSocket — large scope, requires separate library
+- **Con**: Connect button disabled until full implementation — users cannot accidentally connect to a partial integration

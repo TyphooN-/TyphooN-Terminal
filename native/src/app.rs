@@ -12354,30 +12354,10 @@ impl TyphooNApp {
                                 });
                             }
                         }
-                        // tastytrade connect button
+                        // tastytrade connect button — disabled until fully implemented (ADR-022)
                         if !self.tt_username.is_empty() && !self.tt_password.is_empty() {
-                            let tt_label = if self.tt_connected {
-                                egui::RichText::new("tastytrade Connected").color(UP)
-                            } else {
-                                egui::RichText::new("Connect tastytrade")
-                            };
-                            if ui.button(tt_label).clicked() && !self.tt_connected {
-                                if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
-                                    self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
-                                }
-                                if let Err(e) = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password) {
-                                    self.log.push_back(LogEntry::warn(format!("Keyring store tt_password failed: {}", e)));
-                                }
-                                let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
-                                    username: self.tt_username.clone(),
-                                    password: self.tt_password.clone(),
-                                    sandbox: self.tt_sandbox,
-                                });
-                                self.log.push_back(LogEntry::info(format!(
-                                    "tastytrade {} — connecting...",
-                                    if self.tt_sandbox { "Sandbox" } else { "Production" }
-                                )));
-                            }
+                            let tt_label = egui::RichText::new("Connect tastytrade (coming soon)").color(AXIS_TEXT);
+                            ui.add_enabled(false, egui::Button::new(tt_label));
                         }
                     });
 
@@ -19003,6 +18983,20 @@ impl eframe::App for TyphooNApp {
                     self.log.push_back(LogEntry::info(format!("Credentials loaded from {} ({} keys)", src, loaded_values.len())));
                 }
             }
+            // Auto-connect Alpaca if credentials are available and not a LAN client
+            // (LAN clients get data from the server, no need for direct broker connection)
+            if !self.broker_api_key.is_empty() && !self.broker_secret.is_empty() && !self.lan_client_enabled {
+                let _ = self.broker_tx.send(BrokerCmd::Connect {
+                    api_key: self.broker_api_key.clone(),
+                    secret: self.broker_secret.clone(),
+                    paper: self.broker_paper,
+                });
+                self.log.push_back(LogEntry::info(format!(
+                    "Alpaca auto-connecting ({})...",
+                    if self.broker_paper { "Paper" } else { "Live" }
+                )));
+            }
+
             // LAN client auto-connect: if saved as LAN client, connect immediately
             if self.lan_client_enabled && !self.lan_server_ip.is_empty() {
                 let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
