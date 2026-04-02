@@ -7358,7 +7358,7 @@ fn draw_chart(
         let preview_stroke = egui::Stroke::new(1.5, preview_color);
         // Convert crosshair to bar/price
         let mouse_rel = ((cross.x - chart_rect.left()) / bar_w).max(0.0) as usize;
-        let mouse_bar = start_idx + mouse_rel.min(end_idx.saturating_sub(start_idx + 1));
+        let _mouse_bar = start_idx + mouse_rel.min(end_idx.saturating_sub(start_idx + 1));
         let mouse_price = {
             let frac = (cross.y - chart_rect.top()) / chart_rect.height();
             price_max - frac as f64 * (price_max - price_min)

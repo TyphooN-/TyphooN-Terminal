@@ -120,12 +120,14 @@ pub fn unpack_bars_raw(data: &[u8]) -> Result<Vec<(i64, f64, f64, f64, f64, f64)
     let mut bars = Vec::with_capacity(count);
     for i in 0..count {
         let off = 8 + i * BYTES_PER_BAR;
-        let ts = i64::from_le_bytes(data[off..off+8].try_into().unwrap());
-        let o = f64::from_le_bytes(data[off+8..off+16].try_into().unwrap());
-        let h = f64::from_le_bytes(data[off+16..off+24].try_into().unwrap());
-        let l = f64::from_le_bytes(data[off+24..off+32].try_into().unwrap());
-        let c = f64::from_le_bytes(data[off+32..off+40].try_into().unwrap());
-        let v = f64::from_le_bytes(data[off+40..off+48].try_into().unwrap());
+        // Bounds already validated above (data.len() >= expected), but use get() for defense in depth.
+        let sl = data.get(off..off + BYTES_PER_BAR).ok_or("Bar data slice out of bounds")?;
+        let ts = i64::from_le_bytes(sl[0..8].try_into().map_err(|_| "Bad bar timestamp")?);
+        let o = f64::from_le_bytes(sl[8..16].try_into().map_err(|_| "Bad bar open")?);
+        let h = f64::from_le_bytes(sl[16..24].try_into().map_err(|_| "Bad bar high")?);
+        let l = f64::from_le_bytes(sl[24..32].try_into().map_err(|_| "Bad bar low")?);
+        let c = f64::from_le_bytes(sl[32..40].try_into().map_err(|_| "Bad bar close")?);
+        let v = f64::from_le_bytes(sl[40..48].try_into().map_err(|_| "Bad bar volume")?);
         bars.push((ts, o, h, l, c, v));
     }
     Ok(bars)

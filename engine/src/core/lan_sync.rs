@@ -292,9 +292,10 @@ fn export_table_as_json_since(conn: &rusqlite::Connection, table: &str, since_ts
         return Err(format!("Table '{}' not in whitelist", table));
     }
 
-    let use_filter = since_ts > 0 && table_timestamp_column(table).is_some();
-    let sql = if use_filter {
-        format!("SELECT * FROM {} WHERE {} > ?1", table, table_timestamp_column(table).unwrap())
+    let ts_col = table_timestamp_column(table);
+    let use_filter = since_ts > 0 && ts_col.is_some();
+    let sql = if let (true, Some(col)) = (use_filter, ts_col) {
+        format!("SELECT * FROM {} WHERE {} > ?1", table, col)
     } else {
         format!("SELECT * FROM {}", table)
     };
@@ -419,7 +420,10 @@ fn hmac_hex(challenge: &[u8], secret: &[u8; 32]) -> String {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC key length is valid");
+    let mut mac = match HmacSha256::new_from_slice(secret) {
+        Ok(m) => m,
+        Err(_) => return String::new(), // 32-byte key can't fail, but don't panic
+    };
     mac.update(challenge);
     let result = mac.finalize().into_bytes();
     hex_encode(&result)
