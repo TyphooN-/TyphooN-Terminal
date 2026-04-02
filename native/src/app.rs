@@ -9842,6 +9842,19 @@ impl TyphooNApp {
                             .unwrap_or(0);
                         let mut total_bars = 0usize;
                         for tf in &timeframes {
+                            // Skip if recently cached (within last 6 hours) — avoids re-downloading
+                            // when user re-runs backfill after interruption.
+                            let key = format!("cryptocompare:{}:{}", symbol, tf);
+                            if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                if let Ok(Some(age)) = cache.get_cache_age_secs(&key) {
+                                    if age < 6 * 3600 { // cached within 6 hours
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                            "CryptoCompare {} {}: cached ({}m ago)", symbol, tf, age / 60
+                                        )));
+                                        continue;
+                                    }
+                                }
+                            }
                             let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
                                 "CryptoCompare {} {} fetching...", symbol, tf
                             )));

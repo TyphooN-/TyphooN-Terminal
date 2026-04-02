@@ -130,3 +130,21 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - Status bar: LIVE when any data source connected (removed market hours logic).
 - MTF indicators (SMA/KAMA) computed in `try_load()` (was missing — invisible on chart).
 - TF buttons and command palette TF shortcuts use active chart's symbol (not text box).
+
+### 2026-04-02 Session: Drawing UX + Security Audit
+
+**Drawing Tools UX Overhaul:**
+- Live preview: ghost line/shape renders during placement for ALL 70+ drawing types.
+- Undo/Redo: Ctrl+Z / Ctrl+Shift+Z with drawing undo stack. Delete pushes to undo (recoverable).
+- Trashcan button: red trash icon in toolbar for quick one-click delete.
+- Color picker: works for all 60+ drawing types (was only HLine + TrendLine).
+- OHLC snap: drawing endpoints magnetize to nearest candlestick OHLC within 1.5% threshold.
+- Status text: "click point 2 of 3" format for multi-click tools.
+- Prometheus metrics: repair_bar_counts() on startup, skip metadata keys and zero-count entries.
+
+**Security Audit (28K LoC):**
+- Eliminated 6 unwrap() panic risks in `unpack_bars_raw()` — safe get()/map_err() chains.
+- Eliminated unwrap() in LAN sync table export — if-let pattern instead.
+- Replaced expect() in HMAC init — graceful fallback instead of panic.
+- Confirmed: zero unsafe blocks, zero SQL injection, zero hardcoded secrets, all credentials in OS keyring, message size limits enforced, remote command whitelist in place.
+- Remaining recommendations: Zeroizing<String> for credential fields in AppState (medium priority).
