@@ -1353,32 +1353,43 @@ impl ChartState {
     /// so lock() always succeeds immediately — no contention possible.
     /// Returns true if data was loaded (even if empty), false only on error.
     fn try_load(&mut self, cache: &SqliteCache, log: &mut VecDeque<LogEntry>, gpu: Option<&mut gpu_compute::GpuCompute>) -> bool {
-        let key = self.default_cache_key();
-        match cache.get_bars_raw(&key) {
-            Ok(Some(raw)) => {
-                self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
-                    ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
-                }).collect();
-                self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
-                self.compute_indicators_gpu(gpu);
-                // MTF indicators: read_conn is UI-exclusive, reads are instant
-                self.compute_mtf_sma(cache);
-                self.compute_multi_kama(cache);
-                let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
-                    format!(" | MTF_MA: {} lines, MultiKAMA: {} TFs", self.mtf_sma.len(), self.multi_kama.len())
-                } else { String::new() };
-                log.push_back(LogEntry::info(format!(
-                    "Loaded {} bars for {} [{}]{}",
-                    self.bars.len(), self.symbol, self.timeframe.label(), mtf_info
-                )));
-                true
-            }
-            Ok(None) => true,
-            Err(e) => {
-                log.push_back(LogEntry::err(format!("Cache read error: {e}")));
-                false
+        // Data priority: MT5 (authoritative) → Alpaca → CryptoCompare → Kraken
+        let sym = {
+            let parts: Vec<&str> = self.symbol.split(':').collect();
+            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
+            if is_tf && parts.len() > 1 { parts[..parts.len()-1].join(":") } else { self.symbol.clone() }
+        };
+        let tf = self.timeframe.cache_suffix();
+        let keys_to_try = [
+            format!("mt5:{}:{}", sym, tf),
+            format!("alpaca:{}:{}", sym, tf),
+            format!("cryptocompare:{}:{}", sym, tf),
+            format!("kraken:{}:{}", sym, tf),
+        ];
+        let mut result: Option<Vec<(i64, f64, f64, f64, f64, f64)>> = None;
+        for k in &keys_to_try {
+            match cache.get_bars_raw(k) {
+                Ok(Some(raw)) if !raw.is_empty() => { result = Some(raw); break; }
+                _ => {}
             }
         }
+        if let Some(raw) = result {
+            self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+            }).collect();
+            self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+            self.compute_indicators_gpu(gpu);
+            self.compute_mtf_sma(cache);
+            self.compute_multi_kama(cache);
+            let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
+                format!(" | MTF_MA: {} lines, MultiKAMA: {} TFs", self.mtf_sma.len(), self.multi_kama.len())
+            } else { String::new() };
+            log.push_back(LogEntry::info(format!(
+                "Loaded {} bars for {} [{}]{}",
+                self.bars.len(), self.symbol, self.timeframe.label(), mtf_info
+            )));
+        }
+        true
     }
 
     /// Load bars from the shared cache, re-compute indicators.
@@ -8807,6 +8818,8 @@ pub struct TyphooNApp {
     /// Persistent: saved LAN server IP for auto-connect
     lan_server_ip: String,
     show_help: bool,
+    /// Deduplicate FetchBars — track which symbol:TF combos have been requested
+    pending_fetches: std::collections::HashSet<String>,
     show_connect: bool,
     show_indicators_panel: bool,
     show_data_window: bool,
@@ -10388,6 +10401,7 @@ impl TyphooNApp {
             lan_server_enabled: false,
             lan_server_ip: String::new(),
             show_help: false,
+            pending_fetches: std::collections::HashSet::new(),
             show_connect: false,
             show_indicators_panel: false,
             show_data_window: false,
@@ -11043,14 +11057,19 @@ impl TyphooNApp {
                 // Read error (not contention — read_conn is UI-exclusive)
                 self.log.push_back(LogEntry::err("Cache read error — check logs"));
             } else if chart.bars.is_empty() {
-                // Mutex acquired but no data in cache — fetch from Alpaca
-                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                let _ = self.broker_tx.send(BrokerCmd::FetchBars {
-                    symbol: symbol.to_string(),
-                    timeframe: tf.cache_suffix().to_string(),
-                    db_path,
-                });
-                self.log.push_back(LogEntry::info(format!("No cached data for {} {} — fetching from Alpaca...", symbol, tf.label())));
+                // No data in any source (MT5/Alpaca/CryptoCompare/Kraken) — fetch from Alpaca.
+                // Deduplicate: only fetch once per symbol+TF per session to avoid spam.
+                let fetch_key = format!("{}:{}", symbol, tf.cache_suffix());
+                if !self.pending_fetches.contains(&fetch_key) {
+                    self.pending_fetches.insert(fetch_key);
+                    let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                    let _ = self.broker_tx.send(BrokerCmd::FetchBars {
+                        symbol: symbol.to_string(),
+                        timeframe: tf.cache_suffix().to_string(),
+                        db_path,
+                    });
+                    self.log.push_back(LogEntry::info(format!("No cached data for {} {} — fetching from Alpaca...", symbol, tf.label())));
+                }
             }
             if let Some(target) = self.charts.get_mut(self.active_tab) {
                 *target = chart;
@@ -19724,6 +19743,8 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::BarsFetched { symbol, timeframe, count } => {
                     self.log.push_back(LogEntry::info(format!("Fetched {} bars for {} {} — reloading chart", count, symbol, timeframe)));
+                    // Clear from pending so future requests for same symbol work
+                    self.pending_fetches.remove(&format!("{}:{}", symbol, timeframe));
                     // Reload the active chart if it matches this symbol
                     let should_reload = self.charts.get(self.active_tab)
                         .map(|c| c.symbol == symbol || c.symbol.replace('/', "") == symbol.replace('/', ""))
