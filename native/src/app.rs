@@ -9084,31 +9084,35 @@ impl TyphooNApp {
                         _ => None,
                     };
                     // Special handling: FetchBars includes symbol+TF in args
+                    // Use try_lock to avoid blocking the broker command loop
                     if let BrokerCmd::FetchBars { ref symbol, ref timeframe, .. } = cmd {
-                        let guard = lan_remote_tx_ref.lock().await;
-                        if let Some(ref tx) = *guard {
-                            let _ = tx.send(format!("FETCH_BARS:{},{}", symbol, timeframe));
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                format!("LAN client: fetching {} {} via server", symbol, timeframe)
-                            ));
-                        } else {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
-                                "LAN client: not connected to server — can't fetch bars".into()
-                            ));
+                        if let Ok(guard) = lan_remote_tx_ref.try_lock() {
+                            if let Some(ref tx) = *guard {
+                                let _ = tx.send(format!("FETCH_BARS:{},{}", symbol, timeframe));
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                    format!("LAN client: fetching {} {} via server — will sync shortly", symbol, timeframe)
+                                ));
+                            } else {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                    format!("LAN client: {} {} — waiting for server connection", symbol, timeframe)
+                                ));
+                            }
                         }
+                        // else: lock contended, silently skip (will retry on next request)
                         continue;
                     }
                     if let Some(cmd_name) = remote_cmd {
-                        let guard = lan_remote_tx_ref.lock().await;
-                        if let Some(ref tx) = *guard {
-                            let _ = tx.send(cmd_name.to_string());
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
-                                format!("LAN client: '{}' forwarded to server", cmd_name)
-                            ));
-                        } else {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
-                                format!("LAN client: '{}' — not connected to server", cmd_name)
-                            ));
+                        if let Ok(guard) = lan_remote_tx_ref.try_lock() {
+                            if let Some(ref tx) = *guard {
+                                let _ = tx.send(cmd_name.to_string());
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                    format!("LAN client: '{}' forwarded to server", cmd_name)
+                                ));
+                            } else {
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                    format!("LAN client: '{}' — not connected to server", cmd_name)
+                                ));
+                            }
                         }
                         continue;
                     }
