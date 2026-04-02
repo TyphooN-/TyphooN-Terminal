@@ -365,6 +365,10 @@ fn import_table_from_json(conn: &rusqlite::Connection, table: &str, json: &str) 
     );
 
     let mut count = 0usize;
+    // Safety: rollback any dangling transaction from a previous failed import.
+    // unchecked_transaction() fails with "cannot start a transaction within a transaction"
+    // if a prior BEGIN didn't get committed or rolled back.
+    let _ = conn.execute_batch("ROLLBACK");
     let tx = conn.unchecked_transaction().map_err(|e| format!("Begin tx for {table}: {e}"))?;
     {
         let mut stmt = tx.prepare(&sql).map_err(|e| format!("Prepare INSERT for {table}: {e}"))?;

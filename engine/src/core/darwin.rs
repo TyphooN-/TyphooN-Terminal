@@ -6320,22 +6320,20 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
     // Ensure tables exist
     create_darwin_tables(conn)?;
 
-    // Wrap entire DELETE + INSERT in a transaction.
-    // Without this, a failed DELETE leaves old data, and new INSERTs add duplicates
-    // (AUTOINCREMENT ids → INSERT OR REPLACE always creates new rows).
-    conn.execute_batch("BEGIN IMMEDIATE")
-        .map_err(|e| format!("BEGIN IMMEDIATE failed: {e}"))?;
-
     let mut n_acct = 0usize;
     let mut n_deals = 0usize;
     let mut n_pos = 0usize;
 
-    // Clear ALL deals and positions before reimporting — this is a full snapshot from the server.
-    // Without this, AUTOINCREMENT ids cause duplicates on every sync (INSERT OR REPLACE
-    // creates new rows when PK is auto-generated). Also prevents stale data from
-    // accounts that may have been removed on the server.
-    // CRITICAL: these DELETEs must succeed. If they fail (e.g., database locked), the
-    // subsequent INSERTs add duplicates → stale positions computed as "open".
+    // Clear ALL DARWIN data before reimporting — full snapshot from server.
+    // FK-safe order: child tables first, then parent.
+    // darwin_equity_snapshots → darwin_deals → darwin_positions → darwin_accounts
+    // (equity_snapshots and deals/positions reference accounts via FK).
+    // No explicit transaction here — each DELETE auto-commits. The import below
+    // is also auto-commit per INSERT. This avoids the "cannot start a transaction
+    // within a transaction" error that occurred when import_table_from_json (which
+    // uses its own transaction) was called on a connection with an open transaction.
+    conn.execute("DELETE FROM darwin_equity_snapshots", [])
+        .map_err(|e| format!("DELETE darwin_equity_snapshots failed: {e}"))?;
     conn.execute("DELETE FROM darwin_deals", [])
         .map_err(|e| format!("DELETE darwin_deals failed: {e}"))?;
     conn.execute("DELETE FROM darwin_positions", [])
@@ -6415,9 +6413,6 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
             n_pos += 1;
         }
     }
-
-    conn.execute_batch("COMMIT")
-        .map_err(|e| format!("COMMIT failed: {e}"))?;
 
     Ok((n_acct, n_deals, n_pos))
 }
