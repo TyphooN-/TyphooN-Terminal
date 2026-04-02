@@ -19109,6 +19109,32 @@ impl eframe::App for TyphooNApp {
             self.bg = data;
         }
 
+        // ── LAN client: load server's broker positions/account from KV cache ──
+        // The server stores broker:account/positions/orders to KV on every update.
+        // LAN sync's 15s incremental KV sync delivers them to the client's cache.
+        // Reload every ~5s (200 frames at 250ms idle repaint) for near-live updates.
+        if self.lan_sync_mode == "client" && !self.broker_connected {
+            if self.frame_count % 200 == 0 || self.live_positions.is_empty() {
+                if let Some(ref cache) = self.cache {
+                    if let Ok(Some(json)) = cache.get_kv("broker:positions") {
+                        if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
+                            self.live_positions = pos;
+                        }
+                    }
+                    if let Ok(Some(json)) = cache.get_kv("broker:account") {
+                        if let Ok(acct) = serde_json::from_str::<AccountInfo>(&json) {
+                            self.live_account = Some(acct);
+                        }
+                    }
+                    if let Ok(Some(json)) = cache.get_kv("broker:orders") {
+                        if let Ok(orders) = serde_json::from_str::<Vec<OrderInfo>>(&json) {
+                            self.live_orders = orders;
+                        }
+                    }
+                }
+            }
+        }
+
         // ── deferred chart loading: non-blocking, one attempt per frame ──
         // Uses try_load() which returns false if cache Mutex is contended (compaction, MT5 sync).
         // Failed loads go back to the queue and retry next frame — UI never blocks.
@@ -19173,12 +19199,28 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 BrokerMsg::Account(acct) => {
+                    // Store to cache KV for LAN sync (clients get read-only view)
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(json) = serde_json::to_string(&acct) {
+                            let _ = cache.put_kv("broker:account", &json);
+                        }
+                    }
                     self.live_account = Some(acct);
                 }
                 BrokerMsg::Positions(pos) => {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(json) = serde_json::to_string(&pos) {
+                            let _ = cache.put_kv("broker:positions", &json);
+                        }
+                    }
                     self.live_positions = pos;
                 }
                 BrokerMsg::Orders(orders) => {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(json) = serde_json::to_string(&orders) {
+                            let _ = cache.put_kv("broker:orders", &json);
+                        }
+                    }
                     self.live_orders = orders;
                 }
                 BrokerMsg::OrderResult(msg) => {
