@@ -8202,7 +8202,7 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
 // ─── application state ───────────────────────────────────────────────────────
 
 /// Watchlist row data (TradingView-style).
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[allow(dead_code)]
 struct WatchlistRow {
     /// Display symbol name (e.g. "BTCUSD", "SLV", "CC").
@@ -10594,14 +10594,55 @@ impl TyphooNApp {
                             }
                             data.crypto_ts_cache = ts_cache;
                         }
-                        data.equity_curve = darwin::get_portfolio_equity_curve(conn).unwrap_or_default();
-                        data.trade_overlaps = darwin::get_trade_overlaps(conn).unwrap_or_default();
-                        data.symbol_overlaps = darwin::get_symbol_overlap(conn).unwrap_or_default();
-                        data.sector_exposure = darwin::get_sector_exposure(conn).unwrap_or_default();
-                        data.liquidity_risk = darwin::get_liquidity_risk(conn).unwrap_or_default();
-                        data.exposure_treemap = darwin::get_exposure_treemap(conn).ok();
-                        data.timing_divergences = darwin::get_timing_divergences(conn).unwrap_or_default();
-                        data.regime_performance = darwin::get_regime_performance(conn).unwrap_or_default();
+                        if is_lan_client {
+                            // LAN client: load Phase 1c from KV (server-computed)
+                            macro_rules! kv_load {
+                                ($key:expr, $field:ident) => {
+                                    if let Ok(Some(j)) = cache.get_kv($key) {
+                                        if let Ok(v) = serde_json::from_str(&j) { data.$field = v; }
+                                    }
+                                };
+                                ($key:expr, $field:ident, opt) => {
+                                    if let Ok(Some(j)) = cache.get_kv($key) {
+                                        if let Ok(v) = serde_json::from_str(&j) { data.$field = Some(v); }
+                                    }
+                                };
+                            }
+                            kv_load!("darwin:equity_curve", equity_curve);
+                            kv_load!("darwin:trade_overlaps", trade_overlaps);
+                            kv_load!("darwin:symbol_overlaps", symbol_overlaps);
+                            kv_load!("darwin:sector_exposure", sector_exposure);
+                            kv_load!("darwin:liquidity_risk", liquidity_risk);
+                            kv_load!("darwin:exposure_treemap", exposure_treemap, opt);
+                            kv_load!("darwin:timing_divergences", timing_divergences);
+                            kv_load!("darwin:regime_performance", regime_performance);
+                            kv_load!("darwin:darwin_alerts", darwin_alerts);
+                        } else {
+                            // Server: compute from deals, store to KV
+                            data.equity_curve = darwin::get_portfolio_equity_curve(conn).unwrap_or_default();
+                            data.trade_overlaps = darwin::get_trade_overlaps(conn).unwrap_or_default();
+                            data.symbol_overlaps = darwin::get_symbol_overlap(conn).unwrap_or_default();
+                            data.sector_exposure = darwin::get_sector_exposure(conn).unwrap_or_default();
+                            data.liquidity_risk = darwin::get_liquidity_risk(conn).unwrap_or_default();
+                            data.exposure_treemap = darwin::get_exposure_treemap(conn).ok();
+                            data.timing_divergences = darwin::get_timing_divergences(conn).unwrap_or_default();
+                            data.regime_performance = darwin::get_regime_performance(conn).unwrap_or_default();
+                            // Store Phase 1c to KV for LAN clients
+                            macro_rules! kv_store {
+                                ($key:expr, $val:expr) => {
+                                    if let Ok(j) = serde_json::to_string($val) { let _ = cache.put_kv($key, &j); }
+                                };
+                            }
+                            kv_store!("darwin:equity_curve", &data.equity_curve);
+                            kv_store!("darwin:trade_overlaps", &data.trade_overlaps);
+                            kv_store!("darwin:symbol_overlaps", &data.symbol_overlaps);
+                            kv_store!("darwin:sector_exposure", &data.sector_exposure);
+                            kv_store!("darwin:liquidity_risk", &data.liquidity_risk);
+                            if let Some(ref v) = data.exposure_treemap { kv_store!("darwin:exposure_treemap", v); }
+                            kv_store!("darwin:timing_divergences", &data.timing_divergences);
+                            kv_store!("darwin:regime_performance", &data.regime_performance);
+                        }
+                        // Fundamentals come from research tables (synced via LAN) — query locally on both
                         data.all_fundamentals = fundamentals::get_all_fundamentals(conn).unwrap_or_default();
                         data.upcoming_earnings = fundamentals::get_upcoming_earnings(conn, 50).unwrap_or_default();
                         data.upcoming_dividends = fundamentals::get_upcoming_dividends(conn, 50).unwrap_or_default();
@@ -10844,21 +10885,32 @@ impl TyphooNApp {
                             let _ = bg_tx.send(data.clone());
                         }
 
-                        // Phase 6: DARWIN risk alerts
-                        data.darwin_alerts = darwin::check_alerts(conn).unwrap_or_default();
-
-                        // Phase 8: SEC insider trades for portfolio symbols
-                        {
-                            let mut insider_map = std::collections::HashMap::new();
-                            let syms: Vec<String> = data.exposure.iter().map(|e| e.symbol.clone()).collect();
-                            for sym in &syms {
-                                if let Ok(trades) = sec_filing::get_insider_trades(conn, Some(sym), 90) {
-                                    if !trades.is_empty() {
-                                        insider_map.insert(sym.clone(), trades);
+                        // Phase 6: DARWIN risk alerts + Phase 8: insider trades
+                        if !is_lan_client {
+                            data.darwin_alerts = darwin::check_alerts(conn).unwrap_or_default();
+                            {
+                                let mut insider_map = std::collections::HashMap::new();
+                                let syms: Vec<String> = data.exposure.iter().map(|e| e.symbol.clone()).collect();
+                                for sym in &syms {
+                                    if let Ok(trades) = sec_filing::get_insider_trades(conn, Some(sym), 90) {
+                                        if !trades.is_empty() {
+                                            insider_map.insert(sym.clone(), trades);
+                                        }
                                     }
                                 }
+                                data.insider_trades = insider_map;
                             }
-                            data.insider_trades = insider_map;
+                            // Store to KV for LAN clients
+                            if let Ok(j) = serde_json::to_string(&data.darwin_alerts) { let _ = cache.put_kv("darwin:alerts", &j); }
+                            if let Ok(j) = serde_json::to_string(&data.insider_trades) { let _ = cache.put_kv("darwin:insider_trades", &j); }
+                        } else {
+                            // LAN client: load from KV
+                            if let Ok(Some(j)) = cache.get_kv("darwin:alerts") {
+                                if let Ok(v) = serde_json::from_str(&j) { data.darwin_alerts = v; }
+                            }
+                            if let Ok(Some(j)) = cache.get_kv("darwin:insider_trades") {
+                                if let Ok(v) = serde_json::from_str(&j) { data.insider_trades = v; }
+                            }
                         }
 
                         // Mark full refresh complete
@@ -19437,6 +19489,14 @@ impl eframe::App for TyphooNApp {
                             self.bg.open_positions = pos;
                         }
                     }
+                    // Watchlist quotes from server
+                    if self.watchlist_rows.is_empty() {
+                        if let Ok(Some(json)) = cache.get_kv("broker:watchlist") {
+                            if let Ok(rows) = serde_json::from_str::<Vec<WatchlistRow>>(&json) {
+                                self.watchlist_rows = rows;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -19550,6 +19610,10 @@ impl eframe::App for TyphooNApp {
                     self.log.push_back(LogEntry::info(format!("{}: bid {} ask {} last {}", symbol, format_price(bid), format_price(ask), format_price(last))));
                 }
                 BrokerMsg::WatchlistQuotes(rows) => {
+                    // Store to KV for LAN clients
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(j) = serde_json::to_string(&rows) { let _ = cache.put_kv("broker:watchlist", &j); }
+                    }
                     self.watchlist_rows = rows;
                 }
                 BrokerMsg::FredData(series, yields) => {
