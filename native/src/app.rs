@@ -20068,26 +20068,9 @@ impl eframe::App for TyphooNApp {
                             sources.push("LAN Server".into());
                         }
                         let src_text = sources.join(" + ");
-                        // Market hours check (US Eastern: 9:30-16:00 Mon-Fri)
-                        let now_utc = chrono::Utc::now();
-                        let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
-                        use chrono::{Timelike, Datelike};
-                        let hour = eastern.hour();
-                        let min = eastern.minute();
-                        let time_mins = hour * 60 + min;
-                        let weekday = eastern.weekday();
-                        let is_weekday = matches!(weekday, chrono::Weekday::Mon | chrono::Weekday::Tue | chrono::Weekday::Wed | chrono::Weekday::Thu | chrono::Weekday::Fri);
-                        let is_market_hours = is_weekday && time_mins >= 9 * 60 + 30 && time_mins < 16 * 60;
-                        let is_extended = is_weekday && ((time_mins >= 4 * 60 && time_mins < 9 * 60 + 30) || (time_mins >= 16 * 60 && time_mins < 20 * 60));
-                        let (status, color) = if is_market_hours {
-                            ("LIVE", UP)
-                        } else if is_extended {
-                            ("EXT", egui::Color32::from_rgb(241, 196, 15))
-                        } else if has_lan && !has_broker {
-                            ("ONLINE", egui::Color32::from_rgb(26, 188, 156)) // teal for LAN-only
-                        } else {
-                            ("CLOSED", egui::Color32::from_rgb(100, 100, 120))
-                        };
+                        // Any data source connected = LIVE. OFFLINE only when nothing connected.
+                        // Market hours per-symbol can be refined later using symbol specs.
+                        let (status, color) = ("LIVE", UP);
                         ui.label(egui::RichText::new(format!("\u{25CF} {} [{}]", status, src_text)).color(color).small());
                         if let Some(ref acct) = self.live_account {
                             ui.label(egui::RichText::new(format!("${:.0}", acct.equity)).color(egui::Color32::WHITE).small());
