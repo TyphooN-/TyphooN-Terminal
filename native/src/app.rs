@@ -19541,10 +19541,11 @@ impl eframe::App for TyphooNApp {
         // The server stores broker:account/positions/orders to KV on every update.
         // LAN sync's 15s incremental KV sync delivers them to the client's cache.
         // Reload every ~5s (200 frames at 250ms idle repaint) for near-live updates.
-        // LAN client: always reload positions/orders/watchlist from server KV.
-        // No broker_connected gate — LAN client should always use server data.
+        // LAN client: reload positions/orders from server KV.
+        // Check every ~5s (200 frames). Cheap local SQLite read — only deserializes
+        // when KV actually changed (server writes only on position/order updates).
         if self.lan_sync_mode == "client" {
-            if self.frame_count % 200 == 0 || self.live_positions.is_empty() {
+            if self.frame_count % 200 == 0 || (self.live_positions.is_empty() && self.frame_count > 10) {
                 if let Some(ref cache) = self.cache {
                     if let Ok(Some(json)) = cache.get_kv("broker:positions") {
                         if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
