@@ -3829,8 +3829,12 @@ fn compute_supply_demand_zones_from_gpu(gpu_data: &[f32], bars: &[Bar]) -> (Vec<
         .filter_map(|b| { let r = b.high - b.low; if r > 0.0 { Some(r) } else { None } })
         .fold(f64::MAX, f64::min) * 0.01;
 
+    // Apply BACK_LIMIT (matching MQL5 InpBackLimit=1000) to limit scan depth
+    const BACK_LIMIT: usize = 1000;
+    let scan_start = if n > BACK_LIMIT + FRACTAL_LOOKBACK { n - BACK_LIMIT } else { 0 };
+
     // Extract fractals from GPU output, refine boundaries with actual open prices
-    for i in 0..n {
+    for i in scan_start..n {
         let zone_type = gpu_data.get(i * 3).copied().unwrap_or(0.0);
         if zone_type < -0.5 {
             // Supply fractal: hi = high, lo = min(close, open)
