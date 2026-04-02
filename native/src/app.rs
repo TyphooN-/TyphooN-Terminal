@@ -1365,15 +1365,32 @@ impl ChartState {
                 ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
             }).collect();
 
-            // Merge CryptoCompare + Kraken bars for weekend gap-fill (same as load())
-            let mut existing_ts: std::collections::HashSet<i64> = self.bars.iter().map(|b| b.ts_ms).collect();
+            // Merge CryptoCompare + Kraken bars for weekend gap-fill.
+            // For D1+ timeframes, MT5 uses UTC+2 and CryptoCompare uses UTC.
+            // A 2-hour offset means same-day bars have different timestamps.
+            // Snap to day boundary for dedup to avoid doubled daily bars.
+            let tf_ms = match tf {
+                "1Day" => 86_400_000i64,
+                "1Week" => 7 * 86_400_000,
+                "1Month" => 30 * 86_400_000,
+                "4Hour" => 4 * 3_600_000,
+                "1Hour" => 3_600_000,
+                "30Min" => 1_800_000,
+                "15Min" => 900_000,
+                "5Min" => 300_000,
+                _ => 60_000,
+            };
+            // Snap timestamps to TF boundary for dedup (handles timezone offsets)
+            let snap = |ts: i64| -> i64 { ts / tf_ms * tf_ms };
+            let mut existing_snapped: std::collections::HashSet<i64> = self.bars.iter().map(|b| snap(b.ts_ms)).collect();
             let mut gap_filled = 0usize;
             for prefix in &["cryptocompare", "kraken"] {
                 let gap_key = format!("{}:{}:{}", prefix, sym, tf);
                 if let Ok(Some(gap_raw)) = cache.get_bars_raw(&gap_key) {
                     for (ts, o, h, l, c, v) in gap_raw {
-                        if !existing_ts.contains(&ts) {
-                            existing_ts.insert(ts);
+                        let snapped = snap(ts);
+                        if !existing_snapped.contains(&snapped) {
+                            existing_snapped.insert(snapped);
                             self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
                             gap_filled += 1;
                         }
@@ -1440,17 +1457,23 @@ impl ChartState {
         let is_crypto = crypto_bases.iter().any(|b| sym_upper.starts_with(b) && sym_upper.ends_with("USD"));
 
         if is_crypto {
-            // Build a set of existing timestamps for O(1) lookup
-            let mut existing_ts: std::collections::HashSet<i64> = self.bars.iter().map(|b| b.ts_ms).collect();
+            // Snap timestamps to TF boundary for dedup (handles MT5 UTC+2 vs CC/Kraken UTC)
+            let tf_ms: i64 = match tf {
+                "1Day" => 86_400_000, "1Week" => 7 * 86_400_000, "1Month" => 30 * 86_400_000,
+                "4Hour" => 4 * 3_600_000, "1Hour" => 3_600_000, "30Min" => 1_800_000,
+                "15Min" => 900_000, "5Min" => 300_000, _ => 60_000,
+            };
+            let snap = |ts: i64| -> i64 { ts / tf_ms * tf_ms };
+            let mut existing_snapped: std::collections::HashSet<i64> = self.bars.iter().map(|b| snap(b.ts_ms)).collect();
 
-            // Try CryptoCompare: merge into gaps (any timestamp not already present)
             let cc_key = format!("cryptocompare:{}:{}", bare_sym, tf);
             if let Ok(Some(raw)) = cache.get_bars_raw(&cc_key) {
                 let mut merged = 0;
                 for (ts, o, h, l, c, v) in raw {
-                    if !existing_ts.contains(&ts) {
+                    let snapped = snap(ts);
+                    if !existing_snapped.contains(&snapped) {
                         self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
-                        existing_ts.insert(ts);
+                        existing_snapped.insert(snapped);
                         merged += 1;
                     }
                 }
@@ -1459,14 +1482,14 @@ impl ChartState {
                 }
             }
 
-            // Try Kraken gap-fill (most recent, weekend live data)
             let kr_key = format!("kraken:{}:{}", bare_sym, tf);
             if let Ok(Some(raw)) = cache.get_bars_raw(&kr_key) {
                 let mut merged = 0;
                 for (ts, o, h, l, c, v) in raw {
-                    if !existing_ts.contains(&ts) {
+                    let snapped = snap(ts);
+                    if !existing_snapped.contains(&snapped) {
                         self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
-                        existing_ts.insert(ts);
+                        existing_snapped.insert(snapped);
                         merged += 1;
                     }
                 }
@@ -3906,7 +3929,9 @@ fn compute_supply_demand_zones(bars: &[Bar]) -> (Vec<(usize, f64, f64, u8)>, Vec
     let scan_end = n - 1 - FRACTAL_LOOKBACK;
 
     for i in scan_start..=scan_end {
-        // Fractal high: bar's high is strictly greater than lookback bars on each side
+        // Fractal high: bar's high must be STRICTLY greater than ALL lookback bars.
+        // MQL5 uses >= for rejection: if(high[bar-i] >= val) return false;
+        // This means equal highs REJECT the fractal (matching MT5 1:1).
         let is_fractal_high = (1..=FRACTAL_LOOKBACK).all(|k| {
             i >= k && i + k < n &&
             bars[i].high > bars[i - k].high && bars[i].high > bars[i + k].high
@@ -3918,7 +3943,8 @@ fn compute_supply_demand_zones(bars: &[Bar]) -> (Vec<(usize, f64, f64, u8)>, Vec
             zones.push(Zone { idx: i, hi, lo, touches: 0, is_supply: true, broken: false });
         }
 
-        // Fractal low: bar's low is strictly less than lookback bars on each side
+        // Fractal low: bar's low must be STRICTLY less than ALL lookback bars.
+        // MQL5 uses <= for rejection: if(low[bar-i] <= val) return false;
         let is_fractal_low = (1..=FRACTAL_LOOKBACK).all(|k| {
             i >= k && i + k < n &&
             bars[i].low < bars[i - k].low && bars[i].low < bars[i + k].low
