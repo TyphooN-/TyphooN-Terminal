@@ -10401,6 +10401,14 @@ impl TyphooNApp {
                         data.correlations = darwin::get_darwin_correlations(conn).unwrap_or_default();
                         data.exposure = darwin::get_portfolio_exposure(conn).unwrap_or_default();
                         data.open_positions = darwin::get_portfolio_open_positions(conn).unwrap_or_default();
+                        // Store computed DARWIN positions to KV for LAN clients.
+                        // LAN clients read this directly instead of recomputing from 45K deals
+                        // (which produces wrong results due to deal import inconsistencies).
+                        if !data.open_positions.is_empty() {
+                            if let Ok(json) = serde_json::to_string(&data.open_positions) {
+                                let _ = cache.put_kv("darwin:open_positions", &json);
+                            }
+                        }
                         let _ = bg_tx.send(data.clone());
 
                         // Phase 1c: heavier queries — all use BG's own connection (zero contention with UI)
@@ -18278,6 +18286,22 @@ impl TyphooNApp {
                                     let _ = self.broker_tx.send(BrokerCmd::LanResyncDarwin);
                                     self.log.push_back(LogEntry::info("Requesting DARWIN resync from LAN server..."));
                                 }
+                                if ui.button(egui::RichText::new("Resync Positions").small()).clicked() {
+                                    // Force reload of positions from KV cache immediately
+                                    if let Some(ref cache) = self.cache {
+                                        if let Ok(Some(json)) = cache.get_kv("broker:positions") {
+                                            if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
+                                                self.live_positions = pos;
+                                            }
+                                        }
+                                        if let Ok(Some(json)) = cache.get_kv("darwin:open_positions") {
+                                            if let Ok(pos) = serde_json::from_str::<Vec<darwin::PortfolioOpenPosition>>(&json) {
+                                                self.bg.open_positions = pos;
+                                            }
+                                        }
+                                    }
+                                    self.log.push_back(LogEntry::info("Positions reloaded from LAN server cache"));
+                                }
                             });
                         }
                         ui.add_space(8.0);
@@ -19184,6 +19208,14 @@ impl eframe::App for TyphooNApp {
                     if let Ok(Some(json)) = cache.get_kv("broker:orders") {
                         if let Ok(orders) = serde_json::from_str::<Vec<OrderInfo>>(&json) {
                             self.live_orders = orders;
+                        }
+                    }
+                    // DARWIN open positions: read server's computed positions from KV.
+                    // This bypasses the broken recompute-from-45K-deals pipeline —
+                    // the server already computed the correct 3 positions, stored as KV.
+                    if let Ok(Some(json)) = cache.get_kv("darwin:open_positions") {
+                        if let Ok(pos) = serde_json::from_str::<Vec<darwin::PortfolioOpenPosition>>(&json) {
+                            self.bg.open_positions = pos;
                         }
                     }
                 }
