@@ -8041,7 +8041,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "SIGNAL",        desc: "Composite 0-100 trading signal" },
     Command { name: "STATUS",        desc: "Cache, memory, uptime status" },
     // Crypto-specific
-    Command { name: "CRYPTO_BACKFILL",desc: "CryptoCompare deep history backfill" },
+    Command { name: "CRYPTO_BACKFILL",desc: "Crypto deep history backfill (CryptoCompare + Kraken)" },
     // Data management
     Command { name: "BACKUP",        desc: "Backup settings and cache" },
     Command { name: "IMPORT_XLSX",   desc: "Import DARWIN XLSX trade history" },
@@ -16381,7 +16381,7 @@ impl TyphooNApp {
 
         // Crypto Backfill (CryptoCompare deep history)
         if self.show_crypto_backfill {
-            egui::Window::new("Crypto Backfill (CryptoCompare)")
+            egui::Window::new("Crypto Backfill (CryptoCompare + Kraken)")
                 .open(&mut self.show_crypto_backfill)
                 .resizable(true).default_size([550.0, 400.0])
                 .show(ctx, |ui| {
@@ -16415,7 +16415,7 @@ impl TyphooNApp {
 
                     // Progress section
                     ui.label(egui::RichText::new("Progress").small().strong());
-                    ui.label(egui::RichText::new("CryptoCompare deep history — no API key needed").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("CryptoCompare deep history + Kraken weekend gap-fill — no API key needed").color(AXIS_TEXT).small());
                     ui.add_space(4.0);
 
                     // Table with scroll area
