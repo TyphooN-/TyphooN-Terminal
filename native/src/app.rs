@@ -8224,7 +8224,7 @@ struct WatchlistRow {
 }
 
 /// Cached per-account analytics (computed in background thread).
-#[derive(Default, Clone)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 struct AccountDetailCache {
     ticker: String,
     summary: Option<darwin::DarwinAccountSummary>,
@@ -9898,9 +9898,17 @@ impl TyphooNApp {
                                     )));
                                 }
                                 Err(e) => {
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
-                                        "CryptoCompare {} {}: {}", symbol, tf, e
-                                    )));
+                                    // Sub-hourly: downgrade to info (Kraken covers these TFs)
+                                    let is_sub_hourly = matches!(tf.as_str(), "5Min" | "15Min" | "30Min" | "1Min");
+                                    if is_sub_hourly {
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                            "CryptoCompare {} {}: unavailable — Kraken will provide", symbol, tf
+                                        )));
+                                    } else {
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!(
+                                            "CryptoCompare {} {}: {}", symbol, tf, e
+                                        )));
+                                    }
                                 }
                             }
                         }
@@ -10822,8 +10830,12 @@ impl TyphooNApp {
                         }
 
                         // Phase 5: per-account detailed analytics (DARWIN Accounts window)
-                        // Parallel: each account runs on its own thread with its own SQLite connection.
-                        // SQLite WAL mode supports concurrent readers.
+                        if is_lan_client {
+                            // LAN client: load from KV
+                            if let Ok(Some(j)) = cache.get_kv("darwin:account_details") {
+                                if let Ok(v) = serde_json::from_str(&j) { data.account_details = v; }
+                            }
+                        } else
                         {
                             let accounts_snapshot: Vec<String> = data.accounts.iter().map(|a| a.darwin_ticker.clone()).collect();
                             let daily_returns_ref = &data.daily_returns;
@@ -10925,6 +10937,10 @@ impl TyphooNApp {
                             });
 
                             data.account_details = details;
+                            // Store to KV for LAN clients
+                            if let Ok(j) = serde_json::to_string(&data.account_details) {
+                                let _ = cache.put_kv("darwin:account_details", &j);
+                            }
                             let _ = bg_tx.send(data.clone());
                         }
 
@@ -19506,7 +19522,9 @@ impl eframe::App for TyphooNApp {
         // The server stores broker:account/positions/orders to KV on every update.
         // LAN sync's 15s incremental KV sync delivers them to the client's cache.
         // Reload every ~5s (200 frames at 250ms idle repaint) for near-live updates.
-        if self.lan_sync_mode == "client" && !self.broker_connected {
+        // LAN client: always reload positions/orders/watchlist from server KV.
+        // No broker_connected gate — LAN client should always use server data.
+        if self.lan_sync_mode == "client" {
             if self.frame_count % 200 == 0 || self.live_positions.is_empty() {
                 if let Some(ref cache) = self.cache {
                     if let Ok(Some(json)) = cache.get_kv("broker:positions") {
@@ -19532,12 +19550,10 @@ impl eframe::App for TyphooNApp {
                             self.bg.open_positions = pos;
                         }
                     }
-                    // Watchlist quotes from server
-                    if self.watchlist_rows.is_empty() {
-                        if let Ok(Some(json)) = cache.get_kv("broker:watchlist") {
-                            if let Ok(rows) = serde_json::from_str::<Vec<WatchlistRow>>(&json) {
-                                self.watchlist_rows = rows;
-                            }
+                    // Watchlist quotes from server (reload every cycle for live updates)
+                    if let Ok(Some(json)) = cache.get_kv("broker:watchlist") {
+                        if let Ok(rows) = serde_json::from_str::<Vec<WatchlistRow>>(&json) {
+                            self.watchlist_rows = rows;
                         }
                     }
                 }
