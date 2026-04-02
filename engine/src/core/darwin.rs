@@ -6320,6 +6320,12 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
     // Ensure tables exist
     create_darwin_tables(conn)?;
 
+    // Wrap entire DELETE + INSERT in a transaction.
+    // Without this, a failed DELETE leaves old data, and new INSERTs add duplicates
+    // (AUTOINCREMENT ids → INSERT OR REPLACE always creates new rows).
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("BEGIN IMMEDIATE failed: {e}"))?;
+
     let mut n_acct = 0usize;
     let mut n_deals = 0usize;
     let mut n_pos = 0usize;
@@ -6328,9 +6334,14 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
     // Without this, AUTOINCREMENT ids cause duplicates on every sync (INSERT OR REPLACE
     // creates new rows when PK is auto-generated). Also prevents stale data from
     // accounts that may have been removed on the server.
-    let _ = conn.execute("DELETE FROM darwin_deals", []);
-    let _ = conn.execute("DELETE FROM darwin_positions", []);
-    let _ = conn.execute("DELETE FROM darwin_accounts", []);
+    // CRITICAL: these DELETEs must succeed. If they fail (e.g., database locked), the
+    // subsequent INSERTs add duplicates → stale positions computed as "open".
+    conn.execute("DELETE FROM darwin_deals", [])
+        .map_err(|e| format!("DELETE darwin_deals failed: {e}"))?;
+    conn.execute("DELETE FROM darwin_positions", [])
+        .map_err(|e| format!("DELETE darwin_positions failed: {e}"))?;
+    conn.execute("DELETE FROM darwin_accounts", [])
+        .map_err(|e| format!("DELETE darwin_accounts failed: {e}"))?;
 
     if let Some(accounts) = payload["accounts"].as_array() {
         for a in accounts {
@@ -6404,6 +6415,9 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
             n_pos += 1;
         }
     }
+
+    conn.execute_batch("COMMIT")
+        .map_err(|e| format!("COMMIT failed: {e}"))?;
 
     Ok((n_acct, n_deals, n_pos))
 }
