@@ -1333,20 +1333,6 @@ impl ChartState {
     }
 
     /// Fast cache key without any DB probing. Used by try_load to avoid blocking.
-    fn default_cache_key(&self) -> String {
-        let tf = self.timeframe.cache_suffix();
-        let sym = {
-            let parts: Vec<&str> = self.symbol.split(':').collect();
-            let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
-            if is_tf && parts.len() > 1 {
-                parts[..parts.len()-1].join(":")
-            } else {
-                self.symbol.clone()
-            }
-        };
-        format!("mt5:{}:{}", sym, tf)
-    }
-
     /// Try to load bars without blocking. Returns false if lock is contended.
     /// Use this from the UI thread render loop to avoid freezing.
     /// Load bars from cache. read_conn is exclusively owned by the UI thread,
