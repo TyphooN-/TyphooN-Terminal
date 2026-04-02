@@ -27,8 +27,13 @@ CryptoCompare provides the deepest free crypto history with proper pagination:
 - **Endpoints**: `histoday`, `histohour`, `histominute`
 - **OHLCV data**: open, high, low, close, volumefrom, volumeto
 
-### Kraken (Retained for Weekend Gap-Fill)
-Kraken is retained as a secondary source for near-real-time weekend data (720 most recent bars), but CryptoCompare handles all deep history backfill.
+### Kraken (Complementary for Sub-Hourly)
+Kraken provides 720 recent bars per request — complementary to CryptoCompare for sub-hourly TFs. CryptoCompare only has 7 days of minute data; Kraken extends coverage for weekend gap-fill and indicator lookback. Both sources stored independently; chart lookup checks both prefixes.
+
+### Crypto Backfill Flow (2026-04-02)
+The "Backfill ALL Crypto" button fetches 10 symbols × 8 TFs:
+1. CryptoCompare: all 8 TFs (1Day through 5Min). Deep history for hourly+; 7-day limit for sub-hourly.
+2. Kraken: automatically fetched for sub-hourly TFs (5Min, 15Min, 30Min) after CryptoCompare completes. Provides 720 bars (~2.5 days M5, ~7.5 days M15, ~15 days M30) for weekend gap-fill and extra indicator lookback.
 
 ### Data Hierarchy (4-tier)
 
@@ -36,7 +41,7 @@ Kraken is retained as a secondary source for near-real-time weekend data (720 mo
 Priority 1: MT5 (Darwinex)      — weekday authority, signal account data
 Priority 2: Alpaca/tastytrade   — where user actually trades
 Priority 3: CryptoCompare       — deep history backfill (2010+)
-Priority 4: Kraken              — weekend gap-fill (720 most recent bars)
+Priority 4: Kraken              — sub-hourly gap-fill (720 recent bars, no rate limit)
 ```
 
 ### Cache Key Prefixes
@@ -45,7 +50,7 @@ Priority 4: Kraken              — weekend gap-fill (720 most recent bars)
 mt5:SYMBOL:TF           — MT5 BarCacheWriter data (authoritative)
 alpaca:SYMBOL:TF         — Live Alpaca bar fetch
 cryptocompare:SYMBOL:TF  — CryptoCompare deep history
-kraken:SYMBOL:TF         — Kraken weekend gap-fill (legacy, auto-deleted when CryptoCompare replaces)
+kraken:SYMBOL:TF         — Kraken sub-hourly + weekend gap-fill (complementary, not replaced)
 ```
 
 ### Auto-Cleanup

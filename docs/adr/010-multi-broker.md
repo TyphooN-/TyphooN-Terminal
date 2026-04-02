@@ -9,11 +9,14 @@ Multiple brokers needed for different asset classes and market data coverage.
 BrokerCmd/BrokerMsg enum-based async channel architecture. tokio runtime in background thread, mpsc channels bridge UI ↔ broker task.
 
 **Supported:**
-- **Alpaca** — US equities + crypto, paper + live. Wired via AlpacaBroker + async mpsc.
-- **tastytrade** — Options + futures (ADR-022). Session-based auth. Broker module pending.
-- **MT5** — View-only data source via BarCacheWriter EA → SQLite cache. Trade management stays in MT5.
+- **Alpaca** — US equities + crypto, paper + live. Auto-connects on startup if credentials saved in system keyring. Positions/orders/account stored to KV cache for LAN client read-only view.
+- **tastytrade** — Options + futures (ADR-022). Auth-only Phase 1 complete. **Connect button disabled** in UI ("coming soon") until DXLink market data is fully implemented.
+- **MT5** — View-only data source via BarCacheWriter v1.432 → SQLite cache. Trade management stays in MT5.
 
 ## Consequences
 - Pro: Multi-broker validates BrokerTrait abstraction
 - Pro: MT5 data without managing MT5 instances from terminal
+- Pro: Alpaca auto-connect eliminates manual connection step
+- Pro: LAN clients see server's broker positions read-only (no separate credentials needed)
 - Con: Each broker needs its own async client implementation
+- Con: tastytrade DXLink market data is a large scope project (separate library)

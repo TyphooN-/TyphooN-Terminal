@@ -63,18 +63,24 @@ WebSocket messages over TLS-encrypted TCP (wss://), authenticated with PBKDF2-de
 
 #### Server Mode (`LanSyncServer`)
 
-- Binds to `0.0.0.0:9847` (configurable)
+- Binds to `0.0.0.0:9847` (configurable), TLS encrypted (wss://)
 - Accepts multiple concurrent WebSocket clients
+- Connected client IPs tracked and displayed in UI (stored in KV `lan:server:clients`)
 - Serves bar cache metadata and data on request
-- Pushes incremental updates as new data arrives from MT5 sync or API fetches
+- Auto-starts on startup if `lan_server_enabled` is saved in session
+- Stores broker positions/account/orders to KV cache for LAN client read-only view
 
 #### Client Mode (`LanSyncClient`)
 
-- Connects to server IP:port
-- Authenticates via HMAC challenge-response
+- Connects to server IP:port (wss://, TLS encrypted)
+- Authenticates via HMAC challenge-response (PBKDF2 100K iterations)
 - Requests metadata, compares timestamps, fetches only newer entries
-- Receives incremental pushes for live sync
-- Reconnects automatically on connection loss
+- **15-second periodic re-sync**: pulls updated bars, KV, DARWIN, research tables automatically
+- Auto-connects on startup if `lan_client_enabled` is saved in session
+- Read-only view of server's Alpaca positions/orders/account (from KV cache `broker:*`)
+- Read-only view of server's DARWIN open positions (from KV cache `darwin:open_positions`)
+- Resync buttons: Resync Bars, Resync DARWIN, Resync Positions
+- SEC filing content fetched directly (public EDGAR URLs, not forwarded to server)
 
 #### Full Data Sync Protocol (13 tables)
 
@@ -108,8 +114,10 @@ When a `RemoteRequestDone` message arrives from the server (after SEC scrape, ba
 
 ## Security
 
-- All traffic over WebSocket (can be upgraded to WSS with self-signed cert for future)
-- HMAC-SHA256 challenge-response prevents unauthorized sync
+- All traffic over TLS-encrypted WebSocket (wss://) with ephemeral self-signed certificates
+- PBKDF2-HMAC-SHA256 challenge-response (100K iterations) prevents unauthorized sync
+- No certificate pinning (ephemeral certs regenerated on every server restart; see ADR-065)
+- 300-second read timeout during initial sync (DARWIN export of 45K+ deals takes >60s)
 - PBKDF2 key derivation makes brute-force impractical
 - LAN-only — no internet exposure by default (bind to 0.0.0.0, but router NAT provides isolation)
 

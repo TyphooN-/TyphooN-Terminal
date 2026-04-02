@@ -20,33 +20,40 @@ Use SQLite as the local bar cache with zstd-compressed TTBR (TyphooN Terminal Bi
 - Trade-off: SQLite single-writer lock means bar cache writes are serialized; acceptable since writes are infrequent batch inserts from broker fetches
 - Trade-off: JSON session file is not crash-safe; a mid-write crash could lose the last session snapshot
 
-### Dual-Connection Architecture (2026-03-31)
+### Multi-Connection Architecture (2026-04-02)
 
-`SqliteCache` opens **two connections** under WAL mode for concurrent access:
+`SqliteCache` uses multiple independent connections under WAL mode:
 
-| Connection | Mutex | Purpose |
+| Connection | Owner | Purpose |
 |------------|-------|---------|
-| `conn` | Write lock | put_bars, put_kv, delete, compact, create_tables |
-| `read_conn` | Read lock | get_bars_raw, get_kv, stats, detailed_stats, all_keys |
+| `conn` (Mutex) | Write operations | put_bars, put_kv, delete, compact, create_tables, import |
+| `read_conn` (Mutex) | UI thread only | get_bars_raw, try_get_bars_raw, try_connection |
+| BG thread conn | Background thread | DARWIN queries, stats, detailed_stats, crypto timestamps |
+| Phase 5 conns | Per-account scoped threads | DARWIN per-account analytics |
+| Mt5Sync conn | Mt5Sync thread | Separate `SqliteCache::open()` for writing |
 
-WAL mode allows unlimited concurrent readers + one writer. The two Mutexes are independent — write operations on `conn` (Mt5Sync, compaction) never block reads on `read_conn` (UI chart loading, background thread queries). All connections use `PRAGMA busy_timeout=5000` to retry on SQLite-level SQLITE_BUSY for 5 seconds.
+WAL mode allows unlimited concurrent readers + one writer. Each connection has its own Mutex (or no Mutex for owned connections). The BG thread reopens its connection every 3-second cycle for WAL freshness — ensures it always sees the latest committed writes from `import_darwin_data`, Mt5Sync, etc.
 
-**Mt5Sync** opens its own separate `SqliteCache::open()` connection for writing to the main cache. Source MT5 databases are opened via `SqliteCache::open_readonly()` (no journal_mode change, compatible with BarCacheWriter's DELETE mode on the Wine/Linux boundary).
+All connections use `busy_timeout` (5-10s) via `conn.busy_timeout(Duration)` set before any PRAGMAs. Non-critical PRAGMAs (cache_size, temp_store) are best-effort (errors ignored).
 
-### BarCacheWriter (v1.429, 2026-03-31)
+**Mt5Sync** opens its own `SqliteCache::open()` for target writes. Source MT5 databases use `SqliteCache::open_readonly()` with 10s busy_timeout (DELETE journal mode — WAL doesn't work across the Wine/Linux boundary).
 
-The MQL5 BarCacheWriter EA uses **SQL BLOB manipulation** for incremental sync:
+**Data format detection:** `maybe_decompress()` checks the first 4 bytes — "TTBR" magic = raw binary (from BarCacheWriter), otherwise assumes zstd-compressed (from Rust `put_bars`). Applied to all read paths.
+
+### BarCacheWriter (v1.432, 2026-04-02)
+
+The MQL5 BarCacheWriter EA uses **in-memory merge** for incremental sync:
 
 - **Initial sync:** Full export of 100K bars per symbol/TF (one-time, captures complete history)
-- **Subsequent syncs:** Three pre-prepared SQL UPDATE statements manipulate BLOBs server-side. Only the delta (48 bytes × new bars + 4-byte count) crosses the MQL5/SQLite boundary — the full blob never enters MQL5 memory.
-  - `UpdateLastBar`: replaces last 48 bytes (forming bar close update)
-  - `ReplaceLastAndAppend`: SUBSTR splice — updates last bar + appends new bars
-  - `AppendOnly`: SUBSTR splice — appends new bars past existing last timestamp
-- **CAST AS BLOB:** All bound parameters wrapped in `CAST(?N AS BLOB)` — MQL5's `DatabaseBindArray` may bind `uchar[]` as TEXT type, which would corrupt binary concatenation.
-- **Bar count cap:** `MAX_BARS_PER_KEY = 100,000`. When exceeded, falls back to full re-export capped at 100K. Only triggers once per key at the threshold.
-- **Batch sleep:** 50ms between BatchSize commits — prevents Wine CPU thrashing.
-- **Periodic vacuum:** `PRAGMA incremental_vacuum(100)` every ~30 minutes — reclaims freed pages from DELETE mode fragmentation.
-- **Performance:** Only 48×N bytes cross MQL5/SQLite boundary vs 4.8MB full blob round-trip per key per cycle.
+- **Subsequent syncs:** Read existing blob from DB (pre-prepared `g_stmtBarRead`), find merge point by timestamp, update last bar in-place, append new bars via `ArrayCopy`, write merged blob back.
+- **Skip write when no new bars:** If `appendCount == 0`, skip the blob write entirely. The forming bar's close is cosmetic — captured when the next bar opens. This eliminates ~95% of blob writes in steady state.
+- **TF gating:** Per-TF timer tracks last export time. If less than 80% of the TF period has elapsed, skip entirely — no CopyRates, no binary search, no string concat. Only M1 is checked every cycle; M5 every ~4 min, H1 every ~48 min, D1 every ~19 hours.
+- **Bar count cap:** `MAX_BARS_PER_KEY = 100,000`. Falls back to full re-export when exceeded.
+- **Batch size:** 5 symbols per transaction (shorter exclusive lock).
+- **Batch sleep:** 200ms between commits — gives TyphooN-Terminal time to read between exclusive locks.
+- **Periodic vacuum:** `PRAGMA incremental_vacuum(100)` every ~30 minutes.
+
+Note: SQL BLOB manipulation via `SUBSTR`/`||` was attempted in v1.427-v1.429 but reverted — MQL5's `DatabaseBindArray` binds `uchar[]` as TEXT type, causing SUBSTR to use character offsets instead of byte offsets, producing truncated/corrupt output.
 
 ### Sync State Table
 

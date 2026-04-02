@@ -53,12 +53,12 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 
 | Priority | Source | Coverage |
 |----------|--------|----------|
-| 1 | MT5 via BarCacheWriter | 895 symbols x 9 TFs, weekday authority (Darwinex) |
-| 2 | Alpaca/tastytrade | Live trading execution, US equities + crypto |
-| 3 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, all 9 TFs |
-| 4 | Kraken | Weekend live gap-fill (720 bars, adaptive polling, no rate limit) |
+| 1 | MT5 via BarCacheWriter v1.432 | 895 symbols × 9 TFs, weekday authority (Darwinex). TF gating, batch 5, 200ms sleep. |
+| 2 | Alpaca | Live trading execution, US equities + crypto. Auto-connects on startup. |
+| 3 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs |
+| 4 | Kraken | Sub-hourly gap-fill (720 bars, weekend coverage, no rate limit) |
 
-MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade management stays in MT5 directly. DARWIN account analytics are imported via XLSX trade history exports.
+MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade management stays in MT5 directly. DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade auth-only Phase 1 is complete; Connect button disabled until DXLink market data is implemented (ADR-022).
 
 ## Technology Stack
 

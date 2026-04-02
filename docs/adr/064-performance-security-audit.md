@@ -95,11 +95,36 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - **480 tests** passing (75 compiler + 319 engine + 86 native): cache, darwin, fundamentals, SEC, crypto, var, risk, margin, backtest, GPU shaders, app integration, parser, WASM codegen, WGSL codegen
 - **MQL5 compiler parser bug fix**: postfix_op unwrapping now correctly distinguishes `++`/`--` from wrapped call_args/index_access/member_access
 
-### 2026-03-31 Session: SQLite Concurrency & BarCacheWriter
+### 2026-03-31 → 2026-04-02: SQLite Concurrency, LAN Sync, BarCacheWriter
 
-- **Dual-connection SqliteCache**: `conn` (write) + `read_conn` (read) under WAL mode. Reads never blocked by writes. Eliminates "Cache busy" permanently. BG thread uses `read_connection()` for all DARWIN/SEC/fundamentals queries.
-- **busy_timeout=5000**: All SQLite connections retry for 5s on SQLITE_BUSY instead of failing immediately.
-- **Mt5Sync connection isolation**: Opens its own `SqliteCache::open()` for target writes + `open_readonly()` for source reads. No shared Mutex contention with UI/bg threads.
-- **TOFU cert pinning removed**: Ephemeral certs regenerated on every server restart made TOFU pinning unusable. PBKDF2 passphrase challenge handles authentication; TLS provides transport encryption only.
-- **BarCacheWriter v1.429**: SQL BLOB append (only delta bytes cross MQL5/SQLite boundary), CAST AS BLOB for type safety, batch sleep (50ms), incremental_vacuum every ~30min, 100K bar cap per key.
-- **Storage Manager**: Added "Purge All Bar Data" and "Purge All DARWIN Data" buttons with red confirmation prompts.
+**SQLite Concurrency:**
+- Multi-connection architecture: `conn` (write), `read_conn` (UI-exclusive reads), BG thread owns its own connection (reopened each cycle for WAL freshness), Phase 5 threads open independent connections.
+- `maybe_decompress()` handles both raw TTBR (from BarCacheWriter) and zstd-compressed (from Rust) data transparently.
+- `busy_timeout` set via `conn.busy_timeout(Duration)` before any PRAGMAs — prevents cascade failure if DB is locked during PRAGMA execution.
+- Mt5Sync: own `SqliteCache::open()` for writes + `open_readonly()` for source reads (10s timeout).
+- DB maintenance: `stats()` reports actual file size (not data size). VACUUM on purge. `incremental_vacuum(500)` every 6 hours.
+- Storage Manager: Purge All Bar Data + Purge All DARWIN Data buttons with red confirmation.
+
+**LAN Sync:**
+- TLS encrypted (wss://), PBKDF2-HMAC-SHA256 auth. No TOFU cert pinning (ephemeral certs).
+- 15-second periodic re-sync (bars, KV, DARWIN, research tables) — near-real-time.
+- Server auto-start on startup (`lan_server_enabled` persisted). Client auto-connect (`lan_client_enabled`).
+- Connected client IPs tracked and displayed in server UI (stored in KV `lan:server:clients`).
+- Broker positions/account/orders stored to KV cache → LAN clients read-only view.
+- DARWIN open positions stored as pre-computed KV (`darwin:open_positions`) — bypasses broken 45K-deal recompute.
+- 300-second read timeout (DARWIN export of 45K+ deals takes >60s).
+- `import_darwin_data`: FK-safe delete order (equity_snapshots → deals → positions → accounts), no explicit transaction.
+- SEC filing content fetched directly by client (public EDGAR URLs, not forwarded to server).
+- Resync buttons: Bars, DARWIN, Positions.
+
+**BarCacheWriter v1.432:**
+- In-memory merge (SQL BLOB approach reverted — MQL5 TEXT/BLOB corruption).
+- Skip blob write when no new bars (95% I/O reduction).
+- TF gating: only check TFs that could have new bars (90% fewer CopyRates calls).
+- Batch 5, sleep 200ms, incremental_vacuum every 30min, 100K bar cap.
+
+**Other:**
+- Alpaca auto-connect on startup. tastytrade button disabled.
+- Crypto backfill: CryptoCompare + Kraken for sub-hourly TFs.
+- Status bar: LIVE when any data source connected (removed market hours logic).
+- MTF indicators (SMA/KAMA) computed in `try_load()` (was missing — invisible on chart).
