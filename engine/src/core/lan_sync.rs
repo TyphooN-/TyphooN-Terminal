@@ -1517,9 +1517,9 @@ async fn client_sync_loop(
             _ = resync_interval.tick() => {
                 // Periodic re-sync: pull any new data from server since last sync.
                 // Bars: request metadata, server sends entries with newer timestamps.
-                tracing::debug!("LAN sync: periodic re-sync — requesting updated bars + KV + DARWIN + tables");
+                tracing::debug!("LAN sync: periodic re-sync — bars + KV + tables");
                 let _ = sink.send(send_msg(&SyncMessage::RequestMeta)?).await;
-                // KV: incremental since last sync timestamp
+                // KV: incremental since last sync timestamp (carries broker:*, darwin:* analytics)
                 expecting_kv_binary = true;
                 let kv_since = cache.get_sync_ts("kv_cache");
                 let _ = sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: kv_since })?).await;
@@ -1529,8 +1529,10 @@ async fn client_sync_loop(
                     (tbl.to_string(), since_ts)
                 }).collect();
                 let _ = sink.send(send_msg(&SyncMessage::RequestTableSync { tables: table_requests })?).await;
-                // DARWIN: full snapshot (positions change frequently)
-                let _ = sink.send(send_msg(&SyncMessage::RequestDarwinData)?).await;
+                // NOTE: DARWIN deal import removed from periodic resync.
+                // All DARWIN analytics (positions, VaR, exposure, etc.) now sync via KV cache.
+                // The 45K deal import was 20+ seconds of CPU and produced wrong results on client.
+                // DARWIN deals only imported during initial sync (for table completeness).
             }
         }
     }
