@@ -681,10 +681,10 @@ async fn handle_client_tls(
                 }
             }
             SyncMessage::RequestDarwinData => {
-                // Export DARWIN tables — run synchronously (Connection is not Send)
+                // Export DARWIN tables via read connection (doesn't block writes)
                 let cache_clone = cache.clone();
                 let darwin_result = tokio::task::spawn_blocking(move || {
-                    if let Ok(conn) = cache_clone.connection() {
+                    if let Ok(conn) = cache_clone.read_connection() {
                         crate::core::darwin::export_darwin_data(&conn).ok()
                     } else { None }
                 }).await.ok().flatten();
@@ -797,7 +797,7 @@ async fn handle_client_tls(
                 let cache_clone = cache.clone();
                 let table_results = tokio::task::spawn_blocking(move || {
                     let mut results: Vec<(String, String, usize)> = Vec::new();
-                    if let Ok(conn) = cache_clone.connection() {
+                    if let Ok(conn) = cache_clone.read_connection() {
                         for (tbl, since_ts) in &tables {
                             if !SYNCABLE_TABLES.contains(&tbl.as_str()) {
                                 tracing::warn!("LAN sync: table '{}' not in whitelist, skipping", tbl);
@@ -1520,11 +1520,14 @@ async fn client_sync_loop(
 }
 
 async fn read_next(stream: &mut WsStream) -> Result<SyncMessage, String> {
-    match tokio::time::timeout(std::time::Duration::from_secs(60), stream.next()).await {
+    // 5-minute timeout: DARWIN export for 45K+ deals requires serialization + zstd
+    // compression + base64 encoding which can take 60-120s on large databases.
+    // The previous 60s timeout caused "Timeout waiting for message" during initial sync.
+    match tokio::time::timeout(std::time::Duration::from_secs(300), stream.next()).await {
         Ok(Some(Ok(msg))) => parse_msg(&msg),
         Ok(Some(Err(e))) => Err(format!("WebSocket error: {e}")),
         Ok(None) => Err("Connection closed".into()),
-        Err(_) => Err("Timeout waiting for message".into()),
+        Err(_) => Err("Timeout waiting for message (5min)".into()),
     }
 }
 
