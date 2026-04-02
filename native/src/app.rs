@@ -10404,29 +10404,40 @@ impl TyphooNApp {
                         }
                         let _ = bg_tx.send(data.clone());
 
-                        data.portfolio = darwin::get_portfolio_summary(conn).ok();
-                        data.daily_returns = darwin::get_portfolio_daily_returns(conn).unwrap_or_default();
-                        data.correlations = darwin::get_darwin_correlations(conn).unwrap_or_default();
-                        data.exposure = darwin::get_portfolio_exposure(conn).unwrap_or_default();
-                        // DARWIN open positions: LAN clients use KV-sourced (server-computed).
-                        // Server computes locally from deals and stores to KV for clients.
                         let is_lan_client = lan_client_bg.load(std::sync::atomic::Ordering::Relaxed);
                         if is_lan_client {
-                            // LAN client: read server's pre-computed positions from KV.
-                            // Never recompute from local deals (45K deal import produces wrong results).
+                            // LAN client: read ALL deal-dependent analytics from KV (server-computed).
+                            // Local deal import produces wrong results — never compute from local deals.
                             if let Ok(Some(json)) = cache.get_kv("darwin:open_positions") {
                                 if let Ok(pos) = serde_json::from_str::<Vec<darwin::PortfolioOpenPosition>>(&json) {
                                     data.open_positions = pos;
                                 }
                             }
+                            if let Ok(Some(json)) = cache.get_kv("darwin:portfolio") {
+                                if let Ok(v) = serde_json::from_str(&json) { data.portfolio = Some(v); }
+                            }
+                            if let Ok(Some(json)) = cache.get_kv("darwin:exposure") {
+                                if let Ok(v) = serde_json::from_str(&json) { data.exposure = v; }
+                            }
+                            if let Ok(Some(json)) = cache.get_kv("darwin:correlations") {
+                                if let Ok(v) = serde_json::from_str(&json) { data.correlations = v; }
+                            }
+                            if let Ok(Some(json)) = cache.get_kv("darwin:daily_returns") {
+                                if let Ok(v) = serde_json::from_str(&json) { data.daily_returns = v; }
+                            }
                         } else {
                             // Server/standalone: compute from deals, store to KV for LAN clients
+                            data.portfolio = darwin::get_portfolio_summary(conn).ok();
+                            data.daily_returns = darwin::get_portfolio_daily_returns(conn).unwrap_or_default();
+                            data.correlations = darwin::get_darwin_correlations(conn).unwrap_or_default();
+                            data.exposure = darwin::get_portfolio_exposure(conn).unwrap_or_default();
                             data.open_positions = darwin::get_portfolio_open_positions(conn).unwrap_or_default();
-                            if !data.open_positions.is_empty() {
-                                if let Ok(json) = serde_json::to_string(&data.open_positions) {
-                                    let _ = cache.put_kv("darwin:open_positions", &json);
-                                }
-                            }
+                            // Store to KV for LAN clients
+                            if let Ok(j) = serde_json::to_string(&data.open_positions) { let _ = cache.put_kv("darwin:open_positions", &j); }
+                            if let Some(ref p) = data.portfolio { if let Ok(j) = serde_json::to_string(p) { let _ = cache.put_kv("darwin:portfolio", &j); } }
+                            if let Ok(j) = serde_json::to_string(&data.exposure) { let _ = cache.put_kv("darwin:exposure", &j); }
+                            if let Ok(j) = serde_json::to_string(&data.correlations) { let _ = cache.put_kv("darwin:correlations", &j); }
+                            if let Ok(j) = serde_json::to_string(&data.daily_returns) { let _ = cache.put_kv("darwin:daily_returns", &j); }
                         }
                         let _ = bg_tx.send(data.clone());
 
@@ -10498,43 +10509,45 @@ impl TyphooNApp {
                             data.seasonal_analysis = darwin::get_seasonal_analysis(&data.daily_returns);
                         }
 
-                        // Phase 3: heavy DB queries — all use BG's own connection
-                        data.optimal_allocation = darwin::compute_optimal_allocation(conn).unwrap_or_default();
-                        {
-                            let prices = std::collections::HashMap::new();
-                            data.rebalance = darwin::compute_rebalance_suggestions(conn, &prices).ok();
-                        }
-                        data.stress_tests = darwin::run_stress_tests(conn).unwrap_or_default();
-                        data.margin_call_sim = darwin::simulate_margin_call(conn).ok();
-                        data.drawdown_dashboard = darwin::get_combined_drawdown_dashboard(conn, 5).ok();
-                        data.drawdown_attribution = darwin::compute_drawdown_attribution(conn).unwrap_or_default();
-                        data.risk_budget = darwin::compute_risk_budget(conn).unwrap_or_default();
-                        {
-                            let mut decays = Vec::new();
-                            for acct in &data.accounts {
-                                if let Ok(decay) = darwin::compute_signal_decay(conn, &acct.darwin_ticker, 90) {
-                                    decays.push(decay);
-                                }
+                        // Phase 3-4: heavy DB queries from deals — skip on LAN client
+                        // (deal data produces wrong analytics; daily_returns/exposure from KV are correct)
+                        if !is_lan_client {
+                            data.optimal_allocation = darwin::compute_optimal_allocation(conn).unwrap_or_default();
+                            {
+                                let prices = std::collections::HashMap::new();
+                                data.rebalance = darwin::compute_rebalance_suggestions(conn, &prices).ok();
                             }
-                            data.signal_decay = decays;
-                        }
-                        data.var_multipliers = darwin::compute_var_multipliers(conn).unwrap_or_default();
-                        {
-                            let prices = std::collections::HashMap::new();
-                            data.floating_equity = darwin::compute_floating_equity(conn, &prices).ok();
-                        }
-
-                        // Phase 4: per-DARWIN VaR (for VaR Multiplier window)
-                        {
-                            let mut per_var = Vec::new();
-                            for acct in &data.accounts {
-                                if let Ok(daily) = darwin::get_daily_returns(conn, &acct.darwin_ticker) {
-                                    if !daily.is_empty() {
-                                        per_var.push((acct.darwin_ticker.clone(), darwin::compute_var(&daily)));
+                            data.stress_tests = darwin::run_stress_tests(conn).unwrap_or_default();
+                            data.margin_call_sim = darwin::simulate_margin_call(conn).ok();
+                            data.drawdown_dashboard = darwin::get_combined_drawdown_dashboard(conn, 5).ok();
+                            data.drawdown_attribution = darwin::compute_drawdown_attribution(conn).unwrap_or_default();
+                            data.risk_budget = darwin::compute_risk_budget(conn).unwrap_or_default();
+                            {
+                                let mut decays = Vec::new();
+                                for acct in &data.accounts {
+                                    if let Ok(decay) = darwin::compute_signal_decay(conn, &acct.darwin_ticker, 90) {
+                                        decays.push(decay);
                                     }
                                 }
+                                data.signal_decay = decays;
                             }
-                            data.per_darwin_var = per_var;
+                            data.var_multipliers = darwin::compute_var_multipliers(conn).unwrap_or_default();
+                            {
+                                let prices = std::collections::HashMap::new();
+                                data.floating_equity = darwin::compute_floating_equity(conn, &prices).ok();
+                            }
+                            // Phase 4: per-DARWIN VaR
+                            {
+                                let mut per_var = Vec::new();
+                                for acct in &data.accounts {
+                                    if let Ok(daily) = darwin::get_daily_returns(conn, &acct.darwin_ticker) {
+                                        if !daily.is_empty() {
+                                            per_var.push((acct.darwin_ticker.clone(), darwin::compute_var(&daily)));
+                                        }
+                                    }
+                                }
+                                data.per_darwin_var = per_var;
+                            }
                         }
 
                         // Phase 5: per-account detailed analytics (DARWIN Accounts window)
