@@ -9145,7 +9145,7 @@ impl TyphooNApp {
                         if let Some(ref b) = broker {
                             match b.get_positions().await {
                                 Ok(pos) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Positions(pos)); }
-                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                                Err(e) => { tracing::debug!("Positions request failed: {}", e); }
                             }
                         }
                     }
@@ -19655,9 +19655,15 @@ impl eframe::App for TyphooNApp {
                     self.live_orders = orders;
                 }
                 BrokerMsg::OrderResult(msg) => {
+                    // Only refresh positions after actual trade operations (not every log message).
+                    // OrderResult is used for many non-trade messages (LAN sync, backfill, etc.)
+                    // that would spam GetPositions → HTTP 429 Too Many Requests.
+                    let is_trade = msg.contains("filled") || msg.contains("order") || msg.contains("closed") || msg.contains("cancelled");
+                    if is_trade && self.broker_connected {
+                        let _ = self.broker_tx.send(BrokerCmd::GetPositions);
+                        let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                    }
                     self.log.push_back(LogEntry::info(msg));
-                    let _ = self.broker_tx.send(BrokerCmd::GetPositions);
-                    let _ = self.broker_tx.send(BrokerCmd::GetOrders);
                 }
                 BrokerMsg::SecScrapeResult(msg) => {
                     self.log.push_back(LogEntry::info(msg));
