@@ -467,6 +467,7 @@ pub struct SyncStatus {
     pub uptime_secs: u64,       // seconds since start
     pub send_darwin: bool,      // server: opt-in to send DARWIN data to clients
     pub cert_fingerprint: String, // SHA-256 fingerprint of the TLS certificate (hex)
+    pub client_ips: Vec<String>, // server: list of connected client IP addresses
 }
 
 impl Default for SyncStatus {
@@ -476,7 +477,7 @@ impl Default for SyncStatus {
             host: String::new(), port: 0,
             bytes_sent: 0, bytes_received: 0, entries_synced: 0,
             darwin_synced: false, uptime_secs: 0, send_darwin: false,
-            cert_fingerprint: String::new(),
+            cert_fingerprint: String::new(), client_ips: Vec::new(),
         }
     }
 }
@@ -527,13 +528,18 @@ impl LanSyncServer {
                         let status = status_clone.clone();
                         tokio::spawn(async move {
                             // TLS handshake
+                            let client_ip = addr.ip().to_string();
                             match tls_acc.accept(stream).await {
                                 Ok(tls_stream) => {
                                     {
                                         let mut s = status.lock().await;
                                         s.clients += 1;
+                                        s.client_ips.push(client_ip.clone());
+                                        // Persist client list to KV for UI display
+                                        let ips_json = serde_json::to_string(&s.client_ips).unwrap_or_default();
+                                        let _ = cache.put_kv("lan:server:clients", &ips_json);
                                     }
-                                    handle_client_tls(tls_stream, cache, secret, status).await;
+                                    handle_client_tls(tls_stream, cache, secret, status, &client_ip).await;
                                 }
                                 Err(e) => {
                                     tracing::warn!("LAN sync: TLS handshake failed from {addr}: {e}");
@@ -569,6 +575,7 @@ async fn handle_client_tls(
     cache: Arc<SqliteCache>,
     secret: [u8; 32],
     status: Arc<TokioMutex<SyncStatus>>,
+    client_ip: &str,
 ) {
     let ws = match tokio_tungstenite::accept_async_with_config(tls_stream, Some(ws_config())).await {
         Ok(ws) => ws,
@@ -850,7 +857,11 @@ async fn handle_client_tls(
 
     let mut s = status.lock().await;
     s.clients = s.clients.saturating_sub(1);
-    tracing::info!("LAN sync: client disconnected");
+    s.client_ips.retain(|ip| ip != client_ip);
+    // Persist updated client list
+    let ips_json = serde_json::to_string(&s.client_ips).unwrap_or_default();
+    let _ = cache.put_kv("lan:server:clients", &ips_json);
+    tracing::info!("LAN sync: client {} disconnected", client_ip);
 }
 
 fn build_cache_meta(cache: &SqliteCache) -> Vec<CacheMeta> {

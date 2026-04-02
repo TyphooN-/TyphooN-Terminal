@@ -8689,6 +8689,8 @@ pub struct TyphooNApp {
     lan_client_enabled: bool,
     /// Persistent: saved LAN server IP for auto-connect
     lan_server_ip: String,
+    /// Server: connected client IPs (updated from LAN sync status)
+    lan_connected_clients: Vec<String>,
     show_help: bool,
     show_connect: bool,
     show_indicators_panel: bool,
@@ -10198,6 +10200,7 @@ impl TyphooNApp {
             lan_sync_passphrase: String::new(),
             lan_client_enabled: false,
             lan_server_ip: String::new(),
+            lan_connected_clients: Vec::new(),
             show_help: false,
             show_connect: false,
             show_indicators_panel: false,
@@ -18230,10 +18233,30 @@ impl TyphooNApp {
                         // ── Active connection — show stats + stop button ──
                         ui.add_space(4.0);
                         if self.lan_sync_mode == "server" {
-                            ui.label(egui::RichText::new("Serving bar cache + DARWIN data to LAN clients.").color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new("Serving to LAN clients: MT5 bars, Alpaca positions/orders, DARWIN analytics, crypto backfill, fundamentals, SEC filings, news, FRED data.").color(AXIS_TEXT).small());
                             ui.label(egui::RichText::new("Clients connect using this machine's IP address.").color(AXIS_TEXT).small());
+                            // Connected clients list
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(Some(json)) = cache.get_kv("lan:server:clients") {
+                                    if let Ok(ips) = serde_json::from_str::<Vec<String>>(&json) {
+                                        if ips.is_empty() {
+                                            ui.label(egui::RichText::new("No clients connected").color(AXIS_TEXT).small());
+                                        } else {
+                                            ui.add_space(4.0);
+                                            ui.label(egui::RichText::new(format!("Connected clients ({})", ips.len())).small().strong());
+                                            for ip in &ips {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(egui::RichText::new("\u{25CF}").color(UP).small());
+                                                    ui.label(egui::RichText::new(ip).color(egui::Color32::from_rgb(26, 188, 156)).small().monospace());
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         } else {
-                            ui.label(egui::RichText::new(format!("Syncing from {}", self.lan_sync_host)).color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new(format!("Syncing from {} — read-only view of server data", self.lan_sync_host)).color(AXIS_TEXT).small());
+                            ui.label(egui::RichText::new("Receiving: MT5 bars, Alpaca positions/orders, DARWIN analytics, crypto, fundamentals, SEC, news, FRED").color(AXIS_TEXT).small());
                             // Sync status: local vs remote
                             if let Some((bar_count, kv_count, file_size)) = self.bg.cache_stats {
                                 ui.label(egui::RichText::new(format!(
@@ -20623,8 +20646,9 @@ impl eframe::App for TyphooNApp {
                                     }
                                 }
                             }
-                            // Live broker positions
-                            if self.broker_connected && !self.live_positions.is_empty() {
+                            // Live broker positions (from Alpaca or synced from LAN server via KV)
+                            let has_live = self.broker_connected || self.lan_sync_mode == "client";
+                            if has_live && !self.live_positions.is_empty() {
                                 has_positions = true;
                                 for pos in &self.live_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
@@ -20682,7 +20706,8 @@ impl eframe::App for TyphooNApp {
                                     ui.separator();
                                 }
                             } else {
-                                ui.label(egui::RichText::new(if self.broker_connected { "No open orders." } else { "Connect broker for live orders." }).color(AXIS_TEXT).small());
+                                let msg = if self.broker_connected || self.lan_sync_mode == "client" { "No open orders." } else { "Connect broker for live orders." };
+                                ui.label(egui::RichText::new(msg).color(AXIS_TEXT).small());
                             }
                         });
 
