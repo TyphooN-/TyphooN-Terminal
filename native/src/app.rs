@@ -9083,6 +9083,21 @@ impl TyphooNApp {
                         // BrokerCmd::FetchFilingContent { .. } => Some("SEC_FILING"),
                         _ => None,
                     };
+                    // Special handling: FetchBars includes symbol+TF in args
+                    if let BrokerCmd::FetchBars { ref symbol, ref timeframe, .. } = cmd {
+                        let guard = lan_remote_tx_ref.lock().await;
+                        if let Some(ref tx) = *guard {
+                            let _ = tx.send(format!("FETCH_BARS:{},{}", symbol, timeframe));
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(
+                                format!("LAN client: fetching {} {} via server", symbol, timeframe)
+                            ));
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
+                                "LAN client: not connected to server — can't fetch bars".into()
+                            ));
+                        }
+                        continue;
+                    }
                     if let Some(cmd_name) = remote_cmd {
                         let guard = lan_remote_tx_ref.lock().await;
                         if let Some(ref tx) = *guard {

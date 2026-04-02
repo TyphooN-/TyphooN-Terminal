@@ -788,7 +788,7 @@ async fn handle_client_tls(
                 const ALLOWED_REMOTE_CMDS: &[&str] = &[
                     "SEC_SCRAPE", "FUNDAMENTALS", "FUNDAMENTALS_ONE",
                     "KRAKEN_BACKFILL", "CRYPTOCOMPARE",
-                    "MT5_SYNC", "DARWIN_IMPORT",
+                    "MT5_SYNC", "DARWIN_IMPORT", "FETCH_BARS",
                     "FINNHUB_NEWS", "ECON_CALENDAR", "CONGRESS_TRADES", "FRED_DATA",
                     "SEC_FILING", "EVSCRAPE",
                 ];
