@@ -10334,6 +10334,7 @@ impl TyphooNApp {
             app.bg_rx = bg_rx;
             let shared_cache_bg = shared_cache.clone();
             let shared_ftp_dir_bg = shared_ftp_dir.clone();
+            let lan_client_bg = lan_client_flag.clone();
             std::thread::spawn(move || {
                 let importing_flag_bg = importing_flag_bg;
                 let mut full_refresh_done = false;
@@ -10407,13 +10408,24 @@ impl TyphooNApp {
                         data.daily_returns = darwin::get_portfolio_daily_returns(conn).unwrap_or_default();
                         data.correlations = darwin::get_darwin_correlations(conn).unwrap_or_default();
                         data.exposure = darwin::get_portfolio_exposure(conn).unwrap_or_default();
-                        data.open_positions = darwin::get_portfolio_open_positions(conn).unwrap_or_default();
-                        // Store computed DARWIN positions to KV for LAN clients.
-                        // LAN clients read this directly instead of recomputing from 45K deals
-                        // (which produces wrong results due to deal import inconsistencies).
-                        if !data.open_positions.is_empty() {
-                            if let Ok(json) = serde_json::to_string(&data.open_positions) {
-                                let _ = cache.put_kv("darwin:open_positions", &json);
+                        // DARWIN open positions: LAN clients use KV-sourced (server-computed).
+                        // Server computes locally from deals and stores to KV for clients.
+                        let is_lan_client = lan_client_bg.load(std::sync::atomic::Ordering::Relaxed);
+                        if is_lan_client {
+                            // LAN client: read server's pre-computed positions from KV.
+                            // Never recompute from local deals (45K deal import produces wrong results).
+                            if let Ok(Some(json)) = cache.get_kv("darwin:open_positions") {
+                                if let Ok(pos) = serde_json::from_str::<Vec<darwin::PortfolioOpenPosition>>(&json) {
+                                    data.open_positions = pos;
+                                }
+                            }
+                        } else {
+                            // Server/standalone: compute from deals, store to KV for LAN clients
+                            data.open_positions = darwin::get_portfolio_open_positions(conn).unwrap_or_default();
+                            if !data.open_positions.is_empty() {
+                                if let Ok(json) = serde_json::to_string(&data.open_positions) {
+                                    let _ = cache.put_kv("darwin:open_positions", &json);
+                                }
                             }
                         }
                         let _ = bg_tx.send(data.clone());
@@ -18289,9 +18301,9 @@ impl TyphooNApp {
                                     let _ = self.broker_tx.send(BrokerCmd::LanResyncBars);
                                     self.log.push_back(LogEntry::info("Requesting bar resync from LAN server..."));
                                 }
-                                if ui.button(egui::RichText::new("Resync DARWIN").small()).clicked() {
+                                if ui.button(egui::RichText::new("Resync DARWIN Analytics").small()).clicked() {
                                     let _ = self.broker_tx.send(BrokerCmd::LanResyncDarwin);
-                                    self.log.push_back(LogEntry::info("Requesting DARWIN resync from LAN server..."));
+                                    self.log.push_back(LogEntry::info("Requesting DARWIN analytics resync from LAN server..."));
                                 }
                                 if ui.button(egui::RichText::new("Resync Positions").small()).clicked() {
                                     // Force reload of positions from KV cache immediately
