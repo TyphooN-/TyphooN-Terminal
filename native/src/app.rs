@@ -10558,7 +10558,11 @@ impl TyphooNApp {
 
                     let cache_arc = shared_cache_bg.read().ok().and_then(|g| g.clone());
                     if cache_arc.is_none() {
-                        tracing::info!("BG thread: cache not yet available, waiting...");
+                        // Log once, not every 3 seconds
+                        static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                        if !LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            tracing::info!("BG thread: waiting for cache to open...");
+                        }
                         continue;
                     }
 
@@ -20510,8 +20514,20 @@ impl eframe::App for TyphooNApp {
                         // LAN sync status with IP
                         if self.lan_sync_mode == "client" {
                             let ip = if self.lan_server_ip.is_empty() { self.lan_sync_host.clone() } else { self.lan_server_ip.clone() };
+                            // Show server's sources (from KV) so client knows what the server provides
+                            if let Some(ref cache) = self.cache {
+                                if let Ok(Some(server_src)) = cache.get_kv("lan:server:sources") {
+                                    sources.clear();
+                                    sources.push(server_src);
+                                }
+                            }
                             sources.push(format!("LAN {}", ip));
                         } else if self.lan_sync_mode == "server" {
+                            // Store our source list to KV so LAN clients can display it
+                            let server_sources = sources.join(" + ");
+                            if let Some(ref cache) = self.cache {
+                                let _ = cache.put_kv("lan:server:sources", &server_sources);
+                            }
                             sources.push("LAN Server".into());
                         }
                         let src_text = sources.join(" + ");
