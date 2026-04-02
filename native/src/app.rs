@@ -1363,6 +1363,26 @@ impl ChartState {
             self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                 ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
             }).collect();
+
+            // Merge CryptoCompare + Kraken bars for weekend gap-fill (same as load())
+            let mut existing_ts: std::collections::HashSet<i64> = self.bars.iter().map(|b| b.ts_ms).collect();
+            let mut gap_filled = 0usize;
+            for prefix in &["cryptocompare", "kraken"] {
+                let gap_key = format!("{}:{}:{}", prefix, sym, tf);
+                if let Ok(Some(gap_raw)) = cache.get_bars_raw(&gap_key) {
+                    for (ts, o, h, l, c, v) in gap_raw {
+                        if !existing_ts.contains(&ts) {
+                            existing_ts.insert(ts);
+                            self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
+                            gap_filled += 1;
+                        }
+                    }
+                }
+            }
+            if gap_filled > 0 {
+                self.bars.sort_by_key(|b| b.ts_ms);
+            }
+
             self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
             self.compute_indicators_gpu(gpu);
             self.compute_mtf_sma(cache);
@@ -1370,9 +1390,10 @@ impl ChartState {
             let mtf_info = if !self.mtf_sma.is_empty() || !self.multi_kama.is_empty() {
                 format!(" | MTF_MA: {} lines, MultiKAMA: {} TFs", self.mtf_sma.len(), self.multi_kama.len())
             } else { String::new() };
+            let gap_info = if gap_filled > 0 { format!(" +{} gap-fill", gap_filled) } else { String::new() };
             log.push_back(LogEntry::info(format!(
-                "Loaded {} bars for {} [{}]{}",
-                self.bars.len(), self.symbol, self.timeframe.label(), mtf_info
+                "Loaded {} bars for {} [{}]{}{}",
+                self.bars.len(), self.symbol, self.timeframe.label(), mtf_info, gap_info
             )));
         }
         true
