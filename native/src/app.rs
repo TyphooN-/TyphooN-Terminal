@@ -10497,8 +10497,10 @@ impl TyphooNApp {
                             continue;
                         }
 
-                        // Phase 2: pure computation (no DB, no lock contention)
-                        if !data.daily_returns.is_empty() {
+                        // Phase 2: pure computation from daily_returns
+                        // LAN client loads these pre-computed from KV in Phase 3-4 block below.
+                        // Server computes here and stores to KV later.
+                        if !is_lan_client && !data.daily_returns.is_empty() {
                             data.var_stats = Some(darwin::compute_var(&data.daily_returns));
                             data.monte_carlo = Some(darwin::monte_carlo_var(&data.daily_returns, 252, 1000));
                             data.rolling_var = darwin::get_rolling_var(&data.daily_returns, 30);
@@ -10509,9 +10511,42 @@ impl TyphooNApp {
                             data.seasonal_analysis = darwin::get_seasonal_analysis(&data.daily_returns);
                         }
 
-                        // Phase 3-4: heavy DB queries from deals — skip on LAN client
-                        // (deal data produces wrong analytics; daily_returns/exposure from KV are correct)
-                        if !is_lan_client {
+                        // Phase 3-4: deal-dependent analytics
+                        if is_lan_client {
+                            // LAN client: read ALL from KV (server-computed). Zero local deal queries.
+                            macro_rules! kv_load {
+                                ($key:expr, $field:ident) => {
+                                    if let Ok(Some(j)) = cache.get_kv($key) {
+                                        if let Ok(v) = serde_json::from_str(&j) { data.$field = v; }
+                                    }
+                                };
+                                ($key:expr, $field:ident, opt) => {
+                                    if let Ok(Some(j)) = cache.get_kv($key) {
+                                        if let Ok(v) = serde_json::from_str(&j) { data.$field = Some(v); }
+                                    }
+                                };
+                            }
+                            kv_load!("darwin:optimal_allocation", optimal_allocation);
+                            kv_load!("darwin:rebalance", rebalance, opt);
+                            kv_load!("darwin:stress_tests", stress_tests);
+                            kv_load!("darwin:margin_call_sim", margin_call_sim, opt);
+                            kv_load!("darwin:drawdown_dashboard", drawdown_dashboard, opt);
+                            kv_load!("darwin:drawdown_attribution", drawdown_attribution);
+                            kv_load!("darwin:risk_budget", risk_budget);
+                            kv_load!("darwin:signal_decay", signal_decay);
+                            kv_load!("darwin:var_multipliers", var_multipliers);
+                            kv_load!("darwin:floating_equity", floating_equity, opt);
+                            kv_load!("darwin:per_darwin_var", per_darwin_var);
+                            kv_load!("darwin:var_stats", var_stats, opt);
+                            kv_load!("darwin:monte_carlo", monte_carlo, opt);
+                            kv_load!("darwin:rolling_var", rolling_var);
+                            kv_load!("darwin:var_forecast", var_forecast, opt);
+                            kv_load!("darwin:conditional_var", conditional_var);
+                            kv_load!("darwin:market_regime", market_regime, opt);
+                            kv_load!("darwin:tail_risk", tail_risk, opt);
+                            kv_load!("darwin:seasonal_analysis", seasonal_analysis);
+                        } else {
+                            // Server/standalone: compute from deals, store ALL to KV for clients
                             data.optimal_allocation = darwin::compute_optimal_allocation(conn).unwrap_or_default();
                             {
                                 let prices = std::collections::HashMap::new();
@@ -10536,7 +10571,6 @@ impl TyphooNApp {
                                 let prices = std::collections::HashMap::new();
                                 data.floating_equity = darwin::compute_floating_equity(conn, &prices).ok();
                             }
-                            // Phase 4: per-DARWIN VaR
                             {
                                 let mut per_var = Vec::new();
                                 for acct in &data.accounts {
@@ -10548,6 +10582,31 @@ impl TyphooNApp {
                                 }
                                 data.per_darwin_var = per_var;
                             }
+                            // Store ALL analytics to KV for LAN clients
+                            macro_rules! kv_store {
+                                ($key:expr, $val:expr) => {
+                                    if let Ok(j) = serde_json::to_string($val) { let _ = cache.put_kv($key, &j); }
+                                };
+                            }
+                            kv_store!("darwin:optimal_allocation", &data.optimal_allocation);
+                            if let Some(ref v) = data.rebalance { kv_store!("darwin:rebalance", v); }
+                            kv_store!("darwin:stress_tests", &data.stress_tests);
+                            if let Some(ref v) = data.margin_call_sim { kv_store!("darwin:margin_call_sim", v); }
+                            if let Some(ref v) = data.drawdown_dashboard { kv_store!("darwin:drawdown_dashboard", v); }
+                            kv_store!("darwin:drawdown_attribution", &data.drawdown_attribution);
+                            kv_store!("darwin:risk_budget", &data.risk_budget);
+                            kv_store!("darwin:signal_decay", &data.signal_decay);
+                            kv_store!("darwin:var_multipliers", &data.var_multipliers);
+                            if let Some(ref v) = data.floating_equity { kv_store!("darwin:floating_equity", v); }
+                            kv_store!("darwin:per_darwin_var", &data.per_darwin_var);
+                            if let Some(ref v) = data.var_stats { kv_store!("darwin:var_stats", v); }
+                            if let Some(ref v) = data.monte_carlo { kv_store!("darwin:monte_carlo", v); }
+                            kv_store!("darwin:rolling_var", &data.rolling_var);
+                            if let Some(ref v) = data.var_forecast { kv_store!("darwin:var_forecast", v); }
+                            kv_store!("darwin:conditional_var", &data.conditional_var);
+                            if let Some(ref v) = data.market_regime { kv_store!("darwin:market_regime", v); }
+                            if let Some(ref v) = data.tail_risk { kv_store!("darwin:tail_risk", v); }
+                            kv_store!("darwin:seasonal_analysis", &data.seasonal_analysis);
                         }
 
                         // Phase 5: per-account detailed analytics (DARWIN Accounts window)
