@@ -727,6 +727,7 @@ struct TradeMarker {
     volume: f64,        // aggregated total lots
     is_buy: bool,       // true=buy, false=sell
     count: u32,         // number of individual deals aggregated
+    ticker: String,     // DARWIN ticker (e.g., "HAKR", "MFSO")
 }
 
 /// Open position line for chart overlay (entry, SL, TP).
@@ -5965,17 +5966,22 @@ fn draw_chart(
                     egui::pos2(x + arrow_size * 0.6, base_y),
                 ];
                 painter.add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
-                // Volume label (only if aggregated or significant)
-                if tm.count > 1 || tm.volume >= 0.1 {
-                    let label_y = if tm.is_buy { base_y + 2.0 } else { base_y - 10.0 };
-                    painter.text(
-                        egui::pos2(x, label_y),
-                        egui::Align2::CENTER_TOP,
-                        &format!("{:.2}", tm.volume),
-                        egui::FontId::monospace(8.0),
-                        color,
-                    );
-                }
+                // Ticker + volume label
+                let label_y = if tm.is_buy { base_y + 2.0 } else { base_y - 10.0 };
+                let label = if tm.ticker.is_empty() {
+                    format!("{:.2}", tm.volume)
+                } else if tm.count > 1 || tm.volume >= 0.1 {
+                    format!("{} {:.2}", tm.ticker, tm.volume)
+                } else {
+                    tm.ticker.clone()
+                };
+                painter.text(
+                    egui::pos2(x, label_y),
+                    egui::Align2::CENTER_TOP,
+                    &label,
+                    egui::FontId::monospace(8.0),
+                    color,
+                );
             }
         }
     }
@@ -11228,30 +11234,39 @@ impl TyphooNApp {
 
         // Collect deals from all DARWIN accounts matching this symbol
         use std::collections::HashMap;
-        let mut marker_map: HashMap<(usize, bool, i64), (f64, u32)> = HashMap::new(); // (bar_idx, is_buy, price_cents) → (total_vol, count)
+        let mut marker_map: HashMap<(usize, bool, i64), (f64, u32, String)> = HashMap::new(); // (bar_idx, is_buy, price_cents) → (total_vol, count, ticker)
 
         for det in &self.bg.account_details {
             // Check closed positions (have SL/TP)
             for pos in &det.closed_positions {
                 if pos.symbol != bare_sym { continue; }
+                let ticker = det.ticker.clone();
                 // Entry arrow
                 let ts = parse_time(&pos.open_time);
                 if let Some(bar_idx) = find_bar(ts) {
                     let is_buy = pos.pos_type == "buy";
                     let price_key = (pos.open_price * 100000.0) as i64;
-                    let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0));
+                    let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0, String::new()));
                     entry.0 += pos.volume;
                     entry.1 += 1;
+                    if !entry.2.contains(&ticker) {
+                        if !entry.2.is_empty() { entry.2.push_str(", "); }
+                        entry.2.push_str(&ticker);
+                    }
                 }
                 // Exit arrow (opposite direction)
                 if !pos.close_time.is_empty() {
                     let ts = parse_time(&pos.close_time);
                     if let Some(bar_idx) = find_bar(ts) {
-                        let is_buy = pos.pos_type != "buy"; // exit is opposite
+                        let is_buy = pos.pos_type != "buy";
                         let price_key = (pos.close_price * 100000.0) as i64;
-                        let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0));
+                        let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0, String::new()));
                         entry.0 += pos.volume;
                         entry.1 += 1;
+                        if !entry.2.contains(&ticker) {
+                            if !entry.2.is_empty() { entry.2.push_str(", "); }
+                            entry.2.push_str(&ticker);
+                        }
                     }
                 }
             }
@@ -11263,9 +11278,13 @@ impl TyphooNApp {
                 if let Some(bar_idx) = find_bar(ts) {
                     let is_buy = deal.deal_type == "buy";
                     let price_key = (deal.price * 100000.0) as i64;
-                    let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0));
+                    let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0, String::new()));
                     entry.0 += deal.volume;
                     entry.1 += 1;
+                    if !entry.2.contains(&det.ticker) {
+                        if !entry.2.is_empty() { entry.2.push_str(", "); }
+                        entry.2.push_str(&det.ticker);
+                    }
                 }
             }
 
@@ -11297,20 +11316,21 @@ impl TyphooNApp {
             if let Some(bar_idx) = find_bar(ts) {
                 let is_buy = side == "buy";
                 let price_key = (*price * 100000.0) as i64;
-                let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0));
+                let entry = marker_map.entry((bar_idx, is_buy, price_key)).or_insert((0.0, 0, String::new()));
                 entry.0 += qty;
                 entry.1 += 1;
             }
         }
 
         // Convert marker map to sorted markers
-        for ((bar_idx, is_buy, price_key), (volume, count)) in marker_map {
+        for ((bar_idx, is_buy, price_key), (volume, count, ticker)) in marker_map {
             overlay.markers.push(TradeMarker {
                 bar_idx,
                 price: price_key as f64 / 100000.0,
                 volume,
                 is_buy,
                 count,
+                ticker,
             });
         }
         overlay.markers.sort_by_key(|m| m.bar_idx);
@@ -24200,16 +24220,16 @@ mod tests {
     fn test_trade_marker_aggregation() {
         // Verify the HashMap aggregation logic used in build_trade_overlay
         use std::collections::HashMap;
-        let mut marker_map: HashMap<(usize, bool, i64), (f64, u32)> = HashMap::new();
+        let mut marker_map: HashMap<(usize, bool, i64), (f64, u32, String)> = HashMap::new();
 
         // 3 buys at same bar+price
         for _ in 0..3 {
-            let entry = marker_map.entry((100, true, 15000)).or_insert((0.0, 0));
+            let entry = marker_map.entry((100, true, 15000)).or_insert((0.0, 0, String::new()));
             entry.0 += 0.10;
             entry.1 += 1;
         }
         // 1 sell at different price
-        let entry = marker_map.entry((100, false, 16000)).or_insert((0.0, 0));
+        let entry = marker_map.entry((100, false, 16000)).or_insert((0.0, 0, String::new()));
         entry.0 += 0.50;
         entry.1 += 1;
 
