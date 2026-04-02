@@ -23195,6 +23195,39 @@ impl eframe::App for TyphooNApp {
             }
         }
 
+        // Poll for remote commands from LAN clients (server only, every ~5 seconds)
+        if self.frame_count % 20 == 3 && self.lan_sync_mode == "server" {
+            if let Some(ref cache) = self.cache {
+                if let Ok(Some(json)) = cache.get_kv("lan:remote_cmd") {
+                    // Clear immediately to avoid re-executing
+                    let _ = cache.put_kv("lan:remote_cmd", "");
+                    if !json.is_empty() {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json) {
+                            let cmd = v["cmd"].as_str().unwrap_or("");
+                            let args = v["args"].as_str().unwrap_or("");
+                            match cmd {
+                                "FETCH_BARS" => {
+                                    // Parse "SYMBOL,TF" from args
+                                    if let Some((symbol, tf)) = args.split_once(',') {
+                                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                        let _ = self.broker_tx.send(BrokerCmd::FetchBars {
+                                            symbol: symbol.to_string(),
+                                            timeframe: tf.to_string(),
+                                            db_path,
+                                        });
+                                        self.log.push_back(LogEntry::info(format!("LAN remote: fetching {} {} from Alpaca", symbol, tf)));
+                                    }
+                                }
+                                _ => {
+                                    self.log.push_back(LogEntry::info(format!("LAN remote: '{}' (args: {})", cmd, args)));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Poll watchlist quotes every ~15 seconds (disabled for LAN client)
         if self.frame_count % 60 == 5 && !self.user_watchlist.is_empty() && self.broker_connected && !self.lan_client_enabled {
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });

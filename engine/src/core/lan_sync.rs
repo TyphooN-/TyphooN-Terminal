@@ -800,7 +800,11 @@ async fn handle_client_tls(
                     }
                 } else {
                     tracing::info!("LAN sync: client requested remote '{}' (args: {})", cmd, &args[..args.len().min(100)]);
-                    let msg_text = format!("Remote '{}' queued on server", cmd);
+                    // Store remote request to KV for the server's broker loop to pick up.
+                    // The broker loop polls "lan:remote_cmd" every cycle and executes it.
+                    let request_json = serde_json::json!({ "cmd": cmd, "args": args }).to_string();
+                    let _ = cache.put_kv("lan:remote_cmd", &request_json);
+                    let msg_text = format!("Remote '{}' accepted — executing on server", cmd);
                     if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone { cmd, message: msg_text }) {
                         let _ = sink.send(msg).await;
                     }
