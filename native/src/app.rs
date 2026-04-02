@@ -11387,15 +11387,15 @@ impl TyphooNApp {
             }
             "OBJECTS" | "OBJECT_LIST" => { self.show_object_list = !self.show_object_list; }
             // Timeframe shortcuts
-            "M1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M1); }
-            "M5"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M5); }
-            "M15" => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M15); }
-            "M30" => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::M30); }
-            "H1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::H1); }
-            "H4"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::H4); }
-            "D1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::D1); }
-            "W1"  => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::W1); }
-            "MN1" => { let sym = self.symbol_input.clone(); self.reload_symbol(&sym, Timeframe::MN1); }
+            "M1"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::M1); }
+            "M5"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::M5); }
+            "M15" => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::M15); }
+            "M30" => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::M30); }
+            "H1"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::H1); }
+            "H4"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::H4); }
+            "D1"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::D1); }
+            "W1"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::W1); }
+            "MN1" => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::MN1); }
             // Aliases
             "EQUITY"         => self.show_darwin_portfolio = true,
             "CALC"           => self.show_risk_calc = true,
@@ -20057,7 +20057,11 @@ impl eframe::App for TyphooNApp {
                     let btn_color = if selected { ACCENT } else { AXIS_TEXT };
                     let btn_text  = egui::RichText::new(tf.label()).color(btn_color).small().strong();
                     if ui.small_button(btn_text).clicked() {
-                        let sym = self.symbol_input.trim().to_string();
+                        // Use the active chart's symbol, NOT the text box.
+                        // The text box is only for explicit symbol search (Enter key).
+                        let sym = self.charts.get(self.active_tab)
+                            .map(|c| c.symbol.clone())
+                            .unwrap_or_else(|| self.symbol_input.trim().to_string());
                         self.reload_symbol(&sym, tf);
                     }
                 }
@@ -20338,6 +20342,12 @@ impl eframe::App for TyphooNApp {
                 // Apply deferred actions
                 if let Some(idx) = switch_to {
                     self.active_tab = idx;
+                    // Sync symbol_input to the clicked tab's symbol.
+                    // Without this, clicking a timeframe button after switching tabs
+                    // reloads the OLD symbol (from the text box) instead of the tab's symbol.
+                    if let Some(chart) = self.charts.get(idx) {
+                        self.symbol_input = chart.symbol.clone();
+                    }
                     // Lazy-load chart bars on first tab switch
                     if let Some(chart) = self.charts.get_mut(idx) {
                         if chart.bars.is_empty() {
