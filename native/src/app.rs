@@ -8689,8 +8689,6 @@ pub struct TyphooNApp {
     lan_client_enabled: bool,
     /// Persistent: saved LAN server IP for auto-connect
     lan_server_ip: String,
-    /// Server: connected client IPs (updated from LAN sync status)
-    lan_connected_clients: Vec<String>,
     show_help: bool,
     show_connect: bool,
     show_indicators_panel: bool,
@@ -10200,7 +10198,6 @@ impl TyphooNApp {
             lan_sync_passphrase: String::new(),
             lan_client_enabled: false,
             lan_server_ip: String::new(),
-            lan_connected_clients: Vec::new(),
             show_help: false,
             show_connect: false,
             show_indicators_panel: false,
