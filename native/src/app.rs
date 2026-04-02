@@ -23247,8 +23247,83 @@ impl eframe::App for TyphooNApp {
                                             self.log.push_back(LogEntry::info(format!("LAN remote: fetching {} {} from Alpaca", symbol, tf)));
                                         }
                                     }
+                                    "FUNDAMENTALS" => {
+                                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path });
+                                        self.log.push_back(LogEntry::info("LAN remote: fundamentals scrape started"));
+                                    }
+                                    "SEC_SCRAPE" => {
+                                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                        let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
+                                        self.log.push_back(LogEntry::info("LAN remote: SEC scrape started"));
+                                    }
+                                    "MT5_SYNC" => {
+                                        let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
+                                        if !paths.is_empty() {
+                                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths });
+                                            self.log.push_back(LogEntry::info("LAN remote: MT5 sync started"));
+                                        }
+                                    }
+                                    "FRED_DATA" => {
+                                        if !self.fred_key.is_empty() {
+                                            let _ = self.broker_tx.send(BrokerCmd::FredFetch { api_key: self.fred_key.clone() });
+                                            self.log.push_back(LogEntry::info("LAN remote: FRED fetch started"));
+                                        }
+                                    }
+                                    "FINNHUB_NEWS" => {
+                                        if !self.finnhub_key.is_empty() {
+                                            let sym = if args.is_empty() { "general".to_string() } else { args.to_string() };
+                                            let _ = self.broker_tx.send(BrokerCmd::FinnhubNews { symbol: sym, api_key: self.finnhub_key.clone() });
+                                            self.log.push_back(LogEntry::info("LAN remote: Finnhub news fetch started"));
+                                        }
+                                    }
+                                    "CRYPTOCOMPARE" => {
+                                        // Default: backfill all 10 crypto pairs
+                                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                        let tfs = vec!["1Day".into(), "1Month".into(), "1Week".into(), "4Hour".into(), "1Hour".into(), "30Min".into(), "15Min".into(), "5Min".into()];
+                                        for sym in &["BTCUSD", "ETHUSD", "SOLUSD", "DOGEUSD"] {
+                                            let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill { symbol: sym.to_string(), timeframes: tfs.clone(), db_path: db_path.clone() });
+                                        }
+                                        self.log.push_back(LogEntry::info("LAN remote: CryptoCompare backfill started"));
+                                    }
+                                    "ECON_CALENDAR" => {
+                                        if !self.finnhub_key.is_empty() {
+                                            let _ = self.broker_tx.send(BrokerCmd::FetchEconCalendar { finnhub_key: self.finnhub_key.clone() });
+                                            self.log.push_back(LogEntry::info("LAN remote: econ calendar fetch started"));
+                                        }
+                                    }
+                                    "CONGRESS_TRADES" => {
+                                        let _ = self.broker_tx.send(BrokerCmd::FetchCongressTrades);
+                                        self.log.push_back(LogEntry::info("LAN remote: congress trades fetch started"));
+                                    }
+                                    "FUNDAMENTALS_ONE" => {
+                                        if !args.is_empty() {
+                                            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                            let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrapeOne { ticker: args.to_string(), db_path });
+                                            self.log.push_back(LogEntry::info(format!("LAN remote: fundamentals scrape for {}", args)));
+                                        }
+                                    }
+                                    "KRAKEN_BACKFILL" => {
+                                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                        let sym = if args.is_empty() { "BTCUSD" } else { args };
+                                        let tfs = vec!["1Day".into(), "1Hour".into(), "4Hour".into(), "15Min".into(), "30Min".into(), "5Min".into()];
+                                        let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: sym.to_string(), timeframes: tfs, db_path });
+                                        self.log.push_back(LogEntry::info(format!("LAN remote: Kraken backfill {} started", sym)));
+                                    }
+                                    "DARWIN_IMPORT" => {
+                                        if !self.darwin_xlsx_dir.is_empty() {
+                                            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                            let _ = self.broker_tx.send(BrokerCmd::DarwinImportAll { dir: std::path::PathBuf::from(&self.darwin_xlsx_dir), db_path });
+                                            self.log.push_back(LogEntry::info("LAN remote: DARWIN XLSX import started"));
+                                        }
+                                    }
+                                    "EVSCRAPE" => {
+                                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path });
+                                        self.log.push_back(LogEntry::info("LAN remote: EVScrape started"));
+                                    }
                                     _ => {
-                                        self.log.push_back(LogEntry::info(format!("LAN remote: '{}' (args: {})", cmd, args)));
+                                        self.log.push_back(LogEntry::info(format!("LAN remote: unhandled '{}' (args: {})", cmd, args)));
                                     }
                                 }
                             }
