@@ -9855,10 +9855,17 @@ impl TyphooNApp {
                                     }
                                 }
                             }
+                            // Sub-hourly TFs: CryptoCompare only has 7 days of minute data.
+                            // Use 7-day start instead of 2010 to avoid "only available for last 7 days" error.
+                            let tf_start = match tf.as_str() {
+                                "5Min" | "15Min" | "30Min" | "1Min" => now_ms - 7 * 24 * 3600 * 1000,
+                                _ => start_ms,
+                            };
                             let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
-                                "CryptoCompare {} {} fetching...", symbol, tf
+                                "CryptoCompare {} {} fetching{}...", symbol, tf,
+                                if tf_start != start_ms { " (7-day window)" } else { "" }
                             )));
-                            match cryptocompare::fetch_ohlcv(&client, &symbol, tf, start_ms, now_ms).await {
+                            match cryptocompare::fetch_ohlcv(&client, &symbol, tf, tf_start, now_ms).await {
                                 Ok(bars) => {
                                     let count = bars.len();
                                     total_bars += count;
@@ -10093,7 +10100,16 @@ impl TyphooNApp {
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared = shared_cache_broker.clone();
                         tokio::spawn(async move {
-                            if let Some(cache_arc) = shared.read().ok().and_then(|g| g.clone()) {
+                            // Wait for cache to be ready (up to 30s)
+                            let mut cache_arc = shared.read().ok().and_then(|g| g.clone());
+                            if cache_arc.is_none() {
+                                for _ in 0..30 {
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    cache_arc = shared.read().ok().and_then(|g| g.clone());
+                                    if cache_arc.is_some() { break; }
+                                }
+                            }
+                            if let Some(cache_arc) = cache_arc {
                                 match LanSyncServer::start(cache_arc, port, &passphrase).await {
                                     Ok(_server) => {
                                         let _ = msg_tx.send(BrokerMsg::OrderResult(format!("LAN sync server running on wss://0.0.0.0:{}", port)));
@@ -10110,14 +10126,22 @@ impl TyphooNApp {
                     }
                     BrokerCmd::LanSyncConnect { host, port, passphrase, .. } => {
                         use typhoon_engine::core::lan_sync::LanSyncClient;
-                        // Spawn as independent task — connect can take up to 10s on unreachable hosts
-                        // and must not block the broker command loop
                         let msg_tx = broker_msg_tx_clone.clone();
                         let shared = shared_cache_broker.clone();
                         let lan_remote = lan_remote_tx_ref.clone();
                         let lan_flag = lan_client.clone();
                         tokio::spawn(async move {
-                            if let Some(cache_arc) = shared.read().ok().and_then(|g| g.clone()) {
+                            // Wait for cache to be ready (up to 30s) — handles startup race
+                            // where LAN auto-connect fires before async cache-open completes.
+                            let mut cache_arc = shared.read().ok().and_then(|g| g.clone());
+                            if cache_arc.is_none() {
+                                for _ in 0..30 {
+                                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                                    cache_arc = shared.read().ok().and_then(|g| g.clone());
+                                    if cache_arc.is_some() { break; }
+                                }
+                            }
+                            if let Some(cache_arc) = cache_arc {
                                 match tokio::time::timeout(
                                     std::time::Duration::from_secs(10),
                                     LanSyncClient::connect(cache_arc, &host, port, &passphrase),
