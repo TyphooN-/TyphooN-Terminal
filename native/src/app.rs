@@ -22152,7 +22152,28 @@ impl eframe::App for TyphooNApp {
                                 let pmin = centre - half;
                                 let pmax = centre + half;
                                 let frac = (pos.y - chart_rect.top()) / chart_rect.height();
-                                let price = pmax - frac as f64 * (pmax - pmin);
+                                let raw_price = pmax - frac as f64 * (pmax - pmin);
+
+                                // OHLC Snap: snap to nearest candlestick OHLC price if within
+                                // a small threshold. Makes drawing endpoints align precisely with
+                                // candle levels — essential for accurate Fib, trendline, S/R work.
+                                let price = if abs_idx < chart.bars.len() {
+                                    let bar = &chart.bars[abs_idx];
+                                    let ohlc = [bar.open, bar.high, bar.low, bar.close];
+                                    let snap_threshold = (pmax - pmin) * 0.015; // 1.5% of visible range
+                                    let mut best = raw_price;
+                                    let mut best_dist = f64::MAX;
+                                    for &level in &ohlc {
+                                        let dist = (raw_price - level).abs();
+                                        if dist < snap_threshold && dist < best_dist {
+                                            best = level;
+                                            best_dist = dist;
+                                        }
+                                    }
+                                    best
+                                } else {
+                                    raw_price
+                                };
 
                                 match self.draw_mode {
                                     DrawMode::PlacingHLine => {
