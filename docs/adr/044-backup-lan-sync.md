@@ -78,8 +78,9 @@ WebSocket messages over TLS-encrypted TCP (wss://), authenticated with PBKDF2-de
 - **15-second periodic re-sync**: pulls updated bars, KV, DARWIN, research tables automatically
 - Auto-connects on startup if `lan_client_enabled` is saved in session
 - Read-only view of server's Alpaca positions/orders/account (from KV cache `broker:*`)
-- Read-only view of server's DARWIN open positions (from KV cache `darwin:open_positions`)
-- Resync buttons: Resync Bars, Resync DARWIN, Resync Positions
+- **23 DARWIN analytics fields** from server KV — zero local deal queries. Positions, portfolio, exposure, correlations, VaR, Monte Carlo, optimal allocation, rebalance, stress tests, drawdown, signal decay, etc. All identical to server.
+- BG thread checks `lan_client_flag` — never calls `get_portfolio_open_positions()` or any deal-dependent computation locally.
+- Resync buttons: Resync Bars, Resync DARWIN Analytics, Resync Positions
 - SEC filing content fetched directly (public EDGAR URLs, not forwarded to server)
 
 #### Full Data Sync Protocol (13 tables)

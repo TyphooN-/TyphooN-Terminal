@@ -123,7 +123,7 @@ TyphooN-Terminal/
 
 ### LAN Sync
 
-TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates generated on server start (no pinning — PBKDF2 passphrase handles authentication). PBKDF2-HMAC-SHA256 challenge-response authentication (100K iterations). Full data sync: bars + DARWIN tables + KV cache (fundamentals, news, SEC, FRED). LAN clients forward data requests to server (no outbound API calls). Multi-client support. Implemented in `engine/src/core/lan_sync.rs`.
+TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 15-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + KV cache + 23 pre-computed analytics fields. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. Connected client IPs shown in server UI. Implemented in `engine/src/core/lan_sync.rs`.
 
 ### Storage Manager
 
@@ -133,9 +133,9 @@ The `STORAGE` command opens a cache storage manager with:
 - **Purge All Bar Data:** Delete all bar_cache + bar_track entries (with red confirmation prompt)
 - **Purge All DARWIN Data:** Delete all DARWIN accounts, deals, positions, equity snapshots (with red confirmation prompt)
 
-### SQLite Dual-Connection Architecture
+### SQLite Multi-Connection Architecture
 
-`SqliteCache` opens two connections under WAL mode: `conn` (write path — put_bars, compact, Mt5Sync, create_tables) and `read_conn` (read path — get_bars_raw, stats, detailed_stats). The two Mutexes are independent: writes never block reads. All connections use `busy_timeout=5000` for SQLite-level retry. Mt5Sync opens its own separate connection; MT5 source databases are opened via `open_readonly()` (no journal_mode conflict with BarCacheWriter's DELETE mode on Wine).
+`SqliteCache` uses 5 connection types under WAL mode: `conn` (write Mutex), `read_conn` (UI-exclusive Mutex), BG thread (own connection, reopened each cycle), Phase 5 scoped threads (each opens own connection), Mt5Sync (own `SqliteCache::open()`). WAL allows unlimited concurrent readers. BG thread reopens its connection every 3s for WAL freshness. `maybe_decompress()` transparently handles both raw TTBR (from BarCacheWriter) and zstd-compressed (from Rust) data. Source MT5 databases use `open_readonly()` with 10s `busy_timeout`.
 
 ### Multi-Window Support
 

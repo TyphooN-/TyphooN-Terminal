@@ -111,11 +111,12 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - Server auto-start on startup (`lan_server_enabled` persisted). Client auto-connect (`lan_client_enabled`).
 - Connected client IPs tracked and displayed in server UI (stored in KV `lan:server:clients`).
 - Broker positions/account/orders stored to KV cache → LAN clients read-only view.
-- DARWIN open positions stored as pre-computed KV (`darwin:open_positions`) — bypasses broken 45K-deal recompute.
+- **23 DARWIN analytics fields** stored to KV by server, read by LAN client — zero local deal queries on client. Covers: open_positions, portfolio, exposure, correlations, daily_returns, var_stats, monte_carlo, rolling_var, var_forecast, conditional_var, market_regime, tail_risk, seasonal_analysis, optimal_allocation, rebalance, stress_tests, margin_call_sim, drawdown_dashboard, drawdown_attribution, risk_budget, signal_decay, var_multipliers, floating_equity, per_darwin_var.
+- LAN client BG thread checks `lan_client_flag` — never computes from local deals (broken 45K-deal import produces wrong results). All analytics identical between server and client.
 - 300-second read timeout (DARWIN export of 45K+ deals takes >60s).
-- `import_darwin_data`: FK-safe delete order (equity_snapshots → deals → positions → accounts), no explicit transaction.
+- `import_darwin_data`: FK-safe delete order (equity_snapshots → deals → positions → accounts), safety ROLLBACK before `unchecked_transaction()`.
 - SEC filing content fetched directly by client (public EDGAR URLs, not forwarded to server).
-- Resync buttons: Bars, DARWIN, Positions.
+- Resync buttons: Bars, DARWIN Analytics, Positions.
 
 **BarCacheWriter v1.432:**
 - In-memory merge (SQL BLOB approach reverted — MQL5 TEXT/BLOB corruption).
@@ -124,7 +125,8 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - Batch 5, sleep 200ms, incremental_vacuum every 30min, 100K bar cap.
 
 **Other:**
-- Alpaca auto-connect on startup. tastytrade button disabled.
-- Crypto backfill: CryptoCompare + Kraken for sub-hourly TFs.
+- Alpaca auto-connect on startup. tastytrade button disabled (ADR-022).
+- Crypto backfill: CryptoCompare + Kraken for sub-hourly TFs (complementary, both stored).
 - Status bar: LIVE when any data source connected (removed market hours logic).
 - MTF indicators (SMA/KAMA) computed in `try_load()` (was missing — invisible on chart).
+- TF buttons and command palette TF shortcuts use active chart's symbol (not text box).
