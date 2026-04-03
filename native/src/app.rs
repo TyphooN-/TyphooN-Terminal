@@ -19508,6 +19508,10 @@ fn dirs_home() -> PathBuf {
 #[allow(deprecated)] // egui 0.34: Panel::show(ctx) deprecated in favor of show_inside(ui)
                       // Full migration to ui() pattern deferred — show(ctx) works identically
 impl eframe::App for TyphooNApp {
+    fn on_exit(&mut self) {
+        self.save_session();
+    }
+
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Panels rendered in update() via ctx — egui 0.34 migration to ui() pattern is deferred
         // since our 16K-line update() mixes panel rendering with floating windows + state logic
@@ -21371,13 +21375,13 @@ impl eframe::App for TyphooNApp {
                         });
 
                     // ── Orders Section ────────────────────────────────────
-                    let ord_count = self.live_orders.len();
+                    let ord_count = if self.show_alpaca_positions { self.live_orders.len() } else { 0 };
                     egui::CollapsingHeader::new(egui::RichText::new(format!("Orders ({})", ord_count)).strong().small())
                         .id_salt("orders_section")
                         .default_open(self.right_orders_open)
                         .show(ui, |ui| {
                             ui.add_space(4.0);
-                            if self.broker_connected && !self.live_orders.is_empty() {
+                            if (self.broker_connected || self.lan_sync_mode == "client") && self.show_alpaca_positions && !self.live_orders.is_empty() {
                                 for order in &self.live_orders {
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new(&order.symbol).small().strong());
