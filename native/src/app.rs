@@ -132,53 +132,108 @@ impl ChartType {
 }
 
 /// Available timeframes for the selector toolbar.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 enum Timeframe {
+    // Base timeframes (stored natively in cache)
     M1, M5, M15, M30, H1, H4, D1, W1, MN1,
+    // Custom aggregated timeframes (built from base TFs on load)
+    M2, M3, M10, M20, M45,
+    H2, H3, H6, H8, H12,
+    D2, D3, D5, D10,
+    W2, W3,
+    MN2, MN3, MN6,
+    Y1, Y2, Y3, Y5, Y10,
 }
 
 impl Timeframe {
     fn label(self) -> &'static str {
         match self {
-            Timeframe::M1  => "M1",
-            Timeframe::M5  => "M5",
-            Timeframe::M15 => "M15",
-            Timeframe::M30 => "M30",
-            Timeframe::H1  => "H1",
-            Timeframe::H4  => "H4",
-            Timeframe::D1  => "D1",
-            Timeframe::W1  => "W1",
-            Timeframe::MN1 => "MN1",
+            Timeframe::M1  => "M1",  Timeframe::M2  => "M2",  Timeframe::M3  => "M3",
+            Timeframe::M5  => "M5",  Timeframe::M10 => "M10",
+            Timeframe::M15 => "M15", Timeframe::M20 => "M20",
+            Timeframe::M30 => "M30", Timeframe::M45 => "M45",
+            Timeframe::H1  => "H1",  Timeframe::H2  => "H2",  Timeframe::H3  => "H3",
+            Timeframe::H4  => "H4",  Timeframe::H6  => "H6",  Timeframe::H8  => "H8",
+            Timeframe::H12 => "H12",
+            Timeframe::D1  => "D1",  Timeframe::D2  => "D2",  Timeframe::D3  => "D3",
+            Timeframe::D5  => "D5",  Timeframe::D10 => "D10",
+            Timeframe::W1  => "W1",  Timeframe::W2  => "W2",  Timeframe::W3  => "W3",
+            Timeframe::MN1 => "MN1", Timeframe::MN2 => "MN2", Timeframe::MN3 => "MN3",
+            Timeframe::MN6 => "MN6",
+            Timeframe::Y1  => "Y1",  Timeframe::Y2  => "Y2",  Timeframe::Y3  => "Y3",
+            Timeframe::Y5  => "Y5",  Timeframe::Y10 => "Y10",
         }
     }
 
-    /// Timeframe in minutes (used by ATR projection MTF).
+    /// All timeframes for dropdown display, organized by group.
+    fn all() -> &'static [Timeframe] {
+        &[
+            Timeframe::M1, Timeframe::M2, Timeframe::M3, Timeframe::M5, Timeframe::M10,
+            Timeframe::M15, Timeframe::M20, Timeframe::M30, Timeframe::M45,
+            Timeframe::H1, Timeframe::H2, Timeframe::H3, Timeframe::H4,
+            Timeframe::H6, Timeframe::H8, Timeframe::H12,
+            Timeframe::D1, Timeframe::D2, Timeframe::D3, Timeframe::D5, Timeframe::D10,
+            Timeframe::W1, Timeframe::W2, Timeframe::W3,
+            Timeframe::MN1, Timeframe::MN2, Timeframe::MN3, Timeframe::MN6,
+            Timeframe::Y1, Timeframe::Y2, Timeframe::Y3, Timeframe::Y5, Timeframe::Y10,
+        ]
+    }
+
+    /// Parse from label string (for session restore, command palette).
+    fn from_label(s: &str) -> Option<Self> {
+        Self::all().iter().find(|tf| tf.label().eq_ignore_ascii_case(s)).copied()
+    }
+
+    /// Timeframe in minutes.
     fn minutes(self) -> u32 {
         match self {
-            Timeframe::M1  => 1,
-            Timeframe::M5  => 5,
-            Timeframe::M15 => 15,
-            Timeframe::M30 => 30,
-            Timeframe::H1  => 60,
-            Timeframe::H4  => 240,
-            Timeframe::D1  => 1440,
-            Timeframe::W1  => 10080,
-            Timeframe::MN1 => 43200,
+            Timeframe::M1 => 1, Timeframe::M2 => 2, Timeframe::M3 => 3,
+            Timeframe::M5 => 5, Timeframe::M10 => 10,
+            Timeframe::M15 => 15, Timeframe::M20 => 20,
+            Timeframe::M30 => 30, Timeframe::M45 => 45,
+            Timeframe::H1 => 60, Timeframe::H2 => 120, Timeframe::H3 => 180,
+            Timeframe::H4 => 240, Timeframe::H6 => 360, Timeframe::H8 => 480,
+            Timeframe::H12 => 720,
+            Timeframe::D1 => 1440, Timeframe::D2 => 2880, Timeframe::D3 => 4320,
+            Timeframe::D5 => 7200, Timeframe::D10 => 14400,
+            Timeframe::W1 => 10080, Timeframe::W2 => 20160, Timeframe::W3 => 30240,
+            Timeframe::MN1 => 43200, Timeframe::MN2 => 86400, Timeframe::MN3 => 129600,
+            Timeframe::MN6 => 259200,
+            Timeframe::Y1 => 525600, Timeframe::Y2 => 1051200, Timeframe::Y3 => 1576800,
+            Timeframe::Y5 => 2628000, Timeframe::Y10 => 5256000,
         }
     }
 
-    /// Build the cache key suffix used by the MT5 XML import pipeline.
+    /// Cache key suffix. For custom TFs, returns the BASE TF suffix.
     fn cache_suffix(self) -> &'static str {
         match self {
-            Timeframe::M1  => "1Min",
-            Timeframe::M5  => "5Min",
-            Timeframe::M15 => "15Min",
+            Timeframe::M1 | Timeframe::M2 | Timeframe::M3 => "1Min",
+            Timeframe::M5 | Timeframe::M10 | Timeframe::M20 => "5Min",
+            Timeframe::M15 | Timeframe::M45 => "15Min",
             Timeframe::M30 => "30Min",
-            Timeframe::H1  => "1Hour",
-            Timeframe::H4  => "4Hour",
-            Timeframe::D1  => "1Day",
-            Timeframe::W1  => "1Week",
-            Timeframe::MN1 => "1Month",
+            Timeframe::H1 | Timeframe::H2 | Timeframe::H3 | Timeframe::H6 => "1Hour",
+            Timeframe::H4 | Timeframe::H8 | Timeframe::H12 => "4Hour",
+            Timeframe::D1 | Timeframe::D2 | Timeframe::D3 | Timeframe::D5 | Timeframe::D10 => "1Day",
+            Timeframe::W1 | Timeframe::W2 | Timeframe::W3 => "1Week",
+            Timeframe::MN1 | Timeframe::MN2 | Timeframe::MN3 | Timeframe::MN6
+            | Timeframe::Y1 | Timeframe::Y2 | Timeframe::Y3 | Timeframe::Y5 | Timeframe::Y10 => "1Month",
+        }
+    }
+
+    /// Aggregation: (base_tf, factor). None for base TFs.
+    fn aggregation(self) -> Option<usize> {
+        match self {
+            Timeframe::M2 => Some(2), Timeframe::M3 => Some(3),
+            Timeframe::M10 => Some(2), Timeframe::M20 => Some(4),
+            Timeframe::M45 => Some(3),
+            Timeframe::H2 => Some(2), Timeframe::H3 => Some(3), Timeframe::H6 => Some(6),
+            Timeframe::H8 => Some(2), Timeframe::H12 => Some(3),
+            Timeframe::D2 => Some(2), Timeframe::D3 => Some(3), Timeframe::D5 => Some(5), Timeframe::D10 => Some(10),
+            Timeframe::W2 => Some(2), Timeframe::W3 => Some(3),
+            Timeframe::MN2 => Some(2), Timeframe::MN3 => Some(3), Timeframe::MN6 => Some(6),
+            Timeframe::Y1 => Some(12), Timeframe::Y2 => Some(24), Timeframe::Y3 => Some(36),
+            Timeframe::Y5 => Some(60), Timeframe::Y10 => Some(120),
+            _ => None,
         }
     }
 }
@@ -1459,6 +1514,32 @@ impl ChartState {
                 self.bars.sort_by_key(|b| b.ts_ms);
             }
 
+            // Aggregate bars for custom timeframes (H2, D3, Y1, etc.)
+            let agg_info = if let Some(factor) = self.timeframe.aggregation() {
+                if factor > 1 && !self.bars.is_empty() {
+                    let base_count = self.bars.len();
+                    let mut aggregated = Vec::with_capacity(base_count / factor + 1);
+                    let mut i = 0;
+                    while i < self.bars.len() {
+                        let end = (i + factor).min(self.bars.len());
+                        let chunk = &self.bars[i..end];
+                        let bar = Bar {
+                            ts_ms: chunk[0].ts_ms,
+                            open: chunk[0].open,
+                            high: chunk.iter().map(|b| b.high).fold(f64::MIN, f64::max),
+                            low: chunk.iter().map(|b| b.low).fold(f64::MAX, f64::min),
+                            close: chunk[chunk.len() - 1].close,
+                            volume: chunk.iter().map(|b| b.volume).sum(),
+                        };
+                        aggregated.push(bar);
+                        i = end;
+                    }
+                    let agg_count = aggregated.len();
+                    self.bars = aggregated;
+                    format!(" ({}→{} aggregated ×{})", base_count, agg_count, factor)
+                } else { String::new() }
+            } else { String::new() };
+
             self.view_offset = self.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
             self.compute_indicators_gpu(gpu);
             self.compute_mtf_sma(cache);
@@ -1468,8 +1549,8 @@ impl ChartState {
             } else { String::new() };
             let gap_info = if gap_filled > 0 { format!(" +{} gap-fill", gap_filled) } else { String::new() };
             log.push_back(LogEntry::info(format!(
-                "Loaded {} bars for {} [{}]{}{}",
-                self.bars.len(), self.symbol, self.timeframe.label(), mtf_info, gap_info
+                "Loaded {} bars for {} [{}]{}{}{}",
+                self.bars.len(), self.symbol, self.timeframe.label(), agg_info, mtf_info, gap_info
             )));
         }
         true
@@ -12190,16 +12271,12 @@ impl TyphooNApp {
                 }
             }
             "OBJECTS" | "OBJECT_LIST" => { self.show_object_list = !self.show_object_list; }
-            // Timeframe shortcuts
-            "M1"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::M1); }
-            "M5"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::M5); }
-            "M15" => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::M15); }
-            "M30" => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::M30); }
-            "H1"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::H1); }
-            "H4"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::H4); }
-            "D1"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::D1); }
-            "W1"  => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::W1); }
-            "MN1" => { let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone()); self.reload_symbol(&sym, Timeframe::MN1); }
+            // Timeframe shortcuts — any TF label works (M1, M2, H6, D3, Y1, etc.)
+            _ if Timeframe::from_label(&cmd_upper).is_some() => {
+                let tf = Timeframe::from_label(&cmd_upper).unwrap();
+                let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone());
+                self.reload_symbol(&sym, tf);
+            }
             // Aliases
             "EQUITY"         => self.show_darwin_portfolio = true,
             "CALC"           => self.show_risk_calc = true,
@@ -12715,17 +12792,9 @@ impl TyphooNApp {
                         self.charts.clear();
                         for tab in tabs {
                             let sym = tab["symbol"].as_str().unwrap_or("CC").to_string();
-                            let tf = match tab["timeframe"].as_str() {
-                                Some("M1") => Timeframe::M1,
-                                Some("M5") => Timeframe::M5,
-                                Some("M15") => Timeframe::M15,
-                                Some("M30") => Timeframe::M30,
-                                Some("H1") => Timeframe::H1,
-                                Some("D1") => Timeframe::D1,
-                                Some("W1") => Timeframe::W1,
-                                Some("MN1") => Timeframe::MN1,
-                                _ => Timeframe::H4,
-                            };
+                            let tf = tab["timeframe"].as_str()
+                                .and_then(Timeframe::from_label)
+                                .unwrap_or(Timeframe::H4);
                             let ct = match tab["chart_type"].as_str() {
                                 Some("Heikin-Ashi") => ChartType::HeikinAshi,
                                 Some("Line") => ChartType::Line,
@@ -21376,17 +21445,13 @@ impl eframe::App for TyphooNApp {
 
                 // Timeframe dropdown (ComboBox — type to search, e.g. "H4")
                 let cur_tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
-                let all_tfs = [Timeframe::M1, Timeframe::M5, Timeframe::M15, Timeframe::M30,
-                               Timeframe::H1, Timeframe::H4, Timeframe::D1, Timeframe::W1, Timeframe::MN1];
                 let mut new_tf = cur_tf;
                 egui::ComboBox::from_id_salt("tf_combo")
                     .selected_text(egui::RichText::new(cur_tf.label()).color(ACCENT).strong().small())
                     .width(55.0)
                     .show_ui(ui, |ui| {
-                        for &tf in &all_tfs {
-                            if ui.selectable_value(&mut new_tf, tf, tf.label()).clicked() {
-                                // handled below
-                            }
+                        for &tf in Timeframe::all() {
+                            ui.selectable_value(&mut new_tf, tf, tf.label());
                         }
                     });
                 if new_tf != cur_tf {
@@ -24029,8 +24094,7 @@ impl eframe::App for TyphooNApp {
                         ui.separator();
                         ui.label(egui::RichText::new("Timeframe").color(ACCENT).strong());
                         ui.separator();
-                        let tf_switch = &[Timeframe::M1, Timeframe::M5, Timeframe::M15, Timeframe::M30, Timeframe::H1, Timeframe::H4, Timeframe::D1, Timeframe::W1, Timeframe::MN1];
-                        for &tf in tf_switch {
+                        for &tf in Timeframe::all() {
                             let label = if chart.timeframe == tf { format!("● {}", tf.label()) } else { format!("  {}", tf.label()) };
                             if ui.button(label).clicked() {
                                 chart.timeframe = tf;
