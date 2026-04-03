@@ -1141,6 +1141,8 @@ struct ChartState {
     supply_zones: Vec<(usize, f64, f64, u8)>,
     /// Earliest timestamp from primary data source (MT5/Alpaca). Bars before this are backfill.
     primary_first_ts: i64,
+    /// Timestamps of bars sourced from gap-fill (CryptoCompare/Kraken). Colored magenta.
+    gap_fill_timestamps: std::collections::HashSet<i64>,
     demand_zones: Vec<(usize, f64, f64, u8)>,
     /// Auto Fibonacci levels: (price, label, is_extension).
     auto_fib_levels: Vec<(f64, String, bool)>,
@@ -1287,6 +1289,7 @@ impl ChartState {
             ehlers_roof: Vec::new(),
             supply_zones: Vec::new(),
             primary_first_ts: 0,
+            gap_fill_timestamps: std::collections::HashSet::new(),
             demand_zones: Vec::new(),
             auto_fib_levels: Vec::new(),
             auto_fib_swing: None,
@@ -1429,20 +1432,28 @@ impl ChartState {
             format!("cryptocompare:{}:{}", sym, tf),
             format!("kraken:{}:{}", sym, tf),
         ];
-        let mut result: Option<Vec<(i64, f64, f64, f64, f64, f64)>> = None;
+        let mut result: Option<(Vec<(i64, f64, f64, f64, f64, f64)>, bool)> = None;
         for k in &keys_to_try {
             match cache.get_bars_raw(k) {
-                Ok(Some(raw)) if !raw.is_empty() => { result = Some(raw); break; }
+                Ok(Some(raw)) if !raw.is_empty() => {
+                    let is_cc_kr = k.starts_with("cryptocompare:") || k.starts_with("kraken:");
+                    result = Some((raw, is_cc_kr));
+                    break;
+                }
                 _ => {}
             }
         }
-        if let Some(raw) = result {
-            self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
-                ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+        if let Some((raw, primary_is_gap_fill)) = result {
+            self.gap_fill_timestamps.clear();
+            self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| {
+                if primary_is_gap_fill { self.gap_fill_timestamps.insert(ts); }
+                Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v }
             }).collect();
 
             // Track primary source range (bars before this are backfill)
-            self.primary_first_ts = self.bars.first().map(|b| b.ts_ms).unwrap_or(0);
+            self.primary_first_ts = if primary_is_gap_fill { 0 } else {
+                self.bars.first().map(|b| b.ts_ms).unwrap_or(0)
+            };
 
             // Merge CryptoCompare + Kraken bars for weekend gap-fill.
             // For D1+ timeframes, MT5 uses UTC+2 and CryptoCompare uses UTC.
@@ -1474,6 +1485,7 @@ impl ChartState {
                 occupied.insert(snap(b.ts_ms + utc2_offset_ms));
             }
             let mut gap_filled = 0usize;
+            self.gap_fill_timestamps.clear();
             // Try all alternate source prefixes for gap-fill (crypto slash variants too)
             let sym_slash = {
                 let s = sym.to_uppercase();
@@ -1504,6 +1516,7 @@ impl ChartState {
                                 occupied.insert(snap(ts - utc2_offset_ms));
                                 occupied.insert(snap(ts + utc2_offset_ms));
                                 self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
+                                self.gap_fill_timestamps.insert(ts);
                                 gap_filled += 1;
                             }
                         }
@@ -1596,6 +1609,7 @@ impl ChartState {
         let is_crypto = crypto_bases.iter().any(|b| sym_upper.starts_with(b) && sym_upper.ends_with("USD"));
 
         if is_crypto {
+            self.gap_fill_timestamps.clear();
             // Snap timestamps to TF boundary for dedup (handles MT5 UTC+2 vs CC/Kraken UTC)
             let tf_ms: i64 = match tf {
                 "1Day" => 86_400_000, "1Week" => 7 * 86_400_000, "1Month" => 30 * 86_400_000,
@@ -1612,6 +1626,7 @@ impl ChartState {
                     let snapped = snap(ts);
                     if !existing_snapped.contains(&snapped) {
                         self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
+                        self.gap_fill_timestamps.insert(ts);
                         existing_snapped.insert(snapped);
                         merged += 1;
                     }
@@ -1628,6 +1643,7 @@ impl ChartState {
                     let snapped = snap(ts);
                     if !existing_snapped.contains(&snapped) {
                         self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
+                        self.gap_fill_timestamps.insert(ts);
                         existing_snapped.insert(snapped);
                         merged += 1;
                     }
@@ -5451,11 +5467,6 @@ fn draw_chart(
             }
         }
         ChartType::OhlcBars => {
-            let is_crypto_ohlc = {
-                let sym = chart.symbol.to_uppercase();
-                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
-                sym.contains('/') || crypto_bases.iter().any(|b| sym.starts_with(b) && sym.ends_with("USD"))
-            };
             // OHLC Bars: vertical wick + left tick (open) + right tick (close)
             for (rel_idx, bar) in bars.iter().enumerate() {
                 let cx = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
@@ -5463,11 +5474,7 @@ fn draw_chart(
                 let y_high  = price_to_y(bar.high);
                 let y_low   = price_to_y(bar.low);
                 let y_close = price_to_y(bar.close);
-                let is_wknd = if is_crypto_ohlc {
-                    chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0)
-                        .map(|d| { use chrono::Datelike; matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) })
-                        .unwrap_or(false)
-                } else { false };
+                let is_wknd = chart.gap_fill_timestamps.contains(&bar.ts_ms);
                 let color = if is_wknd {
                     if bar.close >= bar.open { egui::Color32::from_rgb(255, 0, 255) } else { egui::Color32::from_rgb(180, 0, 180) }
                 } else {
@@ -5493,14 +5500,7 @@ fn draw_chart(
             }
         }
         ChartType::Candle | ChartType::HeikinAshi | ChartType::Renko => {
-            // Detect crypto symbols for weekend gap-fill coloring
-            let is_crypto = {
-                let sym = chart.symbol.to_uppercase();
-                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
-                    "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
-                sym.contains('/') || crypto_bases.iter().any(|b| sym.starts_with(b) && sym.ends_with("USD"))
-            };
-            let weekend_up = egui::Color32::from_rgb(255, 0, 255);    // magenta bull (weekend gap-fill)
+            let weekend_up = egui::Color32::from_rgb(255, 0, 255);    // magenta bull (gap-fill/weekend)
             let weekend_dn = egui::Color32::from_rgb(180, 0, 180);   // dark magenta bear (weekend gap-fill)
             // Volume heatmap uses pre-computed vol_avg_20 from ChartState (no per-frame alloc)
             let vol_avg = &chart.vol_avg_20;
@@ -5510,16 +5510,10 @@ fn draw_chart(
                 let y_high  = price_to_y(bar.high);
                 let y_low   = price_to_y(bar.low);
                 let y_close = price_to_y(bar.close);
-                // Weekend bars for crypto get distinct color (CryptoCompare/Kraken gap-fill data).
-                // Only on D1 and lower — W1/MN1 bars span entire weeks/months so the
-                // timestamp day-of-week is meaningless (CryptoCompare W1 starts on Sunday).
-                let is_weekend = if is_crypto && !matches!(chart.timeframe, Timeframe::W1 | Timeframe::MN1) {
-                    let dt = chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0);
-                    dt.map(|d| {
-                        use chrono::Datelike;
-                        matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
-                    }).unwrap_or(false)
-                } else { false };
+                // Gap-fill bars (CryptoCompare/Kraken) get magenta color.
+                // Use explicit timestamp tracking rather than day-of-week:
+                // MT5 uses UTC+2 so Saturday 00:00 MT5 = Friday 22:00 UTC — day-of-week is unreliable.
+                let is_weekend = chart.gap_fill_timestamps.contains(&bar.ts_ms);
                 let color = if flags.vol_heatmap && !vol_avg.is_empty() {
                     // Volume heatmap: blue (low) → green → yellow → red (high)
                     let abs_idx = start_idx + rel_idx;
