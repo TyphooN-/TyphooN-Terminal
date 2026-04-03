@@ -20893,6 +20893,33 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
+            // Alt+1-9 = quick timeframe switch (TradingView standard)
+            {
+                let alt_tf = ctx.input(|i| {
+                    if !i.modifiers.alt { return None; }
+                    if i.key_pressed(egui::Key::Num1) { Some(Timeframe::M1) }
+                    else if i.key_pressed(egui::Key::Num2) { Some(Timeframe::M5) }
+                    else if i.key_pressed(egui::Key::Num3) { Some(Timeframe::M15) }
+                    else if i.key_pressed(egui::Key::Num4) { Some(Timeframe::M30) }
+                    else if i.key_pressed(egui::Key::Num5) { Some(Timeframe::H1) }
+                    else if i.key_pressed(egui::Key::Num6) { Some(Timeframe::H4) }
+                    else if i.key_pressed(egui::Key::Num7) { Some(Timeframe::D1) }
+                    else if i.key_pressed(egui::Key::Num8) { Some(Timeframe::W1) }
+                    else if i.key_pressed(egui::Key::Num9) { Some(Timeframe::MN1) }
+                    else { None }
+                });
+                if let Some(tf) = alt_tf {
+                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                        chart.timeframe = tf;
+                        if let Some(ref cache) = self.cache {
+                            let mut gpu = self.gpu_indicators.take();
+                            chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut());
+                            self.gpu_indicators = gpu;
+                        }
+                    }
+                }
+            }
+
             // Replay mode controls
             if self.replay_active {
                 let total_bars = self.charts.get(self.active_tab).map(|c| c.bars.len()).unwrap_or(0);
@@ -21611,6 +21638,11 @@ impl eframe::App for TyphooNApp {
                         switch_to = Some(idx);
                     }
 
+                    // Middle-click to close tab
+                    if tab_resp.middle_clicked() && self.charts.len() > 1 {
+                        close_tab = Some(idx);
+                    }
+
                     // Start drag
                     if tab_resp.dragged() && self.dragging_tab.is_none() {
                         self.dragging_tab = Some(idx);
@@ -22046,7 +22078,8 @@ impl eframe::App for TyphooNApp {
                                         ui.label(egui::RichText::new(side_label).color(side_c).small());
                                         ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small());
                                         let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
-                                        ui.label(egui::RichText::new(format!("${:.2}", pos.unrealized_pl)).color(pl_c).small());
+                                        let pl_pct = if pos.market_value.abs() > 0.01 { pos.unrealized_pl / (pos.market_value - pos.unrealized_pl) * 100.0 } else { 0.0 };
+                                        ui.label(egui::RichText::new(format!("${:.2} ({:+.1}%)", pos.unrealized_pl, pl_pct)).color(pl_c).small());
                                     });
                                     ui.label(egui::RichText::new(format!("entry: {}", format_price(pos.avg_entry_price))).color(AXIS_TEXT).small());
                                     ui.separator();
@@ -23219,12 +23252,8 @@ impl eframe::App for TyphooNApp {
                         }
                     }
 
-                    // Auto-focus on hover, confirm on click
+                    // Pointer in cell detection (for zoom/pan, NOT for focus change)
                     let ptr_in_cell = !pointer_over_floating && ctx.input(|i| i.pointer.hover_pos().map(|p| cell_rect.contains(p)).unwrap_or(false));
-                    if ptr_in_cell {
-                        self.mtf_focused = Some(vi);
-                        self.active_tab = vi;
-                    }
                     let is_focused = self.mtf_focused == Some(vi);
 
                     // Zoom when pointer is in this cell (no focus-click required)
@@ -23993,6 +24022,22 @@ impl eframe::App for TyphooNApp {
                             }
                         }
                         ui.separator();
+                        ui.label(egui::RichText::new("Timeframe").color(ACCENT).strong());
+                        ui.separator();
+                        let tf_switch = &[Timeframe::M1, Timeframe::M5, Timeframe::M15, Timeframe::M30, Timeframe::H1, Timeframe::H4, Timeframe::D1, Timeframe::W1, Timeframe::MN1];
+                        for &tf in tf_switch {
+                            let label = if chart.timeframe == tf { format!("● {}", tf.label()) } else { format!("  {}", tf.label()) };
+                            if ui.button(label).clicked() {
+                                chart.timeframe = tf;
+                                if let Some(ref cache_arc) = self.cache {
+                                    let mut gpu = self.gpu_indicators.take();
+                                    chart.try_load(Arc::as_ref(cache_arc), &mut self.log, gpu.as_mut());
+                                    self.gpu_indicators = gpu;
+                                }
+                                ui.close();
+                            }
+                        }
+                        ui.separator();
                         ui.label(egui::RichText::new("Windows").color(ACCENT).strong());
                         ui.separator();
                         if ui.button("Indicators…").clicked() { self.show_indicators_panel = true; ui.close(); }
@@ -24300,7 +24345,9 @@ impl eframe::App for TyphooNApp {
         let is_lan_client = self.lan_client_enabled || self.lan_sync_mode == "client";
 
         if !is_lan_client {
-            // Weekend crypto sync via Kraken — every 60 seconds, rotate through symbols
+            // Weekend crypto sync — rotate through ALL Darwinex crypto symbols × ALL TFs.
+            // Uses CryptoCompare (deep history) + Kraken (sub-hourly gap-fill).
+            // Runs every ~60s, one symbol per cycle = full rotation in ~10 minutes.
             if self.frame_count % 240 == 150 && self.frame_count > 0 {
                 let now_utc = chrono::Utc::now();
                 let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
@@ -24311,13 +24358,16 @@ impl eframe::App for TyphooNApp {
                     let sym_idx = ((self.frame_count / 240) as usize) % crypto_syms.len();
                     let sym = crypto_syms[sym_idx];
                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                    let active_tf = self.charts.get(self.active_tab)
-                        .map(|c| c.timeframe.cache_suffix().to_string())
-                        .unwrap_or_else(|| "1Day".to_string());
-                    let mut tfs = vec![active_tf];
-                    if !tfs.contains(&"1Day".to_string()) { tfs.push("1Day".into()); }
+                    // All timeframes for complete coverage
+                    let all_tfs = vec!["1Day".into(), "1Week".into(), "1Month".into(), "4Hour".into(), "1Hour".into(), "30Min".into(), "15Min".into(), "5Min".into()];
+                    // CryptoCompare for hourly+ deep history
+                    let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill {
+                        symbol: sym.to_string(), timeframes: all_tfs.clone(), db_path: db_path.clone(),
+                    });
+                    // Kraken for sub-hourly + recent gap-fill
+                    let kraken_tfs = vec!["1Day".into(), "1Hour".into(), "4Hour".into(), "15Min".into(), "30Min".into(), "5Min".into()];
                     let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
-                        symbol: sym.to_string(), timeframes: tfs, db_path,
+                        symbol: sym.to_string(), timeframes: kraken_tfs, db_path,
                     });
                 }
             }
