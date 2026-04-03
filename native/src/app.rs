@@ -8127,6 +8127,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "DRAWDOWN",      desc: "Drawdown dashboard per DARWIN" },
     Command { name: "REBALANCE",     desc: "VaR reduction via decorrelation" },
     Command { name: "DARWIN_TRADES", desc: "Toggle deal history markers on chart" },
+    Command { name: "POSITION_CHARTS", desc: "Open W1 chart tabs for all open positions (DARWIN + Alpaca)" },
     Command { name: "DSCORE",        desc: "D-Score estimation components" },
     Command { name: "DARWIN_BROWSER", desc: "Browse DARWIN FTP universe (50K DARWINs)" },
     Command { name: "DARWINIA_SCAN",  desc: "DarwinIA universe scan — top DARWINs by Sharpe (GPU → CPU)" },
@@ -11683,6 +11684,42 @@ impl TyphooNApp {
             "DRAWDOWN"      => { self.darwin_view = 0; self.show_darwin_portfolio = true; } // Portfolio Summary with per-DARWIN DD%
             "REBALANCE"     => { self.darwin_view = 18; self.show_darwin_portfolio = true; } // Optimal Allocation view
             "DARWIN_TRADES" => { self.log.push_back(LogEntry::info("DARWIN trade markers: open DARWIN Accounts for deal history")); self.show_darwin_accounts = true; }
+            "POSITION_CHARTS" => {
+                // Collect unique symbols from all enabled position sources
+                let mut symbols: Vec<String> = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                if self.show_darwin_positions {
+                    for pos in &self.bg.open_positions {
+                        if seen.insert(pos.symbol.clone()) {
+                            symbols.push(pos.symbol.clone());
+                        }
+                    }
+                }
+                if self.show_alpaca_positions {
+                    for pos in &self.live_positions {
+                        if seen.insert(pos.symbol.clone()) {
+                            symbols.push(pos.symbol.clone());
+                        }
+                    }
+                }
+                if symbols.is_empty() {
+                    self.log.push_back(LogEntry::warn("No open positions to chart"));
+                } else {
+                    let count = symbols.len();
+                    for sym in &symbols {
+                        let mut chart = ChartState::new(sym, Timeframe::W1);
+                        if let Some(ref cache) = self.cache {
+                            let mut gpu = self.gpu_indicators.take();
+                            chart.try_load(Arc::as_ref(cache), &mut self.log, gpu.as_mut());
+                            self.gpu_indicators = gpu;
+                        }
+                        self.charts.push(chart);
+                    }
+                    self.active_tab = self.charts.len().saturating_sub(1);
+                    self.symbol_input = symbols.last().cloned().unwrap_or_default();
+                    self.log.push_back(LogEntry::info(format!("Opened {} W1 charts for open positions: {}", count, symbols.join(", "))));
+                }
+            }
             "DSCORE"        => { self.show_var_mult = true; }
             "DARWIN_BROWSER" => { self.show_darwin_browser = true; }
             "RISKRUIN" => self.show_risk_ruin = true,
