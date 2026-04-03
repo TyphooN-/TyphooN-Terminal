@@ -265,19 +265,11 @@ enum LineStyle { Solid, Dashed, Dotted }
 
 /// Wrapper around Drawing with per-drawing style properties.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 struct DrawingEntry {
     drawing: Drawing,
-    width: f32,        // line width in pixels (default 1.5)
-    style: LineStyle,  // solid, dashed, dotted
-}
-
-impl DrawingEntry {
-    fn new(drawing: Drawing) -> Self {
-        Self { drawing, width: 1.5, style: LineStyle::Solid }
-    }
-    fn with_style(drawing: Drawing, width: f32, style: LineStyle) -> Self {
-        Self { drawing, width, style }
-    }
+    width: f32,
+    style: LineStyle,
 }
 
 #[derive(Clone, Debug)]
@@ -2416,12 +2408,6 @@ impl ChartState {
                 self.auto_fib_levels.push((price, label.to_string(), true));
             }
         }
-    }
-
-    /// Push a drawing with its style. Keeps drawings and drawing_styles in sync.
-    fn push_drawing(&mut self, drawing: Drawing, width: f32, style: LineStyle) {
-        self.drawings.push(drawing);
-        self.drawing_styles.push((width, style));
     }
 
     fn visible_range(&self) -> (usize, usize) {
@@ -6137,8 +6123,8 @@ fn draw_chart(
     // ── drawing annotations ──────────────────────────────────────────────────
     for (draw_idx, drawing) in chart.drawings.iter().enumerate() {
         // Per-drawing style: line width + style (with fallback defaults)
-        let (d_width, d_style) = chart.drawing_styles.get(draw_idx).copied().unwrap_or((1.5, LineStyle::Solid));
-        let is_selected = chart.selected_drawing == Some(draw_idx);
+        let (_d_width, _d_style) = chart.drawing_styles.get(draw_idx).copied().unwrap_or((1.5, LineStyle::Solid));
+        let _is_selected = chart.selected_drawing == Some(draw_idx);
         match drawing {
             Drawing::HLine { price, color } => {
                 let y = price_to_y(*price);
