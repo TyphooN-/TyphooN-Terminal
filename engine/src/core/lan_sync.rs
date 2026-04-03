@@ -845,7 +845,9 @@ async fn handle_client_tls(
                     results
                 }).await.unwrap_or_default();
 
+                let mut sent_count = 0usize;
                 for (tbl, encoded, row_count) in &table_results {
+                    if *row_count == 0 { continue; } // skip empty tables
                     if let Ok(msg) = send_msg(&SyncMessage::TableSyncData {
                         table: tbl.clone(),
                         rows_json: encoded.clone(),
@@ -853,11 +855,14 @@ async fn handle_client_tls(
                         let _ = sink.send(msg).await;
                     }
                     tracing::info!("LAN sync: sent table '{}' ({} rows)", tbl, row_count);
+                    sent_count += 1;
                 }
                 if let Ok(msg) = send_msg(&SyncMessage::TableSyncDone) {
                     let _ = sink.send(msg).await;
                 }
-                tracing::info!("LAN sync: sent {} table(s) to client", table_results.len());
+                if sent_count > 0 {
+                    tracing::info!("LAN sync: sent {} table(s) to client", sent_count);
+                }
             }
             SyncMessage::Ping => {
                 if let Ok(msg) = send_msg(&SyncMessage::Pong) {
@@ -1342,7 +1347,8 @@ async fn client_sync_loop(
                     let _ = tokio::task::spawn_blocking(move || {
                         if let Ok(conn) = cache_clone.connection() {
                             match import_table_from_json(&conn, &tbl, &json) {
-                                Ok(n) => tracing::info!("LAN sync: full re-sync imported {} rows into '{}'", n, tbl),
+                                Ok(n) if n > 0 => tracing::info!("LAN sync: full re-sync imported {} rows into '{}'", n, tbl),
+                                Ok(_) => {}
                                 Err(e) => tracing::warn!("LAN sync: full re-sync import '{}' failed: {}", tbl, e),
                             }
                         }
@@ -1351,7 +1357,7 @@ async fn client_sync_loop(
                     let _ = cache.set_sync_ts(&format!("table:{}", table), new_ts);
                 }
                 SyncMessage::TableSyncDone => {
-                    tracing::info!("LAN sync: full table re-sync complete");
+                    tracing::debug!("LAN sync: full table re-sync complete");
                     break;
                 }
                 other => {
@@ -1453,7 +1459,8 @@ async fn client_sync_loop(
                                         let json = String::from_utf8_lossy(&json_bytes).to_string();
                                         if let Ok(conn) = cache.connection() {
                                             match import_table_from_json(&conn, &table, &json) {
-                                                Ok(n) => tracing::info!("LAN sync: re-sync imported {n} rows into {table}"),
+                                                Ok(n) if n > 0 => tracing::info!("LAN sync: re-sync imported {n} rows into {table}"),
+                                                Ok(_) => {} // 0 rows — don't log
                                                 Err(e) => tracing::warn!("LAN sync: table re-import {table} failed: {e}"),
                                             }
                                         }
@@ -1465,7 +1472,7 @@ async fn client_sync_loop(
                                     let _ = cache.set_sync_ts(&format!("table:{}", table), new_ts);
                                 }
                                 Ok(SyncMessage::TableSyncDone) => {
-                                    tracing::info!("LAN sync: table re-sync complete");
+                                    tracing::debug!("LAN sync: table re-sync cycle complete");
                                 }
                                 Ok(SyncMessage::KvBatchComplete { count }) => {
                                     // KV re-sync complete — update sync_state, reset binary mode
@@ -1534,7 +1541,7 @@ async fn client_sync_loop(
             _ = resync_interval.tick() => {
                 // Periodic re-sync: pull any new data from server since last sync.
                 // Bars: request metadata, server sends entries with newer timestamps.
-                tracing::debug!("LAN sync: periodic re-sync — bars + KV + tables");
+                tracing::trace!("LAN sync: periodic re-sync — bars + KV + tables");
                 let _ = sink.send(send_msg(&SyncMessage::RequestMeta)?).await;
                 // KV: incremental since last sync timestamp (carries broker:*, darwin:* analytics)
                 expecting_kv_binary = true;
