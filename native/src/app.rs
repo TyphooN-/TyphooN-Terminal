@@ -9526,9 +9526,12 @@ impl TyphooNApp {
                             rt.block_on(async {
                                 match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
                                     Ok(cache) => {
-                                        if let Ok(conn) = cache.connection() {
+                                        // Create tables and extract tickers — short lock, then release
+                                        let tickers = if let Ok(conn) = cache.connection() {
                                             let _ = fundamentals::create_fundamentals_tables(&conn);
-                                            let tickers = fundamentals::extract_stock_tickers_from_cache(&conn).unwrap_or_default();
+                                            fundamentals::extract_stock_tickers_from_cache(&conn).unwrap_or_default()
+                                        } else { Vec::new() }; // conn dropped — write lock released
+                                        {
                                             let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Fundamentals scrape: {} stock tickers found", tickers.len())));
                                             let session = match fundamentals::YahooSession::new().await {
                                                 Ok(s) => s,
@@ -9545,14 +9548,15 @@ impl TyphooNApp {
                                             let mut skipped = 0usize;
                                             let mut consecutive_fail = 0usize;
                                             for ticker in &tickers {
-                                                // Skip if recently updated (within 24h)
-                                                if let Ok(Some(existing)) = fundamentals::get_fundamentals(&conn, ticker) {
-                                                    if existing.last_updated >= cutoff {
-                                                        skipped += 1;
-                                                        continue;
-                                                    }
-                                                }
-                                                // Abort if 10 consecutive failures (likely auth issue)
+                                                // Acquire write lock per-ticker — release between iterations
+                                                // so other threads (BG, Mt5Sync, KV writes) aren't starved.
+                                                let skip = if let Ok(conn) = cache.connection() {
+                                                    if let Ok(Some(existing)) = fundamentals::get_fundamentals(&conn, ticker) {
+                                                        existing.last_updated >= cutoff
+                                                    } else { false }
+                                                } else { false }; // conn dropped here
+                                                if skip { skipped += 1; continue; }
+
                                                 if consecutive_fail >= 10 {
                                                     let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
                                                         "Aborting: {} consecutive failures. {} OK, {} failed, {} skipped (cached) out of {}",
@@ -9560,7 +9564,13 @@ impl TyphooNApp {
                                                     )));
                                                     break;
                                                 }
-                                                match fundamentals::scrape_ticker(&session, &conn, ticker).await {
+                                                // Acquire lock, scrape, release — short hold per ticker
+                                                let scrape_result = if let Ok(conn) = cache.connection() {
+                                                    fundamentals::scrape_ticker(&session, &conn, ticker).await
+                                                } else {
+                                                    Err("DB lock failed".into())
+                                                }; // conn dropped here
+                                                match scrape_result {
                                                     Ok(_f) => {
                                                         ok += 1;
                                                         consecutive_fail = 0;
@@ -9578,8 +9588,6 @@ impl TyphooNApp {
                                                 "Fundamentals scrape complete: {} OK, {} failed, {} skipped (cached <24h) out of {}",
                                                 ok, fail, skipped, tickers.len()
                                             )));
-                                        } else {
-                                            let _ = msg_tx.send(BrokerMsg::Error("Fundamentals: could not get DB connection".into()));
                                         }
                                     }
                                     Err(e) => {
