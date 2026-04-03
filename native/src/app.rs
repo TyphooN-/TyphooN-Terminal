@@ -8506,6 +8506,8 @@ enum BrokerCmd {
     GetTopMovers,
     /// Search symbols.
     SearchSymbols { query: String },
+    /// Fetch full tradeable asset list from connected broker.
+    GetAllAssets,
     /// Get order history.
     GetOrderHistory { limit: u32 },
     /// Fetch fundamentals for a symbol (SEC EDGAR).
@@ -8609,6 +8611,8 @@ enum BrokerMsg {
     UnusualVolumeResults(Vec<(String, f64, f64, f64)>),
     /// tastytrade positions converted to unified format for chart overlay.
     TastytradePositions(Vec<PositionInfo>),
+    /// Full asset list from broker (symbol, name, asset_class).
+    AllAssets(Vec<(String, String, String)>),
 }
 
 /// Reusable sort state for clickable column headers.
@@ -8841,6 +8845,9 @@ pub struct TyphooNApp {
     show_symbols: bool,
     symbols_filter: String,
     symbols_expanded: std::collections::HashSet<String>,
+    /// Full asset list from broker (symbol, name, asset_class) for Symbol Explorer.
+    all_broker_assets: Vec<(String, String, String)>,
+    all_broker_assets_fetched: bool,
     show_optimizer: bool,
     show_news: bool,
     show_calendar: bool,
@@ -9388,6 +9395,19 @@ impl TyphooNApp {
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Top Movers".into(), text));
                                 }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetAllAssets => {
+                        if let Some(ref b) = broker {
+                            match b.get_all_assets().await {
+                                Ok(assets) => {
+                                    let all: Vec<(String, String, String)> = assets.iter()
+                                        .map(|a| (a.symbol.clone(), a.name.clone(), a.asset_class.clone()))
+                                        .collect();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::AllAssets(all));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Asset fetch failed: {e}"))); }
                             }
                         }
                     }
@@ -10566,6 +10586,8 @@ impl TyphooNApp {
             show_symbols: false,
             symbols_filter: String::new(),
             symbols_expanded: std::collections::HashSet::new(),
+            all_broker_assets: Vec::new(),
+            all_broker_assets_fetched: false,
             show_optimizer: false,
             show_news: false,
             show_calendar: false,
@@ -15989,11 +16011,17 @@ impl TyphooNApp {
                 });
         }
 
-        // Symbols Explorer — broker hierarchy tree with cached symbol data
+        // Symbols Explorer — all-encompassing symbol browser with broker hierarchy
         if self.show_symbols {
+            // Fetch broker assets on first open
+            if !self.all_broker_assets_fetched && self.broker_connected {
+                let _ = self.broker_tx.send(BrokerCmd::GetAllAssets);
+                self.all_broker_assets_fetched = true;
+            }
+
             egui::Window::new("Symbol Explorer")
                 .open(&mut self.show_symbols)
-                .resizable(true).default_size([620.0, 600.0])
+                .resizable(true).default_size([680.0, 650.0])
                 .show(ctx, |ui| {
                     let sym_teal = egui::Color32::from_rgb(26, 188, 156);
                     let sym_gold = egui::Color32::from_rgb(241, 196, 15);
@@ -16003,189 +16031,232 @@ impl TyphooNApp {
                     let sym_orange = egui::Color32::from_rgb(255, 130, 60);
                     let sym_white = egui::Color32::from_rgb(220, 220, 220);
                     let sym_dim = egui::Color32::from_rgb(120, 120, 120);
+                    let sym_cached = egui::Color32::from_rgb(80, 200, 120);
 
                     ui.horizontal(|ui| {
                         ui.label("Filter:");
                         ui.add(egui::TextEdit::singleline(&mut self.symbols_filter)
-                            .desired_width(200.0).font(egui::TextStyle::Monospace));
+                            .desired_width(250.0).font(egui::TextStyle::Monospace));
                         if ui.small_button("Clear").clicked() { self.symbols_filter.clear(); }
                     });
                     ui.separator();
 
-                    // Parse ALL cache keys into (source, symbol, tf, bar_count)
+                    // Build set of cached symbols (normalized, no slash, uppercase)
                     let details = &self.bg.detailed_stats;
                     let filter_upper = self.symbols_filter.to_uppercase();
 
-                    // Parse key → (source, symbol, tf)
                     fn parse_cache_key(key: &str) -> Option<(&str, String, &str)> {
                         let parts: Vec<&str> = key.split(':').collect();
                         match parts.len() {
-                            4 => Some((parts[0], parts[2].to_string(), parts[3])), // mt5:Broker:SYM:TF
-                            3 => Some((parts[0], parts[1].to_string(), parts[2])), // source:SYM:TF
-                            2 => Some(("mt5", parts[0].to_string(), parts[1])),    // SYM:TF (legacy)
+                            4 => Some((parts[0], parts[2].to_string(), parts[3])),
+                            3 => Some((parts[0], parts[1].to_string(), parts[2])),
+                            2 => Some(("mt5", parts[0].to_string(), parts[1])),
                             _ => None,
                         }
                     }
 
-                    // Group: source → symbol → Vec<(tf, bars)>
-                    let mut grouped: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<(String, i64)>>> = std::collections::BTreeMap::new();
+                    // Cached symbols: source → symbol → Vec<(tf, bars)>
+                    let mut cached: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<(String, i64)>>> = std::collections::BTreeMap::new();
+                    let mut cached_syms_set: std::collections::HashSet<String> = std::collections::HashSet::new();
                     for (key, bars, _ts) in details {
                         if let Some((source, symbol, tf)) = parse_cache_key(key) {
-                            if !filter_upper.is_empty() && !symbol.to_uppercase().contains(&filter_upper) {
-                                continue;
-                            }
-                            grouped.entry(source.to_string()).or_default()
+                            cached_syms_set.insert(symbol.replace('/', "").to_uppercase());
+                            if !filter_upper.is_empty() && !symbol.to_uppercase().contains(&filter_upper) { continue; }
+                            cached.entry(source.to_string()).or_default()
                                 .entry(symbol).or_default()
                                 .push((tf.to_string(), *bars));
                         }
                     }
 
-                    // Count totals
-                    let total_syms: usize = grouped.values().map(|syms| syms.len()).sum();
-                    let total_sources = grouped.len();
-                    ui.label(egui::RichText::new(format!("{} symbols across {} sources", total_syms, total_sources)).color(sym_dim));
+                    // Build fundamentals lookup (symbol → (sector, industry, name))
+                    let fund_map: std::collections::HashMap<String, (&str, &str, &str)> = self.bg.all_fundamentals.iter()
+                        .map(|f| (f.symbol.to_uppercase(), (f.sector.as_str(), f.industry.as_str(), f.company_name.as_str())))
+                        .collect();
+
+                    // Categorize a symbol
+                    let categorize = |sym: &str, asset_class: &str| -> &'static str {
+                        let s = sym.to_uppercase();
+                        if asset_class == "crypto" || s.contains('/') || (s.ends_with("USD") && s.len() <= 10 && !s.contains('.'))
+                            || s.ends_with("BTC") || s.ends_with("ETH") { return "Crypto"; }
+                        if s.len() == 6 && s.chars().all(|c| c.is_ascii_alphabetic()) && !s.ends_with("USD") { return "Forex"; }
+                        if s.starts_with('.') || s.contains("500") || s.contains("DAX") || s.contains("NAS")
+                            || s.contains("JPN") || s.contains("US30") || s.contains("US100") || s.contains("STOXX") { return "Indices"; }
+                        if s.contains("XAU") || s.contains("XAG") || s.contains("XNG") || s.contains("OIL")
+                            || s.contains("BRENT") || s.contains("NATGAS") || s.contains("COCOA")
+                            || s.contains("WHEAT") || s.contains("CORN") || s.contains("SUGAR") || s.contains("COFFEE") { return "Commodities"; }
+                        // Use fundamentals sector if available
+                        if let Some((sector, _, _)) = fund_map.get(&s) {
+                            if !sector.is_empty() { return match *sector {
+                                s if s.contains("ETF") || s.contains("Fund") => "ETFs",
+                                _ => "Stocks",
+                            }; }
+                        }
+                        if asset_class == "us_equity" { return "Stocks"; }
+                        "Other"
+                    };
+
+                    // Count cached + broker universe
+                    let cached_count: usize = cached.values().map(|s| s.len()).sum();
+                    let broker_count = self.all_broker_assets.len();
+                    let uncached_count = self.all_broker_assets.iter()
+                        .filter(|(s, _, _)| !cached_syms_set.contains(&s.replace('/', "").to_uppercase()))
+                        .count();
+                    ui.label(egui::RichText::new(format!(
+                        "{} cached symbols | {} broker universe ({} not cached)",
+                        cached_count, broker_count, uncached_count
+                    )).color(sym_dim));
                     ui.add_space(4.0);
 
                     let mut load_sym: Option<String> = None;
                     let mut add_wl: Option<String> = None;
 
+                    // Macro for symbol row rendering
+                    macro_rules! sym_row {
+                        ($ui:expr, $sym:expr, $info:expr, $indent:expr, $load:expr, $wl:expr) => {
+                            $ui.horizontal(|ui| {
+                                ui.add_space($indent);
+                                if ui.add(egui::Button::new(egui::RichText::new("\u{1F4C8}").small())
+                                    .min_size(egui::vec2(22.0, 18.0))).clicked() {
+                                    $load = Some($sym.to_string());
+                                }
+                                if ui.add(egui::Button::new(egui::RichText::new("+WL").color(sym_blue).small())
+                                    .min_size(egui::vec2(30.0, 18.0))).clicked() {
+                                    $wl = Some($sym.to_string());
+                                }
+                                if ui.add(egui::Label::new(
+                                    egui::RichText::new($sym).monospace().color(sym_white)
+                                ).sense(egui::Sense::click())).clicked() {
+                                    $load = Some($sym.to_string());
+                                }
+                                ui.label(egui::RichText::new($info).color(sym_dim).small());
+                            });
+                        };
+                    }
+
                     let avail = ui.available_height().max(300.0);
                     egui::ScrollArea::vertical().id_salt("symbols_scroll").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
+                        // ── Section 1: Cached Data (by source) ──
                         let source_labels: &[(&str, &str, egui::Color32)] = &[
                             ("mt5", "MT5 (Darwinex)", sym_gold),
-                            ("alpaca", "Alpaca", sym_green),
-                            ("tastytrade", "tastytrade", sym_teal),
+                            ("alpaca", "Alpaca (cached)", sym_green),
+                            ("tastytrade", "tastytrade (cached)", sym_teal),
                             ("cryptocompare", "CryptoCompare", sym_magenta),
                             ("kraken", "Kraken", sym_orange),
                         ];
 
                         for (source_key, label, color) in source_labels {
-                            let Some(syms) = grouped.get(*source_key) else { continue; };
+                            let Some(syms) = cached.get(*source_key) else { continue; };
 
-                            // Sub-categorize
                             let mut categories: std::collections::BTreeMap<&str, Vec<(&String, &Vec<(String, i64)>)>> = std::collections::BTreeMap::new();
                             for (sym, tfs) in syms {
-                                let cat = if *source_key == "mt5" || *source_key == "alpaca" {
-                                    let s = sym.to_uppercase();
-                                    if s.len() == 6 && s.chars().all(|c| c.is_ascii_alphabetic())
-                                        && !s.ends_with("USD") && !s.ends_with("BTC") { "Forex" }
-                                    else if s.contains('/') || (s.ends_with("USD") && s.len() <= 10 && !s.contains('.'))
-                                        || s.ends_with("BTC") || s.ends_with("ETH") { "Crypto" }
-                                    else if s.starts_with('.') || s.contains("500") || s.contains("DAX")
-                                        || s.contains("NAS") || s.contains("JPN") || s.contains("US30")
-                                        || s.contains("US100") || s.contains("US500") || s.contains("STOXX") { "Indices" }
-                                    else if s.contains("XAU") || s.contains("XAG") || s.contains("XNG")
-                                        || s.contains("OIL") || s.contains("BRENT") || s.contains("COCOA")
-                                        || s.contains("WHEAT") || s.contains("CORN") || s.contains("SUGAR")
-                                        || s.contains("COFFEE") || s.contains("NATGAS") { "Commodities" }
-                                    else { "Equities" }
-                                } else {
-                                    "All"
-                                };
-                                categories.entry(cat).or_default().push((sym, tfs));
+                                categories.entry(categorize(sym, "")).or_default().push((sym, tfs));
                             }
 
-                            // Broker header
                             let section_id = source_key.to_string();
                             let expanded = self.symbols_expanded.contains(&section_id);
                             let arrow = if expanded { "\u{25BC}" } else { "\u{25B6}" };
                             if ui.add(egui::Label::new(
-                                egui::RichText::new(format!("{} {} ({})", arrow, label, syms.len()))
-                                    .color(*color).strong()
+                                egui::RichText::new(format!("{} {} ({})", arrow, label, syms.len())).color(*color).strong()
                             ).sense(egui::Sense::click())).clicked() {
                                 if expanded { self.symbols_expanded.remove(&section_id); }
                                 else { self.symbols_expanded.insert(section_id.clone()); }
                             }
-
                             if !expanded { continue; }
 
                             for (cat, entries) in &categories {
-                                // Category sub-header (skip if only "All")
-                                if *cat != "All" {
+                                if categories.len() > 1 {
                                     let cat_id = format!("{}:{}", source_key, cat);
                                     let cat_exp = self.symbols_expanded.contains(&cat_id);
-                                    let cat_arrow = if cat_exp { "\u{25BC}" } else { "\u{25B6}" };
+                                    let ca = if cat_exp { "\u{25BC}" } else { "\u{25B6}" };
                                     ui.horizontal(|ui| {
                                         ui.add_space(12.0);
-                                        if ui.add(egui::Label::new(
-                                            egui::RichText::new(format!("{} {} ({})", cat_arrow, cat, entries.len()))
-                                                .color(sym_dim)
-                                        ).sense(egui::Sense::click())).clicked() {
-                                            if cat_exp { self.symbols_expanded.remove(&cat_id); }
-                                            else { self.symbols_expanded.insert(cat_id.clone()); }
+                                        if ui.add(egui::Label::new(egui::RichText::new(format!("{} {} ({})", ca, cat, entries.len())).color(sym_dim)).sense(egui::Sense::click())).clicked() {
+                                            if cat_exp { self.symbols_expanded.remove(&cat_id); } else { self.symbols_expanded.insert(cat_id.clone()); }
                                         }
                                     });
                                     if !cat_exp { continue; }
                                 }
-
-                                // Symbol rows
-                                let indent = if *cat != "All" { 24.0 } else { 12.0 };
                                 for (sym, tfs) in entries {
                                     let total_bars: i64 = tfs.iter().map(|(_, b)| *b).sum();
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(indent);
-                                        // Chart button
-                                        if ui.add(egui::Button::new(egui::RichText::new("\u{1F4C8}").small())
-                                            .min_size(egui::vec2(22.0, 18.0))).clicked() {
-                                            load_sym = Some((*sym).clone());
-                                        }
-                                        // Watchlist button
-                                        if ui.add(egui::Button::new(egui::RichText::new("+WL").color(sym_blue).small())
-                                            .min_size(egui::vec2(30.0, 18.0))).clicked() {
-                                            add_wl = Some((*sym).clone());
-                                        }
-                                        // Symbol name
-                                        if ui.add(egui::Label::new(
-                                            egui::RichText::new(sym.as_str()).monospace().color(sym_white)
-                                        ).sense(egui::Sense::click())).clicked() {
-                                            load_sym = Some((*sym).clone());
-                                        }
-                                        // TF count + bar count
-                                        ui.label(egui::RichText::new(
-                                            format!("{} TFs  {} bars", tfs.len(), total_bars)
-                                        ).color(sym_dim).small());
-                                    });
+                                    let name = fund_map.get(&sym.to_uppercase()).map(|(_, _, n)| *n).unwrap_or("");
+                                    let info = if name.is_empty() {
+                                        format!("{} TFs  {} bars", tfs.len(), total_bars)
+                                    } else {
+                                        format!("{} TFs  {} bars  {}", tfs.len(), total_bars, name)
+                                    };
+                                    sym_row!(ui, sym.as_str(), info, 24.0_f32, load_sym, add_wl);
                                 }
                             }
                         }
 
-                        // Catch any source not in our label list
-                        for (source_key, syms) in &grouped {
-                            if ["mt5", "alpaca", "tastytrade", "cryptocompare", "kraken"].contains(&source_key.as_str()) {
-                                continue;
+                        // ── Section 2: Broker Universe (uncached symbols) ──
+                        if !self.all_broker_assets.is_empty() {
+                            // Group by category using fundamentals
+                            let mut universe: std::collections::BTreeMap<&str, Vec<&(String, String, String)>> = std::collections::BTreeMap::new();
+                            for asset in &self.all_broker_assets {
+                                let sym_norm = asset.0.replace('/', "").to_uppercase();
+                                if !filter_upper.is_empty() && !sym_norm.contains(&filter_upper) && !asset.1.to_uppercase().contains(&filter_upper) { continue; }
+                                let cat = categorize(&asset.0, &asset.2);
+                                universe.entry(cat).or_default().push(asset);
                             }
-                            let section_id = source_key.clone();
+
+                            let universe_total: usize = universe.values().map(|v| v.len()).sum();
+                            let section_id = "broker_universe".to_string();
                             let expanded = self.symbols_expanded.contains(&section_id);
                             let arrow = if expanded { "\u{25BC}" } else { "\u{25B6}" };
+                            ui.add_space(8.0);
                             if ui.add(egui::Label::new(
-                                egui::RichText::new(format!("{} {} ({})", arrow, source_key, syms.len()))
-                                    .color(sym_dim).strong()
+                                egui::RichText::new(format!("{} Alpaca Universe ({})", arrow, universe_total)).color(sym_green).strong()
                             ).sense(egui::Sense::click())).clicked() {
                                 if expanded { self.symbols_expanded.remove(&section_id); }
                                 else { self.symbols_expanded.insert(section_id.clone()); }
                             }
+
                             if expanded {
-                                for (sym, tfs) in syms {
-                                    let total_bars: i64 = tfs.iter().map(|(_, b)| *b).sum();
+                                for (cat, assets) in &universe {
+                                    let cat_id = format!("universe:{}", cat);
+                                    let cat_exp = self.symbols_expanded.contains(&cat_id);
+                                    let ca = if cat_exp { "\u{25BC}" } else { "\u{25B6}" };
                                     ui.horizontal(|ui| {
                                         ui.add_space(12.0);
-                                        if ui.add(egui::Button::new(egui::RichText::new("\u{1F4C8}").small())
-                                            .min_size(egui::vec2(22.0, 18.0))).clicked() {
-                                            load_sym = Some(sym.clone());
+                                        if ui.add(egui::Label::new(egui::RichText::new(format!("{} {} ({})", ca, cat, assets.len())).color(sym_dim)).sense(egui::Sense::click())).clicked() {
+                                            if cat_exp { self.symbols_expanded.remove(&cat_id); } else { self.symbols_expanded.insert(cat_id.clone()); }
                                         }
-                                        if ui.add(egui::Button::new(egui::RichText::new("+WL").color(sym_blue).small())
-                                            .min_size(egui::vec2(30.0, 18.0))).clicked() {
-                                            add_wl = Some(sym.clone());
-                                        }
-                                        if ui.add(egui::Label::new(
-                                            egui::RichText::new(sym.as_str()).monospace().color(sym_white)
-                                        ).sense(egui::Sense::click())).clicked() {
-                                            load_sym = Some(sym.clone());
-                                        }
-                                        ui.label(egui::RichText::new(
-                                            format!("{} TFs  {} bars", tfs.len(), total_bars)
-                                        ).color(sym_dim).small());
                                     });
+                                    if !cat_exp { continue; }
+
+                                    for (sym, name, _class) in assets.iter().take(500) {
+                                        let is_cached = cached_syms_set.contains(&sym.replace('/', "").to_uppercase());
+                                        let info = if is_cached {
+                                            format!("{}  [cached]", name)
+                                        } else {
+                                            name.to_string()
+                                        };
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(24.0);
+                                            if ui.add(egui::Button::new(egui::RichText::new("\u{1F4C8}").small())
+                                                .min_size(egui::vec2(22.0, 18.0))).clicked() {
+                                                load_sym = Some(sym.clone());
+                                            }
+                                            if ui.add(egui::Button::new(egui::RichText::new("+WL").color(sym_blue).small())
+                                                .min_size(egui::vec2(30.0, 18.0))).clicked() {
+                                                add_wl = Some(sym.clone());
+                                            }
+                                            let sym_color = if is_cached { sym_cached } else { sym_white };
+                                            if ui.add(egui::Label::new(
+                                                egui::RichText::new(sym.as_str()).monospace().color(sym_color)
+                                            ).sense(egui::Sense::click())).clicked() {
+                                                load_sym = Some(sym.clone());
+                                            }
+                                            ui.label(egui::RichText::new(&info).color(sym_dim).small());
+                                        });
+                                    }
+                                    if assets.len() > 500 {
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(24.0);
+                                            ui.label(egui::RichText::new(format!("... {} more (use filter)", assets.len() - 500)).color(sym_dim).small());
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -20226,6 +20297,10 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     self.live_positions = pos;
+                }
+                BrokerMsg::AllAssets(assets) => {
+                    self.all_broker_assets = assets;
+                    self.all_broker_assets_fetched = true;
                 }
                 BrokerMsg::TastytradePositions(pos) => {
                     if let Some(ref cache) = self.cache {
