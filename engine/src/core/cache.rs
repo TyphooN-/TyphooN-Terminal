@@ -1089,6 +1089,23 @@ impl SqliteCache {
         Ok(())
     }
 
+    /// Read all bid/ask quotes from the bid_ask table (BarCacheWriter live prices).
+    /// Returns Vec of (symbol, bid, ask, spread).
+    pub fn read_bid_ask(&self) -> Result<Vec<(String, f64, f64, f64)>, String> {
+        let conn = self.read_conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let mut stmt = conn.prepare("SELECT symbol, bid, ask, spread FROM bid_ask WHERE bid > 0 OR ask > 0")
+            .map_err(|e| format!("Prepare failed (bid_ask table may not exist): {e}"))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        }).map_err(|e| format!("Query failed: {e}"))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     /// Delete all cache entries matching a symbol prefix (e.g., "AAPL:" deletes all TFs for AAPL).
     pub fn delete_symbol(&self, symbol_prefix: &str) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;

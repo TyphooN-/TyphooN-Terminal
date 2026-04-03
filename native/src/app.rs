@@ -8649,6 +8649,10 @@ enum BrokerMsg {
     AllAssets(Vec<(String, String, String)>),
     /// Structured fills for chart overlay (symbol, side, qty, price, time).
     RecentFills(Vec<(String, String, f64, f64, String)>),
+    /// MT5 sync completed with N keys updated — trigger chart reloads.
+    Mt5SyncDone(usize),
+    /// Live bid/ask from MT5 BarCacheWriter — update forming bars.
+    Mt5LiveQuotes(Vec<(String, f64, f64)>), // (symbol, bid, ask)
 }
 
 /// Reusable sort state for clickable column headers.
@@ -9911,10 +9915,29 @@ impl TyphooNApp {
                                     }
                                 }
                             }
+                            let changed = new_keys + updated;
                             let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
                                 "MT5 sync: {} new + {} updated ({} unchanged, {} regressed, {} errors) from {} keys",
                                 new_keys, updated, skipped_unchanged, regressed, read_errors_total, total_keys
                             )));
+                            // Signal chart reload if any data changed
+                            if changed > 0 {
+                                let _ = msg_tx.send(BrokerMsg::Mt5SyncDone(changed));
+                            }
+                            // Read live bid/ask from last MT5 source for real-time forming bar updates
+                            // (bid_ask table written by BarCacheWriter every tick)
+                            if let Some(last_src) = sources.last() {
+                                if let Ok(src_cache) = typhoon_engine::core::cache::SqliteCache::open_readonly(&std::path::PathBuf::from(last_src)) {
+                                    if let Ok(quotes) = src_cache.read_bid_ask() {
+                                        let live: Vec<(String, f64, f64)> = quotes.into_iter()
+                                            .map(|(sym, bid, ask, _spread)| (sym, bid, ask))
+                                            .collect();
+                                        if !live.is_empty() {
+                                            let _ = msg_tx.send(BrokerMsg::Mt5LiveQuotes(live));
+                                        }
+                                    }
+                                }
+                            }
                         });
                     }
                     BrokerCmd::DarwinFtpScan { ftp_dir, min_days } => {
@@ -20422,6 +20445,41 @@ impl eframe::App for TyphooNApp {
                         c.cached_trade_overlay_frame = 0;
                     }
                 }
+                BrokerMsg::Mt5SyncDone(changed) => {
+                    // Reload all visible charts to pick up forming bar updates
+                    if changed > 0 {
+                        if self.mtf_enabled {
+                            for i in 0..self.charts.len() {
+                                self.deferred_chart_loads.push(i);
+                            }
+                        } else {
+                            self.deferred_chart_loads.push(self.active_tab);
+                        }
+                    }
+                }
+                BrokerMsg::Mt5LiveQuotes(quotes) => {
+                    // Update forming bar (last bar) on all charts from MT5 live bid/ask
+                    for (sym, bid, ask) in &quotes {
+                        let mid = (bid + ask) / 2.0;
+                        if mid <= 0.0 { continue; }
+                        let sym_upper = sym.to_uppercase();
+                        for chart in &mut self.charts {
+                            let chart_bare = {
+                                let s = chart.symbol.replace('/', "").to_uppercase();
+                                let parts: Vec<&str> = s.split(':').collect();
+                                let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
+                                if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s }
+                            };
+                            if chart_bare == sym_upper {
+                                if let Some(bar) = chart.bars.last_mut() {
+                                    bar.close = mid;
+                                    if mid > bar.high { bar.high = mid; }
+                                    if mid < bar.low { bar.low = mid; }
+                                }
+                            }
+                        }
+                    }
+                }
                 BrokerMsg::TastytradePositions(pos) => {
                     if let Some(ref cache) = self.cache {
                         if let Ok(json) = serde_json::to_string(&pos) {
@@ -20463,11 +20521,50 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::Quote(symbol, bid, ask, last) => {
                     self.log.push_back(LogEntry::info(format!("{}: bid {} ask {} last {}", symbol, format_price(bid), format_price(ask), format_price(last))));
+                    // Update forming bar (last bar) on any chart matching this symbol
+                    if last > 0.0 {
+                        let sym_norm = symbol.replace('/', "").to_uppercase();
+                        for chart in &mut self.charts {
+                            let chart_sym = chart.symbol.replace('/', "").to_uppercase();
+                            let chart_bare = {
+                                let parts: Vec<&str> = chart_sym.split(':').collect();
+                                let is_tf = matches!(parts.last().map(|s| s.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
+                                if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { chart_sym.clone() }
+                            };
+                            if chart_bare == sym_norm || chart_bare.contains(&sym_norm) || sym_norm.contains(&chart_bare) {
+                                if let Some(bar) = chart.bars.last_mut() {
+                                    bar.close = last;
+                                    if last > bar.high { bar.high = last; }
+                                    if last < bar.low { bar.low = last; }
+                                }
+                            }
+                        }
+                    }
                 }
                 BrokerMsg::WatchlistQuotes(rows) => {
                     // Store to KV for LAN clients
                     if let Some(ref cache) = self.cache {
                         if let Ok(j) = serde_json::to_string(&rows) { let _ = cache.put_kv("broker:watchlist", &j); }
+                    }
+                    // Update forming bars on all charts from watchlist prices
+                    for row in &rows {
+                        if row.last <= 0.0 { continue; }
+                        let row_sym = row.symbol.replace('/', "").to_uppercase();
+                        for chart in &mut self.charts {
+                            let chart_bare = {
+                                let s = chart.symbol.replace('/', "").to_uppercase();
+                                let parts: Vec<&str> = s.split(':').collect();
+                                let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
+                                if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s }
+                            };
+                            if chart_bare == row_sym || chart_bare.contains(&row_sym) || row_sym.contains(&chart_bare) {
+                                if let Some(bar) = chart.bars.last_mut() {
+                                    bar.close = row.last;
+                                    if row.last > bar.high { bar.high = row.last; }
+                                    if row.last < bar.low { bar.low = row.last; }
+                                }
+                            }
+                        }
                     }
                     self.watchlist_rows = rows;
                 }
