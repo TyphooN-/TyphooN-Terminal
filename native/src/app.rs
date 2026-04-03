@@ -21374,21 +21374,26 @@ impl eframe::App for TyphooNApp {
 
                 ui.separator();
 
-                // Timeframe buttons
+                // Timeframe dropdown (ComboBox — type to search, e.g. "H4")
                 let cur_tf = self.charts.get(self.active_tab).map(|c| c.timeframe).unwrap_or(Timeframe::H4);
-                for &tf in &[Timeframe::M1, Timeframe::M5, Timeframe::M15, Timeframe::M30,
-                              Timeframe::H1, Timeframe::H4, Timeframe::D1, Timeframe::W1, Timeframe::MN1] {
-                    let selected = tf == cur_tf;
-                    let btn_color = if selected { ACCENT } else { AXIS_TEXT };
-                    let btn_text  = egui::RichText::new(tf.label()).color(btn_color).small().strong();
-                    if ui.small_button(btn_text).clicked() {
-                        // Use the active chart's symbol, NOT the text box.
-                        // The text box is only for explicit symbol search (Enter key).
-                        let sym = self.charts.get(self.active_tab)
-                            .map(|c| c.symbol.clone())
-                            .unwrap_or_else(|| self.symbol_input.trim().to_string());
-                        self.reload_symbol(&sym, tf);
-                    }
+                let all_tfs = [Timeframe::M1, Timeframe::M5, Timeframe::M15, Timeframe::M30,
+                               Timeframe::H1, Timeframe::H4, Timeframe::D1, Timeframe::W1, Timeframe::MN1];
+                let mut new_tf = cur_tf;
+                egui::ComboBox::from_id_salt("tf_combo")
+                    .selected_text(egui::RichText::new(cur_tf.label()).color(ACCENT).strong().small())
+                    .width(55.0)
+                    .show_ui(ui, |ui| {
+                        for &tf in &all_tfs {
+                            if ui.selectable_value(&mut new_tf, tf, tf.label()).clicked() {
+                                // handled below
+                            }
+                        }
+                    });
+                if new_tf != cur_tf {
+                    let sym = self.charts.get(self.active_tab)
+                        .map(|c| c.symbol.clone())
+                        .unwrap_or_else(|| self.symbol_input.trim().to_string());
+                    self.reload_symbol(&sym, new_tf);
                 }
 
                 ui.separator();
