@@ -9114,6 +9114,7 @@ impl TyphooNApp {
         rt_handle.spawn(async move {
             let mut cmd_rx = _broker_cmd_rx;
             let mut broker: Option<AlpacaBroker> = None;
+            let mut tt_broker: Option<typhoon_engine::broker::tastytrade::TastytradeBroker> = None;
             let importing_flag = importing_flag_broker;
             let lan_client = lan_client_broker;
             // Shared sender for forwarding requests to LAN sync WebSocket
@@ -10071,28 +10072,30 @@ impl TyphooNApp {
                     BrokerCmd::TastytradeConnect { username, password, sandbox } => {
                         use typhoon_engine::broker::tastytrade::TastytradeBroker;
                         let msg_tx = broker_msg_tx_clone.clone();
-                        let mut broker = TastytradeBroker::new(sandbox);
-                        match broker.login(&username, &password).await {
+                        let mut tb = TastytradeBroker::new(sandbox);
+                        match tb.login(&username, &password).await {
                             Ok(session) => {
-                                let acct = broker.account_number().unwrap_or("none").to_string();
+                                let acct = tb.account_number().unwrap_or("none").to_string();
                                 let _ = msg_tx.send(BrokerMsg::Connected(format!(
                                     "tastytrade {} — account {} (token: {}...)",
                                     if sandbox { "Sandbox" } else { "Production" },
                                     acct,
                                     &session.session_token[..session.session_token.len().min(8)]
                                 )));
-                                // Fetch initial positions
-                                if let Ok(positions) = broker.get_positions().await {
+                                // Fetch balances
+                                if let Ok(bal) = tb.get_balances().await {
+                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                        "tastytrade: NLV ${:.2}, BP ${:.2}, Cash ${:.2}",
+                                        bal.net_liquidating_value, bal.equity_buying_power, bal.cash_balance
+                                    )));
+                                }
+                                // Fetch and convert positions to unified format
+                                if let Ok(positions) = tb.get_positions().await {
                                     let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
                                         "tastytrade: {} open positions", positions.len()
                                     )));
-                                    for p in &positions {
-                                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                            "  {} {} {} {:.0} @ ${:.2}",
-                                            p.symbol, p.instrument_type, p.quantity_direction, p.quantity, p.average_open_price
-                                        )));
-                                    }
                                 }
+                                tt_broker = Some(tb);
                             }
                             Err(e) => {
                                 let _ = msg_tx.send(BrokerMsg::Error(format!("tastytrade login failed: {}", e)));
@@ -10100,8 +10103,18 @@ impl TyphooNApp {
                         }
                     }
                     BrokerCmd::TastytradePositions => {
-                        // Would need stored broker reference — for now just log
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("tastytrade: use Connect first".into()));
+                        if let Some(ref tb) = tt_broker {
+                            match tb.get_positions().await {
+                                Ok(positions) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                        "tastytrade: {} positions", positions.len()
+                                    )));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("tastytrade: connect first".into()));
+                        }
                     }
                     BrokerCmd::TastytradeOptionChain { symbol } => {
                         let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("tastytrade option chain for {} — connect first", symbol)));
