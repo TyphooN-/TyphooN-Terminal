@@ -1072,6 +1072,8 @@ struct ChartState {
     /// Supply/demand zones: (bar_idx, zone_high, zone_low, status).
     /// Status: 0=untested, 1=tested (price returned), 2=proven (price bounced)
     supply_zones: Vec<(usize, f64, f64, u8)>,
+    /// Earliest timestamp from primary data source (MT5/Alpaca). Bars before this are backfill.
+    primary_first_ts: i64,
     demand_zones: Vec<(usize, f64, f64, u8)>,
     /// Auto Fibonacci levels: (price, label, is_extension).
     auto_fib_levels: Vec<(f64, String, bool)>,
@@ -1214,6 +1216,7 @@ impl ChartState {
             ehlers_cg: Vec::new(),
             ehlers_roof: Vec::new(),
             supply_zones: Vec::new(),
+            primary_first_ts: 0,
             demand_zones: Vec::new(),
             auto_fib_levels: Vec::new(),
             auto_fib_swing: None,
@@ -1365,6 +1368,9 @@ impl ChartState {
             self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                 ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
             }).collect();
+
+            // Track primary source range (bars before this are backfill)
+            self.primary_first_ts = self.bars.first().map(|b| b.ts_ms).unwrap_or(0);
 
             // Merge CryptoCompare + Kraken bars for weekend gap-fill.
             // For D1+ timeframes, MT5 uses UTC+2 and CryptoCompare uses UTC.
@@ -5408,6 +5414,13 @@ fn draw_chart(
                     }
                 } else if is_weekend {
                     if bar.close >= bar.open { weekend_up } else { weekend_dn }
+                } else if chart.primary_first_ts > 0 && bar.ts_ms < chart.primary_first_ts {
+                    // Backfill data (older than primary source) — dimmed cyan/orange
+                    if bar.close >= bar.open {
+                        egui::Color32::from_rgb(0, 180, 180)   // teal (backfill bull)
+                    } else {
+                        egui::Color32::from_rgb(200, 120, 0)   // orange (backfill bear)
+                    }
                 } else {
                     if bar.close >= bar.open { UP } else { DOWN }
                 };
