@@ -8987,6 +8987,10 @@ pub struct TyphooNApp {
     live_account: Option<AccountInfo>,
     /// Live positions.
     live_positions: Vec<PositionInfo>,
+    /// Position visibility toggles (still synced, just hidden in UI)
+    show_darwin_positions: bool,
+    show_alpaca_positions: bool,
+    show_tt_positions: bool,
     /// Live orders.
     live_orders: Vec<OrderInfo>,
 
@@ -10603,6 +10607,9 @@ impl TyphooNApp {
             tt_connected: false,
             live_account: None,
             live_positions: Vec::new(),
+            show_darwin_positions: true,
+            show_alpaca_positions: true,
+            show_tt_positions: true,
             live_orders: Vec::new(),
             right_tab: RightTab::Trading,
             right_trading_open: true,
@@ -12213,6 +12220,9 @@ impl TyphooNApp {
             "user_watchlist": self.user_watchlist,
             "lan_client_enabled": self.lan_client_enabled,
             "lan_server_enabled": self.lan_server_enabled,
+            "show_darwin_positions": self.show_darwin_positions,
+            "show_alpaca_positions": self.show_alpaca_positions,
+            "show_tt_positions": self.show_tt_positions,
             "lan_server_ip": self.lan_server_ip,
             "lan_sync_port": self.lan_sync_port,
             "darwin_view": self.darwin_view,
@@ -12591,6 +12601,9 @@ impl TyphooNApp {
                 // Restore LAN client config
                 if let Some(b) = v["lan_client_enabled"].as_bool() { self.lan_client_enabled = b; }
                 if let Some(b) = v["lan_server_enabled"].as_bool() { self.lan_server_enabled = b; }
+                if let Some(b) = v["show_darwin_positions"].as_bool() { self.show_darwin_positions = b; }
+                if let Some(b) = v["show_alpaca_positions"].as_bool() { self.show_alpaca_positions = b; }
+                if let Some(b) = v["show_tt_positions"].as_bool() { self.show_tt_positions = b; }
                 if let Some(s) = v["lan_server_ip"].as_str() { self.lan_server_ip = s.to_string(); }
                 if let Some(s) = v["lan_sync_port"].as_str() { self.lan_sync_port = s.to_string(); }
                 // Restore SL/TP state
@@ -21204,16 +21217,24 @@ impl eframe::App for TyphooNApp {
                         });
 
                     // ── Positions Section ─────────────────────────────────
-                    let pos_count = self.bg.open_positions.len() + self.live_positions.len();
+                    let darwin_count = if self.show_darwin_positions { self.bg.open_positions.len() } else { 0 };
+                    let alpaca_count = if self.show_alpaca_positions { self.live_positions.len() } else { 0 };
+                    let pos_count = darwin_count + alpaca_count;
                     egui::CollapsingHeader::new(egui::RichText::new(format!("Positions ({})", pos_count)).strong().small())
                         .id_salt("positions_section")
                         .default_open(self.right_positions_open)
                         .show(ui, |ui| {
+                            // Visibility toggles (compact horizontal checkboxes)
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut self.show_darwin_positions, egui::RichText::new("DARWIN").small());
+                                ui.checkbox(&mut self.show_alpaca_positions, egui::RichText::new("Alpaca").small());
+                                ui.checkbox(&mut self.show_tt_positions, egui::RichText::new("TT").small());
+                            });
                             ui.add_space(4.0);
                             let mut has_positions = false;
                             // DARWIN positions — show current chart symbol first, then others dimmed
                             { let positions = &self.bg.open_positions;
-                                if !positions.is_empty() {
+                                if !positions.is_empty() && self.show_darwin_positions {
                                     has_positions = true;
                                     let active_sym = self.charts.get(self.active_tab)
                                         .map(|c| {
@@ -21258,7 +21279,7 @@ impl eframe::App for TyphooNApp {
                                 }
                             }
                             // Live broker positions (from Alpaca or synced from LAN server via KV)
-                            let has_live = self.broker_connected || self.lan_sync_mode == "client";
+                            let has_live = (self.broker_connected || self.lan_sync_mode == "client") && self.show_alpaca_positions;
                             if has_live && !self.live_positions.is_empty() {
                                 has_positions = true;
                                 for pos in &self.live_positions {
