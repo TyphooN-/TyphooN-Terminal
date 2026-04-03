@@ -458,6 +458,12 @@ impl TastytradeBroker {
         })
     }
 
+    /// Get the DXLink streaming token for WebSocket market data.
+    pub async fn get_streaming_token(&self) -> Result<super::dxlink::DxLinkToken, String> {
+        let token = self.auth_header().ok_or("Not authenticated")?;
+        super::dxlink::get_streaming_token(&self.base_url, &token).await
+    }
+
     pub fn is_authenticated(&self) -> bool { self.session_token.is_some() }
     pub fn account_number(&self) -> Option<&str> { self.account_number.as_deref() }
 }
