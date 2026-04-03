@@ -8607,6 +8607,8 @@ enum BrokerMsg {
     CongressData(Vec<(String, String, String, String, String, String)>),
     /// Unusual volume scan results (symbol, today_vol, avg_vol, ratio).
     UnusualVolumeResults(Vec<(String, f64, f64, f64)>),
+    /// tastytrade positions converted to unified format for chart overlay.
+    TastytradePositions(Vec<PositionInfo>),
 }
 
 /// Reusable sort state for clickable column headers.
@@ -9010,6 +9012,7 @@ pub struct TyphooNApp {
     live_account: Option<AccountInfo>,
     /// Live positions.
     live_positions: Vec<PositionInfo>,
+    tt_positions: Vec<PositionInfo>,
     /// Position visibility toggles (still synced, just hidden in UI)
     show_darwin_positions: bool,
     show_alpaca_positions: bool,
@@ -10133,6 +10136,17 @@ impl TyphooNApp {
                                     let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
                                         "tastytrade: {} open positions", positions.len()
                                     )));
+                                    let unified: Vec<PositionInfo> = positions.iter().map(|p| PositionInfo {
+                                        symbol: p.symbol.clone(),
+                                        qty: p.quantity.abs(),
+                                        side: if p.quantity_direction == "Long" { "long".into() } else { "short".into() },
+                                        avg_entry_price: p.average_open_price,
+                                        market_value: p.mark_price.unwrap_or(p.close_price) * p.quantity.abs(),
+                                        unrealized_pl: p.unrealized_pnl.unwrap_or(0.0),
+                                        asset_class: p.instrument_type.clone(),
+                                        asset_id: String::new(),
+                                    }).collect();
+                                    let _ = msg_tx.send(BrokerMsg::TastytradePositions(unified));
                                 }
                                 tt_broker = Some(tb);
                             }
@@ -10148,6 +10162,18 @@ impl TyphooNApp {
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
                                         "tastytrade: {} positions", positions.len()
                                     )));
+                                    // Convert to unified PositionInfo for chart overlay
+                                    let unified: Vec<PositionInfo> = positions.iter().map(|p| PositionInfo {
+                                        symbol: p.symbol.clone(),
+                                        qty: p.quantity.abs(),
+                                        side: if p.quantity_direction == "Long" { "long".into() } else { "short".into() },
+                                        avg_entry_price: p.average_open_price,
+                                        market_value: p.mark_price.unwrap_or(p.close_price) * p.quantity.abs(),
+                                        unrealized_pl: p.unrealized_pnl.unwrap_or(0.0),
+                                        asset_class: p.instrument_type.clone(),
+                                        asset_id: String::new(),
+                                    }).collect();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::TastytradePositions(unified));
                                 }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
                             }
@@ -10664,6 +10690,7 @@ impl TyphooNApp {
             tt_connected: false,
             live_account: None,
             live_positions: Vec::new(),
+            tt_positions: Vec::new(),
             show_darwin_positions: true,
             show_alpaca_positions: true,
             show_tt_positions: true,
@@ -11409,12 +11436,14 @@ impl TyphooNApp {
 
         // Collect deals from all DARWIN accounts matching this symbol
         use std::collections::HashMap;
+        let bare_upper = bare_sym.to_uppercase();
         let mut marker_map: HashMap<(usize, bool, i64), (f64, u32, String)> = HashMap::new(); // (bar_idx, is_buy, price_cents) → (total_vol, count, ticker)
 
+        if self.show_darwin_positions {
         for det in &self.bg.account_details {
             // Check closed positions (have SL/TP)
             for pos in &det.closed_positions {
-                if pos.symbol != bare_sym { continue; }
+                if pos.symbol.replace('/', "").to_uppercase() != bare_upper { continue; }
                 let ticker = det.ticker.clone();
                 // Entry arrow
                 let ts = parse_time(&pos.open_time);
@@ -11447,7 +11476,7 @@ impl TyphooNApp {
             }
             // Check recent deals
             for deal in &det.recent_deals {
-                if deal.symbol != bare_sym { continue; }
+                if deal.symbol.replace('/', "").to_uppercase() != bare_upper { continue; }
                 if deal.direction.is_empty() { continue; } // skip balance entries
                 let ts = parse_time(&deal.time);
                 if let Some(bar_idx) = find_bar(ts) {
@@ -11465,7 +11494,7 @@ impl TyphooNApp {
 
             // Open position lines (entry, SL, TP)
             for pos in &det.open_positions {
-                if pos.symbol != bare_sym { continue; }
+                if pos.symbol.replace('/', "").to_uppercase() != bare_upper { continue; }
                 let is_buy = pos.side == "buy";
                 overlay.position_lines.push(PositionLine {
                     price: pos.avg_price,
@@ -11475,14 +11504,15 @@ impl TyphooNApp {
                 });
             }
         }
+        } // show_darwin_positions
 
         // Also check portfolio-level positions for SL/TP from closed_positions
         // (Open positions from DarwinOpenPosition don't have SL/TP; closed ones do)
 
         // Broker fills (Alpaca/tastytrade) — add to marker map before conversion
         for (sym, side, qty, price, time) in &self.recent_fills {
-            let fill_sym = sym.replace('/', "");
-            if !fill_sym.contains(&bare_sym) && !bare_sym.contains(&fill_sym) { continue; }
+            let fill_sym = sym.replace('/', "").to_uppercase();
+            if !fill_sym.contains(&bare_upper) && !bare_upper.contains(&fill_sym) { continue; }
             let ts = chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%dT%H:%M:%S%.fZ")
                 .or_else(|_| chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S"))
                 .or_else(|_| chrono::NaiveDate::parse_from_str(time, "%Y-%m-%d").map(|d| d.and_hms_opt(0, 0, 0).unwrap()))
@@ -11510,10 +11540,18 @@ impl TyphooNApp {
         }
         overlay.markers.sort_by_key(|m| m.bar_idx);
 
-        // Live broker position lines
-        for pos in &self.live_positions {
-            let pos_sym = pos.symbol.replace('/', "");
-            if !pos_sym.contains(&bare_sym) && !bare_sym.contains(&pos_sym) { continue; }
+        // Live broker position lines (Alpaca + tastytrade)
+        let alpaca_iter: Box<dyn Iterator<Item = &PositionInfo>> = if self.show_alpaca_positions {
+            Box::new(self.live_positions.iter())
+        } else { Box::new(std::iter::empty()) };
+        let tt_iter: Box<dyn Iterator<Item = &PositionInfo>> = if self.show_tt_positions {
+            Box::new(self.tt_positions.iter())
+        } else { Box::new(std::iter::empty()) };
+        let all_broker_positions = alpaca_iter.chain(tt_iter);
+        for pos in all_broker_positions {
+            let pos_sym = pos.symbol.replace('/', "").to_uppercase();
+            let bare_upper = bare_sym.to_uppercase();
+            if pos_sym != bare_upper && !pos_sym.contains(&bare_upper) && !bare_upper.contains(&pos_sym) { continue; }
             let is_buy = pos.side == "long";
             overlay.position_lines.push(PositionLine {
                 price: pos.avg_entry_price,
@@ -11747,6 +11785,13 @@ impl TyphooNApp {
                 }
                 if self.show_alpaca_positions {
                     for pos in &self.live_positions {
+                        if seen.insert(pos.symbol.clone()) {
+                            symbols.push(pos.symbol.clone());
+                        }
+                    }
+                }
+                if self.show_tt_positions {
+                    for pos in &self.tt_positions {
                         if seen.insert(pos.symbol.clone()) {
                             symbols.push(pos.symbol.clone());
                         }
@@ -20069,6 +20114,11 @@ impl eframe::App for TyphooNApp {
                             self.live_positions = pos;
                         }
                     }
+                    if let Ok(Some(json)) = cache.get_kv("broker:tt_positions") {
+                        if let Ok(pos) = serde_json::from_str::<Vec<PositionInfo>>(&json) {
+                            self.tt_positions = pos;
+                        }
+                    }
                     if let Ok(Some(json)) = cache.get_kv("broker:account") {
                         if let Ok(acct) = serde_json::from_str::<AccountInfo>(&json) {
                             self.live_account = Some(acct);
@@ -20176,6 +20226,14 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     self.live_positions = pos;
+                }
+                BrokerMsg::TastytradePositions(pos) => {
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(json) = serde_json::to_string(&pos) {
+                            let _ = cache.put_kv("broker:tt_positions", &json);
+                        }
+                    }
+                    self.tt_positions = pos;
                 }
                 BrokerMsg::Orders(orders) => {
                     if let Some(ref cache) = self.cache {
@@ -21562,7 +21620,8 @@ impl eframe::App for TyphooNApp {
                     // ── Positions Section ─────────────────────────────────
                     let darwin_count = if self.show_darwin_positions { self.bg.open_positions.len() } else { 0 };
                     let alpaca_count = if self.show_alpaca_positions { self.live_positions.len() } else { 0 };
-                    let pos_count = darwin_count + alpaca_count;
+                    let tt_count = if self.show_tt_positions { self.tt_positions.len() } else { 0 };
+                    let pos_count = darwin_count + alpaca_count + tt_count;
                     egui::CollapsingHeader::new(egui::RichText::new(format!("Positions ({})", pos_count)).strong().small())
                         .id_salt("positions_section")
                         .default_open(self.right_positions_open)
@@ -21636,6 +21695,23 @@ impl eframe::App for TyphooNApp {
                                         ui.label(egui::RichText::new(format!("${:.2}", pos.unrealized_pl)).color(pl_c).small());
                                     });
                                     ui.label(egui::RichText::new(format!("entry: {}", format_price(pos.avg_entry_price))).color(AXIS_TEXT).small());
+                                    ui.separator();
+                                }
+                            }
+                            // tastytrade positions
+                            if self.show_tt_positions && !self.tt_positions.is_empty() {
+                                has_positions = true;
+                                for pos in &self.tt_positions {
+                                    let side_c = if pos.side == "long" { UP } else { DOWN };
+                                    let side_label = if pos.side == "long" { "L" } else { "S" };
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(&pos.symbol).small().strong());
+                                        ui.label(egui::RichText::new(format!("[TT] {}", side_label)).color(side_c).small());
+                                        ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small());
+                                        let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("${:.2}", pos.unrealized_pl)).color(pl_c).small());
+                                    });
+                                    ui.label(egui::RichText::new(format!("entry: {}  ({})", format_price(pos.avg_entry_price), pos.asset_class)).color(AXIS_TEXT).small());
                                     ui.separator();
                                 }
                             }
