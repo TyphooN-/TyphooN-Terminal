@@ -350,6 +350,161 @@ impl TastytradeBroker {
         Ok(expirations)
     }
 
+    /// Get quote snapshots for equity symbols (bid/ask/last/volume/daily OHLC).
+    /// Uses the /api/quote/equities endpoint (REST, no WebSocket needed).
+    /// Returns up to 100 symbols per request.
+    pub async fn get_quotes(&self, symbols: &[String]) -> Result<Vec<TastyQuote>, String> {
+        let token = self.auth_header().ok_or("Not authenticated")?;
+        let sym_param = symbols.join(",");
+        let url = format!("{}/market-data?symbols={}", self.base_url, sym_param);
+
+        let resp = self.client.get(&url)
+            .header("Authorization", &token)
+            .send().await
+            .map_err(|e| format!("Get quotes failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Quotes request failed: {text}"));
+        }
+
+        let data: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Parse quotes failed: {e}"))?;
+
+        let empty = vec![];
+        let items = data["data"]["items"].as_array()
+            .unwrap_or(&empty);
+
+        let mut quotes = Vec::new();
+        for item in items {
+            quotes.push(TastyQuote {
+                symbol: item["symbol"].as_str().unwrap_or("").to_string(),
+                bid: parse_num(&item["bid"]),
+                ask: parse_num(&item["ask"]),
+                last: parse_num(&item["last"]),
+                open: parse_num(&item["open"]),
+                high: parse_num(&item["high"]),
+                low: parse_num(&item["low"]),
+                close: parse_num(&item["close"]),
+                prev_close: parse_num(&item["prev-close"]),
+                volume: item["volume"].as_i64().unwrap_or(0),
+                bid_size: item["bid-size"].as_i64().unwrap_or(0),
+                ask_size: item["ask-size"].as_i64().unwrap_or(0),
+            });
+        }
+        Ok(quotes)
+    }
+
+    /// Get market metrics (IV rank, IV percentile, liquidity) for symbols.
+    pub async fn get_market_metrics(&self, symbols: &[String]) -> Result<Vec<TastyMarketMetric>, String> {
+        let token = self.auth_header().ok_or("Not authenticated")?;
+        let sym_param = symbols.join(",");
+        let url = format!("{}/market-metrics?symbols={}", self.base_url, sym_param);
+
+        let resp = self.client.get(&url)
+            .header("Authorization", &token)
+            .send().await
+            .map_err(|e| format!("Get metrics failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("Metrics request failed: {text}"));
+        }
+
+        let data: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Parse metrics failed: {e}"))?;
+
+        let empty = vec![];
+        let items = data["data"]["items"].as_array()
+            .unwrap_or(&empty);
+
+        let mut metrics = Vec::new();
+        for item in items {
+            metrics.push(TastyMarketMetric {
+                symbol: item["symbol"].as_str().unwrap_or("").to_string(),
+                iv_index: parse_num(&item["implied-volatility-index"]),
+                iv_rank: parse_num(&item["implied-volatility-index-rank"]),
+                iv_percentile: parse_num(&item["implied-volatility-percentile"]),
+                liquidity_rating: item["liquidity-rating"].as_i64().unwrap_or(0) as i32,
+                liquidity_rank: parse_num(&item["liquidity-rank"]),
+                beta: parse_num(&item["beta"]),
+                earnings_date: item["earnings"]["expected-report-date"].as_str().map(|s| s.to_string()),
+            });
+        }
+        Ok(metrics)
+    }
+
+    /// Get account balances.
+    pub async fn get_balances(&self) -> Result<TastyBalances, String> {
+        let token = self.auth_header().ok_or("Not authenticated")?;
+        let acct = self.account_number.as_ref().ok_or("No account selected")?;
+        let url = format!("{}/accounts/{}/balances", self.base_url, acct);
+
+        let resp = self.client.get(&url)
+            .header("Authorization", &token)
+            .send().await
+            .map_err(|e| format!("Get balances failed: {e}"))?;
+
+        let data: serde_json::Value = resp.json().await
+            .map_err(|e| format!("Parse balances failed: {e}"))?;
+
+        let b = &data["data"];
+        Ok(TastyBalances {
+            cash_balance: parse_num(&b["cash-balance"]),
+            net_liquidating_value: parse_num(&b["net-liquidating-value"]),
+            equity_buying_power: parse_num(&b["equity-buying-power"]),
+            maintenance_requirement: parse_num(&b["maintenance-requirement"]),
+            pending_cash: parse_num(&b["pending-cash"]),
+        })
+    }
+
     pub fn is_authenticated(&self) -> bool { self.session_token.is_some() }
     pub fn account_number(&self) -> Option<&str> { self.account_number.as_deref() }
+}
+
+/// Quote snapshot from tastytrade REST API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TastyQuote {
+    pub symbol: String,
+    pub bid: f64,
+    pub ask: f64,
+    pub last: f64,
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+    pub prev_close: f64,
+    pub volume: i64,
+    pub bid_size: i64,
+    pub ask_size: i64,
+}
+
+/// Market metrics (IV, liquidity) from tastytrade REST API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TastyMarketMetric {
+    pub symbol: String,
+    pub iv_index: f64,
+    pub iv_rank: f64,
+    pub iv_percentile: f64,
+    pub liquidity_rating: i32,
+    pub liquidity_rank: f64,
+    pub beta: f64,
+    pub earnings_date: Option<String>,
+}
+
+/// Account balances from tastytrade REST API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TastyBalances {
+    pub cash_balance: f64,
+    pub net_liquidating_value: f64,
+    pub equity_buying_power: f64,
+    pub maintenance_requirement: f64,
+    pub pending_cash: f64,
+}
+
+/// Helper: parse number from tastytrade JSON (may be string or number).
+fn parse_num(v: &serde_json::Value) -> f64 {
+    v.as_f64()
+        .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(0.0)
 }

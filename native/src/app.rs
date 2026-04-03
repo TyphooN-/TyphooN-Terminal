@@ -12796,10 +12796,30 @@ impl TyphooNApp {
                                 });
                             }
                         }
-                        // tastytrade connect button — disabled until fully implemented (ADR-022)
+                        // tastytrade connect button — quotes + metrics via REST, no historical bars
                         if !self.tt_username.is_empty() && !self.tt_password.is_empty() {
-                            let tt_label = egui::RichText::new("Connect tastytrade (coming soon)").color(AXIS_TEXT);
-                            ui.add_enabled(false, egui::Button::new(tt_label));
+                            let tt_label = if self.tt_connected {
+                                egui::RichText::new("tastytrade Connected").color(UP)
+                            } else {
+                                egui::RichText::new("Connect tastytrade")
+                            };
+                            if ui.button(tt_label).clicked() && !self.tt_connected {
+                                if let Err(e) = keyring::store(keyring::keys::TT_USERNAME, &self.tt_username) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store tt_username failed: {}", e)));
+                                }
+                                if let Err(e) = keyring::store(keyring::keys::TT_PASSWORD, &self.tt_password) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store tt_password failed: {}", e)));
+                                }
+                                let _ = self.broker_tx.send(BrokerCmd::TastytradeConnect {
+                                    username: self.tt_username.clone(),
+                                    password: self.tt_password.clone(),
+                                    sandbox: self.tt_sandbox,
+                                });
+                                self.log.push_back(LogEntry::info(format!(
+                                    "tastytrade {} — connecting...",
+                                    if self.tt_sandbox { "Sandbox" } else { "Production" }
+                                )));
+                            }
                         }
                     });
 
