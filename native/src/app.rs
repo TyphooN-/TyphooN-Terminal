@@ -9803,9 +9803,6 @@ impl TyphooNApp {
                         // Using the shared Arc caused Rust Mutex contention: Mt5Sync's tight
                         // put_raw_blob loop starved try_lock callers (UI try_load, bg detailed_stats),
                         // causing "Cache busy" and empty Storage Manager.
-                        // A separate connection with WAL + busy_timeout=5000 lets SQLite handle
-                        // write contention at the database level (retry for 5s) while the main
-                        // connection remains free for UI reads.
                         let msg_tx = broker_msg_tx_clone.clone();
                         std::thread::spawn(move || {
                             let mut target_path = dirs_home();
@@ -9818,52 +9815,94 @@ impl TyphooNApp {
                                     return;
                                 }
                             };
-                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("MT5 sync: {} sources → main cache", sources.len())));
+
+                            // Build target metadata index: key → (bar_count, timestamp)
+                            let target_meta: std::collections::HashMap<String, (i64, i64)> = target_cache.detailed_stats()
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|(k, count, ts)| (k, (count, ts)))
+                                .collect();
+
+                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                "MT5 sync: {} sources → main cache ({} existing keys)",
+                                sources.len(), target_meta.len()
+                            )));
+
                             let mut total_keys = 0usize;
-                            let mut total_synced = 0usize;
+                            let mut updated = 0usize;
+                            let mut skipped_unchanged = 0usize;
+                            let mut new_keys = 0usize;
+                            let mut read_errors_total = 0usize;
+                            let mut regressed = 0usize;
+
                             for src_path in &sources {
                                 let src = std::path::PathBuf::from(src_path);
-                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Syncing from {}...", src.display())));
-                                // open_readonly: no journal_mode change — BarCacheWriter uses DELETE
-                                // mode on this file and WAL shared memory doesn't work across the
-                                // Wine/Linux boundary. Read-only means zero write locks, so
-                                // BarCacheWriter can keep writing concurrently without contention.
                                 match typhoon_engine::core::cache::SqliteCache::open_readonly(&src) {
                                     Ok(src_cache) => {
-                                        match src_cache.all_keys() {
-                                            Ok(keys) => {
-                                                total_keys += keys.len();
-                                                let mut read_errors = 0usize;
-                                                for key in &keys {
-                                                    match src_cache.get_raw_blob(key) {
-                                                        Ok(Some((blob, ts, count))) => {
-                                                            if let Err(_e) = target_cache.put_raw_blob(key, &blob, ts, count) {
-                                                                read_errors += 1;
-                                                            } else {
-                                                                total_synced += 1;
-                                                            }
-                                                        }
-                                                        Ok(None) => {}
-                                                        Err(_) => { read_errors += 1; }
+                                        // Get source metadata for smart comparison
+                                        let src_stats = src_cache.detailed_stats().unwrap_or_default();
+                                        total_keys += src_stats.len();
+                                        let mut src_updated = 0usize;
+                                        let mut src_skipped = 0usize;
+                                        let mut src_new = 0usize;
+                                        let mut src_errors = 0usize;
+                                        let mut src_regressed = 0usize;
+
+                                        for (key, src_count, src_ts) in &src_stats {
+                                            // Skip metadata keys (symbols list, specs, server info)
+                                            if key.contains("__SYMBOLS__") || key.contains("__SPECS__") || key.contains("__SERVER__") {
+                                                // Always sync metadata
+                                                if let Ok(Some((blob, ts, count))) = src_cache.get_raw_blob(key) {
+                                                    let _ = target_cache.put_raw_blob(key, &blob, ts, count);
+                                                }
+                                                continue;
+                                            }
+
+                                            // Compare with target
+                                            if let Some(&(target_count, target_ts)) = target_meta.get(key) {
+                                                // Skip if source has same or fewer bars AND same timestamp
+                                                if *src_count <= target_count && *src_ts <= target_ts {
+                                                    src_skipped += 1;
+                                                    continue;
+                                                }
+                                                // Detect regression: source has significantly fewer bars
+                                                if *src_count > 0 && target_count > 0 && *src_count < target_count / 2 {
+                                                    src_regressed += 1;
+                                                    tracing::warn!("MT5 sync regression: {} — source {} bars, target {} bars (skipping)",
+                                                        key, src_count, target_count);
+                                                    continue; // Don't overwrite with less data
+                                                }
+                                            } else {
+                                                src_new += 1;
+                                            }
+
+                                            // Sync: source has more/newer data
+                                            match src_cache.get_raw_blob(key) {
+                                                Ok(Some((blob, ts, count))) => {
+                                                    if let Err(_) = target_cache.put_raw_blob(key, &blob, ts, count) {
+                                                        src_errors += 1;
+                                                    } else {
+                                                        src_updated += 1;
                                                     }
                                                 }
-                                                let src_name = src.file_name().unwrap_or_default().to_string_lossy();
-                                                if read_errors > 0 {
-                                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                                        "  {} keys synced from {} ({} skipped — DB locked by BarCacheWriter)",
-                                                        keys.len() - read_errors, src_name, read_errors
-                                                    )));
-                                                } else {
-                                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!("  {} keys synced from {}", keys.len(), src_name)));
-                                                }
-                                            }
-                                            Err(e) => {
-                                                let _ = msg_tx.send(BrokerMsg::Error(format!("List keys failed: {e}")));
+                                                Ok(None) => {}
+                                                Err(_) => { src_errors += 1; }
                                             }
                                         }
+
+                                        let src_name = src.file_name().unwrap_or_default().to_string_lossy();
+                                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                            "  {} — {} new, {} updated, {} unchanged, {} regressed, {} errors",
+                                            src_name, src_new, src_updated, src_skipped, src_regressed, src_errors
+                                        )));
+
+                                        updated += src_updated;
+                                        skipped_unchanged += src_skipped;
+                                        new_keys += src_new;
+                                        read_errors_total += src_errors;
+                                        regressed += src_regressed;
                                     }
                                     Err(e) => {
-                                        // Log once per source, not per key
                                         let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
                                             "  Skipping {} — locked by BarCacheWriter (will retry next cycle)",
                                             src.file_name().unwrap_or_default().to_string_lossy()
@@ -9873,8 +9912,8 @@ impl TyphooNApp {
                                 }
                             }
                             let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                "MT5 sync complete: {}/{} keys from {} sources",
-                                total_synced, total_keys, sources.len()
+                                "MT5 sync: {} new + {} updated ({} unchanged, {} regressed, {} errors) from {} keys",
+                                new_keys, updated, skipped_unchanged, regressed, read_errors_total, total_keys
                             )));
                         });
                     }
