@@ -21495,7 +21495,7 @@ impl eframe::App for TyphooNApp {
 
         // ── right panel (collapsible sections — all visible, individually expandable) ──
         egui::Panel::right("right_panel")
-            .min_size(220.0).max_size(350.0).default_size(280.0)
+            .min_size(220.0).max_size(500.0).default_size(320.0).resizable(true)
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
 
