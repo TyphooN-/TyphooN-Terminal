@@ -20297,6 +20297,10 @@ impl eframe::App for TyphooNApp {
             }
 
             // LAN server auto-start: if was running when app last closed, restart it
+            self.log.push_back(LogEntry::info(format!(
+                "LAN auto-start check: server_enabled={}, passphrase_len={}, client_enabled={}",
+                self.lan_server_enabled, self.lan_sync_passphrase.len(), self.lan_client_enabled
+            )));
             if self.lan_server_enabled && !self.lan_sync_passphrase.is_empty() {
                 let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
                 self.lan_sync_mode = "server".into();
