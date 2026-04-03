@@ -20236,8 +20236,9 @@ impl eframe::App for TyphooNApp {
                 self.log.push_back(LogEntry::info(format!("LAN server auto-starting on wss://0.0.0.0:{}...", port)));
             }
 
-            // LAN client auto-connect: recover IP from KV cache if session.json didn't have it
-            if self.lan_server_ip.is_empty() {
+            // LAN client auto-connect: recover IP from KV cache if session.json didn't have it.
+            // Only for non-server machines — don't let stale KV client data override server mode.
+            if self.lan_server_ip.is_empty() && !self.lan_server_enabled {
                 if let Some(ref cache) = self.cache {
                     if let Ok(Some(ip)) = cache.get_kv("lan:server_ip") {
                         if !ip.is_empty() {
@@ -20254,7 +20255,8 @@ impl eframe::App for TyphooNApp {
                     }
                 }
             }
-            if self.lan_client_enabled && !self.lan_server_ip.is_empty() {
+            // Don't auto-connect as client if we're already a server
+            if self.lan_client_enabled && !self.lan_server_ip.is_empty() && !self.lan_server_enabled {
                 let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
                 self.lan_sync_mode = "client".into();
                 self.lan_sync_host = self.lan_server_ip.clone();
