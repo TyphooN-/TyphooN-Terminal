@@ -1003,6 +1003,14 @@ impl LanSyncClient {
         Ok((Self { task: Some(task), status }, remote_tx))
     }
 
+    /// Wait for the client sync task to finish (disconnect or error).
+    /// Used by auto-reconnect loop to detect when reconnection is needed.
+    pub async fn wait(mut self) {
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+    }
+
     pub fn disconnect(&mut self) {
         if let Some(task) = self.task.take() {
             task.abort();

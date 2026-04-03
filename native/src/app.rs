@@ -9151,6 +9151,7 @@ impl TyphooNApp {
             let lan_remote_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>>> =
                 Arc::new(tokio::sync::Mutex::new(None));
             let lan_remote_tx_ref = lan_remote_tx.clone();
+            let mut lan_reconnect_handle: Option<tokio::task::AbortHandle> = None;
             while let Some(cmd) = cmd_rx.recv().await {
                 // LAN client: forward external data-fetching commands to server
                 if lan_client.load(std::sync::atomic::Ordering::Relaxed) {
@@ -10328,7 +10329,8 @@ impl TyphooNApp {
                         let shared = shared_cache_broker.clone();
                         let lan_remote = lan_remote_tx_ref.clone();
                         let lan_flag = lan_client.clone();
-                        tokio::spawn(async move {
+                        // Store abort handle so LanSyncStop can kill the reconnect loop
+                        let reconnect_task = tokio::spawn(async move {
                             // Wait for cache to be ready (up to 30s) — handles startup race
                             // where LAN auto-connect fires before async cache-open completes.
                             let mut cache_arc = shared.read().ok().and_then(|g| g.clone());
@@ -10339,25 +10341,46 @@ impl TyphooNApp {
                                     if cache_arc.is_some() { break; }
                                 }
                             }
-                            if let Some(cache_arc) = cache_arc {
+                            let Some(cache_arc) = cache_arc else {
+                                let _ = msg_tx.send(BrokerMsg::Error("LAN sync: cache not ready yet".into()));
+                                return;
+                            };
+
+                            // Auto-reconnect loop: retry every 30s
+                            loop {
                                 match tokio::time::timeout(
                                     std::time::Duration::from_secs(10),
-                                    LanSyncClient::connect(cache_arc, &host, port, &passphrase),
+                                    LanSyncClient::connect(cache_arc.clone(), &host, port, &passphrase),
                                 ).await {
-                                    Ok(Ok((_client, remote_tx))) => {
+                                    Ok(Ok((client, remote_tx))) => {
                                         { let mut guard = lan_remote.lock().await; *guard = Some(remote_tx); }
                                         lan_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                         let _ = msg_tx.send(BrokerMsg::OrderResult(format!("LAN sync connected to wss://{}:{}", host, port)));
+                                        // Wait for client task to finish (disconnect/error)
+                                        client.wait().await;
+                                        // Connection dropped — clear state and retry
+                                        { let mut guard = lan_remote.lock().await; *guard = None; }
+                                        lan_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                                        let _ = msg_tx.send(BrokerMsg::Error("LAN sync disconnected — reconnecting in 30s...".into()));
                                     }
-                                    Ok(Err(e)) => { let _ = msg_tx.send(BrokerMsg::Error(format!("LAN sync connect failed: {}", e))); }
-                                    Err(_) => { let _ = msg_tx.send(BrokerMsg::Error(format!("LAN sync connect timed out (10s) — is {}:{} reachable?", host, port))); }
+                                    Ok(Err(e)) => {
+                                        let _ = msg_tx.send(BrokerMsg::Error(format!("LAN sync failed: {} — retrying in 30s...", e)));
+                                    }
+                                    Err(_) => {
+                                        let _ = msg_tx.send(BrokerMsg::Error("LAN sync timed out — retrying in 30s...".into()));
+                                    }
                                 }
-                            } else {
-                                let _ = msg_tx.send(BrokerMsg::Error("LAN sync: cache not ready yet".into()));
+                                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
                             }
                         });
+                        // Store the abort handle for LanSyncStop
+                        lan_reconnect_handle = Some(reconnect_task.abort_handle());
                     }
                     BrokerCmd::LanSyncStop => {
+                        // Abort the auto-reconnect loop task
+                        if let Some(handle) = lan_reconnect_handle.take() {
+                            handle.abort();
+                        }
                         // Clear the LAN remote channel so commands stop being forwarded
                         { let mut guard = lan_remote_tx_ref.lock().await; *guard = None; }
                         // Clear the LAN client flag so broker commands execute locally again
@@ -11353,12 +11376,13 @@ impl TyphooNApp {
         if chart.bars.is_empty() { return overlay; }
 
         // Extract bare symbol from chart symbol for matching
+        // Normalize: strip source prefix, TF suffix, and slashes (SOL/USD → SOLUSD)
         let bare_sym = {
             let s = &chart.symbol;
             let parts: Vec<&str> = s.split(':').collect();
             let is_tf = matches!(parts.last().copied(), Some("1Min"|"5Min"|"15Min"|"30Min"|"1Hour"|"4Hour"|"1Day"|"1Week"|"1Month"));
             let sym_parts = if is_tf && parts.len() > 1 { &parts[..parts.len()-1] } else { &parts[..] };
-            sym_parts.last().copied().unwrap_or(s.as_str()).to_string()
+            sym_parts.last().copied().unwrap_or(s.as_str()).replace('/', "")
         };
         if bare_sym.is_empty() { return overlay; }
 
@@ -12295,6 +12319,7 @@ impl TyphooNApp {
             "show_alpaca_positions": self.show_alpaca_positions,
             "show_tt_positions": self.show_tt_positions,
             "lan_server_ip": self.lan_server_ip,
+            "lan_sync_host": self.lan_sync_host,
             "lan_sync_port": self.lan_sync_port,
             "darwin_view": self.darwin_view,
             "darwin_xlsx_dir": self.darwin_xlsx_dir,
@@ -12677,6 +12702,7 @@ impl TyphooNApp {
                 if let Some(b) = v["show_alpaca_positions"].as_bool() { self.show_alpaca_positions = b; }
                 if let Some(b) = v["show_tt_positions"].as_bool() { self.show_tt_positions = b; }
                 if let Some(s) = v["lan_server_ip"].as_str() { self.lan_server_ip = s.to_string(); }
+                if let Some(s) = v["lan_sync_host"].as_str() { self.lan_sync_host = s.to_string(); }
                 if let Some(s) = v["lan_sync_port"].as_str() { self.lan_sync_port = s.to_string(); }
                 // Restore SL/TP state
                 if let Some(sl) = v["sl_enabled"].as_bool() { self.sl_enabled = sl; }
