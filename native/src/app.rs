@@ -1801,7 +1801,14 @@ impl ChartState {
                 // CPU Phase 2: refine boundaries, test zones, merge, purge broken
                 if let Some(data) = gpu.compute_sd_zones_gpu(5) {
                     let (sz, dz) = compute_supply_demand_zones_from_gpu(&data, &self.bars);
-                    self.supply_zones = sz; self.demand_zones = dz;
+                    // GPU fallback: if GPU produces zero zones, try CPU
+                    if sz.is_empty() && dz.is_empty() && self.bars.len() > 20 {
+                        let (sz2, dz2) = compute_supply_demand_zones(&self.bars);
+                        self.supply_zones = sz2; self.demand_zones = dz2;
+                        tracing::debug!("S/D: GPU produced 0 zones, CPU fallback: {} supply, {} demand", self.supply_zones.len(), self.demand_zones.len());
+                    } else {
+                        self.supply_zones = sz; self.demand_zones = dz;
+                    }
                 } else {
                     let (sz, dz) = compute_supply_demand_zones(&self.bars);
                     self.supply_zones = sz; self.demand_zones = dz;
