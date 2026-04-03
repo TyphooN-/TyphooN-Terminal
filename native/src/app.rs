@@ -20296,29 +20296,13 @@ impl eframe::App for TyphooNApp {
                 )));
             }
 
-            // LAN server auto-start: recover from KV cache if session.json didn't have it
-            if !self.lan_server_enabled {
-                if let Some(ref cache) = self.cache {
-                    if let Ok(Some(enabled)) = cache.get_kv("lan:server_enabled") {
-                        if enabled == "true" {
-                            self.lan_server_enabled = true;
-                            self.log.push_back(LogEntry::info("LAN server_enabled recovered from cache"));
-                        }
-                    }
-                }
-            }
-            if self.lan_server_enabled && !self.lan_sync_passphrase.is_empty() {
-                let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
-                self.lan_sync_mode = "server".into();
-                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                let _ = self.broker_tx.send(BrokerCmd::LanSyncStart { port, passphrase: self.lan_sync_passphrase.clone(), db_path });
-                self.log.push_back(LogEntry::info(format!("LAN server auto-starting on wss://0.0.0.0:{}...", port)));
-            }
-
-            // LAN client auto-connect: recover IP from KV cache if session.json didn't have it.
-            // Only for non-server machines — don't let stale KV client data override server mode.
-            if self.lan_server_ip.is_empty() && !self.lan_server_enabled {
-                if let Some(ref cache) = self.cache {
+            // LAN KV recovery: read client_enabled FIRST so we don't misidentify a client
+            // machine as a server. Stale lan:server_enabled keys could have been synced from
+            // the server into the client's local KV cache (fixed in lan_sync.rs, but existing
+            // client DBs may already have the poisoned key — sanitize it here).
+            if let Some(ref cache) = self.cache {
+                // Step 1: read client config (IP, port, client_enabled)
+                if self.lan_server_ip.is_empty() {
                     if let Ok(Some(ip)) = cache.get_kv("lan:server_ip") {
                         if !ip.is_empty() {
                             self.lan_server_ip = ip;
@@ -20326,13 +20310,38 @@ impl eframe::App for TyphooNApp {
                             self.log.push_back(LogEntry::info(format!("LAN server IP recovered from cache: {}", self.lan_server_ip)));
                         }
                     }
-                    if let Ok(Some(port)) = cache.get_kv("lan:sync_port") {
-                        if !port.is_empty() { self.lan_sync_port = port; }
-                    }
+                }
+                if let Ok(Some(port)) = cache.get_kv("lan:sync_port") {
+                    if !port.is_empty() { self.lan_sync_port = port; }
+                }
+                if !self.lan_client_enabled {
                     if let Ok(Some(enabled)) = cache.get_kv("lan:client_enabled") {
                         if enabled == "true" { self.lan_client_enabled = true; }
                     }
                 }
+
+                // Step 2: recover server_enabled — but ONLY if this machine is not a client.
+                // If lan:client_enabled is set, this is a client machine; lan:server_enabled
+                // may have been synced from the server's KV and must be ignored + purged.
+                if !self.lan_server_enabled && !self.lan_client_enabled {
+                    if let Ok(Some(enabled)) = cache.get_kv("lan:server_enabled") {
+                        if enabled == "true" {
+                            self.lan_server_enabled = true;
+                            self.log.push_back(LogEntry::info("LAN server_enabled recovered from cache"));
+                        }
+                    }
+                } else if self.lan_client_enabled {
+                    // Sanitize: remove any stale server_enabled that was synced from server
+                    let _ = cache.put_kv("lan:server_enabled", "false");
+                }
+            }
+
+            if self.lan_server_enabled && !self.lan_sync_passphrase.is_empty() {
+                let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
+                self.lan_sync_mode = "server".into();
+                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                let _ = self.broker_tx.send(BrokerCmd::LanSyncStart { port, passphrase: self.lan_sync_passphrase.clone(), db_path });
+                self.log.push_back(LogEntry::info(format!("LAN server auto-starting on wss://0.0.0.0:{}...", port)));
             }
             // Don't auto-connect as client if we're already a server
             if self.lan_client_enabled && !self.lan_server_ip.is_empty() && !self.lan_server_enabled {

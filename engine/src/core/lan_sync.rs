@@ -719,6 +719,15 @@ async fn handle_client_tls(
             }
             SyncMessage::RequestKvData { since_ts } => {
                 // Send KV cache entries as binary batch (incremental if since_ts > 0)
+                // NEVER sync machine-local config keys: LAN topology and credentials are
+                // per-machine and must not overwrite client settings.
+                let kv_local_keys: &[&str] = &[
+                    "lan:server_enabled", "lan:client_enabled",
+                    "lan:server_ip", "lan:sync_port",
+                ];
+                let is_local_key = |k: &str| {
+                    kv_local_keys.iter().any(|&lk| k == lk) || k.starts_with("cred:")
+                };
                 let cache_clone = cache.clone();
                 let kv_data = tokio::task::spawn_blocking(move || {
                     if since_ts > 0 {
@@ -729,6 +738,7 @@ async fn handle_client_tls(
                             Ok(entries) => {
                                 let mut result = Vec::new();
                                 for (key, compressed, _ts) in entries {
+                                    if is_local_key(&key) { continue; }
                                     match zstd::decode_all(compressed.as_slice()) {
                                         Ok(decompressed) => {
                                             if let Ok(val) = String::from_utf8(decompressed) {
@@ -750,6 +760,7 @@ async fn handle_client_tls(
                         let mut entries: Vec<(String, String)> = Vec::new();
                         if let Ok(keys) = cache_clone.list_kv_keys("") {
                             for key in &keys {
+                                if is_local_key(key) { continue; }
                                 if let Ok(Some(val)) = cache_clone.get_kv(key) {
                                     entries.push((key.clone(), val));
                                 }
