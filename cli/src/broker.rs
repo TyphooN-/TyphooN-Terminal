@@ -441,6 +441,28 @@ impl AlpacaBroker {
         Ok(matches.into_iter().take(20).map(|(_, s, n, c)| (s, n, c)).collect())
     }
 
+    /// Get all tradeable assets grouped by asset class.
+    pub async fn list_all_symbols(&self) -> Result<Vec<(String, String, String)>, String> {
+        let resp = self.client.get(format!("{}/v2/assets", self.base_url))
+            .headers(self.headers())
+            .query(&[("status", "active")])
+            .send().await.map_err(|e| e.to_string())?;
+        if !resp.status().is_success() { return Err(format!("HTTP {}", resp.status())); }
+        let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        let mut symbols: Vec<(String, String, String)> = Vec::new();
+        if let Some(arr) = json.as_array() {
+            for a in arr {
+                if a["tradable"].as_bool() != Some(true) { continue; }
+                let sym = a["symbol"].as_str().unwrap_or("").to_string();
+                let name = a["name"].as_str().unwrap_or("").to_string();
+                let class = a["class"].as_str().unwrap_or("us_equity").to_string();
+                symbols.push((sym, name, class));
+            }
+        }
+        symbols.sort_by(|a, b| a.2.cmp(&b.2).then(a.0.cmp(&b.0)));
+        Ok(symbols)
+    }
+
     /// Get top market movers (most active by volume).
     pub async fn get_top_movers(&self) -> Result<Vec<(String, f64, f64)>, String> {
         let resp = self.client.get(format!("{}/v1beta1/screener/stocks/most-actives", DATA_BASE))

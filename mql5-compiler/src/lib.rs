@@ -12,6 +12,7 @@ pub mod codegen;
 pub mod wgsl_codegen;
 pub mod error;
 pub mod runtime;
+pub mod pine;
 
 
 
@@ -26,7 +27,7 @@ pub struct CompileResult {
     pub metadata: Option<IndicatorMeta>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct Diagnostic {
     pub level: DiagLevel,
     pub message: String,
@@ -34,7 +35,7 @@ pub struct Diagnostic {
     pub col: usize,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub enum DiagLevel {
     Error,
     Warning,
@@ -150,17 +151,8 @@ pub fn compile_to_wgsl(source: &str) -> Result<String, error::CompileError> {
     wgsl_codegen::compile_to_wgsl(source)
 }
 
-/// Compile PineScript source to WASM.
-pub fn compile_pine(_source: &str) -> CompileResult {
-    // TODO: Phase 4 — PineScript parser
-    CompileResult {
-        wasm: None,
-        diagnostics: vec![Diagnostic {
-            level: DiagLevel::Info,
-            message: "PineScript compiler not yet implemented".into(),
-            line: 0,
-            col: 0,
-        }],
-        metadata: None,
-    }
+/// Compile PineScript v5 source to WASM.
+/// Supports: indicator(), input.*, ta.sma/ema/rsi/atr, plot(), math.*, close/open/high/low/volume.
+pub fn compile_pine(source: &str) -> CompileResult {
+    pine::parse_pine(source)
 }

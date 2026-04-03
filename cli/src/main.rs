@@ -774,6 +774,39 @@ impl App {
                 self.log("Cache management — use GUI for full storage manager", Color::Yellow);
                 self.log("  cache stats: shows key count and sizes", Color::Cyan);
             }
+            "symbols" | "sym" => {
+                let filter = if parts.len() > 1 { Some(parts[1..].join(" ").to_uppercase()) } else { None };
+                match self.broker.list_all_symbols().await {
+                    Ok(all) => {
+                        let filtered: Vec<&(String, String, String)> = if let Some(ref f) = filter {
+                            all.iter().filter(|(s, n, _)| s.to_uppercase().contains(f) || n.to_uppercase().contains(f)).collect()
+                        } else { all.iter().collect() };
+                        if filtered.is_empty() {
+                            self.log("No symbols found", Color::Yellow);
+                        } else {
+                            self.log(&format!("--- Symbols ({} total, showing {}) ---", all.len(), filtered.len().min(100)), Color::Cyan);
+                            // Group by asset class
+                            let mut by_class: std::collections::BTreeMap<String, Vec<&(String, String, String)>> = std::collections::BTreeMap::new();
+                            for s in filtered.iter().take(500) {
+                                let class = if s.2.is_empty() { "other" } else { &s.2 };
+                                by_class.entry(class.to_string()).or_default().push(s);
+                            }
+                            for (class, syms) in &by_class {
+                                let c = if class == "crypto" { Color::Magenta } else { Color::Cyan };
+                                self.log(&format!("  [{} — {} symbols]", class, syms.len()), c);
+                                for (sym, name, _) in syms.iter().take(100) {
+                                    let sc = if class == "crypto" { Color::Magenta } else { Color::White };
+                                    self.log(&format!("    {:<12} {}", sym, name), sc);
+                                }
+                                if syms.len() > 100 {
+                                    self.log(&format!("    ... and {} more (use 'symbols FILTER')", syms.len() - 100), Color::DarkGray);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => self.log(&format!("Failed to fetch symbols: {e}"), Color::Red),
+                }
+            }
             "help" | "h" | "?" => {
                 self.log("--- Trade Commands ---", Color::Cyan);
                 self.log("  buy/sell SYMBOL QTY           Market order", Color::Cyan);
@@ -788,6 +821,7 @@ impl App {
                 self.log("  tf TF                         Change timeframe", Color::Cyan);
                 self.log("  watch SYM / unwatch SYM       Manage watchlist", Color::Cyan);
                 self.log("  search QUERY                  Search symbols (stocks + crypto)", Color::Cyan);
+                self.log("  symbols [FILTER]              Browse all tradeable symbols by class", Color::Cyan);
                 self.log("  movers                        Top market movers", Color::Cyan);
                 self.log("  fills [N] / history [N]       Recent fills / order history", Color::Cyan);
                 self.log("--- Accounts ---", Color::Cyan);

@@ -8105,6 +8105,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "OVERLAP",       desc: "Symbol overlap / correlation" },
     Command { name: "BACKTEST",      desc: "Run backtest on current symbol" },
     Command { name: "SCREENER",      desc: "Symbol screener" },
+    Command { name: "SYMBOLS",       desc: "Symbol explorer (broker hierarchy)" },
     Command { name: "OPTIMIZER",     desc: "Strategy parameter optimizer" },
     Command { name: "RISK_CALC",     desc: "Position sizing / risk calculator" },
     Command { name: "VAR",           desc: "VaR multiplier estimator" },
@@ -8835,6 +8836,9 @@ pub struct TyphooNApp {
     show_risk_calc: bool,
     show_backtest: bool,
     show_screener: bool,
+    show_symbols: bool,
+    symbols_filter: String,
+    symbols_expanded: std::collections::HashSet<String>,
     show_optimizer: bool,
     show_news: bool,
     show_calendar: bool,
@@ -10510,6 +10514,9 @@ impl TyphooNApp {
             show_risk_calc: false,
             show_backtest: false,
             show_screener: false,
+            show_symbols: false,
+            symbols_filter: String::new(),
+            symbols_expanded: std::collections::HashSet::new(),
             show_optimizer: false,
             show_news: false,
             show_calendar: false,
@@ -11584,6 +11591,7 @@ impl TyphooNApp {
             "OVERLAP"       => self.show_symbol_overlap = true,
             "BACKTEST"      => self.show_backtest = true,
             "SCREENER"      => self.show_screener = true,
+            "SYMBOLS" | "SYM" => self.show_symbols = true,
             "OPTIMIZER"     => self.show_optimizer = true,
             "RISK_CALC"     => self.show_risk_calc = true,
             "VAR"           => self.show_var_mult = true,
@@ -12306,6 +12314,7 @@ impl TyphooNApp {
                 "news": self.show_news,
                 "indicators_panel": self.show_indicators_panel,
                 "screener": self.show_screener,
+                "symbols": self.show_symbols,
                 "optimizer": self.show_optimizer,
                 "sec": self.show_sec,
                 "insider": self.show_insider,
@@ -12682,6 +12691,7 @@ impl TyphooNApp {
                     if let Some(b) = w["news"].as_bool() { self.show_news = b; }
                     if let Some(b) = w["indicators_panel"].as_bool() { self.show_indicators_panel = b; }
                     if let Some(b) = w["screener"].as_bool() { self.show_screener = b; }
+                    if let Some(b) = w["symbols"].as_bool() { self.show_symbols = b; }
                     if let Some(b) = w["optimizer"].as_bool() { self.show_optimizer = b; }
                     if let Some(b) = w["sec"].as_bool() { self.show_sec = b; }
                     if let Some(b) = w["insider"].as_bool() { self.show_insider = b; }
@@ -12757,6 +12767,7 @@ impl TyphooNApp {
         self.show_risk_calc = false;
         self.show_backtest = false;
         self.show_screener = false;
+        self.show_symbols = false;
         self.show_optimizer = false;
         self.show_news = false;
         self.show_calendar = false;
@@ -15902,6 +15913,239 @@ impl TyphooNApp {
                                     }
                                 });
                             });
+                        }
+                    }
+                });
+        }
+
+        // Symbols Explorer — broker hierarchy tree with cached symbol data
+        if self.show_symbols {
+            egui::Window::new("Symbol Explorer")
+                .open(&mut self.show_symbols)
+                .resizable(true).default_size([620.0, 600.0])
+                .show(ctx, |ui| {
+                    let sym_teal = egui::Color32::from_rgb(26, 188, 156);
+                    let sym_gold = egui::Color32::from_rgb(241, 196, 15);
+                    let sym_magenta = egui::Color32::from_rgb(200, 80, 200);
+                    let sym_green = egui::Color32::from_rgb(46, 204, 113);
+                    let sym_blue = egui::Color32::from_rgb(52, 152, 219);
+                    let sym_orange = egui::Color32::from_rgb(255, 130, 60);
+                    let sym_white = egui::Color32::from_rgb(220, 220, 220);
+                    let sym_dim = egui::Color32::from_rgb(120, 120, 120);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Filter:");
+                        ui.add(egui::TextEdit::singleline(&mut self.symbols_filter)
+                            .desired_width(200.0).font(egui::TextStyle::Monospace));
+                        if ui.small_button("Clear").clicked() { self.symbols_filter.clear(); }
+                    });
+                    ui.separator();
+
+                    // Parse ALL cache keys into (source, symbol, tf, bar_count)
+                    let details = &self.bg.detailed_stats;
+                    let filter_upper = self.symbols_filter.to_uppercase();
+
+                    // Parse key → (source, symbol, tf)
+                    fn parse_cache_key(key: &str) -> Option<(&str, String, &str)> {
+                        let parts: Vec<&str> = key.split(':').collect();
+                        match parts.len() {
+                            4 => Some((parts[0], parts[2].to_string(), parts[3])), // mt5:Broker:SYM:TF
+                            3 => Some((parts[0], parts[1].to_string(), parts[2])), // source:SYM:TF
+                            2 => Some(("mt5", parts[0].to_string(), parts[1])),    // SYM:TF (legacy)
+                            _ => None,
+                        }
+                    }
+
+                    // Group: source → symbol → Vec<(tf, bars)>
+                    let mut grouped: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<(String, i64)>>> = std::collections::BTreeMap::new();
+                    for (key, bars, _ts) in details {
+                        if let Some((source, symbol, tf)) = parse_cache_key(key) {
+                            if !filter_upper.is_empty() && !symbol.to_uppercase().contains(&filter_upper) {
+                                continue;
+                            }
+                            grouped.entry(source.to_string()).or_default()
+                                .entry(symbol).or_default()
+                                .push((tf.to_string(), *bars));
+                        }
+                    }
+
+                    // Count totals
+                    let total_syms: usize = grouped.values().map(|syms| syms.len()).sum();
+                    let total_sources = grouped.len();
+                    ui.label(egui::RichText::new(format!("{} symbols across {} sources", total_syms, total_sources)).color(sym_dim));
+                    ui.add_space(4.0);
+
+                    let mut load_sym: Option<String> = None;
+                    let mut add_wl: Option<String> = None;
+
+                    let avail = ui.available_height().max(300.0);
+                    egui::ScrollArea::vertical().id_salt("symbols_scroll").min_scrolled_height(avail).auto_shrink(false).show(ui, |ui| {
+                        let source_labels: &[(&str, &str, egui::Color32)] = &[
+                            ("mt5", "MT5 (Darwinex)", sym_gold),
+                            ("alpaca", "Alpaca", sym_green),
+                            ("tastytrade", "tastytrade", sym_teal),
+                            ("cryptocompare", "CryptoCompare", sym_magenta),
+                            ("kraken", "Kraken", sym_orange),
+                        ];
+
+                        for (source_key, label, color) in source_labels {
+                            let Some(syms) = grouped.get(*source_key) else { continue; };
+
+                            // Sub-categorize
+                            let mut categories: std::collections::BTreeMap<&str, Vec<(&String, &Vec<(String, i64)>)>> = std::collections::BTreeMap::new();
+                            for (sym, tfs) in syms {
+                                let cat = if *source_key == "mt5" || *source_key == "alpaca" {
+                                    let s = sym.to_uppercase();
+                                    if s.len() == 6 && s.chars().all(|c| c.is_ascii_alphabetic())
+                                        && !s.ends_with("USD") && !s.ends_with("BTC") { "Forex" }
+                                    else if s.contains('/') || (s.ends_with("USD") && s.len() <= 10 && !s.contains('.'))
+                                        || s.ends_with("BTC") || s.ends_with("ETH") { "Crypto" }
+                                    else if s.starts_with('.') || s.contains("500") || s.contains("DAX")
+                                        || s.contains("NAS") || s.contains("JPN") || s.contains("US30")
+                                        || s.contains("US100") || s.contains("US500") || s.contains("STOXX") { "Indices" }
+                                    else if s.contains("XAU") || s.contains("XAG") || s.contains("XNG")
+                                        || s.contains("OIL") || s.contains("BRENT") || s.contains("COCOA")
+                                        || s.contains("WHEAT") || s.contains("CORN") || s.contains("SUGAR")
+                                        || s.contains("COFFEE") || s.contains("NATGAS") { "Commodities" }
+                                    else { "Equities" }
+                                } else {
+                                    "All"
+                                };
+                                categories.entry(cat).or_default().push((sym, tfs));
+                            }
+
+                            // Broker header
+                            let section_id = source_key.to_string();
+                            let expanded = self.symbols_expanded.contains(&section_id);
+                            let arrow = if expanded { "\u{25BC}" } else { "\u{25B6}" };
+                            if ui.add(egui::Label::new(
+                                egui::RichText::new(format!("{} {} ({})", arrow, label, syms.len()))
+                                    .color(*color).strong()
+                            ).sense(egui::Sense::click())).clicked() {
+                                if expanded { self.symbols_expanded.remove(&section_id); }
+                                else { self.symbols_expanded.insert(section_id.clone()); }
+                            }
+
+                            if !expanded { continue; }
+
+                            for (cat, entries) in &categories {
+                                // Category sub-header (skip if only "All")
+                                if *cat != "All" {
+                                    let cat_id = format!("{}:{}", source_key, cat);
+                                    let cat_exp = self.symbols_expanded.contains(&cat_id);
+                                    let cat_arrow = if cat_exp { "\u{25BC}" } else { "\u{25B6}" };
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(12.0);
+                                        if ui.add(egui::Label::new(
+                                            egui::RichText::new(format!("{} {} ({})", cat_arrow, cat, entries.len()))
+                                                .color(sym_dim)
+                                        ).sense(egui::Sense::click())).clicked() {
+                                            if cat_exp { self.symbols_expanded.remove(&cat_id); }
+                                            else { self.symbols_expanded.insert(cat_id.clone()); }
+                                        }
+                                    });
+                                    if !cat_exp { continue; }
+                                }
+
+                                // Symbol rows
+                                let indent = if *cat != "All" { 24.0 } else { 12.0 };
+                                for (sym, tfs) in entries {
+                                    let total_bars: i64 = tfs.iter().map(|(_, b)| *b).sum();
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(indent);
+                                        // Chart button
+                                        if ui.add(egui::Button::new(egui::RichText::new("\u{1F4C8}").small())
+                                            .min_size(egui::vec2(22.0, 18.0))).clicked() {
+                                            load_sym = Some((*sym).clone());
+                                        }
+                                        // Watchlist button
+                                        if ui.add(egui::Button::new(egui::RichText::new("+WL").color(sym_blue).small())
+                                            .min_size(egui::vec2(30.0, 18.0))).clicked() {
+                                            add_wl = Some((*sym).clone());
+                                        }
+                                        // Symbol name
+                                        if ui.add(egui::Label::new(
+                                            egui::RichText::new(sym.as_str()).monospace().color(sym_white)
+                                        ).sense(egui::Sense::click())).clicked() {
+                                            load_sym = Some((*sym).clone());
+                                        }
+                                        // TF count + bar count
+                                        ui.label(egui::RichText::new(
+                                            format!("{} TFs  {} bars", tfs.len(), total_bars)
+                                        ).color(sym_dim).small());
+                                    });
+                                }
+                            }
+                        }
+
+                        // Catch any source not in our label list
+                        for (source_key, syms) in &grouped {
+                            if ["mt5", "alpaca", "tastytrade", "cryptocompare", "kraken"].contains(&source_key.as_str()) {
+                                continue;
+                            }
+                            let section_id = source_key.clone();
+                            let expanded = self.symbols_expanded.contains(&section_id);
+                            let arrow = if expanded { "\u{25BC}" } else { "\u{25B6}" };
+                            if ui.add(egui::Label::new(
+                                egui::RichText::new(format!("{} {} ({})", arrow, source_key, syms.len()))
+                                    .color(sym_dim).strong()
+                            ).sense(egui::Sense::click())).clicked() {
+                                if expanded { self.symbols_expanded.remove(&section_id); }
+                                else { self.symbols_expanded.insert(section_id.clone()); }
+                            }
+                            if expanded {
+                                for (sym, tfs) in syms {
+                                    let total_bars: i64 = tfs.iter().map(|(_, b)| *b).sum();
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(12.0);
+                                        if ui.add(egui::Button::new(egui::RichText::new("\u{1F4C8}").small())
+                                            .min_size(egui::vec2(22.0, 18.0))).clicked() {
+                                            load_sym = Some(sym.clone());
+                                        }
+                                        if ui.add(egui::Button::new(egui::RichText::new("+WL").color(sym_blue).small())
+                                            .min_size(egui::vec2(30.0, 18.0))).clicked() {
+                                            add_wl = Some(sym.clone());
+                                        }
+                                        if ui.add(egui::Label::new(
+                                            egui::RichText::new(sym.as_str()).monospace().color(sym_white)
+                                        ).sense(egui::Sense::click())).clicked() {
+                                            load_sym = Some(sym.clone());
+                                        }
+                                        ui.label(egui::RichText::new(
+                                            format!("{} TFs  {} bars", tfs.len(), total_bars)
+                                        ).color(sym_dim).small());
+                                    });
+                                }
+                            }
+                        }
+                    });
+
+                    // Handle chart load
+                    if let Some(symbol) = load_sym {
+                        self.symbol_input = symbol.clone();
+                        if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                            chart.symbol = symbol.clone();
+                            if let Some(ref cache_arc) = self.cache {
+                                let mut gpu = self.gpu_indicators.take();
+                                if !chart.try_load(Arc::as_ref(cache_arc), &mut self.log, gpu.as_mut()) {
+                                    self.deferred_chart_loads.push(self.active_tab);
+                                }
+                                self.gpu_indicators = gpu;
+                            }
+                        }
+                        self.log.push_back(LogEntry::info(format!("Chart: {}", symbol)));
+                    }
+
+                    // Handle watchlist add
+                    if let Some(sym) = add_wl {
+                        let sym_upper = sym.to_uppercase();
+                        if !self.user_watchlist.contains(&sym_upper) {
+                            self.user_watchlist.push(sym_upper.clone());
+                            self.watchlist_cache_tried = false;
+                            if self.broker_connected {
+                                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
+                            }
+                            self.log.push_back(LogEntry::info(format!("Added {} to watchlist", sym_upper)));
                         }
                     }
                 });

@@ -11,7 +11,7 @@ Pure Rust native GPU application. No JavaScript, no WebKit, no IPC serialization
 │  │ Chart Renderer (egui Painter)               ││
 │  │ - Candle/HeikinAshi/Line/Bars/Renko         ││
 │  │ - 32+ indicators (GPU + CPU fallback)        ││
-│  │ - 56 drawing tools + 10 harmonic patterns     ││
+│  │ - 71 drawing tools + 10 harmonic patterns   ││
 │  │ - DARWIN trade arrows + position lines       ││
 │  │ - Sub-panes (Fisher, RSI, MACD, ADX, etc.)  ││
 │  ├─────────────────────────────────────────────┤│
@@ -53,10 +53,11 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 
 | Priority | Source | Coverage |
 |----------|--------|----------|
-| 1 | MT5 via BarCacheWriter v1.432 | 895 symbols × 9 TFs, weekday authority (Darwinex). TF gating, batch 5, 200ms sleep. |
+| 1 | MT5 via BarCacheWriter v1.435 | 895 symbols × 9 TFs, weekday authority (Darwinex). TF gating, 16MB cache, /dev/shm ramdisk. |
 | 2 | Alpaca | Live trading execution, US equities + crypto. Auto-connects on startup. |
-| 3 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs |
-| 4 | Kraken | Sub-hourly gap-fill (720 bars, weekend coverage, no rate limit) |
+| 3 | tastytrade | Options/futures, DXLink WebSocket historical bars, IV rank/percentile, option chains. |
+| 4 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs |
+| 5 | Kraken | Sub-hourly gap-fill (720 bars, weekend coverage, no rate limit) |
 
 MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade management stays in MT5 directly. DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022.
 
@@ -71,7 +72,7 @@ MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter 
 | Plots | egui_plot | Analytics charts (equity curves, histograms) |
 | Async | tokio | Shared with engine for broker WebSocket |
 | Cache | SQLite + zstd | TTBR binary format, ~3-5x compression |
-| Analytics | darwin.rs (6,800+ lines) | 80 functions, 59 unit tests |
+| Analytics | darwin.rs (7,000+ lines) | 80 functions, 59 unit tests |
 | Risk | risk.rs + margin.rs + var.rs | Full port of TyphooN EA v1.420 |
 
 ## Project Structure
@@ -98,12 +99,14 @@ TyphooN-Terminal/
 │   │   │   ├── cryptocompare.rs # CryptoCompare deep history backfill
 │   │   │   └── ...
 │   │   └── broker/
-│   │       └── alpaca.rs   # REST + WebSocket client
+│   │       ├── alpaca.rs   # REST + WebSocket client
+│   │       ├── tastytrade.rs # REST API (auth, positions, orders, quotes, options)
+│   │       └── dxlink.rs   # DXLink WebSocket (historical bars, streaming)
 │   └── Cargo.toml
 ├── cli/                    # Standalone TUI (6.5MB, SSH-ready)
-├── mql5-compiler/          # MT5 XML → SQLite import pipeline
+├── mql5-compiler/          # MQL5 + PineScript → WASM/WGSL compiler (82 tests)
 └── docs/
-    ├── adr/                # 45 Architecture Decision Records
+    ├── adr/                # 47 Architecture Decision Records
     ├── API_KEYS.md
     └── KEYBOARD_SHORTCUTS.md
 ```
@@ -123,7 +126,7 @@ TyphooN-Terminal/
 
 ### LAN Sync
 
-TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 15-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + KV cache + 23 pre-computed analytics fields. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. Connected client IPs shown in server UI. Implemented in `engine/src/core/lan_sync.rs`.
+TLS-encrypted (wss://) WebSocket cache synchronization between TyphooN Terminal instances. Ephemeral self-signed certificates (no pinning — PBKDF2 passphrase handles auth). 15-second periodic re-sync. Server and client auto-start on startup. Full data sync: bars + DARWIN tables + KV cache + 34 pre-computed analytics fields. LAN clients are read-only viewers — zero local deal computation, all analytics from server KV. Broker positions/orders/account synced via KV for read-only display. 14 remote commands wired (SEC_SCRAPE, DARWIN_IMPORT, FETCH_BARS, etc.). Connected client IPs shown in server UI. Trading buttons disabled on LAN client. Implemented in `engine/src/core/lan_sync.rs`.
 
 ### Storage Manager
 

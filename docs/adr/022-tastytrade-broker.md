@@ -1,6 +1,6 @@
 # ADR-022: Tastytrade Broker Integration
 
-**Status:** Phase 1 — Auth Only
+**Status:** Fully Implemented
 **Date:** 2026-03-16
 
 ## Context

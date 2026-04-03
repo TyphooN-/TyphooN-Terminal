@@ -72,4 +72,4 @@ Priority 3: Alpaca          — live trading execution
 - **Pro**: Portfolio-level risk aggregation across 6 accounts
 - **Con**: XLSX re-export required for trade history updates (until investor mode)
 - **Con**: Kraken rate limit (15 req/min) makes full backfill slow (~5-10 min)
-- **Con**: darwin.rs is large (6,800+ lines) — may benefit from module split in future
+- **Con**: darwin.rs is large (7,000+ lines) — self-contained for now, module split if complexity grows further

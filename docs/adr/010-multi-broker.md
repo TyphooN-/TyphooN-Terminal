@@ -11,7 +11,7 @@ BrokerCmd/BrokerMsg enum-based async channel architecture. tokio runtime in back
 **Supported:**
 - **Alpaca** — US equities + crypto, paper + live. Auto-connects on startup if credentials saved in system keyring. Positions/orders/account stored to KV cache for LAN client read-only view.
 - **tastytrade** — Options + futures (ADR-022). Fully integrated: REST API + DXLink WebSocket. Historical bars, quotes, market metrics (IV rank), option chains, positions, orders.
-- **MT5** — View-only data source via BarCacheWriter v1.432 → SQLite cache. Trade management stays in MT5.
+- **MT5** — View-only data source via BarCacheWriter v1.435 → SQLite cache (TF gating, 16MB cache, /dev/shm ramdisk). Trade management stays in MT5.
 
 ## Consequences
 - Pro: Multi-broker validates BrokerTrait abstraction

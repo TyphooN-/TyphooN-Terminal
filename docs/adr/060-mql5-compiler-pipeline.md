@@ -1,6 +1,6 @@
 # ADR-060: MQL5 Compiler Pipeline — Source to GPU/CPU Execution
 
-**Status:** Phase 1 Implemented (WASM), Phase 2 Implemented (WGSL) | **Date:** 2026-03-27 | **Updated:** 2026-03-31
+**Status:** Phase 1 Implemented (WASM), Phase 2 Implemented (WGSL), Phase 3 Implemented (PineScript) | **Date:** 2026-03-27 | **Updated:** 2026-04-03
 
 ## Context
 
@@ -81,12 +81,31 @@ The `emit_wgsl()` codegen (1100 lines) produces valid WGSL compute shaders:
 ✗ Network — not applicable for indicators
 ```
 
+## Phase 3: PineScript v5 Parser (Implemented)
+
+`pine.rs` parses PineScript v5 source into the same IR used by the MQL5 pipeline:
+
+- `//@version=5` header, `indicator()` declaration
+- `input.int()`, `input.float()`, `input.bool()`, `input.string()` → `IrInput`
+- `ta.sma()`, `ta.ema()`, `ta.rsi()`, `ta.atr()`, `ta.highest()`, `ta.lowest()` → `IrExpr::Call`
+- `ta.crossover()`, `ta.crossunder()`, `ta.stdev()`, `ta.change()`, `ta.tr`, `nz()`
+- `plot()` with title/color extraction → `PlotDef` + `SetBuffer`
+- `math.abs()`, `math.sqrt()`, `math.log()`, `math.max()`, `math.min()`
+- Built-in series: `close`, `open`, `high`, `low`, `volume`, `bar_index`
+- Variable assignments, `var` declarations, binary operators
+- Compiled to WASM via same `emit_wasm()` codegen as MQL5
+
+**Status:** 7 PineScript tests + 75 MQL5 tests = 82 total tests passing. Covers common TradingView indicators (SMA, EMA, RSI, ATR, multi-plot). Wired via `compile_pine()` in `lib.rs`.
+
 ## Consequences
 
 - **Pro:** Users can run MQL5 indicators without MetaTrader
+- **Pro:** Users can run TradingView PineScript indicators natively
 - **Pro:** GPU compilation path provides massive speedup (both backends implemented)
 - **Pro:** Same source compiles to CPU (WASM) and GPU (WGSL) from single AST
+- **Pro:** PineScript reuses same IR → WASM pipeline as MQL5
 - **Pro:** Sandboxed execution prevents malicious indicator code
-- **Pro:** 75 tests covering parser, WASM codegen, and WGSL codegen
+- **Pro:** 82 tests covering parser, WASM codegen, WGSL codegen, and PineScript
 - **Con:** Not 100% MQL5 compatible (trading functions excluded)
+- **Con:** PineScript subset — covers common indicators, not full language
 - **Con:** GPU path limited to parallelizable indicators

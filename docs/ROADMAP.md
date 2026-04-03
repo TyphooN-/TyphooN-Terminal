@@ -90,22 +90,23 @@
 - [x] Storage Manager pagination
 - [x] Data hierarchy: MT5 > Broker > CryptoCompare > Kraken
 
-## In Progress
-
 ### Phase 9: tastytrade Integration
-- [x] tastytrade REST API client (auth only — session-based login)
-- [ ] Market data via DXLink WebSocket
-- [ ] Symbol comparison (tastytrade vs Alpaca coverage)
-- [ ] Options chain + Greeks
-
-## Future
+- [x] tastytrade REST API client (session-based login, balances, positions, orders)
+- [x] Market data via DXLink WebSocket (historical bars: SETUP→AUTH→FEED protocol)
+- [x] Option chains + Greeks (nested expiration/strike, IV rank/percentile via market metrics)
+- [x] Quote snapshots + market metrics (bid/ask, IV rank, IV percentile, beta)
+- [x] 5-source bar priority: MT5 → Alpaca → tastytrade → CryptoCompare → Kraken
 
 ### Phase 10: Advanced Features
-- [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 56 total)
+- [x] More drawing tools (pitchfork, Elliott, Gann — all implemented, 71 total)
 - [x] Price alerts system (indicator-based: RSI, MACD, Fisher, Price conditions)
 - [x] Trade journal (log trades with notes, ~ → JOURNAL)
-- [ ] Pattern recognition (double top/bottom, H&S)
-- [x] Supply/demand zones (auto-detected from impulse candles)
+- [x] Supply/demand zones (auto-detected from impulse candles, GPU + CPU paths)
+- [x] Harmonic patterns (Gartley, Butterfly, Bat, Crab, Shark, Cypher, 5-0, Alt Bat, Deep Crab, Three Drives)
+- [x] Position visibility toggles per broker (DARWIN/Alpaca/tastytrade)
+- [x] POSITION_CHARTS command (open W1 tabs for all open positions)
+- [x] Backfill candle coloring (magenta for non-primary data sources)
+- [x] Session save on window close (on_exit)
 
 ### Phase 11: Data Feeds
 - [x] News feed (Finnhub)
@@ -114,12 +115,21 @@
 - [x] Analyst ratings (Finnhub consensus: buy/hold/sell + price targets)
 - [x] FRED economic data (Fed Funds, CPI, GDP, Treasury yields, VIX, M2 Supply)
 
-### Phase 12: Bookmap
+### Phase 12: MQL5/PineScript Compiler
+- [x] MQL5 parser (pest grammar → AST, core MQL5 syntax, 75+ tests)
+- [x] WASM backend (CPU execution via wasmtime)
+- [x] WGSL backend (GPU execution via wgpu compute shaders)
+- [x] PineScript v5 parser (indicator, input.*, ta.*, plot, math.*, 7 tests)
+- [ ] Hot-reload custom indicators from file
+- [ ] Indicator marketplace / import UI
+
+## Future
+
+### Phase 13: Bookmap
 - [ ] Order book depth heatmap (ADR-048)
 - [ ] wgpu compute shader pipeline
 - [ ] Level 2 WebSocket data
 
-### Phase 13: Scripting
-- [ ] MQL5 indicator compatibility layer
-- [ ] PineScript-like DSL
-- [ ] Hot-reload custom indicators
+### Phase 14: Pattern Recognition
+- [ ] Classic chart patterns (double top/bottom, H&S, wedge, triangle)
+- [ ] Auto-detection with confirmation signals
