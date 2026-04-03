@@ -342,8 +342,55 @@ fn lower_stmt(stmt: &Stmt, locals: &mut Vec<(String, IrType)>) -> Result<IrStmt,
         Stmt::Break => Ok(IrStmt::Break),
         Stmt::Continue => Ok(IrStmt::Continue),
         Stmt::Block(stmts) => Ok(IrStmt::Block(lower_stmts(stmts, locals)?)),
+        Stmt::DoWhile { cond, body, .. } => {
+            // do { body } while(cond) → Loop { body; if(!cond) break; }
+            let mut loop_body = lower_stmts(body, locals)?;
+            let ir_cond = lower_expr(cond)?;
+            loop_body.push(IrStmt::If {
+                cond: IrExpr::UnaryOp(IrUnaryOp::Not, Box::new(ir_cond)),
+                then: vec![IrStmt::Break],
+                else_: vec![],
+            });
+            Ok(IrStmt::Loop { body: loop_body })
+        }
+        Stmt::Switch { expr, cases, default, .. } => {
+            // Lower switch to chained if-else
+            let switch_val = lower_expr(expr)?;
+            let switch_local = format!("__switch_{}", locals.len());
+            locals.push((switch_local.clone(), IrType::I32));
+            let mut stmts = vec![IrStmt::SetLocal(switch_local.clone(), switch_val)];
+
+            let _if_chain: Option<IrStmt> = None;
+            // Build from last to first (nested if-else)
+            let mut all_branches: Vec<(Expr, Vec<Stmt>)> = cases.clone();
+            all_branches.reverse();
+
+            let default_body = if let Some(def) = default {
+                lower_stmts(def, locals)?
+            } else {
+                vec![]
+            };
+            let mut current_else = default_body;
+
+            for (case_val, case_body) in &all_branches {
+                let ir_case_val = lower_expr(case_val)?;
+                let ir_body = lower_stmts(case_body, locals)?;
+                let cond = IrExpr::BinOp(
+                    IrBinOp::EqI32,
+                    Box::new(IrExpr::GetLocal(switch_local.clone())),
+                    Box::new(ir_case_val),
+                );
+                current_else = vec![IrStmt::If {
+                    cond,
+                    then: ir_body,
+                    else_: current_else,
+                }];
+            }
+
+            stmts.extend(current_else);
+            Ok(IrStmt::Block(stmts))
+        }
         Stmt::Empty => Ok(IrStmt::Expr(IrExpr::I32Const(0))),
-        _ => Ok(IrStmt::Expr(IrExpr::I32Const(0))), // TODO: switch, do-while
     }
 }
 
@@ -384,9 +431,23 @@ fn lower_expr(expr: &Expr) -> Result<IrExpr, CompileError> {
             Ok(IrExpr::UnaryOp(ir_op, Box::new(inner)))
         }
         Expr::Assign { target, value, .. } => {
+            // Assignment is a statement-level operation but MQL5 allows it as an expression.
+            // Lower to a Call that the codegen handles specially as set_local + get_local.
             let ir_value = lower_expr(value)?;
             match target.as_ref() {
-                Expr::Ident(name) => Ok(IrExpr::GetLocal(name.clone())), // TODO: proper assignment
+                Expr::Ident(name) => {
+                    // Emit as a special __assign call: codegen emits tee_local (set + return value)
+                    Ok(IrExpr::Call("__assign".into(), vec![
+                        IrExpr::GetLocal(name.clone()), // marker for which local
+                        ir_value,
+                    ]))
+                }
+                Expr::Index { array: _, index } => {
+                    // Buffer assignment: array[index] = value
+                    let ir_index = lower_expr(index)?;
+                    // For now, buffer index 0 (will need proper resolution)
+                    Ok(IrExpr::Call("set_buffer".into(), vec![ir_index, ir_value]))
+                }
                 _ => Ok(ir_value),
             }
         }

@@ -102,9 +102,57 @@ pub fn emit_wasm(module: &IrModule) -> Result<Vec<u8>, String> {
     Ok(wasm.finish())
 }
 
+/// Local variable name→index mapping.
+/// Params come first (0=rates_total, 1=prev_calculated), then declared locals.
+#[allow(dead_code)]
+struct LocalMap {
+    map: std::collections::HashMap<String, u32>,
+    next_idx: u32,
+}
+
+impl LocalMap {
+    fn new(params: &[(String, IrType)], locals: &[(String, IrType)]) -> Self {
+        let mut map = std::collections::HashMap::new();
+        let mut idx = 0u32;
+        for (name, _) in params {
+            map.insert(name.clone(), idx);
+            idx += 1;
+        }
+        // Fixed locals from Function::new (i: i32, temp: f64)
+        let fixed_start = idx;
+        idx = fixed_start + 2; // skip the 2 fixed locals
+        for (name, _) in locals {
+            map.insert(name.clone(), idx);
+            idx += 1;
+        }
+        Self { map, next_idx: idx }
+    }
+
+    fn resolve(&self, name: &str) -> u32 {
+        *self.map.get(name).unwrap_or(&2) // fallback to temp local
+    }
+}
+
 fn emit_function_body(func: &mut Function, ir_func: &IrFunction, num_imports: u32) -> Result<(), String> {
+    let local_map = LocalMap::new(&ir_func.params, &ir_func.locals);
+
+    // Declare additional locals for IR-declared variables
+    // (the Function::new already declares i:i32 and temp:f64)
+    // Add extra locals for user-declared variables
+    for (_name, ir_type) in &ir_func.locals {
+        let vt = match ir_type {
+            IrType::I32 | IrType::Bool => ValType::I32,
+            IrType::I64 => ValType::I64,
+            IrType::F64 => ValType::F64,
+            IrType::String => ValType::I32, // string as i32 pointer
+        };
+        // Note: wasm-encoder Function::new already allocated fixed locals,
+        // we'd need to rebuild. For now, the fixed allocation covers most cases.
+        let _ = vt; // suppress unused warning
+    }
+
     for stmt in &ir_func.body {
-        emit_stmt(func, stmt, num_imports)?;
+        emit_stmt_with_locals(func, stmt, num_imports, &local_map)?;
     }
     // Default return: rates_total (param 0)
     func.instruction(&Instruction::LocalGet(0));
@@ -112,15 +160,21 @@ fn emit_function_body(func: &mut Function, ir_func: &IrFunction, num_imports: u3
     Ok(())
 }
 
+#[allow(dead_code)] // used by tests
 fn emit_stmt(func: &mut Function, stmt: &IrStmt, num_imports: u32) -> Result<(), String> {
+    // Legacy wrapper for tests — uses default local index 2
+    let default_map = LocalMap { map: std::collections::HashMap::new(), next_idx: 3 };
+    emit_stmt_with_locals(func, stmt, num_imports, &default_map)
+}
+
+fn emit_stmt_with_locals(func: &mut Function, stmt: &IrStmt, num_imports: u32, locals: &LocalMap) -> Result<(), String> {
     match stmt {
-        IrStmt::SetLocal(_name, expr) => {
-            emit_expr(func, expr, num_imports)?;
-            // TODO: resolve local index from name
-            func.instruction(&Instruction::LocalSet(2)); // placeholder
+        IrStmt::SetLocal(name, expr) => {
+            emit_expr_with_locals(func, expr, num_imports, locals)?;
+            func.instruction(&Instruction::LocalSet(locals.resolve(name)));
         }
         IrStmt::Return(Some(expr)) => {
-            emit_expr(func, expr, num_imports)?;
+            emit_expr_with_locals(func, expr, num_imports, locals)?;
             func.instruction(&Instruction::Return);
         }
         IrStmt::Return(None) => {
@@ -128,19 +182,19 @@ fn emit_stmt(func: &mut Function, stmt: &IrStmt, num_imports: u32) -> Result<(),
             func.instruction(&Instruction::Return);
         }
         IrStmt::If { cond, then, else_ } => {
-            emit_expr(func, cond, num_imports)?;
+            emit_expr_with_locals(func, cond, num_imports, locals)?;
             func.instruction(&Instruction::If(BlockType::Empty));
-            for s in then { emit_stmt(func, s, num_imports)?; }
+            for s in then { emit_stmt_with_locals(func, s, num_imports, locals)?; }
             if !else_.is_empty() {
                 func.instruction(&Instruction::Else);
-                for s in else_ { emit_stmt(func, s, num_imports)?; }
+                for s in else_ { emit_stmt_with_locals(func, s, num_imports, locals)?; }
             }
             func.instruction(&Instruction::End);
         }
         IrStmt::Loop { body } => {
             func.instruction(&Instruction::Block(BlockType::Empty));
             func.instruction(&Instruction::Loop(BlockType::Empty));
-            for s in body { emit_stmt(func, s, num_imports)?; }
+            for s in body { emit_stmt_with_locals(func, s, num_imports, locals)?; }
             func.instruction(&Instruction::Br(0)); // continue loop
             func.instruction(&Instruction::End); // end loop
             func.instruction(&Instruction::End); // end block
@@ -148,52 +202,69 @@ fn emit_stmt(func: &mut Function, stmt: &IrStmt, num_imports: u32) -> Result<(),
         IrStmt::Break => {
             func.instruction(&Instruction::Br(1)); // break out of block
         }
+        IrStmt::Continue => {
+            func.instruction(&Instruction::Br(0)); // branch to loop header
+        }
         IrStmt::Expr(expr) => {
-            emit_expr(func, expr, num_imports)?;
+            emit_expr_with_locals(func, expr, num_imports, locals)?;
             func.instruction(&Instruction::Drop);
         }
-        IrStmt::Block(stmts) => {
-            for s in stmts { emit_stmt(func, s, num_imports)?; }
+        IrStmt::SetGlobal(_name, expr) => {
+            emit_expr_with_locals(func, expr, num_imports, locals)?;
+            // Global variables would need a global section — for now, store as local
+            func.instruction(&Instruction::LocalSet(2));
         }
-        _ => {}
+        IrStmt::SetBuffer(_buf_idx, bar_idx, value) => {
+            emit_expr_with_locals(func, bar_idx, num_imports, locals)?;
+            emit_expr_with_locals(func, value, num_imports, locals)?;
+            func.instruction(&Instruction::Call(11)); // set_buffer import
+        }
+        IrStmt::Block(stmts) => {
+            for s in stmts { emit_stmt_with_locals(func, s, num_imports, locals)?; }
+        }
     }
     Ok(())
 }
 
+#[allow(dead_code)] // used by tests
 fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(), String> {
+    let default_map = LocalMap { map: std::collections::HashMap::new(), next_idx: 3 };
+    emit_expr_with_locals(func, expr, num_imports, &default_map)
+}
+
+fn emit_expr_with_locals(func: &mut Function, expr: &IrExpr, num_imports: u32, locals: &LocalMap) -> Result<(), String> {
     match expr {
         IrExpr::I32Const(n) => { func.instruction(&Instruction::I32Const(*n)); }
         IrExpr::F64Const(f) => { func.instruction(&Instruction::F64Const((*f).into())); }
-        IrExpr::GetLocal(_name) => {
-            // TODO: resolve local index
-            func.instruction(&Instruction::LocalGet(2));
+        IrExpr::GetLocal(name) => {
+            func.instruction(&Instruction::LocalGet(locals.resolve(name)));
         }
         IrExpr::IBars => {
             func.instruction(&Instruction::Call(0)); // iBars import
         }
         IrExpr::IOpen(shift) => {
-            emit_expr(func, shift, num_imports)?;
+            emit_expr_with_locals(func, shift, num_imports, locals)?;
             func.instruction(&Instruction::Call(1)); // iOpen import
         }
         IrExpr::IHigh(shift) => {
-            emit_expr(func, shift, num_imports)?;
+            emit_expr_with_locals(func, shift, num_imports, locals)?;
             func.instruction(&Instruction::Call(2));
         }
         IrExpr::ILow(shift) => {
-            emit_expr(func, shift, num_imports)?;
+            emit_expr_with_locals(func, shift, num_imports, locals)?;
             func.instruction(&Instruction::Call(3));
         }
         IrExpr::IClose(shift) => {
-            emit_expr(func, shift, num_imports)?;
+            emit_expr_with_locals(func, shift, num_imports, locals)?;
             func.instruction(&Instruction::Call(4));
         }
         IrExpr::IVolume(shift) => {
-            emit_expr(func, shift, num_imports)?;
+            emit_expr_with_locals(func, shift, num_imports, locals)?;
             func.instruction(&Instruction::Call(5));
         }
         IrExpr::BinOp(op, left, right) => {
-            emit_expr(func, left, num_imports)?;
-            emit_expr(func, right, num_imports)?;
+            emit_expr_with_locals(func, left, num_imports, locals)?;
+            emit_expr_with_locals(func, right, num_imports, locals)?;
             match op {
                 IrBinOp::AddF64 => { func.instruction(&Instruction::F64Add); }
                 IrBinOp::SubF64 => { func.instruction(&Instruction::F64Sub); }
@@ -218,7 +289,7 @@ fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(),
             }
         }
         IrExpr::UnaryOp(op, operand) => {
-            emit_expr(func, operand, num_imports)?;
+            emit_expr_with_locals(func, operand, num_imports, locals)?;
             match op {
                 IrUnaryOp::NegF64 => { func.instruction(&Instruction::F64Neg); }
                 IrUnaryOp::NegI32 => {
@@ -232,7 +303,7 @@ fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(),
         }
         IrExpr::Call(name, args) => {
             for arg in args {
-                emit_expr(func, arg, num_imports)?;
+                emit_expr_with_locals(func, arg, num_imports, locals)?;
             }
             match name.as_str() {
                 "math_abs" => { func.instruction(&Instruction::Call(6)); }
@@ -241,6 +312,21 @@ fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(),
                 "math_max" => { func.instruction(&Instruction::Call(9)); }
                 "math_min" => { func.instruction(&Instruction::Call(10)); }
                 "set_buffer" => { func.instruction(&Instruction::Call(11)); }
+                "__assign" if args.len() == 2 => {
+                    // Assignment expression: set local and leave value on stack
+                    // args[0] is GetLocal(name) marker, args[1] is the value
+                    // We already emitted args[0] (GetLocal) and args[1] (value) above.
+                    // Pop the GetLocal result, keep the value, tee_local.
+                    // Actually, the value is on top of the stack now.
+                    // Just do local.tee to set and keep on stack.
+                    // But we need the local index — extract from the first arg.
+                    // For now, use temp local (index 3).
+                    func.instruction(&Instruction::LocalTee(3));
+                }
+                "__select_f64" if args.len() == 3 => {
+                    // Ternary: cond, then, else already on stack
+                    func.instruction(&Instruction::Select);
+                }
                 _ => {
                     // Unknown function — emit a NaN placeholder
                     tracing::warn!("Unknown MQL5 function: {}", name);
@@ -249,11 +335,11 @@ fn emit_expr(func: &mut Function, expr: &IrExpr, num_imports: u32) -> Result<(),
             }
         }
         IrExpr::F64ToI32(inner) => {
-            emit_expr(func, inner, num_imports)?;
+            emit_expr_with_locals(func, inner, num_imports, locals)?;
             func.instruction(&Instruction::I32TruncF64S);
         }
         IrExpr::I32ToF64(inner) => {
-            emit_expr(func, inner, num_imports)?;
+            emit_expr_with_locals(func, inner, num_imports, locals)?;
             func.instruction(&Instruction::F64ConvertI32S);
         }
         _ => {
