@@ -5415,12 +5415,8 @@ fn draw_chart(
                 } else if is_weekend {
                     if bar.close >= bar.open { weekend_up } else { weekend_dn }
                 } else if chart.primary_first_ts > 0 && bar.ts_ms < chart.primary_first_ts {
-                    // Backfill data (older than primary source) — dimmed cyan/orange
-                    if bar.close >= bar.open {
-                        egui::Color32::from_rgb(0, 180, 180)   // teal (backfill bull)
-                    } else {
-                        egui::Color32::from_rgb(200, 120, 0)   // orange (backfill bear)
-                    }
+                    // Backfill data (older than primary source) — same magenta as weekend
+                    if bar.close >= bar.open { weekend_up } else { weekend_dn }
                 } else {
                     if bar.close >= bar.open { UP } else { DOWN }
                 };
