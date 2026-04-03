@@ -11,6 +11,8 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const DXLINK_VERSION: &str = "0.1-DXF-JS/0.3.0";
+/// Keepalive interval for persistent connections (not used in one-shot fetch_candles).
+#[allow(dead_code)]
 const KEEPALIVE_SECS: u64 = 30;
 
 /// DXLink streaming token + URL from tastytrade REST API.
@@ -89,22 +91,19 @@ pub async fn fetch_candles(
     }
     macro_rules! dx_recv {
         ($stream:expr) => {{
-            let mut result: Result<serde_json::Value, String> = Err("no message".into());
             loop {
                 match $stream.next().await {
                     Some(Ok(Message::Text(txt))) => {
-                        result = serde_json::from_str::<serde_json::Value>(&txt)
+                        break serde_json::from_str::<serde_json::Value>(&txt)
                             .map_err(|e| format!("DXLink parse failed: {e}"));
-                        break;
                     }
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
-                    Some(Ok(Message::Close(_))) => { result = Err("DXLink closed".into()); break; }
-                    Some(Err(e)) => { result = Err(format!("DXLink error: {e}")); break; }
-                    None => { result = Err("DXLink ended".into()); break; }
+                    Some(Ok(Message::Close(_))) => { break Err("DXLink closed".into()); }
+                    Some(Err(e)) => { break Err(format!("DXLink error: {e}")); }
+                    None => { break Err("DXLink ended".into()); }
                     _ => continue,
                 }
             }
-            result
         }};
     }
 
