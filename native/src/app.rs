@@ -1391,15 +1391,36 @@ impl ChartState {
             let snap = |ts: i64| -> i64 { ts / tf_ms * tf_ms };
             let mut existing_snapped: std::collections::HashSet<i64> = self.bars.iter().map(|b| snap(b.ts_ms)).collect();
             let mut gap_filled = 0usize;
-            for prefix in &["cryptocompare", "kraken"] {
-                let gap_key = format!("{}:{}:{}", prefix, sym, tf);
-                if let Ok(Some(gap_raw)) = cache.get_bars_raw(&gap_key) {
-                    for (ts, o, h, l, c, v) in gap_raw {
-                        let snapped = snap(ts);
-                        if !existing_snapped.contains(&snapped) {
-                            existing_snapped.insert(snapped);
-                            self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
-                            gap_filled += 1;
+            // Try all alternate source prefixes for gap-fill (crypto slash variants too)
+            let sym_slash = {
+                let s = sym.to_uppercase();
+                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                crypto_bases.iter().find_map(|base| {
+                    if s.starts_with(base) && s.ends_with("USD") && s.len() == base.len() + 3 {
+                        Some(format!("{}/USD", base))
+                    } else { None }
+                }).unwrap_or_default()
+            };
+            let gap_prefixes = ["cryptocompare", "kraken", "alpaca", "tastytrade"];
+            for prefix in &gap_prefixes {
+                // Try both SOLUSD and SOL/USD key forms
+                let keys_to_try: Vec<String> = if sym_slash.is_empty() {
+                    vec![format!("{}:{}:{}", prefix, sym, tf)]
+                } else {
+                    vec![
+                        format!("{}:{}:{}", prefix, sym, tf),
+                        format!("{}:{}:{}", prefix, sym_slash, tf),
+                    ]
+                };
+                for gap_key in &keys_to_try {
+                    if let Ok(Some(gap_raw)) = cache.get_bars_raw(gap_key) {
+                        for (ts, o, h, l, c, v) in gap_raw {
+                            let snapped = snap(ts);
+                            if !existing_snapped.contains(&snapped) {
+                                existing_snapped.insert(snapped);
+                                self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
+                                gap_filled += 1;
+                            }
                         }
                     }
                 }
