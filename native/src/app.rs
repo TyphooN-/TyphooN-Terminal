@@ -19338,13 +19338,19 @@ impl TyphooNApp {
                                     // Save for auto-reconnect on next startup
                                     self.lan_client_enabled = true;
                                     self.lan_server_ip = self.lan_sync_host.clone();
-                                    // Persist passphrase off UI thread
+                                    // Persist passphrase + server IP to keyring AND KV cache
+                                    // (survives crashes where session.json doesn't get written)
                                     let pass_clone = self.lan_sync_passphrase.clone();
+                                    let ip_clone = self.lan_sync_host.clone();
+                                    let port_clone = self.lan_sync_port.clone();
                                     let cache_clone = self.cache.clone();
                                     std::thread::spawn(move || {
                                         let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &pass_clone);
                                         if let Some(ref cache) = cache_clone {
                                             let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &pass_clone);
+                                            let _ = cache.put_kv("lan:server_ip", &ip_clone);
+                                            let _ = cache.put_kv("lan:sync_port", &port_clone);
+                                            let _ = cache.put_kv("lan:client_enabled", "true");
                                         }
                                     });
                                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
@@ -20193,7 +20199,24 @@ impl eframe::App for TyphooNApp {
                 self.log.push_back(LogEntry::info(format!("LAN server auto-starting on wss://0.0.0.0:{}...", port)));
             }
 
-            // LAN client auto-connect: if saved as LAN client, connect immediately
+            // LAN client auto-connect: recover IP from KV cache if session.json didn't have it
+            if self.lan_server_ip.is_empty() {
+                if let Some(ref cache) = self.cache {
+                    if let Ok(Some(ip)) = cache.get_kv("lan:server_ip") {
+                        if !ip.is_empty() {
+                            self.lan_server_ip = ip;
+                            self.lan_sync_host = self.lan_server_ip.clone();
+                            self.log.push_back(LogEntry::info(format!("LAN server IP recovered from cache: {}", self.lan_server_ip)));
+                        }
+                    }
+                    if let Ok(Some(port)) = cache.get_kv("lan:sync_port") {
+                        if !port.is_empty() { self.lan_sync_port = port; }
+                    }
+                    if let Ok(Some(enabled)) = cache.get_kv("lan:client_enabled") {
+                        if enabled == "true" { self.lan_client_enabled = true; }
+                    }
+                }
+            }
             if self.lan_client_enabled && !self.lan_server_ip.is_empty() {
                 let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
                 self.lan_sync_mode = "client".into();
