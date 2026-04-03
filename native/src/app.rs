@@ -5372,8 +5372,10 @@ fn draw_chart(
                 let y_high  = price_to_y(bar.high);
                 let y_low   = price_to_y(bar.low);
                 let y_close = price_to_y(bar.close);
-                // Weekend bars for crypto get distinct color (CryptoCompare/Kraken gap-fill data)
-                let is_weekend = if is_crypto {
+                // Weekend bars for crypto get distinct color (CryptoCompare/Kraken gap-fill data).
+                // Only on D1 and lower — W1/MN1 bars span entire weeks/months so the
+                // timestamp day-of-week is meaningless (CryptoCompare W1 starts on Sunday).
+                let is_weekend = if is_crypto && !matches!(chart.timeframe, Timeframe::W1 | Timeframe::MN1) {
                     let dt = chrono::DateTime::from_timestamp(bar.ts_ms / 1000, 0);
                     dt.map(|d| {
                         use chrono::Datelike;
