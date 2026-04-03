@@ -19412,13 +19412,14 @@ impl TyphooNApp {
                                 } else {
                                     self.lan_sync_mode = "server".into();
                                     self.lan_server_enabled = true; // auto-start on next startup
-                                    // Persist passphrase off UI thread (keyring + cache writes can block)
+                                    // Persist passphrase + server flag to keyring + KV cache
                                     let pass_clone = self.lan_sync_passphrase.clone();
                                     let cache_clone = self.cache.clone();
                                     std::thread::spawn(move || {
                                         let _ = keyring::store(keyring::keys::LAN_SYNC_PASS, &pass_clone);
                                         if let Some(ref cache) = cache_clone {
                                             let _ = cache.put_kv(&format!("cred:{}", keyring::keys::LAN_SYNC_PASS), &pass_clone);
+                                            let _ = cache.put_kv("lan:server_enabled", "true");
                                         }
                                     });
                                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
@@ -19535,6 +19536,11 @@ impl TyphooNApp {
                             self.lan_client_enabled = false;
                             self.lan_server_enabled = false;
                             let _ = self.broker_tx.send(BrokerCmd::LanSyncStop);
+                            // Clear KV persistence
+                            if let Some(ref cache) = self.cache {
+                                let _ = cache.put_kv("lan:server_enabled", "false");
+                                let _ = cache.put_kv("lan:client_enabled", "false");
+                            }
                             self.log.push_back(LogEntry::info("LAN sync stopped"));
                         }
                     }
@@ -20296,11 +20302,17 @@ impl eframe::App for TyphooNApp {
                 )));
             }
 
-            // LAN server auto-start: if was running when app last closed, restart it
-            self.log.push_back(LogEntry::info(format!(
-                "LAN auto-start check: server_enabled={}, passphrase_len={}, client_enabled={}",
-                self.lan_server_enabled, self.lan_sync_passphrase.len(), self.lan_client_enabled
-            )));
+            // LAN server auto-start: recover from KV cache if session.json didn't have it
+            if !self.lan_server_enabled {
+                if let Some(ref cache) = self.cache {
+                    if let Ok(Some(enabled)) = cache.get_kv("lan:server_enabled") {
+                        if enabled == "true" {
+                            self.lan_server_enabled = true;
+                            self.log.push_back(LogEntry::info("LAN server_enabled recovered from cache"));
+                        }
+                    }
+                }
+            }
             if self.lan_server_enabled && !self.lan_sync_passphrase.is_empty() {
                 let port: u16 = self.lan_sync_port.parse().unwrap_or(9847);
                 self.lan_sync_mode = "server".into();
