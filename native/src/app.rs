@@ -24226,8 +24226,8 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Auto MT5 sync every ~30s on weekdays (BarCacheWriter doesn't run on weekends)
-            if self.frame_count % 120 == 100 && self.frame_count > 0 {
+            // Auto MT5 bar sync every ~60s on weekdays (smart: skips unchanged keys)
+            if self.frame_count % 240 == 100 && self.frame_count > 0 {
                 let now_utc = chrono::Utc::now();
                 let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
                 use chrono::Datelike;
@@ -24236,6 +24236,42 @@ impl eframe::App for TyphooNApp {
                     let paths: Vec<String> = self.mt5_db_paths.iter().filter(|p| !p.is_empty()).cloned().collect();
                     if !paths.is_empty() {
                         let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths });
+                    }
+                }
+            }
+
+            // MT5 live bid/ask refresh every ~30s — fast read of bid_ask table only (no bar sync).
+            // Updates forming bars on all charts with latest MT5 mid prices.
+            // Reads from /dev/shm ramdisk — sub-millisecond, safe on UI thread.
+            if self.frame_count % 120 == 60 && self.frame_count > 0 {
+                let paths: Vec<String> = self.mt5_db_paths.iter()
+                    .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
+                    .cloned().collect();
+                if let Some(last_src) = paths.last() {
+                    let src_path = std::path::PathBuf::from(last_src);
+                    if let Ok(src) = typhoon_engine::core::cache::SqliteCache::open_readonly(&src_path) {
+                        if let Ok(quotes) = src.read_bid_ask() {
+                            for (sym, bid, ask, _spread) in &quotes {
+                                let mid = (bid + ask) / 2.0;
+                                if mid <= 0.0 { continue; }
+                                let sym_upper = sym.to_uppercase();
+                                for chart in &mut self.charts {
+                                    let chart_bare = chart.symbol.replace('/', "").to_uppercase();
+                                    let chart_bare = {
+                                        let parts: Vec<&str> = chart_bare.split(':').collect();
+                                        let is_tf = matches!(parts.last().map(|p| p.as_ref()), Some("1MIN"|"5MIN"|"15MIN"|"30MIN"|"1HOUR"|"4HOUR"|"1DAY"|"1WEEK"|"1MONTH"));
+                                        if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { chart_bare }
+                                    };
+                                    if chart_bare == sym_upper {
+                                        if let Some(bar) = chart.bars.last_mut() {
+                                            bar.close = mid;
+                                            if mid > bar.high { bar.high = mid; }
+                                            if mid < bar.low { bar.low = mid; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
