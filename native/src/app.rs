@@ -8613,6 +8613,8 @@ enum BrokerMsg {
     TastytradePositions(Vec<PositionInfo>),
     /// Full asset list from broker (symbol, name, asset_class).
     AllAssets(Vec<(String, String, String)>),
+    /// Structured fills for chart overlay (symbol, side, qty, price, time).
+    RecentFills(Vec<(String, String, f64, f64, String)>),
 }
 
 /// Reusable sort state for clickable column headers.
@@ -9382,6 +9384,19 @@ impl TyphooNApp {
                                         format!("{} {} {} {} {}", a.date, a.side.as_deref().unwrap_or("—"), a.qty.as_deref().unwrap_or("—"), a.symbol.as_deref().unwrap_or("—"), a.net_amount.as_deref().unwrap_or("—"))
                                     }).collect::<Vec<_>>().join("\n");
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Account Activities".into(), text));
+                                    // Also send structured fills for chart overlay
+                                    let fills: Vec<(String, String, f64, f64, String)> = activities.iter()
+                                        .filter(|a| a.activity_type == "FILL")
+                                        .filter_map(|a| {
+                                            let sym = a.symbol.as_deref()?.to_string();
+                                            let side = a.side.as_deref()?.to_string();
+                                            let qty: f64 = a.qty.as_deref()?.parse().ok()?;
+                                            let price: f64 = a.price.as_deref()?.parse().ok()?;
+                                            Some((sym, side, qty, price, a.date.clone()))
+                                        }).collect();
+                                    if !fills.is_empty() {
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::RecentFills(fills));
+                                    }
                                 }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
                             }
@@ -11447,9 +11462,16 @@ impl TyphooNApp {
                 .unwrap_or(0)
         };
 
+        // Tolerance based on timeframe (a deal can be slightly after the last bar)
+        let tf_tolerance_ms: i64 = match chart.timeframe {
+            Timeframe::MN1 => 35 * 86_400_000, // 35 days
+            Timeframe::W1 => 8 * 86_400_000,   // 8 days
+            Timeframe::D1 => 2 * 86_400_000,   // 2 days
+            _ => 86_400_000,                     // 1 day
+        };
         // Find bar index for a timestamp (binary search on sorted bars)
         let find_bar = |ts_ms: i64| -> Option<usize> {
-            if ts_ms < first_ts || ts_ms > last_ts + 86_400_000 { return None; }
+            if ts_ms < first_ts || ts_ms > last_ts + tf_tolerance_ms { return None; }
             match chart.bars.binary_search_by_key(&ts_ms, |b| b.ts_ms) {
                 Ok(idx) => Some(idx),
                 Err(idx) => if idx > 0 { Some(idx - 1) } else { Some(0) },
@@ -11528,8 +11550,25 @@ impl TyphooNApp {
         }
         } // show_darwin_positions
 
-        // Also check portfolio-level positions for SL/TP from closed_positions
-        // (Open positions from DarwinOpenPosition don't have SL/TP; closed ones do)
+        // Also check portfolio-level open positions (aggregated across all DARWINs)
+        if self.show_darwin_positions {
+            for pos in &self.bg.open_positions {
+                if pos.symbol.replace('/', "").to_uppercase() != bare_upper { continue; }
+                let is_buy = pos.side == "buy";
+                // Only add if not already covered by per-account positions
+                let already = overlay.position_lines.iter().any(|pl| {
+                    (pl.price - pos.avg_price).abs() < 0.0001 && pl.is_buy == is_buy
+                });
+                if !already {
+                    overlay.position_lines.push(PositionLine {
+                        price: pos.avg_price,
+                        volume: pos.total_volume,
+                        is_buy,
+                        line_type: 0,
+                    });
+                }
+            }
+        }
 
         // Broker fills (Alpaca/tastytrade) — add to marker map before conversion
         for (sym, side, qty, price, time) in &self.recent_fills {
@@ -20263,9 +20302,10 @@ impl eframe::App for TyphooNApp {
                         self.tt_connected = true;
                     } else {
                         self.broker_connected = true;
-                        // Auto-fetch positions and orders (Alpaca)
+                        // Auto-fetch positions, orders, and recent fills (Alpaca)
                         let _ = self.broker_tx.send(BrokerCmd::GetPositions);
                         let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                        let _ = self.broker_tx.send(BrokerCmd::GetActivities { limit: 100 });
                     }
                     self.log.push_back(LogEntry::info(s));
                 }
@@ -20301,6 +20341,13 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::AllAssets(assets) => {
                     self.all_broker_assets = assets;
                     self.all_broker_assets_fetched = true;
+                }
+                BrokerMsg::RecentFills(fills) => {
+                    self.recent_fills = fills;
+                    // Invalidate trade overlay cache so fills show immediately
+                    for c in &mut self.charts {
+                        c.cached_trade_overlay_frame = 0;
+                    }
                 }
                 BrokerMsg::TastytradePositions(pos) => {
                     if let Some(ref cache) = self.cache {
