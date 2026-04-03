@@ -41,17 +41,31 @@ Implement `TastytradeBroker` in `src/broker/tastytrade.rs` with session-based au
 - Tastytrade uses username/password instead of API key/secret
 - Engine tracks `active_broker` for routing
 
-## Current State (2026-04-01)
+## Current State (2026-04-02)
 
-Phase 1 (auth) is complete: session login, account listing, balances, positions endpoints are wired. Market data via DXLink WebSocket is on the roadmap but not yet implemented — tastytrade is currently auth-only with no live quotes or streaming.
+Fully implemented. Connect button active. All REST + DXLink WebSocket endpoints wired:
 
-**Connect button is disabled in the UI** (greyed out with "coming soon" label) until DXLink market data and order execution are fully implemented. Credentials fields remain visible for future use. Alpaca auto-connects on startup if credentials are saved in the system keyring.
+**REST API:**
+- Auth (login/session), accounts, balances (NLV/BP/cash)
+- Positions, orders (list/place equity), option chains (nested)
+- Quote snapshots (`/market-data`), market metrics (`/market-metrics` — IV rank/percentile/beta)
+- Persistent `tt_broker` stored for later use
+
+**DXLink WebSocket (engine/src/broker/dxlink.rs):**
+- `get_streaming_token()` — REST call for WebSocket auth token + URL
+- `fetch_candles()` — full protocol: SETUP→AUTH→CHANNEL_REQUEST→FEED_SETUP→FEED_SUBSCRIPTION
+- Historical bars for all intervals (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w, 1mo)
+- `BrokerCmd::TastytradeFetchBars` wired to broker loop, stores as `tastytrade:SYM:TF`
+- `try_load()` includes `tastytrade:` in 5-source priority lookup (after Alpaca, before CryptoCompare)
+
+**Note:** tastytrade has no REST endpoint for historical OHLCV bars — DXLink WebSocket is the only way.
+Alpaca free tier provides 15-min delayed bars; tastytrade DXLink provides real-time bars for funded accounts.
 
 ## Consequences
 
 - **Pro**: Second broker validates multi-broker architecture
-- **Pro**: Better options/futures support than Alpaca
-- **Pro**: Free paper trading for testing
+- **Pro**: Better options/futures support than Alpaca (IV rank, option chains)
+- **Pro**: DXLink provides real-time historical bars (no 15-min delay)
+- **Pro**: Market metrics (IV rank/percentile) unique to tastytrade
 - **Con**: Different auth model (session vs API key) adds complexity
-- **Con**: Market data via DXLink WebSocket — large scope, requires separate library
-- **Con**: Connect button disabled until full implementation — users cannot accidentally connect to a partial integration
+- **Con**: DXLink requires WebSocket handshake for bars (not simple REST)

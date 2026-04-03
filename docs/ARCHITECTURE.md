@@ -58,7 +58,7 @@ No JSON. No IPC. No garbage collection. Direct memory access from cache to GPU.
 | 3 | CryptoCompare | Deep crypto history (BTC from 2010), 2000 bars/request, hourly+ TFs |
 | 4 | Kraken | Sub-hourly gap-fill (720 bars, weekend coverage, no rate limit) |
 
-MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade management stays in MT5 directly. DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade auth-only Phase 1 is complete; Connect button disabled until DXLink market data is implemented (ADR-022).
+MT5 is a **view-only data source** — bar data flows in via the BarCacheWriter EA to SQLite cache. Trade management stays in MT5 directly. DARWIN account analytics are imported via XLSX trade history exports. Alpaca auto-connects on startup if credentials are saved in the system keyring. tastytrade fully integrated: REST API (auth, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars). See ADR-022.
 
 ## Technology Stack
 

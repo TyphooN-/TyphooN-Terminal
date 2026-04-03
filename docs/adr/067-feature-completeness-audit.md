@@ -17,9 +17,9 @@
 - **Prometheus metrics** — bar counts, positions, equity, cache stats
 - **Security** — zero unsafe blocks, parameterized SQL, keyring credentials, TLS LAN sync
 
-### Intentionally Disabled (Documented)
-- **tastytrade** — Auth-only Phase 1 complete. Connect button disabled ("coming soon"). DXLink WebSocket market data not implemented. See ADR-022.
-- **MQL5 compiler** — Experimental. 5 TODOs remaining (switch/do-while, assignment, local resolution, PineScript parser). Not user-facing.
+### Fully Implemented (Previously Incomplete)
+- **tastytrade** — Full REST API (auth, balances, positions, orders, quotes, market metrics, option chains) + DXLink WebSocket (historical bars via SETUP→AUTH→FEED protocol). Connect button active. See ADR-022.
+- **MQL5 compiler** — All 5 TODOs fixed (switch, do-while, assignment, local resolution, continue). PineScript parser remains as roadmap item. See ADR-067.
 
 ### Known Limitations
 - DARWIN deal import on LAN client produces wrong positions → fixed by KV-sourced analytics (34 fields)

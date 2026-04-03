@@ -1350,6 +1350,7 @@ impl ChartState {
         let keys_to_try = [
             format!("mt5:{}:{}", sym, tf),
             format!("alpaca:{}:{}", sym, tf),
+            format!("tastytrade:{}:{}", sym, tf),
             format!("cryptocompare:{}:{}", sym, tf),
             format!("kraken:{}:{}", sym, tf),
         ];
@@ -8525,6 +8526,8 @@ enum BrokerCmd {
     TastytradePositions,
     /// Get tastytrade option chain.
     TastytradeOptionChain { symbol: String },
+    /// Fetch bars from tastytrade via DXLink WebSocket.
+    TastytradeFetchBars { symbol: String, timeframe: String },
     /// Batch quote request for watchlist symbols.
     GetWatchlistQuotes { symbols: Vec<String> },
     /// Fetch FRED economic data series.
@@ -10117,7 +10120,71 @@ impl TyphooNApp {
                         }
                     }
                     BrokerCmd::TastytradeOptionChain { symbol } => {
-                        let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("tastytrade option chain for {} — connect first", symbol)));
+                        if let Some(ref tb) = tt_broker {
+                            match tb.get_option_chain(&symbol).await {
+                                Ok(expirations) => {
+                                    let total_strikes: usize = expirations.iter().map(|e| e.strikes.len()).sum();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                        "tastytrade: {} option chain — {} expirations, {} strikes",
+                                        symbol, expirations.len(), total_strikes
+                                    )));
+                                    // Store to KV for UI display
+                                    if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                        if let Ok(json) = serde_json::to_string(&expirations) {
+                                            let _ = cache.put_kv(&format!("tt:options:{}", symbol), &json);
+                                        }
+                                    }
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("tastytrade option chain: {}", e))); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("tastytrade: connect first".into()));
+                        }
+                    }
+                    BrokerCmd::TastytradeFetchBars { symbol, timeframe } => {
+                        if let Some(ref tb) = tt_broker {
+                            let msg_tx = broker_msg_tx_clone.clone();
+                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("tastytrade: fetching {} {} via DXLink...", symbol, timeframe)));
+                            match tb.get_streaming_token().await {
+                                Ok(dx_token) => {
+                                    // Map TF to DXLink interval format
+                                    let interval = match timeframe.as_str() {
+                                        "1Min" => "1m", "5Min" => "5m", "15Min" => "15m", "30Min" => "30m",
+                                        "1Hour" => "1h", "4Hour" => "4h", "1Day" => "1d", "1Week" => "1w", "1Month" => "1mo",
+                                        _ => "1d",
+                                    };
+                                    let from_ms = chrono::Utc::now().timestamp_millis() - 365 * 24 * 3600 * 1000; // 1 year back
+                                    match typhoon_engine::broker::dxlink::fetch_candles(&dx_token, &symbol, interval, from_ms).await {
+                                        Ok(candles) => {
+                                            let count = candles.len();
+                                            if count > 0 {
+                                                if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                                    // Convert to Alpaca Bar format for cache storage
+                                                    let bars: Vec<serde_json::Value> = candles.iter().map(|c| {
+                                                        serde_json::json!({
+                                                            "timestamp": chrono::DateTime::from_timestamp_millis(c.time)
+                                                                .map(|dt| dt.to_rfc3339()).unwrap_or_default(),
+                                                            "open": c.open, "high": c.high, "low": c.low,
+                                                            "close": c.close, "volume": c.volume,
+                                                        })
+                                                    }).collect();
+                                                    let json = serde_json::to_string(&bars).unwrap_or_default();
+                                                    let key = format!("tastytrade:{}:{}", symbol, timeframe);
+                                                    let _ = cache.put_bars(&key, &json);
+                                                }
+                                                let _ = msg_tx.send(BrokerMsg::BarsFetched { symbol, timeframe, count });
+                                            } else {
+                                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("tastytrade: no candles for {} {}", symbol, timeframe)));
+                                            }
+                                        }
+                                        Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("DXLink fetch failed: {e}"))); }
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("DXLink token failed: {e}"))); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("tastytrade: connect first for DXLink bars".into()));
+                        }
                     }
                     BrokerCmd::FredFetch { api_key } => {
                         use typhoon_engine::core::fred;
