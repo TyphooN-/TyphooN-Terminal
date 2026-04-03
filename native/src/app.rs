@@ -260,6 +260,26 @@ const HLINE_COL: egui::Color32 = egui::Color32::from_rgb(255, 200, 80);
 const TRENDLINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 200, 255);
 const FIBO_COL: egui::Color32 = egui::Color32::from_rgb(200, 160, 100);
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum LineStyle { Solid, Dashed, Dotted }
+
+/// Wrapper around Drawing with per-drawing style properties.
+#[derive(Clone, Debug)]
+struct DrawingEntry {
+    drawing: Drawing,
+    width: f32,        // line width in pixels (default 1.5)
+    style: LineStyle,  // solid, dashed, dotted
+}
+
+impl DrawingEntry {
+    fn new(drawing: Drawing) -> Self {
+        Self { drawing, width: 1.5, style: LineStyle::Solid }
+    }
+    fn with_style(drawing: Drawing, width: f32, style: LineStyle) -> Self {
+        Self { drawing, width, style }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Drawing {
     /// Horizontal price line.
@@ -1122,8 +1142,11 @@ struct ChartState {
     harmonics: Vec<HarmonicPattern>,
     /// Drawing annotations.
     drawings: Vec<Drawing>,
+    /// Per-drawing style: (line_width, line_style). Indexed parallel to `drawings`.
+    drawing_styles: Vec<(f32, LineStyle)>,
     /// Undo stack for drawings (Ctrl+Z pops from drawings into here, Ctrl+Shift+Z restores)
     drawings_undo: Vec<Drawing>,
+    selected_drawing: Option<usize>,
     /// Cached trade overlay (rebuilt when bg data changes, not every frame).
     cached_trade_overlay: TradeOverlay,
     cached_trade_overlay_frame: u64,
@@ -1243,7 +1266,9 @@ impl ChartState {
             multi_kama: Vec::new(),
             harmonics: Vec::new(),
             drawings: Vec::new(),
+            drawing_styles: Vec::new(),
             drawings_undo: Vec::new(),
+            selected_drawing: None,
             cached_trade_overlay: TradeOverlay::default(),
             cached_trade_overlay_frame: 0,
             visible_bars: 200,
@@ -2391,6 +2416,12 @@ impl ChartState {
                 self.auto_fib_levels.push((price, label.to_string(), true));
             }
         }
+    }
+
+    /// Push a drawing with its style. Keeps drawings and drawing_styles in sync.
+    fn push_drawing(&mut self, drawing: Drawing, width: f32, style: LineStyle) {
+        self.drawings.push(drawing);
+        self.drawing_styles.push((width, style));
     }
 
     fn visible_range(&self) -> (usize, usize) {
@@ -6104,7 +6135,10 @@ fn draw_chart(
     }
 
     // ── drawing annotations ──────────────────────────────────────────────────
-    for drawing in &chart.drawings {
+    for (draw_idx, drawing) in chart.drawings.iter().enumerate() {
+        // Per-drawing style: line width + style (with fallback defaults)
+        let (d_width, d_style) = chart.drawing_styles.get(draw_idx).copied().unwrap_or((1.5, LineStyle::Solid));
+        let is_selected = chart.selected_drawing == Some(draw_idx);
         match drawing {
             Drawing::HLine { price, color } => {
                 let y = price_to_y(*price);
@@ -8774,6 +8808,11 @@ pub struct TyphooNApp {
 
     /// Drawing interaction mode.
     draw_mode: DrawMode,
+    /// Current drawing style (applied to new drawings).
+    draw_width: f32,
+    draw_line_style: LineStyle,
+    /// OHLC snap (magnet) toggle.
+    snap_enabled: bool,
     /// In-progress polyline points (used during PlacingPolyline mode).
     polyline_points: Vec<(usize, f64)>,
     /// In-progress Elliott Wave / ABC / H&S / XABCD multi-click points.
@@ -10632,6 +10671,9 @@ impl TyphooNApp {
             show_order_blocks: false,
             chart_templates: std::collections::HashMap::new(),
             draw_mode: DrawMode::None,
+            draw_width: 1.5,
+            draw_line_style: LineStyle::Solid,
+            snap_enabled: true,
             polyline_points: Vec::new(),
             multi_click_points: Vec::new(),
             brush_points: Vec::new(),
@@ -12075,6 +12117,7 @@ impl TyphooNApp {
                 }
             }
             // Drawing tools
+            "SNAP" | "MAGNET" => { self.snap_enabled = !self.snap_enabled; self.log.push_back(LogEntry::info(format!("Magnet snap: {}", if self.snap_enabled { "ON" } else { "OFF" }))); }
             "DRAW_HLINE"     => self.draw_mode = DrawMode::PlacingHLine,
             "DRAW_TRENDLINE" => self.draw_mode = DrawMode::PlacingTrendP1,
             "DRAW_FIBO"      => self.draw_mode = DrawMode::PlacingFiboP1,
@@ -12520,6 +12563,9 @@ impl TyphooNApp {
             "show_darwin_positions": self.show_darwin_positions,
             "show_alpaca_positions": self.show_alpaca_positions,
             "show_tt_positions": self.show_tt_positions,
+            "snap_enabled": self.snap_enabled,
+            "draw_width": self.draw_width,
+            "draw_line_style": match self.draw_line_style { LineStyle::Solid => "solid", LineStyle::Dashed => "dashed", LineStyle::Dotted => "dotted" },
             "lan_server_ip": self.lan_server_ip,
             "lan_sync_host": self.lan_sync_host,
             "lan_sync_port": self.lan_sync_port,
@@ -12903,6 +12949,11 @@ impl TyphooNApp {
                 if let Some(b) = v["show_darwin_positions"].as_bool() { self.show_darwin_positions = b; }
                 if let Some(b) = v["show_alpaca_positions"].as_bool() { self.show_alpaca_positions = b; }
                 if let Some(b) = v["show_tt_positions"].as_bool() { self.show_tt_positions = b; }
+                if let Some(b) = v["snap_enabled"].as_bool() { self.snap_enabled = b; }
+                if let Some(w) = v["draw_width"].as_f64() { self.draw_width = w as f32; }
+                if let Some(s) = v["draw_line_style"].as_str() {
+                    self.draw_line_style = match s { "dashed" => LineStyle::Dashed, "dotted" => LineStyle::Dotted, _ => LineStyle::Solid };
+                }
                 if let Some(s) = v["lan_server_ip"].as_str() { self.lan_server_ip = s.to_string(); }
                 if let Some(s) = v["lan_sync_host"].as_str() { self.lan_sync_host = s.to_string(); }
                 if let Some(s) = v["lan_sync_port"].as_str() { self.lan_sync_port = s.to_string(); }
@@ -22681,8 +22732,43 @@ impl eframe::App for TyphooNApp {
                     if drawing_count > 0 {
                         if ui.small_button(egui::RichText::new("\u{1F5D1}").small().color(egui::Color32::from_rgb(200, 80, 80))).on_hover_text("Delete last drawing (Ctrl+Z to undo)").clicked() {
                             if let Some(c) = self.charts.get_mut(self.active_tab) {
-                                if let Some(d) = c.drawings.pop() { c.drawings_undo.push(d); }
+                                if let Some(d) = c.drawings.pop() {
+                                    c.drawing_styles.pop();
+                                    c.drawings_undo.push(d);
+                                }
                             }
+                        }
+                    }
+
+                    ui.separator();
+
+                    // ── Magnet (OHLC snap) toggle ──
+                    let mag_color = if self.snap_enabled { egui::Color32::from_rgb(26, 188, 156) } else { egui::Color32::from_rgb(100, 100, 110) };
+                    if ui.add(egui::Button::new(egui::RichText::new("\u{1F9F2}").small().color(mag_color))
+                        .min_size(egui::vec2(24.0, 20.0))).on_hover_text(if self.snap_enabled { "Magnet ON (OHLC snap)" } else { "Magnet OFF" }).clicked() {
+                        self.snap_enabled = !self.snap_enabled;
+                    }
+
+                    // ── Line width selector ──
+                    let widths = [1.0_f32, 1.5, 2.0, 3.0, 4.0];
+                    for w in &widths {
+                        let is_sel = (self.draw_width - w).abs() < 0.01;
+                        let col = if is_sel { egui::Color32::WHITE } else { egui::Color32::from_rgb(80, 80, 90) };
+                        let lbl = format!("{}px", if *w == w.round() { format!("{}", *w as u32) } else { format!("{:.1}", w) });
+                        if ui.add(egui::Button::new(egui::RichText::new(&lbl).small().color(col))
+                            .min_size(egui::vec2(28.0, 20.0))).clicked() {
+                            self.draw_width = *w;
+                        }
+                    }
+
+                    // ── Line style selector ──
+                    let styles = [(LineStyle::Solid, "━"), (LineStyle::Dashed, "╌"), (LineStyle::Dotted, "┈")];
+                    for (s, lbl) in &styles {
+                        let is_sel = self.draw_line_style == *s;
+                        let col = if is_sel { egui::Color32::WHITE } else { egui::Color32::from_rgb(80, 80, 90) };
+                        if ui.add(egui::Button::new(egui::RichText::new(*lbl).small().color(col))
+                            .min_size(egui::vec2(24.0, 20.0))).clicked() {
+                            self.draw_line_style = *s;
                         }
                     }
 
@@ -23258,13 +23344,12 @@ impl eframe::App for TyphooNApp {
                                 let frac = (pos.y - chart_rect.top()) / chart_rect.height();
                                 let raw_price = pmax - frac as f64 * (pmax - pmin);
 
-                                // OHLC Snap: snap to nearest candlestick OHLC price if within
-                                // a small threshold. Makes drawing endpoints align precisely with
-                                // candle levels — essential for accurate Fib, trendline, S/R work.
-                                let price = if abs_idx < chart.bars.len() {
+                                // OHLC Snap (magnet): snap to nearest candlestick OHLC price
+                                // if within threshold. Toggle via snap_enabled.
+                                let price = if self.snap_enabled && abs_idx < chart.bars.len() {
                                     let bar = &chart.bars[abs_idx];
                                     let ohlc = [bar.open, bar.high, bar.low, bar.close];
-                                    let snap_threshold = (pmax - pmin) * 0.015; // 1.5% of visible range
+                                    let snap_threshold = (pmax - pmin) * 0.015;
                                     let mut best = raw_price;
                                     let mut best_dist = f64::MAX;
                                     for &level in &ohlc {
