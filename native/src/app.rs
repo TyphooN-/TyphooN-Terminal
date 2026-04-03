@@ -13178,6 +13178,12 @@ impl TyphooNApp {
                             self.show_ehlers_ebsw = false; self.show_ehlers_cyber = false;
                             self.show_ehlers_cg = false; self.show_ehlers_roof = false;
                             self.show_pivots = false;
+                            self.show_vol_heatmap = false; self.show_vwap = false;
+                            self.show_price_histogram = false; self.show_sessions = false;
+                            self.show_supertrend = false; self.show_donchian = false;
+                            self.show_keltner = false; self.show_regression = false;
+                            self.show_fvg = false; self.show_order_blocks = false;
+                            self.show_squeeze = false;
                             // Enable EXACTLY what MT5 TyphooN NNFX uses:
                             // Main chart: ATR_Projection + PreviousCandleLevels + MultiKAMA + MTF_MA + SupplyDemand + AutoFib
                             self.show_atr_proj = true;      // ATR_Projection (MTF horizontal levels)
