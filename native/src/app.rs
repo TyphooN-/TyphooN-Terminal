@@ -1387,9 +1387,20 @@ impl ChartState {
                 "5Min" => 300_000,
                 _ => 60_000,
             };
-            // Snap timestamps to TF boundary for dedup (handles timezone offsets)
+            // Dedup: snap to TF boundary for collision detection.
+            // MT5 uses UTC+2, CryptoCompare uses UTC — 2-hour offset on sub-daily TFs.
+            // We insert BOTH the raw snap AND the +2h offset snap into the set,
+            // so a CC bar at 00:00 UTC deduplicates against an MT5 bar at 02:00 UTC
+            // (which is 00:00 UTC+2 = the same H4 bar in MT5's view).
             let snap = |ts: i64| -> i64 { ts / tf_ms * tf_ms };
-            let mut existing_snapped: std::collections::HashSet<i64> = self.bars.iter().map(|b| snap(b.ts_ms)).collect();
+            let utc2_offset_ms: i64 = 2 * 3_600_000; // MT5 Darwinex server offset
+            let mut occupied: std::collections::HashSet<i64> = std::collections::HashSet::new();
+            for b in self.bars.iter() {
+                occupied.insert(snap(b.ts_ms));
+                // Also mark the UTC+2 equivalent so CC bars dedup against MT5 bars
+                occupied.insert(snap(b.ts_ms - utc2_offset_ms));
+                occupied.insert(snap(b.ts_ms + utc2_offset_ms));
+            }
             let mut gap_filled = 0usize;
             // Try all alternate source prefixes for gap-fill (crypto slash variants too)
             let sym_slash = {
@@ -1416,8 +1427,10 @@ impl ChartState {
                     if let Ok(Some(gap_raw)) = cache.get_bars_raw(gap_key) {
                         for (ts, o, h, l, c, v) in gap_raw {
                             let snapped = snap(ts);
-                            if !existing_snapped.contains(&snapped) {
-                                existing_snapped.insert(snapped);
+                            if !occupied.contains(&snapped) {
+                                occupied.insert(snapped);
+                                occupied.insert(snap(ts - utc2_offset_ms));
+                                occupied.insert(snap(ts + utc2_offset_ms));
                                 self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
                                 gap_filled += 1;
                             }
