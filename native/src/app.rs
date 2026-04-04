@@ -23612,13 +23612,45 @@ impl eframe::App for TyphooNApp {
                                                 let y2 = price_to_y(origin.1 + slope * bars_to_edge);
                                                 pt_line_dist(click_pos, egui::pos2(x1, y1), egui::pos2(chart_area.right(), y2))
                                             }
-                                            Drawing::Rectangle { p1, p2, .. } if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx => {
+                                            Drawing::Rectangle { p1, p2, .. } | Drawing::Highlighter { p1, p2, .. } if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx => {
                                                 let r = egui::Rect::from_two_pos(egui::pos2(bar_to_x(p1.0), price_to_y(p1.1)), egui::pos2(bar_to_x(p2.0), price_to_y(p2.1)));
-                                                let dx = (click_pos.x - r.center().x).abs() - r.width() / 2.0;
-                                                let dy = (click_pos.y - r.center().y).abs() - r.height() / 2.0;
-                                                dx.max(0.0).hypot(dy.max(0.0))
+                                                // Inside rect = select too (not just border)
+                                                if r.contains(click_pos) { 0.0 }
+                                                else {
+                                                    let dx = (click_pos.x - r.center().x).abs() - r.width() / 2.0;
+                                                    let dy = (click_pos.y - r.center().y).abs() - r.height() / 2.0;
+                                                    dx.max(0.0).hypot(dy.max(0.0))
+                                                }
                                             }
-                                            _ => HIT_THRESHOLD + 1.0, // not hit-testable yet
+                                            Drawing::TrendAngle { p1, p2, .. } | Drawing::ExtendedLine { p1, p2, .. } | Drawing::Channel { p1, p2, .. } if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx => {
+                                                let a = egui::pos2(bar_to_x(p1.0), price_to_y(p1.1));
+                                                let b = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
+                                                pt_line_dist(click_pos, a, b)
+                                            }
+                                            Drawing::CrossLine { bar_idx, price, .. } if *bar_idx >= start_idx && *bar_idx < end_idx => {
+                                                let x = bar_to_x(*bar_idx);
+                                                let y = price_to_y(*price);
+                                                let dh = (click_pos.y - y).abs();
+                                                let dv = (click_pos.x - x).abs();
+                                                dh.min(dv)
+                                            }
+                                            Drawing::InfoLine { p1, p2, .. } | Drawing::ArrowLine { p1, p2, .. } | Drawing::Ruler { p1, p2, .. } | Drawing::MeasureTool { p1, p2, .. } | Drawing::Forecast { p1, p2, .. } | Drawing::TrendChannel { p1, p2, .. } if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx => {
+                                                let a = egui::pos2(bar_to_x(p1.0), price_to_y(p1.1));
+                                                let b = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
+                                                pt_line_dist(click_pos, a, b)
+                                            }
+                                            Drawing::Polyline { points, .. } | Drawing::ElliottWave { points, .. } | Drawing::AbcCorrection { points, .. } | Drawing::HeadShoulders { points, .. } | Drawing::XabcdPattern { points, .. } => {
+                                                // Min distance to any segment
+                                                let pts: Vec<egui::Pos2> = points.iter().filter(|(idx, _)| *idx >= start_idx && *idx < end_idx)
+                                                    .map(|(idx, price)| egui::pos2(bar_to_x(*idx), price_to_y(*price))).collect();
+                                                pts.windows(2).map(|w| pt_line_dist(click_pos, w[0], w[1])).fold(HIT_THRESHOLD + 1.0, f32::min)
+                                            }
+                                            Drawing::TextLabel { bar_idx, price, .. } | Drawing::ArrowMarker { bar_idx, price, .. } | Drawing::CrossMarker { bar_idx, price, .. } | Drawing::PriceLabel { bar_idx, price, .. } | Drawing::Signpost { bar_idx, price, .. } | Drawing::Flag { bar_idx, price, .. } if *bar_idx >= start_idx && *bar_idx < end_idx => {
+                                                let x = bar_to_x(*bar_idx);
+                                                let y = price_to_y(*price);
+                                                ((click_pos.x - x).powi(2) + (click_pos.y - y).powi(2)).sqrt()
+                                            }
+                                            _ => HIT_THRESHOLD + 1.0, // fallback for types not yet hit-testable
                                         };
                                         if dist < best_dist {
                                             best_dist = dist;
