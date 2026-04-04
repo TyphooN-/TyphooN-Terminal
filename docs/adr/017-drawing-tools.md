@@ -6,7 +6,7 @@
 Chart annotation needed for technical analysis.
 
 ## Decision
-73 drawing tool types across 11 toolbar groups. All accessible via command palette (~), toolbar menus, and right-click context menu.
+70 drawing tool types across 11 toolbar groups. All accessible via command palette (~), toolbar menus, and right-click context menu.
 
 ### UX Features (2026-04-05)
 - **Live preview**: ghost line/shape renders during placement for all drawing types
@@ -18,30 +18,30 @@ Chart annotation needed for technical analysis.
 - **Line width**: 1.0 / 1.5 / 2.0 / 3.0 px selector in toolbar, applied in render loop via effective_width
 - **Line style**: Solid / Dashed / Dotted selector in toolbar, applied via draw_line() helper
 - **Selection**: Click near drawing (8px threshold) to select; selected drawing highlights cyan + boosted width (~50 types)
-- **Move/Drag**: Drag a selected drawing to reposition — all 73 types supported, blocks chart pan during drag
+- **Move/Drag**: Drag a selected drawing to reposition — all 70 types supported, blocks chart pan during drag
 - **Delete selected**: Delete/Backspace removes selected drawing (or last drawing if none selected)
 
-### Drawing Tool Categories (73 types)
+### Drawing Tool Categories (70 enum variants)
 
 | Category | Tools |
 |----------|-------|
 | **Lines** (8) | HLine, TrendLine, ExtendedLine, Ray, HRay, CrossLine, ArrowLine, TrendAngle |
-| **Channels** (4) | Channel, ParallelChannel, RegressionChannel, FibChannel |
-| **Fibonacci** (6) | FiboRetrace, FiboExtension, FibChannel, FibTimeZones, FibCircle, FibSpiral |
+| **Channels** (5) | Channel, ParallelChannel, RegressionChannel, FibChannel, TrendChannel |
+| **Fibonacci** (7) | FiboRetrace, FiboExtension, FibTimeZones, FibCircle, FibSpiral, FibWedge, AnchoredVwapLine |
 | **Shapes** (5) | Rectangle, Ellipse, Triangle, Highlighter, RotatedRectangle |
 | **Gann** (2) | GannFan, GannBox |
 | **Elliott** (2) | ElliottWave (5-point, 1-5 labels), AbcCorrection (3-point, A-B-C labels) |
-| **Measure** (5) | InfoLine, PriceRange, DateRange, DatePriceRange, Ruler |
-| **Patterns** (5) | Pitchfork, SchiffPitchfork, ModSchiffPitchfork, HeadShoulders, XabcdPattern |
-| **Annotate** (11) | VLine, TextLabel, ArrowMarker, PriceLabel, Callout, CrossMarker, AnchorNote, Brush, Emoji, Flag, Balloon |
+| **Measure** (6) | InfoLine, PriceRange, DateRange, DatePriceRange, Ruler, MeasureTool |
+| **Patterns** (6) | Pitchfork, SchiffPitchfork, ModSchiffPitchfork, InsidePitchfork, HeadShoulders, XabcdPattern |
+| **Annotate** (13) | VLine, TextLabel, ArrowMarker, PriceLabel, PriceNote, Callout, CrossMarker, AnchorNote, Brush, Emoji, Flag, Balloon, Signpost |
 | **Position** (3) | LongPosition, ShortPosition, RiskRewardBox |
 | **Cycles** (5) | CyclicLines, SineWave, TimeCycle, SpeedResistanceFan, SpeedResistanceArc |
-| **Projection** (4) | Forecast, GhostFeed, AnchoredVwapLine, Signpost |
-| **Curves** (3) | Polyline, ArcDraw, CurveDraw, PathDraw |
-| **Other** (1) | SessionBreak, MagnetLevel |
+| **Projection** (4) | Forecast, GhostFeed, ArcDraw, CurveDraw |
+| **Curves** (2) | Polyline, PathDraw |
+| **Other** (2) | SessionBreak, MagnetLevel |
 
 ## Consequences
-- Pro: 73 drawing types covering all primary TA needs (near TradingView parity)
+- Pro: 70 drawing types covering all primary TA needs (near TradingView parity)
 - Pro: Live preview during placement — user sees exactly what will be created
 - Pro: OHLC snap ensures precise alignment with candlestick levels
 - Pro: Full undo/redo with Ctrl+Z/Ctrl+Shift+Z

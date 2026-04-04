@@ -1,7 +1,7 @@
 # ADR-055: GPU-Accelerated DARWIN Analytics
 
-**Status:** Accepted
-**Date:** 2026-03-26
+**Status:** Implemented
+**Date:** 2026-03-26 | **Updated:** 2026-04-05
 
 ## Context
 

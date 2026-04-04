@@ -8,7 +8,7 @@
 ### Fully Implemented (Production Ready)
 - **41 BrokerCmd variants** — all handled
 - **21 BrokerMsg variants** — all sent/received
-- **73 drawing tools** with live preview, OHLC snap, undo/redo, color picker, line width/style, selection hit-test (8px), Delete-to-remove-selected
+- **70 drawing tools** with live preview, OHLC snap, undo/redo, color picker, line width/style, selection hit-test (8px), Delete-to-remove-selected
 - **LAN sync** — 34 KV-synced analytics fields, 14 remote commands wired, 15s incremental resync, TLS encryption
 - **Multi-source bar loading** — MT5 → Alpaca → tastytrade → CryptoCompare → Kraken (5-source priority) with timezone-aware dedup
 - **Supply/demand zones** — 1:1 MT5 parity (GPU + CPU paths, BACK_LIMIT=1000)
@@ -35,7 +35,7 @@
 - **Institutional Holders window**: Now renders entity metadata (SIC, state, FY end) + 13F filing table from cached SEC EDGAR data, auto-opens on fetch completion
 - **Orderbook DOM window**: New window (`show_orderbook_window`) renders real L2 bid/ask depth from `orderbook_result` — shows bid/ask ladders with volume bars, auto-opens when Fetch Depth or Fetch L2 returns data
 - **BrokerMsg::JsonResult routing**: Labels prefixed "Analyst:", "Holders:", "Orderbook:" now route to respective result fields + auto-open windows instead of log-only
-- **Drawing move/drag (Gap #2)**: Selected drawings can now be dragged to new positions — `is_drawing_drag` blocks chart pan when a drawing is selected; all 73 types covered
+- **Drawing move/drag (Gap #2)**: Selected drawings can now be dragged to new positions — `is_drawing_drag` blocks chart pan when a drawing is selected; all 70 types covered
 - **Option Chain window**: New `OPTION_CHAIN` command fetches tastytrade expirations and displays them in a collapsible-expiration grid with strike/call/put symbols
 - **tastytrade OPTION_CHAIN command**: Added to command palette, loads from KV cache `tt:options:<symbol>`
 
@@ -44,7 +44,7 @@
 - **Tab drag-drop**: Fixed insert_at logic (right-half drop now inserts after, not at same position); drag_src saved before clearing
 - **Drawing undo/redo**: drawing_styles Vec kept in sync across Delete, Ctrl+Z, Ctrl+Shift+Z
 - **Drawing selection**: Click-to-select with 8px hit threshold for 6 common types; ESC/empty-click to deselect
-- **Drawing render**: All 73 drawing types now use draw_line()/effective_width/sel_tint — width/style/selection finally active
+- **Drawing render**: All 70 drawing types now use draw_line()/effective_width/sel_tint — width/style/selection finally active
 - **Weekend bar coloring**: gap_fill_timestamps HashSet (explicit source tracking) replaces unreliable UTC day-of-week check
 - **LAN KV sync poisoning**: server-side exclusion filter for lan:server_enabled/client_enabled/server_ip/sync_port/cred:*
 - **Crypto backfill signals**: Mt5SyncDone sent after KrakenBackfill + CryptoCompareBackfill so charts reload automatically

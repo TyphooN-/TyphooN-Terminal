@@ -21,7 +21,7 @@ UX audit identified 7 gaps vs TradingView's drawing tool experience. These are t
 ### 2. Drawing Move/Drag — DONE
 - [x] When a drawing is selected and the user drags, `is_drawing_drag = true` (blocks chart pan)
 - [x] Drag delta converted to (bar_delta, price_delta) from visible range / chart height
-- [x] All 73 drawing types have correct field patterns matched and moved
+- [x] All 70 drawing types have correct field patterns matched and moved
 - [x] `primary_released` clears `is_drawing_drag`, returning to normal pan behavior
 - [x] `ChartState.is_drawing_drag: bool` field added
 
@@ -98,7 +98,7 @@ Applied to: HLine, TrendLine, VLine, Rectangle, Ray, Channel, ExtendedLine, HRay
 ## Consequences
 - Line width + style now fully functional (Gaps 4 & 5 complete)
 - Drawing selection hit-testing active for ~50 types (Gap 1 substantially complete)
-- Drawing move/drag fully implemented for all 73 types (Gap 2 complete)
-- Drawing count: 73 tools implemented; all have line width/style/sel_tint wired
+- Drawing move/drag fully implemented for all 70 types (Gap 2 complete)
+- Drawing count: 70 tools implemented; all have line width/style/sel_tint wired
 - Delete selected drawing wired; Ctrl+Z/Shift+Z undo/redo keep drawing_styles in sync
 - Remaining: Gap 3 (control point resize), Gap 7 (cross-TF drawings)

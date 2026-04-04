@@ -49,6 +49,10 @@ pub mod keys {
     pub const TT_PASSWORD: &str = "tastytrade_password";
     pub const FRED_KEY: &str = "fred_api_key";
     pub const LAN_SYNC_PASS: &str = "lan_sync_passphrase";
+    pub const DISCORD_WEBHOOK: &str = "discord_webhook";
+    pub const PUSHOVER_TOKEN: &str = "pushover_token";
+    pub const PUSHOVER_USER: &str = "pushover_user";
+    pub const NTFY_TOPIC: &str = "ntfy_topic";
 }
 
 #[cfg(test)]

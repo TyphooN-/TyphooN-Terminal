@@ -8768,6 +8768,8 @@ enum BrokerCmd {
     FetchEconCalendar { finnhub_key: String },
     /// Fetch congressional stock trades (House Stock Watcher).
     FetchCongressTrades,
+    /// Send notification (Discord/Pushover/ntfy). Runs async.
+    SendNotification { discord_webhook: String, pushover_token: String, pushover_user: String, ntfy_topic: String, message: String },
     /// Start LAN sync server on port with passphrase.
     LanSyncStart { port: u16, passphrase: String, db_path: std::path::PathBuf },
     /// Connect LAN sync client to server.
@@ -8992,6 +8994,11 @@ pub struct TyphooNApp {
     finnhub_key: String,
     /// FRED (Federal Reserve Economic Data) API key.
     fred_key: String,
+    /// Notification config: Discord webhook, Pushover token/user, ntfy topic.
+    discord_webhook: String,
+    pushover_token: String,
+    pushover_user: String,
+    ntfy_topic: String,
     /// Cached news articles (headline, source, datetime).
     news_articles: Vec<(String, String, String)>,
 
@@ -10644,6 +10651,31 @@ impl TyphooNApp {
                             Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Congress trades: {}", e))); }
                         }
                     }
+                    BrokerCmd::SendNotification { discord_webhook, pushover_token, pushover_user, ntfy_topic, message } => {
+                        use typhoon_engine::notifications;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let mut sent = false;
+                            if !discord_webhook.is_empty() {
+                                if let Err(e) = notifications::send_discord(&discord_webhook, &message).await {
+                                    let _ = msg_tx.send(BrokerMsg::Error(format!("Discord: {}", e)));
+                                } else { sent = true; }
+                            }
+                            if !pushover_token.is_empty() && !pushover_user.is_empty() {
+                                if let Err(e) = notifications::send_pushover(&pushover_token, &pushover_user, &message).await {
+                                    let _ = msg_tx.send(BrokerMsg::Error(format!("Pushover: {}", e)));
+                                } else { sent = true; }
+                            }
+                            if !ntfy_topic.is_empty() {
+                                if let Err(e) = notifications::send_ntfy(&ntfy_topic, &message).await {
+                                    let _ = msg_tx.send(BrokerMsg::Error(format!("ntfy: {}", e)));
+                                } else { sent = true; }
+                            }
+                            if sent {
+                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Notification sent: {}", &message[..message.len().min(60)])));
+                            }
+                        });
+                    }
                     BrokerCmd::LanSyncStart { port, passphrase, .. } => {
                         use typhoon_engine::core::lan_sync::LanSyncServer;
                         // Spawn as independent task — cert generation is CPU-heavy (100-500ms)
@@ -10859,6 +10891,10 @@ impl TyphooNApp {
             tt_sandbox: false,  // Default to Production (sandbox requires separate dev credentials)
             finnhub_key: String::new(),
             fred_key: String::new(),
+            discord_webhook: String::new(),
+            pushover_token: String::new(),
+            pushover_user: String::new(),
+            ntfy_topic: String::new(),
             news_articles: Vec::new(),
             sl_price: None,
             tp_price: None,
@@ -12885,6 +12921,10 @@ impl TyphooNApp {
             (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
             (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
             (keyring::keys::LAN_SYNC_PASS, self.lan_sync_passphrase.as_str()),
+            (keyring::keys::DISCORD_WEBHOOK, self.discord_webhook.as_str()),
+            (keyring::keys::PUSHOVER_TOKEN, self.pushover_token.as_str()),
+            (keyring::keys::PUSHOVER_USER, self.pushover_user.as_str()),
+            (keyring::keys::NTFY_TOPIC, self.ntfy_topic.as_str()),
         ];
         for (key, val) in &creds {
             let _ = keyring::store(key, val);
@@ -13320,6 +13360,10 @@ impl TyphooNApp {
                 (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
                 (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
                 (keyring::keys::LAN_SYNC_PASS, self.lan_sync_passphrase.as_str()),
+                (keyring::keys::DISCORD_WEBHOOK, self.discord_webhook.as_str()),
+                (keyring::keys::PUSHOVER_TOKEN, self.pushover_token.as_str()),
+                (keyring::keys::PUSHOVER_USER, self.pushover_user.as_str()),
+                (keyring::keys::NTFY_TOPIC, self.ntfy_topic.as_str()),
             ];
             let mut kr_ok = true;
             for (key, val) in &creds {
@@ -13575,7 +13619,30 @@ impl TyphooNApp {
                     ui.add_space(10.0);
                     ui.heading("Notifications");
                     ui.separator();
-                    ui.label("Discord / Pushover / ntfy (configure in engine)");
+                    ui.label(egui::RichText::new("Alerts trigger push notifications when configured.").color(AXIS_TEXT).small());
+                    egui::Grid::new("notif_grid").num_columns(2).show(ui, |ui| {
+                        ui.label("Discord Webhook:");
+                        ui.add(egui::TextEdit::singleline(&mut self.discord_webhook).desired_width(300.0).password(true));
+                        ui.end_row();
+                        ui.label("Pushover Token:");
+                        ui.add(egui::TextEdit::singleline(&mut self.pushover_token).desired_width(200.0).password(true));
+                        ui.end_row();
+                        ui.label("Pushover User:");
+                        ui.add(egui::TextEdit::singleline(&mut self.pushover_user).desired_width(200.0).password(true));
+                        ui.end_row();
+                        ui.label("ntfy Topic:");
+                        ui.add(egui::TextEdit::singleline(&mut self.ntfy_topic).desired_width(200.0));
+                        ui.end_row();
+                    });
+                    if ui.small_button("Test Notification").clicked() {
+                        let _ = self.broker_tx.send(BrokerCmd::SendNotification {
+                            discord_webhook: self.discord_webhook.clone(),
+                            pushover_token: self.pushover_token.clone(),
+                            pushover_user: self.pushover_user.clone(),
+                            ntfy_topic: self.ntfy_topic.clone(),
+                            message: "TyphooN Terminal: test notification".into(),
+                        });
+                    }
 
                     ui.add_space(10.0);
                     if ui.button("Open Indicators Panel").clicked() {
@@ -19153,10 +19220,22 @@ impl TyphooNApp {
                     alert.last_value = Some(current_val);
                     if triggered {
                         alert.triggered = true;
-                        self.log.push_back(LogEntry::warn(format!(
+                        let msg = format!(
                             "ALERT: {} {} {} {} (value: {:.2})",
                             alert.symbol, alert.indicator, alert.condition, alert.threshold, current_val
-                        )));
+                        );
+                        self.log.push_back(LogEntry::warn(msg.clone()));
+                        // Send notification if any provider configured
+                        if !self.discord_webhook.is_empty() || !self.ntfy_topic.is_empty()
+                            || (!self.pushover_token.is_empty() && !self.pushover_user.is_empty()) {
+                            let _ = self.broker_tx.send(BrokerCmd::SendNotification {
+                                discord_webhook: self.discord_webhook.clone(),
+                                pushover_token: self.pushover_token.clone(),
+                                pushover_user: self.pushover_user.clone(),
+                                ntfy_topic: self.ntfy_topic.clone(),
+                                message: msg,
+                            });
+                        }
                     }
                 }
             }
@@ -20615,6 +20694,10 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::TT_USERNAME, "tt_username"),
                     (keyring::keys::TT_PASSWORD, "tt_password"),
                     (keyring::keys::LAN_SYNC_PASS, "lan_sync_pass"),
+                    (keyring::keys::DISCORD_WEBHOOK, "discord_webhook"),
+                    (keyring::keys::PUSHOVER_TOKEN, "pushover_token"),
+                    (keyring::keys::PUSHOVER_USER, "pushover_user"),
+                    (keyring::keys::NTFY_TOPIC, "ntfy_topic"),
                 ];
                 let mut loaded_values: Vec<(String, String)> = Vec::new();
                 for (kr_key, _label) in &cred_keys {
@@ -20647,6 +20730,10 @@ impl eframe::App for TyphooNApp {
                         k if k == keyring::keys::TT_USERNAME => self.tt_username = val.clone(),
                         k if k == keyring::keys::TT_PASSWORD => self.tt_password = val.clone(),
                         k if k == keyring::keys::LAN_SYNC_PASS => self.lan_sync_passphrase = val.clone(),
+                        k if k == keyring::keys::DISCORD_WEBHOOK => self.discord_webhook = val.clone(),
+                        k if k == keyring::keys::PUSHOVER_TOKEN => self.pushover_token = val.clone(),
+                        k if k == keyring::keys::PUSHOVER_USER => self.pushover_user = val.clone(),
+                        k if k == keyring::keys::NTFY_TOPIC => self.ntfy_topic = val.clone(),
                         _ => {}
                     }
                 }

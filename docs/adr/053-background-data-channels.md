@@ -1,7 +1,7 @@
 # ADR-053: Background Data Channels (Zero DB Queries on UI Thread)
 
-**Status:** Accepted
-**Date:** 2026-03-25
+**Status:** Implemented
+**Date:** 2026-03-25 | **Updated:** 2026-04-05
 
 ## Context
 

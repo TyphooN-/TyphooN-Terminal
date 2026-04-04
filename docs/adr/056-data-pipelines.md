@@ -1,7 +1,7 @@
 # ADR-056: Data Pipelines & Rendering Architecture
 
-**Status:** Accepted
-**Date:** 2026-03-26
+**Status:** Implemented
+**Date:** 2026-03-26 | **Updated:** 2026-04-05
 
 ## Overview
 
