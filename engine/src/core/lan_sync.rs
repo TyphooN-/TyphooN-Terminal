@@ -617,7 +617,8 @@ async fn handle_client_tls(
             match parse_msg(&msg) {
                 Ok(SyncMessage::Auth { response }) => {
                     let expected = hmac_hex(&challenge_bytes, &secret);
-                    response == expected
+                    // Constant-time comparison to prevent timing attacks
+                    response.len() == expected.len() && response.as_bytes().iter().zip(expected.as_bytes()).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
                 }
                 _ => false,
             }

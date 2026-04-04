@@ -28,8 +28,18 @@ fn notification_client() -> &'static Client {
 /// - POST to webhook URL
 /// - Checks HTTP 200/204 for success
 pub async fn send_discord(webhook_url: &str, message: &str) -> Result<(), String> {
-    if webhook_url.is_empty() || !webhook_url.starts_with("https://discord.com/api/webhooks/") {
+    // Strict webhook URL validation: must be exactly discord.com, no path traversal
+    if webhook_url.is_empty() { return Err("Empty webhook URL".to_string()); }
+    if !webhook_url.starts_with("https://discord.com/api/webhooks/") {
         return Err("Invalid Discord webhook URL".to_string());
+    }
+    if webhook_url.contains("..") || webhook_url.contains('@') {
+        return Err("Invalid characters in webhook URL".to_string());
+    }
+    // Validate no redirect/hostname tricks (e.g. discord.com.evil.com)
+    let after_scheme = webhook_url.strip_prefix("https://").unwrap_or("");
+    if !after_scheme.starts_with("discord.com/") {
+        return Err("Webhook URL hostname must be exactly discord.com".to_string());
     }
     // Discord max message length is 2000 chars
     if message.len() > 2000 {

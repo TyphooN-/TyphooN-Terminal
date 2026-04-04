@@ -21444,6 +21444,8 @@ impl eframe::App for TyphooNApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
         ctx.set_visuals(Self::dark_visuals());
+        // Bound log size to prevent unbounded memory growth
+        while self.log.len() > 500 { self.log.pop_front(); }
 
         // ── Screenshot: issue capture command ────────────────────────────
         if self.screenshot_requested {
