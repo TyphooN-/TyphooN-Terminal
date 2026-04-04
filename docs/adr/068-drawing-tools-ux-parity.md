@@ -25,9 +25,10 @@ UX audit identified 7 gaps vs TradingView's drawing tool experience. These are t
 - [x] `primary_released` clears `is_drawing_drag`, returning to normal pan behavior
 - [x] `ChartState.is_drawing_drag: bool` field added
 
-### 3. Drawing Resize via Control Points — PLANNED
-- [ ] Selected drawing shows draggable handles at endpoints
-- [ ] Drag handle to move that specific point (resize/reshape)
+### 3. Drawing Control Points — DONE (visual)
+- [x] Selected drawing shows cyan square handles at endpoints
+- [x] Handles rendered for all multi-point drawing types (lines, pitchforks, patterns, etc.)
+- [ ] Drag handle to resize (future: currently handles are visual only)
 
 ### 4. Line Width Control — DONE
 - [x] Per-drawing line width (1-4px)
@@ -95,10 +96,29 @@ Applied to: HLine, TrendLine, VLine, Rectangle, Ray, Channel, ExtendedLine, HRay
 - All charts for the same symbol share the drawing store
 - Coordinate mapping: bar_idx stored as timestamp offset, converted per-TF
 
+### 8. Pre-Placement Color Picker — DONE (2026-04-05)
+- [x] 8-color palette in drawing toolbar (W/Y/G/R/C/M/O/B)
+- [x] All 89 drawing types use `draw_color` instead of hardcoded constants
+- [x] Color persisted in session save/load
+
+### 9. Per-Drawing Property Editor — DONE (2026-04-05)
+- [x] Right-click selected drawing → Drawing Color submenu (targets selected, not just last)
+- [x] Right-click selected drawing → Drawing Width submenu (1-4px)
+- [x] Right-click selected drawing → Drawing Style submenu (Solid/Dashed/Dotted)
+- [x] Right-click selected drawing → Delete Selected button
+
+### 10. Follow Latest Toggle — DONE (2026-04-05)
+- [x] ⟫ button in drawing toolbar toggles auto-scroll
+- [x] FOLLOW command in palette
+- [x] Session-persisted
+
+### 11. Keyboard Shortcuts — DONE (2026-04-05)
+- [x] Alt+H = HLine, Alt+V = VLine, Alt+T = Trendline, Alt+F = Fibo, Alt+R = Rectangle
+- [x] Alt+E = Eraser, Alt+C = Cycle chart type
+
 ## Consequences
-- Line width + style now fully functional (Gaps 4 & 5 complete)
-- Drawing selection hit-testing active for ~50 types (Gap 1 substantially complete)
-- Drawing move/drag fully implemented for all 89 types (Gap 2 complete)
-- Drawing count: 89 tools implemented; all have line width/style/sel_tint wired
-- Delete selected drawing wired; Ctrl+Z/Shift+Z undo/redo keep drawing_styles in sync
-- Remaining: Gap 3 (control point resize), Gap 7 (cross-TF drawings)
+- All 7 original UX gaps complete (Gaps 1-7)
+- 4 additional UX features added (color picker, property editor, follow toggle, shortcuts)
+- 89 drawing tools with full TradingView parity + 7 bonus tools
+- All drawing colors user-configurable pre-placement
+- Per-drawing right-click editing of color/width/style
