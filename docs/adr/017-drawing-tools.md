@@ -1,6 +1,6 @@
 # ADR-017: Drawing Tools
 
-**Status:** Implemented | **Date:** 2026-03-24 | **Updated:** 2026-04-02
+**Status:** Implemented | **Date:** 2026-03-24 | **Updated:** 2026-04-04
 
 ## Context
 Chart annotation needed for technical analysis.
@@ -8,13 +8,17 @@ Chart annotation needed for technical analysis.
 ## Decision
 71 drawing tool types across 11 toolbar groups. All accessible via command palette (~), toolbar menus, and right-click context menu.
 
-### UX Features (2026-04-02)
+### UX Features (2026-04-04)
 - **Live preview**: ghost line/shape renders during placement for all drawing types
 - **OHLC snap**: drawing endpoints magnetize to nearest candlestick O/H/L/C within 1.5% threshold
-- **Undo/Redo**: Ctrl+Z / Ctrl+Shift+Z with drawing undo stack
+- **Undo/Redo**: Ctrl+Z / Ctrl+Shift+Z with drawing undo stack; drawing_styles kept in sync
 - **Trashcan button**: red trash icon in toolbar for quick one-click delete
 - **Color picker**: 8-color palette works for all 60+ drawing types via right-click menu
 - **Status text**: "click point 2 of 3" format for multi-click tools with Esc cancel
+- **Line width**: 1.0 / 1.5 / 2.0 / 3.0 px selector in toolbar, applied in render loop
+- **Line style**: Solid / Dashed / Dotted selector in toolbar, applied via draw_line() helper
+- **Selection**: Click near drawing (8px threshold) to select; selected drawing highlights cyan + boosted width
+- **Delete selected**: Delete/Backspace removes selected drawing (or last drawing if none selected)
 
 ### Drawing Tool Categories (56 types)
 
@@ -36,7 +40,7 @@ Chart annotation needed for technical analysis.
 | **Other** (1) | SessionBreak, MagnetLevel |
 
 ## Consequences
-- Pro: 71 drawing types covering all primary TA needs (near TradingView parity)
+- Pro: 73 drawing types covering all primary TA needs (near TradingView parity)
 - Pro: Live preview during placement — user sees exactly what will be created
 - Pro: OHLC snap ensures precise alignment with candlestick levels
 - Pro: Full undo/redo with Ctrl+Z/Ctrl+Shift+Z

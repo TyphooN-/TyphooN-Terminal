@@ -1,7 +1,7 @@
 # ADR-002: Chart Engine
 
 **Status:** Implemented
-**Date:** 2026-03-24
+**Date:** 2026-03-24 | **Updated:** 2026-04-04
 
 ## Context
 
@@ -19,3 +19,6 @@ Implement a custom chart engine using egui's Painter API for direct shape render
 - Crosshair with price/time labels provides precise reading without cluttering the chart
 - egui_plot handles indicator sub-panes with built-in axis linking and legend toggling
 - Trade-off: custom renderer requires manual hit-testing for interactive elements (drawing tools, SL/TP lines)
+- Replay mode: `ChartState.replay_bar_cap` caps `visible_range()` to hide future bars during bar-by-bar playback
+- Tab drag-and-drop: `dragging_tab: Option<usize>` with correct insert_at accounting for removal index shift
+- Drawing hit-test selection: point-to-line distance function, 8px threshold, applied to 6 common drawing types

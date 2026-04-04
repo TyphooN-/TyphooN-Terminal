@@ -1,7 +1,7 @@
 # ADR-068: Drawing Tools & UX Parity with TradingView
 
 **Status:** In Progress
-**Date:** 2026-04-03
+**Date:** 2026-04-03 | **Updated:** 2026-04-04
 
 ## Context
 
@@ -9,18 +9,20 @@ UX audit identified 7 gaps vs TradingView's drawing tool experience. These are t
 
 ## Gaps
 
-### 1. Post-Placement Drawing Selection — IN PROGRESS
-- [ ] Click near a drawing to select it (hit-test: point-to-line/shape distance)
-- [ ] Selected drawing shows highlighted border + control point handles
-- [ ] ESC to deselect, click away to deselect
+### 1. Post-Placement Drawing Selection — DONE (partial)
+- [x] Click near a drawing to select it (8px hit threshold; HLine, VLine, TrendLine, HRay, Ray, Rectangle)
+- [x] Selected drawing shows cyan tint + boosted stroke width
+- [x] ESC to deselect, click empty space to deselect
+- [x] Delete/Backspace removes selected drawing (syncs drawing_styles)
+- [ ] Hit-testing for remaining types: Pitchfork, Ellipse, Polyline, etc. (returns false for unrecognized)
 
-**Infrastructure:** `chart.selected_drawing: Option<usize>` field exists. `is_selected` computed per drawing in render loop. `sel_tint()` helper brightens color when selected, `effective_width` boosts stroke width. Hit-testing not yet implemented.
+**Implementation:** `chart.selected_drawing: Option<usize>`. On click in DrawMode::None, iterates drawings with point-to-line distance function, picks closest within 8px. Applied to 6 of the most common drawing types; others return `HIT_THRESHOLD + 1.0` (miss).
 
-### 2. Drawing Move/Drag — IN PROGRESS
+### 2. Drawing Move/Drag — PLANNED
 - [ ] Once selected, drag drawing body to move all points
 - [ ] Offset all points by drag delta (bar_idx + price)
 
-**Dependency:** Requires Gap #1 (selection) to be implemented first.
+**Dependency:** Gap #1 fully implemented for all types first.
 
 ### 3. Drawing Resize via Control Points — PLANNED
 - [ ] Selected drawing shows draggable handles at endpoints
@@ -95,4 +97,6 @@ Applied to: HLine, TrendLine, VLine, Rectangle, Ray, Channel, ExtendedLine, HRay
 ## Consequences
 - Line width + style now fully functional (Gaps 4 & 5 complete)
 - Selection highlight infrastructure in place (partial Gap 1)
-- Drawing count: 73 tools implemented; ~14 niche tools remaining (see ADR-017)
+- Drawing count: 73 tools implemented; all have line width/style/sel_tint wired
+- Selection hit-testing active for HLine, VLine, TrendLine, HRay, Ray, Rectangle (6/73)
+- Delete selected drawing wired; Ctrl+Z/Shift+Z undo/redo keep drawing_styles in sync
