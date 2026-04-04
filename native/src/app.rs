@@ -9162,6 +9162,18 @@ enum BrokerCmd {
     ExportDarwinData,
     /// Import DARWIN data from JSON string.
     ImportDarwinData { json: String },
+    /// Place market order via Alpaca.
+    AlpacaMarketOrder { symbol: String, qty: f64, side: String },
+    /// Place limit order via Alpaca.
+    AlpacaLimitOrder { symbol: String, qty: f64, side: String, limit_price: f64 },
+    /// Place stop order via Alpaca.
+    AlpacaStopOrder { symbol: String, qty: f64, side: String, stop_price: f64 },
+    /// Place bracket order via Alpaca (market entry + TP/SL legs).
+    AlpacaBracketOrder { symbol: String, qty: f64, side: String, stop_loss: f64, take_profit: f64 },
+    /// Cancel an Alpaca order by ID.
+    AlpacaCancelOrder { order_id: String },
+    /// Place equity order via tastytrade.
+    TastytradeEquityOrder { symbol: String, qty: i64, side: String, order_type: String, price: Option<f64> },
 }
 
 /// Messages sent from async broker task → UI.
@@ -9857,6 +9869,7 @@ impl TyphooNApp {
                                     acct.equity, acct.buying_power
                                 )));
                                 let _ = broker_msg_tx_clone.send(BrokerMsg::Account(acct));
+                                b.warm_data_connection().await;
                                 broker = Some(b);
                             }
                             Err(e) => {
@@ -10229,6 +10242,56 @@ impl TyphooNApp {
                                     let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("OptionsChain: {}", symbol), text));
                                 }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::AlpacaMarketOrder { symbol, qty, side } => {
+                        if let Some(ref b) = broker {
+                            match b.market_order(&symbol, qty, &side).await {
+                                Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("{} {} {} @ market: {}", side, qty, symbol, r.status))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Order failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::AlpacaLimitOrder { symbol, qty, side, limit_price } => {
+                        if let Some(ref b) = broker {
+                            match b.limit_order(&symbol, qty, &side, limit_price, "gtc").await {
+                                Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("{} {} {} limit {}: {}", side, qty, symbol, limit_price, r.status))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Order failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::AlpacaStopOrder { symbol, qty, side, stop_price } => {
+                        if let Some(ref b) = broker {
+                            match b.stop_order(&symbol, qty, &side, stop_price, "gtc").await {
+                                Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("{} {} {} stop {}: {}", side, qty, symbol, stop_price, r.status))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Order failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::AlpacaBracketOrder { symbol, qty, side, stop_loss, take_profit } => {
+                        if let Some(ref b) = broker {
+                            match b.bracket_order(&symbol, qty, &side, take_profit, stop_loss).await {
+                                Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Bracket {} {} {}: {}", side, qty, symbol, r.status))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Bracket order failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::AlpacaCancelOrder { order_id } => {
+                        if let Some(ref b) = broker {
+                            match b.cancel_order(&order_id).await {
+                                Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Order {} cancelled", order_id))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Cancel failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::TastytradeEquityOrder { symbol, qty, side, order_type, price } => {
+                        if let Some(ref tb) = tt_broker {
+                            match tb.place_equity_order(&symbol, qty as i64, &side, &order_type, price, "GTC").await {
+                                Ok(r) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("tastytrade: {} {} {} {} — order {}", side, qty, symbol, order_type, &r[..r.len().min(60)])));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("tastytrade order failed: {}", e))); }
                             }
                         }
                     }
@@ -21730,10 +21793,74 @@ impl TyphooNApp {
                     let type_label = ["Market", "Limit", "Stop", "Bracket"][self.order_type];
                     let btn_color = if self.order_side == 0 { UP } else { DOWN };
                     if ui.button(egui::RichText::new(format!("Submit {} {} Order", side_label, type_label)).color(btn_color).strong()).clicked() {
-                        self.log.push_back(LogEntry::info(format!(
-                            "Order: {} {} {} {} — connect broker to execute",
-                            side_label, self.order_qty, self.order_symbol, type_label
-                        )));
+                        let sym = self.order_symbol.trim().to_uppercase();
+                        let side_str = if self.order_side == 0 { "buy".to_string() } else { "sell".to_string() };
+                        if sym.is_empty() {
+                            self.log.push_back(LogEntry::err("Order rejected: no symbol"));
+                        } else if let Ok(qty) = self.order_qty.parse::<f64>() {
+                            let send_alpaca = self.broker_connected && matches!(self.order_broker, OrderBroker::Alpaca | OrderBroker::Both);
+                            let send_tt = self.tt_connected && matches!(self.order_broker, OrderBroker::Tastytrade | OrderBroker::Both);
+                            if !send_alpaca && !send_tt {
+                                self.log.push_back(LogEntry::warn("No broker connected for selected target"));
+                            } else {
+                                match self.order_type {
+                                    0 => { // Market
+                                        if send_alpaca {
+                                            let _ = self.broker_tx.send(BrokerCmd::AlpacaMarketOrder { symbol: sym.clone(), qty, side: side_str.clone() });
+                                        }
+                                        if send_tt {
+                                            let action = if self.order_side == 0 { "Buy to Open" } else { "Sell to Open" };
+                                            let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder { symbol: sym.clone(), qty: qty as i64, side: action.to_string(), order_type: "Market".to_string(), price: None });
+                                        }
+                                        self.log.push_back(LogEntry::info(format!("Submitting market {} {} {}", side_label, qty, sym)));
+                                    }
+                                    1 => { // Limit
+                                        if let Ok(lp) = self.order_limit_price.parse::<f64>() {
+                                            if send_alpaca {
+                                                let _ = self.broker_tx.send(BrokerCmd::AlpacaLimitOrder { symbol: sym.clone(), qty, side: side_str.clone(), limit_price: lp });
+                                            }
+                                            if send_tt {
+                                                let action = if self.order_side == 0 { "Buy to Open" } else { "Sell to Open" };
+                                                let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder { symbol: sym.clone(), qty: qty as i64, side: action.to_string(), order_type: "Limit".to_string(), price: Some(lp) });
+                                            }
+                                            self.log.push_back(LogEntry::info(format!("Submitting limit {} {} {} @ {}", side_label, qty, sym, lp)));
+                                        } else {
+                                            self.log.push_back(LogEntry::err("Limit order requires valid limit price"));
+                                        }
+                                    }
+                                    2 => { // Stop
+                                        if let Ok(sp) = self.order_stop_price.parse::<f64>() {
+                                            if send_alpaca {
+                                                let _ = self.broker_tx.send(BrokerCmd::AlpacaStopOrder { symbol: sym.clone(), qty, side: side_str.clone(), stop_price: sp });
+                                            }
+                                            if send_tt {
+                                                let action = if self.order_side == 0 { "Buy to Open" } else { "Sell to Open" };
+                                                let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder { symbol: sym.clone(), qty: qty as i64, side: action.to_string(), order_type: "Stop".to_string(), price: Some(sp) });
+                                            }
+                                            self.log.push_back(LogEntry::info(format!("Submitting stop {} {} {} @ {}", side_label, qty, sym, sp)));
+                                        } else {
+                                            self.log.push_back(LogEntry::err("Stop order requires valid stop price"));
+                                        }
+                                    }
+                                    3 => { // Bracket (Alpaca only — market entry + TP/SL legs)
+                                        if let (Ok(sl), Ok(tp)) = (self.order_stop_price.parse::<f64>(), self.order_tp_price.parse::<f64>()) {
+                                            if send_alpaca {
+                                                let _ = self.broker_tx.send(BrokerCmd::AlpacaBracketOrder { symbol: sym.clone(), qty, side: side_str.clone(), stop_loss: sl, take_profit: tp });
+                                            }
+                                            if send_tt {
+                                                self.log.push_back(LogEntry::info("Bracket orders not supported on tastytrade — use Alpaca"));
+                                            }
+                                            self.log.push_back(LogEntry::info(format!("Submitting bracket {} {} {} sl={} tp={}", side_label, qty, sym, sl, tp)));
+                                        } else {
+                                            self.log.push_back(LogEntry::err("Bracket order requires valid SL and TP prices"));
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        } else {
+                            self.log.push_back(LogEntry::err("Invalid quantity"));
+                        }
                     }
                 });
         }
@@ -24146,15 +24273,24 @@ impl eframe::App for TyphooNApp {
                         .show(ui, |ui| {
                             ui.add_space(4.0);
                             if (self.broker_connected || self.lan_sync_mode == "client") && self.show_alpaca_positions && !self.live_orders.is_empty() {
+                                let mut cancel_id: Option<String> = None;
                                 for order in &self.live_orders {
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new(&order.symbol).small().strong());
                                         let side_c = if order.side == "buy" { UP } else { DOWN };
                                         ui.label(egui::RichText::new(&order.side).color(side_c).small());
                                         ui.label(egui::RichText::new(&order.order_type).color(AXIS_TEXT).small());
+                                        if self.broker_connected && self.lan_sync_mode != "client" {
+                                            if ui.small_button(egui::RichText::new("X").color(DOWN)).on_hover_text("Cancel order").clicked() {
+                                                cancel_id = Some(order.id.clone());
+                                            }
+                                        }
                                     });
                                     ui.label(egui::RichText::new(format!("qty: {} | {}", order.qty, order.status)).color(ACCENT).small());
                                     ui.separator();
+                                }
+                                if let Some(oid) = cancel_id {
+                                    let _ = self.broker_tx.send(BrokerCmd::AlpacaCancelOrder { order_id: oid });
                                 }
                             } else {
                                 let msg = if self.broker_connected || self.lan_sync_mode == "client" { "No open orders." } else { "Connect broker for live orders." };
