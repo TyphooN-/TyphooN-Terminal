@@ -21,7 +21,7 @@ UX audit identified 7 gaps vs TradingView's drawing tool experience. These are t
 ### 2. Drawing Move/Drag — DONE
 - [x] When a drawing is selected and the user drags, `is_drawing_drag = true` (blocks chart pan)
 - [x] Drag delta converted to (bar_delta, price_delta) from visible range / chart height
-- [x] All 70 drawing types have correct field patterns matched and moved
+- [x] All 89 drawing types have correct field patterns matched and moved
 - [x] `primary_released` clears `is_drawing_drag`, returning to normal pan behavior
 - [x] `ChartState.is_drawing_drag: bool` field added
 

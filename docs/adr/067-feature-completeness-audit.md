@@ -35,14 +35,14 @@
 - **Institutional Holders window**: Now renders entity metadata (SIC, state, FY end) + 13F filing table from cached SEC EDGAR data, auto-opens on fetch completion
 - **Orderbook DOM window**: New window (`show_orderbook_window`) renders real L2 bid/ask depth from `orderbook_result` — shows bid/ask ladders with volume bars, auto-opens when Fetch Depth or Fetch L2 returns data
 - **BrokerMsg::JsonResult routing**: Labels prefixed "Analyst:", "Holders:", "Orderbook:" now route to respective result fields + auto-open windows instead of log-only
-- **Drawing move/drag (Gap #2)**: Selected drawings can now be dragged to new positions — `is_drawing_drag` blocks chart pan when a drawing is selected; all 70 types covered
+- **Drawing move/drag (Gap #2)**: Selected drawings can now be dragged to new positions — `is_drawing_drag` blocks chart pan when a drawing is selected; all 89 types covered
 - **Option Chain window**: New `OPTION_CHAIN` command fetches tastytrade expirations and displays them in a collapsible-expiration grid with strike/call/put symbols
 - **tastytrade OPTION_CHAIN command**: Added to command palette, loads from KV cache `tt:options:<symbol>`
 - **Notifications**: `BrokerCmd::SendNotification` wired — Discord webhook, Pushover, ntfy push notifications fire on indicator alert trigger. Settings panel has config fields + test button. Credentials stored in system keyring.
 - **ADR status fixes**: 4 ADRs promoted from "Accepted" to "Implemented" (053, 054, 055, 056). Drawing count corrected 73→70 across all ADRs.
 - **MQL5/PineScript compiler UI**: New `COMPILE` command + Indicator Compiler window with source editor, Load File dialog, language selector (MQL5/PineScript), compile button, diagnostics display, and metadata summary (buffers, inputs, plots)
 - **BarBuilder real-time streaming**: `BrokerCmd::StartStream` wired to `AlpacaBroker::start_stream()`. `StreamTick` feeds `BarBuilder` for 1-minute bar construction. Completed bars auto-append to matching chart tabs. `StreamQuoteTick` updates forming bar close price.
-- **64 new tests**: bar_builder(7), martingale(14), notifications(13), mql5_export(7), lan_sync(9), fred(4), screener(10). Total: 551 tests.
+- **64 new tests**: bar_builder(7), martingale(14), notifications(13), mql5_export(7), lan_sync(9), fred(4), screener(10). Total: 537 tests.
 - **3 darwin analytics wired**: performance_attribution (per-symbol P&L contribution), dscore_components (FTP 8-component grid), investment_velocity (investor growth rate chart) — all rendered in per-account detail section
 - **Price target display**: Finnhub price target (high/median/low/mean + analyst count) appended to Analyst Ratings window
 
@@ -51,7 +51,7 @@
 - **Tab drag-drop**: Fixed insert_at logic (right-half drop now inserts after, not at same position); drag_src saved before clearing
 - **Drawing undo/redo**: drawing_styles Vec kept in sync across Delete, Ctrl+Z, Ctrl+Shift+Z
 - **Drawing selection**: Click-to-select with 8px hit threshold for 6 common types; ESC/empty-click to deselect
-- **Drawing render**: All 70 drawing types now use draw_line()/effective_width/sel_tint — width/style/selection finally active
+- **Drawing render**: All 89 drawing types now use draw_line()/effective_width/sel_tint — width/style/selection finally active
 - **Weekend bar coloring**: gap_fill_timestamps HashSet (explicit source tracking) replaces unreliable UTC day-of-week check
 - **LAN KV sync poisoning**: server-side exclusion filter for lan:server_enabled/client_enabled/server_ip/sync_port/cred:*
 - **Crypto backfill signals**: Mt5SyncDone sent after KrakenBackfill + CryptoCompareBackfill so charts reload automatically
