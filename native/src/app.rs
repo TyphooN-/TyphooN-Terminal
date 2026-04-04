@@ -9276,6 +9276,8 @@ pub struct TyphooNApp {
     draw_line_style: LineStyle,
     /// OHLC snap (magnet) toggle.
     snap_enabled: bool,
+    /// Cross-timeframe drawings: sync drawings across charts with same symbol.
+    cross_tf_drawings: bool,
     /// In-progress polyline points (used during PlacingPolyline mode).
     polyline_points: Vec<(usize, f64)>,
     /// In-progress Elliott Wave / ABC / H&S / XABCD multi-click points.
@@ -11400,6 +11402,7 @@ impl TyphooNApp {
             draw_width: 1.5,
             draw_line_style: LineStyle::Solid,
             snap_enabled: true,
+            cross_tf_drawings: false,
             polyline_points: Vec::new(),
             multi_click_points: Vec::new(),
             brush_points: Vec::new(),
@@ -12997,6 +13000,10 @@ impl TyphooNApp {
             }
             // Drawing tools
             "SNAP" | "MAGNET" => { self.snap_enabled = !self.snap_enabled; self.log.push_back(LogEntry::info(format!("Magnet snap: {}", if self.snap_enabled { "ON" } else { "OFF" }))); }
+            "CROSS_TF" | "CROSS_TF_DRAWINGS" => {
+                self.cross_tf_drawings = !self.cross_tf_drawings;
+                self.log.push_back(LogEntry::info(format!("Cross-TF drawings: {}", if self.cross_tf_drawings { "ON — drawings shared across timeframes" } else { "OFF" })));
+            }
             "DRAW_HLINE"     => self.draw_mode = DrawMode::PlacingHLine,
             "DRAW_TRENDLINE" => self.draw_mode = DrawMode::PlacingTrendP1,
             "DRAW_FIBO"      => self.draw_mode = DrawMode::PlacingFiboP1,
@@ -13459,6 +13466,7 @@ impl TyphooNApp {
             "show_alpaca_positions": self.show_alpaca_positions,
             "show_tt_positions": self.show_tt_positions,
             "snap_enabled": self.snap_enabled,
+            "cross_tf_drawings": self.cross_tf_drawings,
             "draw_width": self.draw_width,
             "draw_line_style": match self.draw_line_style { LineStyle::Solid => "solid", LineStyle::Dashed => "dashed", LineStyle::Dotted => "dotted" },
             "lan_server_ip": self.lan_server_ip,
@@ -13879,6 +13887,7 @@ impl TyphooNApp {
                 if let Some(b) = v["show_alpaca_positions"].as_bool() { self.show_alpaca_positions = b; }
                 if let Some(b) = v["show_tt_positions"].as_bool() { self.show_tt_positions = b; }
                 if let Some(b) = v["snap_enabled"].as_bool() { self.snap_enabled = b; }
+                if let Some(b) = v["cross_tf_drawings"].as_bool() { self.cross_tf_drawings = b; }
                 if let Some(w) = v["draw_width"].as_f64() { self.draw_width = w as f32; }
                 if let Some(s) = v["draw_line_style"].as_str() {
                     self.draw_line_style = match s { "dashed" => LineStyle::Dashed, "dotted" => LineStyle::Dotted, _ => LineStyle::Solid };
