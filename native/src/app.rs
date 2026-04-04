@@ -1205,6 +1205,8 @@ struct ChartState {
     visible_bars: usize,
     /// Index of the right-most visible bar (0 = oldest, len-1 = newest).
     view_offset: usize,
+    /// When replay mode is active, cap visible_range end at this bar index.
+    replay_bar_cap: Option<usize>,
     /// Fractional price offset for vertical pan.
     price_pan: f64,
     /// Multiplier applied to the natural price range for vertical zoom.
@@ -1323,6 +1325,7 @@ impl ChartState {
             cached_trade_overlay_frame: 0,
             visible_bars: 200,
             view_offset: 0,
+            replay_bar_cap: None,
             price_pan: 0.0,
             price_zoom: 1.0,
             is_dragging: false,
@@ -2511,6 +2514,9 @@ impl ChartState {
         if self.bars.is_empty() { return (0, 0); }
         let end = (self.view_offset + 1).min(self.bars.len());
         let start = end.saturating_sub(self.visible_bars);
+        // Replay cap: limit end to replay_bar_cap when active
+        let end = if let Some(cap) = self.replay_bar_cap { end.min(cap) } else { end };
+        let start = start.min(end);
         (start, end)
     }
 }
@@ -21141,6 +21147,20 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     ctx.request_repaint(); // keep animating
+                }
+                // Sync replay_bar_cap + view_offset on active chart
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    chart.replay_bar_cap = Some(self.replay_bar_idx);
+                    // Lock view to replay position so chart scrolls with replay
+                    let half_vis = chart.visible_bars / 2;
+                    chart.view_offset = self.replay_bar_idx.saturating_sub(1) + half_vis.min(10);
+                }
+            } else {
+                // Replay not active — ensure cap is cleared
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    if chart.replay_bar_cap.is_some() {
+                        chart.replay_bar_cap = None;
+                    }
                 }
             }
 
