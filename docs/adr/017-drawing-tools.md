@@ -6,7 +6,7 @@
 Chart annotation needed for technical analysis.
 
 ## Decision
-70 drawing tool types across 11 toolbar groups. All accessible via command palette (~), toolbar menus, and right-click context menu.
+89 drawing tool types across 11 toolbar groups. All accessible via command palette (~), toolbar menus, and right-click context menu.
 
 ### UX Features (2026-04-05)
 - **Live preview**: ghost line/shape renders during placement for all drawing types
@@ -18,7 +18,7 @@ Chart annotation needed for technical analysis.
 - **Line width**: 1.0 / 1.5 / 2.0 / 3.0 px selector in toolbar, applied in render loop via effective_width
 - **Line style**: Solid / Dashed / Dotted selector in toolbar, applied via draw_line() helper
 - **Selection**: Click near drawing (8px threshold) to select; selected drawing highlights cyan + boosted width (~50 types)
-- **Move/Drag**: Drag a selected drawing to reposition — all 70 types supported, blocks chart pan during drag
+- **Move/Drag**: Drag a selected drawing to reposition — all 89 types supported, blocks chart pan during drag
 - **Delete selected**: Delete/Backspace removes selected drawing (or last drawing if none selected)
 
 ### Drawing Tool Categories (70 enum variants)

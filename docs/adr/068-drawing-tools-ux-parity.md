@@ -98,7 +98,7 @@ Applied to: HLine, TrendLine, VLine, Rectangle, Ray, Channel, ExtendedLine, HRay
 ## Consequences
 - Line width + style now fully functional (Gaps 4 & 5 complete)
 - Drawing selection hit-testing active for ~50 types (Gap 1 substantially complete)
-- Drawing move/drag fully implemented for all 70 types (Gap 2 complete)
-- Drawing count: 70 tools implemented; all have line width/style/sel_tint wired
+- Drawing move/drag fully implemented for all 89 types (Gap 2 complete)
+- Drawing count: 89 tools implemented; all have line width/style/sel_tint wired
 - Delete selected drawing wired; Ctrl+Z/Shift+Z undo/redo keep drawing_styles in sync
 - Remaining: Gap 3 (control point resize), Gap 7 (cross-TF drawings)

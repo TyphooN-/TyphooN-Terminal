@@ -8,7 +8,7 @@
 ### Fully Implemented (Production Ready)
 - **46 BrokerCmd variants** — all handled
 - **29 BrokerMsg variants** — all sent/received
-- **70 drawing tools** with live preview, OHLC snap, undo/redo, color picker, line width/style, selection hit-test (8px), Delete-to-remove-selected
+- **89 drawing tools** with live preview, OHLC snap, undo/redo, color picker, line width/style, selection hit-test (8px), Delete-to-remove-selected
 - **LAN sync** — 34 KV-synced analytics fields, 14 remote commands wired, 15s incremental resync, TLS encryption
 - **Multi-source bar loading** — MT5 → Alpaca → tastytrade → CryptoCompare → Kraken (5-source priority) with timezone-aware dedup
 - **Supply/demand zones** — 1:1 MT5 parity (GPU + CPU paths, BACK_LIMIT=1000)
