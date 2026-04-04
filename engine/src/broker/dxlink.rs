@@ -454,3 +454,148 @@ fn parse_f64(v: &serde_json::Value) -> f64 {
         _ => f64::NAN,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dxlink_token_default_construction() {
+        let tok = DxLinkToken {
+            token: String::new(),
+            url: String::new(),
+        };
+        assert!(tok.token.is_empty());
+        assert!(tok.url.is_empty());
+    }
+
+    #[test]
+    fn dxlink_token_with_values() {
+        let tok = DxLinkToken {
+            token: "abc123".to_string(),
+            url: "wss://example.com/feed".to_string(),
+        };
+        assert_eq!(tok.token, "abc123");
+        assert_eq!(tok.url, "wss://example.com/feed");
+    }
+
+    #[test]
+    fn dx_candle_fields_accessible() {
+        let candle = DxCandle {
+            symbol: "AAPL".to_string(),
+            time: 1700000000000,
+            open: 150.0,
+            high: 155.0,
+            low: 149.0,
+            close: 153.0,
+            volume: 1_000_000.0,
+        };
+        assert_eq!(candle.symbol, "AAPL");
+        assert_eq!(candle.time, 1700000000000);
+        assert!((candle.open - 150.0).abs() < f64::EPSILON);
+        assert!((candle.high - 155.0).abs() < f64::EPSILON);
+        assert!((candle.low - 149.0).abs() < f64::EPSILON);
+        assert!((candle.close - 153.0).abs() < f64::EPSILON);
+        assert!((candle.volume - 1_000_000.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn dx_candle_clone() {
+        let candle = DxCandle {
+            symbol: "SPY".to_string(),
+            time: 100,
+            open: 1.0, high: 2.0, low: 0.5, close: 1.5, volume: 500.0,
+        };
+        let cloned = candle.clone();
+        assert_eq!(cloned.symbol, "SPY");
+        assert_eq!(cloned.time, 100);
+    }
+
+    #[test]
+    fn dx_quote_fields_accessible() {
+        let quote = DxQuote {
+            symbol: "TSLA".to_string(),
+            bid: 240.50,
+            ask: 240.75,
+            bid_size: 100.0,
+            ask_size: 200.0,
+        };
+        assert_eq!(quote.symbol, "TSLA");
+        assert!((quote.bid - 240.50).abs() < f64::EPSILON);
+        assert!((quote.ask - 240.75).abs() < f64::EPSILON);
+        assert!((quote.bid_size - 100.0).abs() < f64::EPSILON);
+        assert!((quote.ask_size - 200.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn dx_quote_clone() {
+        let quote = DxQuote {
+            symbol: "MSFT".to_string(),
+            bid: 300.0, ask: 301.0, bid_size: 50.0, ask_size: 75.0,
+        };
+        let cloned = quote.clone();
+        assert_eq!(cloned.symbol, "MSFT");
+    }
+
+    #[test]
+    fn parse_f64_normal_number() {
+        let v = serde_json::json!(42.5);
+        assert!((parse_f64(&v) - 42.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_f64_integer() {
+        let v = serde_json::json!(100);
+        assert!((parse_f64(&v) - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_f64_negative() {
+        let v = serde_json::json!(-3.14);
+        assert!((parse_f64(&v) - (-3.14)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_f64_nan_string() {
+        let v = serde_json::json!("NaN");
+        assert!(parse_f64(&v).is_nan());
+    }
+
+    #[test]
+    fn parse_f64_infinity_string() {
+        let v = serde_json::json!("Infinity");
+        assert!(parse_f64(&v).is_infinite());
+        assert!(parse_f64(&v).is_sign_positive());
+    }
+
+    #[test]
+    fn parse_f64_neg_infinity_string() {
+        let v = serde_json::json!("-Infinity");
+        assert!(parse_f64(&v).is_infinite());
+        assert!(parse_f64(&v).is_sign_negative());
+    }
+
+    #[test]
+    fn parse_f64_numeric_string() {
+        let v = serde_json::json!("99.9");
+        assert!((parse_f64(&v) - 99.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_f64_invalid_string() {
+        let v = serde_json::json!("not_a_number");
+        assert!(parse_f64(&v).is_nan());
+    }
+
+    #[test]
+    fn parse_f64_null() {
+        let v = serde_json::json!(null);
+        assert!(parse_f64(&v).is_nan());
+    }
+
+    #[test]
+    fn parse_f64_bool() {
+        let v = serde_json::json!(true);
+        assert!(parse_f64(&v).is_nan());
+    }
+}

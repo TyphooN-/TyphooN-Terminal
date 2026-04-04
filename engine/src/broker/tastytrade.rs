@@ -514,3 +514,308 @@ fn parse_num(v: &serde_json::Value) -> f64 {
         .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
         .unwrap_or(0.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tasty_session_construction() {
+        let session = TastySession {
+            session_token: "tok_abc123".to_string(),
+            remember_token: Some("rem_xyz".to_string()),
+        };
+        assert_eq!(session.session_token, "tok_abc123");
+        assert_eq!(session.remember_token.as_deref(), Some("rem_xyz"));
+    }
+
+    #[test]
+    fn tasty_session_no_remember_token() {
+        let session = TastySession {
+            session_token: "tok_only".to_string(),
+            remember_token: None,
+        };
+        assert_eq!(session.session_token, "tok_only");
+        assert!(session.remember_token.is_none());
+    }
+
+    #[test]
+    fn tasty_account_construction() {
+        let acct = TastyAccount {
+            account_number: "5YZ12345".to_string(),
+            account_type: "Individual".to_string(),
+            nickname: Some("Main".to_string()),
+            margin_or_cash: "Margin".to_string(),
+            is_closed: false,
+        };
+        assert_eq!(acct.account_number, "5YZ12345");
+        assert_eq!(acct.account_type, "Individual");
+        assert_eq!(acct.nickname.as_deref(), Some("Main"));
+        assert_eq!(acct.margin_or_cash, "Margin");
+        assert!(!acct.is_closed);
+    }
+
+    #[test]
+    fn tasty_account_closed() {
+        let acct = TastyAccount {
+            account_number: "CLOSED1".to_string(),
+            account_type: "Entity".to_string(),
+            nickname: None,
+            margin_or_cash: "Cash".to_string(),
+            is_closed: true,
+        };
+        assert!(acct.is_closed);
+        assert!(acct.nickname.is_none());
+    }
+
+    #[test]
+    fn tasty_position_long() {
+        let pos = TastyPosition {
+            symbol: "AAPL".to_string(),
+            instrument_type: "Equity".to_string(),
+            quantity: 100.0,
+            quantity_direction: "Long".to_string(),
+            close_price: 175.50,
+            average_open_price: 150.00,
+            mark_price: Some(176.00),
+            unrealized_pnl: Some(2600.0),
+        };
+        assert_eq!(pos.symbol, "AAPL");
+        assert_eq!(pos.instrument_type, "Equity");
+        assert!((pos.quantity - 100.0).abs() < f64::EPSILON);
+        assert_eq!(pos.quantity_direction, "Long");
+        assert!((pos.close_price - 175.50).abs() < f64::EPSILON);
+        assert!((pos.average_open_price - 150.0).abs() < f64::EPSILON);
+        assert_eq!(pos.mark_price, Some(176.00));
+        assert_eq!(pos.unrealized_pnl, Some(2600.0));
+    }
+
+    #[test]
+    fn tasty_position_short_no_mark() {
+        let pos = TastyPosition {
+            symbol: "SPY".to_string(),
+            instrument_type: "Equity Option".to_string(),
+            quantity: 5.0,
+            quantity_direction: "Short".to_string(),
+            close_price: 3.20,
+            average_open_price: 4.50,
+            mark_price: None,
+            unrealized_pnl: None,
+        };
+        assert_eq!(pos.quantity_direction, "Short");
+        assert!(pos.mark_price.is_none());
+        assert!(pos.unrealized_pnl.is_none());
+    }
+
+    #[test]
+    fn tasty_order_with_legs() {
+        let leg = TastyOrderLeg {
+            instrument_type: "Equity".to_string(),
+            symbol: "MSFT".to_string(),
+            action: "Buy to Open".to_string(),
+            quantity: 10,
+        };
+        let order = TastyOrder {
+            id: "ORD-12345".to_string(),
+            order_type: "Limit".to_string(),
+            time_in_force: "Day".to_string(),
+            status: "Received".to_string(),
+            legs: vec![leg],
+            price: Some(350.00),
+            size: 10,
+        };
+        assert_eq!(order.id, "ORD-12345");
+        assert_eq!(order.order_type, "Limit");
+        assert_eq!(order.legs.len(), 1);
+        assert_eq!(order.legs[0].symbol, "MSFT");
+        assert_eq!(order.legs[0].action, "Buy to Open");
+        assert_eq!(order.legs[0].quantity, 10);
+        assert_eq!(order.price, Some(350.00));
+    }
+
+    #[test]
+    fn tasty_order_no_price() {
+        let order = TastyOrder {
+            id: "ORD-99".to_string(),
+            order_type: "Market".to_string(),
+            time_in_force: "GTC".to_string(),
+            status: "Filled".to_string(),
+            legs: vec![],
+            price: None,
+            size: 50,
+        };
+        assert!(order.price.is_none());
+        assert!(order.legs.is_empty());
+        assert_eq!(order.size, 50);
+    }
+
+    #[test]
+    fn tasty_greeks_construction() {
+        let greeks = TastyGreeks {
+            delta: 0.45,
+            gamma: 0.03,
+            theta: -0.12,
+            vega: 0.25,
+            rho: 0.01,
+            implied_volatility: 0.32,
+        };
+        assert!((greeks.delta - 0.45).abs() < f64::EPSILON);
+        assert!((greeks.gamma - 0.03).abs() < f64::EPSILON);
+        assert!((greeks.theta - (-0.12)).abs() < f64::EPSILON);
+        assert!((greeks.vega - 0.25).abs() < f64::EPSILON);
+        assert!((greeks.rho - 0.01).abs() < f64::EPSILON);
+        assert!((greeks.implied_volatility - 0.32).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn tasty_greeks_zero_values() {
+        let greeks = TastyGreeks {
+            delta: 0.0,
+            gamma: 0.0,
+            theta: 0.0,
+            vega: 0.0,
+            rho: 0.0,
+            implied_volatility: 0.0,
+        };
+        assert!((greeks.delta).abs() < f64::EPSILON);
+        assert!((greeks.gamma).abs() < f64::EPSILON);
+        assert!((greeks.theta).abs() < f64::EPSILON);
+        assert!((greeks.vega).abs() < f64::EPSILON);
+        assert!((greeks.rho).abs() < f64::EPSILON);
+        assert!((greeks.implied_volatility).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn tasty_expiration_empty_strikes() {
+        let exp = TastyExpiration {
+            expiration_date: "2026-04-18".to_string(),
+            strikes: vec![],
+        };
+        assert_eq!(exp.expiration_date, "2026-04-18");
+        assert!(exp.strikes.is_empty());
+    }
+
+    #[test]
+    fn tasty_expiration_with_strikes() {
+        let strike = TastyStrike {
+            strike_price: 150.0,
+            call_symbol: "AAPL  260418C00150000".to_string(),
+            put_symbol: "AAPL  260418P00150000".to_string(),
+        };
+        let exp = TastyExpiration {
+            expiration_date: "2026-04-18".to_string(),
+            strikes: vec![strike],
+        };
+        assert_eq!(exp.strikes.len(), 1);
+        assert!((exp.strikes[0].strike_price - 150.0).abs() < f64::EPSILON);
+        assert!(exp.strikes[0].call_symbol.contains('C'));
+        assert!(exp.strikes[0].put_symbol.contains('P'));
+    }
+
+    #[test]
+    fn tasty_option_chain_construction() {
+        let chain = TastyOptionChain {
+            underlying_symbol: "AAPL".to_string(),
+            expirations: vec![
+                TastyExpiration {
+                    expiration_date: "2026-04-18".to_string(),
+                    strikes: vec![],
+                },
+            ],
+        };
+        assert_eq!(chain.underlying_symbol, "AAPL");
+        assert_eq!(chain.expirations.len(), 1);
+    }
+
+    #[test]
+    fn tasty_quote_construction() {
+        let quote = TastyQuote {
+            symbol: "NVDA".to_string(),
+            bid: 880.0,
+            ask: 881.0,
+            last: 880.50,
+            open: 875.0,
+            high: 890.0,
+            low: 870.0,
+            close: 880.50,
+            prev_close: 872.0,
+            volume: 50_000_000,
+            bid_size: 100,
+            ask_size: 200,
+        };
+        assert_eq!(quote.symbol, "NVDA");
+        assert!((quote.bid - 880.0).abs() < f64::EPSILON);
+        assert_eq!(quote.volume, 50_000_000);
+    }
+
+    #[test]
+    fn tasty_balances_construction() {
+        let bal = TastyBalances {
+            cash_balance: 10_000.0,
+            net_liquidating_value: 50_000.0,
+            equity_buying_power: 100_000.0,
+            maintenance_requirement: 25_000.0,
+            pending_cash: 0.0,
+        };
+        assert!((bal.cash_balance - 10_000.0).abs() < f64::EPSILON);
+        assert!((bal.net_liquidating_value - 50_000.0).abs() < f64::EPSILON);
+        assert!((bal.equity_buying_power - 100_000.0).abs() < f64::EPSILON);
+        assert!((bal.maintenance_requirement - 25_000.0).abs() < f64::EPSILON);
+        assert!((bal.pending_cash).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn tasty_market_metric_construction() {
+        let metric = TastyMarketMetric {
+            symbol: "SPY".to_string(),
+            iv_index: 0.18,
+            iv_rank: 0.35,
+            iv_percentile: 0.42,
+            liquidity_rating: 5,
+            liquidity_rank: 0.99,
+            beta: 1.0,
+            earnings_date: None,
+        };
+        assert_eq!(metric.symbol, "SPY");
+        assert_eq!(metric.liquidity_rating, 5);
+        assert!(metric.earnings_date.is_none());
+    }
+
+    #[test]
+    fn tastytrade_broker_new_production() {
+        let broker = TastytradeBroker::new(false);
+        assert!(!broker.is_authenticated());
+        assert!(broker.account_number().is_none());
+    }
+
+    #[test]
+    fn tastytrade_broker_new_sandbox() {
+        let broker = TastytradeBroker::new(true);
+        assert!(!broker.is_authenticated());
+        assert!(broker.account_number().is_none());
+    }
+
+    #[test]
+    fn parse_num_from_number() {
+        let v = serde_json::json!(42.5);
+        assert!((parse_num(&v) - 42.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_num_from_string() {
+        let v = serde_json::json!("99.9");
+        assert!((parse_num(&v) - 99.9).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_num_from_null() {
+        let v = serde_json::json!(null);
+        assert!((parse_num(&v)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_num_from_invalid_string() {
+        let v = serde_json::json!("not_a_number");
+        assert!((parse_num(&v)).abs() < f64::EPSILON);
+    }
+}
