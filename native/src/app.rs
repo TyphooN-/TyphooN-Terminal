@@ -10174,6 +10174,8 @@ impl TyphooNApp {
                         }
                         if total_bars > 0 {
                             tracing::debug!("Kraken {}: {} bars across {} TFs", symbol, total_bars, timeframes.len());
+                            // Signal chart reload so gap-fill bars appear without manual refresh
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Mt5SyncDone(total_bars));
                         }
                     }
                     BrokerCmd::CryptoCompareBackfill { symbol, timeframes, db_path: _ } => {
@@ -10281,6 +10283,10 @@ impl TyphooNApp {
                             "CryptoCompare {} complete: {} bars across {} TFs",
                             symbol, total_bars, timeframes.len()
                         )));
+                        if total_bars > 0 {
+                            // Signal chart reload so new bars appear without manual refresh
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Mt5SyncDone(total_bars));
+                        }
                     }
                     BrokerCmd::FetchFilingContent { url } => {
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -10603,7 +10609,11 @@ impl TyphooNApp {
                                 return;
                             };
 
-                            // Auto-reconnect loop: retry every 30s
+                            // Auto-reconnect loop: retry every 30s on failure.
+                            // Periodic re-sync: force reconnect every 15 minutes so clients
+                            // pick up new bars (weekend crypto backfill, MT5 updates) without
+                            // waiting for a connection drop.
+                            const RESYNC_INTERVAL_SECS: u64 = 15 * 60; // 15 minutes
                             loop {
                                 match tokio::time::timeout(
                                     std::time::Duration::from_secs(10),
@@ -10613,11 +10623,20 @@ impl TyphooNApp {
                                         { let mut guard = lan_remote.lock().await; *guard = Some(remote_tx); }
                                         lan_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                                         let _ = msg_tx.send(BrokerMsg::OrderResult(format!("LAN sync connected to wss://{}:{}", host, port)));
-                                        // Wait for client task to finish (disconnect/error)
-                                        client.wait().await;
-                                        // Connection dropped — clear state and retry
+                                        // Wait for sync to complete (up to RESYNC_INTERVAL then force reconnect)
+                                        let timed_out = tokio::time::timeout(
+                                            std::time::Duration::from_secs(RESYNC_INTERVAL_SECS),
+                                            client.wait(),
+                                        ).await.is_err();
+                                        // Trigger chart reload — bars may have been synced
+                                        let _ = msg_tx.send(BrokerMsg::Mt5SyncDone(1));
+                                        // Connection dropped or periodic resync — clear state and retry
                                         { let mut guard = lan_remote.lock().await; *guard = None; }
                                         lan_flag.store(false, std::sync::atomic::Ordering::Relaxed);
+                                        if timed_out {
+                                            // Periodic resync — reconnect immediately (no sleep)
+                                            continue;
+                                        }
                                         let _ = msg_tx.send(BrokerMsg::Error("LAN sync disconnected — reconnecting in 30s...".into()));
                                     }
                                     Ok(Err(e)) => {
