@@ -19421,6 +19421,25 @@ impl TyphooNApp {
                         });
                         ui.add_space(5.0);
                         ui.label(egui::RichText::new("Darwinex limit: 0.95 correlation / 45d").color(AXIS_TEXT));
+                        // Visual heatmap
+                        if !corrs.is_empty() {
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new("Heatmap").strong());
+                            let cell = 28.0_f32;
+                            let n = corrs.len();
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(cell * n as f32, cell), egui::Sense::hover());
+                            let painter = ui.painter_at(rect);
+                            for (i, c) in corrs.iter().enumerate() {
+                                let abs_c = c.correlation.abs();
+                                let color = if abs_c > 0.95 { egui::Color32::from_rgb(255, 40, 40) }
+                                            else if abs_c > 0.7 { egui::Color32::from_rgb(255, 165, 0) }
+                                            else if abs_c > 0.5 { egui::Color32::from_rgb(255, 220, 50) }
+                                            else { egui::Color32::from_rgb(46, 204, 113) };
+                                let r = egui::Rect::from_min_size(rect.min + egui::vec2(i as f32 * cell, 0.0), egui::vec2(cell - 2.0, cell - 2.0));
+                                painter.rect_filled(r, 3.0, color);
+                                painter.text(r.center(), egui::Align2::CENTER_CENTER, format!("{:.2}", c.correlation), egui::FontId::proportional(9.0), egui::Color32::BLACK);
+                            }
+                        }
                     }
                 });
         }
@@ -19446,6 +19465,7 @@ impl TyphooNApp {
                                 }
                             }
                             let months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                            let mut monthly_avgs: Vec<(usize, f64)> = Vec::new();
                             egui::Grid::new("seasonal_grid").striped(true).num_columns(4).show(ui, |ui| {
                                 ui.strong("Month"); ui.strong("Avg Return %"); ui.strong("Win Rate %"); ui.strong("Samples");
                                 ui.end_row();
@@ -19462,10 +19482,24 @@ impl TyphooNApp {
                                             ui.label(format!("{:.1}", wr));
                                             ui.label(format!("{}", rets.len()));
                                             ui.end_row();
+                                            monthly_avgs.push((i, avg));
                                         }
                                     }
                                 }
                             });
+                            // Monthly returns bar chart
+                            if !monthly_avgs.is_empty() {
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new("Monthly Average Returns").strong());
+                                let pos_bars: Vec<PlotBar> = monthly_avgs.iter().filter(|&&(_, avg)| avg >= 0.0)
+                                    .map(|&(i, avg)| PlotBar::new(i as f64, avg).name(months[i])).collect();
+                                let neg_bars: Vec<PlotBar> = monthly_avgs.iter().filter(|&&(_, avg)| avg < 0.0)
+                                    .map(|&(i, avg)| PlotBar::new(i as f64, avg).name(months[i])).collect();
+                                let pos_chart = BarChart::new("Positive", pos_bars).width(0.6).color(UP);
+                                let neg_chart = BarChart::new("Negative", neg_bars).width(0.6).color(DOWN);
+                                Plot::new("seasonal_bars").height(120.0).allow_drag(false).allow_zoom(false)
+                                    .show(ui, |plot_ui| { plot_ui.bar_chart(pos_chart); plot_ui.bar_chart(neg_chart); });
+                            }
                         } else {
                             ui.label(egui::RichText::new("Need more bar data for seasonal analysis.").color(AXIS_TEXT));
                         }
@@ -19512,6 +19546,18 @@ impl TyphooNApp {
                             ui.label("Worst Day:"); ui.label(egui::RichText::new(format!("${:.2}", var_stats.worst_day)).color(DOWN));
                             ui.end_row();
                         });
+                        // VaR levels bar chart
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("VaR / CVaR Levels").strong());
+                        let bars = vec![
+                            PlotBar::new(0.0, var_stats.var_95.abs()).name("VaR 95%"),
+                            PlotBar::new(1.0, var_stats.var_99.abs()).name("VaR 99%"),
+                            PlotBar::new(2.0, var_stats.cvar_95.abs()).name("CVaR 95%"),
+                            PlotBar::new(3.0, var_stats.cvar_99.abs()).name("CVaR 99%"),
+                        ];
+                        let chart = BarChart::new("VaR Levels", bars).width(0.6).color(egui::Color32::from_rgb(255, 100, 80));
+                        Plot::new("mc_var_bars").height(120.0).allow_drag(false).allow_zoom(false)
+                            .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
                     } else {
                         ui.label(egui::RichText::new("Need 30+ daily returns for Monte Carlo. Import DARWIN data.").color(AXIS_TEXT));
                     }
@@ -20574,6 +20620,18 @@ impl TyphooNApp {
                             self.journal_entries.remove(idx);
                         }
                     });
+                    // Cumulative P&L line chart
+                    let closed_pnls: Vec<f64> = self.journal_entries.iter().filter_map(|e| e.pnl).collect();
+                    if closed_pnls.len() >= 2 {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Cumulative P&L").strong());
+                        let mut cum = 0.0_f64;
+                        let pts: PlotPoints = PlotPoints::new(closed_pnls.iter().enumerate().map(|(i, &p)| { cum += p; [i as f64, cum] }).collect());
+                        let color = if cum >= 0.0 { UP } else { DOWN };
+                        let line = Line::new("Cumulative P&L", pts).color(color).width(1.5);
+                        Plot::new("journal_cum_pnl").height(100.0).allow_drag(false).allow_zoom(false)
+                            .show(ui, |plot_ui| { plot_ui.line(line); });
+                    }
                 });
         }
 
@@ -20684,6 +20742,29 @@ impl TyphooNApp {
                     if !self.mm_result.is_empty() {
                         ui.separator();
                         ui.label(egui::RichText::new(&self.mm_result).monospace().color(egui::Color32::from_rgb(200, 220, 255)));
+                        // Visual margin level gauge
+                        let equity: f64 = self.mm_equity.replace(['$', ','], "").parse().unwrap_or(0.0);
+                        let margin_used: f64 = self.mm_margin.replace(['$', ','], "").parse().unwrap_or(0.0);
+                        if margin_used > 0.0 && equity > 0.0 {
+                            let ml = equity / margin_used * 100.0;
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new("Margin Level Gauge").strong());
+                            let bar_w = 360.0_f32;
+                            let bar_h = 22.0_f32;
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_w, bar_h), egui::Sense::hover());
+                            let painter = ui.painter_at(rect);
+                            // Draw zones: red 0-100%, yellow 100-200%, green 200-400%
+                            let r_end = (bar_w * 0.25).min(bar_w);
+                            let y_end = (bar_w * 0.50).min(bar_w);
+                            painter.rect_filled(egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + r_end, rect.max.y)), 0.0, egui::Color32::from_rgb(180, 40, 40));
+                            painter.rect_filled(egui::Rect::from_min_max(egui::pos2(rect.min.x + r_end, rect.min.y), egui::pos2(rect.min.x + y_end, rect.max.y)), 0.0, egui::Color32::from_rgb(200, 180, 40));
+                            painter.rect_filled(egui::Rect::from_min_max(egui::pos2(rect.min.x + y_end, rect.min.y), rect.max), 0.0, egui::Color32::from_rgb(40, 160, 60));
+                            // Marker for current level (clamped to 0-400%)
+                            let frac = (ml / 400.0).clamp(0.0, 1.0) as f32;
+                            let mx = rect.min.x + frac * bar_w;
+                            painter.rect_filled(egui::Rect::from_center_size(egui::pos2(mx, rect.center().y), egui::vec2(3.0, bar_h)), 0.0, egui::Color32::WHITE);
+                            painter.text(egui::pos2(mx, rect.min.y - 2.0), egui::Align2::CENTER_BOTTOM, format!("{:.0}%", ml), egui::FontId::proportional(10.0), egui::Color32::WHITE);
+                        }
                     }
                 });
         }
@@ -21296,9 +21377,19 @@ impl TyphooNApp {
                                     if let Some(Some(v)) = chart.hma.get(abs_idx) { ui.label(egui::RichText::new("HMA20").color(HMA_COL)); ui.label(format_price(*v)); ui.end_row(); }
                                     if let Some(Some(v)) = chart.bb_upper.get(abs_idx) { ui.label(egui::RichText::new("BB Upper").color(BB_COL)); ui.label(format_price(*v)); ui.end_row(); }
                                     if let Some(Some(v)) = chart.bb_lower.get(abs_idx) { ui.label(egui::RichText::new("BB Lower").color(BB_COL)); ui.label(format_price(*v)); ui.end_row(); }
-                                    if let Some(Some(v)) = chart.rsi.get(abs_idx) { ui.label(egui::RichText::new("RSI").color(RSI_LINE)); ui.label(format!("{:.1}", v)); ui.end_row(); }
-                                    if let Some(Some(v)) = chart.fisher.get(abs_idx) { ui.label(egui::RichText::new("Fisher").color(FISHER_POS)); ui.label(format!("{:.3}", v)); ui.end_row(); }
-                                    if let Some(Some(v)) = chart.atr.get(abs_idx) { ui.label("ATR"); ui.label(format_price(*v)); ui.end_row(); }
+                                    if let Some(Some(v)) = chart.rsi.get(abs_idx) {
+                                        let rsi_col = if *v > 70.0 { DOWN } else if *v < 30.0 { UP } else { RSI_LINE };
+                                        ui.label(egui::RichText::new("RSI").color(rsi_col));
+                                        ui.label(egui::RichText::new(format!("{:.1}", v)).color(rsi_col));
+                                        ui.end_row();
+                                    }
+                                    if let Some(Some(v)) = chart.fisher.get(abs_idx) {
+                                        let f_col = if *v > 0.0 { FISHER_POS } else { FISHER_NEG };
+                                        ui.label(egui::RichText::new("Fisher").color(f_col));
+                                        ui.label(egui::RichText::new(format!("{:.3}", v)).color(f_col));
+                                        ui.end_row();
+                                    }
+                                    if let Some(Some(v)) = chart.atr.get(abs_idx) { ui.label(egui::RichText::new("ATR").color(AXIS_TEXT)); ui.label(egui::RichText::new(format_price(*v)).color(AXIS_TEXT)); ui.end_row(); }
                                     if let Some(Some(v)) = chart.macd_line.get(abs_idx) { ui.label(egui::RichText::new("MACD").color(MACD_LINE_COL)); ui.label(format!("{:.4}", v)); ui.end_row(); }
                                     if let Some(Some(v)) = chart.stoch_k.get(abs_idx) { ui.label(egui::RichText::new("Stoch %K").color(STOCH_K_COL)); ui.label(format!("{:.1}", v)); ui.end_row(); }
                                     if let Some(Some(v)) = chart.adx.get(abs_idx) { ui.label(egui::RichText::new("ADX").color(ADX_COL)); ui.label(format!("{:.1}", v)); ui.end_row(); }
