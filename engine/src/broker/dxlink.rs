@@ -273,6 +273,177 @@ pub async fn fetch_candles(
     Ok(candles)
 }
 
+/// Subscribe to real-time Quote events via a persistent DXLink WebSocket.
+///
+/// Returns a channel receiver that yields `DxQuote` structs as they arrive.
+/// The connection stays open indefinitely; drop the receiver to stop.
+pub async fn subscribe_quotes(
+    dx_token: &DxLinkToken,
+    symbols: Vec<String>,
+) -> Result<tokio::sync::mpsc::Receiver<DxQuote>, String> {
+    // Connect
+    let (ws_stream, _) = connect_async(&dx_token.url).await
+        .map_err(|e| format!("DXLink connect failed: {e}"))?;
+    let (mut sink, mut stream) = ws_stream.split();
+
+    macro_rules! dx_send {
+        ($sink:expr, $msg:expr) => {
+            $sink.send(Message::Text($msg.to_string().into())).await
+                .map_err(|e| format!("DXLink send failed: {e}"))?
+        };
+    }
+    macro_rules! dx_recv {
+        ($stream:expr) => {{
+            loop {
+                match $stream.next().await {
+                    Some(Ok(Message::Text(txt))) => {
+                        break serde_json::from_str::<serde_json::Value>(&txt)
+                            .map_err(|e| format!("DXLink parse failed: {e}"));
+                    }
+                    Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
+                    Some(Ok(Message::Close(_))) => { break Err("DXLink closed".into()); }
+                    Some(Err(e)) => { break Err(format!("DXLink error: {e}")); }
+                    None => { break Err("DXLink ended".into()); }
+                    _ => continue,
+                }
+            }
+        }};
+    }
+
+    // Step 1: SETUP
+    dx_send!(sink, serde_json::json!({
+        "type": "SETUP",
+        "channel": 0,
+        "version": DXLINK_VERSION,
+        "keepaliveTimeout": 60,
+        "acceptKeepaliveTimeout": 60
+    }));
+
+    // Step 2: Wait for server SETUP
+    let msg = dx_recv!(stream)?;
+    if msg["type"] != "SETUP" {
+        return Err(format!("Expected SETUP, got {:?}", msg["type"]));
+    }
+
+    // Step 3: Wait for AUTH_STATE UNAUTHORIZED
+    let msg = dx_recv!(stream)?;
+    if msg["type"] != "AUTH_STATE" || msg["state"] != "UNAUTHORIZED" {
+        return Err(format!("Expected AUTH_STATE UNAUTHORIZED, got {:?}", msg));
+    }
+
+    // Step 4: AUTH
+    dx_send!(sink, serde_json::json!({
+        "type": "AUTH",
+        "channel": 0,
+        "token": dx_token.token
+    }));
+
+    // Step 5: Wait for AUTH_STATE AUTHORIZED
+    let msg = dx_recv!(stream)?;
+    if msg["type"] != "AUTH_STATE" || msg["state"] != "AUTHORIZED" {
+        return Err(format!("DXLink auth failed: {:?}", msg));
+    }
+
+    // Step 6: Open channel 1 for Quote data
+    dx_send!(sink, serde_json::json!({
+        "type": "CHANNEL_REQUEST",
+        "channel": 1,
+        "service": "FEED",
+        "parameters": { "contract": "AUTO" }
+    }));
+
+    loop {
+        let msg = dx_recv!(stream)?;
+        if msg["type"] == "CHANNEL_OPENED" && msg["channel"] == 1 { break; }
+        if msg["type"] == "ERROR" {
+            return Err(format!("DXLink channel error: {}", msg["message"]));
+        }
+    }
+
+    // Step 7: FEED_SETUP — request Quote fields
+    let quote_fields = vec!["eventSymbol", "bidPrice", "askPrice", "bidSize", "askSize"];
+    let field_count = quote_fields.len();
+    dx_send!(sink, serde_json::json!({
+        "type": "FEED_SETUP",
+        "channel": 1,
+        "acceptAggregationPeriod": 0,
+        "acceptDataFormat": "COMPACT",
+        "acceptEventFields": {
+            "Quote": quote_fields
+        }
+    }));
+
+    // Wait for FEED_CONFIG
+    loop {
+        let msg = dx_recv!(stream)?;
+        if msg["type"] == "FEED_CONFIG" && msg["channel"] == 1 { break; }
+        if msg["type"] == "KEEPALIVE" { continue; }
+    }
+
+    // Step 8: Subscribe to quotes for all symbols
+    let add_list: Vec<serde_json::Value> = symbols.iter().map(|s| {
+        serde_json::json!({ "symbol": s, "type": "Quote" })
+    }).collect();
+    dx_send!(sink, serde_json::json!({
+        "type": "FEED_SUBSCRIPTION",
+        "channel": 1,
+        "add": add_list
+    }));
+
+    // Step 9: Spawn reader task that streams quotes through channel
+    let (tx, rx) = tokio::sync::mpsc::channel::<DxQuote>(256);
+
+    tokio::spawn(async move {
+        let _sink = sink; // keep sink alive so the connection stays open
+        loop {
+            let msg_val = match stream.next().await {
+                Some(Ok(Message::Text(txt))) => {
+                    match serde_json::from_str::<serde_json::Value>(&txt) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    }
+                }
+                Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => continue,
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                _ => continue,
+            };
+
+            if msg_val["type"] == "KEEPALIVE" { continue; }
+            if msg_val["type"] != "FEED_DATA" || msg_val["channel"] != 1 { continue; }
+
+            if let Some(data) = msg_val["data"].as_array() {
+                let mut i = 0;
+                while i < data.len() {
+                    if data[i].as_str() == Some("Quote") {
+                        i += 1;
+                        if let Some(values) = data.get(i).and_then(|v| v.as_array()) {
+                            let chunks = values.len() / field_count;
+                            for c in 0..chunks {
+                                let off = c * field_count;
+                                let symbol = values[off].as_str().unwrap_or("").to_string();
+                                let bid = parse_f64(&values[off + 1]);
+                                let ask = parse_f64(&values[off + 2]);
+                                let bid_size = parse_f64(&values[off + 3]);
+                                let ask_size = parse_f64(&values[off + 4]);
+
+                                if !symbol.is_empty() && !bid.is_nan() && !ask.is_nan() {
+                                    let quote = DxQuote { symbol, bid, ask, bid_size, ask_size };
+                                    if tx.send(quote).await.is_err() {
+                                        return; // receiver dropped
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+    });
+
+    Ok(rx)
+}
+
 /// Parse f64 from JSON value (handles "NaN", "Infinity" strings).
 fn parse_f64(v: &serde_json::Value) -> f64 {
     match v {

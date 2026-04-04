@@ -783,6 +783,134 @@ enum Drawing {
         p2: (usize, f64),
         color: egui::Color32,
     },
+    /// Anchored Text (1-click, text pinned to bar+price).
+    #[allow(dead_code)]
+    AnchoredText {
+        bar_idx: usize,
+        price: f64,
+        text: String,
+        color: egui::Color32,
+    },
+    /// Comment (1-click, text note pinned to bar+price).
+    #[allow(dead_code)]
+    Comment {
+        bar_idx: usize,
+        price: f64,
+        text: String,
+        color: egui::Color32,
+    },
+    /// Arrow Marker Left (1-click, left-pointing triangle).
+    #[allow(dead_code)]
+    ArrowMarkerLeft {
+        bar_idx: usize,
+        price: f64,
+        color: egui::Color32,
+    },
+    /// Arrow Marker Right (1-click, right-pointing triangle).
+    #[allow(dead_code)]
+    ArrowMarkerRight {
+        bar_idx: usize,
+        price: f64,
+        color: egui::Color32,
+    },
+    /// Circle (2 clicks: center + radius point).
+    #[allow(dead_code)]
+    Circle {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Pitch Fan (2 clicks).
+    #[allow(dead_code)]
+    PitchFan {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Trend-Based Fib Time (2 clicks).
+    #[allow(dead_code)]
+    TrendFibTime {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Gann Square (2 clicks).
+    #[allow(dead_code)]
+    GannSquare {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Gann Square Fixed (2 clicks).
+    #[allow(dead_code)]
+    GannSquareFixed {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Bars Pattern (2 clicks: source range to mirror).
+    #[allow(dead_code)]
+    BarsPattern {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Projection (2 clicks).
+    #[allow(dead_code)]
+    Projection {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Double Curve (2 clicks).
+    #[allow(dead_code)]
+    DoubleCurve {
+        p1: (usize, f64),
+        p2: (usize, f64),
+        color: egui::Color32,
+    },
+    /// Triangle Pattern (3 clicks).
+    #[allow(dead_code)]
+    TrianglePattern {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// Three Drives Pattern (3 clicks).
+    #[allow(dead_code)]
+    ThreeDrives {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// Elliott Double Combo WXY (3 clicks).
+    #[allow(dead_code)]
+    ElliottDouble {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// ABCD Pattern (4 clicks).
+    #[allow(dead_code)]
+    AbcdPattern {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// Cypher Pattern (5 clicks).
+    #[allow(dead_code)]
+    CypherPattern {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// Elliott Triangle ABCDE (5 clicks).
+    #[allow(dead_code)]
+    ElliottTriangle {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
+    /// Elliott Triple Combo WXYXZ (5 clicks).
+    #[allow(dead_code)]
+    ElliottTripleCombo {
+        points: Vec<(usize, f64)>,
+        color: egui::Color32,
+    },
 }
 
 /// Trade marker for chart overlay (DARWIN deals, broker fills).
@@ -817,6 +945,7 @@ struct TradeOverlay {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum DrawMode {
     None,
+    Eraser, // click near a drawing to delete it instantly
     PlacingHLine,
     PlacingTrendP1,
     PlacingTrendP2 { bar1: usize, price1: f64 },
@@ -952,6 +1081,34 @@ enum DrawMode {
     PlacingPriceNote,
     PlacingMeasureToolP1,
     PlacingMeasureToolP2 { bar1: usize, price1: f64 },
+    // ── New drawing tools ──
+    PlacingAnchoredText,
+    PlacingComment,
+    PlacingArrowMarkerLeft,
+    PlacingArrowMarkerRight,
+    PlacingCircleP1,
+    PlacingCircleP2 { bar1: usize, price1: f64 },
+    PlacingPitchFanP1,
+    PlacingPitchFanP2 { bar1: usize, price1: f64 },
+    PlacingTrendFibTimeP1,
+    PlacingTrendFibTimeP2 { bar1: usize, price1: f64 },
+    PlacingGannSquareP1,
+    PlacingGannSquareP2 { bar1: usize, price1: f64 },
+    PlacingGannSquareFixedP1,
+    PlacingGannSquareFixedP2 { bar1: usize, price1: f64 },
+    PlacingBarsPatternP1,
+    PlacingBarsPatternP2 { bar1: usize, price1: f64 },
+    PlacingProjectionP1,
+    PlacingProjectionP2 { bar1: usize, price1: f64 },
+    PlacingDoubleCurveP1,
+    PlacingDoubleCurveP2 { bar1: usize, price1: f64 },
+    PlacingTrianglePattern,
+    PlacingThreeDrives,
+    PlacingElliottDouble,
+    PlacingAbcdPattern,
+    PlacingCypherPattern,
+    PlacingElliottTriangle,
+    PlacingElliottTripleCombo,
 }
 
 // ─── Ichimoku data ───────────────────────────────────────────────────────────
@@ -7627,6 +7784,99 @@ fn draw_chart(
                     painter.circle_filled(egui::pos2(x2, y2), 3.0, *color);
                 }
             }
+            Drawing::AnchoredText { bar_idx, price, text, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    painter.text(egui::pos2(x, y), egui::Align2::LEFT_BOTTOM, text, egui::FontId::monospace(11.0), sel_tint(*color));
+                }
+            }
+            Drawing::Comment { bar_idx, price, text, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    let sc = sel_tint(*color);
+                    let galley = painter.layout_no_wrap(text.clone(), egui::FontId::monospace(9.0), sc);
+                    let tw = galley.rect.width(); let th = galley.rect.height();
+                    let pad = 3.0_f32;
+                    let br = egui::Rect::from_min_size(egui::pos2(x - pad, y - th - pad * 2.0), egui::vec2(tw + pad * 2.0, th + pad * 2.0));
+                    painter.rect_filled(br, 2.0, egui::Color32::from_rgba_premultiplied(20, 20, 30, 200));
+                    painter.rect_stroke(br, 2.0, egui::Stroke::new(1.0, sc), egui::StrokeKind::Outside);
+                    painter.galley(egui::pos2(x, y - th - pad), galley, sc);
+                }
+            }
+            Drawing::ArrowMarkerLeft { bar_idx, price, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    let sc = sel_tint(*color);
+                    let sz = 8.0_f32;
+                    painter.add(egui::Shape::convex_polygon(vec![egui::pos2(x - sz, y), egui::pos2(x + sz * 0.5, y - sz * 0.7), egui::pos2(x + sz * 0.5, y + sz * 0.7)], sc, egui::Stroke::NONE));
+                }
+            }
+            Drawing::ArrowMarkerRight { bar_idx, price, color } => {
+                if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*price);
+                    let sc = sel_tint(*color);
+                    let sz = 8.0_f32;
+                    painter.add(egui::Shape::convex_polygon(vec![egui::pos2(x + sz, y), egui::pos2(x - sz * 0.5, y - sz * 0.7), egui::pos2(x - sz * 0.5, y + sz * 0.7)], sc, egui::Stroke::NONE));
+                }
+            }
+            Drawing::Circle { p1, p2, color } => {
+                if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx {
+                    let cx = chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let cy = price_to_y(p1.1);
+                    let rx = chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let ry = price_to_y(p2.1);
+                    let radius = ((rx - cx).powi(2) + (ry - cy).powi(2)).sqrt();
+                    painter.circle_stroke(egui::pos2(cx, cy), radius, egui::Stroke::new(effective_width, sel_tint(*color)));
+                }
+            }
+            Drawing::PitchFan { p1, p2, color } | Drawing::TrendFibTime { p1, p2, color }
+            | Drawing::GannSquare { p1, p2, color } | Drawing::GannSquareFixed { p1, p2, color }
+            | Drawing::BarsPattern { p1, p2, color } | Drawing::Projection { p1, p2, color }
+            | Drawing::DoubleCurve { p1, p2, color } => {
+                if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx {
+                    let x1 = chart_rect.left() + ((p1.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let y1 = price_to_y(p1.1);
+                    let x2 = chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w;
+                    let y2 = price_to_y(p2.1);
+                    let sc = sel_tint(*color);
+                    draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sc), d_style);
+                    painter.circle_filled(egui::pos2(x1, y1), 3.0, sc);
+                    painter.circle_filled(egui::pos2(x2, y2), 3.0, sc);
+                }
+            }
+            Drawing::TrianglePattern { points, color } | Drawing::ThreeDrives { points, color }
+            | Drawing::ElliottDouble { points, color } | Drawing::AbcdPattern { points, color }
+            | Drawing::CypherPattern { points, color } | Drawing::ElliottTriangle { points, color }
+            | Drawing::ElliottTripleCombo { points, color } => {
+                let labels: &[&str] = match drawing {
+                    Drawing::TrianglePattern { .. } => &["A", "B", "C"],
+                    Drawing::ThreeDrives { .. } => &["1", "2", "3"],
+                    Drawing::ElliottDouble { .. } => &["W", "X", "Y"],
+                    Drawing::AbcdPattern { .. } => &["A", "B", "C", "D"],
+                    Drawing::CypherPattern { .. } => &["X", "A", "B", "C", "D"],
+                    Drawing::ElliottTriangle { .. } => &["A", "B", "C", "D", "E"],
+                    Drawing::ElliottTripleCombo { .. } => &["W", "X", "Y", "X", "Z"],
+                    _ => &[],
+                };
+                let screen_pts: Vec<(f32, f32)> = points.iter()
+                    .filter(|(bi, _)| *bi >= start_idx && *bi < end_idx)
+                    .map(|(bi, pr)| (chart_rect.left() + ((*bi - start_idx) as f32 + 0.5) * bar_w, price_to_y(*pr)))
+                    .collect();
+                let sc = sel_tint(*color);
+                for w in screen_pts.windows(2) {
+                    draw_line(&painter, egui::pos2(w[0].0, w[0].1), egui::pos2(w[1].0, w[1].1), egui::Stroke::new(effective_width, sc), d_style);
+                }
+                for (i, &(x, y)) in screen_pts.iter().enumerate() {
+                    painter.circle_filled(egui::pos2(x, y), 3.0, sc);
+                    if i < labels.len() {
+                        painter.text(egui::pos2(x, y - 12.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(10.0), sc);
+                    }
+                }
+            }
         }
     }
 
@@ -8339,8 +8589,11 @@ const COMMANDS: &[Command] = &[
     Command { name: "PORTFOLIO_HIST",desc: "Portfolio equity history" },
     Command { name: "HOLDERS",       desc: "Institutional holders" },
     Command { name: "OPTION_CHAIN",  desc: "tastytrade option chain for current symbol" },
+    Command { name: "OPTIONS",       desc: "Alpaca options chain for current symbol" },
+    Command { name: "WATCHLISTS",    desc: "Alpaca watchlists" },
     Command { name: "COMPILE",       desc: "MQL5/PineScript indicator compiler" },
     Command { name: "STREAM",        desc: "Start real-time WebSocket stream for current symbol" },
+    Command { name: "DXLINK_STREAM", desc: "Start DXLink real-time quote stream (tastytrade)" },
     // Analysis
     Command { name: "CORRELATION",   desc: "Correlation matrix" },
     Command { name: "SEASONALS",     desc: "Seasonal patterns" },
@@ -8368,6 +8621,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "DARWIN_BROWSER", desc: "Browse DARWIN FTP universe (50K DARWINs)" },
     Command { name: "DARWINIA_SCAN",  desc: "DarwinIA universe scan — top DARWINs by Sharpe (GPU → CPU)" },
     Command { name: "DARWINEXOUTLIERS", desc: "Darwinex symbol outlier analysis (VaR, spread, swap, ATR)" },
+    Command { name: "EXPORT_DARWIN", desc: "Export all DARWIN data to JSON file" },
+    Command { name: "IMPORT_DARWIN", desc: "Import DARWIN data from JSON file" },
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
     Command { name: "RISKRUIN",        desc: "Risk-of-Ruin calculator (Monte Carlo equity path simulation)" },
     Command { name: "REPLAY",          desc: "Market replay mode — step through history bar-by-bar" },
@@ -8413,6 +8668,26 @@ const COMMANDS: &[Command] = &[
     Command { name: "DRAW_FIB_SPIRAL",  desc: "Draw Fibonacci spiral (2 clicks: center + radius)" },
     Command { name: "DRAW_ROTATED_RECT",desc: "Draw rotated rectangle (3 clicks)" },
     Command { name: "DRAW_ANCHORED_VWAP",desc: "Draw anchored VWAP line from bar" },
+    Command { name: "DRAW_ANCHORED_TEXT", desc: "Draw anchored text (1-click)" },
+    Command { name: "DRAW_COMMENT",       desc: "Draw comment note (1-click)" },
+    Command { name: "DRAW_ARROW_LEFT",    desc: "Draw left arrow marker (1-click)" },
+    Command { name: "DRAW_ARROW_RIGHT",   desc: "Draw right arrow marker (1-click)" },
+    Command { name: "DRAW_CIRCLE",        desc: "Draw circle (2-click center + radius)" },
+    Command { name: "DRAW_PITCH_FAN",     desc: "Draw pitch fan (2 clicks)" },
+    Command { name: "DRAW_TREND_FIB_TIME",desc: "Draw trend-based fib time (2 clicks)" },
+    Command { name: "DRAW_GANN_SQUARE",   desc: "Draw Gann square (2 clicks)" },
+    Command { name: "DRAW_GANN_SQUARE_FIXED", desc: "Draw Gann square fixed (2 clicks)" },
+    Command { name: "DRAW_BARS_PATTERN",  desc: "Draw bars pattern (2 clicks)" },
+    Command { name: "DRAW_PROJECTION",    desc: "Draw projection (2 clicks)" },
+    Command { name: "DRAW_DOUBLE_CURVE",  desc: "Draw double curve (2 clicks)" },
+    Command { name: "DRAW_TRIANGLE_PATTERN", desc: "Draw triangle pattern (3 clicks)" },
+    Command { name: "DRAW_THREE_DRIVES",  desc: "Draw three drives pattern (3 clicks)" },
+    Command { name: "DRAW_ELLIOTT_DOUBLE",desc: "Draw Elliott double combo WXY (3 clicks)" },
+    Command { name: "DRAW_ABCD",          desc: "Draw ABCD pattern (4 clicks)" },
+    Command { name: "DRAW_CYPHER",        desc: "Draw Cypher pattern (5 clicks)" },
+    Command { name: "DRAW_ELLIOTT_TRIANGLE", desc: "Draw Elliott triangle ABCDE (5 clicks)" },
+    Command { name: "DRAW_ELLIOTT_TRIPLE",desc: "Draw Elliott triple combo WXYXZ (5 clicks)" },
+    Command { name: "DRAW_ERASER",   desc: "Eraser mode — click to delete drawings" },
     Command { name: "CLEAR_DRAWINGS",desc: "Clear all drawings on chart" },
     Command { name: "SESSIONS",      desc: "Toggle trading session highlighting (Asian/London/NY)" },
     Command { name: "VOL_HEATMAP",   desc: "Toggle volume heatmap candle coloring" },
@@ -8559,6 +8834,8 @@ struct AccountDetailCache {
     performance_attribution: Vec<darwin::SymbolAttribution>,
     dscore_components: Option<darwin::DScoreComponents>,
     investment_velocity: Vec<(String, f64)>,
+    tax_lots: Option<darwin::TaxSummary>,
+    investor_flow: Vec<darwin::InvestorFlow>,
 }
 
 /// Background-computed data — populated by background thread, read by render thread.
@@ -8628,6 +8905,10 @@ struct BgDarwinData {
     drawdown_attribution: Vec<darwin::DrawdownAttribution>,
     signal_decay: Vec<darwin::SignalDecay>,
     risk_budget: Vec<darwin::RiskBudget>,
+
+    // ── DARWIN analytics: rolling correlation + diversification ──
+    rolling_correlations: Vec<darwin::RollingCorrelation>,
+    low_correlation_darwins: Vec<darwin::DiversificationCandidate>,
 }
 
 /// Bottom panel mode.
@@ -8748,6 +9029,12 @@ enum BrokerCmd {
     GetShortInterest { symbol: String, finnhub_key: String },
     /// Fetch corporate actions for symbol.
     GetCorporateActions { symbol: String },
+    /// Fetch Alpaca watchlists.
+    GetWatchlists,
+    /// Create Alpaca watchlist.
+    CreateWatchlist { name: String, symbols: Vec<String> },
+    /// Fetch Alpaca options chain for underlying.
+    GetOptionsChain { symbol: String, expiry: String },
     /// Fetch live bars from Alpaca and store in cache (fallback when cache misses).
     FetchBars { symbol: String, timeframe: String, db_path: std::path::PathBuf },
     /// Crypto backfill via Kraken public OHLC API.
@@ -8804,6 +9091,12 @@ enum BrokerCmd {
     LanResyncDarwin,
     /// Scan unusual volume (background, heavy DB reads).
     ScanUnusualVolume { keys: Vec<(String, i64)> },
+    /// Start real-time DXLink quote stream via tastytrade WebSocket.
+    StartDxLinkStream { symbols: Vec<String> },
+    /// Export all DARWIN data to JSON.
+    ExportDarwinData,
+    /// Import DARWIN data from JSON string.
+    ImportDarwinData { json: String },
 }
 
 /// Messages sent from async broker task → UI.
@@ -9448,6 +9741,8 @@ impl TyphooNApp {
                         BrokerCmd::FetchCongressTrades => Some("CONGRESS_TRADES"),
                         BrokerCmd::FredFetch { .. } => Some("FRED_DATA"),
                         BrokerCmd::DarwinImportAll { .. } => Some("DARWIN_IMPORT"),
+                        BrokerCmd::ExportDarwinData => Some("EXPORT_DARWIN"),
+                        BrokerCmd::ImportDarwinData { .. } => Some("IMPORT_DARWIN"),
                         // FetchFilingContent NOT forwarded — SEC EDGAR is public, fetch directly
                         // BrokerCmd::FetchFilingContent { .. } => Some("SEC_FILING"),
                         _ => None,
@@ -9841,6 +10136,36 @@ impl TyphooNApp {
                             }
                         }
                     }
+                    BrokerCmd::GetWatchlists => {
+                        if let Some(ref b) = broker {
+                            match b.get_watchlists().await {
+                                Ok(v) => {
+                                    let text = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Watchlists".into(), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::CreateWatchlist { name, symbols } => {
+                        if let Some(ref b) = broker {
+                            match b.create_watchlist(&name, &symbols).await {
+                                Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Watchlist '{}' created ({} symbols)", name, symbols.len()))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetOptionsChain { symbol, expiry } => {
+                        if let Some(ref b) = broker {
+                            match b.get_options_chain(&symbol, &expiry).await {
+                                Ok(contracts) => {
+                                    let text = serde_json::to_string_pretty(&contracts).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("OptionsChain: {}", symbol), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
                     BrokerCmd::DarwinImportAll { dir, db_path: _ } => {
                         // Spawn a dedicated thread so we don't block the broker command loop
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -9901,6 +10226,56 @@ impl TyphooNApp {
                                 }
                             }
                             importing.store(false, std::sync::atomic::Ordering::Relaxed);
+                        });
+                    }
+                    BrokerCmd::ExportDarwinData => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        std::thread::spawn(move || {
+                            match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
+                                Ok(cache) => {
+                                    if let Ok(conn) = cache.connection() {
+                                        match darwin::export_darwin_data(&conn) {
+                                            Ok((json, accts, deals, positions)) => {
+                                                let path = dirs_home().join("cache").join("darwin_export.json");
+                                                match std::fs::write(&path, &json) {
+                                                    Ok(_) => {
+                                                        let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                                            "DARWIN export: {} accounts, {} deals, {} positions -> {}",
+                                                            accts, deals, positions, path.display()
+                                                        )));
+                                                    }
+                                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Write failed: {e}"))); }
+                                                }
+                                            }
+                                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Export failed: {e}"))); }
+                                        }
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(e)); }
+                            }
+                        });
+                    }
+                    BrokerCmd::ImportDarwinData { json } => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let shared_cache_broker = shared_cache_broker.clone();
+                        std::thread::spawn(move || {
+                            match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
+                                Ok(cache) => {
+                                    if let Ok(conn) = cache.connection() {
+                                        match darwin::import_darwin_data(&conn, &json) {
+                                            Ok((accts, deals, positions)) => {
+                                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                                    "DARWIN import: {} accounts, {} deals, {} positions",
+                                                    accts, deals, positions
+                                                )));
+                                            }
+                                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Import failed: {e}"))); }
+                                        }
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(e)); }
+                            }
                         });
                     }
                     BrokerCmd::FundamentalsScrape { db_path: _ } => {
@@ -10087,6 +10462,38 @@ impl TyphooNApp {
                             results.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
                             let _ = msg_tx.send(BrokerMsg::UnusualVolumeResults(results));
                         });
+                    }
+                    BrokerCmd::StartDxLinkStream { symbols } => {
+                        if let Some(ref tb) = tt_broker {
+                            let msg_tx = broker_msg_tx_clone.clone();
+                            let symbol_count = symbols.len();
+                            match tb.get_streaming_token().await {
+                                Ok(dx_token) => {
+                                    match typhoon_engine::broker::dxlink::subscribe_quotes(&dx_token, symbols).await {
+                                        Ok(mut rx) => {
+                                            let _ = msg_tx.send(BrokerMsg::OrderResult(
+                                                format!("DXLink stream started for {} symbols", symbol_count)
+                                            ));
+                                            tokio::spawn(async move {
+                                                while let Some(q) = rx.recv().await {
+                                                    if msg_tx.send(BrokerMsg::StreamQuoteTick {
+                                                        symbol: q.symbol,
+                                                        bid: q.bid,
+                                                        ask: q.ask,
+                                                    }).is_err() {
+                                                        break; // UI dropped
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("DXLink stream failed: {e}"))); }
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("DXLink token failed: {e}"))); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect tastytrade first for DXLink stream".into()));
+                        }
                     }
                     BrokerCmd::Mt5Sync { sources, .. } => {
                         // Open a SEPARATE connection for the target — NOT the shared Arc.
@@ -11510,6 +11917,8 @@ impl TyphooNApp {
                             kv_load!("darwin:market_regime", market_regime, opt);
                             kv_load!("darwin:tail_risk", tail_risk, opt);
                             kv_load!("darwin:seasonal_analysis", seasonal_analysis);
+                            kv_load!("darwin:rolling_correlations", rolling_correlations);
+                            kv_load!("darwin:low_correlation_darwins", low_correlation_darwins);
                         } else {
                             // Server/standalone: compute from deals, store ALL to KV for clients
                             data.optimal_allocation = darwin::compute_optimal_allocation(conn).unwrap_or_default();
@@ -11547,6 +11956,26 @@ impl TyphooNApp {
                                 }
                                 data.per_darwin_var = per_var;
                             }
+                            // Rolling correlation: O(n^2) pairs of DARWINs
+                            {
+                                let tickers: Vec<String> = data.accounts.iter().map(|a| a.darwin_ticker.clone()).collect();
+                                let mut corrs = Vec::new();
+                                for i in 0..tickers.len() {
+                                    for j in (i+1)..tickers.len() {
+                                        if let Ok(rc) = darwin::compute_rolling_correlation(conn, &tickers[i], &tickers[j], 45) {
+                                            corrs.push(rc);
+                                        }
+                                    }
+                                }
+                                data.rolling_correlations = corrs;
+                            }
+                            // Low-correlation DARWIN finder (FTP scan)
+                            {
+                                let ftp_dir = shared_ftp_dir_bg.lock().ok().map(|d| d.clone()).unwrap_or_default();
+                                if !ftp_dir.is_empty() {
+                                    data.low_correlation_darwins = darwin::find_low_correlation_darwins(conn, &ftp_dir, 20).unwrap_or_default();
+                                }
+                            }
                             // Store ALL analytics to KV for LAN clients
                             macro_rules! kv_store {
                                 ($key:expr, $val:expr) => {
@@ -11572,6 +12001,8 @@ impl TyphooNApp {
                             if let Some(ref v) = data.market_regime { kv_store!("darwin:market_regime", v); }
                             if let Some(ref v) = data.tail_risk { kv_store!("darwin:tail_risk", v); }
                             kv_store!("darwin:seasonal_analysis", &data.seasonal_analysis);
+                            kv_store!("darwin:rolling_correlations", &data.rolling_correlations);
+                            kv_store!("darwin:low_correlation_darwins", &data.low_correlation_darwins);
                         }
 
                         // Phase 5: per-account detailed analytics (DARWIN Accounts window)
@@ -11678,11 +12109,18 @@ impl TyphooNApp {
                                         if let Ok(ref conn) = cache_ref.open_bg_read_connection() {
                                             det.performance_attribution = darwin::compute_performance_attribution(conn, &ticker).unwrap_or_default();
                                         }
+                                        // Tax lots (current year)
+                                        if let Ok(ref conn) = cache_ref.open_bg_read_connection() {
+                                            use chrono::Datelike;
+                                            let year = chrono::Utc::now().year();
+                                            det.tax_lots = darwin::compute_tax_lots(conn, &ticker, year).ok();
+                                        }
                                         // D-Score components from FTP
                                         if !ftp_dir.is_empty() {
                                             det.dscore_components = darwin::get_dscore_components(&ftp_dir, &ticker).ok();
-                                            // Investor flow → investment velocity
+                                            // Investor flow (raw) + investment velocity
                                             if let Ok(flow) = darwin::get_investor_flow(&ftp_dir, &ticker) {
+                                                det.investor_flow = flow.clone();
                                                 det.investment_velocity = darwin::compute_investment_velocity(&flow);
                                             }
                                         }
@@ -12273,6 +12711,19 @@ impl TyphooNApp {
             "PORTFOLIO_HIST" => {
                 let _ = self.broker_tx.send(BrokerCmd::GetPortfolioHistory { period: "1M".into() });
             }
+            "WATCHLISTS"    => {
+                let _ = self.broker_tx.send(BrokerCmd::GetWatchlists);
+            }
+            "OPTIONS"       => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    // Default to nearest monthly expiry (approximate)
+                    let expiry = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                    let _ = self.broker_tx.send(BrokerCmd::GetOptionsChain { symbol: sym, expiry });
+                }
+            }
             "HOLDERS"       => self.show_holders = true,
             "OPTION_CHAIN"  => {
                 let sym = self.charts.get(self.active_tab)
@@ -12294,6 +12745,15 @@ impl TyphooNApp {
                     let _ = self.broker_tx.send(BrokerCmd::StartStream { trade_symbols: vec![sym.clone()], quote_symbols: vec![sym.clone()] });
                     self.stream_active = true;
                     self.log.push_back(LogEntry::info(format!("Starting stream for {}", sym)));
+                }
+            }
+            "DXLINK_STREAM" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::StartDxLinkStream { symbols: vec![sym.clone()] });
+                    self.log.push_back(LogEntry::info(format!("Starting DXLink stream for {}", sym)));
                 }
             }
             "CORRELATION"   => self.show_correlation = true,
@@ -12418,6 +12878,23 @@ impl TyphooNApp {
             }
             "DSCORE"        => { self.show_var_mult = true; }
             "DARWIN_BROWSER" => { self.show_darwin_browser = true; }
+            "EXPORT_DARWIN" => {
+                let _ = self.broker_tx.send(BrokerCmd::ExportDarwinData);
+                self.log.push_back(LogEntry::info("Exporting DARWIN data to JSON..."));
+            }
+            "IMPORT_DARWIN" => {
+                // Open file dialog (or use fixed path) — for now use a well-known path
+                let path = dirs_home().join("cache").join("darwin_export.json");
+                match std::fs::read_to_string(&path) {
+                    Ok(json) => {
+                        let _ = self.broker_tx.send(BrokerCmd::ImportDarwinData { json });
+                        self.log.push_back(LogEntry::info(format!("Importing DARWIN data from {}", path.display())));
+                    }
+                    Err(e) => {
+                        self.log.push_back(LogEntry::err(format!("Failed to read {}: {}", path.display(), e)));
+                    }
+                }
+            }
             "RISKRUIN" => self.show_risk_ruin = true,
             "REPLAY" => {
                 self.replay_active = !self.replay_active;
@@ -12574,7 +13051,27 @@ impl TyphooNApp {
             "DRAW_FIB_WEDGE" => self.draw_mode = DrawMode::PlacingFibWedgeP1,
             "DRAW_PRICE_NOTE" => self.draw_mode = DrawMode::PlacingPriceNote,
             "DRAW_MEASURE_TOOL" => self.draw_mode = DrawMode::PlacingMeasureToolP1,
-            "CLEAR_DRAWINGS" => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); } }
+            "DRAW_ANCHORED_TEXT" => self.draw_mode = DrawMode::PlacingAnchoredText,
+            "DRAW_COMMENT" => self.draw_mode = DrawMode::PlacingComment,
+            "DRAW_ARROW_LEFT" => self.draw_mode = DrawMode::PlacingArrowMarkerLeft,
+            "DRAW_ARROW_RIGHT" => self.draw_mode = DrawMode::PlacingArrowMarkerRight,
+            "DRAW_CIRCLE" => self.draw_mode = DrawMode::PlacingCircleP1,
+            "DRAW_PITCH_FAN" => self.draw_mode = DrawMode::PlacingPitchFanP1,
+            "DRAW_TREND_FIB_TIME" => self.draw_mode = DrawMode::PlacingTrendFibTimeP1,
+            "DRAW_GANN_SQUARE" => self.draw_mode = DrawMode::PlacingGannSquareP1,
+            "DRAW_GANN_SQUARE_FIXED" => self.draw_mode = DrawMode::PlacingGannSquareFixedP1,
+            "DRAW_BARS_PATTERN" => self.draw_mode = DrawMode::PlacingBarsPatternP1,
+            "DRAW_PROJECTION" => self.draw_mode = DrawMode::PlacingProjectionP1,
+            "DRAW_DOUBLE_CURVE" => self.draw_mode = DrawMode::PlacingDoubleCurveP1,
+            "DRAW_TRIANGLE_PATTERN" => { self.draw_mode = DrawMode::PlacingTrianglePattern; self.multi_click_points.clear(); },
+            "DRAW_THREE_DRIVES" => { self.draw_mode = DrawMode::PlacingThreeDrives; self.multi_click_points.clear(); },
+            "DRAW_ELLIOTT_DOUBLE" => { self.draw_mode = DrawMode::PlacingElliottDouble; self.multi_click_points.clear(); },
+            "DRAW_ABCD" => { self.draw_mode = DrawMode::PlacingAbcdPattern; self.multi_click_points.clear(); },
+            "DRAW_CYPHER" => { self.draw_mode = DrawMode::PlacingCypherPattern; self.multi_click_points.clear(); },
+            "DRAW_ELLIOTT_TRIANGLE" => { self.draw_mode = DrawMode::PlacingElliottTriangle; self.multi_click_points.clear(); },
+            "DRAW_ELLIOTT_TRIPLE" => { self.draw_mode = DrawMode::PlacingElliottTripleCombo; self.multi_click_points.clear(); },
+            "DRAW_ERASER"    => { self.draw_mode = DrawMode::Eraser; }
+            "CLEAR_DRAWINGS" => { if let Some(c) = self.charts.get_mut(self.active_tab) { c.drawings.clear(); c.drawing_styles.clear(); } }
             "SESSIONS" => { self.show_sessions = !self.show_sessions; self.log.push_back(LogEntry::info(format!("Sessions: {}", if self.show_sessions { "ON" } else { "OFF" }))); }
             "VOL_HEATMAP" => { self.show_vol_heatmap = !self.show_vol_heatmap; self.log.push_back(LogEntry::info(format!("Volume heatmap: {}", if self.show_vol_heatmap { "ON" } else { "OFF" }))); }
             "VWAP" => { self.show_vwap = !self.show_vwap; self.log.push_back(LogEntry::info(format!("VWAP: {}", if self.show_vwap { "ON" } else { "OFF" }))); }
@@ -13082,6 +13579,25 @@ impl TyphooNApp {
                     Drawing::FibWedge { p1, p2, p3, color } => Some(serde_json::json!({"type":"fibwedge","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"p3":[p3.0,p3.1],"color":[color.r(),color.g(),color.b()]})),
                     Drawing::PriceNote { price, text, color } => Some(serde_json::json!({"type":"pricenote","price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
                     Drawing::MeasureTool { p1, p2, color } => Some(serde_json::json!({"type":"measuretool","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::AnchoredText { bar_idx, price, text, color } => Some(serde_json::json!({"type":"anchoredtext","bar_idx":bar_idx,"price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Comment { bar_idx, price, text, color } => Some(serde_json::json!({"type":"comment","bar_idx":bar_idx,"price":price,"text":text,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ArrowMarkerLeft { bar_idx, price, color } => Some(serde_json::json!({"type":"arrowleft","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ArrowMarkerRight { bar_idx, price, color } => Some(serde_json::json!({"type":"arrowright","bar_idx":bar_idx,"price":price,"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Circle { p1, p2, color } => Some(serde_json::json!({"type":"circle","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::PitchFan { p1, p2, color } => Some(serde_json::json!({"type":"pitchfan","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TrendFibTime { p1, p2, color } => Some(serde_json::json!({"type":"trendfibtime","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::GannSquare { p1, p2, color } => Some(serde_json::json!({"type":"gannsquare","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::GannSquareFixed { p1, p2, color } => Some(serde_json::json!({"type":"gannsquarefixed","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::BarsPattern { p1, p2, color } => Some(serde_json::json!({"type":"barspattern","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::Projection { p1, p2, color } => Some(serde_json::json!({"type":"projection","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::DoubleCurve { p1, p2, color } => Some(serde_json::json!({"type":"doublecurve","p1":[p1.0,p1.1],"p2":[p2.0,p2.1],"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::TrianglePattern { points, color } => Some(serde_json::json!({"type":"trianglepattern","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ThreeDrives { points, color } => Some(serde_json::json!({"type":"threedrives","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ElliottDouble { points, color } => Some(serde_json::json!({"type":"elliottdouble","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::AbcdPattern { points, color } => Some(serde_json::json!({"type":"abcd","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::CypherPattern { points, color } => Some(serde_json::json!({"type":"cypher","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ElliottTriangle { points, color } => Some(serde_json::json!({"type":"elliotttriangle","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
+                    Drawing::ElliottTripleCombo { points, color } => Some(serde_json::json!({"type":"elliotttriple","points":points.iter().map(|p| serde_json::json!([p.0, p.1])).collect::<Vec<_>>(),"color":[color.r(),color.g(),color.b()]})),
                 }).collect::<Vec<_>>()
             }).unwrap_or_default(),
             "alerts": self.alerts.iter().map(|(p, l)| serde_json::json!({"price": p, "label": l})).collect::<Vec<_>>(),
@@ -13269,6 +13785,25 @@ impl TyphooNApp {
                                 Some("fibwedge") => { if let (Some(p1), Some(p2), Some(p3)) = (parse_pt(d,"p1"), parse_pt(d,"p2"), parse_pt(d,"p3")) { chart.drawings.push(Drawing::FibWedge { p1, p2, p3, color: parse_col(d) }); } }
                                 Some("pricenote") => { if let (Some(p), Some(t)) = (d["price"].as_f64(), d["text"].as_str()) { chart.drawings.push(Drawing::PriceNote { price: p, text: t.to_string(), color: parse_col(d) }); } }
                                 Some("measuretool") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::MeasureTool { p1, p2, color: parse_col(d) }); } }
+                                Some("anchoredtext") => { if let (Some(idx), Some(p), Some(t)) = (d["bar_idx"].as_u64(), d["price"].as_f64(), d["text"].as_str()) { chart.drawings.push(Drawing::AnchoredText { bar_idx: idx as usize, price: p, text: t.to_string(), color: parse_col(d) }); } }
+                                Some("comment") => { if let (Some(idx), Some(p), Some(t)) = (d["bar_idx"].as_u64(), d["price"].as_f64(), d["text"].as_str()) { chart.drawings.push(Drawing::Comment { bar_idx: idx as usize, price: p, text: t.to_string(), color: parse_col(d) }); } }
+                                Some("arrowleft") => { if let (Some(idx), Some(p)) = (d["bar_idx"].as_u64(), d["price"].as_f64()) { chart.drawings.push(Drawing::ArrowMarkerLeft { bar_idx: idx as usize, price: p, color: parse_col(d) }); } }
+                                Some("arrowright") => { if let (Some(idx), Some(p)) = (d["bar_idx"].as_u64(), d["price"].as_f64()) { chart.drawings.push(Drawing::ArrowMarkerRight { bar_idx: idx as usize, price: p, color: parse_col(d) }); } }
+                                Some("circle") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::Circle { p1, p2, color: parse_col(d) }); } }
+                                Some("pitchfan") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::PitchFan { p1, p2, color: parse_col(d) }); } }
+                                Some("trendfibtime") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::TrendFibTime { p1, p2, color: parse_col(d) }); } }
+                                Some("gannsquare") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::GannSquare { p1, p2, color: parse_col(d) }); } }
+                                Some("gannsquarefixed") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::GannSquareFixed { p1, p2, color: parse_col(d) }); } }
+                                Some("barspattern") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::BarsPattern { p1, p2, color: parse_col(d) }); } }
+                                Some("projection") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::Projection { p1, p2, color: parse_col(d) }); } }
+                                Some("doublecurve") => { if let (Some(p1), Some(p2)) = (parse_pt(d,"p1"), parse_pt(d,"p2")) { chart.drawings.push(Drawing::DoubleCurve { p1, p2, color: parse_col(d) }); } }
+                                Some("trianglepattern") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::TrianglePattern { points, color: parse_col(d) }); } } }
+                                Some("threedrives") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::ThreeDrives { points, color: parse_col(d) }); } } }
+                                Some("elliottdouble") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::ElliottDouble { points, color: parse_col(d) }); } } }
+                                Some("abcd") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::AbcdPattern { points, color: parse_col(d) }); } } }
+                                Some("cypher") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::CypherPattern { points, color: parse_col(d) }); } } }
+                                Some("elliotttriangle") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::ElliottTriangle { points, color: parse_col(d) }); } } }
+                                Some("elliotttriple") => { if let Some(pts) = d["points"].as_array() { let points: Vec<(usize, f64)> = pts.iter().filter_map(|p| { let a = p.as_array()?; Some((a.first()?.as_u64()? as usize, a.get(1)?.as_f64()?)) }).collect(); if !points.is_empty() { chart.drawings.push(Drawing::ElliottTripleCombo { points, color: parse_col(d) }); } } }
                                 _ => {}
                             }
                         }
@@ -20452,6 +20987,25 @@ impl TyphooNApp {
                                             Drawing::FibWedge { .. } => ("Fib Wedge", String::new()),
                                             Drawing::PriceNote { price, text, .. } => ("Price Note", format!("{:.4} {}", price, text)),
                                             Drawing::MeasureTool { p1, p2, .. } => ("Measure", format!("{:.4}", p2.1 - p1.1)),
+                                            Drawing::AnchoredText { text, .. } => ("Anchored Text", text.clone()),
+                                            Drawing::Comment { text, .. } => ("Comment", text.clone()),
+                                            Drawing::ArrowMarkerLeft { .. } => ("Arrow Left", String::new()),
+                                            Drawing::ArrowMarkerRight { .. } => ("Arrow Right", String::new()),
+                                            Drawing::Circle { .. } => ("Circle", String::new()),
+                                            Drawing::PitchFan { .. } => ("Pitch Fan", String::new()),
+                                            Drawing::TrendFibTime { .. } => ("Trend Fib Time", String::new()),
+                                            Drawing::GannSquare { .. } => ("Gann Square", String::new()),
+                                            Drawing::GannSquareFixed { .. } => ("Gann Square Fixed", String::new()),
+                                            Drawing::BarsPattern { .. } => ("Bars Pattern", String::new()),
+                                            Drawing::Projection { .. } => ("Projection", String::new()),
+                                            Drawing::DoubleCurve { .. } => ("Double Curve", String::new()),
+                                            Drawing::TrianglePattern { .. } => ("Triangle Pattern", String::new()),
+                                            Drawing::ThreeDrives { .. } => ("Three Drives", String::new()),
+                                            Drawing::ElliottDouble { .. } => ("Elliott WXY", String::new()),
+                                            Drawing::AbcdPattern { .. } => ("ABCD", String::new()),
+                                            Drawing::CypherPattern { .. } => ("Cypher", String::new()),
+                                            Drawing::ElliottTriangle { .. } => ("Elliott ABCDE", String::new()),
+                                            Drawing::ElliottTripleCombo { .. } => ("Elliott WXYXZ", String::new()),
                                         };
                                         ui.label(egui::RichText::new(type_name).small());
                                         ui.label(egui::RichText::new(details).small().color(AXIS_TEXT));
@@ -23638,6 +24192,10 @@ impl eframe::App for TyphooNApp {
                         if ui.button("Time Cycle (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingTimeCycleP1; ui.close(); }
                         if ui.button("Inside Pitchfork (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingInsidePitchforkP1; ui.close(); }
                         if ui.button("Fib Wedge (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingFibWedgeP1; ui.close(); }
+                        if ui.button("Pitch Fan (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingPitchFanP1; ui.close(); }
+                        if ui.button("Trend Fib Time (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingTrendFibTimeP1; ui.close(); }
+                        if ui.button("Gann Square (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingGannSquareP1; ui.close(); }
+                        if ui.button("Gann Square Fixed (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingGannSquareFixedP1; ui.close(); }
                     });
                     ui.separator();
 
@@ -23645,6 +24203,9 @@ impl eframe::App for TyphooNApp {
                     ui.menu_button(egui::RichText::new("Elliott").small().color(normal_col), |ui| {
                         if ui.button("Elliott Wave 1-5 (5 clicks)").clicked() { self.draw_mode = DrawMode::PlacingElliottWave; self.multi_click_points.clear(); ui.close(); }
                         if ui.button("ABC Correction (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingAbcCorrection; self.multi_click_points.clear(); ui.close(); }
+                        if ui.button("Elliott Double WXY (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingElliottDouble; self.multi_click_points.clear(); ui.close(); }
+                        if ui.button("Elliott Triangle ABCDE (5 clicks)").clicked() { self.draw_mode = DrawMode::PlacingElliottTriangle; self.multi_click_points.clear(); ui.close(); }
+                        if ui.button("Elliott Triple WXYXZ (5 clicks)").clicked() { self.draw_mode = DrawMode::PlacingElliottTripleCombo; self.multi_click_points.clear(); ui.close(); }
                     });
                     ui.separator();
 
@@ -23655,6 +24216,8 @@ impl eframe::App for TyphooNApp {
                         if ui.button("Date & Price Range (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingDatePriceRangeP1; ui.close(); }
                         if ui.button("Ruler (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingRulerP1; ui.close(); }
                         if ui.button("Measure Tool (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingMeasureToolP1; ui.close(); }
+                        if ui.button("Bars Pattern (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingBarsPatternP1; ui.close(); }
+                        if ui.button("Projection (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingProjectionP1; ui.close(); }
                     });
                     ui.separator();
 
@@ -23662,6 +24225,10 @@ impl eframe::App for TyphooNApp {
                     ui.menu_button(egui::RichText::new("Patterns").small().color(normal_col), |ui| {
                         if ui.button("Head & Shoulders (5 clicks)").clicked() { self.draw_mode = DrawMode::PlacingHeadShoulders; self.multi_click_points.clear(); ui.close(); }
                         if ui.button("XABCD Pattern (5 clicks)").clicked() { self.draw_mode = DrawMode::PlacingXabcdPattern; self.multi_click_points.clear(); ui.close(); }
+                        if ui.button("Triangle Pattern (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingTrianglePattern; self.multi_click_points.clear(); ui.close(); }
+                        if ui.button("Three Drives (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingThreeDrives; self.multi_click_points.clear(); ui.close(); }
+                        if ui.button("ABCD Pattern (4 clicks)").clicked() { self.draw_mode = DrawMode::PlacingAbcdPattern; self.multi_click_points.clear(); ui.close(); }
+                        if ui.button("Cypher Pattern (5 clicks)").clicked() { self.draw_mode = DrawMode::PlacingCypherPattern; self.multi_click_points.clear(); ui.close(); }
                     });
                     ui.separator();
 
@@ -23677,6 +24244,8 @@ impl eframe::App for TyphooNApp {
                         if ui.button("⌒  Arc (3 clicks)").clicked() { self.draw_mode = DrawMode::PlacingArcP1; ui.close(); }
                         if ui.button("∿  Curve (4 clicks)").clicked() { self.draw_mode = DrawMode::PlacingCurveP1; ui.close(); }
                         if ui.button("⤳  Path (multi-click)").clicked() { self.draw_mode = DrawMode::PlacingPath; self.polyline_points.clear(); ui.close(); }
+                        if ui.button("◯  Circle (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingCircleP1; ui.close(); }
+                        if ui.button("∿  Double Curve (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingDoubleCurveP1; ui.close(); }
                     });
                     ui.separator();
 
@@ -23700,6 +24269,10 @@ impl eframe::App for TyphooNApp {
                         if ui.button("\u{1F47B}  Ghost Feed (2 clicks)").clicked() { self.draw_mode = DrawMode::PlacingGhostFeedP1; ui.close(); }
                         if ui.button("\u{1F4CA}  Anchored VWAP").clicked() { self.draw_mode = DrawMode::PlacingAnchoredVwap; ui.close(); }
                         if ui.button("\u{1F4DD}  Price Note").clicked() { self.draw_mode = DrawMode::PlacingPriceNote; ui.close(); }
+                        if ui.button("A  Anchored Text").clicked() { self.draw_mode = DrawMode::PlacingAnchoredText; ui.close(); }
+                        if ui.button("#  Comment").clicked() { self.draw_mode = DrawMode::PlacingComment; ui.close(); }
+                        if ui.button("<  Arrow Left").clicked() { self.draw_mode = DrawMode::PlacingArrowMarkerLeft; ui.close(); }
+                        if ui.button(">  Arrow Right").clicked() { self.draw_mode = DrawMode::PlacingArrowMarkerRight; ui.close(); }
                     });
                     ui.separator();
 
@@ -23921,6 +24494,34 @@ impl eframe::App for TyphooNApp {
                             DrawMode::PlacingPriceNote => "Price Note: click price level",
                             DrawMode::PlacingMeasureToolP1 => "Measure: click start",
                             DrawMode::PlacingMeasureToolP2 { .. } => "Measure: click end",
+                            DrawMode::PlacingAnchoredText => "Anchored Text: click",
+                            DrawMode::PlacingComment => "Comment: click",
+                            DrawMode::PlacingArrowMarkerLeft => "Arrow Left: click",
+                            DrawMode::PlacingArrowMarkerRight => "Arrow Right: click",
+                            DrawMode::PlacingCircleP1 => "Circle: click center",
+                            DrawMode::PlacingCircleP2 { .. } => "Circle: click radius",
+                            DrawMode::PlacingPitchFanP1 => "Pitch Fan: click start",
+                            DrawMode::PlacingPitchFanP2 { .. } => "Pitch Fan: click end",
+                            DrawMode::PlacingTrendFibTimeP1 => "Trend Fib Time: click start",
+                            DrawMode::PlacingTrendFibTimeP2 { .. } => "Trend Fib Time: click end",
+                            DrawMode::PlacingGannSquareP1 => "Gann Square: click corner 1",
+                            DrawMode::PlacingGannSquareP2 { .. } => "Gann Square: click corner 2",
+                            DrawMode::PlacingGannSquareFixedP1 => "Gann Square Fixed: click corner 1",
+                            DrawMode::PlacingGannSquareFixedP2 { .. } => "Gann Square Fixed: click corner 2",
+                            DrawMode::PlacingBarsPatternP1 => "Bars Pattern: click start",
+                            DrawMode::PlacingBarsPatternP2 { .. } => "Bars Pattern: click end",
+                            DrawMode::PlacingProjectionP1 => "Projection: click start",
+                            DrawMode::PlacingProjectionP2 { .. } => "Projection: click end",
+                            DrawMode::PlacingDoubleCurveP1 => "Double Curve: click start",
+                            DrawMode::PlacingDoubleCurveP2 { .. } => "Double Curve: click end",
+                            DrawMode::PlacingTrianglePattern => "Triangle Pattern: click (3)",
+                            DrawMode::PlacingThreeDrives => "Three Drives: click (3)",
+                            DrawMode::PlacingElliottDouble => "Elliott WXY: click (3)",
+                            DrawMode::PlacingAbcdPattern => "ABCD: click (4)",
+                            DrawMode::PlacingCypherPattern => "Cypher: click (5)",
+                            DrawMode::PlacingElliottTriangle => "Elliott ABCDE: click (5)",
+                            DrawMode::PlacingElliottTripleCombo => "Elliott WXYXZ: click (5)",
+                            DrawMode::Eraser => "ERASER: click near drawing to delete",
                             DrawMode::None => "",
                         };
                         ui.label(egui::RichText::new(mode_name).small().color(active_col));
@@ -24189,7 +24790,11 @@ impl eframe::App for TyphooNApp {
                                 | Drawing::GannBox { p1, p2, .. } | Drawing::GhostFeed { p1, p2, .. }
                                 | Drawing::FibWedge { p1, p2, .. } | Drawing::DateRange { p1, p2, .. }
                                 | Drawing::DatePriceRange { p1, p2, .. } | Drawing::PriceRange { p1, p2, .. }
-                                | Drawing::ParallelChannel { p1, p2, .. } => {
+                                | Drawing::ParallelChannel { p1, p2, .. }
+                                | Drawing::Circle { p1, p2, .. } | Drawing::PitchFan { p1, p2, .. }
+                                | Drawing::TrendFibTime { p1, p2, .. } | Drawing::GannSquare { p1, p2, .. }
+                                | Drawing::GannSquareFixed { p1, p2, .. } | Drawing::BarsPattern { p1, p2, .. }
+                                | Drawing::Projection { p1, p2, .. } | Drawing::DoubleCurve { p1, p2, .. } => {
                                     p1.0 = move_bar(p1.0); p1.1 += price_delta;
                                     p2.0 = move_bar(p2.0); p2.1 += price_delta;
                                 }
@@ -24198,7 +24803,9 @@ impl eframe::App for TyphooNApp {
                                 | Drawing::TextLabel { bar_idx, price, .. } | Drawing::PriceLabel { bar_idx, price, .. }
                                 | Drawing::Signpost { bar_idx, price, .. } | Drawing::Flag { bar_idx, price, .. }
                                 | Drawing::ArrowMarker { bar_idx, price, .. } | Drawing::CrossMarker { bar_idx, price, .. }
-                                | Drawing::AnchorNote { bar_idx, price, .. } | Drawing::Emoji { bar_idx, price, .. } => {
+                                | Drawing::AnchorNote { bar_idx, price, .. } | Drawing::Emoji { bar_idx, price, .. }
+                                | Drawing::AnchoredText { bar_idx, price, .. } | Drawing::Comment { bar_idx, price, .. }
+                                | Drawing::ArrowMarkerLeft { bar_idx, price, .. } | Drawing::ArrowMarkerRight { bar_idx, price, .. } => {
                                     *bar_idx = move_bar(*bar_idx); *price += price_delta;
                                 }
                                 // origin + slope
@@ -24232,7 +24839,11 @@ impl eframe::App for TyphooNApp {
                                 Drawing::Polyline { points, .. } | Drawing::ElliottWave { points, .. }
                                 | Drawing::AbcCorrection { points, .. } | Drawing::HeadShoulders { points, .. }
                                 | Drawing::XabcdPattern { points, .. } | Drawing::Brush { points, .. }
-                                | Drawing::PathDraw { points, .. } => {
+                                | Drawing::PathDraw { points, .. }
+                                | Drawing::TrianglePattern { points, .. } | Drawing::ThreeDrives { points, .. }
+                                | Drawing::ElliottDouble { points, .. } | Drawing::AbcdPattern { points, .. }
+                                | Drawing::CypherPattern { points, .. } | Drawing::ElliottTriangle { points, .. }
+                                | Drawing::ElliottTripleCombo { points, .. } => {
                                     for pt in points.iter_mut() {
                                         pt.0 = move_bar(pt.0); pt.1 += price_delta;
                                     }
@@ -24455,8 +25066,8 @@ impl eframe::App for TyphooNApp {
                         );
                     }
 
-                    // ── drawing selection via click (DrawMode::None) ─────
-                    if resp.clicked() && self.draw_mode == DrawMode::None {
+                    // ── drawing selection via click (DrawMode::None) or eraser delete ─────
+                    if resp.clicked() && (self.draw_mode == DrawMode::None || self.draw_mode == DrawMode::Eraser) {
                         if let Some(click_pos) = ctx.input(|i| i.pointer.interact_pos()) {
                             let price_axis_w = 70.0_f32;
                             let chart_area = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right() - price_axis_w, rect.bottom()));
@@ -24547,18 +25158,18 @@ impl eframe::App for TyphooNApp {
                                                 let dv = (click_pos.x - x).abs();
                                                 dh.min(dv)
                                             }
-                                            Drawing::InfoLine { p1, p2, .. } | Drawing::ArrowLine { p1, p2, .. } | Drawing::Ruler { p1, p2, .. } | Drawing::MeasureTool { p1, p2, .. } | Drawing::Forecast { p1, p2, .. } | Drawing::TrendChannel { p1, p2, .. } if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx => {
+                                            Drawing::InfoLine { p1, p2, .. } | Drawing::ArrowLine { p1, p2, .. } | Drawing::Ruler { p1, p2, .. } | Drawing::MeasureTool { p1, p2, .. } | Drawing::Forecast { p1, p2, .. } | Drawing::TrendChannel { p1, p2, .. } | Drawing::Circle { p1, p2, .. } | Drawing::PitchFan { p1, p2, .. } | Drawing::TrendFibTime { p1, p2, .. } | Drawing::GannSquare { p1, p2, .. } | Drawing::GannSquareFixed { p1, p2, .. } | Drawing::BarsPattern { p1, p2, .. } | Drawing::Projection { p1, p2, .. } | Drawing::DoubleCurve { p1, p2, .. } if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx => {
                                                 let a = egui::pos2(bar_to_x(p1.0), price_to_y(p1.1));
                                                 let b = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
                                                 pt_line_dist(click_pos, a, b)
                                             }
-                                            Drawing::Polyline { points, .. } | Drawing::ElliottWave { points, .. } | Drawing::AbcCorrection { points, .. } | Drawing::HeadShoulders { points, .. } | Drawing::XabcdPattern { points, .. } => {
+                                            Drawing::Polyline { points, .. } | Drawing::ElliottWave { points, .. } | Drawing::AbcCorrection { points, .. } | Drawing::HeadShoulders { points, .. } | Drawing::XabcdPattern { points, .. } | Drawing::TrianglePattern { points, .. } | Drawing::ThreeDrives { points, .. } | Drawing::ElliottDouble { points, .. } | Drawing::AbcdPattern { points, .. } | Drawing::CypherPattern { points, .. } | Drawing::ElliottTriangle { points, .. } | Drawing::ElliottTripleCombo { points, .. } => {
                                                 // Min distance to any segment
                                                 let pts: Vec<egui::Pos2> = points.iter().filter(|(idx, _)| *idx >= start_idx && *idx < end_idx)
                                                     .map(|(idx, price)| egui::pos2(bar_to_x(*idx), price_to_y(*price))).collect();
                                                 pts.windows(2).map(|w| pt_line_dist(click_pos, w[0], w[1])).fold(HIT_THRESHOLD + 1.0, f32::min)
                                             }
-                                            Drawing::TextLabel { bar_idx, price, .. } | Drawing::ArrowMarker { bar_idx, price, .. } | Drawing::CrossMarker { bar_idx, price, .. } | Drawing::PriceLabel { bar_idx, price, .. } | Drawing::Signpost { bar_idx, price, .. } | Drawing::Flag { bar_idx, price, .. } if *bar_idx >= start_idx && *bar_idx < end_idx => {
+                                            Drawing::TextLabel { bar_idx, price, .. } | Drawing::ArrowMarker { bar_idx, price, .. } | Drawing::CrossMarker { bar_idx, price, .. } | Drawing::PriceLabel { bar_idx, price, .. } | Drawing::Signpost { bar_idx, price, .. } | Drawing::Flag { bar_idx, price, .. } | Drawing::AnchoredText { bar_idx, price, .. } | Drawing::Comment { bar_idx, price, .. } | Drawing::ArrowMarkerLeft { bar_idx, price, .. } | Drawing::ArrowMarkerRight { bar_idx, price, .. } if *bar_idx >= start_idx && *bar_idx < end_idx => {
                                                 let x = bar_to_x(*bar_idx);
                                                 let y = price_to_y(*price);
                                                 ((click_pos.x - x).powi(2) + (click_pos.y - y).powi(2)).sqrt()
@@ -24570,7 +25181,15 @@ impl eframe::App for TyphooNApp {
                                             best_idx = Some(i);
                                         }
                                     }
-                                    if best_idx != chart.selected_drawing {
+                                    if self.draw_mode == DrawMode::Eraser {
+                                        // Eraser mode: delete the nearest drawing on click
+                                        if let Some(idx) = best_idx {
+                                            let d = chart.drawings.remove(idx);
+                                            if idx < chart.drawing_styles.len() { chart.drawing_styles.remove(idx); }
+                                            chart.drawings_undo.push(d);
+                                            chart.selected_drawing = None;
+                                        }
+                                    } else if best_idx != chart.selected_drawing {
                                         chart.selected_drawing = best_idx;
                                     } else if best_idx.is_none() {
                                         // Click on empty space → deselect
@@ -24586,7 +25205,7 @@ impl eframe::App for TyphooNApp {
                     }
 
                     // ── drawing mode click handling ──────────────────────
-                    if resp.clicked() && self.draw_mode != DrawMode::None {
+                    if resp.clicked() && self.draw_mode != DrawMode::None && self.draw_mode != DrawMode::Eraser {
                         if let Some(pos) = crosshair {
                             // Calculate bar index and price from click position
                             let price_axis_w = 70.0_f32;
@@ -24636,6 +25255,7 @@ impl eframe::App for TyphooNApp {
                                 };
 
                                 match self.draw_mode {
+                                    DrawMode::Eraser | DrawMode::None => {} // handled above
                                     DrawMode::PlacingHLine => {
                                         chart.drawings.push(Drawing::HLine { price, color: HLINE_COL });
                                         self.draw_mode = DrawMode::None;
@@ -25159,6 +25779,137 @@ impl eframe::App for TyphooNApp {
                                     DrawMode::PlacingMeasureToolP2 { bar1, price1 } => {
                                         chart.drawings.push(Drawing::MeasureTool { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 200, 200) });
                                         self.draw_mode = DrawMode::None;
+                                    }
+                                    // ── New 1-click tools ──
+                                    DrawMode::PlacingAnchoredText => {
+                                        chart.drawings.push(Drawing::AnchoredText { bar_idx: abs_idx, price, text: "Text".to_string(), color: egui::Color32::WHITE });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingComment => {
+                                        chart.drawings.push(Drawing::Comment { bar_idx: abs_idx, price, text: "Comment".to_string(), color: egui::Color32::from_rgb(200, 200, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingArrowMarkerLeft => {
+                                        chart.drawings.push(Drawing::ArrowMarkerLeft { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(100, 200, 255) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingArrowMarkerRight => {
+                                        chart.drawings.push(Drawing::ArrowMarkerRight { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(100, 200, 255) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    // ── New 2-click tools ──
+                                    DrawMode::PlacingCircleP1 => {
+                                        self.draw_mode = DrawMode::PlacingCircleP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingCircleP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::Circle { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingPitchFanP1 => {
+                                        self.draw_mode = DrawMode::PlacingPitchFanP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingPitchFanP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::PitchFan { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 150, 80) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingTrendFibTimeP1 => {
+                                        self.draw_mode = DrawMode::PlacingTrendFibTimeP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingTrendFibTimeP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::TrendFibTime { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(180, 130, 220) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingGannSquareP1 => {
+                                        self.draw_mode = DrawMode::PlacingGannSquareP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingGannSquareP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::GannSquare { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 180, 60) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingGannSquareFixedP1 => {
+                                        self.draw_mode = DrawMode::PlacingGannSquareFixedP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingGannSquareFixedP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::GannSquareFixed { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 180, 60) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingBarsPatternP1 => {
+                                        self.draw_mode = DrawMode::PlacingBarsPatternP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingBarsPatternP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::BarsPattern { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(150, 200, 100) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingProjectionP1 => {
+                                        self.draw_mode = DrawMode::PlacingProjectionP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingProjectionP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::Projection { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 180, 220) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    DrawMode::PlacingDoubleCurveP1 => {
+                                        self.draw_mode = DrawMode::PlacingDoubleCurveP2 { bar1: abs_idx, price1: price };
+                                    }
+                                    DrawMode::PlacingDoubleCurveP2 { bar1, price1 } => {
+                                        chart.drawings.push(Drawing::DoubleCurve { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(180, 100, 200) });
+                                        self.draw_mode = DrawMode::None;
+                                    }
+                                    // ── New multi-click tools ──
+                                    DrawMode::PlacingTrianglePattern => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 3 {
+                                            let pts = self.multi_click_points.drain(..).collect();
+                                            chart.drawings.push(Drawing::TrianglePattern { points: pts, color: egui::Color32::from_rgb(200, 150, 100) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingThreeDrives => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 3 {
+                                            let pts = self.multi_click_points.drain(..).collect();
+                                            chart.drawings.push(Drawing::ThreeDrives { points: pts, color: egui::Color32::from_rgb(255, 180, 50) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingElliottDouble => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 3 {
+                                            let pts = self.multi_click_points.drain(..).collect();
+                                            chart.drawings.push(Drawing::ElliottDouble { points: pts, color: egui::Color32::from_rgb(100, 200, 255) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingAbcdPattern => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 4 {
+                                            let pts = self.multi_click_points.drain(..).collect();
+                                            chart.drawings.push(Drawing::AbcdPattern { points: pts, color: egui::Color32::from_rgb(255, 150, 100) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingCypherPattern => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 5 {
+                                            let pts = self.multi_click_points.drain(..).collect();
+                                            chart.drawings.push(Drawing::CypherPattern { points: pts, color: egui::Color32::from_rgb(255, 200, 50) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingElliottTriangle => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 5 {
+                                            let pts = self.multi_click_points.drain(..).collect();
+                                            chart.drawings.push(Drawing::ElliottTriangle { points: pts, color: egui::Color32::from_rgb(100, 255, 200) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
+                                    }
+                                    DrawMode::PlacingElliottTripleCombo => {
+                                        self.multi_click_points.push((abs_idx, price));
+                                        if self.multi_click_points.len() >= 5 {
+                                            let pts = self.multi_click_points.drain(..).collect();
+                                            chart.drawings.push(Drawing::ElliottTripleCombo { points: pts, color: egui::Color32::from_rgb(200, 100, 255) });
+                                            self.draw_mode = DrawMode::None;
+                                        }
                                     }
                                     DrawMode::None => {}
                                 }
