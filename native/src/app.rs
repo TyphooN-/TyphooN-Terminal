@@ -22355,6 +22355,26 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
+            // Alt+letter = drawing tool shortcuts (TradingView standard)
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::H)) { self.draw_mode = DrawMode::PlacingHLine; }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::V)) { self.draw_mode = DrawMode::PlacingVLine; }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::T)) { self.draw_mode = DrawMode::PlacingTrendP1; }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::F)) { self.draw_mode = DrawMode::PlacingFiboP1; }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::R)) { self.draw_mode = DrawMode::PlacingRectP1; }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::E)) { self.draw_mode = DrawMode::Eraser; }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::C)) {
+                // Alt+C = cycle chart type
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    chart.chart_type = match chart.chart_type {
+                        ChartType::Candle => ChartType::HeikinAshi,
+                        ChartType::HeikinAshi => ChartType::Line,
+                        ChartType::Line => ChartType::OhlcBars,
+                        ChartType::OhlcBars => ChartType::Renko,
+                        ChartType::Renko => ChartType::Candle,
+                    };
+                }
+            }
+
             // Replay mode controls
             if self.replay_active {
                 let total_bars = self.charts.get(self.active_tab).map(|c| c.bars.len()).unwrap_or(0);
@@ -24266,8 +24286,8 @@ impl eframe::App for TyphooNApp {
                     if dm != DrawMode::None {
                         ui.separator();
                         let mode_name = match dm {
-                            DrawMode::PlacingHLine => "H-Line: click to place",
-                            DrawMode::PlacingVLine => "V-Line: click to place",
+                            DrawMode::PlacingHLine => "HLine: click price level",
+                            DrawMode::PlacingVLine => "VLine: click bar position",
                             DrawMode::PlacingTrendP1 => "Trendline: click start",
                             DrawMode::PlacingTrendP2 { .. } => "Trendline: click end",
                             DrawMode::PlacingRayP1 => "Ray: click origin",
@@ -24281,8 +24301,8 @@ impl eframe::App for TyphooNApp {
                             DrawMode::PlacingFiboP2 { .. } => "Fib: click end",
                             DrawMode::PlacingExtLineP1 => "Ext Line: click P1",
                             DrawMode::PlacingExtLineP2 { .. } => "Ext Line: click P2",
-                            DrawMode::PlacingHRay => "H-Ray: click to place",
-                            DrawMode::PlacingCrossLine => "Cross: click to place",
+                            DrawMode::PlacingHRay => "HRay: click start point",
+                            DrawMode::PlacingCrossLine => "CrossLine: click intersection",
                             DrawMode::PlacingArrowP1 => "Arrow: click start",
                             DrawMode::PlacingArrowP2 { .. } => "Arrow: click end",
                             DrawMode::PlacingInfoLineP1 => "Info: click start",
@@ -24302,9 +24322,9 @@ impl eframe::App for TyphooNApp {
                             DrawMode::PlacingShortPosP3 { .. } => "Short: click target",
                             DrawMode::PlacingPriceRangeP1 => "Range: click P1",
                             DrawMode::PlacingPriceRangeP2 { .. } => "Range: click P2",
-                            DrawMode::PlacingTextLabel => "Text: click to place",
-                            DrawMode::PlacingArrowMarkerUp => "Arrow Up: click",
-                            DrawMode::PlacingArrowMarkerDown => "Arrow Down: click",
+                            DrawMode::PlacingTextLabel => "Text: click to place label",
+                            DrawMode::PlacingArrowMarkerUp => "Arrow Up: click to place",
+                            DrawMode::PlacingArrowMarkerDown => "Arrow Down: click to place",
                             DrawMode::PlacingEllipseP1 => "Ellipse: click corner 1",
                             DrawMode::PlacingEllipseP2 { .. } => "Ellipse: click corner 2",
                             DrawMode::PlacingTriangleP1 => "Triangle: click P1",
@@ -24318,14 +24338,14 @@ impl eframe::App for TyphooNApp {
                             DrawMode::PlacingFibChannelP2 { .. } => "Fib Ch: click P2",
                             DrawMode::PlacingFibChannelP3 { .. } => "Fib Ch: click width",
                             DrawMode::PlacingFibTimeZones => "Fib Time: click start",
-                            DrawMode::PlacingPriceLabel => "Price Label: click",
+                            DrawMode::PlacingPriceLabel => "PriceLabel: click price level",
                             DrawMode::PlacingCalloutP1 => "Callout: click anchor",
                             DrawMode::PlacingCalloutP2 { .. } => "Callout: click label pos",
                             DrawMode::PlacingHighlighterP1 => "Highlighter: click corner 1",
                             DrawMode::PlacingHighlighterP2 { .. } => "Highlighter: click corner 2",
-                            DrawMode::PlacingCrossMarker => "Cross: click to place",
+                            DrawMode::PlacingCrossMarker => "CrossMarker: click to place",
                             DrawMode::PlacingPolyline => "Polyline: click points, dbl-click end",
-                            DrawMode::PlacingAnchorNote => "Note: click to place",
+                            DrawMode::PlacingAnchorNote => "AnchorNote: click to place",
                             DrawMode::PlacingRegressionChP1 => "Regression: click start",
                             DrawMode::PlacingRegressionChP2 { .. } => "Regression: click end",
                             DrawMode::PlacingGannBoxP1 => "Gann Box: click corner 1",
