@@ -38,6 +38,8 @@
 - **Drawing move/drag (Gap #2)**: Selected drawings can now be dragged to new positions — `is_drawing_drag` blocks chart pan when a drawing is selected; all 70 types covered
 - **Option Chain window**: New `OPTION_CHAIN` command fetches tastytrade expirations and displays them in a collapsible-expiration grid with strike/call/put symbols
 - **tastytrade OPTION_CHAIN command**: Added to command palette, loads from KV cache `tt:options:<symbol>`
+- **Notifications**: `BrokerCmd::SendNotification` wired — Discord webhook, Pushover, ntfy push notifications fire on indicator alert trigger. Settings panel has config fields + test button. Credentials stored in system keyring.
+- **ADR status fixes**: 4 ADRs promoted from "Accepted" to "Implemented" (053, 054, 055, 056). Drawing count corrected 73→70 across all ADRs.
 
 ## Post-Audit Fixes (2026-04-04)
 - **Replay mode**: `ChartState.replay_bar_cap` now actually caps visible_range so bars after replay_bar_idx are hidden
