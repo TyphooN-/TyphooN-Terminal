@@ -1770,6 +1770,41 @@ impl ChartState {
             }
         }
 
+        // Synthesize forming bar from lower-timeframe data if last bar is stale
+        // This allows HTF charts (H1, H4, D1) to show partial/forming bars while the period is still open
+        if !self.bars.is_empty() && self.timeframe.minutes() > 5 {
+            let last_ts = self.bars.last().map(|b| b.ts_ms).unwrap_or(0);
+            let tf_ms = self.timeframe.minutes() as i64 * 60 * 1000;
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            // Only synthesize if the last bar is older than one period
+            if now_ms - last_ts > tf_ms {
+                // Try M5 first, then M1
+                let ltf_keys = [
+                    format!("{}:{}:5Min", self.symbol.split(':').next().unwrap_or("mt5"), bare_sym),
+                    format!("kraken:{}:5Min", bare_sym),
+                    format!("cryptocompare:{}:5Min", bare_sym),
+                    format!("{}:{}:1Min", self.symbol.split(':').next().unwrap_or("mt5"), bare_sym),
+                ];
+                for ltf_key in &ltf_keys {
+                    if let Ok(Some(ltf_raw)) = cache.get_bars_raw(ltf_key) {
+                        // Find LTF bars newer than the last HTF bar
+                        let forming_start = (last_ts / tf_ms + 1) * tf_ms; // next HTF period boundary
+                        let newer: Vec<_> = ltf_raw.iter().filter(|(ts, _, _, _, _, _)| *ts >= forming_start).collect();
+                        if !newer.is_empty() {
+                            let open = newer.first().map(|(_, o, _, _, _, _)| *o).unwrap_or(0.0);
+                            let high = newer.iter().map(|(_, _, h, _, _, _)| *h).fold(f64::NEG_INFINITY, f64::max);
+                            let low = newer.iter().map(|(_, _, _, l, _, _)| *l).fold(f64::INFINITY, f64::min);
+                            let close = newer.last().map(|(_, _, _, _, c, _)| *c).unwrap_or(0.0);
+                            let volume: f64 = newer.iter().map(|(_, _, _, _, _, v)| *v).sum();
+                            self.bars.push(Bar { ts_ms: forming_start, open, high, low, close, volume });
+                            log.push_back(LogEntry::info(format!("  +1 forming bar from {} LTF bars", newer.len())));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         if self.bars.is_empty() {
             log.push_back(LogEntry::warn(format!(
                 "No data found for key '{}' — run the MT5 XML import pipeline first", key
