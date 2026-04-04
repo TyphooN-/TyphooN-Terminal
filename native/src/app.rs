@@ -288,7 +288,6 @@ impl LogEntry {
 
 // ─── drawing tools ───────────────────────────────────────────────────────────
 
-const HLINE_COL: egui::Color32 = egui::Color32::from_rgb(255, 200, 80);
 const TRENDLINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 200, 255);
 const FIBO_COL: egui::Color32 = egui::Color32::from_rgb(200, 160, 100);
 
@@ -6171,6 +6170,55 @@ fn draw_chart(
         }
     }
 
+    // ── Drawing control points (drag handles when selected) ────────────────
+    if let Some(sel) = chart.selected_drawing {
+        if let Some(drawing) = chart.drawings.get(sel) {
+            let cp_size = 4.0_f32; // half-size of control point square
+            let cp_fill = egui::Color32::from_rgb(0, 200, 220);
+            let cp_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+            // Collect control points as (bar_idx, price)
+            let mut cps: Vec<(usize, f64)> = Vec::new();
+            match drawing {
+                Drawing::HLine { price, .. } => { cps.push((start_idx, *price)); cps.push((end_idx.saturating_sub(1), *price)); }
+                Drawing::VLine { bar_idx, .. } => { cps.push((*bar_idx, price_max)); cps.push((*bar_idx, price_min)); }
+                Drawing::TrendLine { p1, p2, .. } | Drawing::ExtendedLine { p1, p2, .. }
+                | Drawing::ArrowLine { p1, p2, .. } | Drawing::InfoLine { p1, p2, .. }
+                | Drawing::TrendAngle { p1, p2, .. } | Drawing::Rectangle { p1, p2, .. }
+                | Drawing::Highlighter { p1, p2, .. } | Drawing::Ruler { p1, p2, .. }
+                | Drawing::MeasureTool { p1, p2, .. } | Drawing::Forecast { p1, p2, .. }
+                | Drawing::Ellipse { p1, p2, .. } | Drawing::SineWave { p1, p2, .. } => {
+                    cps.push(*p1); cps.push(*p2);
+                }
+                Drawing::Pitchfork { pivot, p2, p3, .. } | Drawing::SchiffPitchfork { pivot, p2, p3, .. }
+                | Drawing::ModSchiffPitchfork { pivot, p2, p3, .. } | Drawing::InsidePitchfork { pivot, p2, p3, .. } => {
+                    cps.push(*pivot); cps.push(*p2); cps.push(*p3);
+                }
+                Drawing::FiboExtension { p1, p2, p3, .. } | Drawing::FibChannel { p1, p2, p3, .. }
+                | Drawing::TrendChannel { p1, p2, p3, .. } | Drawing::ArcDraw { p1, p2, p3, .. }
+                | Drawing::Triangle { p1, p2, p3, .. } | Drawing::RotatedRectangle { p1, p2, p3, .. } => {
+                    cps.push(*p1); cps.push(*p2); cps.push(*p3);
+                }
+                Drawing::Polyline { points, .. } | Drawing::ElliottWave { points, .. }
+                | Drawing::AbcCorrection { points, .. } | Drawing::HeadShoulders { points, .. }
+                | Drawing::XabcdPattern { points, .. } | Drawing::PathDraw { points, .. } => {
+                    for pt in points { cps.push(*pt); }
+                }
+                _ => {} // single-point tools: no resize handles needed
+            }
+            for (bi, pr) in &cps {
+                if *bi >= start_idx && *bi < end_idx {
+                    let x = chart_rect.left() + ((*bi - start_idx) as f32 + 0.5) * bar_w;
+                    let y = price_to_y(*pr);
+                    if y >= chart_rect.top() && y <= chart_rect.bottom() {
+                        let r = egui::Rect::from_center_size(egui::pos2(x, y), egui::vec2(cp_size * 2.0, cp_size * 2.0));
+                        painter.rect_filled(r, 0.0, cp_fill);
+                        painter.rect_stroke(r, 0.0, cp_stroke, egui::StrokeKind::Outside);
+                    }
+                }
+            }
+        }
+    }
+
     // ── DARWIN/broker trade markers (buy/sell arrows + position lines) ────────
     // Position entry/SL/TP lines
     for pl in &trade_overlay.position_lines {
@@ -9188,10 +9236,14 @@ pub struct TyphooNApp {
     /// Current drawing style (applied to new drawings).
     draw_width: f32,
     draw_line_style: LineStyle,
+    /// Pre-placement color for new drawings (TradingView: choose before placing).
+    draw_color: egui::Color32,
     /// OHLC snap (magnet) toggle.
     snap_enabled: bool,
     /// Cross-timeframe drawings: sync drawings across charts with same symbol.
     cross_tf_drawings: bool,
+    /// Auto-scroll to latest bar when new data arrives. Toggle with FOLLOW command.
+    follow_latest: bool,
     /// In-progress polyline points (used during PlacingPolyline mode).
     polyline_points: Vec<(usize, f64)>,
     /// In-progress Elliott Wave / ABC / H&S / XABCD multi-click points.
@@ -11308,7 +11360,9 @@ impl TyphooNApp {
             draw_mode: DrawMode::None,
             draw_width: 1.5,
             draw_line_style: LineStyle::Solid,
+            draw_color: egui::Color32::from_rgb(0, 188, 212), // default cyan
             snap_enabled: true,
+            follow_latest: true,
             cross_tf_drawings: false,
             polyline_points: Vec::new(),
             multi_click_points: Vec::new(),
@@ -12909,6 +12963,10 @@ impl TyphooNApp {
                 self.cross_tf_drawings = !self.cross_tf_drawings;
                 self.log.push_back(LogEntry::info(format!("Cross-TF drawings: {}", if self.cross_tf_drawings { "ON — drawings shared across timeframes" } else { "OFF" })));
             }
+            "FOLLOW" | "AUTO_SCROLL" => {
+                self.follow_latest = !self.follow_latest;
+                self.log.push_back(LogEntry::info(format!("Follow latest: {}", if self.follow_latest { "ON — chart auto-scrolls" } else { "OFF — locked position" })));
+            }
             "DRAW_HLINE"     => self.draw_mode = DrawMode::PlacingHLine,
             "DRAW_TRENDLINE" => self.draw_mode = DrawMode::PlacingTrendP1,
             "DRAW_FIBO"      => self.draw_mode = DrawMode::PlacingFiboP1,
@@ -13372,7 +13430,9 @@ impl TyphooNApp {
             "show_tt_positions": self.show_tt_positions,
             "snap_enabled": self.snap_enabled,
             "cross_tf_drawings": self.cross_tf_drawings,
+            "follow_latest": self.follow_latest,
             "draw_width": self.draw_width,
+            "draw_color": [self.draw_color.r(), self.draw_color.g(), self.draw_color.b()],
             "draw_line_style": match self.draw_line_style { LineStyle::Solid => "solid", LineStyle::Dashed => "dashed", LineStyle::Dotted => "dotted" },
             "lan_server_ip": self.lan_server_ip,
             "lan_sync_host": self.lan_sync_host,
@@ -13793,7 +13853,16 @@ impl TyphooNApp {
                 if let Some(b) = v["show_tt_positions"].as_bool() { self.show_tt_positions = b; }
                 if let Some(b) = v["snap_enabled"].as_bool() { self.snap_enabled = b; }
                 if let Some(b) = v["cross_tf_drawings"].as_bool() { self.cross_tf_drawings = b; }
+                if let Some(b) = v["follow_latest"].as_bool() { self.follow_latest = b; }
                 if let Some(w) = v["draw_width"].as_f64() { self.draw_width = w as f32; }
+                if let Some(arr) = v["draw_color"].as_array() {
+                    if arr.len() == 3 {
+                        let r = arr[0].as_u64().unwrap_or(0) as u8;
+                        let g = arr[1].as_u64().unwrap_or(188) as u8;
+                        let b = arr[2].as_u64().unwrap_or(212) as u8;
+                        self.draw_color = egui::Color32::from_rgb(r, g, b);
+                    }
+                }
                 if let Some(s) = v["draw_line_style"].as_str() {
                     self.draw_line_style = match s { "dashed" => LineStyle::Dashed, "dotted" => LineStyle::Dotted, _ => LineStyle::Solid };
                 }
@@ -22033,8 +22102,8 @@ impl eframe::App for TyphooNApp {
                                         ts_ms: chrono::DateTime::parse_from_rfc3339(&bar.timestamp).map(|dt| dt.timestamp_millis()).unwrap_or(0),
                                         open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume,
                                     });
-                                    // Advance view offset if at end
-                                    if chart.view_offset >= chart.bars.len().saturating_sub(2) {
+                                    // Advance view offset if following latest
+                                    if self.follow_latest && chart.view_offset >= chart.bars.len().saturating_sub(2) {
                                         chart.view_offset = chart.bars.len().saturating_sub(1) + 20;
                                     }
                                 }
@@ -24282,6 +24351,32 @@ impl eframe::App for TyphooNApp {
                         }
                     }
 
+                    // ── Color picker (pre-placement) ──
+                    ui.separator();
+                    let colors = [
+                        ("W", egui::Color32::WHITE), ("Y", egui::Color32::from_rgb(255, 200, 50)),
+                        ("G", egui::Color32::from_rgb(0, 200, 100)), ("R", egui::Color32::from_rgb(220, 50, 50)),
+                        ("C", egui::Color32::from_rgb(0, 188, 212)), ("M", egui::Color32::from_rgb(200, 50, 200)),
+                        ("O", egui::Color32::from_rgb(255, 140, 50)), ("B", egui::Color32::from_rgb(80, 120, 255)),
+                    ];
+                    for (lbl, col) in &colors {
+                        let is_sel = self.draw_color == *col;
+                        let btn = egui::Button::new(egui::RichText::new(*lbl).small().color(*col).strong())
+                            .min_size(egui::vec2(20.0, 20.0))
+                            .fill(if is_sel { egui::Color32::from_rgb(40, 40, 60) } else { egui::Color32::TRANSPARENT });
+                        if ui.add(btn).clicked() {
+                            self.draw_color = *col;
+                        }
+                    }
+
+                    // ── Follow latest toggle ──
+                    ui.separator();
+                    let follow_col = if self.follow_latest { egui::Color32::from_rgb(0, 200, 200) } else { egui::Color32::from_rgb(80, 80, 90) };
+                    if ui.add(egui::Button::new(egui::RichText::new("⟫").small().color(follow_col))
+                        .min_size(egui::vec2(22.0, 20.0))).on_hover_text("Follow latest bar (auto-scroll)").clicked() {
+                        self.follow_latest = !self.follow_latest;
+                    }
+
                     // ── Status ──
                     if dm != DrawMode::None {
                         ui.separator();
@@ -24519,7 +24614,7 @@ impl eframe::App for TyphooNApp {
                 if self.polyline_points.len() >= 2 {
                     let pts = std::mem::take(&mut self.polyline_points);
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                        chart.drawings.push(Drawing::Polyline { points: pts, color: egui::Color32::from_rgb(100, 200, 255) });
+                        chart.drawings.push(Drawing::Polyline { points: pts, color: self.draw_color });
                     }
                 }
                 self.polyline_points.clear();
@@ -24531,7 +24626,7 @@ impl eframe::App for TyphooNApp {
                 if self.polyline_points.len() >= 2 {
                     let pts = std::mem::take(&mut self.polyline_points);
                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                        chart.drawings.push(Drawing::PathDraw { points: pts, color: egui::Color32::from_rgb(180, 100, 255) });
+                        chart.drawings.push(Drawing::PathDraw { points: pts, color: self.draw_color });
                     }
                 }
                 self.polyline_points.clear();
@@ -24570,7 +24665,7 @@ impl eframe::App for TyphooNApp {
                     let pts = std::mem::take(&mut self.brush_points);
                     if pts.len() >= 2 {
                         if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                            chart.drawings.push(Drawing::Brush { points: pts, color: egui::Color32::from_rgb(255, 200, 100) });
+                            chart.drawings.push(Drawing::Brush { points: pts, color: self.draw_color });
                         }
                     }
                     self.draw_mode = DrawMode::None;
@@ -25181,10 +25276,11 @@ impl eframe::App for TyphooNApp {
                                     raw_price
                                 };
 
+                                let dc = self.draw_color; // pre-placement color
                                 match self.draw_mode {
                                     DrawMode::Eraser | DrawMode::None => {} // handled above
                                     DrawMode::PlacingHLine => {
-                                        chart.drawings.push(Drawing::HLine { price, color: HLINE_COL });
+                                        chart.drawings.push(Drawing::HLine { price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingTrendP1 => {
@@ -25209,7 +25305,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingVLine => {
-                                        chart.drawings.push(Drawing::VLine { bar_idx: abs_idx, color: egui::Color32::from_rgb(200, 200, 100) });
+                                        chart.drawings.push(Drawing::VLine { bar_idx: abs_idx, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingRectP1 => {
@@ -25252,29 +25348,29 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingExtLineP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingExtLineP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::ExtendedLine { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(180, 180, 200) });
+                                        chart.drawings.push(Drawing::ExtendedLine { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingHRay => {
-                                        chart.drawings.push(Drawing::HRay { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(200, 200, 100) });
+                                        chart.drawings.push(Drawing::HRay { bar_idx: abs_idx, price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingCrossLine => {
-                                        chart.drawings.push(Drawing::CrossLine { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(180, 180, 200) });
+                                        chart.drawings.push(Drawing::CrossLine { bar_idx: abs_idx, price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingArrowP1 => {
                                         self.draw_mode = DrawMode::PlacingArrowP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingArrowP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::ArrowLine { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 200, 100) });
+                                        chart.drawings.push(Drawing::ArrowLine { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingInfoLineP1 => {
                                         self.draw_mode = DrawMode::PlacingInfoLineP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingInfoLineP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::InfoLine { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        chart.drawings.push(Drawing::InfoLine { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingPitchforkP1 => {
@@ -25284,7 +25380,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingPitchforkP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingPitchforkP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::Pitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        chart.drawings.push(Drawing::Pitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingFiboExtP1 => {
@@ -25294,7 +25390,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingFiboExtP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingFiboExtP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::FiboExtension { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(255, 200, 50) });
+                                        chart.drawings.push(Drawing::FiboExtension { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingGannFan => {
@@ -25304,7 +25400,7 @@ impl eframe::App for TyphooNApp {
                                         let hi = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
                                         let lo = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
                                         let scale = if vis.len() > 1 { (hi - lo) / vis.len() as f64 } else { 1.0 };
-                                        chart.drawings.push(Drawing::GannFan { origin: (abs_idx, price), scale, color: egui::Color32::from_rgb(200, 150, 100) });
+                                        chart.drawings.push(Drawing::GannFan { origin: (abs_idx, price), scale, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingLongPosP1 => {
@@ -25339,18 +25435,18 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingArrowMarkerUp => {
-                                        chart.drawings.push(Drawing::ArrowMarker { bar_idx: abs_idx, price, is_up: true, color: egui::Color32::from_rgb(0, 200, 100) });
+                                        chart.drawings.push(Drawing::ArrowMarker { bar_idx: abs_idx, price, is_up: true, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingArrowMarkerDown => {
-                                        chart.drawings.push(Drawing::ArrowMarker { bar_idx: abs_idx, price, is_up: false, color: egui::Color32::from_rgb(220, 50, 50) });
+                                        chart.drawings.push(Drawing::ArrowMarker { bar_idx: abs_idx, price, is_up: false, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingEllipseP1 => {
                                         self.draw_mode = DrawMode::PlacingEllipseP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingEllipseP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::Ellipse { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgba_premultiplied(100, 150, 255, 40) });
+                                        chart.drawings.push(Drawing::Ellipse { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingTriangleP1 => {
@@ -25360,14 +25456,14 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingTriangleP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingTriangleP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::Triangle { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgba_premultiplied(100, 200, 150, 40) });
+                                        chart.drawings.push(Drawing::Triangle { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingTrendAngleP1 => {
                                         self.draw_mode = DrawMode::PlacingTrendAngleP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingTrendAngleP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::TrendAngle { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 200, 100) });
+                                        chart.drawings.push(Drawing::TrendAngle { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingParallelChP1 => {
@@ -25391,15 +25487,15 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingFibChannelP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingFibChannelP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::FibChannel { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(255, 200, 50) });
+                                        chart.drawings.push(Drawing::FibChannel { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingFibTimeZones => {
-                                        chart.drawings.push(Drawing::FibTimeZones { bar_idx: abs_idx, color: egui::Color32::from_rgb(200, 160, 100) });
+                                        chart.drawings.push(Drawing::FibTimeZones { bar_idx: abs_idx, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingPriceLabel => {
-                                        chart.drawings.push(Drawing::PriceLabel { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(255, 200, 80) });
+                                        chart.drawings.push(Drawing::PriceLabel { bar_idx: abs_idx, price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingCalloutP1 => {
@@ -25413,11 +25509,11 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingHighlighterP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingHighlighterP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::Highlighter { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(255, 255, 0) });
+                                        chart.drawings.push(Drawing::Highlighter { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingCrossMarker => {
-                                        chart.drawings.push(Drawing::CrossMarker { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(255, 100, 100) });
+                                        chart.drawings.push(Drawing::CrossMarker { bar_idx: abs_idx, price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingPolyline => {
@@ -25432,21 +25528,21 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingRegressionChP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingRegressionChP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::RegressionChannel { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 180, 255) });
+                                        chart.drawings.push(Drawing::RegressionChannel { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingGannBoxP1 => {
                                         self.draw_mode = DrawMode::PlacingGannBoxP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingGannBoxP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::GannBox { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 150, 100) });
+                                        chart.drawings.push(Drawing::GannBox { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingElliottWave => {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 5 {
                                             let pts = std::mem::take(&mut self.multi_click_points);
-                                            chart.drawings.push(Drawing::ElliottWave { points: pts, color: egui::Color32::from_rgb(100, 200, 255) });
+                                            chart.drawings.push(Drawing::ElliottWave { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25454,7 +25550,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 3 {
                                             let pts = std::mem::take(&mut self.multi_click_points);
-                                            chart.drawings.push(Drawing::AbcCorrection { points: pts, color: egui::Color32::from_rgb(255, 180, 80) });
+                                            chart.drawings.push(Drawing::AbcCorrection { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25476,7 +25572,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 5 {
                                             let pts = std::mem::take(&mut self.multi_click_points);
-                                            chart.drawings.push(Drawing::HeadShoulders { points: pts, color: egui::Color32::from_rgb(220, 100, 255) });
+                                            chart.drawings.push(Drawing::HeadShoulders { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25484,7 +25580,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 5 {
                                             let pts = std::mem::take(&mut self.multi_click_points);
-                                            chart.drawings.push(Drawing::XabcdPattern { points: pts, color: egui::Color32::from_rgb(255, 200, 50) });
+                                            chart.drawings.push(Drawing::XabcdPattern { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25499,7 +25595,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingSchiffPitchforkP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingSchiffPitchforkP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::SchiffPitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        chart.drawings.push(Drawing::SchiffPitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingModSchiffPitchforkP1 => {
@@ -25509,21 +25605,21 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingModSchiffPitchforkP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingModSchiffPitchforkP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::ModSchiffPitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(150, 200, 255) });
+                                        chart.drawings.push(Drawing::ModSchiffPitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingCyclicLinesP1 => {
                                         self.draw_mode = DrawMode::PlacingCyclicLinesP2 { bar1: abs_idx };
                                     }
                                     DrawMode::PlacingCyclicLinesP2 { bar1 } => {
-                                        chart.drawings.push(Drawing::CyclicLines { bar_start: bar1, bar_end: abs_idx, color: egui::Color32::from_rgb(200, 160, 100) });
+                                        chart.drawings.push(Drawing::CyclicLines { bar_start: bar1, bar_end: abs_idx, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingSineWaveP1 => {
                                         self.draw_mode = DrawMode::PlacingSineWaveP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingSineWaveP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::SineWave { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        chart.drawings.push(Drawing::SineWave { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingEmoji => {
@@ -25531,7 +25627,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingFlag => {
-                                        chart.drawings.push(Drawing::Flag { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(255, 100, 100) });
+                                        chart.drawings.push(Drawing::Flag { bar_idx: abs_idx, price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingBalloonP1 => {
@@ -25542,11 +25638,11 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingSessionBreak => {
-                                        chart.drawings.push(Drawing::SessionBreak { bar_idx: abs_idx, color: egui::Color32::from_rgb(200, 200, 100) });
+                                        chart.drawings.push(Drawing::SessionBreak { bar_idx: abs_idx, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingMagnetLevel => {
-                                        chart.drawings.push(Drawing::MagnetLevel { price, color: egui::Color32::from_rgb(255, 200, 50) });
+                                        chart.drawings.push(Drawing::MagnetLevel { price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingRiskRewardP1 => {
@@ -25563,7 +25659,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingFibCircleP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingFibCircleP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::FibCircle { center: (bar1, price1), radius_pt: (abs_idx, price), color: egui::Color32::from_rgb(200, 160, 100) });
+                                        chart.drawings.push(Drawing::FibCircle { center: (bar1, price1), radius_pt: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingArcP1 => {
@@ -25573,7 +25669,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingArcP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingArcP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::ArcDraw { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(180, 100, 255) });
+                                        chart.drawings.push(Drawing::ArcDraw { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingCurveP1 => {
@@ -25586,7 +25682,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingCurveP4 { bar1, price1, bar2, price2, bar3: abs_idx, price3: price };
                                     }
                                     DrawMode::PlacingCurveP4 { bar1, price1, bar2, price2, bar3, price3 } => {
-                                        chart.drawings.push(Drawing::CurveDraw { p1: (bar1, price1), ctrl1: (bar2, price2), ctrl2: (bar3, price3), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        chart.drawings.push(Drawing::CurveDraw { p1: (bar1, price1), ctrl1: (bar2, price2), ctrl2: (bar3, price3), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingPath => {
@@ -25597,32 +25693,32 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingForecastP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingForecastP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::Forecast { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        chart.drawings.push(Drawing::Forecast { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingGhostFeedP1 => {
                                         self.draw_mode = DrawMode::PlacingGhostFeedP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingGhostFeedP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::GhostFeed { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(150, 150, 200) });
+                                        chart.drawings.push(Drawing::GhostFeed { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingSignpost => {
-                                        chart.drawings.push(Drawing::Signpost { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(255, 200, 80) });
+                                        chart.drawings.push(Drawing::Signpost { bar_idx: abs_idx, price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingRulerP1 => {
                                         self.draw_mode = DrawMode::PlacingRulerP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingRulerP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::Ruler { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 200, 200) });
+                                        chart.drawings.push(Drawing::Ruler { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingTimeCycleP1 => {
                                         self.draw_mode = DrawMode::PlacingTimeCycleP2 { bar1: abs_idx };
                                     }
                                     DrawMode::PlacingTimeCycleP2 { bar1 } => {
-                                        chart.drawings.push(Drawing::TimeCycle { bar_start: bar1, bar_end: abs_idx, color: egui::Color32::from_rgb(200, 160, 100) });
+                                        chart.drawings.push(Drawing::TimeCycle { bar_start: bar1, bar_end: abs_idx, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingSpeedFanP1 => {
@@ -25632,7 +25728,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingSpeedFanP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingSpeedFanP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::SpeedResistanceFan { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(200, 150, 100) });
+                                        chart.drawings.push(Drawing::SpeedResistanceFan { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingSpeedArcP1 => {
@@ -25642,14 +25738,14 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingSpeedArcP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingSpeedArcP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::SpeedResistanceArc { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(200, 150, 100) });
+                                        chart.drawings.push(Drawing::SpeedResistanceArc { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingFibSpiralP1 => {
                                         self.draw_mode = DrawMode::PlacingFibSpiralP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingFibSpiralP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::FibSpiral { center: (bar1, price1), radius_pt: (abs_idx, price), color: egui::Color32::from_rgb(255, 200, 50) });
+                                        chart.drawings.push(Drawing::FibSpiral { center: (bar1, price1), radius_pt: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingRotatedRectP1 => {
@@ -25659,11 +25755,11 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingRotatedRectP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingRotatedRectP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::RotatedRectangle { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgba_premultiplied(150, 200, 100, 40) });
+                                        chart.drawings.push(Drawing::RotatedRectangle { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingAnchoredVwap => {
-                                        chart.drawings.push(Drawing::AnchoredVwapLine { bar_idx: abs_idx, color: egui::Color32::from_rgb(255, 180, 0) });
+                                        chart.drawings.push(Drawing::AnchoredVwapLine { bar_idx: abs_idx, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingTrendChannelP1 => {
@@ -25673,7 +25769,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingTrendChannelP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingTrendChannelP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::TrendChannel { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(100, 180, 255) });
+                                        chart.drawings.push(Drawing::TrendChannel { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingInsidePitchforkP1 => {
@@ -25683,7 +25779,7 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingInsidePitchforkP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingInsidePitchforkP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::InsidePitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(200, 100, 150) });
+                                        chart.drawings.push(Drawing::InsidePitchfork { pivot: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingFibWedgeP1 => {
@@ -25693,18 +25789,18 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingFibWedgeP3 { bar1, price1, bar2: abs_idx, price2: price };
                                     }
                                     DrawMode::PlacingFibWedgeP3 { bar1, price1, bar2, price2 } => {
-                                        chart.drawings.push(Drawing::FibWedge { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: egui::Color32::from_rgb(180, 160, 100) });
+                                        chart.drawings.push(Drawing::FibWedge { p1: (bar1, price1), p2: (bar2, price2), p3: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingPriceNote => {
-                                        chart.drawings.push(Drawing::PriceNote { price, text: "Note".to_string(), color: egui::Color32::from_rgb(200, 200, 100) });
+                                        chart.drawings.push(Drawing::PriceNote { price, text: "Note".to_string(), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingMeasureToolP1 => {
                                         self.draw_mode = DrawMode::PlacingMeasureToolP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingMeasureToolP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::MeasureTool { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 200, 200) });
+                                        chart.drawings.push(Drawing::MeasureTool { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     // ── New 1-click tools ──
@@ -25713,15 +25809,15 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingComment => {
-                                        chart.drawings.push(Drawing::Comment { bar_idx: abs_idx, price, text: "Comment".to_string(), color: egui::Color32::from_rgb(200, 200, 100) });
+                                        chart.drawings.push(Drawing::Comment { bar_idx: abs_idx, price, text: "Comment".to_string(), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingArrowMarkerLeft => {
-                                        chart.drawings.push(Drawing::ArrowMarkerLeft { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(100, 200, 255) });
+                                        chart.drawings.push(Drawing::ArrowMarkerLeft { bar_idx: abs_idx, price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingArrowMarkerRight => {
-                                        chart.drawings.push(Drawing::ArrowMarkerRight { bar_idx: abs_idx, price, color: egui::Color32::from_rgb(100, 200, 255) });
+                                        chart.drawings.push(Drawing::ArrowMarkerRight { bar_idx: abs_idx, price, color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     // ── New 2-click tools ──
@@ -25729,56 +25825,56 @@ impl eframe::App for TyphooNApp {
                                         self.draw_mode = DrawMode::PlacingCircleP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingCircleP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::Circle { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 200, 255) });
+                                        chart.drawings.push(Drawing::Circle { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingPitchFanP1 => {
                                         self.draw_mode = DrawMode::PlacingPitchFanP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingPitchFanP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::PitchFan { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 150, 80) });
+                                        chart.drawings.push(Drawing::PitchFan { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingTrendFibTimeP1 => {
                                         self.draw_mode = DrawMode::PlacingTrendFibTimeP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingTrendFibTimeP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::TrendFibTime { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(180, 130, 220) });
+                                        chart.drawings.push(Drawing::TrendFibTime { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingGannSquareP1 => {
                                         self.draw_mode = DrawMode::PlacingGannSquareP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingGannSquareP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::GannSquare { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 180, 60) });
+                                        chart.drawings.push(Drawing::GannSquare { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingGannSquareFixedP1 => {
                                         self.draw_mode = DrawMode::PlacingGannSquareFixedP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingGannSquareFixedP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::GannSquareFixed { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(200, 180, 60) });
+                                        chart.drawings.push(Drawing::GannSquareFixed { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingBarsPatternP1 => {
                                         self.draw_mode = DrawMode::PlacingBarsPatternP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingBarsPatternP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::BarsPattern { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(150, 200, 100) });
+                                        chart.drawings.push(Drawing::BarsPattern { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingProjectionP1 => {
                                         self.draw_mode = DrawMode::PlacingProjectionP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingProjectionP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::Projection { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(100, 180, 220) });
+                                        chart.drawings.push(Drawing::Projection { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     DrawMode::PlacingDoubleCurveP1 => {
                                         self.draw_mode = DrawMode::PlacingDoubleCurveP2 { bar1: abs_idx, price1: price };
                                     }
                                     DrawMode::PlacingDoubleCurveP2 { bar1, price1 } => {
-                                        chart.drawings.push(Drawing::DoubleCurve { p1: (bar1, price1), p2: (abs_idx, price), color: egui::Color32::from_rgb(180, 100, 200) });
+                                        chart.drawings.push(Drawing::DoubleCurve { p1: (bar1, price1), p2: (abs_idx, price), color: dc });
                                         self.draw_mode = DrawMode::None;
                                     }
                                     // ── New multi-click tools ──
@@ -25786,7 +25882,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 3 {
                                             let pts = self.multi_click_points.drain(..).collect();
-                                            chart.drawings.push(Drawing::TrianglePattern { points: pts, color: egui::Color32::from_rgb(200, 150, 100) });
+                                            chart.drawings.push(Drawing::TrianglePattern { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25794,7 +25890,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 3 {
                                             let pts = self.multi_click_points.drain(..).collect();
-                                            chart.drawings.push(Drawing::ThreeDrives { points: pts, color: egui::Color32::from_rgb(255, 180, 50) });
+                                            chart.drawings.push(Drawing::ThreeDrives { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25802,7 +25898,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 3 {
                                             let pts = self.multi_click_points.drain(..).collect();
-                                            chart.drawings.push(Drawing::ElliottDouble { points: pts, color: egui::Color32::from_rgb(100, 200, 255) });
+                                            chart.drawings.push(Drawing::ElliottDouble { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25810,7 +25906,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 4 {
                                             let pts = self.multi_click_points.drain(..).collect();
-                                            chart.drawings.push(Drawing::AbcdPattern { points: pts, color: egui::Color32::from_rgb(255, 150, 100) });
+                                            chart.drawings.push(Drawing::AbcdPattern { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25818,7 +25914,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 5 {
                                             let pts = self.multi_click_points.drain(..).collect();
-                                            chart.drawings.push(Drawing::CypherPattern { points: pts, color: egui::Color32::from_rgb(255, 200, 50) });
+                                            chart.drawings.push(Drawing::CypherPattern { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25826,7 +25922,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 5 {
                                             let pts = self.multi_click_points.drain(..).collect();
-                                            chart.drawings.push(Drawing::ElliottTriangle { points: pts, color: egui::Color32::from_rgb(100, 255, 200) });
+                                            chart.drawings.push(Drawing::ElliottTriangle { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25834,7 +25930,7 @@ impl eframe::App for TyphooNApp {
                                         self.multi_click_points.push((abs_idx, price));
                                         if self.multi_click_points.len() >= 5 {
                                             let pts = self.multi_click_points.drain(..).collect();
-                                            chart.drawings.push(Drawing::ElliottTripleCombo { points: pts, color: egui::Color32::from_rgb(200, 100, 255) });
+                                            chart.drawings.push(Drawing::ElliottTripleCombo { points: pts, color: dc });
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
@@ -25890,8 +25986,9 @@ impl eframe::App for TyphooNApp {
                                 ];
                                 for (name, color) in &colors {
                                     if ui.button(egui::RichText::new(*name).color(*color)).clicked() {
-                                        // Apply color to ANY drawing type that has a color field
-                                        if let Some(d) = chart.drawings.last_mut() {
+                                        // Apply color to selected drawing, or last if none selected
+                                        let target_idx = chart.selected_drawing.unwrap_or(chart.drawings.len().saturating_sub(1));
+                                        if let Some(d) = chart.drawings.get_mut(target_idx) {
                                             // Generic: try setting color on common variants
                                             macro_rules! set_color {
                                                 ($d:expr, $c:expr, $($variant:ident),+) => {
@@ -25919,13 +26016,53 @@ impl eframe::App for TyphooNApp {
                                                 AnchoredVwapLine, TrendChannel, InsidePitchfork,
                                                 FibWedge, PriceNote, MeasureTool, PriceLabel,
                                                 CrossMarker, Forecast, GhostFeed, Signpost,
-                                                VLine
+                                                VLine, AnchoredText, Comment, ArrowMarkerLeft,
+                                                ArrowMarkerRight, Circle, PitchFan, TrendFibTime,
+                                                GannSquare, GannSquareFixed, BarsPattern, Projection,
+                                                DoubleCurve, TrianglePattern, ThreeDrives,
+                                                ElliottDouble, AbcdPattern, CypherPattern,
+                                                ElliottTriangle, ElliottTripleCombo
                                             );
                                         }
                                         ui.close();
                                     }
                                 }
                             });
+                        }
+                        // Per-drawing width/style editor (for selected drawing)
+                        if let Some(sel) = chart.selected_drawing {
+                            ui.menu_button("Drawing Width", |ui| {
+                                for w in [1.0_f32, 1.5, 2.0, 3.0, 4.0] {
+                                    if ui.button(format!("{}px", w)).clicked() {
+                                        if let Some(style) = chart.drawing_styles.get_mut(sel) {
+                                            style.0 = w;
+                                        }
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.menu_button("Drawing Style", |ui| {
+                                if ui.button("━ Solid").clicked() {
+                                    if let Some(style) = chart.drawing_styles.get_mut(sel) { style.1 = LineStyle::Solid; }
+                                    ui.close();
+                                }
+                                if ui.button("╌ Dashed").clicked() {
+                                    if let Some(style) = chart.drawing_styles.get_mut(sel) { style.1 = LineStyle::Dashed; }
+                                    ui.close();
+                                }
+                                if ui.button("┈ Dotted").clicked() {
+                                    if let Some(style) = chart.drawing_styles.get_mut(sel) { style.1 = LineStyle::Dotted; }
+                                    ui.close();
+                                }
+                            });
+                            if ui.button("Delete Selected").clicked() {
+                                let d = chart.drawings.remove(sel);
+                                if sel < chart.drawing_styles.len() { chart.drawing_styles.remove(sel); }
+                                chart.drawings_undo.push(d);
+                                chart.selected_drawing = None;
+                                ui.close();
+                            }
+                            ui.separator();
                         }
                         if ui.button("Remove Last Drawing").clicked() {
                             chart.drawings.pop();
