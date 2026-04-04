@@ -8633,6 +8633,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "SYMBOLS",       desc: "Symbol explorer (broker hierarchy)" },
     Command { name: "OPTIMIZER",     desc: "Strategy parameter optimizer" },
     Command { name: "RISK_CALC",     desc: "Position sizing / risk calculator" },
+    Command { name: "COMPOUND",      desc: "Compound interest calculator" },
     Command { name: "VAR",           desc: "VaR multiplier estimator" },
     Command { name: "MARGIN",        desc: "Margin monitor" },
     // Research
@@ -9470,6 +9471,13 @@ pub struct TyphooNApp {
     show_darwin_accounts: bool,
     show_darwin_portfolio: bool,
     show_risk_calc: bool,
+    show_compound_calc: bool,
+    ci_principal: String,
+    ci_rate: String,
+    ci_years: String,
+    ci_compounds: String,
+    ci_contribution: String,
+    ci_result: Vec<(f64, f64, f64)>,
     show_backtest: bool,
     show_screener: bool,
     screener_filter: String,
@@ -11597,6 +11605,13 @@ impl TyphooNApp {
             show_darwin_accounts: false,
             show_darwin_portfolio: false,
             show_risk_calc: false,
+            show_compound_calc: false,
+            ci_principal: String::new(),
+            ci_rate: String::new(),
+            ci_years: String::new(),
+            ci_compounds: String::new(),
+            ci_contribution: String::new(),
+            ci_result: Vec::new(),
             show_backtest: false,
             show_screener: false,
             screener_filter: String::new(),
@@ -12774,6 +12789,7 @@ impl TyphooNApp {
             "SYMBOLS" | "SYM" => self.show_symbols = true,
             "OPTIMIZER"     => self.show_optimizer = true,
             "RISK_CALC"     => self.show_risk_calc = true,
+            "COMPOUND" | "COMPOUND_INTEREST" => self.show_compound_calc = true,
             "VAR"           => self.show_var_mult = true,
             "MARGIN"        => self.show_margin_monitor = true,
             "FRED" => {
@@ -13670,6 +13686,7 @@ impl TyphooNApp {
                 "darwin_accounts": self.show_darwin_accounts,
                 "darwin_portfolio": self.show_darwin_portfolio,
                 "risk_calc": self.show_risk_calc,
+                "compound_calc": self.show_compound_calc,
                 "backtest": self.show_backtest,
                 "news": self.show_news,
                 "indicators_panel": self.show_indicators_panel,
@@ -14098,6 +14115,7 @@ impl TyphooNApp {
                     if let Some(b) = w["darwin_accounts"].as_bool() { self.show_darwin_accounts = b; }
                     if let Some(b) = w["darwin_portfolio"].as_bool() { self.show_darwin_portfolio = b; }
                     if let Some(b) = w["risk_calc"].as_bool() { self.show_risk_calc = b; }
+                    if let Some(b) = w["compound_calc"].as_bool() { self.show_compound_calc = b; }
                     if let Some(b) = w["backtest"].as_bool() { self.show_backtest = b; }
                     if let Some(b) = w["news"].as_bool() { self.show_news = b; }
                     if let Some(b) = w["indicators_panel"].as_bool() { self.show_indicators_panel = b; }
@@ -14175,6 +14193,7 @@ impl TyphooNApp {
         self.show_darwin_accounts = false;
         self.show_darwin_portfolio = false;
         self.show_risk_calc = false;
+        self.show_compound_calc = false;
         self.show_backtest = false;
         self.show_screener = false;
         self.show_symbols = false;
@@ -17294,6 +17313,64 @@ impl TyphooNApp {
                                 );
                             }
                         }
+                    }
+                });
+        }
+
+        // Compound Interest Calculator
+        if self.show_compound_calc {
+            egui::Window::new("Compound Interest Calculator")
+                .open(&mut self.show_compound_calc)
+                .resizable(true).default_size([500.0, 450.0])
+                .show(ctx, |ui| {
+                    egui::Grid::new("ci_grid").num_columns(2).show(ui, |ui| {
+                        ui.label("Principal ($):"); ui.add(egui::TextEdit::singleline(&mut self.ci_principal).desired_width(120.0)); ui.end_row();
+                        ui.label("Annual Return (%):"); ui.add(egui::TextEdit::singleline(&mut self.ci_rate).desired_width(80.0)); ui.end_row();
+                        ui.label("Years:"); ui.add(egui::TextEdit::singleline(&mut self.ci_years).desired_width(60.0)); ui.end_row();
+                        ui.label("Compounds/Year:"); ui.add(egui::TextEdit::singleline(&mut self.ci_compounds).desired_width(60.0)); ui.end_row();
+                        ui.label("Monthly Add ($):"); ui.add(egui::TextEdit::singleline(&mut self.ci_contribution).desired_width(120.0)); ui.end_row();
+                    });
+                    if ui.button("Calculate").clicked() {
+                        let p = self.ci_principal.replace(['$', ','], "").parse::<f64>().unwrap_or(10000.0);
+                        let r = self.ci_rate.parse::<f64>().unwrap_or(10.0) / 100.0;
+                        let y = self.ci_years.parse::<u32>().unwrap_or(10);
+                        let n = self.ci_compounds.parse::<f64>().unwrap_or(12.0);
+                        let monthly = self.ci_contribution.replace(['$', ','], "").parse::<f64>().unwrap_or(0.0);
+                        self.ci_result.clear();
+                        let mut balance = p;
+                        let mut total_contrib = p;
+                        for year in 0..=y {
+                            self.ci_result.push((year as f64, balance, total_contrib));
+                            // Compound for one year
+                            for _ in 0..n as u32 {
+                                balance *= 1.0 + r / n;
+                                balance += monthly * 12.0 / n; // distribute monthly contribution
+                            }
+                            total_contrib += monthly * 12.0;
+                        }
+                    }
+                    if !self.ci_result.is_empty() {
+                        ui.separator();
+                        // Summary
+                        let final_bal = self.ci_result.last().map(|r| r.1).unwrap_or(0.0);
+                        let total_cont = self.ci_result.last().map(|r| r.2).unwrap_or(0.0);
+                        let interest_earned = final_bal - total_cont;
+                        ui.label(egui::RichText::new(format!("Final Balance: ${:.2}", final_bal)).strong().color(UP));
+                        ui.label(format!("Total Contributed: ${:.2}", total_cont));
+                        ui.label(egui::RichText::new(format!("Interest Earned: ${:.2}", interest_earned)).color(ACCENT));
+                        ui.separator();
+                        // Chart
+                        let bal_pts: PlotPoints = PlotPoints::new(self.ci_result.iter().map(|(y, b, _)| [*y, *b]).collect());
+                        let cont_pts: PlotPoints = PlotPoints::new(self.ci_result.iter().map(|(y, _, c)| [*y, *c]).collect());
+                        let bal_line = Line::new("Balance", bal_pts).color(UP).width(2.0);
+                        let cont_line = Line::new("Contributions", cont_pts).color(ACCENT).width(1.0);
+                        Plot::new("ci_plot").height(200.0)
+                            .allow_drag(false).allow_zoom(false)
+                            .legend(egui_plot::Legend::default())
+                            .show(ui, |plot_ui| {
+                                plot_ui.line(bal_line);
+                                plot_ui.line(cont_line);
+                            });
                     }
                 });
         }
@@ -22099,6 +22176,22 @@ impl eframe::App for TyphooNApp {
         ctx.set_visuals(Self::dark_visuals());
         // Bound log size to prevent unbounded memory growth
         while self.log.len() > 500 { self.log.pop_front(); }
+
+        // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
+        if self.frame_count % 240 == 120 && self.broker_connected {
+            if let Some(chart) = self.charts.get(self.active_tab) {
+                let sym = chart.symbol.clone();
+                let bare = sym.split(':').last().unwrap_or(&sym).to_string();
+                // Check if it's a crypto symbol (contains USD and no forex pairs)
+                let is_crypto = (bare.contains("USD") || bare.contains("BTC") || bare.contains("ETH") || bare.contains("SOL"))
+                    && !bare.starts_with("USD") && bare.len() <= 10;
+                if is_crypto {
+                    let tf = chart.timeframe.label().to_string();
+                    let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                    let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: bare, timeframe: tf, db_path });
+                }
+            }
+        }
 
         // ── Screenshot: issue capture command ────────────────────────────
         if self.screenshot_requested {
