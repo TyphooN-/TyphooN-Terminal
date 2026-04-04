@@ -9,6 +9,9 @@
 
 use std::collections::HashMap;
 
+/// Maximum completed bars to buffer before oldest are dropped (prevents unbounded growth).
+const MAX_COMPLETED_BARS: usize = 10_000;
+
 /// A completed 1-minute bar.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CompletedBar {
@@ -34,6 +37,22 @@ struct PartialBar {
     trade_count: u32,
 }
 
+impl PartialBar {
+    fn to_completed(&self, symbol: &str) -> CompletedBar {
+        let dt = chrono::DateTime::from_timestamp(self.minute_epoch, 0).unwrap_or_default();
+        CompletedBar {
+            symbol: symbol.to_string(),
+            timestamp: dt.to_rfc3339(),
+            open: self.open,
+            high: self.high,
+            low: self.low,
+            close: self.close,
+            volume: self.volume,
+            trade_count: self.trade_count,
+        }
+    }
+}
+
 /// Builds 1-minute OHLCV bars from incoming trade stream.
 /// Thread-safe: wrap in Mutex for shared state access.
 pub struct BarBuilder {
@@ -41,6 +60,10 @@ pub struct BarBuilder {
     active: HashMap<String, PartialBar>,
     /// Completed bars ready for frontend consumption
     completed: Vec<CompletedBar>,
+}
+
+impl Default for BarBuilder {
+    fn default() -> Self { Self::new() }
 }
 
 impl BarBuilder {
@@ -53,13 +76,19 @@ impl BarBuilder {
 
     /// Ingest a trade. If the trade's minute differs from the active bar's minute,
     /// the active bar is completed and a new one starts.
+    ///
+    /// Validates: price > 0, size >= 0, price is finite, timestamp parses correctly.
     pub fn ingest_trade(&mut self, symbol: &str, price: f64, size: f64, timestamp_rfc3339: &str) {
-        if price <= 0.0 { return; }
+        // Validate inputs
+        if price <= 0.0 || !price.is_finite() { return; }
+        if size < 0.0 || !size.is_finite() { return; }
+        if symbol.is_empty() { return; }
 
         // Parse timestamp to epoch seconds, floor to minute boundary
-        let trade_epoch = chrono::DateTime::parse_from_rfc3339(timestamp_rfc3339)
-            .map(|dt| dt.timestamp())
-            .unwrap_or(0);
+        let trade_epoch = match chrono::DateTime::parse_from_rfc3339(timestamp_rfc3339) {
+            Ok(dt) => dt.timestamp(),
+            Err(_) => return, // reject unparseable timestamps instead of silently using epoch 0
+        };
         let trade_minute = trade_epoch - (trade_epoch % 60);
 
         if let Some(bar) = self.active.get_mut(symbol) {
@@ -72,17 +101,7 @@ impl BarBuilder {
                 bar.trade_count += 1;
             } else {
                 // New minute — complete old bar, start new one
-                let dt = chrono::DateTime::from_timestamp(bar.minute_epoch, 0).unwrap_or_default();
-                self.completed.push(CompletedBar {
-                    symbol: symbol.to_string(),
-                    timestamp: dt.to_rfc3339(),
-                    open: bar.open,
-                    high: bar.high,
-                    low: bar.low,
-                    close: bar.close,
-                    volume: bar.volume,
-                    trade_count: bar.trade_count,
-                });
+                self.completed.push(bar.to_completed(symbol));
                 // Start new bar
                 *bar = PartialBar {
                     minute_epoch: trade_minute,
@@ -93,6 +112,10 @@ impl BarBuilder {
                     volume: size,
                     trade_count: 1,
                 };
+                // Bound completed buffer
+                if self.completed.len() > MAX_COMPLETED_BARS {
+                    self.completed.drain(0..self.completed.len() - MAX_COMPLETED_BARS);
+                }
             }
         } else {
             // First trade for this symbol
@@ -108,6 +131,35 @@ impl BarBuilder {
         }
     }
 
+    /// Flush any active bars older than `max_age_secs` into the completed buffer.
+    /// Call periodically (e.g., every 60s) to ensure bars don't stay open indefinitely
+    /// when no trades arrive for a symbol.
+    pub fn flush_stale(&mut self, max_age_secs: i64) {
+        let now = chrono::Utc::now().timestamp();
+        let cutoff = now - max_age_secs;
+        let stale_syms: Vec<String> = self.active.iter()
+            .filter(|(_, bar)| bar.minute_epoch + 60 < cutoff)
+            .map(|(sym, _)| sym.clone())
+            .collect();
+        for sym in stale_syms {
+            if let Some(bar) = self.active.remove(&sym) {
+                self.completed.push(bar.to_completed(&sym));
+            }
+        }
+    }
+
+    /// Ingest a quote (bid/ask) to update the active bar's close/high/low.
+    /// Useful for instruments where quotes arrive more frequently than trades.
+    pub fn ingest_quote(&mut self, symbol: &str, bid: f64, ask: f64) {
+        if bid <= 0.0 || ask <= 0.0 || !bid.is_finite() || !ask.is_finite() { return; }
+        let mid = (bid + ask) / 2.0;
+        if let Some(bar) = self.active.get_mut(symbol) {
+            bar.close = mid;
+            bar.high = bar.high.max(mid);
+            bar.low = bar.low.min(mid);
+        }
+    }
+
     /// Drain all completed bars. Returns them and clears the internal buffer.
     pub fn drain_completed(&mut self) -> Vec<CompletedBar> {
         std::mem::take(&mut self.completed)
@@ -116,26 +168,24 @@ impl BarBuilder {
     /// Get the current (still-forming) bar for a symbol, if any.
     /// Useful for real-time display of the live candle.
     pub fn get_active_bar(&self, symbol: &str) -> Option<CompletedBar> {
-        self.active.get(symbol).map(|bar| {
-            let dt = chrono::DateTime::from_timestamp(bar.minute_epoch, 0).unwrap_or_default();
-            CompletedBar {
-                symbol: symbol.to_string(),
-                timestamp: dt.to_rfc3339(),
-                open: bar.open,
-                high: bar.high,
-                low: bar.low,
-                close: bar.close,
-                volume: bar.volume,
-                trade_count: bar.trade_count,
-            }
-        })
+        self.active.get(symbol).map(|bar| bar.to_completed(symbol))
     }
 
     /// Get all active (forming) bars across all symbols.
     pub fn get_all_active_bars(&self) -> Vec<CompletedBar> {
-        self.active.keys()
-            .filter_map(|sym| self.get_active_bar(sym))
+        self.active.iter()
+            .map(|(sym, bar)| bar.to_completed(sym))
             .collect()
+    }
+
+    /// Number of symbols currently being tracked.
+    pub fn active_count(&self) -> usize {
+        self.active.len()
+    }
+
+    /// Number of completed bars waiting to be drained.
+    pub fn pending_count(&self) -> usize {
+        self.completed.len()
     }
 }
 
@@ -268,5 +318,107 @@ mod tests {
         let mut bb2 = BarBuilder::new();
         bb2.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
         assert!(bb2.get_active_bar("MSFT").is_none());
+    }
+
+    // ── New robustness tests ──
+
+    #[test]
+    fn nan_and_infinity_price_rejected() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", f64::NAN, 100.0, "2026-01-15T10:30:00Z");
+        bb.ingest_trade("AAPL", f64::INFINITY, 100.0, "2026-01-15T10:30:10Z");
+        bb.ingest_trade("AAPL", f64::NEG_INFINITY, 100.0, "2026-01-15T10:30:20Z");
+        assert!(bb.get_active_bar("AAPL").is_none());
+    }
+
+    #[test]
+    fn negative_size_rejected() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, -100.0, "2026-01-15T10:30:00Z");
+        assert!(bb.get_active_bar("AAPL").is_none());
+    }
+
+    #[test]
+    fn nan_size_rejected() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, f64::NAN, "2026-01-15T10:30:00Z");
+        assert!(bb.get_active_bar("AAPL").is_none());
+    }
+
+    #[test]
+    fn invalid_timestamp_rejected() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, 100.0, "not-a-timestamp");
+        assert!(bb.get_active_bar("AAPL").is_none());
+    }
+
+    #[test]
+    fn empty_symbol_rejected() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("", 150.0, 100.0, "2026-01-15T10:30:00Z");
+        assert_eq!(bb.active_count(), 0);
+    }
+
+    #[test]
+    fn zero_size_trade_accepted() {
+        // Zero-size trades are valid (e.g., index ticks with no volume)
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("SPX", 5000.0, 0.0, "2026-01-15T10:30:00Z");
+        let bar = bb.get_active_bar("SPX").unwrap();
+        assert_eq!(bar.volume, 0.0);
+        assert_eq!(bar.trade_count, 1);
+    }
+
+    #[test]
+    fn ingest_quote_updates_active_bar() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
+
+        bb.ingest_quote("AAPL", 152.0, 153.0); // mid = 152.5
+        let bar = bb.get_active_bar("AAPL").unwrap();
+        assert_eq!(bar.close, 152.5);
+        assert_eq!(bar.high, 152.5); // higher than original 150
+        assert_eq!(bar.low, 150.0);  // original still lowest
+        assert_eq!(bar.trade_count, 1); // quotes don't increment trade count
+    }
+
+    #[test]
+    fn ingest_quote_no_active_bar_ignored() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_quote("AAPL", 150.0, 151.0);
+        assert!(bb.get_active_bar("AAPL").is_none()); // quote alone doesn't create a bar
+    }
+
+    #[test]
+    fn ingest_quote_invalid_rejected() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
+        bb.ingest_quote("AAPL", -1.0, 151.0); // invalid bid
+        bb.ingest_quote("AAPL", 150.0, f64::NAN); // invalid ask
+        let bar = bb.get_active_bar("AAPL").unwrap();
+        assert_eq!(bar.close, 150.0); // unchanged
+    }
+
+    #[test]
+    fn active_count_and_pending_count() {
+        let mut bb = BarBuilder::new();
+        assert_eq!(bb.active_count(), 0);
+        assert_eq!(bb.pending_count(), 0);
+
+        bb.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
+        bb.ingest_trade("MSFT", 300.0, 200.0, "2026-01-15T10:30:00Z");
+        assert_eq!(bb.active_count(), 2);
+        assert_eq!(bb.pending_count(), 0);
+
+        bb.ingest_trade("AAPL", 160.0, 50.0, "2026-01-15T10:31:00Z");
+        assert_eq!(bb.active_count(), 2);
+        assert_eq!(bb.pending_count(), 1);
+    }
+
+    #[test]
+    fn default_impl() {
+        let bb = BarBuilder::default();
+        assert_eq!(bb.active_count(), 0);
+        assert_eq!(bb.pending_count(), 0);
     }
 }
