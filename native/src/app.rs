@@ -1109,6 +1109,8 @@ struct ChartState {
     timeframe: Timeframe,
     /// Chart rendering style.
     chart_type: ChartType,
+    /// Logarithmic price scale (vs linear).
+    log_scale: bool,
     /// Raw bar data loaded from cache.
     bars: Vec<Bar>,
     /// Pre-computed SMA(200) — indexed parallel to `bars`.
@@ -1304,6 +1306,7 @@ impl ChartState {
             symbol: symbol.into(),
             timeframe: tf,
             chart_type: ChartType::Candle,
+            log_scale: false,
             bars: Vec::new(),
             sma200: Vec::new(),
             sma100: Vec::new(),
@@ -4600,8 +4603,16 @@ fn draw_chart(
 
     if (price_max - price_min).abs() < f64::EPSILON { return; }
 
+    let use_log = chart.log_scale && price_min > 0.0; // log scale requires positive prices
     let price_to_y = |p: f64| -> f32 {
-        let frac = (price_max - p) / (price_max - price_min);
+        let frac = if use_log {
+            let log_max = price_max.ln();
+            let log_min = price_min.ln();
+            let log_range = log_max - log_min;
+            if log_range.abs() < f64::EPSILON { 0.5 } else { (log_max - p.max(0.001).ln()) / log_range }
+        } else {
+            (price_max - p) / (price_max - price_min)
+        };
         chart_rect.top() + frac as f32 * chart_rect.height()
     };
 
@@ -12963,6 +12974,21 @@ impl TyphooNApp {
                 self.cross_tf_drawings = !self.cross_tf_drawings;
                 self.log.push_back(LogEntry::info(format!("Cross-TF drawings: {}", if self.cross_tf_drawings { "ON — drawings shared across timeframes" } else { "OFF" })));
             }
+            "FIT" | "FIT_ALL" | "AUTO_FIT" => {
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    chart.visible_bars = chart.bars.len().max(50);
+                    chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                    chart.price_zoom = 1.0;
+                    chart.price_pan = 0.0;
+                    self.log.push_back(LogEntry::info("Auto-fit: showing all bars"));
+                }
+            }
+            "LOG_SCALE" | "LOG" => {
+                if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                    chart.log_scale = !chart.log_scale;
+                    self.log.push_back(LogEntry::info(format!("Price scale: {}", if chart.log_scale { "logarithmic" } else { "linear" })));
+                }
+            }
             "FOLLOW" | "AUTO_SCROLL" => {
                 self.follow_latest = !self.follow_latest;
                 self.log.push_back(LogEntry::info(format!("Follow latest: {}", if self.follow_latest { "ON — chart auto-scrolls" } else { "OFF — locked position" })));
@@ -13388,6 +13414,7 @@ impl TyphooNApp {
                 "symbol": c.symbol,
                 "timeframe": c.timeframe.label(),
                 "chart_type": c.chart_type.label(),
+                "log_scale": c.log_scale,
             })).collect::<Vec<_>>(),
             "indicators": {
                 "sma200": self.show_sma200, "sma100": self.show_sma100,
@@ -13632,6 +13659,7 @@ impl TyphooNApp {
                             };
                             let mut chart = ChartState::new(&sym, tf);
                             chart.chart_type = ct;
+                            chart.log_scale = tab["log_scale"].as_bool().unwrap_or(false);
                             self.charts.push(chart);
                         }
                         // Load charts: if MTF grid is active, load ALL charts; otherwise just the active tab
@@ -22431,6 +22459,9 @@ impl eframe::App for TyphooNApp {
             if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::F)) { self.draw_mode = DrawMode::PlacingFiboP1; }
             if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::R)) { self.draw_mode = DrawMode::PlacingRectP1; }
             if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::E)) { self.draw_mode = DrawMode::Eraser; }
+            if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::L)) {
+                if let Some(chart) = self.charts.get_mut(self.active_tab) { chart.log_scale = !chart.log_scale; }
+            }
             if ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::C)) {
                 // Alt+C = cycle chart type
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
@@ -26082,6 +26113,18 @@ impl eframe::App for TyphooNApp {
                             chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
                             ui.close();
                         }
+                        if ui.button(if chart.log_scale { "● Log Scale" } else { "  Log Scale" }).clicked() {
+                            chart.log_scale = !chart.log_scale;
+                            ui.close();
+                        }
+                        if ui.button("Fit All Bars").clicked() {
+                            chart.visible_bars = chart.bars.len().max(50);
+                            chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                            chart.price_zoom = 1.0;
+                            chart.price_pan = 0.0;
+                            ui.close();
+                        }
+                        ui.separator();
                         for &ct in &[ChartType::Candle, ChartType::HeikinAshi, ChartType::Line, ChartType::OhlcBars, ChartType::Renko] {
                             let label = if chart.chart_type == ct { format!("● {}", ct.label()) } else { format!("  {}", ct.label()) };
                             if ui.button(label).clicked() {
