@@ -51,7 +51,7 @@ All other GPU/CPU pairs produce identical results:
 
 ## Test Coverage
 
-537 tests (82 compiler + 369 engine + 86 native) across engine, GPU shaders, integration, and MQL5 compiler (up from 261 at initial audit). Engine gained bar_builder(7), martingale(14), notifications(13), mql5_export(7), lan_sync(9) tests in 2026-04-05 session.
+551 tests (82 compiler + 383 engine + 86 native) across engine, GPU shaders, integration, and MQL5 compiler (up from 261 at initial audit). Engine gained bar_builder(7), martingale(14), notifications(13), mql5_export(7), lan_sync(9) tests in 2026-04-05 session.
 
 ## Consequences
 

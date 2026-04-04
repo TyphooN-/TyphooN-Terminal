@@ -42,7 +42,9 @@
 - **ADR status fixes**: 4 ADRs promoted from "Accepted" to "Implemented" (053, 054, 055, 056). Drawing count corrected 73→70 across all ADRs.
 - **MQL5/PineScript compiler UI**: New `COMPILE` command + Indicator Compiler window with source editor, Load File dialog, language selector (MQL5/PineScript), compile button, diagnostics display, and metadata summary (buffers, inputs, plots)
 - **BarBuilder real-time streaming**: `BrokerCmd::StartStream` wired to `AlpacaBroker::start_stream()`. `StreamTick` feeds `BarBuilder` for 1-minute bar construction. Completed bars auto-append to matching chart tabs. `StreamQuoteTick` updates forming bar close price.
-- **50 new tests**: bar_builder(7), martingale(14), notifications(13), mql5_export(7), lan_sync(9). Total: 537 tests.
+- **64 new tests**: bar_builder(7), martingale(14), notifications(13), mql5_export(7), lan_sync(9), fred(4), screener(10). Total: 551 tests.
+- **3 darwin analytics wired**: performance_attribution (per-symbol P&L contribution), dscore_components (FTP 8-component grid), investment_velocity (investor growth rate chart) — all rendered in per-account detail section
+- **Price target display**: Finnhub price target (high/median/low/mean + analyst count) appended to Analyst Ratings window
 
 ## Post-Audit Fixes (2026-04-04)
 - **Replay mode**: `ChartState.replay_bar_cap` now actually caps visible_range so bars after replay_bar_idx are hidden

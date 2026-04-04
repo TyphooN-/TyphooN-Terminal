@@ -82,7 +82,7 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - **Docker containerization**: Dockerfile added for reproducible builds and deployment
 
 ### Code Quality
-- **537 tests** (82 compiler + 369 engine + 86 native) — comprehensive coverage across engine, GPU shaders, integration, and MQL5 compiler
+- **551 tests** (82 compiler + 383 engine + 86 native) — comprehensive coverage across engine, GPU shaders, integration, and MQL5 compiler
 - **bytemuck migration**: All `unsafe` transmute/pointer-cast blocks replaced with `bytemuck` Pod/Zeroable derives — zero `unsafe` blocks in entire codebase
 
 ### 2026-03-31 Session: UI Freeze Elimination
@@ -92,7 +92,7 @@ No per-frame throttling by window state — expensive operations eliminated inst
   - Unusual volume scanner: runs in background thread, results cached
   - Watchlist stats: computed once and cached, not recomputed per-frame
 - **Zero unsafe blocks** confirmed across entire codebase (engine + native + compiler)
-- **537 tests** passing (82 compiler + 369 engine + 86 native): cache, darwin, fundamentals, SEC, crypto, var, risk, margin, backtest, GPU shaders, app integration, parser, WASM codegen, WGSL codegen
+- **551 tests** passing (82 compiler + 383 engine + 86 native): cache, darwin, fundamentals, SEC, crypto, var, risk, margin, backtest, GPU shaders, app integration, parser, WASM codegen, WGSL codegen
 - **MQL5 compiler parser bug fix**: postfix_op unwrapping now correctly distinguishes `++`/`--` from wrapped call_args/index_access/member_access
 
 ### 2026-03-31 → 2026-04-02: SQLite Concurrency, LAN Sync, BarCacheWriter
