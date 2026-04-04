@@ -21035,10 +21035,18 @@ impl eframe::App for TyphooNApp {
                 }
             }
 
-            // Delete/Backspace = remove last drawing (push to undo stack)
+            // Delete/Backspace = remove selected drawing, or last drawing if none selected
             if delete {
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                    if let Some(d) = chart.drawings.pop() {
+                    if let Some(sel) = chart.selected_drawing {
+                        if sel < chart.drawings.len() {
+                            let d = chart.drawings.remove(sel);
+                            chart.drawing_styles.remove(sel);
+                            chart.drawings_undo.push(d);
+                            chart.selected_drawing = None;
+                        }
+                    } else if let Some(d) = chart.drawings.pop() {
+                        chart.drawing_styles.pop();
                         chart.drawings_undo.push(d);
                     }
                 }
@@ -21047,7 +21055,9 @@ impl eframe::App for TyphooNApp {
             if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z) && !i.modifiers.shift) {
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
                     if let Some(d) = chart.drawings.pop() {
+                        chart.drawing_styles.pop();
                         chart.drawings_undo.push(d);
+                        chart.selected_drawing = None;
                     }
                 }
             }
@@ -21056,6 +21066,8 @@ impl eframe::App for TyphooNApp {
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
                     if let Some(d) = chart.drawings_undo.pop() {
                         chart.drawings.push(d);
+                        // Restore default style for redone drawing
+                        chart.drawing_styles.push((1.5, LineStyle::Solid));
                     }
                 }
             }
@@ -21729,7 +21741,7 @@ impl eframe::App for TyphooNApp {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let mut switch_to: Option<usize> = None;
                 let mut close_tab: Option<usize> = None;
-                let mut drop_target: Option<usize> = None;
+                let mut drop_target: Option<(usize, usize)> = None; // (drag_src, insert_at)
                 let pointer_pos = ctx.input(|i| i.pointer.hover_pos());
                 let pointer_released = ctx.input(|i| i.pointer.primary_released());
 
@@ -21835,8 +21847,9 @@ impl eframe::App for TyphooNApp {
                             for (idx, rect) in tab_rects.iter().enumerate() {
                                 if rect.contains(pos) && idx != drag_src {
                                     let mid = rect.center().x;
-                                    let target = if pos.x < mid { idx } else { idx };
-                                    drop_target = Some(target);
+                                    // Insert before idx if dropping on left half, after if right half
+                                    let insert_at = if pos.x < mid { idx } else { idx + 1 };
+                                    drop_target = Some((drag_src, insert_at));
                                     break;
                                 }
                             }
@@ -21887,15 +21900,14 @@ impl eframe::App for TyphooNApp {
                         self.active_tab = self.charts.len().saturating_sub(1);
                     }
                 }
-                if let Some(target) = drop_target {
-                    if let Some(drag_src) = self.dragging_tab.or(Some(self.active_tab)) {
-                        if drag_src < self.charts.len() && target < self.charts.len() && drag_src != target {
-                            let chart = self.charts.remove(drag_src);
-                            let insert_at = if target > drag_src { target } else { target };
-                            let insert_at = insert_at.min(self.charts.len());
-                            self.charts.insert(insert_at, chart);
-                            self.active_tab = insert_at;
-                        }
+                if let Some((drag_src, insert_at)) = drop_target {
+                    if drag_src < self.charts.len() {
+                        let chart = self.charts.remove(drag_src);
+                        // Adjust insert_at since removal shifts indices
+                        let adjusted = if insert_at > drag_src { insert_at - 1 } else { insert_at };
+                        let adjusted = adjusted.min(self.charts.len());
+                        self.charts.insert(adjusted, chart);
+                        self.active_tab = adjusted;
                     }
                 }
             });
@@ -23508,6 +23520,104 @@ impl eframe::App for TyphooNApp {
                             egui::FontId::monospace(12.0),
                             egui::Color32::from_rgb(255, 200, 50),
                         );
+                    }
+
+                    // ── drawing selection via click (DrawMode::None) ─────
+                    if resp.clicked() && self.draw_mode == DrawMode::None {
+                        if let Some(click_pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                            let price_axis_w = 70.0_f32;
+                            let chart_area = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right() - price_axis_w, rect.bottom()));
+                            if chart_area.contains(click_pos) {
+                                let (start_idx, end_idx) = chart.visible_range();
+                                let bar_w = chart_area.width() / (end_idx - start_idx).max(1) as f32;
+                                let mut vis_bars_range = None;
+                                if end_idx > start_idx && !chart.bars.is_empty() {
+                                    let vis = &chart.bars[start_idx..end_idx];
+                                    let price_min = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                                    let price_max = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                                    let padding = (price_max - price_min) * 0.05;
+                                    let pmin = price_min - padding;
+                                    let pmax = price_max + padding;
+                                    let centre = (pmax + pmin) * 0.5 + chart.price_pan;
+                                    let half = (pmax - pmin) * 0.5 / chart.price_zoom;
+                                    vis_bars_range = Some((centre - half, centre + half));
+                                }
+                                if let Some((pmin, pmax)) = vis_bars_range {
+                                    let price_to_y = |p: f64| -> f32 {
+                                        let frac = (pmax - p) / (pmax - pmin);
+                                        chart_area.top() + frac as f32 * chart_area.height()
+                                    };
+                                    let bar_to_x = |idx: usize| -> f32 {
+                                        chart_area.left() + ((idx - start_idx) as f32 + 0.5) * bar_w
+                                    };
+                                    const HIT_THRESHOLD: f32 = 8.0;
+                                    // Point-to-line-segment distance
+                                    let pt_line_dist = |p: egui::Pos2, a: egui::Pos2, b: egui::Pos2| -> f32 {
+                                        let ab = egui::vec2(b.x - a.x, b.y - a.y);
+                                        let ap = egui::vec2(p.x - a.x, p.y - a.y);
+                                        let ab_len_sq = ab.x * ab.x + ab.y * ab.y;
+                                        if ab_len_sq < 0.001 {
+                                            return (ap.x * ap.x + ap.y * ap.y).sqrt();
+                                        }
+                                        let t = ((ap.x * ab.x + ap.y * ab.y) / ab_len_sq).clamp(0.0, 1.0);
+                                        let proj = egui::pos2(a.x + t * ab.x, a.y + t * ab.y);
+                                        ((p.x - proj.x).powi(2) + (p.y - proj.y).powi(2)).sqrt()
+                                    };
+                                    let mut best_idx: Option<usize> = None;
+                                    let mut best_dist = HIT_THRESHOLD;
+                                    for (i, drawing) in chart.drawings.iter().enumerate() {
+                                        let dist = match drawing {
+                                            Drawing::HLine { price, .. } => {
+                                                let y = price_to_y(*price);
+                                                (click_pos.y - y).abs()
+                                            }
+                                            Drawing::VLine { bar_idx, .. } if *bar_idx >= start_idx && *bar_idx < end_idx => {
+                                                let x = bar_to_x(*bar_idx);
+                                                (click_pos.x - x).abs()
+                                            }
+                                            Drawing::TrendLine { p1, p2, .. } if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx => {
+                                                let a = egui::pos2(bar_to_x(p1.0), price_to_y(p1.1));
+                                                let b = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
+                                                pt_line_dist(click_pos, a, b)
+                                            }
+                                            Drawing::HRay { bar_idx, price, .. } => {
+                                                let y = price_to_y(*price);
+                                                let x_start = if *bar_idx >= start_idx && *bar_idx < end_idx { bar_to_x(*bar_idx) } else { chart_area.left() };
+                                                pt_line_dist(click_pos, egui::pos2(x_start, y), egui::pos2(chart_area.right(), y))
+                                            }
+                                            Drawing::Ray { origin, slope, .. } if origin.0 >= start_idx && origin.0 < end_idx => {
+                                                let x1 = bar_to_x(origin.0);
+                                                let y1 = price_to_y(origin.1);
+                                                let bars_to_edge = ((chart_area.right() - x1) / bar_w) as f64;
+                                                let y2 = price_to_y(origin.1 + slope * bars_to_edge);
+                                                pt_line_dist(click_pos, egui::pos2(x1, y1), egui::pos2(chart_area.right(), y2))
+                                            }
+                                            Drawing::Rectangle { p1, p2, .. } if p1.0 >= start_idx && p1.0 < end_idx && p2.0 >= start_idx && p2.0 < end_idx => {
+                                                let r = egui::Rect::from_two_pos(egui::pos2(bar_to_x(p1.0), price_to_y(p1.1)), egui::pos2(bar_to_x(p2.0), price_to_y(p2.1)));
+                                                let dx = (click_pos.x - r.center().x).abs() - r.width() / 2.0;
+                                                let dy = (click_pos.y - r.center().y).abs() - r.height() / 2.0;
+                                                dx.max(0.0).hypot(dy.max(0.0))
+                                            }
+                                            _ => HIT_THRESHOLD + 1.0, // not hit-testable yet
+                                        };
+                                        if dist < best_dist {
+                                            best_dist = dist;
+                                            best_idx = Some(i);
+                                        }
+                                    }
+                                    if best_idx != chart.selected_drawing {
+                                        chart.selected_drawing = best_idx;
+                                    } else if best_idx.is_none() {
+                                        // Click on empty space → deselect
+                                        chart.selected_drawing = None;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // ESC → deselect drawing
+                    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && chart.selected_drawing.is_some() {
+                        chart.selected_drawing = None;
                     }
 
                     // ── drawing mode click handling ──────────────────────
