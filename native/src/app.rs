@@ -1196,6 +1196,8 @@ struct ChartState {
     /// Undo stack for drawings (Ctrl+Z pops from drawings into here, Ctrl+Shift+Z restores)
     drawings_undo: Vec<Drawing>,
     selected_drawing: Option<usize>,
+    /// True while dragging a selected drawing (suppresses chart pan).
+    is_drawing_drag: bool,
     /// Cached trade overlay (rebuilt when bg data changes, not every frame).
     cached_trade_overlay: TradeOverlay,
     cached_trade_overlay_frame: u64,
@@ -1321,6 +1323,7 @@ impl ChartState {
             drawing_styles: Vec::new(),
             drawings_undo: Vec::new(),
             selected_drawing: None,
+            is_drawing_drag: false,
             cached_trade_overlay: TradeOverlay::default(),
             cached_trade_overlay_frame: 0,
             visible_bars: 200,
@@ -8330,6 +8333,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "MT5SYNC",       desc: "Sync bar data from MT5 BarCacheWriter databases" },
     Command { name: "ANALYST",       desc: "Analyst ratings & targets" },
     Command { name: "HOLDERS",       desc: "Institutional holders" },
+    Command { name: "OPTION_CHAIN",  desc: "tastytrade option chain for current symbol" },
     // Analysis
     Command { name: "CORRELATION",   desc: "Correlation matrix" },
     Command { name: "SEASONALS",     desc: "Seasonal patterns" },
@@ -9078,7 +9082,11 @@ pub struct TyphooNApp {
     show_insider: bool,
     show_fundamentals: bool,
     show_analyst: bool,
+    analyst_result: String,   // last fetched Finnhub recommendations JSON
     show_holders: bool,
+    holders_result: String,   // last fetched SEC EDGAR 13F JSON
+    show_orderbook_window: bool,
+    orderbook_result: String, // last fetched L2 orderbook JSON
     show_symbol_overlap: bool,
     show_correlation: bool,
     show_seasonals: bool,
@@ -9091,6 +9099,8 @@ pub struct TyphooNApp {
     darwinex_outliers: Vec<typhoon_engine::core::var::OutlierResult>,
     darwinex_sector_stats: Vec<typhoon_engine::core::var::SectorStats>,
     darwinex_multi_outliers: Vec<typhoon_engine::core::var::MultiOutlierResult>,
+    show_option_chain: bool,
+    option_chain_sym: String,  // symbol last fetched
     show_journal: bool,
     show_object_list: bool,
     journal_entries: Vec<JournalEntry>,
@@ -10913,7 +10923,11 @@ impl TyphooNApp {
             show_insider: false,
             show_fundamentals: false,
             show_analyst: false,
+            analyst_result: String::new(),
             show_holders: false,
+            holders_result: String::new(),
+            show_orderbook_window: false,
+            orderbook_result: String::new(),
             show_symbol_overlap: false,
             show_correlation: false,
             show_seasonals: false,
@@ -10926,6 +10940,8 @@ impl TyphooNApp {
             darwinex_multi_outliers: Vec::new(),
             darwinex_outliers: Vec::new(),
             darwinex_sector_stats: Vec::new(),
+            show_option_chain: false,
+            option_chain_sym: String::new(),
             show_journal: false,
             show_object_list: false,
             journal_entries: Vec::new(),
@@ -12055,6 +12071,17 @@ impl TyphooNApp {
             }
             "ANALYST"       => self.show_analyst = true,
             "HOLDERS"       => self.show_holders = true,
+            "OPTION_CHAIN"  => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    self.option_chain_sym = sym.clone();
+                    let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym });
+                    self.show_option_chain = true;
+                    self.log.push_back(LogEntry::info(format!("Fetching option chain for {}...", self.option_chain_sym)));
+                }
+            }
             "CORRELATION"   => self.show_correlation = true,
             "SEASONALS"     => self.show_seasonals = true,
             "MONTECARLO"    => self.show_montecarlo = true,
@@ -13204,6 +13231,7 @@ impl TyphooNApp {
         self.show_fundamentals = false;
         self.show_analyst = false;
         self.show_holders = false;
+        self.show_orderbook_window = false;
         self.show_symbol_overlap = false;
         self.show_correlation = false;
         self.show_seasonals = false;
@@ -13213,6 +13241,7 @@ impl TyphooNApp {
         self.show_order_flow = false;
         self.show_bookmap = false;
         self.show_darwinex_outliers = false;
+        self.show_option_chain = false;
         self.show_risk_ruin = false;
         self.show_alert_builder = false;
         self.show_journal = false;
@@ -18103,7 +18132,7 @@ impl TyphooNApp {
         if self.show_analyst {
             egui::Window::new("Analyst Ratings")
                 .open(&mut self.show_analyst)
-                .resizable(true).default_size([400.0, 300.0])
+                .resizable(true).default_size([480.0, 340.0])
                 .show(ctx, |ui| {
                     let sym = self.charts.get(self.active_tab)
                         .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
@@ -18114,14 +18143,55 @@ impl TyphooNApp {
                             let _ = self.broker_tx.send(BrokerCmd::GetAnalyst { symbol: sym.clone(), finnhub_key: self.finnhub_key.clone() });
                             self.log.push_back(LogEntry::info(format!("Fetching analyst ratings for {}...", sym)));
                         }
+                        if self.finnhub_key.is_empty() {
+                            ui.label(egui::RichText::new("(add Finnhub key in Settings)").color(AXIS_TEXT).small());
+                        }
                     });
                     ui.separator();
-                    if self.finnhub_key.is_empty() {
-                        ui.label(egui::RichText::new("Enter Finnhub API key in Settings to fetch analyst data.").color(AXIS_TEXT).small());
+                    if self.analyst_result.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Fetch Ratings.").color(AXIS_TEXT).small());
+                    } else if let Ok(arr) = serde_json::from_str::<serde_json::Value>(&self.analyst_result) {
+                        if let Some(recs) = arr.as_array() {
+                            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                                egui::Grid::new("analyst_grid").striped(true).num_columns(7).show(ui, |ui| {
+                                    ui.strong("Period");
+                                    ui.strong("StrongBuy"); ui.strong("Buy");
+                                    ui.strong("Hold");
+                                    ui.strong("Sell"); ui.strong("StrongSell");
+                                    ui.strong("Consensus");
+                                    ui.end_row();
+                                    for rec in recs.iter().take(12) {
+                                        let period   = rec["period"].as_str().unwrap_or("—");
+                                        let sb = rec["strongBuy"].as_i64().unwrap_or(0);
+                                        let b  = rec["buy"].as_i64().unwrap_or(0);
+                                        let h  = rec["hold"].as_i64().unwrap_or(0);
+                                        let s  = rec["sell"].as_i64().unwrap_or(0);
+                                        let ss = rec["strongSell"].as_i64().unwrap_or(0);
+                                        let buy_total = sb + b;
+                                        let sell_total = s + ss;
+                                        let consensus = if buy_total > sell_total + h { "BUY" }
+                                            else if sell_total > buy_total + h { "SELL" }
+                                            else { "HOLD" };
+                                        let con_color = match consensus {
+                                            "BUY"  => UP,
+                                            "SELL" => DOWN,
+                                            _      => egui::Color32::from_rgb(200, 180, 50),
+                                        };
+                                        ui.label(period);
+                                        ui.label(egui::RichText::new(sb.to_string()).color(UP));
+                                        ui.label(egui::RichText::new(b.to_string()).color(UP));
+                                        ui.label(h.to_string());
+                                        ui.label(egui::RichText::new(s.to_string()).color(DOWN));
+                                        ui.label(egui::RichText::new(ss.to_string()).color(DOWN));
+                                        ui.label(egui::RichText::new(consensus).color(con_color).strong());
+                                        ui.end_row();
+                                    }
+                                });
+                            });
+                        }
                     } else {
-                        ui.label(egui::RichText::new("Buy/Hold/Sell ratings, price targets via Finnhub.").color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new("Failed to parse analyst data.").color(DOWN).small());
                     }
-                    ui.label(egui::RichText::new("Results appear in the log panel below.").color(AXIS_TEXT).small());
                 });
         }
 
@@ -18129,7 +18199,7 @@ impl TyphooNApp {
         if self.show_holders {
             egui::Window::new("Institutional Holders")
                 .open(&mut self.show_holders)
-                .resizable(true).default_size([500.0, 350.0])
+                .resizable(true).default_size([560.0, 400.0])
                 .show(ctx, |ui| {
                     let ticker = self.charts.get(self.active_tab)
                         .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
@@ -18142,7 +18212,118 @@ impl TyphooNApp {
                         }
                     });
                     ui.separator();
-                    ui.label(egui::RichText::new("Top institutional holders via SEC EDGAR 13F filings.").color(AXIS_TEXT).small());
+                    if self.holders_result.is_empty() {
+                        ui.label(egui::RichText::new("No data — click Fetch 13F.").color(AXIS_TEXT).small());
+                    } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.holders_result) {
+                        // Entity summary
+                        egui::Grid::new("holders_meta").num_columns(2).show(ui, |ui| {
+                            if let Some(s) = v["entity_name"].as_str() {
+                                ui.strong("Entity:"); ui.label(s); ui.end_row();
+                            }
+                            if let Some(s) = v["sic_description"].as_str().filter(|s| !s.is_empty()) {
+                                ui.strong("SIC:"); ui.label(s); ui.end_row();
+                            }
+                            if let Some(s) = v["state_of_incorporation"].as_str().filter(|s| !s.is_empty()) {
+                                ui.strong("State:"); ui.label(s); ui.end_row();
+                            }
+                            if let Some(s) = v["fiscal_year_end"].as_str().filter(|s| !s.is_empty()) {
+                                ui.strong("FY End:"); ui.label(s); ui.end_row();
+                            }
+                        });
+                        ui.separator();
+                        let count = v["total_13f_found"].as_u64().unwrap_or(0);
+                        ui.label(egui::RichText::new(format!("{} 13F filings found (SEC EDGAR)", count)).small());
+                        if let Some(filings) = v["filings_13f"].as_array() {
+                            egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                                egui::Grid::new("holders_grid").striped(true).num_columns(3).show(ui, |ui| {
+                                    ui.strong("Form"); ui.strong("Filed"); ui.strong("Accession");
+                                    ui.end_row();
+                                    for f in filings.iter() {
+                                        let form = f["form"].as_str().unwrap_or("—");
+                                        let date = f["filing_date"].as_str().unwrap_or("—");
+                                        let acc  = f["accession_number"].as_str().unwrap_or("—");
+                                        ui.label(form);
+                                        ui.label(date);
+                                        ui.label(egui::RichText::new(acc).monospace().small());
+                                        ui.end_row();
+                                    }
+                                });
+                            });
+                        }
+                    } else {
+                        ui.label(egui::RichText::new("Failed to parse holders data.").color(DOWN).small());
+                    }
+                });
+        }
+
+        // Option Chain — tastytrade option expirations from KV cache
+        if self.show_option_chain {
+            egui::Window::new("Option Chain")
+                .open(&mut self.show_option_chain)
+                .resizable(true).default_size([560.0, 440.0])
+                .show(ctx, |ui| {
+                    let sym = &self.option_chain_sym;
+                    let oc_green = egui::Color32::from_rgb(0, 200, 80);
+                    let oc_red   = egui::Color32::from_rgb(220, 50, 50);
+                    let oc_dim   = egui::Color32::from_rgb(80, 80, 100);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("Option Chain: {}", sym)).strong());
+                        if ui.button("Refresh").clicked() && !sym.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym.clone() });
+                            self.log.push_back(LogEntry::info(format!("Refreshing option chain for {}...", sym)));
+                        }
+                        ui.label(egui::RichText::new("via tastytrade").color(oc_dim).small());
+                    });
+                    ui.separator();
+
+                    // Load from KV cache
+                    let chain_json = self.cache.as_ref()
+                        .and_then(|c| c.get_kv(&format!("tt:options:{}", sym)).ok().flatten());
+
+                    if let Some(json) = chain_json {
+                        if let Ok(expirations) = serde_json::from_str::<serde_json::Value>(&json) {
+                            if let Some(arr) = expirations.as_array() {
+                                ui.label(egui::RichText::new(format!("{} expirations", arr.len())).small());
+                                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                                    for exp in arr.iter() {
+                                        let date = exp["expiration_date"].as_str().unwrap_or("?");
+                                        let strikes = exp["strikes"].as_array();
+                                        let strike_count = strikes.map(|s| s.len()).unwrap_or(0);
+                                        let header = format!("{} ({} strikes)", date, strike_count);
+                                        egui::CollapsingHeader::new(
+                                            egui::RichText::new(header).small()
+                                        )
+                                        .id_salt(date)
+                                        .show(ui, |ui| {
+                                            if let Some(strikes) = strikes {
+                                                egui::Grid::new(format!("oc_{}", date))
+                                                    .striped(true).num_columns(3)
+                                                    .show(ui, |ui| {
+                                                    ui.strong("Strike");
+                                                    ui.strong("Call Symbol");
+                                                    ui.strong("Put Symbol");
+                                                    ui.end_row();
+                                                    for s in strikes.iter() {
+                                                        let strike = s["strike_price"].as_f64().unwrap_or(0.0);
+                                                        let call_sym = s["call_symbol"].as_str().unwrap_or("—");
+                                                        let put_sym  = s["put_symbol"].as_str().unwrap_or("—");
+                                                        ui.label(format!("{:.2}", strike));
+                                                        ui.label(egui::RichText::new(call_sym).color(oc_green).monospace().small());
+                                                        ui.label(egui::RichText::new(put_sym).color(oc_red).monospace().small());
+                                                        ui.end_row();
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    }
+                                });
+                            }
+                        } else {
+                            ui.label(egui::RichText::new("Failed to parse option chain data.").color(oc_red).small());
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(format!("No data cached for {} — click Refresh or run OPTION_CHAIN command.", sym)).color(oc_dim).small());
+                    }
                 });
         }
 
@@ -18649,6 +18830,66 @@ impl TyphooNApp {
                         } else {
                             ui.label(egui::RichText::new("Load chart data first.").color(bm_dim));
                         }
+                    }
+                });
+        }
+
+        // Orderbook DOM — shows real L2 data from Fetch Depth/Fetch L2
+        if self.show_orderbook_window {
+            egui::Window::new("Orderbook DOM")
+                .open(&mut self.show_orderbook_window)
+                .resizable(true).default_size([360.0, 420.0])
+                .show(ctx, |ui| {
+                    let ob_bid = egui::Color32::from_rgb(0, 200, 80);
+                    let ob_ask = egui::Color32::from_rgb(220, 50, 50);
+                    let ob_dim = egui::Color32::from_rgb(80, 80, 100);
+                    if self.orderbook_result.is_empty() {
+                        ui.label(egui::RichText::new("No L2 data — click Fetch Depth in Bookmap or Fetch L2 in Order Flow.").color(ob_dim).small());
+                    } else if let Ok(v) = serde_json::from_str::<serde_json::Value>(&self.orderbook_result) {
+                        let sym = v["symbol"].as_str().unwrap_or("?");
+                        let ts  = v["timestamp"].as_str().unwrap_or("");
+                        ui.label(egui::RichText::new(format!("{} — {}", sym, ts)).strong().small());
+                        ui.separator();
+                        let bids = v["bids"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+                        let asks = v["asks"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+                        // max size for bar scaling
+                        let max_sz = bids.iter().chain(asks.iter())
+                            .filter_map(|e| e["size"].as_f64())
+                            .fold(0.0_f64, f64::max).max(1.0);
+                        let avail_w = ui.available_width().min(320.0);
+                        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                            ui.label(egui::RichText::new("Asks (sell side)").color(ob_ask).small().strong());
+                            for ask in asks.iter().rev().take(15) {
+                                let price = ask["price"].as_f64().unwrap_or(0.0);
+                                let size  = ask["size"].as_f64().unwrap_or(0.0);
+                                let frac  = (size / max_sz) as f32;
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format_price(price)).monospace().small().color(ob_ask));
+                                    let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w - 90.0, 10.0), egui::Sense::hover());
+                                    ui.painter_at(rect).rect_filled(
+                                        egui::Rect::from_min_size(rect.min, egui::vec2(frac * rect.width(), 10.0)),
+                                        0.0, egui::Color32::from_rgba_premultiplied(200, 40, 40, 120));
+                                    ui.label(egui::RichText::new(format!("{:.4}", size)).monospace().small().color(ob_dim));
+                                });
+                            }
+                            ui.separator();
+                            ui.label(egui::RichText::new("Bids (buy side)").color(ob_bid).small().strong());
+                            for bid in bids.iter().take(15) {
+                                let price = bid["price"].as_f64().unwrap_or(0.0);
+                                let size  = bid["size"].as_f64().unwrap_or(0.0);
+                                let frac  = (size / max_sz) as f32;
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format_price(price)).monospace().small().color(ob_bid));
+                                    let (rect, _) = ui.allocate_exact_size(egui::vec2(avail_w - 90.0, 10.0), egui::Sense::hover());
+                                    ui.painter_at(rect).rect_filled(
+                                        egui::Rect::from_min_size(rect.min, egui::vec2(frac * rect.width(), 10.0)),
+                                        0.0, egui::Color32::from_rgba_premultiplied(0, 180, 60, 120));
+                                    ui.label(egui::RichText::new(format!("{:.4}", size)).monospace().small().color(ob_dim));
+                                });
+                            }
+                        });
+                    } else {
+                        ui.label(egui::RichText::new("Failed to parse orderbook data.").color(ob_ask).small());
                     }
                 });
         }
@@ -20871,6 +21112,17 @@ impl eframe::App for TyphooNApp {
                     self.log.push_back(LogEntry::info(msg));
                 }
                 BrokerMsg::JsonResult(label, text) => {
+                    // Route structured results to their windows; log everything
+                    if label.starts_with("Analyst:") {
+                        self.analyst_result = text.clone();
+                        self.show_analyst = true;
+                    } else if label.starts_with("Holders:") {
+                        self.holders_result = text.clone();
+                        self.show_holders = true;
+                    } else if label.starts_with("Orderbook:") {
+                        self.orderbook_result = text.clone();
+                        self.show_orderbook_window = true;
+                    }
                     self.log.push_back(LogEntry::info(format!("{}:\n{}", label, text)));
                 }
                 BrokerMsg::FundamentalsProgress(msg) => {
@@ -23367,19 +23619,29 @@ impl eframe::App for TyphooNApp {
                         // Start price-axis scaling drag (TradingView style)
                         chart.is_scaling_price = true;
                         chart.is_dragging = false;
+                        chart.is_drawing_drag = false;
                         chart.scale_start_zoom = chart.price_zoom;
                         chart.scale_start_y = press_pos.y;
                     } else if available.contains(press_pos) {
-                        // Start normal chart pan drag — only if inside the chart area
-                        chart.is_dragging = true;
-                        chart.is_scaling_price = false;
-                        chart.drag_start = pointer.press_origin();
-                        chart.drag_start_offset = chart.view_offset;
-                        chart.drag_start_ppan = chart.price_pan;
+                        if chart.selected_drawing.is_some() && self.draw_mode == DrawMode::None {
+                            // Drag the selected drawing instead of panning the chart
+                            chart.is_drawing_drag = true;
+                            chart.is_dragging = false;
+                            chart.is_scaling_price = false;
+                        } else {
+                            // Start normal chart pan drag — only if inside the chart area
+                            chart.is_dragging = true;
+                            chart.is_drawing_drag = false;
+                            chart.is_scaling_price = false;
+                            chart.drag_start = pointer.press_origin();
+                            chart.drag_start_offset = chart.view_offset;
+                            chart.drag_start_ppan = chart.price_pan;
+                        }
                     }
                 } else if pointer.primary_released() || pointer_over_window {
                     // Stop dragging when mouse released OR pointer moves over a floating window
                     chart.is_dragging = false;
+                    chart.is_drawing_drag = false;
                     chart.is_scaling_price = false;
                     chart.drag_start = None;
                 }
@@ -23392,6 +23654,131 @@ impl eframe::App for TyphooNApp {
                     let sensitivity = 0.003;
                     let zoom_delta = -drag_delta.y as f64 * sensitivity;
                     chart.price_zoom = (chart.price_zoom * (1.0 + zoom_delta)).clamp(0.1, 20.0);
+                }
+
+                // Drawing drag — move selected drawing by delta
+                if chart.is_drawing_drag && (drag_delta.x.abs() > 0.0 || drag_delta.y.abs() > 0.0) {
+                    if let Some(sel) = chart.selected_drawing {
+                        let (si, ei) = chart.visible_range();
+                        let vis_count = (ei - si).max(1) as f32;
+                        // bar_delta: positive = move right (later bars)
+                        let bar_delta = (drag_delta.x / (available.width() / vis_count)) as i64;
+                        // price_delta: drag down = lower price (y increases down, price increases up)
+                        let price_delta = if !chart.bars.is_empty() {
+                            let slice = &chart.bars[si..ei];
+                            let hi = slice.iter().map(|b| b.high).fold(0.0_f64, f64::max);
+                            let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                            let range = hi - lo;
+                            -drag_delta.y as f64 * range / available.height() as f64
+                        } else { 0.0 };
+
+                        // Helper to clamp bar index
+                        let move_bar = |idx: usize| -> usize {
+                            let new_idx = idx as i64 + bar_delta;
+                            new_idx.clamp(0, chart.bars.len().saturating_sub(1) as i64) as usize
+                        };
+
+                        if let Some(d) = chart.drawings.get_mut(sel) {
+                            match d {
+                                // Single-price horizontal
+                                Drawing::HLine { price, .. } | Drawing::MagnetLevel { price, .. }
+                                | Drawing::PriceNote { price, .. } => { *price += price_delta; }
+                                // Single-bar vertical
+                                Drawing::VLine { bar_idx, .. } | Drawing::AnchoredVwapLine { bar_idx, .. }
+                                | Drawing::SessionBreak { bar_idx, .. } | Drawing::FibTimeZones { bar_idx, .. } => {
+                                    *bar_idx = move_bar(*bar_idx);
+                                }
+                                // Two-point (p1, p2)
+                                Drawing::TrendLine { p1, p2, .. } | Drawing::TrendAngle { p1, p2, .. }
+                                | Drawing::ExtendedLine { p1, p2, .. } | Drawing::Channel { p1, p2, .. }
+                                | Drawing::InfoLine { p1, p2, .. } | Drawing::ArrowLine { p1, p2, .. }
+                                | Drawing::Ruler { p1, p2, .. } | Drawing::MeasureTool { p1, p2, .. }
+                                | Drawing::Forecast { p1, p2, .. } | Drawing::Rectangle { p1, p2, .. }
+                                | Drawing::Highlighter { p1, p2, .. } | Drawing::Ellipse { p1, p2, .. }
+                                | Drawing::SineWave { p1, p2, .. } | Drawing::RegressionChannel { p1, p2, .. }
+                                | Drawing::GannBox { p1, p2, .. } | Drawing::GhostFeed { p1, p2, .. }
+                                | Drawing::FibWedge { p1, p2, .. } | Drawing::DateRange { p1, p2, .. }
+                                | Drawing::DatePriceRange { p1, p2, .. } | Drawing::PriceRange { p1, p2, .. }
+                                | Drawing::ParallelChannel { p1, p2, .. } => {
+                                    p1.0 = move_bar(p1.0); p1.1 += price_delta;
+                                    p2.0 = move_bar(p2.0); p2.1 += price_delta;
+                                }
+                                // bar_idx + price
+                                Drawing::HRay { bar_idx, price, .. } | Drawing::CrossLine { bar_idx, price, .. }
+                                | Drawing::TextLabel { bar_idx, price, .. } | Drawing::PriceLabel { bar_idx, price, .. }
+                                | Drawing::Signpost { bar_idx, price, .. } | Drawing::Flag { bar_idx, price, .. }
+                                | Drawing::ArrowMarker { bar_idx, price, .. } | Drawing::CrossMarker { bar_idx, price, .. }
+                                | Drawing::AnchorNote { bar_idx, price, .. } | Drawing::Emoji { bar_idx, price, .. } => {
+                                    *bar_idx = move_bar(*bar_idx); *price += price_delta;
+                                }
+                                // origin + slope
+                                Drawing::Ray { origin, .. } => {
+                                    origin.0 = move_bar(origin.0); origin.1 += price_delta;
+                                }
+                                // pivot + p2 + p3 (pitchforks)
+                                Drawing::Pitchfork { pivot, p2, p3, .. } | Drawing::SchiffPitchfork { pivot, p2, p3, .. }
+                                | Drawing::ModSchiffPitchfork { pivot, p2, p3, .. } | Drawing::InsidePitchfork { pivot, p2, p3, .. } => {
+                                    pivot.0 = move_bar(pivot.0); pivot.1 += price_delta;
+                                    p2.0 = move_bar(p2.0); p2.1 += price_delta;
+                                    p3.0 = move_bar(p3.0); p3.1 += price_delta;
+                                }
+                                // p1 + p2 + p3
+                                Drawing::FiboExtension { p1, p2, p3, .. } | Drawing::FibChannel { p1, p2, p3, .. }
+                                | Drawing::TrendChannel { p1, p2, p3, .. } | Drawing::ArcDraw { p1, p2, p3, .. }
+                                | Drawing::RotatedRectangle { p1, p2, p3, .. } | Drawing::SpeedResistanceFan { p1, p2, p3, .. }
+                                | Drawing::SpeedResistanceArc { p1, p2, p3, .. } | Drawing::Triangle { p1, p2, p3, .. } => {
+                                    p1.0 = move_bar(p1.0); p1.1 += price_delta;
+                                    p2.0 = move_bar(p2.0); p2.1 += price_delta;
+                                    p3.0 = move_bar(p3.0); p3.1 += price_delta;
+                                }
+                                // CurveDraw: p1, ctrl1, ctrl2, p2
+                                Drawing::CurveDraw { p1, ctrl1, ctrl2, p2, .. } => {
+                                    p1.0 = move_bar(p1.0); p1.1 += price_delta;
+                                    ctrl1.0 = move_bar(ctrl1.0); ctrl1.1 += price_delta;
+                                    ctrl2.0 = move_bar(ctrl2.0); ctrl2.1 += price_delta;
+                                    p2.0 = move_bar(p2.0); p2.1 += price_delta;
+                                }
+                                // Bezier path / multi-point
+                                Drawing::Polyline { points, .. } | Drawing::ElliottWave { points, .. }
+                                | Drawing::AbcCorrection { points, .. } | Drawing::HeadShoulders { points, .. }
+                                | Drawing::XabcdPattern { points, .. } | Drawing::Brush { points, .. }
+                                | Drawing::PathDraw { points, .. } => {
+                                    for pt in points.iter_mut() {
+                                        pt.0 = move_bar(pt.0); pt.1 += price_delta;
+                                    }
+                                }
+                                // center + radius_pt
+                                Drawing::FibCircle { center, radius_pt, .. } | Drawing::FibSpiral { center, radius_pt, .. } => {
+                                    center.0 = move_bar(center.0); center.1 += price_delta;
+                                    radius_pt.0 = move_bar(radius_pt.0); radius_pt.1 += price_delta;
+                                }
+                                // anchor + label_pos
+                                Drawing::Callout { anchor, label_pos, .. } | Drawing::Balloon { anchor, label_pos, .. } => {
+                                    anchor.0 = move_bar(anchor.0); anchor.1 += price_delta;
+                                    label_pos.0 = move_bar(label_pos.0); label_pos.1 += price_delta;
+                                }
+                                // entry + stop/target (single bar point)
+                                Drawing::LongPosition { entry, stop, target } | Drawing::ShortPosition { entry, stop, target }
+                                | Drawing::RiskRewardBox { entry, stop, target } => {
+                                    entry.0 = move_bar(entry.0); entry.1 += price_delta;
+                                    *stop += price_delta; *target += price_delta;
+                                }
+                                // Fib retracement uses high/low/bar_start/bar_end
+                                Drawing::FiboRetrace { high, low, bar_start, bar_end } => {
+                                    *high += price_delta; *low += price_delta;
+                                    *bar_start = move_bar(*bar_start); *bar_end = move_bar(*bar_end);
+                                }
+                                // GannFan: origin + scale (scale doesn't change on drag)
+                                Drawing::GannFan { origin, .. } => {
+                                    origin.0 = move_bar(origin.0); origin.1 += price_delta;
+                                }
+                                // CyclicLines / TimeCycle: bar_start + bar_end
+                                Drawing::CyclicLines { bar_start, bar_end, .. } | Drawing::TimeCycle { bar_start, bar_end, .. } => {
+                                    *bar_start = move_bar(*bar_start); *bar_end = move_bar(*bar_end);
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Normal chart body drag → pan

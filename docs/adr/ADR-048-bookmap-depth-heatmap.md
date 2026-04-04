@@ -1,6 +1,6 @@
 # ADR-048: Bookmap-Style Depth Heatmap (Future)
 
-## Status: Proposed (2026-03-24)
+## Status: Partial (2026-04-05) — Volume heatmap window implemented, real L2 streaming planned
 
 ## Context
 

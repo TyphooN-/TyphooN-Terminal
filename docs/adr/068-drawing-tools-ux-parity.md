@@ -18,11 +18,12 @@ UX audit identified 7 gaps vs TradingView's drawing tool experience. These are t
 
 **Implementation:** `chart.selected_drawing: Option<usize>`. On click in DrawMode::None, iterates drawings with point-to-line distance function, picks closest within 8px. Applied to 6 of the most common drawing types; others return `HIT_THRESHOLD + 1.0` (miss).
 
-### 2. Drawing Move/Drag — PLANNED
-- [ ] Once selected, drag drawing body to move all points
-- [ ] Offset all points by drag delta (bar_idx + price)
-
-**Dependency:** Gap #1 fully implemented for all types first.
+### 2. Drawing Move/Drag — DONE
+- [x] When a drawing is selected and the user drags, `is_drawing_drag = true` (blocks chart pan)
+- [x] Drag delta converted to (bar_delta, price_delta) from visible range / chart height
+- [x] All 73 drawing types have correct field patterns matched and moved
+- [x] `primary_released` clears `is_drawing_drag`, returning to normal pan behavior
+- [x] `ChartState.is_drawing_drag: bool` field added
 
 ### 3. Drawing Resize via Control Points — PLANNED
 - [ ] Selected drawing shows draggable handles at endpoints
@@ -96,7 +97,8 @@ Applied to: HLine, TrendLine, VLine, Rectangle, Ray, Channel, ExtendedLine, HRay
 
 ## Consequences
 - Line width + style now fully functional (Gaps 4 & 5 complete)
-- Selection highlight infrastructure in place (partial Gap 1)
+- Drawing selection hit-testing active for ~50 types (Gap 1 substantially complete)
+- Drawing move/drag fully implemented for all 73 types (Gap 2 complete)
 - Drawing count: 73 tools implemented; all have line width/style/sel_tint wired
-- Selection hit-testing active for HLine, VLine, TrendLine, HRay, Ray, Rectangle (6/73)
 - Delete selected drawing wired; Ctrl+Z/Shift+Z undo/redo keep drawing_styles in sync
+- Remaining: Gap 3 (control point resize), Gap 7 (cross-TF drawings)

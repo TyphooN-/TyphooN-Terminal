@@ -30,6 +30,15 @@
 - /dev/shm ramdisk: data doesn't survive reboot (BarCacheWriter re-exports ~5-10 min)
 - PineScript parser covers a subset of PineScript v5 (common indicators, not full language)
 
+## Post-Audit Fixes (2026-04-05)
+- **Analyst Ratings window**: Now renders structured grid (Period/StrongBuy/Buy/Hold/Sell/StrongSell/Consensus) from cached Finnhub recommendations JSON, auto-opens on fetch completion
+- **Institutional Holders window**: Now renders entity metadata (SIC, state, FY end) + 13F filing table from cached SEC EDGAR data, auto-opens on fetch completion
+- **Orderbook DOM window**: New window (`show_orderbook_window`) renders real L2 bid/ask depth from `orderbook_result` — shows bid/ask ladders with volume bars, auto-opens when Fetch Depth or Fetch L2 returns data
+- **BrokerMsg::JsonResult routing**: Labels prefixed "Analyst:", "Holders:", "Orderbook:" now route to respective result fields + auto-open windows instead of log-only
+- **Drawing move/drag (Gap #2)**: Selected drawings can now be dragged to new positions — `is_drawing_drag` blocks chart pan when a drawing is selected; all 73 types covered
+- **Option Chain window**: New `OPTION_CHAIN` command fetches tastytrade expirations and displays them in a collapsible-expiration grid with strike/call/put symbols
+- **tastytrade OPTION_CHAIN command**: Added to command palette, loads from KV cache `tt:options:<symbol>`
+
 ## Post-Audit Fixes (2026-04-04)
 - **Replay mode**: `ChartState.replay_bar_cap` now actually caps visible_range so bars after replay_bar_idx are hidden
 - **Tab drag-drop**: Fixed insert_at logic (right-half drop now inserts after, not at same position); drag_src saved before clearing
