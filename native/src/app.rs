@@ -9059,6 +9059,8 @@ pub struct TyphooNApp {
     show_risk_calc: bool,
     show_backtest: bool,
     show_screener: bool,
+    screener_filter: String,
+    screener_sort_by_bars: bool,
     show_symbols: bool,
     symbols_filter: String,
     symbols_expanded: std::collections::HashSet<String>,
@@ -10893,6 +10895,8 @@ impl TyphooNApp {
             show_risk_calc: false,
             show_backtest: false,
             show_screener: false,
+            screener_filter: String::new(),
+            screener_sort_by_bars: true,
             show_symbols: false,
             symbols_filter: String::new(),
             symbols_expanded: std::collections::HashSet::new(),
@@ -16294,51 +16298,83 @@ impl TyphooNApp {
         if self.show_screener {
             egui::Window::new("Symbol Screener")
                 .open(&mut self.show_screener)
-                .resizable(true).default_size([600.0, 400.0])
+                .resizable(true).default_size([700.0, 480.0])
                 .show(ctx, |ui| {
-                    ui.heading("Screener");
+                    let details = &self.bg.detailed_stats;
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} cached entries", details.len()));
+                        ui.add_space(10.0);
+                        ui.label("Filter:");
+                        ui.add(egui::TextEdit::singleline(&mut self.screener_filter)
+                            .desired_width(200.0).font(egui::TextStyle::Monospace)
+                            .hint_text("symbol / TF / source…"));
+                        if ui.small_button("✕").clicked() { self.screener_filter.clear(); }
+                        ui.add_space(10.0);
+                        ui.label("Sort:");
+                        if ui.small_button("↕ Bars").clicked() { self.screener_sort_by_bars = !self.screener_sort_by_bars; }
+                    });
                     ui.separator();
-                    { let details = &self.bg.detailed_stats;
-                        if !details.is_empty() {
-                            ui.label(format!("{} cached symbols", details.len()));
-                            ui.add_space(5.0);
-                            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                                egui::Grid::new("screener_grid").striped(true).num_columns(3).show(ui, |ui| {
-                                    ui.strong("Symbol / Key"); ui.strong("Bars"); ui.strong("Action");
-                                    ui.end_row();
-                                    let mut load_key: Option<String> = None;
-                                    for (key, count, _size) in details {
-                                        ui.label(egui::RichText::new(key).monospace());
-                                        ui.label(format!("{}", count));
-                                        if ui.small_button("Load").clicked() {
-                                            load_key = Some(key.to_string());
-                                        }
-                                        ui.end_row();
-                                    }
-                                    // Load symbol into active chart
-                                    if let Some(key) = load_key {
-                                        if let Some(ref cache_arc) = self.cache {
-                                            if let Some(chart) = self.charts.get_mut(self.active_tab) {
-                                                match cache_arc.get_bars_raw(&key) {
-                                                    Ok(Some(raw)) => {
-                                                        chart.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
-                                                            ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
-                                                        }).collect();
-                                                        chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
-                                                        chart.symbol = key.clone();
-                                                        chart.compute_indicators();
-                                                        self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
-                                                    }
-                                                    Ok(None) => { self.log.push_back(LogEntry::warn(format!("No data for {}", key))); }
-                                                    Err(e) => { self.log.push_back(LogEntry::err(format!("Load error: {}", e))); }
-                                                }
-                                            }
-                                        }
-                                    }
-                                });
-                            });
-                        }
+                    let filt = self.screener_filter.to_lowercase();
+                    let mut entries: Vec<&(String, i64, i64)> = details.iter()
+                        .filter(|(key, _, _)| filt.is_empty() || key.to_lowercase().contains(&filt))
+                        .collect();
+                    if self.screener_sort_by_bars {
+                        entries.sort_by(|a, b| b.1.cmp(&a.1));
                     }
+                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                        egui::Grid::new("screener_grid").striped(true).num_columns(5)
+                            .min_col_width(60.0).show(ui, |ui| {
+                            ui.strong("Source"); ui.strong("Symbol"); ui.strong("TF"); ui.strong("Bars"); ui.strong("");
+                            ui.end_row();
+                            let mut load_key: Option<String> = None;
+                            for (key, count, _size) in &entries {
+                                // Parse key: "source:SYMBOL:TF" or "SYMBOL:TF"
+                                let parts: Vec<&str> = key.splitn(3, ':').collect();
+                                let (source, sym, tf) = match parts.as_slice() {
+                                    [s, sym, tf] => (*s, *sym, *tf),
+                                    [sym, tf] => ("mt5", *sym, *tf),
+                                    [sym] => ("mt5", *sym, ""),
+                                    _ => ("", key.as_str(), ""),
+                                };
+                                let src_col = match source {
+                                    "mt5" => egui::Color32::from_rgb(100, 180, 255),
+                                    "alpaca" => egui::Color32::from_rgb(100, 220, 100),
+                                    "cryptocompare" => egui::Color32::from_rgb(255, 170, 50),
+                                    "kraken" => egui::Color32::from_rgb(200, 100, 255),
+                                    _ => egui::Color32::from_rgb(160, 160, 160),
+                                };
+                                ui.label(egui::RichText::new(source).color(src_col).monospace().small());
+                                ui.label(egui::RichText::new(sym).monospace());
+                                ui.label(egui::RichText::new(tf).monospace().small());
+                                ui.label(egui::RichText::new(format!("{}", count)).monospace()
+                                    .color(if *count > 5000 { egui::Color32::from_rgb(100, 220, 100) } else { egui::Color32::from_rgb(180, 180, 180) }));
+                                if ui.small_button("▶ Load").clicked() {
+                                    load_key = Some(key.to_string());
+                                }
+                                ui.end_row();
+                            }
+                            // Load symbol into active chart
+                            if let Some(key) = load_key {
+                                if let Some(ref cache_arc) = self.cache {
+                                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                                        match cache_arc.get_bars_raw(&key) {
+                                            Ok(Some(raw)) => {
+                                                chart.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
+                                                    ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
+                                                }).collect();
+                                                chart.view_offset = chart.bars.len().saturating_sub(1) + CHART_RIGHT_MARGIN;
+                                                chart.symbol = key.clone();
+                                                chart.compute_indicators();
+                                                self.log.push_back(LogEntry::info(format!("Loaded {} bars from {}", chart.bars.len(), key)));
+                                            }
+                                            Ok(None) => { self.log.push_back(LogEntry::warn(format!("No data for {}", key))); }
+                                            Err(e) => { self.log.push_back(LogEntry::err(format!("Load error: {}", e))); }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    });
                 });
         }
 
