@@ -49,7 +49,6 @@ const AXIS_TEXT: egui::Color32 = egui::Color32::from_rgb(140, 140, 160); // #8c8
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(76, 175, 80);
 const FISHER_POS: egui::Color32 = egui::Color32::from_rgb(0, 255, 0);     // #00ff00 (MT5 bright green)
 const FISHER_NEG: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);    // #ff0000 (MT5 bright red)
-#[allow(dead_code)]
 const FISHER_SIG: egui::Color32 = egui::Color32::from_rgb(169, 169, 169); // clrDarkGray (MT5 signal)
 const RSI_LINE: egui::Color32 = egui::Color32::from_rgb(200, 180, 60);   // #c8b43c (mustard yellow)
 const MACD_LINE_COL: egui::Color32 = egui::Color32::from_rgb(100, 180, 255); // #64b4ff
