@@ -24303,6 +24303,7 @@ impl eframe::App for TyphooNApp {
                             let has_live = (self.broker_connected || self.lan_sync_mode == "client") && self.show_alpaca_positions;
                             if has_live && !self.live_positions.is_empty() {
                                 has_positions = true;
+                                let mut close_sym: Option<String> = None;
                                 for pos in &self.live_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
@@ -24313,9 +24314,17 @@ impl eframe::App for TyphooNApp {
                                         let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
                                         let pl_pct = if pos.market_value.abs() > 0.01 { pos.unrealized_pl / (pos.market_value - pos.unrealized_pl) * 100.0 } else { 0.0 };
                                         ui.label(egui::RichText::new(format!("${:.2} ({:+.1}%)", pos.unrealized_pl, pl_pct)).color(pl_c).small());
+                                        if self.broker_connected && self.lan_sync_mode != "client" {
+                                            if ui.small_button(egui::RichText::new("x").color(DOWN)).on_hover_text("Close position").clicked() {
+                                                close_sym = Some(pos.symbol.clone());
+                                            }
+                                        }
                                     });
                                     ui.label(egui::RichText::new(format!("entry: {}", format_price(pos.avg_entry_price))).color(AXIS_TEXT).small());
                                     ui.separator();
+                                }
+                                if let Some(sym) = close_sym {
+                                    let _ = self.broker_tx.send(BrokerCmd::ClosePosition { symbol: sym });
                                 }
                             }
                             // tastytrade positions
