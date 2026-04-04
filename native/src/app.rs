@@ -1111,6 +1111,20 @@ struct ChartState {
     chart_type: ChartType,
     /// Logarithmic price scale (vs linear).
     log_scale: bool,
+    // ── Configurable indicator periods ─────────────────────────────────
+    sma_slow_period: u32,
+    sma_fast_period: u32,
+    ema_period: u32,
+    rsi_period: u32,
+    atr_period: u32,
+    bb_period: u32,
+    stoch_period: u32,
+    adx_period: u32,
+    fisher_period: u32,
+    momentum_period: u32,
+    // ── Compare symbol overlay ─────────────────────────────────────────
+    compare_symbol: Option<String>,
+    compare_bars: Vec<Bar>,
     /// Raw bar data loaded from cache.
     bars: Vec<Bar>,
     /// Pre-computed SMA(200) — indexed parallel to `bars`.
@@ -1307,6 +1321,18 @@ impl ChartState {
             timeframe: tf,
             chart_type: ChartType::Candle,
             log_scale: false,
+            sma_slow_period: 200,
+            sma_fast_period: 100,
+            ema_period: 21,
+            rsi_period: 14,
+            atr_period: 14,
+            bb_period: 20,
+            stoch_period: 14,
+            adx_period: 14,
+            fisher_period: 32,
+            momentum_period: 10,
+            compare_symbol: None,
+            compare_bars: Vec::new(),
             bars: Vec::new(),
             sma200: Vec::new(),
             sma100: Vec::new(),
@@ -1776,13 +1802,15 @@ impl ChartState {
                 gpu.upload_bars_full(&closes, &highs, &lows, &volumes);
 
                 // SMA — parallel GPU
-                if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Sma, 200, true) {
+                let sma_slow = self.sma_slow_period;
+                let sma_fast = self.sma_fast_period;
+                if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Sma, sma_slow, true) {
                     self.sma200 = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
-                } else { self.sma200 = compute_sma(&self.bars, 200); }
+                } else { self.sma200 = compute_sma(&self.bars, sma_slow as usize); }
 
-                if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Sma, 100, true) {
+                if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Sma, sma_fast, true) {
                     self.sma100 = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
-                } else { self.sma100 = compute_sma(&self.bars, 100); }
+                } else { self.sma100 = compute_sma(&self.bars, sma_fast as usize); }
 
                 // KAMA — sequential GPU
                 if let Some(data) = gpu.compute_kama_gpu(10) {
@@ -1790,12 +1818,14 @@ impl ChartState {
                 } else { self.kama = compute_kama(&self.bars, 10, 2, 30); }
 
                 // EMA — sequential GPU
-                if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Ema, 21, false) {
+                let ema_p = self.ema_period;
+                if let Some(data) = gpu.dispatch_indicator_pub(&gpu_compute::Indicator::Ema, ema_p, false) {
                     self.ema21 = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
-                } else { self.ema21 = compute_ema(&self.bars, 21); }
+                } else { self.ema21 = compute_ema(&self.bars, ema_p as usize); }
 
                 // Bollinger — parallel GPU
-                if let Some(data) = gpu.compute_bollinger_gpu(20) {
+                let bb_p = self.bb_period;
+                if let Some(data) = gpu.compute_bollinger_gpu(bb_p) {
                     let mut mid = Vec::with_capacity(n);
                     let mut upper = Vec::with_capacity(n);
                     let mut lower = Vec::with_capacity(n);
@@ -1808,17 +1838,19 @@ impl ChartState {
                     }
                     self.bb_mid = mid; self.bb_upper = upper; self.bb_lower = lower;
                 } else {
-                    let (m, u, l) = compute_bollinger(&self.bars, 20, 2.0);
+                    let (m, u, l) = compute_bollinger(&self.bars, bb_p as usize, 2.0);
                     self.bb_mid = m; self.bb_upper = u; self.bb_lower = l;
                 }
 
                 // RSI — sequential GPU
-                if let Some(data) = gpu.compute_rsi_gpu(14) {
-                    self.rsi = data.iter().enumerate().map(|(i, &v)| if i <= 14 || v == 0.0 { None } else { Some(v as f64) }).collect();
-                } else { self.rsi = compute_rsi(&self.bars, 14); }
+                let rsi_p = self.rsi_period;
+                if let Some(data) = gpu.compute_rsi_gpu(rsi_p) {
+                    self.rsi = data.iter().enumerate().map(|(i, &v)| if i <= rsi_p as usize || v == 0.0 { None } else { Some(v as f64) }).collect();
+                } else { self.rsi = compute_rsi(&self.bars, rsi_p as usize); }
 
                 // Fisher — sequential GPU (uses midpoints)
-                if let Some(data) = gpu.compute_fisher_gpu(32) {
+                let fisher_p = self.fisher_period;
+                if let Some(data) = gpu.compute_fisher_gpu(fisher_p) {
                     let mut f = Vec::with_capacity(n);
                     let mut fs = Vec::with_capacity(n);
                     for i in 0..n {
@@ -1829,14 +1861,15 @@ impl ChartState {
                     }
                     self.fisher = f; self.fisher_signal = fs;
                 } else {
-                    let (f, fs) = compute_fisher(&self.bars, 32);
+                    let (f, fs) = compute_fisher(&self.bars, fisher_p as usize);
                     self.fisher = f; self.fisher_signal = fs;
                 }
 
                 // ATR — sequential GPU (uses OHLC)
-                if let Some(data) = gpu.compute_atr_gpu(14) {
+                let atr_p = self.atr_period;
+                if let Some(data) = gpu.compute_atr_gpu(atr_p) {
                     self.atr = data.iter().map(|&v| if v == 0.0 { None } else { Some(v as f64) }).collect();
-                } else { self.atr = compute_atr(&self.bars, 14); }
+                } else { self.atr = compute_atr(&self.bars, atr_p as usize); }
 
                 // MACD — sequential GPU (warmup: 26 bars for EMA26, +9 for signal)
                 if let Some(data) = gpu.compute_macd_gpu() {
@@ -1859,12 +1892,13 @@ impl ChartState {
                     self.macd_line = ml; self.macd_signal = ms; self.macd_hist = mh;
                 }
 
-                // Stochastic — sequential GPU (uses OHLC, warmup: 14+3 bars)
-                if let Some(data) = gpu.compute_stochastic_gpu(14) {
+                // Stochastic — sequential GPU (uses OHLC, warmup: period+3 bars)
+                let stoch_p = self.stoch_period;
+                if let Some(data) = gpu.compute_stochastic_gpu(stoch_p) {
                     let mut sk = Vec::with_capacity(n);
                     let mut sd = Vec::with_capacity(n);
                     for i in 0..n {
-                        if i < 14 {
+                        if i < stoch_p as usize {
                             sk.push(None); sd.push(None);
                         } else {
                             sk.push(Some(data.get(i * 2).copied().unwrap_or(50.0) as f64));
@@ -1873,12 +1907,13 @@ impl ChartState {
                     }
                     self.stoch_k = sk; self.stoch_d = sd;
                 } else {
-                    let (sk, sd) = compute_stochastic(&self.bars, 14, 3, 3);
+                    let (sk, sd) = compute_stochastic(&self.bars, stoch_p as usize, 3, 3);
                     self.stoch_k = sk; self.stoch_d = sd;
                 }
 
                 // ADX — sequential GPU (uses OHLC, warmup: 2×period bars)
-                if let Some(data) = gpu.compute_adx_gpu(14) {
+                let adx_p = self.adx_period;
+                if let Some(data) = gpu.compute_adx_gpu(adx_p) {
                     let mut adx = Vec::with_capacity(n);
                     let mut dip = Vec::with_capacity(n);
                     let mut dim = Vec::with_capacity(n);
@@ -1886,7 +1921,7 @@ impl ChartState {
                         let a = data.get(i * 3).copied().unwrap_or(0.0);
                         let dp = data.get(i * 3 + 1).copied().unwrap_or(0.0);
                         let dm = data.get(i * 3 + 2).copied().unwrap_or(0.0);
-                        if i < 28 || (a == 0.0 && dp == 0.0 && dm == 0.0) {
+                        if i < adx_p as usize * 2 || (a == 0.0 && dp == 0.0 && dm == 0.0) {
                             adx.push(None); dip.push(None); dim.push(None);
                         } else {
                             adx.push(Some(a as f64)); dip.push(Some(dp as f64)); dim.push(Some(dm as f64));
@@ -1894,7 +1929,7 @@ impl ChartState {
                     }
                     self.adx = adx; self.di_plus = dip; self.di_minus = dim;
                 } else {
-                    let (adx, dip, dim) = compute_adx(&self.bars, 14);
+                    let (adx, dip, dim) = compute_adx(&self.bars, adx_p as usize);
                     self.adx = adx; self.di_plus = dip; self.di_minus = dim;
                 }
 
@@ -1951,9 +1986,10 @@ impl ChartState {
                 }
 
                 // Momentum — GPU (parallel, oscillator — 0.0 is valid)
-                if let Some(data) = gpu.compute_momentum_gpu(10) {
-                    self.momentum = data.iter().enumerate().map(|(i, &v)| if i < 10 { None } else { Some(v as f64) }).collect();
-                } else { self.momentum = compute_momentum(&self.bars, 10); }
+                let mom_p = self.momentum_period;
+                if let Some(data) = gpu.compute_momentum_gpu(mom_p) {
+                    self.momentum = data.iter().enumerate().map(|(i, &v)| if i < mom_p as usize { None } else { Some(v as f64) }).collect();
+                } else { self.momentum = compute_momentum(&self.bars, mom_p as usize); }
 
                 // Parabolic SAR — GPU (sequential, from OHLC)
                 if let Some(data) = gpu.compute_psar_gpu() {
@@ -2212,27 +2248,37 @@ impl ChartState {
         }
 
         // ── CPU fallback path (no GPU available) ──
-        self.sma200 = compute_sma(&self.bars, 200);
-        self.sma100 = compute_sma(&self.bars, 100);
+        let sma_slow = self.sma_slow_period as usize;
+        let sma_fast = self.sma_fast_period as usize;
+        let ema_p = self.ema_period as usize;
+        let bb_p = self.bb_period as usize;
+        let rsi_p = self.rsi_period as usize;
+        let fisher_p = self.fisher_period as usize;
+        let atr_p = self.atr_period as usize;
+        let stoch_p = self.stoch_period as usize;
+        let adx_p = self.adx_period as usize;
+        let mom_p = self.momentum_period as usize;
+        self.sma200 = compute_sma(&self.bars, sma_slow);
+        self.sma100 = compute_sma(&self.bars, sma_fast);
         self.kama   = compute_kama(&self.bars, 10, 2, 30);
-        self.ema21  = compute_ema(&self.bars, 21);
-        let (mid, upper, lower) = compute_bollinger(&self.bars, 20, 2.0);
+        self.ema21  = compute_ema(&self.bars, ema_p);
+        let (mid, upper, lower) = compute_bollinger(&self.bars, bb_p, 2.0);
         self.bb_mid = mid;
         self.bb_upper = upper;
         self.bb_lower = lower;
-        self.rsi = compute_rsi(&self.bars, 14);
-        let (f, fs) = compute_fisher(&self.bars, 32);
+        self.rsi = compute_rsi(&self.bars, rsi_p);
+        let (f, fs) = compute_fisher(&self.bars, fisher_p);
         self.fisher = f;
         self.fisher_signal = fs;
-        self.atr = compute_atr(&self.bars, 14);
+        self.atr = compute_atr(&self.bars, atr_p);
         let (ml, ms, mh) = compute_macd(&self.bars, 12, 26, 9);
         self.macd_line = ml;
         self.macd_signal = ms;
         self.macd_hist = mh;
-        let (sk, sd) = compute_stochastic(&self.bars, 14, 3, 3);
+        let (sk, sd) = compute_stochastic(&self.bars, stoch_p, 3, 3);
         self.stoch_k = sk;
         self.stoch_d = sd;
-        let (adx, dip, dim) = compute_adx(&self.bars, 14);
+        let (adx, dip, dim) = compute_adx(&self.bars, adx_p);
         self.adx = adx;
         self.di_plus = dip;
         self.di_minus = dim;
@@ -2246,7 +2292,7 @@ impl ChartState {
         self.cci = compute_cci(&self.bars, 20);
         self.williams_r = compute_williams_r(&self.bars, 14);
         self.obv = compute_obv(&self.bars);
-        self.momentum = compute_momentum(&self.bars, 10);
+        self.momentum = compute_momentum(&self.bars, mom_p);
         self.psar = compute_parabolic_sar(&self.bars, 0.02, 0.2);
         let (au, al) = compute_atr_projection(&self.bars, &self.atr);
         self.atr_proj_upper = au;
@@ -6230,6 +6276,33 @@ fn draw_chart(
         }
     }
 
+    // ── Compare symbol overlay (% change line) ──────────────────────────
+    if let Some(ref _cmp_sym) = chart.compare_symbol {
+        if !chart.compare_bars.is_empty() && bars.len() > 1 {
+            let cmp = &chart.compare_bars;
+            let (start_idx, _end_idx) = chart.visible_range();
+            let base_close = chart.bars.get(start_idx).map(|b| b.close).unwrap_or(1.0);
+            let cmp_base = cmp.get(start_idx.min(cmp.len().saturating_sub(1))).map(|b| b.close).unwrap_or(1.0);
+            if base_close > 0.0 && cmp_base > 0.0 {
+                let cmp_col = egui::Color32::from_rgb(200, 100, 255); // purple overlay
+                let mut prev_pt: Option<egui::Pos2> = None;
+                for rel_idx in 0..bars.len() {
+                    let abs_idx = start_idx + rel_idx;
+                    if abs_idx >= cmp.len() { break; }
+                    let cmp_pct = (cmp[abs_idx].close - cmp_base) / cmp_base;
+                    let mapped_price = base_close * (1.0 + cmp_pct);
+                    let x = chart_rect.left() + (rel_idx as f32 + 0.5) * bar_w;
+                    let y = price_to_y(mapped_price);
+                    let pt = egui::pos2(x, y.clamp(chart_rect.top(), chart_rect.bottom()));
+                    if let Some(pp) = prev_pt {
+                        painter.line_segment([pp, pt], egui::Stroke::new(1.5, cmp_col));
+                    }
+                    prev_pt = Some(pt);
+                }
+            }
+        }
+    }
+
     // ── DARWIN/broker trade markers (buy/sell arrows + position lines) ────────
     // Position entry/SL/TP lines
     for pl in &trade_overlay.position_lines {
@@ -9601,6 +9674,8 @@ pub struct TyphooNApp {
     /// GPU DARWIN analytics engine (compute shaders for batch stats/correlation).
     gpu_darwin: Option<gpu_compute::GpuDarwinAnalytics>,
     gpu_indicators: Option<gpu_compute::GpuCompute>,
+    /// Set true when indicator periods change in the UI; cleared after recompute.
+    indicators_dirty: bool,
 
     // ── Prometheus metrics ───────────────────────────────────────────────
     /// Shared metrics registry (updated periodically, served via HTTP).
@@ -11611,6 +11686,7 @@ impl TyphooNApp {
             },
             gpu_darwin: None,
             gpu_indicators: None,
+            indicators_dirty: false,
             metrics_registry: None,
             metrics_start: std::time::Instant::now(),
             screenshot_requested: false,
@@ -13110,7 +13186,41 @@ impl TyphooNApp {
             "CALC"           => self.show_risk_calc = true,
             "TRADESTATS"     => { self.darwin_view = 0; self.show_darwin_portfolio = true; } // Portfolio Summary
             "PERF"           => { self.darwin_view = 14; self.show_darwin_portfolio = true; } // Seasonals
-            "COMPARE"        => { self.darwin_view = 3; self.show_darwin_portfolio = true; } // Correlation Matrix
+            "COMPARE" => {
+                let sym = self.symbol_input.clone();
+                if !sym.is_empty() {
+                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                        chart.compare_symbol = Some(sym.clone());
+                        chart.compare_bars.clear();
+                        if let Some(ref cache) = self.cache {
+                            let tf_label = chart.timeframe.cache_suffix();
+                            let keys = [
+                                format!("mt5:{}:{}", sym, tf_label),
+                                format!("alpaca:{}:{}", sym, tf_label),
+                            ];
+                            for key in &keys {
+                                if let Ok(Some(raw)) = cache.get_bars_raw(key) {
+                                    chart.compare_bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v }).collect();
+                                    if !chart.compare_bars.is_empty() {
+                                        self.log.push_back(LogEntry::info(format!("Compare: {} loaded ({} bars)", sym, chart.compare_bars.len())));
+                                        break;
+                                    }
+                                }
+                            }
+                            if chart.compare_bars.is_empty() {
+                                self.log.push_back(LogEntry::warn(format!("Compare: no cached data for {}", sym)));
+                            }
+                        }
+                    }
+                } else {
+                    // Empty symbol clears the compare overlay
+                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                        chart.compare_symbol = None;
+                        chart.compare_bars.clear();
+                        self.log.push_back(LogEntry::info("Compare overlay cleared"));
+                    }
+                }
+            }
             "SPREAD"         => { self.darwin_view = 4; self.show_darwin_portfolio = true; } // Symbol Exposure
             "HEATMAP"        => { self.darwin_view = 14; self.show_darwin_portfolio = true; } // Seasonals
             "PROFILE"        => self.show_darwin_accounts = true,
@@ -14626,6 +14736,49 @@ impl TyphooNApp {
                     ui.checkbox(&mut self.show_ehlers_cyber,    "Cyber Cycle");
                     ui.checkbox(&mut self.show_ehlers_cg,       "CG Oscillator(10)");
                     ui.checkbox(&mut self.show_ehlers_roof,     "Roofing Filter(10,48)");
+
+                    // ── Indicator Periods ──
+                    ui.add_space(4.0);
+                    ui.heading("Indicator Periods");
+                    ui.separator();
+                    if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                        let mut changed = false;
+                        egui::Grid::new("ind_periods").num_columns(2).show(ui, |ui| {
+                            ui.label("SMA Slow:");
+                            if ui.add(egui::DragValue::new(&mut chart.sma_slow_period).range(5..=500)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("SMA Fast:");
+                            if ui.add(egui::DragValue::new(&mut chart.sma_fast_period).range(5..=500)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("EMA:");
+                            if ui.add(egui::DragValue::new(&mut chart.ema_period).range(2..=200)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("RSI:");
+                            if ui.add(egui::DragValue::new(&mut chart.rsi_period).range(2..=100)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("ATR:");
+                            if ui.add(egui::DragValue::new(&mut chart.atr_period).range(2..=100)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("Bollinger:");
+                            if ui.add(egui::DragValue::new(&mut chart.bb_period).range(5..=100)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("Stochastic:");
+                            if ui.add(egui::DragValue::new(&mut chart.stoch_period).range(2..=100)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("ADX:");
+                            if ui.add(egui::DragValue::new(&mut chart.adx_period).range(2..=100)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("Fisher:");
+                            if ui.add(egui::DragValue::new(&mut chart.fisher_period).range(5..=100)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("Momentum:");
+                            if ui.add(egui::DragValue::new(&mut chart.momentum_period).range(2..=100)).changed() { changed = true; }
+                            ui.end_row();
+                        });
+                        if changed {
+                            self.indicators_dirty = true;
+                        }
+                    }
                 });
         }
 
@@ -21905,6 +22058,16 @@ impl eframe::App for TyphooNApp {
                 self.deferred_chart_loads.remove(0);
             }
             // If !loaded, leave in queue — will retry next frame when Mutex is free
+        }
+
+        // ── recompute indicators when periods changed in UI ──────────────
+        if self.indicators_dirty {
+            self.indicators_dirty = false;
+            let mut gpu = self.gpu_indicators.take();
+            if let Some(chart) = self.charts.get_mut(self.active_tab) {
+                chart.compute_indicators_gpu(gpu.as_mut());
+            }
+            self.gpu_indicators = gpu;
         }
 
         // ── receive MTF grid status from background thread (non-blocking) ──
