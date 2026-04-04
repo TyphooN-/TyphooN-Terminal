@@ -28,3 +28,5 @@ Implement a custom chart engine using egui's Painter API for direct shape render
 - Pre-placement color picker: 8-color palette in drawing toolbar; all 89 drawing types use `draw_color`
 - Per-drawing property editor: right-click selected drawing to change color, width, style
 - Drawing control points: selected drawings show cyan square handles at endpoints
+- Adjustable indicator parameters: 10 key periods (SMA slow/fast, EMA, RSI, ATR, BB, Stochastic, ADX, Fisher, Momentum) configurable per-chart via DragValue sliders in Indicators panel; changes trigger GPU recompute
+- Multi-symbol chart overlay: COMPARE command loads second symbol from cache, renders as purple % change line normalized to primary chart's first visible bar; per-chart `compare_symbol` + `compare_bars` fields
