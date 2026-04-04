@@ -25920,7 +25920,6 @@ impl eframe::App for TyphooNApp {
                                             self.draw_mode = DrawMode::None;
                                         }
                                     }
-                                    DrawMode::None => {}
                                 }
                             }
                         }

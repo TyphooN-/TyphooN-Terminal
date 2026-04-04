@@ -41,7 +41,7 @@ Chart annotation needed for technical analysis.
 | **Other** (2) | SessionBreak, MagnetLevel |
 
 ## Consequences
-- Pro: 70 drawing types covering all primary TA needs (near TradingView parity)
+- Pro: 89 drawing types covering all primary TA needs (near TradingView parity)
 - Pro: Live preview during placement — user sees exactly what will be created
 - Pro: OHLC snap ensures precise alignment with candlestick levels
 - Pro: Full undo/redo with Ctrl+Z/Ctrl+Shift+Z
