@@ -1125,6 +1125,9 @@ struct ChartState {
     // ── Compare symbol overlay ─────────────────────────────────────────
     compare_symbol: Option<String>,
     compare_bars: Vec<Bar>,
+    /// Live bid/ask from streaming quotes (for spread line rendering).
+    live_bid: f64,
+    live_ask: f64,
     /// Raw bar data loaded from cache.
     bars: Vec<Bar>,
     /// Pre-computed SMA(200) — indexed parallel to `bars`.
@@ -1333,6 +1336,8 @@ impl ChartState {
             momentum_period: 10,
             compare_symbol: None,
             compare_bars: Vec::new(),
+            live_bid: 0.0,
+            live_ask: 0.0,
             bars: Vec::new(),
             sma200: Vec::new(),
             sma100: Vec::new(),
@@ -5773,6 +5778,20 @@ fn draw_chart(
                 egui::FontId::monospace(10.0),
                 egui::Color32::BLACK,
             );
+        }
+    }
+
+    // ── Bid/Ask spread lines (live streaming quotes) ──────────────────────
+    if chart.live_bid > 0.0 && chart.live_ask > 0.0 {
+        let bid_y = price_to_y(chart.live_bid);
+        let ask_y = price_to_y(chart.live_ask);
+        let bid_col = egui::Color32::from_rgba_premultiplied(0, 200, 80, 120);
+        let ask_col = egui::Color32::from_rgba_premultiplied(220, 50, 50, 120);
+        if bid_y >= chart_rect.top() && bid_y <= chart_rect.bottom() {
+            painter.line_segment([egui::pos2(chart_rect.left(), bid_y), egui::pos2(chart_rect.right(), bid_y)], egui::Stroke::new(0.5, bid_col));
+        }
+        if ask_y >= chart_rect.top() && ask_y <= chart_rect.bottom() {
+            painter.line_segment([egui::pos2(chart_rect.left(), ask_y), egui::pos2(chart_rect.right(), ask_y)], egui::Stroke::new(0.5, ask_col));
         }
     }
 
@@ -22303,11 +22322,13 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 BrokerMsg::StreamQuoteTick { symbol, bid, ask } => {
-                    // Update forming bar close price on active charts
+                    // Update forming bar close price + live bid/ask on matching charts
                     let last = (bid + ask) / 2.0;
                     if last > 0.0 {
                         for chart in &mut self.charts {
                             if chart.symbol.contains(&symbol) {
+                                chart.live_bid = bid;
+                                chart.live_ask = ask;
                                 if let Some(bar) = chart.bars.last_mut() {
                                     bar.close = last;
                                     bar.high = bar.high.max(last);
@@ -22563,6 +22584,7 @@ impl eframe::App for TyphooNApp {
                         chart.drawing_styles.pop();
                         chart.drawings_undo.push(d);
                         chart.selected_drawing = None;
+                        self.log.push_back(LogEntry::info("Undo: drawing removed"));
                     }
                 }
             }
@@ -22571,8 +22593,8 @@ impl eframe::App for TyphooNApp {
                 if let Some(chart) = self.charts.get_mut(self.active_tab) {
                     if let Some(d) = chart.drawings_undo.pop() {
                         chart.drawings.push(d);
-                        // Restore default style for redone drawing
                         chart.drawing_styles.push((1.5, LineStyle::Solid));
+                        self.log.push_back(LogEntry::info("Redo: drawing restored"));
                     }
                 }
             }
