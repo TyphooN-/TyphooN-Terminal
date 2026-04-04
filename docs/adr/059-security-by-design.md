@@ -1,6 +1,6 @@
 # ADR-059: Security by Design — Credential & Data Protection
 
-**Status:** Implemented | **Date:** 2026-03-27 | **Updated:** 2026-03-30
+**Status:** Implemented | **Date:** 2026-03-27 | **Updated:** 2026-04-05
 
 ## Context
 
@@ -63,6 +63,13 @@ Stored credentials:
 - Zero `unsafe` blocks in the entire codebase
 - All GPU buffer marshalling uses `bytemuck` (Pod/Zeroable derives, `cast_slice`) instead of raw pointer casts
 - Mutex-across-await fix in broker rate limiter (was holding `MutexGuard` across `.await`, now drops guard before await point)
+
+### 8. Security Hardening (2026-04-05)
+
+- **Constant-time HMAC comparison** in LAN sync auth: prevents timing attack on challenge-response (XOR-fold comparison instead of string equality)
+- **Discord webhook URL hardening**: validates hostname is exactly `discord.com`, rejects path traversal (`..`), rejects `@` URL tricks
+- **Log VecDeque bounded** to 500 entries: prevents unbounded memory growth from error spam
+- **Notification input validation**: Pushover (token/user 64 char max, message 1024), ntfy (topic alphanumeric only, 128 char max, message 4096)
 
 ## Consequences
 

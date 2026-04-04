@@ -1,6 +1,6 @@
 # ADR-064: Performance & Security Audit
 
-**Status:** Complete | **Date:** 2026-03-28 | **Updated:** 2026-03-30
+**Status:** Complete | **Date:** 2026-03-28 | **Updated:** 2026-04-05
 
 ## Context
 
@@ -82,7 +82,7 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - **Docker containerization**: Dockerfile added for reproducible builds and deployment
 
 ### Code Quality
-- **551 tests** (82 compiler + 383 engine + 86 native) — comprehensive coverage across engine, GPU shaders, integration, and MQL5 compiler
+- **537 tests** (82 compiler + 383 engine + 72 native) — comprehensive coverage across engine, GPU shaders, integration, and MQL5 compiler
 - **bytemuck migration**: All `unsafe` transmute/pointer-cast blocks replaced with `bytemuck` Pod/Zeroable derives — zero `unsafe` blocks in entire codebase
 
 ### 2026-03-31 Session: UI Freeze Elimination
@@ -92,8 +92,24 @@ No per-frame throttling by window state — expensive operations eliminated inst
   - Unusual volume scanner: runs in background thread, results cached
   - Watchlist stats: computed once and cached, not recomputed per-frame
 - **Zero unsafe blocks** confirmed across entire codebase (engine + native + compiler)
-- **551 tests** passing (82 compiler + 383 engine + 86 native): cache, darwin, fundamentals, SEC, crypto, var, risk, margin, backtest, GPU shaders, app integration, parser, WASM codegen, WGSL codegen
+- **537 tests** (82 compiler + 383 engine + 72 native): cache, darwin, fundamentals, SEC, crypto, var, risk, margin, backtest, GPU shaders, app integration, parser, WASM codegen, WGSL codegen
 - **MQL5 compiler parser bug fix**: postfix_op unwrapping now correctly distinguishes `++`/`--` from wrapped call_args/index_access/member_access
+
+### 2026-04-05: Security + Performance Hardening
+
+**Security Fixes:**
+- Constant-time HMAC comparison in LAN sync authentication (XOR-fold, prevents timing attacks)
+- Discord webhook URL hardened: hostname validation, path traversal rejection, `@` trick rejection
+- Log VecDeque bounded to 500 entries (prevents unbounded memory growth)
+
+**Dead Code Removal:**
+- 515 lines of dead code removed: 8 unused CSS color constants, DrawingEntry struct, ATR_PROJ_COL, KEEPALIVE_SECS, confirm_close_all, watchlist_symbols, screenshot_path, created_at, should_query_db(), standalone OrderBlock/FVG/MarketStructure detection helpers
+- All stale `#[allow(dead_code)]` annotations removed from 50+ Drawing variants
+
+**Code Quality:**
+- Zero warnings across entire workspace
+- Only 1 intentional `#[allow(dead_code)]` remains (BrokerCmd enum — some variants handled but not all have UI triggers)
+- **537 tests** passing (82 compiler + 383 engine + 72 native)
 
 ### 2026-03-31 → 2026-04-02: SQLite Concurrency, LAN Sync, BarCacheWriter
 
