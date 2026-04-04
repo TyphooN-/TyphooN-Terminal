@@ -7859,7 +7859,7 @@ fn draw_fisher_pane(
         }
     }
     if sig_points.len() > 1 {
-        painter.add(egui::Shape::line(sig_points, egui::Stroke::new(1.0, egui::Color32::from_rgb(169, 169, 169)))); // clrDarkGray signal (MT5 buffer 3)
+        painter.add(egui::Shape::line(sig_points, egui::Stroke::new(1.0, FISHER_SIG))); // clrDarkGray signal (MT5 buffer 3)
     }
 
     // Fisher line — colored segments per bar (MT5 exact: green when Fisher > Signal, red when < Signal)
