@@ -8332,6 +8332,11 @@ const COMMANDS: &[Command] = &[
     Command { name: "EVSCRAPE",      desc: "Scrape fundamentals for all MT5 symbols" },
     Command { name: "MT5SYNC",       desc: "Sync bar data from MT5 BarCacheWriter databases" },
     Command { name: "ANALYST",       desc: "Analyst ratings & targets" },
+    Command { name: "PRICE_TARGET",  desc: "Analyst price targets (Finnhub)" },
+    Command { name: "SHORT_INTEREST",desc: "Short interest data (Finnhub)" },
+    Command { name: "CORPORATE",     desc: "Corporate actions (splits, dividends, mergers)" },
+    Command { name: "MOST_ACTIVE",   desc: "Most active stocks by volume" },
+    Command { name: "PORTFOLIO_HIST",desc: "Portfolio equity history" },
     Command { name: "HOLDERS",       desc: "Institutional holders" },
     Command { name: "OPTION_CHAIN",  desc: "tastytrade option chain for current symbol" },
     Command { name: "COMPILE",       desc: "MQL5/PineScript indicator compiler" },
@@ -8730,6 +8735,16 @@ enum BrokerCmd {
     GetAnalyst { symbol: String, finnhub_key: String },
     /// Fetch orderbook (Level 2).
     GetOrderbook { symbol: String },
+    /// Fetch most active stocks by volume.
+    GetMostActive,
+    /// Fetch portfolio equity history.
+    GetPortfolioHistory { period: String },
+    /// Fetch Finnhub price target for symbol.
+    GetPriceTarget { symbol: String, finnhub_key: String },
+    /// Fetch Finnhub short interest for symbol.
+    GetShortInterest { symbol: String, finnhub_key: String },
+    /// Fetch corporate actions for symbol.
+    GetCorporateActions { symbol: String },
     /// Fetch live bars from Alpaca and store in cache (fallback when cache misses).
     FetchBars { symbol: String, timeframe: String, db_path: std::path::PathBuf },
     /// Crypto backfill via Kraken public OHLC API.
@@ -9768,6 +9783,61 @@ impl TyphooNApp {
                             }
                         }
                     }
+                    BrokerCmd::GetMostActive => {
+                        if let Some(ref b) = broker {
+                            match b.get_most_active(20).await {
+                                Ok(v) => {
+                                    let text = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Most Active".into(), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetPortfolioHistory { period } => {
+                        if let Some(ref b) = broker {
+                            match b.get_portfolio_history(&period, "1D").await {
+                                Ok(v) => {
+                                    let text = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Portfolio History".into(), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetPriceTarget { symbol, finnhub_key } => {
+                        if let Some(ref b) = broker {
+                            match b.get_finnhub_price_target(&symbol, &finnhub_key).await {
+                                Ok(v) => {
+                                    let text = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("PriceTarget: {}", symbol), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetShortInterest { symbol, finnhub_key } => {
+                        if let Some(ref b) = broker {
+                            match b.get_finnhub_short_interest(&symbol, &finnhub_key).await {
+                                Ok(v) => {
+                                    let text = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("ShortInterest: {}", symbol), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
+                    BrokerCmd::GetCorporateActions { symbol } => {
+                        if let Some(ref b) = broker {
+                            match b.get_corporate_actions(&symbol).await {
+                                Ok(v) => {
+                                    let text = serde_json::to_string_pretty(&v).unwrap_or_default();
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult(format!("CorporateActions: {}", symbol), text));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
+                            }
+                        }
+                    }
                     BrokerCmd::DarwinImportAll { dir, db_path: _ } => {
                         // Spawn a dedicated thread so we don't block the broker command loop
                         let msg_tx = broker_msg_tx_clone.clone();
@@ -10602,7 +10672,7 @@ impl TyphooNApp {
                         use typhoon_engine::core::fred;
                         let client = reqwest::Client::new();
                         let mut series_data = Vec::new();
-                        for (id, _name) in fred::KEY_SERIES.iter().take(5) {
+                        for (id, _name) in fred::KEY_SERIES.iter() {
                             if let Ok(s) = fred::fetch_series(&client, &api_key, id, 60).await {
                                 series_data.push(s);
                             }
@@ -12158,6 +12228,36 @@ impl TyphooNApp {
                 }
             }
             "ANALYST"       => self.show_analyst = true,
+            "PRICE_TARGET"  => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() && !self.finnhub_key.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::GetPriceTarget { symbol: sym, finnhub_key: self.finnhub_key.clone() });
+                }
+            }
+            "SHORT_INTEREST" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() && !self.finnhub_key.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::GetShortInterest { symbol: sym, finnhub_key: self.finnhub_key.clone() });
+                }
+            }
+            "CORPORATE"     => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::GetCorporateActions { symbol: sym });
+                }
+            }
+            "MOST_ACTIVE"   => {
+                let _ = self.broker_tx.send(BrokerCmd::GetMostActive);
+            }
+            "PORTFOLIO_HIST" => {
+                let _ = self.broker_tx.send(BrokerCmd::GetPortfolioHistory { period: "1M".into() });
+            }
             "HOLDERS"       => self.show_holders = true,
             "OPTION_CHAIN"  => {
                 let sym = self.charts.get(self.active_tab)
