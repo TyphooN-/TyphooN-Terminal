@@ -8822,6 +8822,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "SAVE_TEMPLATE", desc: "Save current indicators as named template (SAVE_TEMPLATE <name>)" },
     Command { name: "LOAD_TEMPLATE", desc: "Load a saved indicator template (LOAD_TEMPLATE <name>)" },
     Command { name: "TEMPLATES",     desc: "List all available chart templates" },
+    Command { name: "FEAR_GREED",    desc: "Crypto Fear & Greed Index" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -9175,6 +9176,12 @@ enum BrokerCmd {
     AlpacaCancelOrder { order_id: String },
     /// Place equity order via tastytrade.
     TastytradeEquityOrder { symbol: String, qty: i64, side: String, order_type: String, price: Option<f64> },
+    /// Place trailing stop order via Alpaca.
+    AlpacaTrailingStop { symbol: String, qty: f64, side: String, trail_percent: f64 },
+    /// Place stop-limit order via Alpaca.
+    AlpacaStopLimitOrder { symbol: String, qty: f64, side: String, stop_price: f64, limit_price: f64 },
+    /// Fetch Crypto Fear & Greed Index (alternative.me, no auth).
+    FetchFearGreed,
 }
 
 /// Messages sent from async broker task → UI.
@@ -9638,6 +9645,12 @@ pub struct TyphooNApp {
     order_limit_price: String,
     order_stop_price: String,
     order_tp_price: String,
+    order_trail_percent: String,
+
+    // ── Fear & Greed Index ───────────────────────────────────────────────
+    show_fear_greed: bool,
+    fear_greed_value: u32,     // 0-100
+    fear_greed_label: String,  // "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed"
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -10302,6 +10315,40 @@ impl TyphooNApp {
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("tastytrade order failed: {}", e))); }
                             }
                         }
+                    }
+                    BrokerCmd::AlpacaTrailingStop { symbol, qty, side, trail_percent } => {
+                        if let Some(ref b) = broker {
+                            match b.trailing_stop_order(&symbol, qty, &side, None, Some(trail_percent), "gtc").await {
+                                Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Trailing stop {} {} {} trail {}%: {}", side, qty, symbol, trail_percent, r.status))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Trailing stop failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::AlpacaStopLimitOrder { symbol, qty, side, stop_price, limit_price } => {
+                        if let Some(ref b) = broker {
+                            match b.stop_limit_order(&symbol, qty, &side, stop_price, limit_price, "gtc").await {
+                                Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Stop-limit {} {} {} stop={} lim={}: {}", side, qty, symbol, stop_price, limit_price, r.status))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Stop-limit failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::FetchFearGreed => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::new();
+                            match client.get("https://api.alternative.me/fng/?limit=1").send().await {
+                                Ok(resp) => {
+                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                        if let Some(data) = json["data"].as_array().and_then(|a| a.first()) {
+                                            let value = data["value"].as_str().and_then(|v| v.parse::<u32>().ok()).unwrap_or(50);
+                                            let label = data["value_classification"].as_str().unwrap_or("Neutral").to_string();
+                                            let _ = msg_tx.send(BrokerMsg::JsonResult("FearGreed".into(), format!("{}|{}", value, label)));
+                                        }
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Fear & Greed: {}", e))); }
+                            }
+                        });
                     }
                     BrokerCmd::DarwinImportAll { dir, db_path: _ } => {
                         // Spawn a dedicated thread so we don't block the broker command loop
@@ -11743,6 +11790,10 @@ impl TyphooNApp {
             order_limit_price: String::new(),
             order_stop_price: String::new(),
             order_tp_price: String::new(),
+            order_trail_percent: String::new(),
+            show_fear_greed: false,
+            fear_greed_value: 0,
+            fear_greed_label: String::new(),
             bottom_tab: BottomTab::Log,
             log,
             crosshair: None,
@@ -13387,6 +13438,12 @@ impl TyphooNApp {
             "DATA_WINDOW"    => self.show_data_window = true,
             // "ALERTS" handled above (alert builder)
             "ORDER"          => { self.show_order_entry = true; self.order_symbol = self.symbol_input.clone(); }
+            "FEAR_GREED" | "FNG" => {
+                self.show_fear_greed = true;
+                if self.fear_greed_value == 0 {
+                    let _ = self.broker_tx.send(BrokerCmd::FetchFearGreed);
+                }
+            }
             "PREV_LEVELS"    => self.show_prev_levels = !self.show_prev_levels,
             "CRYPTO_BACKFILL" => {
                 self.show_crypto_backfill = true;
@@ -14241,6 +14298,7 @@ impl TyphooNApp {
         self.show_fred = false;
         self.show_econ_calendar = false;
         self.show_congress = false;
+        self.show_fear_greed = false;
     }
 
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
@@ -21830,12 +21888,18 @@ impl TyphooNApp {
                             ui.radio_value(&mut self.order_type, 3, "Bracket");
                         });
                         ui.end_row();
-                        if self.order_type == 1 || self.order_type == 3 {
+                        ui.label("");
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut self.order_type, 4, "Trailing");
+                            ui.radio_value(&mut self.order_type, 5, "Stop-Limit");
+                        });
+                        ui.end_row();
+                        if self.order_type == 1 || self.order_type == 3 || self.order_type == 5 {
                             ui.label("Limit Price:");
                             ui.add(egui::TextEdit::singleline(&mut self.order_limit_price).desired_width(100.0));
                             ui.end_row();
                         }
-                        if self.order_type == 2 {
+                        if self.order_type == 2 || self.order_type == 5 {
                             ui.label("Stop Price:");
                             ui.add(egui::TextEdit::singleline(&mut self.order_stop_price).desired_width(100.0));
                             ui.end_row();
@@ -21846,6 +21910,11 @@ impl TyphooNApp {
                             ui.end_row();
                             ui.label("TP Price:");
                             ui.add(egui::TextEdit::singleline(&mut self.order_tp_price).desired_width(100.0));
+                            ui.end_row();
+                        }
+                        if self.order_type == 4 {
+                            ui.label("Trail %:");
+                            ui.add(egui::TextEdit::singleline(&mut self.order_trail_percent).desired_width(100.0).hint_text("e.g. 1.5"));
                             ui.end_row();
                         }
                     });
@@ -21867,7 +21936,7 @@ impl TyphooNApp {
 
                     ui.add_space(10.0);
                     let side_label = if self.order_side == 0 { "BUY" } else { "SELL" };
-                    let type_label = ["Market", "Limit", "Stop", "Bracket"][self.order_type];
+                    let type_label = ["Market", "Limit", "Stop", "Bracket", "Trailing", "Stop-Limit"][self.order_type.min(5)];
                     let btn_color = if self.order_side == 0 { UP } else { DOWN };
                     if ui.button(egui::RichText::new(format!("Submit {} {} Order", side_label, type_label)).color(btn_color).strong()).clicked() {
                         let sym = self.order_symbol.trim().to_uppercase();
@@ -21932,6 +22001,32 @@ impl TyphooNApp {
                                             self.log.push_back(LogEntry::err("Bracket order requires valid SL and TP prices"));
                                         }
                                     }
+                                    4 => { // Trailing Stop (Alpaca only)
+                                        if let Ok(tp) = self.order_trail_percent.parse::<f64>() {
+                                            if send_alpaca {
+                                                let _ = self.broker_tx.send(BrokerCmd::AlpacaTrailingStop { symbol: sym.clone(), qty, side: side_str.clone(), trail_percent: tp });
+                                            }
+                                            if send_tt {
+                                                self.log.push_back(LogEntry::info("Trailing stop orders not supported on tastytrade — use Alpaca"));
+                                            }
+                                            self.log.push_back(LogEntry::info(format!("Submitting trailing stop {} {} {} trail {}%", side_label, qty, sym, tp)));
+                                        } else {
+                                            self.log.push_back(LogEntry::err("Trailing stop requires valid trail percent"));
+                                        }
+                                    }
+                                    5 => { // Stop-Limit (Alpaca only)
+                                        if let (Ok(sp), Ok(lp)) = (self.order_stop_price.parse::<f64>(), self.order_limit_price.parse::<f64>()) {
+                                            if send_alpaca {
+                                                let _ = self.broker_tx.send(BrokerCmd::AlpacaStopLimitOrder { symbol: sym.clone(), qty, side: side_str.clone(), stop_price: sp, limit_price: lp });
+                                            }
+                                            if send_tt {
+                                                self.log.push_back(LogEntry::info("Stop-limit orders not supported on tastytrade — use Alpaca"));
+                                            }
+                                            self.log.push_back(LogEntry::info(format!("Submitting stop-limit {} {} {} stop={} lim={}", side_label, qty, sym, sp, lp)));
+                                        } else {
+                                            self.log.push_back(LogEntry::err("Stop-limit order requires valid stop price and limit price"));
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
@@ -21939,6 +22034,89 @@ impl TyphooNApp {
                             self.log.push_back(LogEntry::err("Invalid quantity"));
                         }
                     }
+                });
+        }
+
+        // Fear & Greed Index window
+        if self.show_fear_greed {
+            egui::Window::new("Fear & Greed Index")
+                .open(&mut self.show_fear_greed)
+                .resizable(true).default_size([340.0, 220.0])
+                .show(ctx, |ui| {
+                    ui.heading("Crypto Fear & Greed Index");
+                    ui.separator();
+                    if ui.button("Refresh").clicked() {
+                        let _ = self.broker_tx.send(BrokerCmd::FetchFearGreed);
+                    }
+                    ui.add_space(8.0);
+
+                    let val = self.fear_greed_value;
+                    // Color based on value zone
+                    let gauge_color = if val <= 25 {
+                        egui::Color32::from_rgb(255, 50, 50)      // Extreme Fear — red
+                    } else if val <= 45 {
+                        egui::Color32::from_rgb(255, 165, 0)      // Fear — orange
+                    } else if val <= 55 {
+                        egui::Color32::from_rgb(255, 255, 80)     // Neutral — yellow
+                    } else if val <= 75 {
+                        egui::Color32::from_rgb(144, 238, 100)    // Greed — light green
+                    } else {
+                        egui::Color32::from_rgb(0, 200, 0)        // Extreme Greed — green
+                    };
+
+                    // Large value display
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{}", val)).color(gauge_color).size(48.0).strong());
+                        ui.vertical(|ui| {
+                            ui.add_space(12.0);
+                            ui.label(egui::RichText::new(&self.fear_greed_label).color(gauge_color).size(18.0));
+                            ui.label(egui::RichText::new("/ 100").color(AXIS_TEXT).size(14.0));
+                        });
+                    });
+
+                    ui.add_space(8.0);
+
+                    // Gauge bar
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), egui::Sense::hover());
+                    let painter = ui.painter_at(rect);
+                    // Background
+                    painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(40, 40, 40));
+                    // Gradient zones
+                    let w = rect.width();
+                    let zone_colors = [
+                        (0.0, 0.25, egui::Color32::from_rgb(255, 50, 50)),
+                        (0.25, 0.45, egui::Color32::from_rgb(255, 165, 0)),
+                        (0.45, 0.55, egui::Color32::from_rgb(255, 255, 80)),
+                        (0.55, 0.75, egui::Color32::from_rgb(144, 238, 100)),
+                        (0.75, 1.0, egui::Color32::from_rgb(0, 200, 0)),
+                    ];
+                    for (start, end, color) in &zone_colors {
+                        let zone_rect = egui::Rect::from_min_max(
+                            egui::pos2(rect.min.x + w * *start as f32, rect.min.y),
+                            egui::pos2(rect.min.x + w * *end as f32, rect.max.y),
+                        );
+                        painter.rect_filled(zone_rect, 0.0, *color);
+                    }
+                    // Indicator needle
+                    let needle_x = rect.min.x + w * (val as f32 / 100.0);
+                    painter.line_segment(
+                        [egui::pos2(needle_x, rect.min.y - 2.0), egui::pos2(needle_x, rect.max.y + 2.0)],
+                        egui::Stroke::new(3.0, egui::Color32::WHITE),
+                    );
+
+                    ui.add_space(4.0);
+                    // Zone labels
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Extreme Fear").color(egui::Color32::from_rgb(255, 50, 50)).small());
+                        ui.separator();
+                        ui.label(egui::RichText::new("Fear").color(egui::Color32::from_rgb(255, 165, 0)).small());
+                        ui.separator();
+                        ui.label(egui::RichText::new("Neutral").color(egui::Color32::from_rgb(255, 255, 80)).small());
+                        ui.separator();
+                        ui.label(egui::RichText::new("Greed").color(egui::Color32::from_rgb(144, 238, 100)).small());
+                        ui.separator();
+                        ui.label(egui::RichText::new("Extreme Greed").color(egui::Color32::from_rgb(0, 200, 0)).small());
+                    });
                 });
         }
 
@@ -22832,6 +23010,13 @@ impl eframe::App for TyphooNApp {
                     } else if label.starts_with("Orderbook:") {
                         self.orderbook_result = text.clone();
                         self.show_orderbook_window = true;
+                    } else if label == "FearGreed" {
+                        // Parse "value|label" format
+                        let parts: Vec<&str> = text.splitn(2, '|').collect();
+                        if parts.len() == 2 {
+                            self.fear_greed_value = parts[0].parse::<u32>().unwrap_or(50);
+                            self.fear_greed_label = parts[1].to_string();
+                        }
                     }
                     self.log.push_back(LogEntry::info(format!("{}:\n{}", label, text)));
                 }
