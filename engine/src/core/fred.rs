@@ -98,3 +98,36 @@ pub const KEY_SERIES: &[(&str, &str)] = &[
     ("RRPONTSYD", "Reverse Repo"),
     ("WTREGEN", "Treasury General Account"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn key_series_has_ten_entries() {
+        assert_eq!(KEY_SERIES.len(), 10);
+    }
+
+    #[test]
+    fn key_series_ids_non_empty() {
+        for (id, _) in KEY_SERIES {
+            assert!(!id.is_empty(), "found empty series ID");
+        }
+    }
+
+    #[test]
+    fn key_series_titles_non_empty() {
+        for (_, title) in KEY_SERIES {
+            assert!(!title.is_empty(), "found empty series title");
+        }
+    }
+
+    #[test]
+    fn key_series_no_duplicate_ids() {
+        let mut seen = HashSet::new();
+        for (id, _) in KEY_SERIES {
+            assert!(seen.insert(id), "duplicate series ID: {id}");
+        }
+    }
+}

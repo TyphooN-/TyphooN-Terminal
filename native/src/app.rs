@@ -8556,6 +8556,9 @@ struct AccountDetailCache {
     recovery_factor: f64,
     dd_duration: (usize, usize, f64), // (max, current, avg)
     divergence: Vec<darwin::DivergencePoint>,
+    performance_attribution: Vec<darwin::SymbolAttribution>,
+    dscore_components: Option<darwin::DScoreComponents>,
+    investment_velocity: Vec<(String, f64)>,
 }
 
 /// Background-computed data — populated by background thread, read by render thread.
@@ -11671,6 +11674,18 @@ impl TyphooNApp {
                                                 }
                                             }
                                         }
+                                        // Performance attribution (per-symbol P&L contribution)
+                                        if let Ok(ref conn) = cache_ref.open_bg_read_connection() {
+                                            det.performance_attribution = darwin::compute_performance_attribution(conn, &ticker).unwrap_or_default();
+                                        }
+                                        // D-Score components from FTP
+                                        if !ftp_dir.is_empty() {
+                                            det.dscore_components = darwin::get_dscore_components(&ftp_dir, &ticker).ok();
+                                            // Investor flow → investment velocity
+                                            if let Ok(flow) = darwin::get_investor_flow(&ftp_dir, &ticker) {
+                                                det.investment_velocity = darwin::compute_investment_velocity(&flow);
+                                            }
+                                        }
                                         tracing::info!("BG: account {} detail {}ms", ticker, t.elapsed().as_millis());
                                         det
                                     })
@@ -14375,6 +14390,59 @@ impl TyphooNApp {
                                     let sc = if p.side == "buy" { chart_green } else { chart_red };
                                     ui.label(egui::RichText::new(format!("  {} {} {:.2} @ {}", p.symbol, p.side, p.total_volume, format_price(p.avg_price))).color(sc).small());
                                 }
+                            }
+                            // Performance Attribution (per-symbol P&L contribution)
+                            if !det.performance_attribution.is_empty() {
+                                ui.label(egui::RichText::new("P&L Attribution (Top 10)").small().strong());
+                                egui::Grid::new(format!("attr_{}", det.ticker)).striped(true).num_columns(4).show(ui, |ui| {
+                                    ui.label(egui::RichText::new("Symbol").color(dim).small());
+                                    ui.label(egui::RichText::new("P&L").color(dim).small());
+                                    ui.label(egui::RichText::new("Win%").color(dim).small());
+                                    ui.label(egui::RichText::new("Contrib%").color(dim).small());
+                                    ui.end_row();
+                                    for a in det.performance_attribution.iter().take(10) {
+                                        ui.label(egui::RichText::new(&a.symbol).small());
+                                        let pc = if a.total_pnl >= 0.0 { chart_green } else { chart_red };
+                                        ui.label(egui::RichText::new(format!("${:.0}", a.total_pnl)).color(pc).small());
+                                        ui.label(egui::RichText::new(format!("{:.1}%", a.win_rate * 100.0)).small());
+                                        ui.label(egui::RichText::new(format!("{:.1}%", a.contribution_pct)).small());
+                                        ui.end_row();
+                                    }
+                                });
+                            }
+                            // D-Score Components (FTP) — show grid if available
+                            if let Some(ref dsc) = det.dscore_components {
+                                ui.label(egui::RichText::new("D-Score Components (FTP)").small().strong());
+                                egui::Grid::new(format!("dsc_{}", det.ticker)).num_columns(4).show(ui, |ui| {
+                                    let comps: Vec<(&str, f64)> = vec![
+                                        ("Experience", dsc.experience.unwrap_or(0.0)),
+                                        ("Risk Stability", dsc.risk_stability.unwrap_or(0.0)),
+                                        ("Risk Adj", dsc.risk_adjustment.unwrap_or(0.0)),
+                                        ("Mkt Corr", dsc.market_correlation.unwrap_or(0.0)),
+                                        ("Win Consist", dsc.winning_consistency.unwrap_or(0.0)),
+                                        ("Loss Consist", dsc.losing_consistency.unwrap_or(0.0)),
+                                        ("Performance", dsc.performance.unwrap_or(0.0)),
+                                        ("Scalability", dsc.scalability.unwrap_or(0.0)),
+                                    ];
+                                    for (label, val) in &comps {
+                                        let c = if *val >= 7.0 { chart_green } else if *val >= 4.0 { chart_gold } else { chart_red };
+                                        ui.label(egui::RichText::new(*label).color(dim).small());
+                                        ui.label(egui::RichText::new(format!("{:.1}", val)).color(c).strong());
+                                    }
+                                    ui.end_row();
+                                });
+                            }
+                            // Investment Velocity (FTP)
+                            if !det.investment_velocity.is_empty() {
+                                ui.label(egui::RichText::new("Investor Growth Rate").small().strong());
+                                let pts: PlotPoints = PlotPoints::new(
+                                    det.investment_velocity.iter().enumerate().map(|(i, (_, v))| [i as f64, *v]).collect()
+                                );
+                                let c = if det.investment_velocity.last().map(|(_, v)| *v >= 0.0).unwrap_or(true) { chart_green } else { chart_red };
+                                Plot::new(format!("velocity_{}", det.ticker)).height(50.0)
+                                    .allow_drag(false).allow_zoom(false).allow_scroll(false)
+                                    .show_axes([false, true])
+                                    .show(ui, |plot_ui| { plot_ui.line(Line::new("Growth%", pts).color(c).width(1.0)); });
                             }
                             // Recent Deals (compact)
                             if !det.recent_deals.is_empty() {
@@ -18423,6 +18491,21 @@ impl TyphooNApp {
                     } else {
                         ui.label(egui::RichText::new("Failed to parse analyst data.").color(DOWN).small());
                     }
+                    // Price target section (appended via PriceTarget: routing)
+                    if let Some(pt_start) = self.analyst_result.find("---PRICE_TARGET---") {
+                        let pt_json = &self.analyst_result[pt_start + 18..];
+                        if let Ok(pt) = serde_json::from_str::<serde_json::Value>(pt_json.trim()) {
+                            ui.separator();
+                            ui.label(egui::RichText::new("Price Target").small().strong());
+                            egui::Grid::new("pt_grid").num_columns(2).show(ui, |ui| {
+                                if let Some(h) = pt["targetHigh"].as_f64() { ui.label("High:"); ui.label(egui::RichText::new(format!("${:.2}", h)).color(UP)); ui.end_row(); }
+                                if let Some(m) = pt["targetMedian"].as_f64() { ui.label("Median:"); ui.label(format!("${:.2}", m)); ui.end_row(); }
+                                if let Some(l) = pt["targetLow"].as_f64() { ui.label("Low:"); ui.label(egui::RichText::new(format!("${:.2}", l)).color(DOWN)); ui.end_row(); }
+                                if let Some(m) = pt["targetMean"].as_f64() { ui.label("Mean:"); ui.label(format!("${:.2}", m)); ui.end_row(); }
+                                if let Some(n) = pt["numberOfAnalysts"].as_i64() { ui.label("Analysts:"); ui.label(n.to_string()); ui.end_row(); }
+                            });
+                        }
+                    }
                 });
         }
 
@@ -21517,6 +21600,11 @@ impl eframe::App for TyphooNApp {
                     // Route structured results to their windows; log everything
                     if label.starts_with("Analyst:") {
                         self.analyst_result = text.clone();
+                        self.show_analyst = true;
+                    } else if label.starts_with("PriceTarget:") {
+                        // Append price target to analyst window
+                        self.analyst_result.push_str("\n---PRICE_TARGET---\n");
+                        self.analyst_result.push_str(&text);
                         self.show_analyst = true;
                     } else if label.starts_with("Holders:") {
                         self.holders_result = text.clone();
