@@ -15115,8 +15115,13 @@ impl TyphooNApp {
                                         ui.label(egui::RichText::new(&a.symbol).small());
                                         let pc = if a.total_pnl >= 0.0 { chart_green } else { chart_red };
                                         ui.label(egui::RichText::new(format!("${:.0}", a.total_pnl)).color(pc).small());
-                                        ui.label(egui::RichText::new(format!("{:.1}%", a.win_rate * 100.0)).small());
-                                        ui.label(egui::RichText::new(format!("{:.1}%", a.contribution_pct)).small());
+                                        {
+                                            let awr = a.win_rate * 100.0;
+                                            let awr_c = if awr >= 50.0 { UP } else if awr >= 40.0 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("{:.1}%", awr)).color(awr_c).small());
+                                        }
+                                        let cont_c = if a.contribution_pct >= 0.0 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("{:.1}%", a.contribution_pct)).color(cont_c).small());
                                         ui.end_row();
                                     }
                                 });
@@ -15349,7 +15354,7 @@ impl TyphooNApp {
                                                 ui.end_row();
                                                 ui.label("Total Commission:"); ui.label(format!("${:.2}", portfolio.total_commission));
                                                 ui.end_row();
-                                                ui.label("Max Drawdown:"); ui.label(format!("{:.2}%", portfolio.combined_max_drawdown_pct));
+                                                ui.label("Max Drawdown:"); ui.label(egui::RichText::new(format!("{:.2}%", portfolio.combined_max_drawdown_pct)).color(DOWN));
                                                 ui.end_row();
                                                 ui.label("Total Deals:"); ui.label(format!("{}", portfolio.total_deals));
                                                 ui.end_row();
@@ -15374,7 +15379,7 @@ impl TyphooNApp {
                                                     let wr_c = if acct.win_rate >= 50.0 { UP } else { DOWN };
                                                     ui.label(egui::RichText::new(format!("{:.1}%", acct.win_rate)).color(wr_c));
                                                     ui.label(format!("{:.2}", acct.profit_factor));
-                                                    ui.label(format!("{:.1}%", acct.max_drawdown_pct));
+                                                    ui.label(egui::RichText::new(format!("{:.1}%", acct.max_drawdown_pct)).color(DOWN));
                                                     // DARWIN quote columns (from FTP data)
                                                     let ftp = self.bg.account_details.iter()
                                                         .find(|d| d.ticker == *ticker)
@@ -15471,7 +15476,7 @@ impl TyphooNApp {
                                                         ui.label("Calmar:"); ui.label(format!("{:.3}", vs.calmar));
                                                         ui.end_row();
                                                         ui.label("CVaR 99%:"); ui.label(format!("${:.2}", vs.cvar_99));
-                                                        ui.label("Max DD:"); ui.label(format!("{:.2}%", vs.max_drawdown_pct));
+                                                        ui.label("Max DD:"); ui.label(egui::RichText::new(format!("{:.2}%", vs.max_drawdown_pct)).color(DOWN));
                                                         ui.end_row();
                                                         ui.label("Daily Vol:"); ui.label(format!("{:.4}", vs.daily_vol));
                                                         ui.label("Ann. Vol:"); ui.label(format!("{:.4}", vs.annualized_vol));
@@ -15507,7 +15512,7 @@ impl TyphooNApp {
                                                                 ui.label(&d.darwin_ticker);
                                                                 ui.label(egui::RichText::new(format!("{:.2}%", d.max_drawdown_pct)).color(DOWN));
                                                                 ui.label(&d.max_dd_date);
-                                                                ui.label(format!("{:.2}%", d.current_drawdown_pct));
+                                                                ui.label(egui::RichText::new(format!("{:.2}%", d.current_drawdown_pct)).color(DOWN));
                                                                 // Quote DD from FTP data
                                                                 let ftp = self.bg.account_details.iter()
                                                                     .find(|det| det.ticker == d.darwin_ticker)
@@ -15520,7 +15525,7 @@ impl TyphooNApp {
                                                                         .and_then(|det| det.ftp_drawdown_curve.last())
                                                                         .map(|&(_, dd)| -dd) // stored negative
                                                                         .unwrap_or(0.0);
-                                                                    ui.label(format!("{:.2}%", cur_dd));
+                                                                    ui.label(egui::RichText::new(format!("{:.2}%", cur_dd)).color(DOWN));
                                                                 } else { ui.label(egui::RichText::new("—").color(AXIS_TEXT)); ui.label(egui::RichText::new("—").color(AXIS_TEXT)); }
                                                                 ui.end_row();
                                                             }
@@ -15528,7 +15533,7 @@ impl TyphooNApp {
                                                             ui.label(egui::RichText::new("COMBINED").strong());
                                                             ui.label(egui::RichText::new(format!("{:.2}%", dd.combined.max_drawdown_pct)).color(DOWN).strong());
                                                             ui.label(&dd.combined.max_dd_date);
-                                                            ui.label(format!("{:.2}%", dd.combined.current_drawdown_pct));
+                                                            ui.label(egui::RichText::new(format!("{:.2}%", dd.combined.current_drawdown_pct)).color(DOWN));
                                                             ui.label(egui::RichText::new("—").color(AXIS_TEXT));
                                                             ui.label(egui::RichText::new("—").color(AXIS_TEXT));
                                                             ui.end_row();
@@ -15628,8 +15633,14 @@ impl TyphooNApp {
                                                                 let div_c = if rb.diversification_benefit > 0.0 { UP } else { DOWN };
                                                                 let status = if rb.diversification_benefit > 0.0 { "DIVERSIFIES" } else { "CONCENTRATES" };
                                                                 ui.label(egui::RichText::new(&rb.darwin_ticker).small());
-                                                                ui.label(egui::RichText::new(format!("{:.2}%", rb.standalone_var)).small());
-                                                                ui.label(egui::RichText::new(format!("{:.2}%", rb.marginal_var)).small());
+                                                                {
+                                                                    let sv_c = if rb.standalone_var >= 3.25 && rb.standalone_var <= 6.5 { UP } else { DOWN };
+                                                                    ui.label(egui::RichText::new(format!("{:.2}%", rb.standalone_var)).color(sv_c).small());
+                                                                }
+                                                                {
+                                                                    let mv_c = if rb.marginal_var >= 3.25 && rb.marginal_var <= 6.5 { UP } else { DOWN };
+                                                                    ui.label(egui::RichText::new(format!("{:.2}%", rb.marginal_var)).color(mv_c).small());
+                                                                }
                                                                 ui.label(egui::RichText::new(format!("{:.1}%", rb.risk_contribution_pct)).color(risk_c).small());
                                                                 ui.label(egui::RichText::new(format!("{:+.2}%", rb.diversification_benefit)).color(div_c).small());
                                                                 ui.label(egui::RichText::new(status).color(div_c).small());
@@ -17179,6 +17190,47 @@ impl TyphooNApp {
                     ui.separator();
                     if !self.rc_result.is_empty() {
                         ui.label(egui::RichText::new(&self.rc_result).monospace().color(egui::Color32::from_rgb(200, 220, 255)));
+
+                        // Risk/Reward visualization
+                        let entry: f64 = self.rc_entry.parse().unwrap_or(0.0);
+                        let sl: f64 = self.rc_sl.parse().unwrap_or(0.0);
+                        let tp: f64 = self.rc_tp.parse().unwrap_or(0.0);
+                        if entry > 0.0 && sl > 0.0 && tp > 0.0 {
+                            let sl_dist = (entry - sl).abs();
+                            let tp_dist = (tp - entry).abs();
+                            let total = sl_dist + tp_dist;
+                            if total > 0.0 {
+                                ui.add_space(8.0);
+                                ui.label(egui::RichText::new("Risk / Reward").strong());
+                                let bar_w = 340.0_f32;
+                                let bar_h = 22.0_f32;
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_w, bar_h), egui::Sense::hover());
+                                let painter = ui.painter_at(rect);
+                                let risk_w = (sl_dist / total) as f32 * bar_w;
+                                let reward_w = (tp_dist / total) as f32 * bar_w;
+                                // Red risk bar
+                                painter.rect_filled(
+                                    egui::Rect::from_min_size(rect.min, egui::vec2(risk_w, bar_h)),
+                                    2.0, egui::Color32::from_rgb(220, 50, 50),
+                                );
+                                // Green reward bar
+                                painter.rect_filled(
+                                    egui::Rect::from_min_size(egui::pos2(rect.left() + risk_w, rect.top()), egui::vec2(reward_w, bar_h)),
+                                    2.0, egui::Color32::from_rgb(50, 200, 70),
+                                );
+                                // Labels
+                                painter.text(
+                                    egui::pos2(rect.left() + risk_w * 0.5, rect.center().y),
+                                    egui::Align2::CENTER_CENTER,
+                                    format!("Risk {}", format_price(sl_dist)), egui::FontId::proportional(10.0), egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    egui::pos2(rect.left() + risk_w + reward_w * 0.5, rect.center().y),
+                                    egui::Align2::CENTER_CENTER,
+                                    format!("Reward {}", format_price(tp_dist)), egui::FontId::proportional(10.0), egui::Color32::WHITE,
+                                );
+                            }
+                        }
                     }
                 });
         }
@@ -17272,14 +17324,18 @@ impl TyphooNApp {
                         ui.separator();
                         egui::Grid::new("bt_report").striped(true).num_columns(4).show(ui, |ui| {
                             ui.label("Trades:"); ui.label(format!("{}", report.total_trades));
-                            ui.label("Win Rate:"); ui.label(format!("{:.1}%", report.win_rate * 100.0));
+                            ui.label("Win Rate:"); {
+                                let wr = report.win_rate * 100.0;
+                                let wr_c = if wr >= 50.0 { UP } else if wr >= 40.0 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
+                                ui.label(egui::RichText::new(format!("{:.1}%", wr)).color(wr_c));
+                            }
                             ui.end_row();
                             ui.label("Profit Factor:"); ui.label(format!("{:.2}", report.profit_factor));
                             ui.label("Sharpe:"); ui.label(format!("{:.3}", report.sharpe_ratio));
                             ui.end_row();
                             let pnl_c = if report.total_pnl >= 0.0 { UP } else { DOWN };
                             ui.label("Total P&L:"); ui.label(egui::RichText::new(format!("${:.2}", report.total_pnl)).color(pnl_c));
-                            ui.label("Max DD:"); ui.label(format!("{:.2}%", report.max_drawdown_pct));
+                            ui.label("Max DD:"); ui.label(egui::RichText::new(format!("{:.2}%", report.max_drawdown_pct)).color(DOWN));
                             ui.end_row();
                             ui.label("Avg Win:"); ui.label(format!("${:.2}", report.avg_win));
                             ui.label("Avg Loss:"); ui.label(format!("${:.2}", report.avg_loss));
@@ -18177,7 +18233,14 @@ impl TyphooNApp {
                                     ui.label(egui::RichText::new(dt).color(egui::Color32::from_rgb(102, 102, 102)).small());
                                     ui.label(egui::RichText::new(source).color(egui::Color32::from_rgb(85, 85, 85)).small());
                                 });
-                                ui.label(egui::RichText::new(headline).color(egui::Color32::from_rgb(204, 204, 204)));
+                                // Sentiment coloring based on keywords
+                                let hl = headline.to_lowercase();
+                                let bullish = ["surge", "rally", "beat", "up ", "soar", "gain", "rise", "jump", "bull", "record high"];
+                                let bearish = ["crash", "fall", "miss", "down ", "plunge", "drop", "sink", "bear", "sell-off", "selloff", "decline"];
+                                let is_bull = bullish.iter().any(|w| hl.contains(w));
+                                let is_bear = bearish.iter().any(|w| hl.contains(w));
+                                let hl_color = if is_bull { UP } else if is_bear { DOWN } else { egui::Color32::from_rgb(204, 204, 204) };
+                                ui.label(egui::RichText::new(headline).color(hl_color));
                                 ui.separator();
                             }
                         });
@@ -19601,6 +19664,20 @@ impl TyphooNApp {
                             });
                             ui.add_space(5.0);
                             ui.label(format!("Max historical DD: {:.2}%", portfolio.combined_max_drawdown_pct));
+
+                            // Horizontal bar chart of portfolio impact
+                            ui.add_space(10.0);
+                            ui.label(egui::RichText::new("Portfolio Impact").strong());
+                            let impact_scenarios: Vec<(&str, f64)> = scenarios.iter().take(6).map(|&(name, dd_pct)| {
+                                let loss = equity * dd_pct / 100.0;
+                                (name, loss)
+                            }).collect();
+                            let bars: Vec<PlotBar> = impact_scenarios.iter().enumerate().map(|(i, &(name, loss))| {
+                                PlotBar::new(i as f64, loss).width(0.7).fill(DOWN).name(name)
+                            }).collect();
+                            let chart = BarChart::new("Impact", bars);
+                            Plot::new("stress_impact_bars").height(140.0).allow_drag(false).allow_zoom(false)
+                                .show(ui, |plot_ui| { plot_ui.bar_chart(chart); });
                         } else {
                             ui.label(egui::RichText::new("Import DARWIN data for stress testing.").color(AXIS_TEXT));
                         }
@@ -20677,7 +20754,10 @@ impl TyphooNApp {
                                     ui.label(egui::RichText::new(format!("{:.2}x", m.investor_return_factor)).color(irf_c));
                                     let cc = if m.in_corridor { UP } else { DOWN };
                                     ui.label(egui::RichText::new(&m.corridor_position).color(cc));
-                                    ui.label(format!("{:.2}%", m.var_45d));
+                                    {
+                                        let v45_c = if m.var_45d >= 3.25 && m.var_45d <= 6.5 { UP } else { DOWN };
+                                        ui.label(egui::RichText::new(format!("{:.2}%", m.var_45d)).color(v45_c));
+                                    }
                                     ui.end_row();
                                 }
                             });
@@ -20704,6 +20784,55 @@ impl TyphooNApp {
                         ui.label("Margin accounts:"); ui.label(egui::RichText::new("100%").strong());
                         ui.end_row();
                     });
+
+                    // VaR Corridor Gauge
+                    if !self.bg.per_darwin_var.is_empty() {
+                        ui.add_space(10.0);
+                        ui.label(egui::RichText::new("VaR Corridor Gauge").strong());
+                        let bar_w = 400.0_f32;
+                        let bar_h = 24.0_f32;
+                        let max_pct = 10.0_f32; // 0-10% range
+                        for (ticker, vs) in &self.bg.per_darwin_var {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(ticker).monospace().small());
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_w, bar_h), egui::Sense::hover());
+                                let painter = ui.painter_at(rect);
+                                // Background (dark)
+                                painter.rect_filled(rect, 2.0, egui::Color32::from_rgb(30, 30, 50));
+                                // Green corridor zone: 3.25% - 6.5%
+                                let lo_frac = 3.25 / max_pct as f64;
+                                let hi_frac = 6.5 / max_pct as f64;
+                                let green_left = rect.left() + lo_frac as f32 * bar_w;
+                                let green_right = rect.left() + hi_frac as f32 * bar_w;
+                                painter.rect_filled(
+                                    egui::Rect::from_min_max(egui::pos2(green_left, rect.top()), egui::pos2(green_right, rect.bottom())),
+                                    0.0, egui::Color32::from_rgba_premultiplied(76, 175, 80, 60),
+                                );
+                                // Current VaR position marker
+                                let var_pct = vs.annualized_vol * 100.0;
+                                let frac = (var_pct / max_pct as f64).clamp(0.0, 1.0) as f32;
+                                let mx = rect.left() + frac * bar_w;
+                                painter.rect_filled(
+                                    egui::Rect::from_center_size(egui::pos2(mx, rect.center().y), egui::vec2(3.0, bar_h)),
+                                    0.0, egui::Color32::WHITE,
+                                );
+                                painter.text(
+                                    egui::pos2(mx, rect.top() - 2.0), egui::Align2::CENTER_BOTTOM,
+                                    format!("{:.1}%", var_pct), egui::FontId::proportional(9.0), egui::Color32::WHITE,
+                                );
+                            });
+                        }
+                        // Legend
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("0%").color(AXIS_TEXT).small());
+                            ui.add_space(bar_w * 0.28);
+                            ui.label(egui::RichText::new("3.25%").color(UP).small());
+                            ui.add_space(bar_w * 0.22);
+                            ui.label(egui::RichText::new("6.5%").color(UP).small());
+                            ui.add_space(bar_w * 0.15);
+                            ui.label(egui::RichText::new("10%").color(AXIS_TEXT).small());
+                        });
+                    }
                 });
         }
 
@@ -20781,6 +20910,44 @@ impl TyphooNApp {
                         ui.label(format!("Bar entries: {}", rows));
                         ui.label(format!("KV entries: {}", kv));
                         ui.label(format!("DB size: {} KB", size / 1024));
+
+                        // Proportional bar: bars vs KV
+                        let total = (rows + kv) as f32;
+                        if total > 0.0 {
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new("Entry Distribution").strong());
+                            let bar_w = 380.0_f32;
+                            let bar_h = 20.0_f32;
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_w, bar_h), egui::Sense::hover());
+                            let painter = ui.painter_at(rect);
+                            let bar_frac = rows as f32 / total;
+                            let bar_px = bar_frac * bar_w;
+                            // Cyan for bar entries
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(rect.min, egui::vec2(bar_px, bar_h)),
+                                2.0, egui::Color32::from_rgb(0, 188, 212),
+                            );
+                            // Orange for KV entries
+                            painter.rect_filled(
+                                egui::Rect::from_min_size(egui::pos2(rect.left() + bar_px, rect.top()), egui::vec2(bar_w - bar_px, bar_h)),
+                                2.0, egui::Color32::from_rgb(255, 152, 0),
+                            );
+                            // Labels
+                            if bar_px > 50.0 {
+                                painter.text(
+                                    egui::pos2(rect.left() + bar_px * 0.5, rect.center().y),
+                                    egui::Align2::CENTER_CENTER,
+                                    format!("Bars {}", rows), egui::FontId::proportional(9.0), egui::Color32::WHITE,
+                                );
+                            }
+                            if bar_w - bar_px > 50.0 {
+                                painter.text(
+                                    egui::pos2(rect.left() + bar_px + (bar_w - bar_px) * 0.5, rect.center().y),
+                                    egui::Align2::CENTER_CENTER,
+                                    format!("KV {}", kv), egui::FontId::proportional(9.0), egui::Color32::WHITE,
+                                );
+                            }
+                        }
                     }
                     ui.add_space(10.0);
                     if !self.bg.detailed_stats.is_empty() {
@@ -24389,7 +24556,13 @@ impl eframe::App for TyphooNApp {
                                                 ui.label(egui::RichText::new(dt).color(egui::Color32::from_rgb(80, 80, 95)).small());
                                                 ui.label(egui::RichText::new(source).color(egui::Color32::from_rgb(100, 100, 120)).small());
                                             });
-                                            ui.label(egui::RichText::new(headline).color(egui::Color32::from_rgb(190, 190, 200)).small());
+                                            let hl = headline.to_lowercase();
+                                            let bullish = ["surge", "rally", "beat", "up ", "soar", "gain", "rise", "jump", "bull", "record high"];
+                                            let bearish = ["crash", "fall", "miss", "down ", "plunge", "drop", "sink", "bear", "sell-off", "selloff", "decline"];
+                                            let is_bull = bullish.iter().any(|w| hl.contains(w));
+                                            let is_bear = bearish.iter().any(|w| hl.contains(w));
+                                            let hl_color = if is_bull { UP } else if is_bear { DOWN } else { egui::Color32::from_rgb(190, 190, 200) };
+                                            ui.label(egui::RichText::new(headline).color(hl_color).small());
                                             ui.add_space(2.0);
                                         }
                                     });
