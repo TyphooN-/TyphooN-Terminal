@@ -138,3 +138,135 @@ impl BarBuilder {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_trade_creates_active_bar() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
+
+        let bar = bb.get_active_bar("AAPL").expect("should have active bar");
+        assert_eq!(bar.symbol, "AAPL");
+        assert_eq!(bar.open, 150.0);
+        assert_eq!(bar.high, 150.0);
+        assert_eq!(bar.low, 150.0);
+        assert_eq!(bar.close, 150.0);
+        assert_eq!(bar.volume, 100.0);
+        assert_eq!(bar.trade_count, 1);
+        assert!(bar.timestamp.contains("2026-01-15T10:30:00"));
+    }
+
+    #[test]
+    fn multiple_trades_same_minute_update_ohlcv() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
+        bb.ingest_trade("AAPL", 155.0, 200.0, "2026-01-15T10:30:15Z");
+        bb.ingest_trade("AAPL", 148.0, 50.0, "2026-01-15T10:30:30Z");
+        bb.ingest_trade("AAPL", 152.0, 75.0, "2026-01-15T10:30:45Z");
+
+        let bar = bb.get_active_bar("AAPL").unwrap();
+        assert_eq!(bar.open, 150.0);
+        assert_eq!(bar.high, 155.0);
+        assert_eq!(bar.low, 148.0);
+        assert_eq!(bar.close, 152.0);
+        assert_eq!(bar.volume, 425.0);
+        assert_eq!(bar.trade_count, 4);
+    }
+
+    #[test]
+    fn minute_boundary_completes_bar_and_starts_new() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
+        bb.ingest_trade("AAPL", 155.0, 200.0, "2026-01-15T10:30:30Z");
+
+        // Cross into next minute
+        bb.ingest_trade("AAPL", 160.0, 50.0, "2026-01-15T10:31:00Z");
+
+        // Old bar should be completed
+        let completed = bb.drain_completed();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].open, 150.0);
+        assert_eq!(completed[0].high, 155.0);
+        assert_eq!(completed[0].low, 150.0);
+        assert_eq!(completed[0].close, 155.0);
+        assert_eq!(completed[0].volume, 300.0);
+        assert_eq!(completed[0].trade_count, 2);
+        assert!(completed[0].timestamp.contains("2026-01-15T10:30:00"));
+
+        // New bar should be active
+        let active = bb.get_active_bar("AAPL").unwrap();
+        assert_eq!(active.open, 160.0);
+        assert_eq!(active.close, 160.0);
+        assert_eq!(active.volume, 50.0);
+        assert_eq!(active.trade_count, 1);
+        assert!(active.timestamp.contains("2026-01-15T10:31:00"));
+    }
+
+    #[test]
+    fn zero_and_negative_price_ignored() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 0.0, 100.0, "2026-01-15T10:30:00Z");
+        bb.ingest_trade("AAPL", -5.0, 100.0, "2026-01-15T10:30:10Z");
+        assert!(bb.get_active_bar("AAPL").is_none());
+
+        // Valid trade still works after ignored ones
+        bb.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:20Z");
+        assert!(bb.get_active_bar("AAPL").is_some());
+
+        // Zero price within existing bar is ignored
+        bb.ingest_trade("AAPL", 0.0, 500.0, "2026-01-15T10:30:30Z");
+        let bar = bb.get_active_bar("AAPL").unwrap();
+        assert_eq!(bar.trade_count, 1);
+        assert_eq!(bar.volume, 100.0);
+    }
+
+    #[test]
+    fn drain_completed_clears_buffer() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
+        bb.ingest_trade("AAPL", 160.0, 50.0, "2026-01-15T10:31:00Z");
+
+        let first = bb.drain_completed();
+        assert_eq!(first.len(), 1);
+
+        let second = bb.drain_completed();
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn multiple_symbols_tracked_independently() {
+        let mut bb = BarBuilder::new();
+        bb.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
+        bb.ingest_trade("MSFT", 300.0, 200.0, "2026-01-15T10:30:00Z");
+        bb.ingest_trade("AAPL", 155.0, 50.0, "2026-01-15T10:30:30Z");
+        bb.ingest_trade("MSFT", 295.0, 75.0, "2026-01-15T10:30:30Z");
+
+        let aapl = bb.get_active_bar("AAPL").unwrap();
+        assert_eq!(aapl.open, 150.0);
+        assert_eq!(aapl.high, 155.0);
+        assert_eq!(aapl.low, 150.0);
+        assert_eq!(aapl.volume, 150.0);
+
+        let msft = bb.get_active_bar("MSFT").unwrap();
+        assert_eq!(msft.open, 300.0);
+        assert_eq!(msft.high, 300.0);
+        assert_eq!(msft.low, 295.0);
+        assert_eq!(msft.volume, 275.0);
+
+        let all = bb.get_all_active_bars();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn get_active_bar_returns_none_for_unknown_symbol() {
+        let bb = BarBuilder::new();
+        assert!(bb.get_active_bar("UNKNOWN").is_none());
+
+        let mut bb2 = BarBuilder::new();
+        bb2.ingest_trade("AAPL", 150.0, 100.0, "2026-01-15T10:30:00Z");
+        assert!(bb2.get_active_bar("MSFT").is_none());
+    }
+}

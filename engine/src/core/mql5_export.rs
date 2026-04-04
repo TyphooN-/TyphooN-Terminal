@@ -217,3 +217,111 @@ pub fn export_strategy(strategy: &OptimizedStrategy, output_dir: &str) -> Result
 
     Ok(exported)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a test strategy with known, deterministic values.
+    fn test_strategy() -> OptimizedStrategy {
+        OptimizedStrategy {
+            symbol: "EURUSD".to_string(),
+            timeframe: "H1".to_string(),
+            sma_fast: 10,
+            sma_slow: 50,
+            rsi_period: 14,
+            rsi_overbought: 70.0,
+            rsi_oversold: 30.0,
+            atr_period: 14,
+            atr_sl_mult: 1.50,
+            atr_tp_mult: 2.00,
+            sharpe: 1.85,
+            profit_factor: 2.10,
+            max_drawdown: 0.12,
+            win_rate: 0.58,
+            trade_count: 342,
+            robustness_score: 0.91,
+        }
+    }
+
+    #[test]
+    fn ea_source_contains_copyright() {
+        let source = generate_ea_source(&test_strategy());
+        assert!(
+            source.contains(r#"#property copyright "TyphooN Risk Management System""#),
+            "EA source must contain #property copyright"
+        );
+    }
+
+    #[test]
+    fn ea_source_contains_input_parameters_with_correct_values() {
+        let strat = test_strategy();
+        let source = generate_ea_source(&strat);
+        assert!(source.contains("InpFastPeriod     = 10"));
+        assert!(source.contains("InpSlowPeriod     = 50"));
+        assert!(source.contains("InpRSIPeriod      = 14"));
+        assert!(source.contains("InpRSIOverbought  = 70.0"));
+        assert!(source.contains("InpRSIOversold    = 30.0"));
+        assert!(source.contains("InpATRPeriod      = 14"));
+        assert!(source.contains("InpATRSLMult      = 1.50"));
+        assert!(source.contains("InpATRTPMult      = 2.00"));
+    }
+
+    #[test]
+    fn ea_source_contains_oninit_and_ontick() {
+        let source = generate_ea_source(&test_strategy());
+        assert!(source.contains("int OnInit()"), "EA source must contain OnInit");
+        assert!(source.contains("void OnTick()"), "EA source must contain OnTick");
+    }
+
+    #[test]
+    fn set_file_contains_fast_period_with_correct_value() {
+        let strat = test_strategy();
+        let set = generate_set_file(&strat);
+        assert!(
+            set.contains("InpFastPeriod=10||"),
+            "Set file must contain InpFastPeriod with value 10"
+        );
+    }
+
+    #[test]
+    fn set_file_contains_symbol_and_timeframe_comments() {
+        let strat = test_strategy();
+        let set = generate_set_file(&strat);
+        assert!(set.contains("Symbol: EURUSD"), "Set file must reference symbol in comment");
+        assert!(set.contains("Timeframe: H1"), "Set file must reference timeframe in comment");
+    }
+
+    #[test]
+    fn export_creates_files_in_temp_directory() {
+        let strat = test_strategy();
+        let tmp = std::env::temp_dir().join("mql5_export_test");
+        // Clean up from any previous run
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let result = export_strategy(&strat, tmp.to_str().unwrap());
+        assert!(result.is_ok(), "export_strategy should succeed");
+        let files = result.unwrap();
+        assert_eq!(files.len(), 2, "Should export exactly 2 files (EA + set)");
+
+        for path_str in &files {
+            let path = std::path::Path::new(path_str);
+            assert!(path.exists(), "Exported file must exist: {}", path_str);
+            let content = std::fs::read_to_string(path).unwrap();
+            assert!(!content.is_empty(), "Exported file must not be empty: {}", path_str);
+        }
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn generated_ea_references_correct_symbol() {
+        let strat = test_strategy();
+        let source = generate_ea_source(&strat);
+        assert!(
+            source.contains("Symbol: EURUSD"),
+            "EA header must reference the strategy symbol"
+        );
+    }
+}

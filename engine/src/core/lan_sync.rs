@@ -1603,3 +1603,111 @@ fn extract_bar_count(compressed: &[u8]) -> i64 {
         Err(_) => 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    // ── SyncMessage serialization ─────────────────────────────────
+
+    #[test]
+    fn ping_serializes_to_tagged_json() {
+        let json = serde_json::to_string(&SyncMessage::Ping).unwrap();
+        assert_eq!(json, r#"{"type":"Ping"}"#);
+    }
+
+    #[test]
+    fn auth_challenge_roundtrips() {
+        let msg = SyncMessage::AuthChallenge {
+            challenge: "abc123def456".into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: SyncMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            SyncMessage::AuthChallenge { challenge } => {
+                assert_eq!(challenge, "abc123def456");
+            }
+            other => panic!("Expected AuthChallenge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remote_request_serializes_with_cmd_and_args() {
+        let msg = SyncMessage::RemoteRequest {
+            cmd: "SEC_SCRAPE".into(),
+            args: r#"{"ticker":"AAPL"}"#.into(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "RemoteRequest");
+        assert_eq!(v["cmd"], "SEC_SCRAPE");
+        assert_eq!(v["args"], r#"{"ticker":"AAPL"}"#);
+    }
+
+    // ── CacheMeta serialization ───────────────────────────────────
+
+    #[test]
+    fn cache_meta_roundtrips() {
+        let meta = CacheMeta {
+            key: "EURUSD_H1".into(),
+            timestamp: 1700000000,
+            bar_count: Some(5000),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let parsed: CacheMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.key, "EURUSD_H1");
+        assert_eq!(parsed.timestamp, 1700000000);
+        assert_eq!(parsed.bar_count, Some(5000));
+    }
+
+    // ── derive_secret ─────────────────────────────────────────────
+
+    #[test]
+    fn derive_secret_is_deterministic() {
+        let a = derive_secret("my-passphrase");
+        let b = derive_secret("my-passphrase");
+        assert_eq!(a, b);
+        // Must not be all zeros
+        assert_ne!(a, [0u8; 32]);
+    }
+
+    #[test]
+    fn derive_secret_differs_for_different_passphrases() {
+        let a = derive_secret("passphrase-one");
+        let b = derive_secret("passphrase-two");
+        assert_ne!(a, b);
+    }
+
+    // ── hmac_hex ──────────────────────────────────────────────────
+
+    #[test]
+    fn hmac_hex_is_consistent() {
+        let secret = derive_secret("test-secret");
+        let h1 = hmac_hex(b"challenge-data", &secret);
+        let h2 = hmac_hex(b"challenge-data", &secret);
+        assert_eq!(h1, h2);
+        // HMAC-SHA256 produces 64 hex chars
+        assert_eq!(h1.len(), 64);
+        // All chars are lowercase hex
+        assert!(h1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    // ── hex_encode / hex_decode ───────────────────────────────────
+
+    #[test]
+    fn hex_encode_decode_roundtrip() {
+        let original: Vec<u8> = (0u8..=255).collect();
+        let encoded = hex_encode(&original);
+        let decoded = hex_decode(&encoded).expect("valid hex should decode");
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn hex_decode_rejects_invalid_hex() {
+        // Odd length
+        assert!(hex_decode("abc").is_none());
+        // Invalid hex chars
+        assert!(hex_decode("zzzz").is_none());
+    }
+}

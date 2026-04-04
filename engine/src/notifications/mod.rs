@@ -133,3 +133,99 @@ pub async fn send_ntfy(topic: &str, message: &str) -> Result<(), String> {
         Err(err)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Discord validation tests ---
+
+    #[tokio::test]
+    async fn discord_empty_webhook_returns_err() {
+        let result = send_discord("", "hello").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn discord_invalid_webhook_returns_err() {
+        let result = send_discord("https://example.com/not-a-webhook", "hello").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn discord_message_too_long_returns_err() {
+        let long_msg = "a".repeat(2001);
+        let result =
+            send_discord("https://discord.com/api/webhooks/123/abc", &long_msg).await;
+        assert!(result.is_err());
+    }
+
+    // --- Pushover validation tests ---
+
+    #[tokio::test]
+    async fn pushover_empty_token_returns_err() {
+        let result = send_pushover("", "user123", "hello").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn pushover_token_too_long_returns_err() {
+        let long_token = "a".repeat(65);
+        let result = send_pushover(&long_token, "user123", "hello").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn pushover_empty_user_returns_err() {
+        let result = send_pushover("token123", "", "hello").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn pushover_empty_message_returns_err() {
+        let result = send_pushover("token123", "user123", "").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn pushover_message_too_long_returns_err() {
+        let long_msg = "a".repeat(1025);
+        let result = send_pushover("token123", "user123", &long_msg).await;
+        assert!(result.is_err());
+    }
+
+    // --- ntfy validation tests ---
+
+    #[tokio::test]
+    async fn ntfy_empty_topic_returns_err() {
+        let result = send_ntfy("", "hello").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn ntfy_topic_too_long_returns_err() {
+        let long_topic = "a".repeat(129);
+        let result = send_ntfy(&long_topic, "hello").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn ntfy_invalid_topic_chars_returns_err() {
+        assert!(send_ntfy("has spaces", "hello").await.is_err());
+        assert!(send_ntfy("special!@#", "hello").await.is_err());
+        assert!(send_ntfy("path/slash", "hello").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn ntfy_empty_message_returns_err() {
+        let result = send_ntfy("valid-topic", "").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn ntfy_message_too_long_returns_err() {
+        let long_msg = "a".repeat(4097);
+        let result = send_ntfy("valid-topic", &long_msg).await;
+        assert!(result.is_err());
+    }
+}

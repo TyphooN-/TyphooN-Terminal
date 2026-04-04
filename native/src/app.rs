@@ -8334,6 +8334,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "ANALYST",       desc: "Analyst ratings & targets" },
     Command { name: "HOLDERS",       desc: "Institutional holders" },
     Command { name: "OPTION_CHAIN",  desc: "tastytrade option chain for current symbol" },
+    Command { name: "COMPILE",       desc: "MQL5/PineScript indicator compiler" },
+    Command { name: "STREAM",        desc: "Start real-time WebSocket stream for current symbol" },
     // Analysis
     Command { name: "CORRELATION",   desc: "Correlation matrix" },
     Command { name: "SEASONALS",     desc: "Seasonal patterns" },
@@ -8770,6 +8772,8 @@ enum BrokerCmd {
     FetchCongressTrades,
     /// Send notification (Discord/Pushover/ntfy). Runs async.
     SendNotification { discord_webhook: String, pushover_token: String, pushover_user: String, ntfy_topic: String, message: String },
+    /// Start real-time WebSocket trade/quote stream for symbols.
+    StartStream { trade_symbols: Vec<String>, quote_symbols: Vec<String> },
     /// Start LAN sync server on port with passphrase.
     LanSyncStart { port: u16, passphrase: String, db_path: std::path::PathBuf },
     /// Connect LAN sync client to server.
@@ -8799,6 +8803,10 @@ enum BrokerMsg {
     Quote(String, f64, f64, f64), // symbol, bid, ask, last
     /// Market clock status.
     MarketClock(String),
+    /// Real-time trade tick from WebSocket stream (feeds BarBuilder).
+    StreamTick { symbol: String, price: f64, size: f64, timestamp: String },
+    /// Real-time quote tick from WebSocket stream.
+    StreamQuoteTick { symbol: String, bid: f64, ask: f64 },
     /// Generic JSON results for various API calls.
     JsonResult(String, String), // (label, formatted text)
     /// Fundamentals scrape progress update.
@@ -8999,6 +9007,9 @@ pub struct TyphooNApp {
     pushover_token: String,
     pushover_user: String,
     ntfy_topic: String,
+    /// Real-time bar construction from WebSocket trade stream.
+    bar_builder: std::sync::Arc<std::sync::Mutex<typhoon_engine::core::bar_builder::BarBuilder>>,
+    stream_active: bool,
     /// Cached news articles (headline, source, datetime).
     news_articles: Vec<(String, String, String)>,
 
@@ -9108,6 +9119,12 @@ pub struct TyphooNApp {
     darwinex_multi_outliers: Vec<typhoon_engine::core::var::MultiOutlierResult>,
     show_option_chain: bool,
     option_chain_sym: String,  // symbol last fetched
+    // MQL5/PineScript compiler
+    show_indicator_compiler: bool,
+    compiler_source: String,         // source code input
+    compiler_language: usize,        // 0=MQL5, 1=PineScript
+    compiler_diagnostics: Vec<String>,
+    compiler_metadata: Option<mql5_compiler::CompileResult>,
     show_journal: bool,
     show_object_list: bool,
     journal_entries: Vec<JournalEntry>,
@@ -10676,6 +10693,34 @@ impl TyphooNApp {
                             }
                         });
                     }
+                    BrokerCmd::StartStream { trade_symbols, quote_symbols } => {
+                        if let Some(ref b) = broker {
+                            let msg_tx = broker_msg_tx_clone.clone();
+                            let total = trade_symbols.len() + quote_symbols.len();
+                            match b.start_stream(trade_symbols, quote_symbols).await {
+                                Ok(mut rx) => {
+                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Stream started for {} symbols", total)));
+                                    tokio::spawn(async move {
+                                        while let Some(msg) = rx.recv().await {
+                                            match msg {
+                                                typhoon_engine::broker::alpaca::StreamMessage::Trade(t) => {
+                                                    let _ = msg_tx.send(BrokerMsg::StreamTick {
+                                                        symbol: t.symbol, price: t.price, size: t.size, timestamp: t.timestamp,
+                                                    });
+                                                }
+                                                typhoon_engine::broker::alpaca::StreamMessage::Quote(q) => {
+                                                    let _ = msg_tx.send(BrokerMsg::StreamQuoteTick {
+                                                        symbol: q.symbol, bid: q.bid, ask: q.ask,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Stream failed: {}", e))); }
+                            }
+                        }
+                    }
                     BrokerCmd::LanSyncStart { port, passphrase, .. } => {
                         use typhoon_engine::core::lan_sync::LanSyncServer;
                         // Spawn as independent task — cert generation is CPU-heavy (100-500ms)
@@ -10895,6 +10940,8 @@ impl TyphooNApp {
             pushover_token: String::new(),
             pushover_user: String::new(),
             ntfy_topic: String::new(),
+            bar_builder: std::sync::Arc::new(std::sync::Mutex::new(typhoon_engine::core::bar_builder::BarBuilder::new())),
+            stream_active: false,
             news_articles: Vec::new(),
             sl_price: None,
             tp_price: None,
@@ -10978,6 +11025,11 @@ impl TyphooNApp {
             darwinex_sector_stats: Vec::new(),
             show_option_chain: false,
             option_chain_sym: String::new(),
+            show_indicator_compiler: false,
+            compiler_source: String::new(),
+            compiler_language: 0,
+            compiler_diagnostics: Vec::new(),
+            compiler_metadata: None,
             show_journal: false,
             show_object_list: false,
             journal_entries: Vec::new(),
@@ -12116,6 +12168,17 @@ impl TyphooNApp {
                     let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym });
                     self.show_option_chain = true;
                     self.log.push_back(LogEntry::info(format!("Fetching option chain for {}...", self.option_chain_sym)));
+                }
+            }
+            "COMPILE"       => self.show_indicator_compiler = true,
+            "STREAM"        => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').rev().nth(1).or_else(|| c.symbol.split(':').last()).unwrap_or("").to_string())
+                    .unwrap_or_default();
+                if !sym.is_empty() && !self.stream_active {
+                    let _ = self.broker_tx.send(BrokerCmd::StartStream { trade_symbols: vec![sym.clone()], quote_symbols: vec![sym.clone()] });
+                    self.stream_active = true;
+                    self.log.push_back(LogEntry::info(format!("Starting stream for {}", sym)));
                 }
             }
             "CORRELATION"   => self.show_correlation = true,
@@ -13282,6 +13345,7 @@ impl TyphooNApp {
         self.show_bookmap = false;
         self.show_darwinex_outliers = false;
         self.show_option_chain = false;
+        self.show_indicator_compiler = false;
         self.show_risk_ruin = false;
         self.show_alert_builder = false;
         self.show_journal = false;
@@ -18961,6 +19025,120 @@ impl TyphooNApp {
                 });
         }
 
+        // MQL5/PineScript Indicator Compiler
+        if self.show_indicator_compiler {
+            egui::Window::new("Indicator Compiler")
+                .open(&mut self.show_indicator_compiler)
+                .resizable(true).default_size([650.0, 550.0])
+                .show(ctx, |ui| {
+                    let cc_green = egui::Color32::from_rgb(46, 204, 113);
+                    let cc_red   = egui::Color32::from_rgb(231, 76, 60);
+                    let cc_dim   = egui::Color32::from_rgb(100, 100, 120);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Language:").small());
+                        egui::ComboBox::from_id_salt("compiler_lang")
+                            .selected_text(if self.compiler_language == 0 { "MQL5" } else { "PineScript v5" })
+                            .width(120.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.compiler_language, 0, "MQL5");
+                                ui.selectable_value(&mut self.compiler_language, 1, "PineScript v5");
+                            });
+                        if ui.button("Load File...").clicked() {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Indicator", &["mq5", "mqh", "pine", "txt"])
+                                .pick_file() {
+                                if let Ok(contents) = std::fs::read_to_string(&path) {
+                                    self.compiler_source = contents;
+                                    // Auto-detect language
+                                    if path.extension().map(|e| e == "pine").unwrap_or(false) {
+                                        self.compiler_language = 1;
+                                    } else {
+                                        self.compiler_language = 0;
+                                    }
+                                    self.log.push_back(LogEntry::info(format!("Loaded: {}", path.display())));
+                                }
+                            }
+                        }
+                        let compile_btn = ui.add(egui::Button::new(
+                            egui::RichText::new("Compile").color(egui::Color32::WHITE)).fill(BTN_BLUE));
+                        if compile_btn.clicked() && !self.compiler_source.is_empty() {
+                            let result = if self.compiler_language == 0 {
+                                mql5_compiler::compile_mql5(&self.compiler_source)
+                            } else {
+                                mql5_compiler::compile_pine(&self.compiler_source)
+                            };
+                            self.compiler_diagnostics.clear();
+                            for d in &result.diagnostics {
+                                self.compiler_diagnostics.push(format!("{}:{}: {} — {}",
+                                    d.line, d.col,
+                                    match d.level { mql5_compiler::DiagLevel::Error => "ERROR", mql5_compiler::DiagLevel::Warning => "WARN", _ => "INFO" },
+                                    d.message));
+                            }
+                            if result.wasm.is_some() {
+                                let wasm_size = result.wasm.as_ref().map(|w| w.len()).unwrap_or(0);
+                                let buffers = result.metadata.as_ref().map(|m| m.buffers).unwrap_or(0);
+                                let inputs = result.metadata.as_ref().map(|m| m.inputs.len()).unwrap_or(0);
+                                self.compiler_diagnostics.insert(0, format!(
+                                    "OK: compiled to {} bytes WASM — {} buffers, {} inputs",
+                                    wasm_size, buffers, inputs));
+                                self.log.push_back(LogEntry::info(format!(
+                                    "Compiled: {} bytes WASM, {} buffers", wasm_size, buffers)));
+                            }
+                            self.compiler_metadata = Some(result);
+                        }
+                    });
+                    ui.separator();
+
+                    // Source code editor
+                    ui.label(egui::RichText::new("Source Code").small().strong());
+                    egui::ScrollArea::vertical().max_height(280.0).id_salt("compiler_src").show(ui, |ui| {
+                        ui.add(egui::TextEdit::multiline(&mut self.compiler_source)
+                            .code_editor()
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(16)
+                            .font(egui::TextStyle::Monospace));
+                    });
+                    ui.separator();
+
+                    // Diagnostics
+                    if !self.compiler_diagnostics.is_empty() {
+                        ui.label(egui::RichText::new("Diagnostics").small().strong());
+                        egui::ScrollArea::vertical().max_height(120.0).id_salt("compiler_diag").show(ui, |ui| {
+                            for d in &self.compiler_diagnostics {
+                                let c = if d.starts_with("OK:") { cc_green }
+                                    else if d.contains("ERROR") { cc_red }
+                                    else { cc_dim };
+                                ui.label(egui::RichText::new(d).monospace().small().color(c));
+                            }
+                        });
+                    }
+
+                    // Metadata summary
+                    if let Some(ref result) = self.compiler_metadata {
+                        if let Some(ref meta) = result.metadata {
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(format!("Name: {}", meta.short_name)).small().strong());
+                                ui.label(egui::RichText::new(format!("Buffers: {}", meta.buffers)).color(cc_dim).small());
+                                ui.label(egui::RichText::new(if meta.separate_window { "Separate Window" } else { "Chart Overlay" }).color(cc_dim).small());
+                            });
+                            if !meta.inputs.is_empty() {
+                                ui.label(egui::RichText::new("Inputs:").small());
+                                for inp in &meta.inputs {
+                                    ui.label(egui::RichText::new(format!("  {} ({}) = {}", inp.name, inp.param_type, inp.default_value)).monospace().small().color(cc_dim));
+                                }
+                            }
+                            if !meta.plots.is_empty() {
+                                ui.label(egui::RichText::new("Plots:").small());
+                                for p in &meta.plots {
+                                    ui.label(egui::RichText::new(format!("  [{}] {} — {:?} color={}", p.index, p.label, p.draw_type, p.color)).monospace().small().color(cc_dim));
+                                }
+                            }
+                        }
+                    }
+                });
+        }
+
         // Risk-of-Ruin Calculator
         if self.show_risk_ruin {
             egui::Window::new("Risk-of-Ruin Calculator")
@@ -21197,6 +21375,43 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::MarketClock(msg) => {
                     self.log.push_back(LogEntry::info(msg));
+                }
+                BrokerMsg::StreamTick { symbol, price, size, timestamp } => {
+                    // Feed into BarBuilder for real-time bar construction
+                    if let Ok(mut bb) = self.bar_builder.lock() {
+                        bb.ingest_trade(&symbol, price, size, &timestamp);
+                        // Drain completed bars and append to matching charts
+                        let completed = bb.drain_completed();
+                        for bar in completed {
+                            for chart in &mut self.charts {
+                                if chart.symbol.contains(&bar.symbol) || bar.symbol.contains(&chart.symbol.split(':').rev().nth(1).or_else(|| chart.symbol.split(':').last()).unwrap_or("")) {
+                                    chart.bars.push(Bar {
+                                        ts_ms: chrono::DateTime::parse_from_rfc3339(&bar.timestamp).map(|dt| dt.timestamp_millis()).unwrap_or(0),
+                                        open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume,
+                                    });
+                                    // Advance view offset if at end
+                                    if chart.view_offset >= chart.bars.len().saturating_sub(2) {
+                                        chart.view_offset = chart.bars.len().saturating_sub(1) + 20;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                BrokerMsg::StreamQuoteTick { symbol, bid, ask } => {
+                    // Update forming bar close price on active charts
+                    let last = (bid + ask) / 2.0;
+                    if last > 0.0 {
+                        for chart in &mut self.charts {
+                            if chart.symbol.contains(&symbol) {
+                                if let Some(bar) = chart.bars.last_mut() {
+                                    bar.close = last;
+                                    bar.high = bar.high.max(last);
+                                    bar.low = bar.low.min(last);
+                                }
+                            }
+                        }
+                    }
                 }
                 BrokerMsg::JsonResult(label, text) => {
                     // Route structured results to their windows; log everything

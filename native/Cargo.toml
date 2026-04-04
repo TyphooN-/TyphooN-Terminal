@@ -12,6 +12,9 @@ path = "src/main.rs"
 # Engine (shared core library)
 typhoon-engine = { path = "../engine" }
 
+# MQL5/PineScript compiler (indicator compilation + execution)
+mql5-compiler = { path = "../mql5-compiler" }
+
 # Native GPU UI — latest stable egui ecosystem (2026-03-27)
 eframe = { version = "0.34", default-features = true, features = ["wgpu"] }
 egui = "0.34"

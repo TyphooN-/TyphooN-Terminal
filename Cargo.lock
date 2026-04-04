@@ -6157,6 +6157,7 @@ dependencies = [
  "egui",
  "egui_plot",
  "image",
+ "mql5-compiler",
  "prometheus",
  "reqwest",
  "rfd",

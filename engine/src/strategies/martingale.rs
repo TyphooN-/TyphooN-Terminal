@@ -281,3 +281,190 @@ impl MartingaleState {
         (per_side, safe_gross)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::position::{Direction, HedgedPosition};
+
+    // ── Helper ─────────────────────────────────────────────────────
+
+    /// Build a hedged position with given bias/hedge quantities.
+    fn make_position(bias_qty: f64, hedge_qty: f64) -> HedgedPosition {
+        HedgedPosition {
+            symbol: "SOLUSD".into(),
+            bias_direction: Direction::Short,
+            bias_qty,
+            hedge_qty,
+            bias_avg_entry: 80.0,
+            hedge_avg_entry: 80.0,
+            trim_closes: 0,
+            protect_closes: 0,
+        }
+    }
+
+    fn default_state(mode: MartingaleMode) -> MartingaleState {
+        let mut s = MartingaleState::new(MartingaleConfig {
+            enabled: true,
+            ..MartingaleConfig::default()
+        });
+        s.mode = mode;
+        s
+    }
+
+    // ── Mode cycling ───────────────────────────────────────────────
+
+    #[test]
+    fn mode_cycles_off_long_short_unwind_off() {
+        let m = MartingaleMode::Off;
+        let m = m.next(); assert_eq!(m, MartingaleMode::Long);
+        let m = m.next(); assert_eq!(m, MartingaleMode::Short);
+        let m = m.next(); assert_eq!(m, MartingaleMode::Unwind);
+        let m = m.next(); assert_eq!(m, MartingaleMode::Off);
+    }
+
+    // ── Mode labels ────────────────────────────────────────────────
+
+    #[test]
+    fn mode_labels() {
+        assert_eq!(MartingaleMode::Off.label(), "MG: OFF");
+        assert_eq!(MartingaleMode::Long.label(), "MG: LONG");
+        assert_eq!(MartingaleMode::Short.label(), "MG: SHORT");
+        assert_eq!(MartingaleMode::Unwind.label(), "MG: UNWIND");
+    }
+
+    // ── Default config ─────────────────────────────────────────────
+
+    #[test]
+    fn default_config_values() {
+        let c = MartingaleConfig::default();
+        assert_eq!(c.trim_pct, 65.0);
+        assert_eq!(c.protect_pct, 56.0);
+        assert_eq!(c.hard_floor_pct, 10.0);
+        assert_eq!(c.spread_tolerance, 2.0);
+        assert_eq!(c.equity_tp, 0.0);
+        assert!(!c.enabled);
+    }
+
+    // ── Decide: Idle when ML well above trim ───────────────────────
+
+    #[test]
+    fn decide_idle_when_mode_off() {
+        let state = default_state(MartingaleMode::Off);
+        let pos = make_position(100.0, 50.0);
+        // High equity relative to margin → ML well above trim
+        let d = state.decide(100_000.0, 1_000.0, 100.0, &pos, 0.0);
+        assert_eq!(d.action, Action::Idle);
+    }
+
+    #[test]
+    fn decide_trim_when_above_threshold() {
+        // ML = equity / margin * 100 = 100_000 / 1_000 * 100 = 10_000%
+        // Well above trim_pct (65%), max_safe_lots will be large, close_qty limited by hedge_qty
+        let state = default_state(MartingaleMode::Long);
+        let pos = make_position(100.0, 50.0);
+        let d = state.decide(100_000.0, 1_000.0, 100.0, &pos, 0.0);
+        assert_eq!(d.action, Action::Trim);
+        assert!(d.close_qty > 0.0);
+    }
+
+    // ── Decide: DeadZone when ML between protect and trim ──────────
+
+    #[test]
+    fn decide_deadzone_when_ml_at_trim_threshold() {
+        // ML = equity / margin * 100
+        // We want ML exactly at trim_pct (65%). So: 65 = eq / margin * 100
+        // With eq=6500, margin=10000 → ML = 65.0 (exactly at threshold → DeadZone since <= trim_pct)
+        let state = default_state(MartingaleMode::Long);
+        let pos = make_position(100.0, 50.0);
+        let d = state.decide(6_500.0, 10_000.0, 100.0, &pos, 0.0);
+        assert_eq!(d.action, Action::DeadZone);
+    }
+
+    // ── Decide: Protect when ML below protect_pct ──────────────────
+
+    #[test]
+    fn decide_protect_when_below_protect_threshold() {
+        // ML = eq / margin * 100. Want ML = 50 < 56 (protect_pct).
+        // eq=5000, margin=10000 → ML=50
+        let state = default_state(MartingaleMode::Long);
+        let pos = make_position(100.0, 50.0);
+        let d = state.decide(5_000.0, 10_000.0, 100.0, &pos, 0.0);
+        assert_eq!(d.action, Action::Protect);
+        assert!(d.close_qty >= 1.0);
+    }
+
+    // ── Decide: HardFloor when ML below hard_floor_pct ─────────────
+
+    #[test]
+    fn decide_hard_floor_when_below_floor() {
+        // ML = eq / margin * 100. Want ML = 8 <= 10 (hard_floor_pct).
+        // eq=800, margin=10000 → ML=8
+        let state = default_state(MartingaleMode::Long);
+        let pos = make_position(100.0, 50.0);
+        let d = state.decide(800.0, 10_000.0, 100.0, &pos, 0.0);
+        assert_eq!(d.action, Action::HardFloor);
+    }
+
+    // ── Decide: Unwind when mode is Unwind ─────────────────────────
+
+    #[test]
+    fn decide_unwind_when_mode_unwind() {
+        let state = default_state(MartingaleMode::Unwind);
+        let pos = make_position(100.0, 50.0);
+        let d = state.decide(100_000.0, 1_000.0, 100.0, &pos, 0.0);
+        assert_eq!(d.action, Action::Unwind);
+    }
+
+    // ── Decide: EquityTP when P/L >= target ────────────────────────
+
+    #[test]
+    fn decide_equity_tp_when_pl_meets_target() {
+        let mut state = default_state(MartingaleMode::Long);
+        state.config.equity_tp = 5_000.0;
+        let pos = make_position(100.0, 50.0);
+        // mg_pl=5000 >= equity_tp=5000
+        let d = state.decide(100_000.0, 1_000.0, 100.0, &pos, 5_000.0);
+        assert_eq!(d.action, Action::EquityTP);
+    }
+
+    #[test]
+    fn decide_no_equity_tp_when_disabled() {
+        // equity_tp = 0 (disabled) — should not fire EquityTP even with high P/L
+        let state = default_state(MartingaleMode::Long);
+        let pos = make_position(100.0, 50.0);
+        let d = state.decide(100_000.0, 1_000.0, 100.0, &pos, 999_999.0);
+        assert_ne!(d.action, Action::EquityTP);
+    }
+
+    // ── Decide: PureBias when hedge_qty == 0 ───────────────────────
+
+    #[test]
+    fn decide_pure_bias_when_all_long_zero_short() {
+        let state = default_state(MartingaleMode::Long);
+        // bias_qty=100, hedge_qty=0 → is_pure_bias() = true
+        let pos = make_position(100.0, 0.0);
+        let d = state.decide(100_000.0, 1_000.0, 100.0, &pos, 0.0);
+        assert_eq!(d.action, Action::PureBias);
+    }
+
+    // ── calc_open_mg_size ──────────────────────────────────────────
+
+    #[test]
+    fn calc_open_mg_size_basic() {
+        let state = default_state(MartingaleMode::Long);
+        // spread_tolerance = 2.0 (default), equity = 10_000
+        // safe_gross = floor(10000/2) = 5000, per_side = floor(5000/2) = 2500
+        let (per_side, gross) = state.calc_open_mg_size(10_000.0);
+        assert_eq!(gross, 5_000.0);
+        assert_eq!(per_side, 2_500.0);
+    }
+
+    #[test]
+    fn calc_open_mg_size_zero_equity() {
+        let state = default_state(MartingaleMode::Long);
+        let (per_side, gross) = state.calc_open_mg_size(0.0);
+        assert_eq!(per_side, 0.0);
+        assert_eq!(gross, 0.0);
+    }
+}
