@@ -1,7 +1,7 @@
 # ADR-002: Chart Engine
 
 **Status:** Implemented
-**Date:** 2026-03-24 | **Updated:** 2026-04-04
+**Date:** 2026-03-24 | **Updated:** 2026-04-05
 
 ## Context
 
@@ -21,4 +21,10 @@ Implement a custom chart engine using egui's Painter API for direct shape render
 - Trade-off: custom renderer requires manual hit-testing for interactive elements (drawing tools, SL/TP lines)
 - Replay mode: `ChartState.replay_bar_cap` caps `visible_range()` to hide future bars during bar-by-bar playback
 - Tab drag-and-drop: `dragging_tab: Option<usize>` with correct insert_at accounting for removal index shift
-- Drawing hit-test selection: point-to-line distance function, 8px threshold, applied to 6 common drawing types
+- Drawing hit-test selection: point-to-line distance function, 8px threshold, applied to ~50 drawing types
+- Logarithmic price scale: `ChartState.log_scale` toggleable via Alt+L, LOG_SCALE command, or right-click menu. Uses ln() mapping; requires positive prices.
+- Auto-fit: FIT command resets zoom/pan to show all bars at once
+- Follow latest toggle: `follow_latest` controls whether chart auto-scrolls on new bar data
+- Pre-placement color picker: 8-color palette in drawing toolbar; all 89 drawing types use `draw_color`
+- Per-drawing property editor: right-click selected drawing to change color, width, style
+- Drawing control points: selected drawings show cyan square handles at endpoints
