@@ -181,8 +181,6 @@ pub fn create_fundamentals_tables(conn: &Connection) -> Result<(), String> {
 struct SecCompanyEntry {
     cik_str: u64,
     ticker: String,
-    #[allow(dead_code)]
-    title: String,
 }
 
 /// Look up CIK for a ticker from SEC EDGAR.

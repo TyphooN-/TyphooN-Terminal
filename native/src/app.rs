@@ -63,26 +63,8 @@ const BTN_BLUE: egui::Color32 = egui::Color32::from_rgb(15, 52, 96);    // .btn-
 const BTN_BLUE_TEXT: egui::Color32 = egui::Color32::from_rgb(136, 204, 255); // #8cf
 const BTN_RED: egui::Color32 = egui::Color32::from_rgb(90, 26, 26);     // .btn-danger: #5a1a1a
 const BTN_RED_TEXT: egui::Color32 = egui::Color32::from_rgb(255, 136, 136);  // #f88
-// Old CSS variable equivalents (used throughout for WebKit parity)
-#[allow(dead_code)]
-const BG_DARK: egui::Color32 = egui::Color32::from_rgb(10, 10, 20);     // --bg-dark: #0a0a14
-#[allow(dead_code)]
-const BG_INPUT: egui::Color32 = egui::Color32::from_rgb(15, 52, 96);    // --bg-input: #0f3460
 const BG_BUTTON: egui::Color32 = egui::Color32::from_rgb(26, 26, 46);   // --bg-button: #1a1a2e
-#[allow(dead_code)]
-const BG_HOVER: egui::Color32 = egui::Color32::from_rgb(22, 33, 62);    // --bg-hover: #16213e
-#[allow(dead_code)]
-const BORDER: egui::Color32 = egui::Color32::from_rgb(51, 51, 51);      // --border: #333
-#[allow(dead_code)]
-const INFO_COL: egui::Color32 = egui::Color32::from_rgb(136, 204, 255); // --info: #8cf
-#[allow(dead_code)]
-const ACCENT_CYAN: egui::Color32 = egui::Color32::from_rgb(0, 188, 212); // --accent: #00bcd4
-// Quake console colours (from old WebKit CSS)
-#[allow(dead_code)]
-const QUAKE_BG: egui::Color32 = egui::Color32::from_rgb(8, 8, 24);     // rgba(8,8,24,0.97)
 const QUAKE_CMD: egui::Color32 = egui::Color32::from_rgb(0, 220, 220); // used in status bar
-#[allow(dead_code)]
-const QUAKE_DESC: egui::Color32 = egui::Color32::from_rgb(136, 136, 136); // #888
 // Watchlist symbol colours (rotating palette)
 const WL_COLORS: [egui::Color32; 8] = [
     egui::Color32::from_rgb(0, 220, 80),    // green
@@ -263,8 +245,6 @@ struct IndicatorAlert {
     active: bool,
     triggered: bool,
     last_value: Option<f64>,
-    #[allow(dead_code)]
-    created_at: String,
 }
 
 const ALERT_INDICATORS: &[&str] = &["Price", "RSI", "Fisher", "MACD", "ATR", "ADX", "Stochastic %K", "CCI", "Volume"];
@@ -282,8 +262,6 @@ struct JournalEntry {
     pnl: Option<f64>,
     strategy: String,
     notes: String,
-    #[allow(dead_code)]
-    screenshot_path: Option<String>,
 }
 
 impl LogEntry {
@@ -319,14 +297,6 @@ enum LineStyle { Solid, Dashed, Dotted }
 
 /// Wrapper around Drawing with per-drawing style properties.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
-struct DrawingEntry {
-    drawing: Drawing,
-    width: f32,
-    style: LineStyle,
-}
-
-#[derive(Clone, Debug)]
 enum Drawing {
     /// Horizontal price line.
     HLine { price: f64, color: egui::Color32 },
@@ -344,24 +314,20 @@ enum Drawing {
         bar_end: usize,
     },
     /// Vertical line at a bar index.
-    #[allow(dead_code)]
     VLine { bar_idx: usize, color: egui::Color32 },
     /// Rectangle between two (bar, price) corners.
-    #[allow(dead_code)]
     Rectangle {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Ray from one point extending infinitely to the right.
-    #[allow(dead_code)]
     Ray {
         origin: (usize, f64),
         slope: f64, // price per bar
         color: egui::Color32,
     },
     /// Parallel channel (trendline + offset).
-    #[allow(dead_code)]
     Channel {
         p1: (usize, f64),
         p2: (usize, f64),
@@ -572,7 +538,6 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Schiff Pitchfork (pivot shifted to midpoint of pivot-endpoint1).
-    #[allow(dead_code)]
     SchiffPitchfork {
         pivot: (usize, f64),
         p2: (usize, f64),
@@ -580,7 +545,6 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Modified Schiff Pitchfork (pivot shifted to midpoint of both pivot-endpoint pairs).
-    #[allow(dead_code)]
     ModSchiffPitchfork {
         pivot: (usize, f64),
         p2: (usize, f64),
@@ -588,35 +552,30 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Cyclic Lines (vertical lines at regular intervals from two click points).
-    #[allow(dead_code)]
     CyclicLines {
         bar_start: usize,
         bar_end: usize,
         color: egui::Color32,
     },
     /// Sine Wave (sine curve from two click points defining period/amplitude).
-    #[allow(dead_code)]
     SineWave {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Emoji annotation (single character placed at a chart point).
-    #[allow(dead_code)]
     Emoji {
         bar_idx: usize,
         price: f64,
         emoji: String,
     },
     /// Flag marker at a chart point.
-    #[allow(dead_code)]
     Flag {
         bar_idx: usize,
         price: f64,
         color: egui::Color32,
     },
     /// Balloon / speech bubble (anchor + box position with text).
-    #[allow(dead_code)]
     Balloon {
         anchor: (usize, f64),
         label_pos: (usize, f64),
@@ -624,33 +583,28 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Session Break (vertical dashed line with label).
-    #[allow(dead_code)]
     SessionBreak {
         bar_idx: usize,
         color: egui::Color32,
     },
     /// Magnet Level (horizontal line that glows when price is within 0.5%).
-    #[allow(dead_code)]
     MagnetLevel {
         price: f64,
         color: egui::Color32,
     },
     /// Risk/Reward Box (entry, SL, TP with green/red zones and R:R ratio).
-    #[allow(dead_code)]
     RiskRewardBox {
         entry: (usize, f64),
         stop: f64,
         target: f64,
     },
     /// Fib Circle (center + radius click, draws circles at Fib ratios).
-    #[allow(dead_code)]
     FibCircle {
         center: (usize, f64),
         radius_pt: (usize, f64),
         color: egui::Color32,
     },
     /// Arc through 3 points (start, midpoint, end).
-    #[allow(dead_code)]
     ArcDraw {
         p1: (usize, f64),
         p2: (usize, f64),
@@ -658,7 +612,6 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Bezier Curve with 2 control points (start, ctrl1, ctrl2, end).
-    #[allow(dead_code)]
     CurveDraw {
         p1: (usize, f64),
         ctrl1: (usize, f64),
@@ -667,48 +620,41 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Smooth Bezier-interpolated path through multiple points.
-    #[allow(dead_code)]
     PathDraw {
         points: Vec<(usize, f64)>,
         color: egui::Color32,
     },
     /// Forecast (2 clicks defining period, projects trend forward as dashed line).
-    #[allow(dead_code)]
     Forecast {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Ghost Feed (mirrors historical price action forward).
-    #[allow(dead_code)]
     GhostFeed {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Signpost icon with direction arrow at a point.
-    #[allow(dead_code)]
     Signpost {
         bar_idx: usize,
         price: f64,
         color: egui::Color32,
     },
     /// Ruler (distance in price, bars, percentage between two points).
-    #[allow(dead_code)]
     Ruler {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Time Cycle (vertical lines at cycle intervals with semi-circles).
-    #[allow(dead_code)]
     TimeCycle {
         bar_start: usize,
         bar_end: usize,
         color: egui::Color32,
     },
     /// Speed Resistance Fan (low, high, time ref — draws 1/3 and 2/3 speed lines).
-    #[allow(dead_code)]
     SpeedResistanceFan {
         p1: (usize, f64),
         p2: (usize, f64),
@@ -716,7 +662,6 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Speed Resistance Arc (same as fan but with arcs).
-    #[allow(dead_code)]
     SpeedResistanceArc {
         p1: (usize, f64),
         p2: (usize, f64),
@@ -724,14 +669,12 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Fib Spiral (center + radius, draws golden spiral).
-    #[allow(dead_code)]
     FibSpiral {
         center: (usize, f64),
         radius_pt: (usize, f64),
         color: egui::Color32,
     },
     /// Rotated Rectangle (2 clicks for baseline, 1 for height).
-    #[allow(dead_code)]
     RotatedRectangle {
         p1: (usize, f64),
         p2: (usize, f64),
@@ -739,13 +682,11 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Anchored VWAP Line (from anchor bar forward using actual bar data).
-    #[allow(dead_code)]
     AnchoredVwapLine {
         bar_idx: usize,
         color: egui::Color32,
     },
     /// Trend Channel (2 clicks for trendline + 1 for channel width, with fill).
-    #[allow(dead_code)]
     TrendChannel {
         p1: (usize, f64),
         p2: (usize, f64),
@@ -753,7 +694,6 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Inside Pitchfork (3 clicks, pitchfork drawn inside the price action).
-    #[allow(dead_code)]
     InsidePitchfork {
         pivot: (usize, f64),
         p2: (usize, f64),
@@ -761,7 +701,6 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Fib Wedge (3 clicks, fibonacci levels on converging trendlines).
-    #[allow(dead_code)]
     FibWedge {
         p1: (usize, f64),
         p2: (usize, f64),
@@ -769,21 +708,18 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Price Note (text annotation pinned to a price level, not a bar).
-    #[allow(dead_code)]
     PriceNote {
         price: f64,
         text: String,
         color: egui::Color32,
     },
     /// Measure Tool (2 clicks, shows bars, price, %, angle, R:R).
-    #[allow(dead_code)]
     MeasureTool {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Anchored Text (1-click, text pinned to bar+price).
-    #[allow(dead_code)]
     AnchoredText {
         bar_idx: usize,
         price: f64,
@@ -791,7 +727,6 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Comment (1-click, text note pinned to bar+price).
-    #[allow(dead_code)]
     Comment {
         bar_idx: usize,
         price: f64,
@@ -799,113 +734,96 @@ enum Drawing {
         color: egui::Color32,
     },
     /// Arrow Marker Left (1-click, left-pointing triangle).
-    #[allow(dead_code)]
     ArrowMarkerLeft {
         bar_idx: usize,
         price: f64,
         color: egui::Color32,
     },
     /// Arrow Marker Right (1-click, right-pointing triangle).
-    #[allow(dead_code)]
     ArrowMarkerRight {
         bar_idx: usize,
         price: f64,
         color: egui::Color32,
     },
     /// Circle (2 clicks: center + radius point).
-    #[allow(dead_code)]
     Circle {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Pitch Fan (2 clicks).
-    #[allow(dead_code)]
     PitchFan {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Trend-Based Fib Time (2 clicks).
-    #[allow(dead_code)]
     TrendFibTime {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Gann Square (2 clicks).
-    #[allow(dead_code)]
     GannSquare {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Gann Square Fixed (2 clicks).
-    #[allow(dead_code)]
     GannSquareFixed {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Bars Pattern (2 clicks: source range to mirror).
-    #[allow(dead_code)]
     BarsPattern {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Projection (2 clicks).
-    #[allow(dead_code)]
     Projection {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Double Curve (2 clicks).
-    #[allow(dead_code)]
     DoubleCurve {
         p1: (usize, f64),
         p2: (usize, f64),
         color: egui::Color32,
     },
     /// Triangle Pattern (3 clicks).
-    #[allow(dead_code)]
     TrianglePattern {
         points: Vec<(usize, f64)>,
         color: egui::Color32,
     },
     /// Three Drives Pattern (3 clicks).
-    #[allow(dead_code)]
     ThreeDrives {
         points: Vec<(usize, f64)>,
         color: egui::Color32,
     },
     /// Elliott Double Combo WXY (3 clicks).
-    #[allow(dead_code)]
     ElliottDouble {
         points: Vec<(usize, f64)>,
         color: egui::Color32,
     },
     /// ABCD Pattern (4 clicks).
-    #[allow(dead_code)]
     AbcdPattern {
         points: Vec<(usize, f64)>,
         color: egui::Color32,
     },
     /// Cypher Pattern (5 clicks).
-    #[allow(dead_code)]
     CypherPattern {
         points: Vec<(usize, f64)>,
         color: egui::Color32,
     },
     /// Elliott Triangle ABCDE (5 clicks).
-    #[allow(dead_code)]
     ElliottTriangle {
         points: Vec<(usize, f64)>,
         color: egui::Color32,
     },
     /// Elliott Triple Combo WXYXZ (5 clicks).
-    #[allow(dead_code)]
     ElliottTripleCombo {
         points: Vec<(usize, f64)>,
         color: egui::Color32,
@@ -1139,8 +1057,6 @@ const EHLERS_EBSW_COL: egui::Color32 = egui::Color32::from_rgb(0, 200, 180);
 const EHLERS_CYBER_COL: egui::Color32 = egui::Color32::from_rgb(200, 100, 255);
 const EHLERS_CG_COL: egui::Color32 = egui::Color32::from_rgb(255, 180, 0);
 const EHLERS_ROOF_COL: egui::Color32 = egui::Color32::from_rgb(100, 255, 100);
-#[allow(dead_code)]
-const ATR_PROJ_COL: egui::Color32 = egui::Color32::from_rgb(255, 255, 0); // clrYellow (MT5)
 // BetterVolume colors — exact MT5 BetterVolume.mqh values
 const BVOL_CLIMAX_UP: egui::Color32 = egui::Color32::from_rgb(255, 0, 0);      // clrRed — bullish climax
 const BVOL_CLIMAX_DN: egui::Color32 = egui::Color32::from_rgb(255, 255, 255);  // clrWhite — bearish climax
@@ -8769,7 +8685,6 @@ fn fuzzy_match(query: &str, target: &str) -> bool {
 
 /// Watchlist row data (TradingView-style).
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
 struct WatchlistRow {
     /// Display symbol name (e.g. "BTCUSD", "SLV", "CC").
     symbol: String,
@@ -8983,7 +8898,7 @@ impl OrderBroker {
 }
 
 /// Messages sent from UI → async broker task.
-#[allow(dead_code)]
+#[allow(dead_code)] // Some variants are handled but not all have UI triggers yet
 enum BrokerCmd {
     Connect { api_key: String, secret: String, paper: bool },
     GetAccount,
@@ -9375,9 +9290,6 @@ pub struct TyphooNApp {
     active_tab: usize,
 
     // ── watchlist ────────────────────────────────────────────────────────
-    /// Cached symbol keys from SQLite cache (used by screener/backfill panels).
-    #[allow(dead_code)]
-    watchlist_symbols: Vec<(String, i64)>,
     /// Rich watchlist data: symbol name, last, prev_close, change, change_pct, volume, cache_key.
     watchlist_rows: Vec<WatchlistRow>,
     /// User-managed watchlist symbols (persisted in session).
@@ -9537,8 +9449,6 @@ pub struct TyphooNApp {
     replay_playing: bool,
     replay_speed: f32,
     replay_timer: f32,
-    #[allow(dead_code)]
-    confirm_close_all: bool,
     // Symbol autocomplete
     symbol_suggestions: Vec<(String, String, String)>,  // (symbol, company, sector)
     symbol_ac_selected: usize,
@@ -9571,8 +9481,7 @@ pub struct TyphooNApp {
 
     // ── async broker ─────────────────────────────────────────────────────
     /// Tokio runtime handle for spawning async tasks.
-    #[allow(dead_code)]
-    rt_handle: tokio::runtime::Handle,
+        rt_handle: tokio::runtime::Handle,
     /// Send commands to broker task.
     broker_tx: mpsc::UnboundedSender<BrokerCmd>,
     /// Receive results from broker task.
@@ -9697,7 +9606,6 @@ impl TyphooNApp {
             .map(|&tf| ChartState::new("CC", tf))
             .collect();
 
-        let watchlist_symbols: Vec<(String, i64)> = Vec::new();
         let watchlist_rows: Vec<WatchlistRow> = Vec::new();
 
         // Create async broker channels
@@ -11459,7 +11367,6 @@ impl TyphooNApp {
             mm_trim_pct: "150".to_string(),
             mm_result: String::new(),
             active_tab: 0,
-            watchlist_symbols,
             watchlist_rows,
             user_watchlist: vec!["BTCUSD".into(), "ETHUSD".into(), "SOLUSD".into()],
             watchlist_input: String::new(),
@@ -11588,7 +11495,6 @@ impl TyphooNApp {
             replay_playing: false,
             replay_speed: 2.0,
             replay_timer: 0.0,
-            confirm_close_all: false,
             symbol_suggestions: Vec::new(),
             symbol_ac_selected: 0,
             symbol_ac_visible: false,
@@ -13939,7 +13845,6 @@ impl TyphooNApp {
                             pnl: entry["pnl"].as_f64(),
                             strategy: entry["strategy"].as_str().unwrap_or("").to_string(),
                             notes: entry["notes"].as_str().unwrap_or("").to_string(),
-                            screenshot_path: None,
                         });
                     }
                 }
@@ -14063,11 +13968,6 @@ impl TyphooNApp {
     // ── floating window rendering ────────────────────────────────────────────
 
     /// Whether expensive DB queries should run this frame.
-    /// Returns true once every ~4 seconds (every 16th frame at 4 FPS).
-    #[allow(dead_code)]
-    fn should_query_db(&self) -> bool {
-        self.frame_count % 16 == 0 || self.frame_count < 4
-    }
 
     fn draw_floating_windows(&mut self, ctx: &egui::Context) {
 
@@ -20045,7 +19945,6 @@ impl TyphooNApp {
                                     active: true,
                                     triggered: false,
                                     last_value: None,
-                                    created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string(),
                                 });
                                 self.log.push_back(LogEntry::info(format!(
                                     "Alert: {} {} {} {}",
@@ -20342,8 +20241,7 @@ impl TyphooNApp {
                                 pnl: None,
                                 strategy: "NNFX".to_string(),
                                 notes: String::new(),
-                                screenshot_path: None,
-                            });
+                                });
                         }
                     });
                     ui.separator();
@@ -26476,157 +26374,6 @@ impl eframe::App for TyphooNApp {
     }
 }
 
-// ─── Testable detection helpers (extracted from render logic) ────────────────
-#[allow(dead_code)]
-
-/// Detected order block zone.
-#[derive(Debug, Clone)]
-struct OrderBlock {
-    high: f64,
-    low: f64,
-    bar_idx: usize,
-    is_bull: bool,
-    /// Index where the zone was broken (or bars.len() if still active).
-    end_idx: usize,
-}
-
-#[allow(dead_code)]
-fn detect_order_blocks(bars: &[Bar]) -> Vec<OrderBlock> {
-    if bars.len() < 3 { return Vec::new(); }
-
-    // Compute rolling ATR(14)
-    let atr_period = 14usize;
-    let mut local_atr: Vec<f64> = Vec::with_capacity(bars.len());
-    for i in 0..bars.len() {
-        if i < atr_period {
-            local_atr.push(bars[i].high - bars[i].low);
-        } else {
-            let mut sum = 0.0;
-            for j in (i + 1 - atr_period)..=i {
-                let tr = if j == 0 {
-                    bars[j].high - bars[j].low
-                } else {
-                    let hl = bars[j].high - bars[j].low;
-                    let hc = (bars[j].high - bars[j - 1].close).abs();
-                    let lc = (bars[j].low - bars[j - 1].close).abs();
-                    hl.max(hc).max(lc)
-                };
-                sum += tr;
-            }
-            local_atr.push(sum / atr_period as f64);
-        }
-    }
-
-    let mut zones = Vec::new();
-    for i in 0..bars.len().saturating_sub(1) {
-        let cur = &bars[i];
-        let nxt = &bars[i + 1];
-        let atr = local_atr[i];
-        if atr <= 0.0 { continue; }
-
-        // Bullish OB
-        if cur.close < cur.open && nxt.close > cur.high + atr {
-            let mut end = bars.len();
-            for j in (i + 2)..bars.len() {
-                if bars[j].low <= cur.high { end = j; break; }
-            }
-            zones.push(OrderBlock { high: cur.high, low: cur.low, bar_idx: i, is_bull: true, end_idx: end });
-        }
-
-        // Bearish OB
-        if cur.close > cur.open && nxt.close < cur.low - atr {
-            let mut end = bars.len();
-            for j in (i + 2)..bars.len() {
-                if bars[j].high >= cur.low { end = j; break; }
-            }
-            zones.push(OrderBlock { high: cur.high, low: cur.low, bar_idx: i, is_bull: false, end_idx: end });
-        }
-    }
-    zones
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-struct FairValueGap {
-    /// Index of the middle bar (the gap is between bar[i-1] and bar[i+1]).
-    bar_idx: usize,
-    /// Top of the gap.
-    gap_top: f64,
-    /// Bottom of the gap.
-    gap_bot: f64,
-    /// True if bullish (gap up), false if bearish (gap down).
-    is_bull: bool,
-    /// Whether the gap has been filled by subsequent price action.
-    filled: bool,
-}
-
-#[allow(dead_code)]
-fn detect_fair_value_gaps(bars: &[Bar]) -> Vec<FairValueGap> {
-    if bars.len() < 3 { return Vec::new(); }
-    let mut gaps = Vec::new();
-    for i in 1..bars.len().saturating_sub(1) {
-        let prev = &bars[i - 1];
-        let next = &bars[i + 1];
-
-        // Bullish FVG: bar[i+1].low > bar[i-1].high
-        if next.low > prev.high {
-            let mut filled = false;
-            for j in (i + 2)..bars.len() {
-                if bars[j].low <= prev.high { filled = true; break; }
-            }
-            gaps.push(FairValueGap {
-                bar_idx: i, gap_top: next.low, gap_bot: prev.high,
-                is_bull: true, filled,
-            });
-        }
-
-        // Bearish FVG: bar[i+1].high < bar[i-1].low
-        if next.high < prev.low {
-            let mut filled = false;
-            for j in (i + 2)..bars.len() {
-                if bars[j].high >= prev.low { filled = true; break; }
-            }
-            gaps.push(FairValueGap {
-                bar_idx: i, gap_top: prev.low, gap_bot: next.high,
-                is_bull: false, filled,
-            });
-        }
-    }
-    gaps
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq)]
-enum MarketStructureLabel { HH, HL, LH, LL }
-
-#[allow(dead_code)]
-fn detect_market_structure(bars: &[Bar], fractal_up: &[bool], fractal_down: &[bool])
-    -> (Vec<(usize, MarketStructureLabel)>, Vec<(usize, MarketStructureLabel)>)
-{
-    let mut high_labels = Vec::new();
-    let mut low_labels = Vec::new();
-    let mut prev_swing_high: Option<f64> = None;
-    let mut prev_swing_low: Option<f64> = None;
-
-    for i in 0..bars.len() {
-        if i < fractal_up.len() && fractal_up[i] {
-            if let Some(prev_h) = prev_swing_high {
-                let label = if bars[i].high > prev_h { MarketStructureLabel::HH } else { MarketStructureLabel::LH };
-                high_labels.push((i, label));
-            }
-            prev_swing_high = Some(bars[i].high);
-        }
-        if i < fractal_down.len() && fractal_down[i] {
-            if let Some(prev_l) = prev_swing_low {
-                let label = if bars[i].low > prev_l { MarketStructureLabel::HL } else { MarketStructureLabel::LL };
-                low_labels.push((i, label));
-            }
-            prev_swing_low = Some(bars[i].low);
-        }
-    }
-    (high_labels, low_labels)
-}
-
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -27436,260 +27183,6 @@ mod tests {
             });
         }
         bars
-    }
-
-    #[test]
-    fn test_order_block_bullish_detected() {
-        let bars = make_ob_bars_bullish();
-        let obs = detect_order_blocks(&bars);
-        let bull_obs: Vec<_> = obs.iter().filter(|ob| ob.is_bull).collect();
-        assert!(!bull_obs.is_empty(), "Should detect at least one bullish OB");
-        // The OB candle should be at or near index 20
-        let ob = &bull_obs[bull_obs.len() - 1];
-        assert_eq!(ob.bar_idx, 20, "Bullish OB should be at bar 20");
-        assert!(ob.high <= 102.0 + 0.01, "OB high should be the candle high");
-        assert!(ob.low >= 97.99, "OB low should be the candle low");
-    }
-
-    #[test]
-    fn test_order_block_bearish_detected() {
-        let mut bars = Vec::new();
-        // 20 bars of flat range around 100
-        for i in 0..20 {
-            bars.push(Bar {
-                ts_ms: 1700000000000 + i as i64 * 3600000,
-                open: 99.5, high: 101.5, low: 98.5, close: 100.5,
-                volume: 1000.0,
-            });
-        }
-        // Bar 20: bullish candle (close > open)
-        bars.push(Bar {
-            ts_ms: 1700000000000 + 20 * 3600000,
-            open: 99.0, high: 102.0, low: 98.0, close: 101.0,
-            volume: 1500.0,
-        });
-        // Bar 21: strong down move — close < bar[20].low - ATR
-        // ATR ~3.0, need close < 98 - 3 = 95
-        bars.push(Bar {
-            ts_ms: 1700000000000 + 21 * 3600000,
-            open: 100.0, high: 100.5, low: 91.0, close: 92.0,
-            volume: 3000.0,
-        });
-        // Trailing bars that stay below
-        for i in 22..30 {
-            bars.push(Bar {
-                ts_ms: 1700000000000 + i as i64 * 3600000,
-                open: 92.0, high: 93.0, low: 90.0, close: 91.0,
-                volume: 1000.0,
-            });
-        }
-        let obs = detect_order_blocks(&bars);
-        let bear_obs: Vec<_> = obs.iter().filter(|ob| !ob.is_bull).collect();
-        assert!(!bear_obs.is_empty(), "Should detect at least one bearish OB");
-        let ob = &bear_obs[bear_obs.len() - 1];
-        assert_eq!(ob.bar_idx, 20, "Bearish OB should be at bar 20");
-    }
-
-    #[test]
-    fn test_order_block_none_in_flat_market() {
-        // Flat bars with no impulsive moves — should produce no OBs
-        let mut bars = Vec::new();
-        for i in 0..50 {
-            bars.push(Bar {
-                ts_ms: 1700000000000 + i as i64 * 3600000,
-                open: 100.0, high: 100.5, low: 99.5, close: 100.0,
-                volume: 1000.0,
-            });
-        }
-        let obs = detect_order_blocks(&bars);
-        assert!(obs.is_empty(), "Flat market should produce no order blocks");
-    }
-
-    #[test]
-    fn test_order_block_too_few_bars() {
-        let bars = make_bars(2);
-        let obs = detect_order_blocks(&bars);
-        assert!(obs.is_empty(), "Too few bars should return empty");
-    }
-
-    // ── Fair Value Gaps detection ────────────────────────────────────────
-
-    #[test]
-    fn test_fvg_bullish_detected() {
-        // Create a clear bullish gap: bar[2].low > bar[0].high
-        let bars = vec![
-            Bar { ts_ms: 1700000000000, open: 100.0, high: 102.0, low: 99.0, close: 101.0, volume: 1000.0 },
-            Bar { ts_ms: 1700000000000 + 3600000, open: 102.0, high: 105.0, low: 101.5, close: 104.0, volume: 1500.0 },
-            Bar { ts_ms: 1700000000000 + 7200000, open: 105.0, high: 108.0, low: 103.0, close: 107.0, volume: 1200.0 },
-        ];
-        // bar[2].low (103) > bar[0].high (102) → bullish FVG
-        let gaps = detect_fair_value_gaps(&bars);
-        let bull: Vec<_> = gaps.iter().filter(|g| g.is_bull).collect();
-        assert!(!bull.is_empty(), "Should detect bullish FVG");
-        assert_eq!(bull[0].bar_idx, 1, "FVG middle bar should be index 1");
-        assert!((bull[0].gap_top - 103.0).abs() < 0.01, "Gap top = bar[2].low = 103");
-        assert!((bull[0].gap_bot - 102.0).abs() < 0.01, "Gap bot = bar[0].high = 102");
-    }
-
-    #[test]
-    fn test_fvg_bearish_detected() {
-        // bar[2].high < bar[0].low → bearish FVG
-        let bars = vec![
-            Bar { ts_ms: 1700000000000, open: 105.0, high: 107.0, low: 103.0, close: 104.0, volume: 1000.0 },
-            Bar { ts_ms: 1700000000000 + 3600000, open: 103.0, high: 103.5, low: 99.0, close: 99.5, volume: 1500.0 },
-            Bar { ts_ms: 1700000000000 + 7200000, open: 99.0, high: 102.0, low: 97.0, close: 98.0, volume: 1200.0 },
-        ];
-        // bar[2].high (102) < bar[0].low (103) → bearish FVG
-        let gaps = detect_fair_value_gaps(&bars);
-        let bear: Vec<_> = gaps.iter().filter(|g| !g.is_bull).collect();
-        assert!(!bear.is_empty(), "Should detect bearish FVG");
-        assert_eq!(bear[0].bar_idx, 1);
-        assert!((bear[0].gap_top - 103.0).abs() < 0.01, "Gap top = bar[0].low");
-        assert!((bear[0].gap_bot - 102.0).abs() < 0.01, "Gap bot = bar[2].high");
-    }
-
-    #[test]
-    fn test_fvg_filled_gap() {
-        // Bullish gap that gets filled by a subsequent bar
-        let bars = vec![
-            Bar { ts_ms: 1700000000000, open: 100.0, high: 102.0, low: 99.0, close: 101.0, volume: 1000.0 },
-            Bar { ts_ms: 1700000000000 + 3600000, open: 102.5, high: 106.0, low: 102.0, close: 105.0, volume: 1500.0 },
-            Bar { ts_ms: 1700000000000 + 7200000, open: 105.0, high: 108.0, low: 103.0, close: 107.0, volume: 1200.0 },
-            // Bar 3: drops back down and fills the gap (low <= bar[0].high = 102)
-            Bar { ts_ms: 1700000000000 + 10800000, open: 106.0, high: 106.5, low: 101.0, close: 102.0, volume: 2000.0 },
-        ];
-        // bar[2].low (103) > bar[0].high (102) → bullish FVG, but bar[3] fills it
-        let gaps = detect_fair_value_gaps(&bars);
-        let bull: Vec<_> = gaps.iter().filter(|g| g.is_bull).collect();
-        assert!(!bull.is_empty(), "Should detect the FVG");
-        assert!(bull[0].filled, "Gap should be marked as filled");
-    }
-
-    #[test]
-    fn test_fvg_unfilled_gap() {
-        // Gap that stays open
-        let bars = vec![
-            Bar { ts_ms: 1700000000000, open: 100.0, high: 102.0, low: 99.0, close: 101.0, volume: 1000.0 },
-            Bar { ts_ms: 1700000000000 + 3600000, open: 103.0, high: 106.0, low: 102.5, close: 105.0, volume: 1500.0 },
-            Bar { ts_ms: 1700000000000 + 7200000, open: 105.0, high: 108.0, low: 103.0, close: 107.0, volume: 1200.0 },
-            // Subsequent bars stay above the gap
-            Bar { ts_ms: 1700000000000 + 10800000, open: 107.0, high: 109.0, low: 105.0, close: 108.0, volume: 1000.0 },
-            Bar { ts_ms: 1700000000000 + 14400000, open: 108.0, high: 110.0, low: 106.0, close: 109.0, volume: 1000.0 },
-        ];
-        let gaps = detect_fair_value_gaps(&bars);
-        let bull: Vec<_> = gaps.iter().filter(|g| g.is_bull).collect();
-        assert!(!bull.is_empty(), "Should detect the FVG");
-        assert!(!bull[0].filled, "Gap should remain unfilled");
-    }
-
-    #[test]
-    fn test_fvg_no_gap_in_overlapping_bars() {
-        // Bars that overlap — no gaps
-        let bars = vec![
-            Bar { ts_ms: 1700000000000, open: 100.0, high: 103.0, low: 99.0, close: 102.0, volume: 1000.0 },
-            Bar { ts_ms: 1700000000000 + 3600000, open: 102.0, high: 104.0, low: 100.0, close: 103.0, volume: 1000.0 },
-            Bar { ts_ms: 1700000000000 + 7200000, open: 103.0, high: 105.0, low: 101.0, close: 104.0, volume: 1000.0 },
-        ];
-        let gaps = detect_fair_value_gaps(&bars);
-        assert!(gaps.is_empty(), "Overlapping bars should produce no FVGs");
-    }
-
-    #[test]
-    fn test_fvg_too_few_bars() {
-        let bars = make_bars(2);
-        let gaps = detect_fair_value_gaps(&bars);
-        assert!(gaps.is_empty());
-    }
-
-    // ── Market Structure labels ──────────────────────────────────────────
-
-    #[test]
-    fn test_market_structure_hh_hl() {
-        // Create bars with ascending swing highs and ascending swing lows
-        // Fractal up at bars 2, 7, 12 with increasing highs → HH
-        // Fractal down at bars 4, 9 with increasing lows → HL
-        let mut bars = Vec::new();
-        for i in 0..15 {
-            bars.push(Bar {
-                ts_ms: 1700000000000 + i as i64 * 3600000,
-                open: 100.0 + i as f64,
-                high: 102.0 + i as f64,  // ascending highs
-                low: 98.0 + i as f64,    // ascending lows
-                close: 101.0 + i as f64,
-                volume: 1000.0,
-            });
-        }
-        let mut frac_up = vec![false; 15];
-        let mut frac_down = vec![false; 15];
-        frac_up[2] = true;   // high = 104
-        frac_up[7] = true;   // high = 109
-        frac_up[12] = true;  // high = 114
-        frac_down[4] = true;  // low = 102
-        frac_down[9] = true;  // low = 107
-
-        let (highs, lows) = detect_market_structure(&bars, &frac_up, &frac_down);
-
-        // Second swing high (bar 7, high=109) > first (bar 2, high=104) → HH
-        assert_eq!(highs.len(), 2);
-        assert_eq!(highs[0], (7, MarketStructureLabel::HH));
-        assert_eq!(highs[1], (12, MarketStructureLabel::HH));
-
-        // Second swing low (bar 9, low=107) > first (bar 4, low=102) → HL
-        assert_eq!(lows.len(), 1);
-        assert_eq!(lows[0], (9, MarketStructureLabel::HL));
-    }
-
-    #[test]
-    fn test_market_structure_lh_ll() {
-        // Descending swing highs and descending swing lows
-        let mut bars = Vec::new();
-        for i in 0..15 {
-            bars.push(Bar {
-                ts_ms: 1700000000000 + i as i64 * 3600000,
-                open: 120.0 - i as f64,
-                high: 122.0 - i as f64,  // descending highs
-                low: 118.0 - i as f64,   // descending lows
-                close: 119.0 - i as f64,
-                volume: 1000.0,
-            });
-        }
-        let mut frac_up = vec![false; 15];
-        let mut frac_down = vec![false; 15];
-        frac_up[3] = true;   // high = 119
-        frac_up[8] = true;   // high = 114
-        frac_down[5] = true;  // low = 113
-        frac_down[10] = true; // low = 108
-
-        let (highs, lows) = detect_market_structure(&bars, &frac_up, &frac_down);
-
-        // bar 8 high (114) < bar 3 high (119) → LH
-        assert_eq!(highs.len(), 1);
-        assert_eq!(highs[0], (8, MarketStructureLabel::LH));
-
-        // bar 10 low (108) < bar 5 low (113) → LL
-        assert_eq!(lows.len(), 1);
-        assert_eq!(lows[0], (10, MarketStructureLabel::LL));
-    }
-
-    #[test]
-    fn test_market_structure_no_fractals() {
-        let bars = make_bars(10);
-        let frac_up = vec![false; 10];
-        let frac_down = vec![false; 10];
-        let (highs, lows) = detect_market_structure(&bars, &frac_up, &frac_down);
-        assert!(highs.is_empty());
-        assert!(lows.is_empty());
-    }
-
-    #[test]
-    fn test_market_structure_single_fractal() {
-        // Only one swing high — no previous to compare against, so no labels
-        let bars = make_bars(10);
-        let mut frac_up = vec![false; 10];
-        frac_up[5] = true;
-        let frac_down = vec![false; 10];
-        let (highs, _) = detect_market_structure(&bars, &frac_up, &frac_down);
-        assert!(highs.is_empty(), "Single fractal should produce no label (no prior to compare)");
     }
 
     // ── BetterVolume extended tests ─────────────────────────────────────

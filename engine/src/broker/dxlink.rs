@@ -11,9 +11,6 @@ use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const DXLINK_VERSION: &str = "0.1-DXF-JS/0.3.0";
-/// Keepalive interval for persistent connections (not used in one-shot fetch_candles).
-#[allow(dead_code)]
-const KEEPALIVE_SECS: u64 = 30;
 
 /// DXLink streaming token + URL from tastytrade REST API.
 #[derive(Debug, Clone)]
