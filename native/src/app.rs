@@ -2800,8 +2800,8 @@ fn compute_donchian(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Optio
         min_dq.push_back(i);
         while min_dq.front().map_or(false, |&j| j + period <= i) { min_dq.pop_front(); }
         if i >= period - 1 {
-            upper[i] = Some(bars[*max_dq.front().unwrap()].high);
-            lower[i] = Some(bars[*min_dq.front().unwrap()].low);
+            upper[i] = Some(bars[*max_dq.front().unwrap_or(&0)].high);
+            lower[i] = Some(bars[*min_dq.front().unwrap_or(&0)].low);
         }
     }
     (upper, lower)
@@ -2990,8 +2990,8 @@ fn compute_fisher(bars: &[Bar], period: usize) -> (Vec<Option<f64>>, Vec<Option<
 
         if i < period { continue; }
 
-        let hi = bars[*max_dq.front().unwrap()].high;
-        let lo = bars[*min_dq.front().unwrap()].low;
+        let hi = bars[*max_dq.front().unwrap_or(&0)].high;
+        let lo = bars[*min_dq.front().unwrap_or(&0)].low;
         let mid = (bars[i].high + bars[i].low) / 2.0;
 
         let range = hi - lo;
@@ -3453,8 +3453,8 @@ fn compute_stochastic(bars: &[Bar], k_period: usize, k_smooth: usize, d_smooth: 
         while min_dq.front().map_or(false, |&j| j + k_period <= i) { min_dq.pop_front(); }
 
         if i >= k_period - 1 {
-            let hi = bars[*max_dq.front().unwrap()].high;
-            let lo = bars[*min_dq.front().unwrap()].low;
+            let hi = bars[*max_dq.front().unwrap_or(&0)].high;
+            let lo = bars[*min_dq.front().unwrap_or(&0)].low;
             let range = hi - lo;
             raw_k[i] = Some(if range < f64::EPSILON { 50.0 } else { (bars[i].close - lo) / range * 100.0 });
         }
@@ -3660,8 +3660,8 @@ fn compute_williams_r(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
         min_dq.push_back(i);
         while min_dq.front().map_or(false, |&j| j + period <= i) { min_dq.pop_front(); }
         if i >= period - 1 {
-            let hi = bars[*max_dq.front().unwrap()].high;
-            let lo = bars[*min_dq.front().unwrap()].low;
+            let hi = bars[*max_dq.front().unwrap_or(&0)].high;
+            let lo = bars[*min_dq.front().unwrap_or(&0)].low;
             let range = hi - lo;
             out[i] = if range < f64::EPSILON { Some(-50.0) } else { Some(-100.0 * (hi - bars[i].close) / range) };
         }
@@ -3756,7 +3756,7 @@ fn compute_atr_projection_levels(bars: &[Bar], chart_tf_minutes: u32) -> Vec<(&'
 
         // Find the current HTF period open: the open of the first bar that starts the current HTF candle
         // Walk backward from the last bar to find where the HTF period boundary is
-        let last_ts = bars.last().unwrap().ts_ms;
+        let last_ts = match bars.last() { Some(b) => b.ts_ms, None => return Vec::new() };
         let htf_secs = htf_minutes as i64 * 60;
         // For monthly, align to start of month; for weekly, align to Monday 00:00 UTC
         let current_htf_start = if htf_minutes >= 43200 {
@@ -4633,8 +4633,8 @@ fn draw_chart(
                     } else { false };
                     if in_session && block_start.is_none() {
                         block_start = Some(i);
-                    } else if !in_session && block_start.is_some() {
-                        let bs = block_start.unwrap();
+                    } else if !in_session {
+                        let bs = match block_start { Some(v) => v, None => continue };
                         let x1 = chart_rect.left() + bs as f32 * bar_w;
                         let x2 = (chart_rect.left() + i as f32 * bar_w).min(chart_rect.right());
                         painter.rect_filled(egui::Rect::from_min_max(egui::pos2(x1, chart_rect.top()), egui::pos2(x2, chart_rect.bottom())), 0.0, color);
@@ -10192,7 +10192,7 @@ impl TyphooNApp {
                         let shared_cache_broker = shared_cache_broker.clone();
                         std::thread::spawn(move || {
                             let rt = tokio::runtime::Builder::new_current_thread()
-                                .enable_all().build().unwrap();
+                                .enable_all().build().expect("tokio runtime");
                             rt.block_on(async {
                                 match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
                                     Ok(cache) => {
@@ -10272,7 +10272,7 @@ impl TyphooNApp {
                         let shared_cache_broker = shared_cache_broker.clone();
                         std::thread::spawn(move || {
                             let rt = tokio::runtime::Builder::new_current_thread()
-                                .enable_all().build().unwrap();
+                                .enable_all().build().expect("tokio runtime");
                             rt.block_on(async {
                                 match shared_cache_broker.read().ok().and_then(|g| g.clone()).ok_or("Cache not ready".to_string()) {
                                     Ok(cache) => {
@@ -11614,7 +11614,7 @@ impl TyphooNApp {
                             }
                         }
                     }
-                    let conn = bg_conn.as_ref().unwrap();
+                    let conn = match bg_conn.as_ref() { Some(c) => c, None => continue };
 
                     if let Some(ref cache) = cache_arc {
                         let phase_start = std::time::Instant::now();
@@ -12410,7 +12410,7 @@ impl TyphooNApp {
             if !fill_sym.contains(&bare_upper) && !bare_upper.contains(&fill_sym) { continue; }
             let ts = chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%dT%H:%M:%S%.fZ")
                 .or_else(|_| chrono::NaiveDateTime::parse_from_str(time, "%Y-%m-%d %H:%M:%S"))
-                .or_else(|_| chrono::NaiveDate::parse_from_str(time, "%Y-%m-%d").map(|d| d.and_hms_opt(0, 0, 0).unwrap()))
+                .or_else(|_| chrono::NaiveDate::parse_from_str(time, "%Y-%m-%d").map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default()))
                 .map(|dt| dt.and_utc().timestamp_millis())
                 .unwrap_or(0);
             if let Some(bar_idx) = find_bar(ts) {
@@ -13017,7 +13017,7 @@ impl TyphooNApp {
             "OBJECTS" | "OBJECT_LIST" => { self.show_object_list = !self.show_object_list; }
             // Timeframe shortcuts — any TF label works (M1, M2, H6, D3, Y1, etc.)
             _ if Timeframe::from_label(&cmd_upper).is_some() => {
-                let tf = Timeframe::from_label(&cmd_upper).unwrap();
+                let tf = match Timeframe::from_label(&cmd_upper) { Some(t) => t, None => return };
                 let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_else(|| self.symbol_input.clone());
                 self.reload_symbol(&sym, tf);
             }
@@ -14611,8 +14611,7 @@ impl TyphooNApp {
 
                     // ── Per-account detail cards with charts ─────────────────────
                     for det in &self.bg.account_details {
-                        if det.summary.is_none() { continue; }
-                        let summary = det.summary.as_ref().unwrap();
+                        let summary = match det.summary.as_ref() { Some(s) => s, None => continue };
                         ui.add_space(6.0);
                         ui.separator();
 

@@ -1137,6 +1137,7 @@ impl SqliteCache {
     pub fn delete_all_darwin(&self) -> Result<u64, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
         let mut total = 0u64;
+        // Table names are compile-time constants, not user input — safe for format!()
         for table in &["darwin_deals", "darwin_positions", "darwin_equity_snapshots", "darwin_accounts"] {
             let deleted = conn.execute(&format!("DELETE FROM {}", table), []).unwrap_or(0) as u64;
             total += deleted;
