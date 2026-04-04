@@ -1,6 +1,6 @@
 # ADR-040: Crypto Data Source Hierarchy — CryptoCompare + Kraken
 
-**Status:** Implemented (Updated 2026-03-27)
+**Status:** Implemented (Updated 2026-04-03)
 **Date:** 2026-03-22 | **Updated:** 2026-03-27
 
 ## Context

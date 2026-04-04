@@ -75,7 +75,7 @@ WebSocket messages over TLS-encrypted TCP (wss://), authenticated with PBKDF2-de
 - Connects to server IP:port (wss://, TLS encrypted)
 - Authenticates via HMAC challenge-response (PBKDF2 100K iterations)
 - Requests metadata, compares timestamps, fetches only newer entries
-- **15-second periodic re-sync**: pulls updated bars, KV, DARWIN, research tables automatically
+- **15-minute periodic re-sync**: pulls updated bars, KV, DARWIN, research tables automatically (force-reconnect triggers incremental sync; picks up weekend crypto backfill bars)
 - Auto-connects on startup if `lan_client_enabled` is saved in session
 - Read-only view of server's Alpaca positions/orders/account (from KV cache `broker:*`)
 - **23 DARWIN analytics fields** from server KV — zero local deal queries. Positions, portfolio, exposure, correlations, VaR, Monte Carlo, optimal allocation, rebalance, stress tests, drawdown, signal decay, etc. All identical to server.
@@ -113,6 +113,14 @@ When a `RemoteRequestDone` message arrives from the server (after SEC scrape, ba
 - Status indicator in dashboard showing sync state (connected, syncing, disconnected)
 - Passphrase prompt on first setup
 
+#### KV Exclusion List
+
+Machine-local configuration keys are **never synced** to other nodes:
+- `lan:server_enabled`, `lan:client_enabled`, `lan:server_ip`, `lan:sync_port`
+- `cred:*` (credentials — never leave the machine)
+
+Previously, syncing `lan:server_enabled = "true"` from server to clients caused clients to auto-start a LAN server on next launch. The server-side `RequestKvData` handler now filters these keys before transmission. Client-side startup also reads `lan:client_enabled` first and sanitizes any stale `lan:server_enabled` in local DB.
+
 ## Security
 
 - All traffic over TLS-encrypted WebSocket (wss://) with ephemeral self-signed certificates
@@ -121,6 +129,7 @@ When a `RemoteRequestDone` message arrives from the server (after SEC scrape, ba
 - 300-second read timeout during initial sync (DARWIN export of 45K+ deals takes >60s)
 - PBKDF2 key derivation makes brute-force impractical
 - LAN-only — no internet exposure by default (bind to 0.0.0.0, but router NAT provides isolation)
+- Machine-local KV keys excluded from sync to prevent topology poisoning
 
 ## Consequences
 

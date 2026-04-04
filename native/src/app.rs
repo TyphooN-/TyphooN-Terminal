@@ -6196,17 +6196,68 @@ fn draw_chart(
     }
 
     // ── drawing annotations ──────────────────────────────────────────────────
+    // Helper: draw a line segment respecting the per-drawing LineStyle.
+    let draw_line = |painter: &egui::Painter, p1: egui::Pos2, p2: egui::Pos2, stroke: egui::Stroke, style: LineStyle| {
+        match style {
+            LineStyle::Solid => { painter.line_segment([p1, p2], stroke); }
+            LineStyle::Dashed => {
+                let dx = p2.x - p1.x; let dy = p2.y - p1.y;
+                let len = (dx*dx + dy*dy).sqrt();
+                if len < 0.1 { return; }
+                let (nx, ny) = (dx / len, dy / len);
+                let dash = 8.0f32; let gap = 5.0f32;
+                let mut t = 0.0f32;
+                while t < len {
+                    let t1 = (t + dash).min(len);
+                    painter.line_segment([
+                        egui::pos2(p1.x + nx * t, p1.y + ny * t),
+                        egui::pos2(p1.x + nx * t1, p1.y + ny * t1),
+                    ], stroke);
+                    t += dash + gap;
+                }
+            }
+            LineStyle::Dotted => {
+                let dx = p2.x - p1.x; let dy = p2.y - p1.y;
+                let len = (dx*dx + dy*dy).sqrt();
+                if len < 0.1 { return; }
+                let (nx, ny) = (dx / len, dy / len);
+                let dot = stroke.width.max(2.0); let gap = 4.0f32;
+                let mut t = 0.0f32;
+                while t < len {
+                    let t1 = (t + dot).min(len);
+                    painter.line_segment([
+                        egui::pos2(p1.x + nx * t, p1.y + ny * t),
+                        egui::pos2(p1.x + nx * t1, p1.y + ny * t1),
+                    ], stroke);
+                    t += dot + gap;
+                }
+            }
+        }
+    };
+
     for (draw_idx, drawing) in chart.drawings.iter().enumerate() {
         // Per-drawing style: line width + style (with fallback defaults)
-        let (_d_width, _d_style) = chart.drawing_styles.get(draw_idx).copied().unwrap_or((1.5, LineStyle::Solid));
-        let _is_selected = chart.selected_drawing == Some(draw_idx);
+        let (d_width, d_style) = chart.drawing_styles.get(draw_idx).copied().unwrap_or((1.5, LineStyle::Solid));
+        let is_selected = chart.selected_drawing == Some(draw_idx);
+        // Selection: boost width and tint color slightly cyan
+        let sel_boost = if is_selected { 1.5 } else { 0.0 };
+        let effective_width = d_width + sel_boost;
+        // Tint helper: if selected, blend color toward cyan for visibility
+        let sel_tint = |c: egui::Color32| -> egui::Color32 {
+            if !is_selected { return c; }
+            egui::Color32::from_rgb(
+                c.r().saturating_add(30),
+                c.g().saturating_add(50),
+                c.b().saturating_add(80),
+            )
+        };
         match drawing {
             Drawing::HLine { price, color } => {
                 let y = price_to_y(*price);
                 if y >= chart_rect.top() && y <= chart_rect.bottom() {
-                    painter.line_segment(
-                        [egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)],
-                        egui::Stroke::new(1.0, *color),
+                    draw_line(&painter,
+                        egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y),
+                        egui::Stroke::new(effective_width, sel_tint(*color)), d_style,
                     );
                     painter.text(
                         egui::pos2(chart_rect.right() - 60.0, y - 10.0),
@@ -6228,9 +6279,9 @@ fn draw_chart(
                 if let (Some(x1), Some(x2)) = (x1, x2) {
                     let y1 = price_to_y(p1.1);
                     let y2 = price_to_y(p2.1);
-                    painter.line_segment(
-                        [egui::pos2(x1, y1), egui::pos2(x2, y2)],
-                        egui::Stroke::new(1.5, *color),
+                    draw_line(&painter,
+                        egui::pos2(x1, y1), egui::pos2(x2, y2),
+                        egui::Stroke::new(effective_width, sel_tint(*color)), d_style,
                     );
                 }
             }
@@ -6264,9 +6315,9 @@ fn draw_chart(
             Drawing::VLine { bar_idx, color } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
                     let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
-                    painter.line_segment(
-                        [egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom())],
-                        egui::Stroke::new(1.0, *color),
+                    draw_line(&painter,
+                        egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom()),
+                        egui::Stroke::new(effective_width, sel_tint(*color)), d_style,
                     );
                 }
             }
@@ -6278,7 +6329,7 @@ fn draw_chart(
                     let y2 = price_to_y(p2.1);
                     let r = egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2));
                     painter.rect_filled(r, 0.0, *color);
-                    painter.rect_stroke(r, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(color.r(), color.g(), color.b())), egui::StrokeKind::Outside);
+                    painter.rect_stroke(r, 0.0, egui::Stroke::new(effective_width, sel_tint(*color)), egui::StrokeKind::Outside);
                 }
             }
             Drawing::Ray { origin, slope, color } => {
@@ -6288,7 +6339,10 @@ fn draw_chart(
                     let bars_to_edge = ((chart_rect.right() - x1) / bar_w) as f64;
                     let end_price = origin.1 + slope * bars_to_edge;
                     let y2 = price_to_y(end_price);
-                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(chart_rect.right(), y2)], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter,
+                        egui::pos2(x1, y1), egui::pos2(chart_rect.right(), y2),
+                        egui::Stroke::new(effective_width, sel_tint(*color)), d_style,
+                    );
                 }
             }
             Drawing::Channel { p1, p2, width, color } => {
@@ -6299,8 +6353,9 @@ fn draw_chart(
                     let y2 = price_to_y(p2.1);
                     let y1b = price_to_y(p1.1 + width);
                     let y2b = price_to_y(p2.1 + width);
-                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
-                    painter.line_segment([egui::pos2(x1, y1b), egui::pos2(x2, y2b)], egui::Stroke::new(1.0, *color));
+                    let sc = sel_tint(*color);
+                    draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sc), d_style);
+                    draw_line(&painter, egui::pos2(x1, y1b), egui::pos2(x2, y2b), egui::Stroke::new(effective_width, sc), d_style);
                     let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 20);
                     let poly = vec![egui::pos2(x1, y1), egui::pos2(x2, y2), egui::pos2(x2, y2b), egui::pos2(x1, y1b)];
                     painter.add(egui::Shape::convex_polygon(poly, fill, egui::Stroke::NONE));
@@ -6314,26 +6369,29 @@ fn draw_chart(
                     let price_at_end = p1.1 + slope * (end_idx as f64 - p1.0 as f64);
                     let y1 = price_to_y(price_at_start);
                     let y2 = price_to_y(price_at_end);
-                    painter.line_segment([egui::pos2(chart_rect.left(), y1), egui::pos2(chart_rect.right(), y2)], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter,
+                        egui::pos2(chart_rect.left(), y1), egui::pos2(chart_rect.right(), y2),
+                        egui::Stroke::new(effective_width, sel_tint(*color)), d_style,
+                    );
                 }
             }
             Drawing::HRay { bar_idx, price, color } => {
-                if *bar_idx >= start_idx && *bar_idx < end_idx {
-                    let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
-                    let y = price_to_y(*price);
-                    painter.line_segment([egui::pos2(x, y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, *color));
-                } else if *bar_idx < start_idx {
-                    // Bar is to the left of visible range — still draw across full width
-                    let y = price_to_y(*price);
-                    painter.line_segment([egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, *color));
-                }
+                let y = price_to_y(*price);
+                let x_start = if *bar_idx >= start_idx && *bar_idx < end_idx {
+                    chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w
+                } else { chart_rect.left() }; // bar left of view — draw full width
+                draw_line(&painter,
+                    egui::pos2(x_start, y), egui::pos2(chart_rect.right(), y),
+                    egui::Stroke::new(effective_width, sel_tint(*color)), d_style,
+                );
             }
             Drawing::CrossLine { bar_idx, price, color } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
                     let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
-                    painter.line_segment([egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom())], egui::Stroke::new(1.0, *color));
-                    painter.line_segment([egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, *color));
+                    let sc = sel_tint(*color); let sw = egui::Stroke::new(effective_width, sc);
+                    draw_line(&painter, egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom()), sw, d_style);
+                    draw_line(&painter, egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y), sw, d_style);
                 }
             }
             Drawing::ArrowLine { p1, p2, color } => {
@@ -6342,7 +6400,8 @@ fn draw_chart(
                 if let (Some(x1), Some(x2)) = (x1, x2) {
                     let y1 = price_to_y(p1.1);
                     let y2 = price_to_y(p2.1);
-                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                    let sc = sel_tint(*color);
+                    draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sc), d_style);
                     // Arrowhead at p2
                     let dx = x2 - x1; let dy = y2 - y1;
                     let len = (dx * dx + dy * dy).sqrt().max(1.0);
@@ -6352,7 +6411,7 @@ fn draw_chart(
                     let ay = y2 - uy * sz - ux * sz * 0.4;
                     let bx = x2 - ux * sz - uy * sz * 0.4;
                     let by = y2 - uy * sz + ux * sz * 0.4;
-                    painter.add(egui::Shape::convex_polygon(vec![egui::pos2(x2, y2), egui::pos2(ax, ay), egui::pos2(bx, by)], *color, egui::Stroke::NONE));
+                    painter.add(egui::Shape::convex_polygon(vec![egui::pos2(x2, y2), egui::pos2(ax, ay), egui::pos2(bx, by)], sc, egui::Stroke::NONE));
                 }
             }
             Drawing::InfoLine { p1, p2, color } => {
@@ -6361,7 +6420,7 @@ fn draw_chart(
                 if let (Some(x1), Some(x2)) = (x1, x2) {
                     let y1 = price_to_y(p1.1);
                     let y2 = price_to_y(p2.1);
-                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.0, *color));
+                    draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sel_tint(*color)), d_style);
                     // Info label: distance, percent, bars
                     let dist = p2.1 - p1.1;
                     let pct = if p1.1.abs() > f64::EPSILON { dist / p1.1 * 100.0 } else { 0.0 };
@@ -6387,13 +6446,14 @@ fn draw_chart(
                     let dx = mid_x - xp; let dy = mid_y - yp;
                     let ext = if dx.abs() > 0.1 { (chart_rect.right() - xp) / dx } else { 1.0 };
                     let end_x = xp + dx * ext; let end_y = yp + dy * ext;
-                    painter.line_segment([egui::pos2(xp, yp), egui::pos2(end_x, end_y)], egui::Stroke::new(1.5, *color));
+                    let sc = sel_tint(*color); let sw = egui::Stroke::new(effective_width, sc);
+                    draw_line(&painter, egui::pos2(xp, yp), egui::pos2(end_x, end_y), sw, d_style);
                     // Upper line (through p2, parallel to median)
                     let ux = x2 + dx * ext; let uy = y2 + dy * ext;
-                    painter.line_segment([egui::pos2(x2, y2), egui::pos2(ux.min(chart_rect.right()), uy)], egui::Stroke::new(1.0, *color));
+                    draw_line(&painter, egui::pos2(x2, y2), egui::pos2(ux.min(chart_rect.right()), uy), sw, d_style);
                     // Lower line (through p3, parallel to median)
                     let lx = x3 + dx * ext; let ly = y3 + dy * ext;
-                    painter.line_segment([egui::pos2(x3, y3), egui::pos2(lx.min(chart_rect.right()), ly)], egui::Stroke::new(1.0, *color));
+                    draw_line(&painter, egui::pos2(x3, y3), egui::pos2(lx.min(chart_rect.right()), ly), sw, d_style);
                 }
             }
             Drawing::FiboExtension { p1, p2, p3, color } => {
@@ -6406,13 +6466,15 @@ fn draw_chart(
                     let dir = if p2.1 > p1.1 { 1.0 } else { -1.0 };
                     let levels = [0.0, 0.618, 1.0, 1.272, 1.618, 2.0, 2.618];
                     let names = ["0%", "61.8%", "100%", "127.2%", "161.8%", "200%", "261.8%"];
+                    let sc = sel_tint(*color);
                     for (i, &lvl) in levels.iter().enumerate() {
                         let price = base + dir * range * lvl;
                         let y = price_to_y(price);
                         if y >= chart_rect.top() && y <= chart_rect.bottom() {
                             let alpha = if lvl == 1.0 || lvl == 1.618 { 180 } else { 100 };
-                            let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
-                            painter.line_segment([egui::pos2(x3, y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, c));
+                            let c = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), alpha);
+                            let lw = if lvl == 1.0 || lvl == 1.618 { effective_width } else { effective_width * 0.65 };
+                            draw_line(&painter, egui::pos2(x3, y), egui::pos2(chart_rect.right(), y), egui::Stroke::new(lw, c), d_style);
                             painter.text(egui::pos2(chart_rect.right() - 60.0, y - 10.0), egui::Align2::LEFT_BOTTOM, names[i], egui::FontId::monospace(9.0), c);
                         }
                     }
@@ -6424,19 +6486,20 @@ fn draw_chart(
                     let oy = price_to_y(origin.1);
                     // Gann angles: 1×8, 1×4, 1×3, 1×2, 1×1, 2×1, 3×1, 4×1, 8×1
                     let ratios: &[(f64, &str)] = &[(0.125,"1×8"),(0.25,"1×4"),(0.333,"1×3"),(0.5,"1×2"),(1.0,"1×1"),(2.0,"2×1"),(3.0,"3×1"),(4.0,"4×1"),(8.0,"8×1")];
+                    let sc = sel_tint(*color);
                     for &(ratio, label) in ratios {
                         let bars_to_edge = ((chart_rect.right() - ox) / bar_w) as f64;
                         let end_price = origin.1 + scale * ratio * bars_to_edge;
                         let end_y = price_to_y(end_price);
                         let alpha = if ratio == 1.0 { 200 } else { 100 };
-                        let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
-                        let w = if ratio == 1.0 { 1.5 } else { 0.8 };
-                        painter.line_segment([egui::pos2(ox, oy), egui::pos2(chart_rect.right(), end_y)], egui::Stroke::new(w, c));
+                        let c = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), alpha);
+                        let w = if ratio == 1.0 { effective_width } else { effective_width * 0.55 };
+                        draw_line(&painter, egui::pos2(ox, oy), egui::pos2(chart_rect.right(), end_y), egui::Stroke::new(w, c), d_style);
                         painter.text(egui::pos2(chart_rect.right() - 2.0, end_y), egui::Align2::RIGHT_CENTER, label, egui::FontId::monospace(8.0), c);
                         // Downward mirror
                         let dn_price = origin.1 - scale * ratio * bars_to_edge;
                         let dn_y = price_to_y(dn_price);
-                        painter.line_segment([egui::pos2(ox, oy), egui::pos2(chart_rect.right(), dn_y)], egui::Stroke::new(w, c));
+                        draw_line(&painter, egui::pos2(ox, oy), egui::pos2(chart_rect.right(), dn_y), egui::Stroke::new(w, c), d_style);
                     }
                 }
             }
@@ -6525,8 +6588,9 @@ fn draw_chart(
                         let a = 2.0 * std::f32::consts::PI * i as f32 / n_pts as f32;
                         egui::pos2(cx + rx * a.cos(), cy + ry * a.sin())
                     }).collect();
-                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 20);
-                    painter.add(egui::Shape::convex_polygon(pts, fill, egui::Stroke::new(1.0, *color)));
+                    let sc = sel_tint(*color);
+                    let fill = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), 20);
+                    painter.add(egui::Shape::convex_polygon(pts, fill, egui::Stroke::new(effective_width, sc)));
                 }
             }
             Drawing::Triangle { p1, p2, p3, color } => {
@@ -6537,8 +6601,9 @@ fn draw_chart(
                     } else { None }
                 };
                 if let (Some(a), Some(b), Some(c)) = (to_pt(p1.0, p1.1), to_pt(p2.0, p2.1), to_pt(p3.0, p3.1)) {
-                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 20);
-                    painter.add(egui::Shape::convex_polygon(vec![a, b, c], fill, egui::Stroke::new(1.0, *color)));
+                    let sc = sel_tint(*color);
+                    let fill = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), 20);
+                    painter.add(egui::Shape::convex_polygon(vec![a, b, c], fill, egui::Stroke::new(effective_width, sc)));
                 }
             }
             Drawing::TrendAngle { p1, p2, color } => {
@@ -6546,12 +6611,12 @@ fn draw_chart(
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
                 if let (Some(x1), Some(x2)) = (x1, x2) {
                     let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
-                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sel_tint(*color)), d_style);
                     // Angle display
                     let dx = x2 - x1; let dy = y2 - y1;
                     let angle_deg = (dy / dx).atan().to_degrees();
                     painter.text(egui::pos2((x1 + x2) / 2.0, (y1 + y2) / 2.0 - 12.0), egui::Align2::CENTER_BOTTOM,
-                        &format!("{:.1}°", angle_deg), egui::FontId::monospace(10.0), *color);
+                        &format!("{:.1}°", angle_deg), egui::FontId::monospace(10.0), sel_tint(*color));
                 }
             }
             Drawing::ParallelChannel { p1, p2, offset, color } => {
@@ -6564,12 +6629,13 @@ fn draw_chart(
                     let y2u = price_to_y(p2.1 + offset);
                     let y1d = price_to_y(p1.1 - offset);
                     let y2d = price_to_y(p2.1 - offset);
+                    let sc = sel_tint(*color);
                     // Center line (dashed-style: thinner)
-                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(0.8, *color));
+                    draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width * 0.5, sc), d_style);
                     // Upper boundary
-                    painter.line_segment([egui::pos2(x1, y1u), egui::pos2(x2, y2u)], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter, egui::pos2(x1, y1u), egui::pos2(x2, y2u), egui::Stroke::new(effective_width, sc), d_style);
                     // Lower boundary
-                    painter.line_segment([egui::pos2(x1, y1d), egui::pos2(x2, y2d)], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter, egui::pos2(x1, y1d), egui::pos2(x2, y2d), egui::Stroke::new(effective_width, sc), d_style);
                     // Fill between upper and lower
                     let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 15);
                     let poly = vec![egui::pos2(x1, y1u), egui::pos2(x2, y2u), egui::pos2(x2, y2d), egui::pos2(x1, y1d)];
@@ -6585,18 +6651,19 @@ fn draw_chart(
                     let ch_offset = p3.1 - p1.1; // price offset defining full channel width
                     let levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0];
                     let names = ["0%", "23.6%", "38.2%", "50%", "61.8%", "78.6%", "100%"];
+                    let sc = sel_tint(*color);
                     for (i, &lvl) in levels.iter().enumerate() {
                         let off = ch_offset * lvl;
                         let ly1 = price_to_y(p1.1 + off);
                         let ly2 = price_to_y(p2.1 + off);
                         let alpha = if lvl == 0.0 || lvl == 0.5 || lvl == 1.0 { 180 } else { 100 };
-                        let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
-                        let w = if lvl == 0.0 || lvl == 1.0 { 1.5 } else { 0.8 };
-                        painter.line_segment([egui::pos2(x1, ly1), egui::pos2(x2, ly2)], egui::Stroke::new(w, c));
+                        let c = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), alpha);
+                        let w = if lvl == 0.0 || lvl == 1.0 { effective_width } else { effective_width * 0.55 };
+                        draw_line(&painter, egui::pos2(x1, ly1), egui::pos2(x2, ly2), egui::Stroke::new(w, c), d_style);
                         painter.text(egui::pos2(x2 + 4.0, ly2), egui::Align2::LEFT_CENTER, names[i], egui::FontId::monospace(8.0), c);
                     }
                     // Fill 0-100%
-                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 10);
+                    let fill = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), 10);
                     let poly = vec![
                         egui::pos2(x1, price_to_y(p1.1)),
                         egui::pos2(x2, price_to_y(p2.1)),
@@ -6616,8 +6683,9 @@ fn draw_chart(
                     if idx >= start_idx && idx < end_idx {
                         let x = chart_rect.left() + ((idx - start_idx) as f32 + 0.5) * bar_w;
                         let alpha = if f <= 3 { 120 } else { 80 };
-                        let c = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha);
-                        painter.line_segment([egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom())], egui::Stroke::new(1.0, c));
+                        let sc = sel_tint(*color);
+                        let c = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), alpha);
+                        draw_line(&painter, egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom()), egui::Stroke::new(effective_width * 0.65, c), d_style);
                         painter.text(egui::pos2(x + 2.0, chart_rect.top() + 2.0), egui::Align2::LEFT_TOP, &format!("{}", cumulative), egui::FontId::monospace(8.0), c);
                     }
                 }
@@ -6633,7 +6701,8 @@ fn draw_chart(
                     } else {
                         return; // bar beyond visible range
                     };
-                    painter.line_segment([egui::pos2(x_start, y), egui::pos2(chart_rect.right(), y)], egui::Stroke::new(1.0, *color));
+                    let sc = sel_tint(*color);
+                    draw_line(&painter, egui::pos2(x_start, y), egui::pos2(chart_rect.right(), y), egui::Stroke::new(effective_width, sc), d_style);
                     // Price badge on the right
                     let label = format!("{:.5}", price);
                     let badge_w = 65.0_f32;
@@ -6678,10 +6747,11 @@ fn draw_chart(
                 let x2 = if p2.0 >= start_idx && p2.0 < end_idx { Some(chart_rect.left() + ((p2.0 - start_idx) as f32 + 0.5) * bar_w) } else { None };
                 if let (Some(x1), Some(x2)) = (x1, x2) {
                     let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
-                    let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 40);
+                    let sc = sel_tint(*color);
+                    let fill = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), 40);
                     painter.rect_filled(egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2)), 0.0, fill);
                     // Border
-                    painter.rect_stroke(egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2)), 0.0, egui::Stroke::new(1.0, *color), egui::StrokeKind::Outside);
+                    painter.rect_stroke(egui::Rect::from_two_pos(egui::pos2(x1, y1), egui::pos2(x2, y2)), 0.0, egui::Stroke::new(effective_width, sc), egui::StrokeKind::Outside);
                 }
             }
             Drawing::CrossMarker { bar_idx, price, color } => {
@@ -6689,9 +6759,10 @@ fn draw_chart(
                     let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
                     let sz = 6.0_f32;
+                    let sc = sel_tint(*color); let sw = egui::Stroke::new(effective_width, sc);
                     // + shape
-                    painter.line_segment([egui::pos2(x - sz, y), egui::pos2(x + sz, y)], egui::Stroke::new(2.0, *color));
-                    painter.line_segment([egui::pos2(x, y - sz), egui::pos2(x, y + sz)], egui::Stroke::new(2.0, *color));
+                    draw_line(&painter, egui::pos2(x - sz, y), egui::pos2(x + sz, y), sw, d_style);
+                    draw_line(&painter, egui::pos2(x, y - sz), egui::pos2(x, y + sz), sw, d_style);
                 }
             }
             Drawing::Polyline { points, color } => {
@@ -6703,7 +6774,7 @@ fn draw_chart(
                     }
                 }
                 if screen_pts.len() > 1 {
-                    painter.add(egui::Shape::line(screen_pts, egui::Stroke::new(1.5, *color)));
+                    painter.add(egui::Shape::line(screen_pts, egui::Stroke::new(effective_width, sel_tint(*color))));
                 }
             }
             Drawing::AnchorNote { bar_idx, price, text, color } => {
@@ -6767,16 +6838,17 @@ fn draw_chart(
                         let x_end = if b2 >= start_idx && b2 < end_idx { chart_rect.left() + ((b2 - start_idx) as f32 + 0.5) * bar_w } else { chart_rect.right() };
                         let reg_y1 = price_to_y(intercept);
                         let reg_y2 = price_to_y(intercept + slope * n);
+                        let sc = sel_tint(*color);
                         // Center line
-                        painter.line_segment([egui::pos2(x_start, reg_y1), egui::pos2(x_end, reg_y2)], egui::Stroke::new(1.5, *color));
+                        draw_line(&painter, egui::pos2(x_start, reg_y1), egui::pos2(x_end, reg_y2), egui::Stroke::new(effective_width, sc), d_style);
                         // Upper band (+1 StdDev)
                         let uy1 = price_to_y(intercept + std_dev);
                         let uy2 = price_to_y(intercept + slope * n + std_dev);
-                        painter.line_segment([egui::pos2(x_start, uy1), egui::pos2(x_end, uy2)], egui::Stroke::new(0.8, *color));
+                        draw_line(&painter, egui::pos2(x_start, uy1), egui::pos2(x_end, uy2), egui::Stroke::new(effective_width * 0.55, sc), d_style);
                         // Lower band (-1 StdDev)
                         let dy1 = price_to_y(intercept - std_dev);
                         let dy2 = price_to_y(intercept + slope * n - std_dev);
-                        painter.line_segment([egui::pos2(x_start, dy1), egui::pos2(x_end, dy2)], egui::Stroke::new(0.8, *color));
+                        draw_line(&painter, egui::pos2(x_start, dy1), egui::pos2(x_end, dy2), egui::Stroke::new(effective_width * 0.55, sc), d_style);
                         // Fill between bands
                         let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 15);
                         let poly = vec![egui::pos2(x_start, uy1), egui::pos2(x_end, uy2), egui::pos2(x_end, dy2), egui::pos2(x_start, dy1)];
@@ -6825,12 +6897,13 @@ fn draw_chart(
                     }
                 }
                 let labels = ["1", "2", "3", "4", "5"];
+                let sc = sel_tint(*color);
                 for i in 0..screen_pts.len() {
                     if i + 1 < screen_pts.len() {
-                        painter.line_segment([egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1)], egui::Stroke::new(1.2, *color));
+                        draw_line(&painter, egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1), egui::Stroke::new(effective_width, sc), d_style);
                     }
                     if i < labels.len() {
-                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(11.0), *color);
+                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(11.0), sc);
                     }
                 }
             }
@@ -6844,12 +6917,13 @@ fn draw_chart(
                     }
                 }
                 let labels = ["A", "B", "C"];
+                let sc = sel_tint(*color);
                 for i in 0..screen_pts.len() {
                     if i + 1 < screen_pts.len() {
-                        painter.line_segment([egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1)], egui::Stroke::new(1.2, *color));
+                        draw_line(&painter, egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1), egui::Stroke::new(effective_width, sc), d_style);
                     }
                     if i < labels.len() {
-                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(11.0), *color);
+                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(11.0), sc);
                     }
                 }
             }
@@ -6897,18 +6971,19 @@ fn draw_chart(
                     }
                 }
                 let labels = ["LS", "L", "H", "R", "RS"];
+                let sc = sel_tint(*color);
                 for i in 0..screen_pts.len() {
                     if i + 1 < screen_pts.len() {
-                        painter.line_segment([egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1)], egui::Stroke::new(1.2, *color));
+                        draw_line(&painter, egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1), egui::Stroke::new(effective_width, sc), d_style);
                     }
                     if i < labels.len() {
-                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(9.0), *color);
+                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(9.0), sc);
                     }
                 }
                 // Neckline: dashed line between point 0 and point 4
                 if screen_pts.len() >= 5 {
-                    let nk_col = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 150);
-                    painter.line_segment([egui::pos2(screen_pts[0].0, screen_pts[0].1), egui::pos2(screen_pts[4].0, screen_pts[4].1)], egui::Stroke::new(1.5, nk_col));
+                    let nk_col = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), 150);
+                    draw_line(&painter, egui::pos2(screen_pts[0].0, screen_pts[0].1), egui::pos2(screen_pts[4].0, screen_pts[4].1), egui::Stroke::new(effective_width, nk_col), LineStyle::Dashed);
                     painter.text(egui::pos2((screen_pts[0].0 + screen_pts[4].0) / 2.0, (screen_pts[0].1 + screen_pts[4].1) / 2.0 + 12.0), egui::Align2::CENTER_TOP, "Neckline", egui::FontId::monospace(9.0), nk_col);
                 }
             }
@@ -6922,19 +6997,20 @@ fn draw_chart(
                     }
                 }
                 let labels = ["X", "A", "B", "C", "D"];
+                let sc = sel_tint(*color);
                 for i in 0..screen_pts.len() {
                     if i + 1 < screen_pts.len() {
-                        painter.line_segment([egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1)], egui::Stroke::new(1.2, *color));
+                        draw_line(&painter, egui::pos2(screen_pts[i].0, screen_pts[i].1), egui::pos2(screen_pts[i + 1].0, screen_pts[i + 1].1), egui::Stroke::new(effective_width, sc), d_style);
                     }
                     if i < labels.len() {
-                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(11.0), *color);
+                        painter.text(egui::pos2(screen_pts[i].0, screen_pts[i].1 - 10.0), egui::Align2::CENTER_BOTTOM, labels[i], egui::FontId::monospace(11.0), sc);
                     }
                 }
                 // XA→BD dashed line (harmonic diagonal)
                 if screen_pts.len() >= 5 {
-                    let diag = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 80);
-                    painter.line_segment([egui::pos2(screen_pts[0].0, screen_pts[0].1), egui::pos2(screen_pts[3].0, screen_pts[3].1)], egui::Stroke::new(0.6, diag));
-                    painter.line_segment([egui::pos2(screen_pts[1].0, screen_pts[1].1), egui::pos2(screen_pts[4].0, screen_pts[4].1)], egui::Stroke::new(0.6, diag));
+                    let diag = egui::Color32::from_rgba_premultiplied(sc.r(), sc.g(), sc.b(), 80);
+                    draw_line(&painter, egui::pos2(screen_pts[0].0, screen_pts[0].1), egui::pos2(screen_pts[3].0, screen_pts[3].1), egui::Stroke::new(0.6, diag), LineStyle::Dashed);
+                    draw_line(&painter, egui::pos2(screen_pts[1].0, screen_pts[1].1), egui::pos2(screen_pts[4].0, screen_pts[4].1), egui::Stroke::new(0.6, diag), LineStyle::Dashed);
                 }
             }
             Drawing::Brush { points, color } => {
@@ -6965,9 +7041,10 @@ fn draw_chart(
                 let bar_to_x = |b: usize| -> Option<f32> {
                     if b >= start_idx && b < end_idx { Some(chart_rect.left() + ((b - start_idx) as f32 + 0.5) * bar_w) } else { None }
                 };
+                let sc = sel_tint(*color);
                 // Median line: shifted pivot → midpoint of p2,p3
                 if let (Some(sx), Some(mx)) = (bar_to_x(shifted_bar), bar_to_x(mid_bar)) {
-                    painter.line_segment([egui::pos2(sx, price_to_y(shifted_price)), egui::pos2(mx, price_to_y(mid_price))], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter, egui::pos2(sx, price_to_y(shifted_price)), egui::pos2(mx, price_to_y(mid_price)), egui::Stroke::new(effective_width, sc), d_style);
                 }
                 // Parallel lines through p2 and p3
                 if let (Some(sx), Some(mx), Some(x2), Some(x3)) = (bar_to_x(shifted_bar), bar_to_x(mid_bar), bar_to_x(p2.0), bar_to_x(p3.0)) {
@@ -6975,8 +7052,8 @@ fn draw_chart(
                     let dy = price_to_y(mid_price) - price_to_y(shifted_price);
                     let y2 = price_to_y(p2.1);
                     let y3 = price_to_y(p3.1);
-                    painter.line_segment([egui::pos2(x2, y2), egui::pos2(x2 + dx, y2 + dy)], egui::Stroke::new(1.0, *color));
-                    painter.line_segment([egui::pos2(x3, y3), egui::pos2(x3 + dx, y3 + dy)], egui::Stroke::new(1.0, *color));
+                    draw_line(&painter, egui::pos2(x2, y2), egui::pos2(x2 + dx, y2 + dy), egui::Stroke::new(effective_width * 0.7, sc), d_style);
+                    draw_line(&painter, egui::pos2(x3, y3), egui::pos2(x3 + dx, y3 + dy), egui::Stroke::new(effective_width * 0.7, sc), d_style);
                 }
             }
             Drawing::CyclicLines { bar_start, bar_end, color } => {
@@ -6985,7 +7062,7 @@ fn draw_chart(
                 while b < start_idx + (end_idx - start_idx) + interval * 20 {
                     if b >= start_idx && b < end_idx {
                         let x = chart_rect.left() + ((b - start_idx) as f32 + 0.5) * bar_w;
-                        painter.line_segment([egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom())], egui::Stroke::new(0.8, *color));
+                        draw_line(&painter, egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom()), egui::Stroke::new(effective_width * 0.5, sel_tint(*color)), d_style);
                     }
                     b += interval;
                 }
@@ -7006,7 +7083,7 @@ fn draw_chart(
                     let y = price_to_y(price_val);
                     let pt = egui::pos2(x, y);
                     if let Some(p) = prev {
-                        painter.line_segment([p, pt], egui::Stroke::new(1.2, *color));
+                        painter.line_segment([p, pt], egui::Stroke::new(effective_width, sel_tint(*color)));
                     }
                     prev = Some(pt);
                 }
@@ -7022,11 +7099,12 @@ fn draw_chart(
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
                     let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
+                    let sc = sel_tint(*color);
                     // Pole
-                    painter.line_segment([egui::pos2(x, y), egui::pos2(x, y - 20.0)], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter, egui::pos2(x, y), egui::pos2(x, y - 20.0), egui::Stroke::new(effective_width, sc), d_style);
                     // Flag triangle
                     let tri = vec![egui::pos2(x, y - 20.0), egui::pos2(x + 12.0, y - 15.0), egui::pos2(x, y - 10.0)];
-                    painter.add(egui::Shape::convex_polygon(tri, *color, egui::Stroke::NONE));
+                    painter.add(egui::Shape::convex_polygon(tri, sc, egui::Stroke::NONE));
                 }
             }
             Drawing::Balloon { anchor, label_pos, text, color } => {
@@ -7037,25 +7115,22 @@ fn draw_chart(
                     let ay = price_to_y(anchor.1);
                     let ly = price_to_y(label_pos.1);
                     // Line from anchor to label
-                    painter.line_segment([egui::pos2(ax, ay), egui::pos2(lx, ly)], egui::Stroke::new(1.0, *color));
+                    draw_line(&painter, egui::pos2(ax, ay), egui::pos2(lx, ly), egui::Stroke::new(effective_width, sel_tint(*color)), d_style);
                     // Bubble background
                     let text_rect = egui::Rect::from_center_size(egui::pos2(lx, ly), egui::vec2(80.0, 24.0));
                     painter.rect_filled(text_rect, 6.0, egui::Color32::from_rgba_premultiplied(40, 40, 60, 200));
-                    painter.rect_stroke(text_rect, 6.0, egui::Stroke::new(1.0, *color), egui::StrokeKind::Outside);
-                    painter.text(egui::pos2(lx, ly), egui::Align2::CENTER_CENTER, text, egui::FontId::monospace(10.0), *color);
+                    let sc = sel_tint(*color);
+                    painter.rect_stroke(text_rect, 6.0, egui::Stroke::new(effective_width, sc), egui::StrokeKind::Outside);
+                    painter.text(egui::pos2(lx, ly), egui::Align2::CENTER_CENTER, text, egui::FontId::monospace(10.0), sc);
                 }
             }
             Drawing::SessionBreak { bar_idx, color } => {
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
                     let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
-                    // Dashed vertical line (draw segments with gaps)
-                    let mut y = chart_rect.top();
-                    while y < chart_rect.bottom() {
-                        let y_end = (y + 6.0).min(chart_rect.bottom());
-                        painter.line_segment([egui::pos2(x, y), egui::pos2(x, y_end)], egui::Stroke::new(1.0, *color));
-                        y += 10.0;
-                    }
-                    painter.text(egui::pos2(x + 4.0, chart_rect.top() + 2.0), egui::Align2::LEFT_TOP, "Session", egui::FontId::monospace(8.0), *color);
+                    let sc = sel_tint(*color);
+                    // Dashed vertical line — delegate to draw_line for style support
+                    draw_line(&painter, egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom()), egui::Stroke::new(effective_width, sc), LineStyle::Dashed);
+                    painter.text(egui::pos2(x + 4.0, chart_rect.top() + 2.0), egui::Align2::LEFT_TOP, "Session", egui::FontId::monospace(8.0), sc);
                 }
             }
             Drawing::MagnetLevel { price, color } => {
@@ -7066,15 +7141,12 @@ fn draw_chart(
                         let last_close = chart.bars.get(end_idx - 1).map(|b| b.close).unwrap_or(0.0);
                         (last_close - price).abs() / price.abs().max(0.0001) < 0.005
                     } else { false };
-                    let stroke_w = if glow { 2.5 } else { 1.0 };
-                    let draw_color = if glow {
-                        egui::Color32::from_rgb(255, 255, 100)
-                    } else {
-                        *color
-                    };
-                    painter.line_segment(
-                        [egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y)],
-                        egui::Stroke::new(stroke_w, draw_color),
+                    let base_col = if glow { egui::Color32::from_rgb(255, 255, 100) } else { sel_tint(*color) };
+                    let stroke_w = if glow { effective_width.max(2.5) } else { effective_width };
+                    let draw_color = base_col;
+                    draw_line(&painter,
+                        egui::pos2(chart_rect.left(), y), egui::pos2(chart_rect.right(), y),
+                        egui::Stroke::new(stroke_w, draw_color), d_style,
                     );
                     if glow {
                         // Glow effect: semi-transparent wider line
@@ -7084,7 +7156,7 @@ fn draw_chart(
                             egui::Stroke::new(6.0, glow_col),
                         );
                     }
-                    painter.text(egui::pos2(chart_rect.right() - 80.0, y - 10.0), egui::Align2::LEFT_TOP, &format!("M {}", &format_price(*price)), egui::FontId::monospace(9.0), draw_color);
+                    painter.text(egui::pos2(chart_rect.right() - 80.0, y - 10.0), egui::Align2::LEFT_TOP, &format!("M {}", &format_price(*price)), egui::FontId::monospace(9.0), base_col);
                 }
             }
             Drawing::RiskRewardBox { entry, stop, target } => {
@@ -7128,7 +7200,8 @@ fn draw_chart(
                         let angle = (i as f32 / segments as f32) * 2.0 * std::f32::consts::PI;
                         pts.push(egui::pos2(cx + r * angle.cos(), cy + r * angle.sin()));
                     }
-                    for w in pts.windows(2) { painter.line_segment([w[0], w[1]], egui::Stroke::new(1.0, *color)); }
+                    let sc = sel_tint(*color);
+                    for w in pts.windows(2) { painter.line_segment([w[0], w[1]], egui::Stroke::new(effective_width, sc)); }
                     painter.text(egui::pos2(cx + r + 2.0, cy), egui::Align2::LEFT_CENTER, &format!("{:.3}", ratio), egui::FontId::monospace(8.0), *color);
                 }
             }
@@ -7148,7 +7221,7 @@ fn draw_chart(
                     let px = it * it * x1 + 2.0 * it * t * ctrl_x + t * t * x3;
                     let py = it * it * y1 + 2.0 * it * t * ctrl_y + t * t * y3;
                     let pt = egui::pos2(px, py);
-                    painter.line_segment([prev, pt], egui::Stroke::new(1.5, *color));
+                    painter.line_segment([prev, pt], egui::Stroke::new(effective_width, sel_tint(*color)));
                     prev = pt;
                 }
             }
@@ -7166,7 +7239,7 @@ fn draw_chart(
                     let px = it.powi(3) * x0 + 3.0 * it.powi(2) * t * cx1 + 3.0 * it * t.powi(2) * cx2 + t.powi(3) * x3;
                     let py = it.powi(3) * y0 + 3.0 * it.powi(2) * t * cy1 + 3.0 * it * t.powi(2) * cy2 + t.powi(3) * y3;
                     let pt = egui::pos2(px, py);
-                    painter.line_segment([prev, pt], egui::Stroke::new(1.5, *color));
+                    painter.line_segment([prev, pt], egui::Stroke::new(effective_width, sel_tint(*color)));
                     prev = pt;
                 }
                 // Draw control point markers
@@ -7191,7 +7264,7 @@ fn draw_chart(
                             let px = 0.5 * ((2.0 * pa.x) + (-p0.x + pb.x) * t + (2.0 * p0.x - 5.0 * pa.x + 4.0 * pb.x - p3.x) * t2 + (-p0.x + 3.0 * pa.x - 3.0 * pb.x + p3.x) * t3);
                             let py = 0.5 * ((2.0 * pa.y) + (-p0.y + pb.y) * t + (2.0 * p0.y - 5.0 * pa.y + 4.0 * pb.y - p3.y) * t2 + (-p0.y + 3.0 * pa.y - 3.0 * pb.y + p3.y) * t3);
                             let pt = egui::pos2(px, py);
-                            painter.line_segment([prev, pt], egui::Stroke::new(1.5, *color));
+                            painter.line_segment([prev, pt], egui::Stroke::new(effective_width, sel_tint(*color)));
                             prev = pt;
                         }
                     }
@@ -7201,26 +7274,14 @@ fn draw_chart(
                 let bar_to_x = |b: usize| -> f32 { chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let x1 = bar_to_x(p1.0); let y1 = price_to_y(p1.1);
                 let x2 = bar_to_x(p2.0); let y2 = price_to_y(p2.1);
+                let sc = sel_tint(*color);
                 // Solid trend line
-                painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sc), d_style);
                 // Dashed projection forward (same slope, same length)
                 let dx = x2 - x1; let dy = y2 - y1;
                 let proj_x = x2 + dx; let proj_y = y2 + dy;
-                let dash_len = 6.0; let gap_len = 4.0;
-                let total_len = ((dx * dx + dy * dy) as f32).sqrt();
-                if total_len > 0.0 {
-                    let nx = dx / total_len; let ny = dy / total_len;
-                    let mut d = 0.0_f32;
-                    while d < total_len {
-                        let end_d = (d + dash_len).min(total_len);
-                        let sx = x2 + nx * d; let sy = y2 + ny * d;
-                        let ex = x2 + nx * end_d; let ey = y2 + ny * end_d;
-                        painter.line_segment([egui::pos2(sx, sy), egui::pos2(ex, ey)], egui::Stroke::new(1.0, *color));
-                        d += dash_len + gap_len;
-                    }
-                }
-                let _ = proj_x; let _ = proj_y;
-                painter.text(egui::pos2(x2 + dx + 4.0, y2 + dy), egui::Align2::LEFT_CENTER, "Forecast", egui::FontId::monospace(9.0), *color);
+                draw_line(&painter, egui::pos2(x2, y2), egui::pos2(proj_x, proj_y), egui::Stroke::new(effective_width * 0.7, sc), LineStyle::Dashed);
+                painter.text(egui::pos2(proj_x + 4.0, proj_y), egui::Align2::LEFT_CENTER, "Forecast", egui::FontId::monospace(9.0), sc);
             }
             Drawing::GhostFeed { p1, p2, color } => {
                 let bar_to_x = |b: usize| -> f32 { chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
@@ -7252,23 +7313,25 @@ fn draw_chart(
                 if *bar_idx >= start_idx && *bar_idx < end_idx {
                     let x = chart_rect.left() + ((*bar_idx - start_idx) as f32 + 0.5) * bar_w;
                     let y = price_to_y(*price);
+                    let sc = sel_tint(*color);
                     // Pole
-                    painter.line_segment([egui::pos2(x, y + 15.0), egui::pos2(x, y - 15.0)], egui::Stroke::new(2.0, *color));
+                    draw_line(&painter, egui::pos2(x, y + 15.0), egui::pos2(x, y - 15.0), egui::Stroke::new(effective_width, sc), d_style);
                     // Arrow head (pointing right)
                     let arrow = vec![egui::pos2(x, y - 12.0), egui::pos2(x + 14.0, y - 6.0), egui::pos2(x, y)];
-                    painter.add(egui::Shape::convex_polygon(arrow, *color, egui::Stroke::NONE));
+                    painter.add(egui::Shape::convex_polygon(arrow, sc, egui::Stroke::NONE));
                     // Base
-                    painter.line_segment([egui::pos2(x - 5.0, y + 15.0), egui::pos2(x + 5.0, y + 15.0)], egui::Stroke::new(2.0, *color));
+                    draw_line(&painter, egui::pos2(x - 5.0, y + 15.0), egui::pos2(x + 5.0, y + 15.0), egui::Stroke::new(effective_width, sc), d_style);
                 }
             }
             Drawing::Ruler { p1, p2, color } => {
                 let bar_to_x = |b: usize| -> f32 { chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
                 let x1 = bar_to_x(p1.0); let y1 = price_to_y(p1.1);
                 let x2 = bar_to_x(p2.0); let y2 = price_to_y(p2.1);
-                painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                let sc = sel_tint(*color);
+                draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sc), d_style);
                 // Endpoints
-                painter.circle_filled(egui::pos2(x1, y1), 3.0, *color);
-                painter.circle_filled(egui::pos2(x2, y2), 3.0, *color);
+                painter.circle_filled(egui::pos2(x1, y1), 3.0, sc);
+                painter.circle_filled(egui::pos2(x2, y2), 3.0, sc);
                 // Measurement label
                 let price_diff = p2.1 - p1.1;
                 let bars_diff = if p2.0 > p1.0 { p2.0 - p1.0 } else { p1.0 - p2.0 };
@@ -7277,7 +7340,7 @@ fn draw_chart(
                 let label = format!("{:.4} ({} bars, {:.2}%)", price_diff, bars_diff, pct);
                 let bg_rect = egui::Rect::from_center_size(egui::pos2(mid_x, mid_y - 12.0), egui::vec2(label.len() as f32 * 6.5 + 8.0, 16.0));
                 painter.rect_filled(bg_rect, 3.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, 200));
-                painter.text(egui::pos2(mid_x, mid_y - 12.0), egui::Align2::CENTER_CENTER, &label, egui::FontId::monospace(10.0), *color);
+                painter.text(egui::pos2(mid_x, mid_y - 12.0), egui::Align2::CENTER_CENTER, &label, egui::FontId::monospace(10.0), sc);
             }
             Drawing::TimeCycle { bar_start, bar_end, color } => {
                 let interval = if *bar_end > *bar_start { bar_end - bar_start } else { 1 };
@@ -7285,7 +7348,8 @@ fn draw_chart(
                 while b < chart.bars.len() + CHART_RIGHT_MARGIN * 10 {
                     if b >= start_idx && b < end_idx {
                         let x = chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w;
-                        painter.line_segment([egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom())], egui::Stroke::new(1.0, *color));
+                        let sc = sel_tint(*color);
+                        draw_line(&painter, egui::pos2(x, chart_rect.top()), egui::pos2(x, chart_rect.bottom()), egui::Stroke::new(effective_width, sc), d_style);
                     }
                     // Draw semi-circle arc between this line and the next
                     let next_b = b + interval;
@@ -7296,13 +7360,14 @@ fn draw_chart(
                         let r = (x2 - x1) / 2.0;
                         let arc_y = chart_rect.bottom() - 2.0;
                         let segs = 24;
+                        let sc = sel_tint(*color);
                         let mut prev_pt = egui::pos2(x1, arc_y);
                         for i in 1..=segs {
                             let angle = std::f32::consts::PI * (i as f32 / segs as f32);
                             let px = cx - r * angle.cos();
                             let py = arc_y - r * angle.sin() * 0.3; // squashed arc
                             let pt = egui::pos2(px, py);
-                            painter.line_segment([prev_pt, pt], egui::Stroke::new(0.8, *color));
+                            painter.line_segment([prev_pt, pt], egui::Stroke::new(effective_width * 0.55, sc));
                             prev_pt = pt;
                         }
                     }
@@ -7320,16 +7385,17 @@ fn draw_chart(
                 let dy = y2 - y1;
                 let dx = x2 - x1;
                 let extend = chart_rect.right() - x1;
+                let sc = sel_tint(*color);
                 for frac in [1.0_f32 / 3.0, 2.0 / 3.0] {
                     let target_y = y1 + dy * frac;
                     let slope = if dx.abs() > 0.1 { (target_y - y1) / dx } else { 0.0 };
                     let end_x = x1 + extend;
                     let end_y = y1 + slope * extend;
-                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(end_x, end_y)], egui::Stroke::new(1.0, *color));
-                    painter.text(egui::pos2(end_x - 30.0, end_y), egui::Align2::LEFT_CENTER, &format!("{:.0}%", frac * 100.0), egui::FontId::monospace(8.0), *color);
+                    draw_line(&painter, egui::pos2(x1, y1), egui::pos2(end_x, end_y), egui::Stroke::new(effective_width * 0.7, sc), d_style);
+                    painter.text(egui::pos2(end_x - 30.0, end_y), egui::Align2::LEFT_CENTER, &format!("{:.0}%", frac * 100.0), egui::FontId::monospace(8.0), sc);
                 }
                 // Base line
-                painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sc), d_style);
             }
             Drawing::SpeedResistanceArc { p1, p2, p3, color } => {
                 let bar_to_x = |b: usize| -> f32 { chart_rect.left() + ((b as f32 - start_idx as f32) + 0.5) * bar_w };
@@ -7337,8 +7403,9 @@ fn draw_chart(
                 let x2 = bar_to_x(p2.0); let y2 = price_to_y(p2.1);
                 let _ = bar_to_x(p3.0);
                 let base_r = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
+                let sc = sel_tint(*color);
                 // Base line
-                painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sc), d_style);
                 // Arcs at 1/3 and 2/3
                 for frac in [1.0_f32 / 3.0, 2.0 / 3.0] {
                     let r = base_r * frac;
@@ -7349,7 +7416,7 @@ fn draw_chart(
                         let px = x1 + r * angle.cos();
                         let py = y1 - r * angle.sin();
                         let pt = egui::pos2(px, py);
-                        if let Some(p) = prev { painter.line_segment([p, pt], egui::Stroke::new(1.0, *color)); }
+                        if let Some(p) = prev { painter.line_segment([p, pt], egui::Stroke::new(effective_width * 0.7, sc)); }
                         prev = Some(pt);
                     }
                 }
@@ -7373,7 +7440,7 @@ fn draw_chart(
                     let px = cx + r * theta.cos();
                     let py = cy - r * theta.sin();
                     let pt = egui::pos2(px, py);
-                    if let Some(p) = prev { painter.line_segment([p, pt], egui::Stroke::new(1.0, *color)); }
+                    if let Some(p) = prev { painter.line_segment([p, pt], egui::Stroke::new(effective_width, sel_tint(*color))); }
                     prev = Some(pt);
                 }
             }
@@ -7394,7 +7461,7 @@ fn draw_chart(
                 let c3 = egui::pos2(x2 + nx * h, y2 + ny * h);
                 let c4 = egui::pos2(x1 + nx * h, y1 + ny * h);
                 let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 25);
-                painter.add(egui::Shape::convex_polygon(vec![c1, c2, c3, c4], fill, egui::Stroke::new(1.5, *color)));
+                painter.add(egui::Shape::convex_polygon(vec![c1, c2, c3, c4], fill, egui::Stroke::new(effective_width, sel_tint(*color))));
             }
             Drawing::AnchoredVwapLine { bar_idx, color } => {
                 if *bar_idx < chart.bars.len() {
@@ -7411,7 +7478,7 @@ fn draw_chart(
                             let x = chart_rect.left() + ((i as f32 - start_idx as f32) + 0.5) * bar_w;
                             let y = price_to_y(vwap);
                             let pt = egui::pos2(x, y);
-                            if let Some(p) = prev_pt { painter.line_segment([p, pt], egui::Stroke::new(1.5, *color)); }
+                            if let Some(p) = prev_pt { painter.line_segment([p, pt], egui::Stroke::new(effective_width, sel_tint(*color))); }
                             prev_pt = Some(pt);
                         } else {
                             prev_pt = None;
@@ -7430,16 +7497,17 @@ fn draw_chart(
                 if let (Some(x1), Some(x2)) = (to_x(p1.0), to_x(p2.0)) {
                     let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
                     let ch_offset = p3.1 - p1.1;
+                    let sc = sel_tint(*color);
                     // Main trendline
-                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sc), d_style);
                     // Parallel line
                     let y1p = price_to_y(p1.1 + ch_offset);
                     let y2p = price_to_y(p2.1 + ch_offset);
-                    painter.line_segment([egui::pos2(x1, y1p), egui::pos2(x2, y2p)], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter, egui::pos2(x1, y1p), egui::pos2(x2, y2p), egui::Stroke::new(effective_width, sc), d_style);
                     // Mid line (dashed)
                     let y1m = price_to_y(p1.1 + ch_offset * 0.5);
                     let y2m = price_to_y(p2.1 + ch_offset * 0.5);
-                    painter.line_segment([egui::pos2(x1, y1m), egui::pos2(x2, y2m)], egui::Stroke::new(0.5, *color));
+                    draw_line(&painter, egui::pos2(x1, y1m), egui::pos2(x2, y2m), egui::Stroke::new(effective_width * 0.35, sc), LineStyle::Dashed);
                     // Fill
                     let fill = egui::Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), 18);
                     let poly = vec![egui::pos2(x1, y1), egui::pos2(x2, y2), egui::pos2(x2, y2p), egui::pos2(x1, y1p)];
@@ -7453,20 +7521,21 @@ fn draw_chart(
                     } else { None }
                 };
                 if let (Some(pv), Some(a), Some(b)) = (to_pt(pivot.0, pivot.1), to_pt(p2.0, p2.1), to_pt(p3.0, p3.1)) {
+                    let sc = sel_tint(*color);
                     // Inside pitchfork: median from midpoint of p2-p3 through pivot, extended
                     let mid = egui::pos2((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
                     // Median line from pivot through midpoint, extended 2x
                     let dx = mid.x - pv.x; let dy = mid.y - pv.y;
                     let ext = egui::pos2(pv.x + dx * 2.5, pv.y + dy * 2.5);
-                    painter.line_segment([pv, ext], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter, pv, ext, egui::Stroke::new(effective_width, sc), d_style);
                     // Prongs from p2 and p3, parallel to median
                     let ext_a = egui::pos2(a.x + dx * 2.0, a.y + dy * 2.0);
                     let ext_b = egui::pos2(b.x + dx * 2.0, b.y + dy * 2.0);
-                    painter.line_segment([a, ext_a], egui::Stroke::new(1.0, *color));
-                    painter.line_segment([b, ext_b], egui::Stroke::new(1.0, *color));
+                    draw_line(&painter, a, ext_a, egui::Stroke::new(effective_width * 0.7, sc), d_style);
+                    draw_line(&painter, b, ext_b, egui::Stroke::new(effective_width * 0.7, sc), d_style);
                     // Connect pivot to p2 and p3
-                    painter.line_segment([pv, a], egui::Stroke::new(0.6, *color));
-                    painter.line_segment([pv, b], egui::Stroke::new(0.6, *color));
+                    draw_line(&painter, pv, a, egui::Stroke::new(effective_width * 0.4, sc), d_style);
+                    draw_line(&painter, pv, b, egui::Stroke::new(effective_width * 0.4, sc), d_style);
                 }
             }
             Drawing::FibWedge { p1, p2, p3, color } => {
@@ -7476,9 +7545,10 @@ fn draw_chart(
                     } else { None }
                 };
                 if let (Some(a), Some(b), Some(c)) = (to_pt(p1.0, p1.1), to_pt(p2.0, p2.1), to_pt(p3.0, p3.1)) {
+                    let sc = sel_tint(*color);
                     // Two converging trendlines: p1->p2 and p1->p3
-                    painter.line_segment([a, b], egui::Stroke::new(1.5, *color));
-                    painter.line_segment([a, c], egui::Stroke::new(1.5, *color));
+                    draw_line(&painter, a, b, egui::Stroke::new(effective_width, sc), d_style);
+                    draw_line(&painter, a, c, egui::Stroke::new(effective_width, sc), d_style);
                     // Fib levels between the two lines
                     let levels = [0.236, 0.382, 0.5, 0.618, 0.786];
                     let names = ["23.6%", "38.2%", "50%", "61.8%", "78.6%"];
@@ -7522,7 +7592,8 @@ fn draw_chart(
                 if let (Some(x1), Some(x2)) = (x1o, x2o) {
                     let y1 = price_to_y(p1.1); let y2 = price_to_y(p2.1);
                     // Connecting line
-                    painter.line_segment([egui::pos2(x1, y1), egui::pos2(x2, y2)], egui::Stroke::new(1.5, *color));
+                    let sc = sel_tint(*color);
+                    draw_line(&painter, egui::pos2(x1, y1), egui::pos2(x2, y2), egui::Stroke::new(effective_width, sc), d_style);
                     // Compute measurements
                     let bars_count = if p2.0 > p1.0 { p2.0 - p1.0 } else { p1.0 - p2.0 };
                     let price_diff = p2.1 - p1.1;
