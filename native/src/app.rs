@@ -1695,7 +1695,7 @@ impl ChartState {
             let known = ["mt5:", "default:", "kraken:", "alpaca:", "cryptocompare:", "paper_TyphooN:", "alpaca_paper_TyphooN:"];
             let mut r = s;
             for pfx in &known { if r.starts_with(pfx) { r = &r[pfx.len()..]; break; } }
-            r.split(':').last().unwrap_or(r).to_string()
+            r.split(':').last().unwrap_or(r).replace('/', "")
         };
 
         // Load primary source (filter invalid bars at read time)
@@ -14096,17 +14096,25 @@ impl TyphooNApp {
                         }
 
                         if is_crypto {
-                            // Crypto: use Kraken + CryptoCompare (NOT Alpaca — better source, no rate limit issues)
+                            // Crypto: use Kraken + CryptoCompare (free, deep history)
+                            // Normalize: remove slashes, uppercase (BTC/USD → BTCUSD)
+                            let clean_sym = sym.replace('/', "").to_uppercase();
                             let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
-                                symbol: sym.clone(),
+                                symbol: clean_sym.clone(),
                                 timeframes: missing_tfs.iter().map(|s| s.to_string()).collect(),
                                 db_path: db_path.clone(),
                             });
-                            let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill {
-                                symbol: sym.clone(),
-                                timeframes: missing_tfs.iter().map(|s| s.to_string()).collect(),
-                                db_path: db_path.clone(),
-                            });
+                            // CryptoCompare: only for D1+ (sub-hourly has 7-day limit)
+                            let cc_tfs: Vec<String> = missing_tfs.iter()
+                                .filter(|tf| matches!(**tf, "1Day" | "1Week" | "1Month" | "4Hour" | "1Hour"))
+                                .map(|s| s.to_string()).collect();
+                            if !cc_tfs.is_empty() {
+                                let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill {
+                                    symbol: clean_sym,
+                                    timeframes: cc_tfs,
+                                    db_path: db_path.clone(),
+                                });
+                            }
                         } else if self.broker_connected {
                             // Stocks/Forex/CFDs: use Alpaca
                             for tf in &missing_tfs {
@@ -23644,25 +23652,13 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                    if self.lan_sync_mode == "client" {
-                        // LAN client: request bars from server via FETCH_BARS (includes symbol+TF args)
-                        // Server fetches from Kraken/CC, stores in cache, LAN sync delivers back
-                        let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: bare.clone(), timeframe: tf_label.clone(), db_path: db_path.clone() });
-                        // Also request the next-lower TF for forming bar synthesis
-                        for ltf in &timeframes[1..] {
-                            let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: bare.clone(), timeframe: ltf.clone(), db_path: db_path.clone() });
-                        }
-                        // Trigger immediate LAN resync to pull new bars quickly
-                        let _ = self.broker_tx.send(BrokerCmd::LanResyncBars);
-                    } else {
-                        // Server: fetch directly from Kraken
-                        let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: bare.clone(), timeframes, db_path: db_path.clone() });
-                        // Also fetch from CryptoCompare for deeper history on higher TFs
-                        if tf_minutes >= 1440 {
+                    // Server/standalone: fetch directly from Kraken (LAN clients excluded by outer guard)
+                    let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: bare.clone(), timeframes, db_path: db_path.clone() });
+                    // Also fetch from CryptoCompare for deeper history on higher TFs
+                    if tf_minutes >= 1440 {
                             let cc_tfs = vec![tf_label.clone()];
                             let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill { symbol: bare, timeframes: cc_tfs, db_path });
                         }
-                    }
                 }
             }
         }
