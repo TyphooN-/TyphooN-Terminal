@@ -55,6 +55,8 @@ pub mod keys {
     pub const NTFY_TOPIC: &str = "ntfy_topic";
     pub const ANTHROPIC_KEY: &str = "anthropic_api_key";
     pub const OPENAI_KEY: &str = "openai_api_key";
+    pub const KRAKEN_API_KEY: &str = "kraken_api_key";
+    pub const KRAKEN_API_SECRET: &str = "kraken_api_secret";
 }
 
 #[cfg(test)]

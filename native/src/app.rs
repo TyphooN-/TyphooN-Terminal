@@ -8917,6 +8917,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "INDICES",       desc: "World stock indices dashboard" },
     Command { name: "CRYPTO50",      desc: "Top 50 cryptocurrencies by market cap" },
     Command { name: "FOREX",         desc: "Forex major pairs dashboard" },
+    Command { name: "KRAKEN",        desc: "Kraken crypto exchange (connect, balance, trade)" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -9131,6 +9132,7 @@ impl OrderTypeMode {
 enum OrderBroker {
     Alpaca,
     Tastytrade,
+    Kraken,
     Both,
 }
 
@@ -9139,6 +9141,7 @@ impl OrderBroker {
         match self {
             OrderBroker::Alpaca => "Alpaca",
             OrderBroker::Tastytrade => "tastytrade",
+            OrderBroker::Kraken => "Kraken",
             OrderBroker::Both => "Both",
         }
     }
@@ -9295,6 +9298,16 @@ enum BrokerCmd {
     FetchCryptoTop50,
     /// Fetch full CryptoCompare coin list (8000+ coins).
     FetchCryptoSymbols,
+    /// Connect to Kraken crypto exchange.
+    KrakenConnect { api_key: String, api_secret: String },
+    /// Get Kraken account balance.
+    KrakenGetBalance,
+    /// Place an order on Kraken.
+    KrakenPlaceOrder { pair: String, side: String, order_type: String, volume: f64, price: Option<f64> },
+    /// Cancel a Kraken order by transaction ID.
+    KrakenCancelOrder { txid: String },
+    /// Get all Kraken tradeable asset pairs.
+    KrakenGetPairs,
 }
 
 /// Messages sent from async broker task → UI.
@@ -9350,6 +9363,10 @@ enum BrokerMsg {
     Mt5LiveQuotes(Vec<(String, f64, f64)>), // (symbol, bid, ask)
     /// Crypto Top 50 from CoinGecko (name, price, 24h%, market_cap).
     CryptoTop50(Vec<(String, f64, f64, f64)>),
+    /// Kraken account balances (asset, balance).
+    KrakenBalances(Vec<(String, f64)>),
+    /// Kraken tradeable pairs (pair_name, display_name).
+    KrakenPairs(Vec<(String, String)>),
 }
 
 /// Reusable sort state for clickable column headers.
@@ -9514,6 +9531,13 @@ pub struct TyphooNApp {
     tt_username: String,
     tt_password: String,
     tt_sandbox: bool,
+
+    /// Broker connection fields (Kraken).
+    kraken_api_key: String,
+    kraken_api_secret: String,
+    kraken_connected: bool,
+    kraken_balances: Vec<(String, f64)>,
+    kraken_pairs: Vec<(String, String)>,
 
     /// Finnhub API key.
     finnhub_key: String,
@@ -9966,6 +9990,7 @@ impl TyphooNApp {
             let mut cmd_rx = _broker_cmd_rx;
             let mut broker: Option<AlpacaBroker> = None;
             let mut tt_broker: Option<typhoon_engine::broker::tastytrade::TastytradeBroker> = None;
+            let mut kraken_broker: Option<typhoon_engine::broker::kraken_broker::KrakenBroker> = None;
             let importing_flag = importing_flag_broker;
             let lan_client = lan_client_broker;
             // Shared sender for forwarding requests to LAN sync WebSocket
@@ -10720,6 +10745,90 @@ impl TyphooNApp {
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("CoinGecko: {}", e))); }
                             }
                         });
+                    }
+                    BrokerCmd::KrakenConnect { api_key, api_secret } => {
+                        use typhoon_engine::broker::kraken_broker::KrakenBroker;
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let kb = KrakenBroker::new(api_key, api_secret);
+                        match kb.get_balance().await {
+                            Ok(balances) => {
+                                let mut bal_vec: Vec<(String, f64)> = balances.into_iter()
+                                    .filter(|(_, v)| *v > 0.0)
+                                    .collect();
+                                bal_vec.sort_by(|a, b| a.0.cmp(&b.0));
+                                let summary: String = bal_vec.iter()
+                                    .map(|(a, v)| format!("{}: {:.8}", a, v))
+                                    .collect::<Vec<_>>().join(", ");
+                                let _ = msg_tx.send(BrokerMsg::Connected(format!(
+                                    "Kraken connected — {} assets ({})", bal_vec.len(), summary
+                                )));
+                                let _ = msg_tx.send(BrokerMsg::KrakenBalances(bal_vec));
+                                kraken_broker = Some(kb);
+                            }
+                            Err(e) => {
+                                let _ = msg_tx.send(BrokerMsg::Error(format!("Kraken auth failed: {}", e)));
+                            }
+                        }
+                    }
+                    BrokerCmd::KrakenGetBalance => {
+                        if let Some(ref kb) = kraken_broker {
+                            let msg_tx = broker_msg_tx_clone.clone();
+                            match kb.get_balance().await {
+                                Ok(balances) => {
+                                    let bal_vec: Vec<(String, f64)> = balances.into_iter()
+                                        .filter(|(_, v)| *v > 0.0)
+                                        .collect();
+                                    let _ = msg_tx.send(BrokerMsg::KrakenBalances(bal_vec));
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Kraken balance: {}", e))); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("Kraken: connect first".into()));
+                        }
+                    }
+                    BrokerCmd::KrakenPlaceOrder { pair, side, order_type, volume, price } => {
+                        if let Some(ref kb) = kraken_broker {
+                            let msg_tx = broker_msg_tx_clone.clone();
+                            match kb.place_order(&pair, &side, &order_type, volume, price).await {
+                                Ok(result) => {
+                                    let text = serde_json::to_string_pretty(&result).unwrap_or_default();
+                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Kraken order placed: {}", text)));
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Kraken order failed: {}", e))); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("Kraken: connect first".into()));
+                        }
+                    }
+                    BrokerCmd::KrakenCancelOrder { txid } => {
+                        if let Some(ref kb) = kraken_broker {
+                            let msg_tx = broker_msg_tx_clone.clone();
+                            match kb.cancel_order(&txid).await {
+                                Ok(result) => {
+                                    let text = serde_json::to_string_pretty(&result).unwrap_or_default();
+                                    let _ = msg_tx.send(BrokerMsg::OrderResult(format!("Kraken cancel: {}", text)));
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Kraken cancel failed: {}", e))); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult("Kraken: connect first".into()));
+                        }
+                    }
+                    BrokerCmd::KrakenGetPairs => {
+                        // Public endpoint — no auth needed, create temporary broker if none
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        let kb = if let Some(ref kb) = kraken_broker {
+                            kb.get_tradeable_pairs().await
+                        } else {
+                            let tmp = typhoon_engine::broker::kraken_broker::KrakenBroker::new(String::new(), String::new());
+                            tmp.get_tradeable_pairs().await
+                        };
+                        match kb {
+                            Ok(pairs) => {
+                                let _ = msg_tx.send(BrokerMsg::KrakenPairs(pairs));
+                            }
+                            Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Kraken pairs: {}", e))); }
+                        }
                     }
                     BrokerCmd::DarwinImportAll { dir, db_path: _ } => {
                         // Spawn a dedicated thread so we don't block the broker command loop
@@ -12241,6 +12350,11 @@ impl TyphooNApp {
             broker_rx,
             broker_connected: false,
             tt_connected: false,
+            kraken_api_key: String::new(),
+            kraken_api_secret: String::new(),
+            kraken_connected: false,
+            kraken_balances: Vec::new(),
+            kraken_pairs: Vec::new(),
             live_account: None,
             live_positions: Vec::new(),
             tt_positions: Vec::new(),
@@ -14032,6 +14146,10 @@ impl TyphooNApp {
                 let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
                 self.log.push_back(LogEntry::info("Fetching forex pairs..."));
             }
+            "KRAKEN" => {
+                self.show_settings = true;
+                self.log.push_back(LogEntry::info("Open Settings to configure Kraken API credentials"));
+            }
             "PREV_LEVELS"    => self.show_prev_levels = !self.show_prev_levels,
             "CRYPTO_BACKFILL" => {
                 self.show_crypto_backfill = true;
@@ -14585,6 +14703,8 @@ impl TyphooNApp {
             (keyring::keys::NTFY_TOPIC.into(), self.ntfy_topic.clone()),
             (keyring::keys::ANTHROPIC_KEY.into(), self.anthropic_key.clone()),
             (keyring::keys::OPENAI_KEY.into(), self.openai_key.clone()),
+            (keyring::keys::KRAKEN_API_KEY.into(), self.kraken_api_key.clone()),
+            (keyring::keys::KRAKEN_API_SECRET.into(), self.kraken_api_secret.clone()),
         ];
         let cache_clone = self.cache.clone();
         std::thread::spawn(move || {
@@ -15067,6 +15187,8 @@ impl TyphooNApp {
                 (keyring::keys::NTFY_TOPIC, self.ntfy_topic.as_str()),
                 (keyring::keys::ANTHROPIC_KEY, self.anthropic_key.as_str()),
                 (keyring::keys::OPENAI_KEY, self.openai_key.as_str()),
+                (keyring::keys::KRAKEN_API_KEY, self.kraken_api_key.as_str()),
+                (keyring::keys::KRAKEN_API_SECRET, self.kraken_api_secret.as_str()),
             ];
             let mut kr_ok = true;
             for (key, val) in &creds {
@@ -15125,6 +15247,12 @@ impl TyphooNApp {
                             ui.radio_value(&mut self.tt_sandbox, true, "Sandbox");
                             ui.radio_value(&mut self.tt_sandbox, false, "Production");
                         });
+                        ui.end_row();
+                        ui.label("Kraken API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.kraken_api_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("Kraken API Secret:");
+                        ui.add(egui::TextEdit::singleline(&mut self.kraken_api_secret).desired_width(250.0).password(true));
                         ui.end_row();
                     });
                     ui.add_space(4.0);
@@ -15194,6 +15322,27 @@ impl TyphooNApp {
                                 )));
                             }
                         }
+                        // Kraken connect button
+                        if !self.kraken_api_key.is_empty() && !self.kraken_api_secret.is_empty() {
+                            let kraken_label = if self.kraken_connected {
+                                egui::RichText::new("Kraken Connected").color(UP)
+                            } else {
+                                egui::RichText::new("Connect Kraken")
+                            };
+                            if ui.button(kraken_label).clicked() && !self.kraken_connected {
+                                if let Err(e) = keyring::store(keyring::keys::KRAKEN_API_KEY, &self.kraken_api_key) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store kraken_api_key failed: {}", e)));
+                                }
+                                if let Err(e) = keyring::store(keyring::keys::KRAKEN_API_SECRET, &self.kraken_api_secret) {
+                                    self.log.push_back(LogEntry::warn(format!("Keyring store kraken_api_secret failed: {}", e)));
+                                }
+                                let _ = self.broker_tx.send(BrokerCmd::KrakenConnect {
+                                    api_key: self.kraken_api_key.clone(),
+                                    api_secret: self.kraken_api_secret.clone(),
+                                });
+                                self.log.push_back(LogEntry::info("Kraken — connecting..."));
+                            }
+                        }
                     });
 
                     ui.add_space(10.0);
@@ -15213,8 +15362,10 @@ impl TyphooNApp {
                     }
                     let alpaca_status = if self.broker_connected { "Connected" } else { "Disconnected" };
                     let tt_status = if self.tt_connected { "Connected" } else { "Disconnected" };
+                    let kraken_status = if self.kraken_connected { "Connected" } else { "Disconnected" };
                     ui.label(format!("Alpaca: REST API + WebSocket — {}", alpaca_status));
                     ui.label(format!("tastytrade: REST API — {}", tt_status));
+                    ui.label(format!("Kraken: REST API — {}", kraken_status));
                     ui.label("Finnhub: News, Analyst, Insider Sentiment, Short Interest");
                     ui.label("SEC EDGAR: Filing scraper + Form 4 insider trades");
                     ui.add_space(6.0);
@@ -22854,7 +23005,8 @@ impl TyphooNApp {
                         } else if let Ok(qty) = self.order_qty.parse::<f64>() {
                             let send_alpaca = self.broker_connected && matches!(self.order_broker, OrderBroker::Alpaca | OrderBroker::Both);
                             let send_tt = self.tt_connected && matches!(self.order_broker, OrderBroker::Tastytrade | OrderBroker::Both);
-                            if !send_alpaca && !send_tt {
+                            let send_kraken = self.kraken_connected && matches!(self.order_broker, OrderBroker::Kraken);
+                            if !send_alpaca && !send_tt && !send_kraken {
                                 self.log.push_back(LogEntry::warn("No broker connected for selected target"));
                             } else {
                                 match self.order_type {
@@ -22866,6 +23018,9 @@ impl TyphooNApp {
                                             let action = if self.order_side == 0 { "Buy to Open" } else { "Sell to Open" };
                                             let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder { symbol: sym.clone(), qty: qty as i64, side: action.to_string(), order_type: "Market".to_string(), price: None });
                                         }
+                                        if send_kraken {
+                                            let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder { pair: sym.clone(), side: side_str.clone(), order_type: "market".to_string(), volume: qty, price: None });
+                                        }
                                         self.log.push_back(LogEntry::info(format!("Submitting market {} {} {}", side_label, qty, sym)));
                                     }
                                     1 => { // Limit
@@ -22876,6 +23031,9 @@ impl TyphooNApp {
                                             if send_tt {
                                                 let action = if self.order_side == 0 { "Buy to Open" } else { "Sell to Open" };
                                                 let _ = self.broker_tx.send(BrokerCmd::TastytradeEquityOrder { symbol: sym.clone(), qty: qty as i64, side: action.to_string(), order_type: "Limit".to_string(), price: Some(lp) });
+                                            }
+                                            if send_kraken {
+                                                let _ = self.broker_tx.send(BrokerCmd::KrakenPlaceOrder { pair: sym.clone(), side: side_str.clone(), order_type: "limit".to_string(), volume: qty, price: Some(lp) });
                                             }
                                             self.log.push_back(LogEntry::info(format!("Submitting limit {} {} {} @ {}", side_label, qty, sym, lp)));
                                         } else {
@@ -23525,6 +23683,8 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::NTFY_TOPIC, "ntfy_topic"),
                     (keyring::keys::ANTHROPIC_KEY, "anthropic_key"),
                     (keyring::keys::OPENAI_KEY, "openai_key"),
+                    (keyring::keys::KRAKEN_API_KEY, "kraken_api_key"),
+                    (keyring::keys::KRAKEN_API_SECRET, "kraken_api_secret"),
                 ];
                 let mut loaded_values: Vec<(String, String)> = Vec::new();
                 for (kr_key, _label) in &cred_keys {
@@ -23563,6 +23723,8 @@ impl eframe::App for TyphooNApp {
                         k if k == keyring::keys::NTFY_TOPIC => self.ntfy_topic = val.clone(),
                         k if k == keyring::keys::ANTHROPIC_KEY => self.anthropic_key = val.clone(),
                         k if k == keyring::keys::OPENAI_KEY => self.openai_key = val.clone(),
+                        k if k == keyring::keys::KRAKEN_API_KEY => self.kraken_api_key = val.clone(),
+                        k if k == keyring::keys::KRAKEN_API_SECRET => self.kraken_api_secret = val.clone(),
                         _ => {}
                     }
                 }
@@ -23583,6 +23745,14 @@ impl eframe::App for TyphooNApp {
                     "Alpaca auto-connecting ({})...",
                     if self.broker_paper { "Paper" } else { "Live" }
                 )));
+            }
+            // Auto-connect Kraken if credentials are available
+            if !self.kraken_api_key.is_empty() && !self.kraken_api_secret.is_empty() {
+                let _ = self.broker_tx.send(BrokerCmd::KrakenConnect {
+                    api_key: self.kraken_api_key.clone(),
+                    api_secret: self.kraken_api_secret.clone(),
+                });
+                self.log.push_back(LogEntry::info("Kraken auto-connecting..."));
             }
 
             // LAN KV recovery: read client_enabled FIRST so we don't misidentify a client
@@ -23866,7 +24036,9 @@ impl eframe::App for TyphooNApp {
         while let Ok(msg) = self.broker_rx.try_recv() {
             match msg {
                 BrokerMsg::Connected(s) => {
-                    if s.contains("tastytrade") {
+                    if s.contains("Kraken") {
+                        self.kraken_connected = true;
+                    } else if s.contains("tastytrade") {
                         self.tt_connected = true;
                     } else {
                         self.broker_connected = true;
@@ -24058,6 +24230,14 @@ impl eframe::App for TyphooNApp {
                 BrokerMsg::CryptoTop50(data) => {
                     self.log.push_back(LogEntry::info(format!("CoinGecko: {} coins loaded", data.len())));
                     self.crypto_top50 = data;
+                }
+                BrokerMsg::KrakenBalances(balances) => {
+                    self.kraken_balances = balances;
+                    self.log.push_back(LogEntry::info(format!("Kraken: {} assets with balance", self.kraken_balances.len())));
+                }
+                BrokerMsg::KrakenPairs(pairs) => {
+                    self.log.push_back(LogEntry::info(format!("Kraken: {} tradeable pairs loaded", pairs.len())));
+                    self.kraken_pairs = pairs;
                 }
                 BrokerMsg::FredData(series, yields) => {
                     self.fred_data = series;
@@ -24932,6 +25112,16 @@ impl eframe::App for TyphooNApp {
                                 }
                             }
                         }
+                        // From Kraken tradeable pairs (if loaded)
+                        for (pair_name, display_name) in &self.kraken_pairs {
+                            let pn = pair_name.to_uppercase();
+                            let dn = display_name.to_uppercase();
+                            if pn.contains(&query) || dn.contains(&query) {
+                                if !suggestions.iter().any(|(s, _, _)| s.to_uppercase() == pn) {
+                                    suggestions.push((display_name.clone(), pair_name.clone(), "crypto".to_string()));
+                                }
+                            }
+                        }
                         suggestions.sort_by(|a, b| {
                             // Exact prefix match first, then alphabetical
                             let a_starts = a.0.to_uppercase().starts_with(&query);
@@ -25547,8 +25737,8 @@ impl eframe::App for TyphooNApp {
                                         }
                                     });
                             });
-                            // Broker target selector (only show when both connected)
-                            if self.broker_connected || self.tt_connected {
+                            // Broker target selector (only show when any broker connected)
+                            if self.broker_connected || self.tt_connected || self.kraken_connected {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new("Broker").color(AXIS_TEXT).small());
                                     egui::ComboBox::from_id_salt("order_broker_combo")
@@ -25560,6 +25750,9 @@ impl eframe::App for TyphooNApp {
                                             }
                                             if self.tt_connected {
                                                 ui.selectable_value(&mut self.order_broker, OrderBroker::Tastytrade, "tastytrade");
+                                            }
+                                            if self.kraken_connected {
+                                                ui.selectable_value(&mut self.order_broker, OrderBroker::Kraken, "Kraken");
                                             }
                                             if self.broker_connected && self.tt_connected {
                                                 ui.selectable_value(&mut self.order_broker, OrderBroker::Both, "Both");
