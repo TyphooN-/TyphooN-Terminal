@@ -22681,17 +22681,30 @@ impl eframe::App for TyphooNApp {
         while self.log.len() > 500 { self.log.pop_front(); }
 
         // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
-        if self.frame_count % 240 == 120 && self.broker_connected {
+        // Periodic crypto bar refresh (~60s) — works on both server and LAN client
+        // Uses Kraken (free, no auth) as primary source, Alpaca as fallback
+        if self.frame_count % 240 == 120 {
             if let Some(chart) = self.charts.get(self.active_tab) {
                 let sym = chart.symbol.clone();
                 let bare = sym.split(':').last().unwrap_or(&sym).to_string();
-                // Check if it's a crypto symbol (contains USD and no forex pairs)
-                let is_crypto = (bare.contains("USD") || bare.contains("BTC") || bare.contains("ETH") || bare.contains("SOL"))
-                    && !bare.starts_with("USD") && bare.len() <= 10;
+                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                let su = bare.to_uppercase();
+                let is_crypto = crypto_bases.iter().any(|b| su.starts_with(b) && su.ends_with("USD"));
                 if is_crypto {
-                    let tf = chart.timeframe.label().to_string();
+                    let tf_label = chart.timeframe.label().to_string();
+                    let tf_minutes = chart.timeframe.minutes();
+                    // Fetch from Kraken (free, no auth, works on weekends)
+                    // Always fetch the chart's TF + M5 for forming bar synthesis on HTF
+                    let mut timeframes = vec![tf_label.clone()];
+                    if tf_minutes > 5 && !timeframes.contains(&"5Min".to_string()) {
+                        timeframes.push("5Min".to_string());
+                    }
                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                    let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: bare, timeframe: tf, db_path });
+                    let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: bare.clone(), timeframes, db_path: db_path.clone() });
+                    // Also fetch from Alpaca if connected (better data quality when available)
+                    if self.broker_connected {
+                        let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: bare, timeframe: tf_label, db_path });
+                    }
                 }
             }
         }
