@@ -14072,6 +14072,39 @@ impl TyphooNApp {
     }
 
     fn save_session(&self) {
+        // Write demand.txt for BarCacheWriter — list symbols the terminal actually needs
+        // This prevents BarCacheWriter from re-exporting ALL 851 symbols on reboot
+        {
+            let mut demand_syms: std::collections::HashSet<String> = std::collections::HashSet::new();
+            // Add all chart tab symbols
+            for chart in &self.charts {
+                let bare = chart.symbol.split(':').last().unwrap_or("").to_string();
+                if !bare.is_empty() { demand_syms.insert(bare); }
+            }
+            // Add watchlist symbols
+            for sym in &self.user_watchlist {
+                if !sym.is_empty() { demand_syms.insert(sym.clone()); }
+            }
+            // Write to MT5 common files directory (where BarCacheWriter reads)
+            for mt5_path in &self.mt5_db_paths {
+                if mt5_path.is_empty() { continue; }
+                let db_dir = std::path::Path::new(mt5_path).parent();
+                if let Some(dir) = db_dir {
+                    let demand_path = dir.join("demand.txt");
+                    if let Ok(content) = std::fs::read_to_string(&demand_path) {
+                        // Merge with existing demand (other terminals may have written)
+                        for line in content.lines() {
+                            let trimmed = line.trim();
+                            if !trimmed.is_empty() { demand_syms.insert(trimmed.to_string()); }
+                        }
+                    }
+                    let mut sorted: Vec<&String> = demand_syms.iter().collect();
+                    sorted.sort();
+                    let output = sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+                    let _ = std::fs::write(&demand_path, output);
+                }
+            }
+        }
         // Persist credentials to keyring + SQLite fallback on quit
         let creds = [
             (keyring::keys::ALPACA_API_KEY, self.broker_api_key.as_str()),
