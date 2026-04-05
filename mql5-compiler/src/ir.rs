@@ -497,3 +497,69 @@ fn lower_expr(expr: &Expr) -> Result<IrExpr, CompileError> {
         _ => Ok(IrExpr::F64Const(0.0)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ir_module_empty() {
+        let m = IrModule {
+            buffers: vec![], inputs: vec![], functions: vec![],
+            on_calculate: None, on_init: None, globals: vec![],
+        };
+        assert!(m.buffers.is_empty());
+        assert!(m.on_calculate.is_none());
+    }
+
+    #[test]
+    fn ir_type_variants() {
+        let types = [IrType::I32, IrType::I64, IrType::F64, IrType::Bool, IrType::String];
+        assert_eq!(types.len(), 5);
+    }
+
+    #[test]
+    fn extract_metadata_empty_program() {
+        let p = Program { items: vec![] };
+        let meta = extract_metadata(&p);
+        assert_eq!(meta.buffers, 0);
+        assert!(!meta.separate_window);
+        assert!(meta.inputs.is_empty());
+    }
+
+    #[test]
+    fn extract_metadata_with_properties() {
+        let p = Program {
+            items: vec![
+                TopLevel::Property(Property { name: "indicator_separate_window".into(), value: Expr::IntLit(1), line: 1 }),
+                TopLevel::Property(Property { name: "indicator_buffers".into(), value: Expr::IntLit(3), line: 2 }),
+                TopLevel::Property(Property { name: "indicator_shortname".into(), value: Expr::StringLit("Test".into()), line: 3 }),
+            ],
+        };
+        let meta = extract_metadata(&p);
+        assert!(meta.separate_window);
+        assert_eq!(meta.buffers, 3);
+        assert_eq!(meta.short_name, "Test");
+    }
+
+    #[test]
+    fn extract_metadata_with_inputs() {
+        let p = Program {
+            items: vec![
+                TopLevel::Input(InputDecl { type_name: "int".into(), name: "Period".into(), default: Some(Expr::IntLit(14)), line: 1 }),
+            ],
+        };
+        let meta = extract_metadata(&p);
+        assert_eq!(meta.inputs.len(), 1);
+        assert_eq!(meta.inputs[0].name, "Period");
+    }
+
+    #[test]
+    fn lower_empty_program() {
+        let p = Program { items: vec![] };
+        let result = lower(&p);
+        assert!(result.is_ok());
+        let m = result.unwrap();
+        assert!(m.on_calculate.is_none());
+    }
+}

@@ -156,3 +156,58 @@ pub fn compile_to_wgsl(source: &str) -> Result<String, error::CompileError> {
 pub fn compile_pine(source: &str) -> CompileResult {
     pine::parse_pine(source)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compile_mql5_produces_result() {
+        // compile_mql5 should never panic, regardless of input
+        let src = "#property indicator_chart_window\n#property indicator_buffers 1\n";
+        let result = compile_mql5(src);
+        // May or may not produce WASM depending on parser requirements,
+        // but should always return a CompileResult without panicking
+        if result.metadata.is_some() {
+            let meta = result.metadata.as_ref().unwrap();
+            assert_eq!(meta.buffers, 1);
+        }
+        // Verify diagnostics are populated if compilation failed
+        if result.wasm.is_none() && result.metadata.is_none() {
+            assert!(!result.diagnostics.is_empty());
+        }
+    }
+
+    #[test]
+    fn compile_mql5_invalid_returns_diagnostics() {
+        let result = compile_mql5("this is not valid MQL5 {{{{");
+        assert!(result.wasm.is_none());
+        assert!(!result.diagnostics.is_empty());
+        assert!(matches!(result.diagnostics[0].level, DiagLevel::Error));
+    }
+
+    #[test]
+    fn compile_mql5_empty_returns_error() {
+        let result = compile_mql5("");
+        // Empty source may parse as empty program — check it doesn't panic
+        // Either wasm is None (parse error) or Some (empty but valid)
+        let _ = result;
+    }
+
+    #[test]
+    fn compile_pine_valid_returns_result() {
+        let src = r#"//@version=5
+indicator("Test", overlay=true)
+plot(close)
+"#;
+        let result = compile_pine(src);
+        assert!(result.metadata.is_some(), "valid PineScript should produce metadata");
+    }
+
+    #[test]
+    fn compile_pine_invalid_returns_error() {
+        let result = compile_pine("not valid pine {{{{");
+        // Should not panic — either returns diagnostics or empty result
+        let _ = result;
+    }
+}

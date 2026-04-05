@@ -43,3 +43,49 @@ function createMql5Runtime(bars, numBars) {
   };
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn template_is_not_empty() {
+        assert!(!JS_RUNTIME_TEMPLATE.is_empty());
+        assert!(JS_RUNTIME_TEMPLATE.len() > 100);
+    }
+
+    #[test]
+    fn template_contains_bar_data_imports() {
+        assert!(JS_RUNTIME_TEMPLATE.contains("iBars"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("iOpen"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("iHigh"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("iLow"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("iClose"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("iVolume"));
+    }
+
+    #[test]
+    fn template_contains_math_functions() {
+        assert!(JS_RUNTIME_TEMPLATE.contains("math_abs"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("math_sqrt"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("math_log"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("math_max"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("math_min"));
+    }
+
+    #[test]
+    fn template_contains_set_buffer() {
+        assert!(JS_RUNTIME_TEMPLATE.contains("set_buffer"));
+    }
+
+    #[test]
+    fn template_contains_runtime_factory() {
+        assert!(JS_RUNTIME_TEMPLATE.contains("createMql5Runtime"));
+    }
+
+    #[test]
+    fn template_uses_shift_based_access() {
+        assert!(JS_RUNTIME_TEMPLATE.contains("shift"));
+        assert!(JS_RUNTIME_TEMPLATE.contains("numBars - 1 - shift"));
+    }
+}
