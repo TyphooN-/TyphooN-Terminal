@@ -13835,36 +13835,86 @@ impl TyphooNApp {
                 }
             }
             "BARDATA" | "FETCH_ALL" | "FULL_HISTORY" => {
-                let sym = self.charts.get(self.active_tab)
-                    .map(|c| c.symbol.split(':').last().unwrap_or("").to_string())
-                    .unwrap_or_default();
-                let tf = self.charts.get(self.active_tab)
-                    .map(|c| c.timeframe.cache_suffix().to_string())
-                    .unwrap_or_else(|| "1Day".into());
-                if !sym.is_empty() {
-                    // Fetch from Alpaca
-                    if self.broker_connected {
-                        let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                // Download ALL available bars for ALL symbols from ALL connected brokers
+                // Collects: chart tab symbols, watchlist symbols, DARWIN position symbols, Alpaca positions
+                let all_tfs = ["1Day", "1Week", "1Hour", "4Hour", "1Month"];
+                let mut symbols: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+                // Chart tab symbols
+                for chart in &self.charts {
+                    let bare = chart.symbol.split(':').last().unwrap_or("").to_string();
+                    if !bare.is_empty() { symbols.insert(bare); }
+                }
+                // Watchlist symbols
+                for sym in &self.user_watchlist {
+                    if !sym.is_empty() { symbols.insert(sym.clone()); }
+                }
+                // DARWIN/MT5 position symbols
+                for pos in &self.bg.open_positions {
+                    let sym = pos.symbol.replace('/', "");
+                    if !sym.is_empty() { symbols.insert(sym); }
+                }
+                // Alpaca position symbols
+                for pos in &self.live_positions {
+                    if !pos.symbol.is_empty() { symbols.insert(pos.symbol.clone()); }
+                }
+                // tastytrade position symbols
+                for pos in &self.tt_positions {
+                    if !pos.symbol.is_empty() { symbols.insert(pos.symbol.clone()); }
+                }
+
+                if symbols.is_empty() {
+                    self.log.push_back(LogEntry::warn("BARDATA: no symbols to fetch — open charts or add to watchlist first"));
+                } else {
+                    let count = symbols.len();
+                    let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+                        "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
+
+                    for sym in &symbols {
                         let su = sym.to_uppercase();
-                        let api_sym = crypto_bases.iter().find_map(|b| {
-                            if su.starts_with(b) && su.ends_with("USD") && su.len() == b.len() + 3 {
-                                Some(format!("{}/USD", b))
-                            } else { None }
-                        }).unwrap_or_else(|| sym.clone());
-                        let _ = self.broker_tx.send(BrokerCmd::FetchAllBars { symbol: api_sym.clone(), timeframe: tf.clone() });
-                        self.log.push_back(LogEntry::info(format!("BARDATA: fetching ALL bars for {} {} from Alpaca...", api_sym, tf)));
+                        let is_crypto = crypto_bases.iter().any(|b| su.starts_with(b) && su.ends_with("USD"));
+
+                        // Alpaca: full history for each TF
+                        if self.broker_connected {
+                            let api_sym = if is_crypto {
+                                crypto_bases.iter().find_map(|b| {
+                                    if su.starts_with(b) && su.ends_with("USD") && su.len() == b.len() + 3 {
+                                        Some(format!("{}/USD", b))
+                                    } else { None }
+                                }).unwrap_or_else(|| sym.clone())
+                            } else { sym.clone() };
+                            for tf in &all_tfs {
+                                let _ = self.broker_tx.send(BrokerCmd::FetchAllBars { symbol: api_sym.clone(), timeframe: tf.to_string() });
+                            }
+                        }
+
+                        // Kraken: crypto symbols
+                        if is_crypto {
+                            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                            let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
+                                symbol: sym.clone(),
+                                timeframes: all_tfs.iter().map(|s| s.to_string()).collect(),
+                                db_path: db_path.clone(),
+                            });
+                            let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill {
+                                symbol: sym.clone(),
+                                timeframes: all_tfs.iter().map(|s| s.to_string()).collect(),
+                                db_path,
+                            });
+                        }
+
+                        // tastytrade: bars + option chain
+                        if self.tt_connected {
+                            for tf in &all_tfs {
+                                let _ = self.broker_tx.send(BrokerCmd::TastytradeFetchBars { symbol: sym.clone(), timeframe: tf.to_string() });
+                            }
+                            let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym.clone() });
+                        }
                     }
-                    // Also fetch from tastytrade via DXLink
-                    if self.tt_connected {
-                        let _ = self.broker_tx.send(BrokerCmd::TastytradeFetchBars { symbol: sym.clone(), timeframe: tf.clone() });
-                        self.log.push_back(LogEntry::info(format!("BARDATA: fetching bars for {} {} from tastytrade...", sym, tf)));
-                        // Also fetch option chain for the symbol
-                        let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym.clone() });
-                        self.log.push_back(LogEntry::info(format!("BARDATA: fetching option chain for {} from tastytrade...", sym)));
-                    }
-                    if !self.broker_connected && !self.tt_connected {
-                        self.log.push_back(LogEntry::warn("BARDATA: connect Alpaca or tastytrade first"));
-                    }
+                    self.log.push_back(LogEntry::info(format!(
+                        "BARDATA: downloading ALL bars for {} symbols × {} TFs from all brokers...",
+                        count, all_tfs.len()
+                    )));
                 }
             }
             "INDICES" | "WORLD_INDICES" => {
