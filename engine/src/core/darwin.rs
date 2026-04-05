@@ -1,8 +1,11 @@
-//! DARWIN trade history import — parses MT5 XLSX exports and stores in SQLite.
+//! MT5 trade history import + analytics — parses MT5 XLSX exports from ANY server.
 //!
 //! Supports importing closed positions, orders, and deals from MT5's
-//! "Trade History Report" XLSX format. Each DARWIN is stored as a named
+//! "Trade History Report" XLSX format. Each account is stored as a named
 //! virtual account with full trade history for analytics.
+//!
+//! Works with any MT5 server (Darwinex, Axion, OANDA, etc.).
+//! When imported from Darwinex, additional VaR multiplier analytics apply.
 
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
@@ -12,7 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DarwinAccount {
     pub name: String,           // MT5 name (e.g. "TyphooN_MT5")
-    pub darwin_ticker: String,  // 4-letter DARWIN ticker (e.g. "XUQF")
+    pub darwin_ticker: String,  // Account ID from filename (e.g. "XUQF" for Darwinex, "MAIN" for other MT5)
     pub mt5_account: String,    // MT5 account number
     pub initial_balance: f64,
     pub created_at: i64,        // import timestamp

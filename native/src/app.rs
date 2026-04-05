@@ -8670,7 +8670,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "SET_TP",        desc: "Click chart to set take profit" },
     Command { name: "OPEN_MG",       desc: "Open martingale position" },
     // Tools
-    Command { name: "DARWIN",        desc: "DARWIN accounts overview" },
+    Command { name: "DARWIN",        desc: "MT5 accounts overview (DARWIN + any server)" },
     Command { name: "PORTFOLIO",     desc: "DARWIN portfolio dashboard + accounts" },
     Command { name: "OVERLAP",       desc: "Symbol overlap / correlation" },
     Command { name: "BACKTEST",      desc: "Run backtest on current symbol" },
@@ -8838,7 +8838,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "CRYPTO_BACKFILL",desc: "Crypto deep history backfill (CryptoCompare + Kraken)" },
     // Data management
     Command { name: "BACKUP",        desc: "Backup settings and cache" },
-    Command { name: "IMPORT_XLSX",   desc: "Import DARWIN XLSX trade history" },
+    Command { name: "IMPORT_XLSX",   desc: "Import MT5 XLSX trade history (any server)" },
     Command { name: "WORKSPACE",     desc: "Save/restore workspace layout" },
     // Misc
     Command { name: "CACHE_STATS",   desc: "Show cache statistics" },
@@ -9159,8 +9159,9 @@ enum BrokerCmd {
     KrakenBackfill { symbol: String, timeframes: Vec<String>, db_path: std::path::PathBuf },
     /// Deep crypto backfill via CryptoCompare (2000 bars/request, back to 2010).
     CryptoCompareBackfill { symbol: String, timeframes: Vec<String>, db_path: std::path::PathBuf },
-    /// Import all DARWIN XLSX files from a directory (non-blocking).
-    /// Ticker is derived from filename: e.g. "THA.xlsx" → "THA", "THB_history.xlsx" → "THB".
+    /// Import all MT5 XLSX trade history files from a directory (any server).
+    /// Account ID derived from filename: e.g. "THA.xlsx" → "THA", "MyAccount_2024.xlsx" → "MYACCOUNT".
+    /// Works with Darwinex, Axion, OANDA, or any MT5 server export.
     DarwinImportAll { dir: PathBuf, db_path: PathBuf },
     /// Sync bar data from MT5 BarCacheWriter databases into main cache.
     /// Uses shared Arc<SqliteCache> — no second connection opened.
@@ -15006,13 +15007,13 @@ impl TyphooNApp {
                     ui.add_space(10.0);
                     ui.heading("DARWIN XLSX Import");
                     ui.separator();
-                    ui.label(egui::RichText::new("Directory containing DARWIN XLSX files (e.g. THA.xlsx, THB.xlsx)").color(AXIS_TEXT).small());
+                    ui.label(egui::RichText::new("Directory containing MT5 XLSX trade history files (any server — Darwinex, Axion, etc.)").color(AXIS_TEXT).small());
                     ui.horizontal(|ui| {
                         ui.label("XLSX Dir:");
                         ui.add(egui::TextEdit::singleline(&mut self.darwin_xlsx_dir).desired_width(250.0).hint_text("/path/to/darwin/xlsx"));
                         if ui.button("Browse").clicked() {
                             if let Some(dir) = rfd::FileDialog::new()
-                                .set_title("Select DARWIN XLSX Directory")
+                                .set_title("Select MT5 XLSX Trade History Directory")
                                 .pick_folder()
                             {
                                 self.darwin_xlsx_dir = dir.display().to_string();
