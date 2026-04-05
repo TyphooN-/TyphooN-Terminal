@@ -9212,6 +9212,12 @@ enum BrokerCmd {
     AlpacaBracketOrder { symbol: String, qty: f64, side: String, stop_loss: f64, take_profit: f64 },
     /// Cancel an Alpaca order by ID.
     AlpacaCancelOrder { order_id: String },
+    /// Modify an existing Alpaca order (change price/qty on bracket legs).
+    AlpacaModifyOrder { order_id: String, qty: Option<f64>, limit_price: Option<f64>, stop_price: Option<f64> },
+    /// Set SL for current symbol: places a stop order opposite to position direction.
+    AlpacaSetSL { symbol: String, price: f64 },
+    /// Set TP for current symbol: places a limit order opposite to position direction.
+    AlpacaSetTP { symbol: String, price: f64 },
     /// Place equity order via tastytrade.
     TastytradeEquityOrder { symbol: String, qty: i64, side: String, order_type: String, price: Option<f64> },
     /// Place trailing stop order via Alpaca.
@@ -10361,6 +10367,55 @@ impl TyphooNApp {
                             match b.cancel_order(&order_id).await {
                                 Ok(_) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Order {} cancelled", order_id))); }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Cancel failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::AlpacaModifyOrder { order_id, qty, limit_price, stop_price } => {
+                        if let Some(ref b) = broker {
+                            match b.modify_order(&order_id, qty, limit_price, stop_price, None).await {
+                                Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("Order {} modified: {}", order_id, r.status))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Modify failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::AlpacaSetSL { symbol, price } => {
+                        if let Some(ref b) = broker {
+                            // Determine position direction to place SL as opposite-side stop order
+                            match b.get_positions().await {
+                                Ok(positions) => {
+                                    let pos = positions.iter().find(|p| p.symbol == symbol);
+                                    if let Some(pos) = pos {
+                                        let sl_side = if pos.side == "long" { "sell" } else { "buy" };
+                                        let qty = pos.qty.abs();
+                                        match b.stop_order(&symbol, qty, sl_side, price, "gtc").await {
+                                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("SL stop {} {} {} @ {}: {}", sl_side, qty, symbol, price, r.status))); }
+                                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("SL order failed: {}", e))); }
+                                        }
+                                    } else {
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("No position found for {} to set SL", symbol)));
+                                    }
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Get positions failed: {}", e))); }
+                            }
+                        }
+                    }
+                    BrokerCmd::AlpacaSetTP { symbol, price } => {
+                        if let Some(ref b) = broker {
+                            match b.get_positions().await {
+                                Ok(positions) => {
+                                    let pos = positions.iter().find(|p| p.symbol == symbol);
+                                    if let Some(pos) = pos {
+                                        let tp_side = if pos.side == "long" { "sell" } else { "buy" };
+                                        let qty = pos.qty.abs();
+                                        match b.limit_order(&symbol, qty, tp_side, price, "gtc").await {
+                                            Ok(r) => { let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("TP limit {} {} {} @ {}: {}", tp_side, qty, symbol, price, r.status))); }
+                                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("TP order failed: {}", e))); }
+                                        }
+                                    } else {
+                                        let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("No position found for {} to set TP", symbol)));
+                                    }
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Get positions failed: {}", e))); }
                             }
                         }
                     }
@@ -23853,12 +23908,15 @@ impl eframe::App for TyphooNApp {
                     }
                     ui.separator();
                     if ui.button("Set SL Line").clicked() {
-                        // Use current SL price to modify existing positions (MT5 parity: ModifyPosition for SL)
                         if let Some(sl) = self.sl_price {
                             if self.broker_connected {
-                                self.log.push_back(LogEntry::info(format!("Set SL: {} — Alpaca does not support modifying SL on existing positions (use bracket orders)", format_price(sl))));
+                                let sym = self.charts.get(self.active_tab)
+                                    .map(|c| c.symbol.split(':').last().unwrap_or("").to_string())
+                                    .unwrap_or_default();
+                                let _ = self.broker_tx.send(BrokerCmd::AlpacaSetSL { symbol: sym.clone(), price: sl });
+                                self.log.push_back(LogEntry::info(format!("Set SL: placing stop order at {} for {}", format_price(sl), sym)));
                             } else {
-                                self.log.push_back(LogEntry::info(format!("Set SL: {} (visual only — connect broker to apply)", format_price(sl))));
+                                self.log.push_back(LogEntry::info(format!("Set SL: {} (visual only — connect broker to place stop order)", format_price(sl))));
                             }
                         } else {
                             self.log.push_back(LogEntry::warn("No SL line set — use Buy Lines or Sell Lines first"));
@@ -23868,9 +23926,13 @@ impl eframe::App for TyphooNApp {
                     if ui.button("Set TP Line").clicked() {
                         if let Some(tp) = self.tp_price {
                             if self.broker_connected {
-                                self.log.push_back(LogEntry::info(format!("Set TP: {} — Alpaca does not support modifying TP on existing positions (use bracket orders)", format_price(tp))));
+                                let sym = self.charts.get(self.active_tab)
+                                    .map(|c| c.symbol.split(':').last().unwrap_or("").to_string())
+                                    .unwrap_or_default();
+                                let _ = self.broker_tx.send(BrokerCmd::AlpacaSetTP { symbol: sym.clone(), price: tp });
+                                self.log.push_back(LogEntry::info(format!("Set TP: placing limit order at {} for {}", format_price(tp), sym)));
                             } else {
-                                self.log.push_back(LogEntry::info(format!("Set TP: {} (visual only — connect broker to apply)", format_price(tp))));
+                                self.log.push_back(LogEntry::info(format!("Set TP: {} (visual only — connect broker to place limit order)", format_price(tp))));
                             }
                         } else {
                             self.log.push_back(LogEntry::warn("No TP line set — use Buy Lines or Sell Lines first"));
