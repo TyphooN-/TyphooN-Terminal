@@ -310,6 +310,22 @@ impl TastytradeBroker {
         Ok(data["data"]["order"]["id"].as_str().unwrap_or("ok").to_string())
     }
 
+    /// Search symbols by query string.
+    pub async fn search_symbols(&self, query: &str) -> Result<Vec<serde_json::Value>, String> {
+        let token = self.auth_header().ok_or("Not authenticated")?;
+        let url = format!("{}/symbols/search/{}", self.base_url, query);
+        let resp = self.client.get(&url)
+            .header("Authorization", &token)
+            .send().await
+            .map_err(|e| format!("tastytrade search failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("tastytrade search: HTTP {}", resp.status()));
+        }
+        let json: serde_json::Value = resp.json().await
+            .map_err(|e| format!("tastytrade search parse: {e}"))?;
+        Ok(json["data"]["items"].as_array().cloned().unwrap_or_default())
+    }
+
     /// Get option chain for a symbol.
     pub async fn get_option_chain(&self, symbol: &str) -> Result<Vec<TastyExpiration>, String> {
         let token = self.auth_header().ok_or("Not authenticated")?;

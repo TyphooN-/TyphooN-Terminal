@@ -10239,46 +10239,75 @@ impl TyphooNApp {
                         }
                     }
                     BrokerCmd::SearchSymbols { query } => {
+                        let q = query.to_uppercase();
+                        let mut all_suggestions: Vec<(String, String, String)> = Vec::new();
+
+                        // Search Alpaca assets
                         if let Some(ref b) = broker {
-                            match b.get_all_assets().await {
-                                Ok(assets) => {
-                                    let q = query.to_uppercase();
-                                    // Collect matching assets with priority scoring:
-                                    // 0 = exact symbol match, 1 = symbol starts with query,
-                                    // 2 = symbol contains query, 3 = name contains query
-                                    let mut matches: Vec<(u8, &_)> = assets.iter()
-                                        .filter_map(|a| {
-                                            let sym = a.symbol.to_uppercase();
-                                            // Also match without slash (e.g. "SOLUSD" matches "SOL/USD")
-                                            let sym_no_slash = sym.replace('/', "");
-                                            if sym == q || sym_no_slash == q {
-                                                Some((0, a))
-                                            } else if sym.starts_with(&q) || sym_no_slash.starts_with(&q) {
-                                                Some((1, a))
-                                            } else if sym.contains(&q) || sym_no_slash.contains(&q) {
-                                                Some((2, a))
-                                            } else if a.name.to_uppercase().contains(&q) {
-                                                Some((3, a))
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .collect();
-                                    matches.sort_by_key(|(pri, _)| *pri);
-                                    let text = matches.iter()
-                                        .take(20)
-                                        .map(|(_, a)| format!("{} — {} ({})", a.symbol, a.name, a.asset_class))
-                                        .collect::<Vec<_>>().join("\n");
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Symbol Search".into(), text));
-                                    // Also send structured suggestions for autocomplete
-                                    let suggestions: Vec<(String, String, String)> = matches.iter()
-                                        .take(20)
-                                        .map(|(_, a)| (a.symbol.clone(), a.name.clone(), a.asset_class.clone()))
-                                        .collect();
-                                    let _ = broker_msg_tx_clone.send(BrokerMsg::SymbolSuggestions(suggestions));
+                            if let Ok(assets) = b.get_all_assets().await {
+                                let mut matches: Vec<(u8, &_)> = assets.iter()
+                                    .filter_map(|a| {
+                                        let sym = a.symbol.to_uppercase();
+                                        let sym_no_slash = sym.replace('/', "");
+                                        if sym == q || sym_no_slash == q { Some((0, a)) }
+                                        else if sym.starts_with(&q) || sym_no_slash.starts_with(&q) { Some((1, a)) }
+                                        else if sym.contains(&q) || sym_no_slash.contains(&q) { Some((2, a)) }
+                                        else if a.name.to_uppercase().contains(&q) { Some((3, a)) }
+                                        else { None }
+                                    })
+                                    .collect();
+                                matches.sort_by_key(|(pri, _)| *pri);
+                                for (_, a) in matches.iter().take(15) {
+                                    all_suggestions.push((a.symbol.clone(), a.name.clone(), format!("Alpaca {}", a.asset_class)));
                                 }
-                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(e)); }
                             }
+                        }
+
+                        // Search tastytrade (if connected)
+                        if let Some(ref tb) = tt_broker {
+                            if tb.is_authenticated() {
+                                if let Ok(results) = tb.search_symbols(&q).await {
+                                    for item in results.iter().take(10) {
+                                        let sym = item["symbol"].as_str().unwrap_or("").to_string();
+                                        let desc = item["description"].as_str().unwrap_or("").to_string();
+                                        if !sym.is_empty() {
+                                            // Deduplicate: skip if already from Alpaca
+                                            let dup = all_suggestions.iter().any(|(s, _, _)| s.to_uppercase() == sym.to_uppercase());
+                                            if !dup {
+                                                all_suggestions.push((sym, desc, "tastytrade".into()));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Search CryptoCompare coins (from cached list in shared state)
+                        // CC coins are in the app state, not accessible here — search by symbol pattern
+                        {
+                            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+                                "XMR","ZEC","DASH","UNI","AAVE","ATOM","NEAR","FIL","ICP","XLM","ALGO",
+                                "VET","HBAR","FTM","SAND","MANA","AXS","GRT","ENJ","BAT","COMP","MKR",
+                                "SNX","CRV","SUSHI","YFI","TRX","ETC","EOS","XTZ","SHIB","APE","ARB","OP","THETA","KAVA",
+                                "MATIC","BCH","DOT"];
+                            for base in &crypto_bases {
+                                let sym = format!("{}USD", base);
+                                if sym.contains(&q) || base.contains(&q.replace("USD","")) {
+                                    let dup = all_suggestions.iter().any(|(s, _, _)| s.to_uppercase() == sym);
+                                    if !dup {
+                                        all_suggestions.push((sym, format!("{} (crypto)", base), "CryptoCompare".into()));
+                                    }
+                                }
+                            }
+                        }
+
+                        if !all_suggestions.is_empty() {
+                            let text = all_suggestions.iter().take(25)
+                                .map(|(s, n, src)| format!("{} — {} [{}]", s, n, src))
+                                .collect::<Vec<_>>().join("\n");
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::JsonResult("Symbol Search".into(), text));
+                            let suggestions: Vec<(String, String, String)> = all_suggestions.into_iter().take(25).collect();
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::SymbolSuggestions(suggestions));
                         }
                     }
                     BrokerCmd::GetOrderHistory { limit } => {
