@@ -8868,6 +8868,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "LOAD_TEMPLATE", desc: "Load a saved indicator template (LOAD_TEMPLATE <name>)" },
     Command { name: "TEMPLATES",     desc: "List all available chart templates" },
     Command { name: "FEAR_GREED",    desc: "Crypto Fear & Greed Index" },
+    Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
+    Command { name: "MATRIX",        desc: "Matrix chat room viewer" },
     Command { name: "INDICES",       desc: "World stock indices dashboard" },
     Command { name: "CRYPTO50",      desc: "Top 50 cryptocurrencies by market cap" },
     Command { name: "FOREX",         desc: "Forex major pairs dashboard" },
@@ -9228,6 +9230,10 @@ enum BrokerCmd {
     AlpacaSetSL { symbol: String, price: f64 },
     /// Set TP for current symbol: places a limit order opposite to position direction.
     AlpacaSetTP { symbol: String, price: f64 },
+    /// AI chat request (Anthropic Claude or OpenAI GPT).
+    AiChat { provider: String, api_key: String, message: String, history: Vec<(bool, String)> },
+    /// Fetch recent messages from a public Matrix room.
+    MatrixFetchMessages { room_id: String },
     /// Place equity order via tastytrade.
     TastytradeEquityOrder { symbol: String, qty: i64, side: String, order_type: String, price: Option<f64> },
     /// Place trailing stop order via Alpaca.
@@ -9467,6 +9473,17 @@ pub struct TyphooNApp {
     pushover_token: String,
     pushover_user: String,
     ntfy_topic: String,
+    /// AI chat (Anthropic Claude / OpenAI GPT).
+    anthropic_key: String,
+    openai_key: String,
+    show_ai_chat: bool,
+    ai_chat_history: Vec<(bool, String)>, // (is_user, message)
+    ai_chat_input: String,
+    ai_provider: usize, // 0=Claude, 1=GPT
+    /// Matrix chat (public room message viewer).
+    show_matrix_chat: bool,
+    matrix_room: String,
+    matrix_messages: Vec<(String, String, String)>, // (sender, timestamp, body)
     /// Real-time bar construction from WebSocket trade stream.
     bar_builder: std::sync::Arc<std::sync::Mutex<typhoon_engine::core::bar_builder::BarBuilder>>,
     stream_active: bool,
@@ -10428,6 +10445,74 @@ impl TyphooNApp {
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Get positions failed: {}", e))); }
                             }
                         }
+                    }
+                    BrokerCmd::AiChat { provider, api_key, message, history } => {
+                        let client = reqwest::Client::new();
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let msgs: Vec<serde_json::Value> = history.iter()
+                                .map(|(is_user, text)| serde_json::json!({"role": if *is_user { "user" } else { "assistant" }, "content": text}))
+                                .chain(std::iter::once(serde_json::json!({"role": "user", "content": message})))
+                                .collect();
+                            if provider == "claude" {
+                                let body = serde_json::json!({"model": "claude-sonnet-4-20250514", "max_tokens": 1024, "messages": msgs});
+                                match client.post("https://api.anthropic.com/v1/messages")
+                                    .header("x-api-key", &api_key).header("anthropic-version", "2023-06-01")
+                                    .header("content-type", "application/json").json(&body).send().await {
+                                    Ok(resp) => {
+                                        let text = resp.json::<serde_json::Value>().await.ok()
+                                            .and_then(|j| j["content"][0]["text"].as_str().map(|s| s.to_string()))
+                                            .unwrap_or_else(|| "(no response)".into());
+                                        let _ = msg_tx.send(BrokerMsg::JsonResult("AiChat".into(), text));
+                                    }
+                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Claude: {}", e))); }
+                                }
+                            } else {
+                                let mut all = vec![serde_json::json!({"role": "system", "content": "You are a trading assistant for TyphooN Terminal."})];
+                                all.extend(msgs);
+                                let body = serde_json::json!({"model": "gpt-4o", "messages": all, "max_tokens": 1024});
+                                match client.post("https://api.openai.com/v1/chat/completions")
+                                    .header("Authorization", format!("Bearer {}", api_key))
+                                    .header("content-type", "application/json").json(&body).send().await {
+                                    Ok(resp) => {
+                                        let text = resp.json::<serde_json::Value>().await.ok()
+                                            .and_then(|j| j["choices"][0]["message"]["content"].as_str().map(|s| s.to_string()))
+                                            .unwrap_or_else(|| "(no response)".into());
+                                        let _ = msg_tx.send(BrokerMsg::JsonResult("AiChat".into(), text));
+                                    }
+                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("OpenAI: {}", e))); }
+                                }
+                            }
+                        });
+                    }
+                    BrokerCmd::MatrixFetchMessages { room_id } => {
+                        let client = reqwest::Client::new();
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let url = format!("https://matrix.org/_matrix/client/r0/rooms/{}/messages?dir=b&limit=50", room_id);
+                            match client.get(&url).header("User-Agent", "TyphooN-Terminal/1.0").send().await {
+                                Ok(resp) => {
+                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                        let mut msgs = Vec::new();
+                                        if let Some(chunk) = json["chunk"].as_array() {
+                                            for ev in chunk.iter().rev() {
+                                                if ev["type"].as_str() == Some("m.room.message") {
+                                                    let sender = ev["sender"].as_str().unwrap_or("?").to_string();
+                                                    let ts = ev["origin_server_ts"].as_i64().unwrap_or(0);
+                                                    let dt = chrono::DateTime::from_timestamp(ts / 1000, 0)
+                                                        .map(|d| d.format("%H:%M").to_string()).unwrap_or_default();
+                                                    let body = ev["content"]["body"].as_str().unwrap_or("").to_string();
+                                                    msgs.push((sender, dt, body));
+                                                }
+                                            }
+                                        }
+                                        let text = serde_json::to_string(&msgs).unwrap_or_default();
+                                        let _ = msg_tx.send(BrokerMsg::JsonResult("MatrixMessages".into(), text));
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Matrix: {}", e))); }
+                            }
+                        });
                     }
                     BrokerCmd::TastytradeEquityOrder { symbol, qty, side, order_type, price } => {
                         if let Some(ref tb) = tt_broker {
@@ -11758,6 +11843,15 @@ impl TyphooNApp {
             pushover_token: String::new(),
             pushover_user: String::new(),
             ntfy_topic: String::new(),
+            anthropic_key: String::new(),
+            openai_key: String::new(),
+            show_ai_chat: false,
+            ai_chat_history: Vec::new(),
+            ai_chat_input: String::new(),
+            ai_provider: 0,
+            show_matrix_chat: false,
+            matrix_room: String::new(),
+            matrix_messages: Vec::new(),
             bar_builder: std::sync::Arc::new(std::sync::Mutex::new(typhoon_engine::core::bar_builder::BarBuilder::new())),
             stream_active: false,
             news_articles: Vec::new(),
@@ -13609,6 +13703,8 @@ impl TyphooNApp {
                     let _ = self.broker_tx.send(BrokerCmd::FetchFearGreed);
                 }
             }
+            "AI" | "AI_CHAT" | "CHAT" => self.show_ai_chat = true,
+            "MATRIX" => self.show_matrix_chat = true,
             "INDICES" | "WORLD_INDICES" => {
                 self.show_world_indices = true;
                 let symbols = vec![
@@ -14161,6 +14257,8 @@ impl TyphooNApp {
             (keyring::keys::PUSHOVER_TOKEN.into(), self.pushover_token.clone()),
             (keyring::keys::PUSHOVER_USER.into(), self.pushover_user.clone()),
             (keyring::keys::NTFY_TOPIC.into(), self.ntfy_topic.clone()),
+            (keyring::keys::ANTHROPIC_KEY.into(), self.anthropic_key.clone()),
+            (keyring::keys::OPENAI_KEY.into(), self.openai_key.clone()),
         ];
         let cache_clone = self.cache.clone();
         std::thread::spawn(move || {
@@ -14534,6 +14632,8 @@ impl TyphooNApp {
         self.show_darwin_portfolio = false;
         self.show_risk_calc = false;
         self.show_compound_calc = false;
+        self.show_ai_chat = false;
+        self.show_matrix_chat = false;
         self.show_backtest = false;
         self.show_screener = false;
         self.show_symbols = false;
@@ -14638,6 +14738,8 @@ impl TyphooNApp {
                 (keyring::keys::PUSHOVER_TOKEN, self.pushover_token.as_str()),
                 (keyring::keys::PUSHOVER_USER, self.pushover_user.as_str()),
                 (keyring::keys::NTFY_TOPIC, self.ntfy_topic.as_str()),
+                (keyring::keys::ANTHROPIC_KEY, self.anthropic_key.as_str()),
+                (keyring::keys::OPENAI_KEY, self.openai_key.as_str()),
             ];
             let mut kr_ok = true;
             for (key, val) in &creds {
@@ -14906,6 +15008,12 @@ impl TyphooNApp {
                         ui.end_row();
                         ui.label("ntfy Topic:");
                         ui.add(egui::TextEdit::singleline(&mut self.ntfy_topic).desired_width(200.0));
+                        ui.end_row();
+                        ui.label("Anthropic API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.anthropic_key).desired_width(250.0).password(true));
+                        ui.end_row();
+                        ui.label("OpenAI API Key:");
+                        ui.add(egui::TextEdit::singleline(&mut self.openai_key).desired_width(250.0).password(true));
                         ui.end_row();
                     });
                     if ui.small_button("Test Notification").clicked() {
@@ -17553,6 +17661,87 @@ impl TyphooNApp {
                             ui.add_space(10.0);
                             ui.label(egui::RichText::new("VaR corridor: 3.25% – 6.5%  |  Correlation limit: 0.95 / 45d").color(AXIS_TEXT));
                     }
+                });
+        }
+
+        // AI Chat (Anthropic Claude / OpenAI GPT)
+        if self.show_ai_chat {
+            egui::Window::new("AI Assistant")
+                .open(&mut self.show_ai_chat)
+                .resizable(true).default_size([500.0, 450.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Provider:");
+                        ui.radio_value(&mut self.ai_provider, 0, "Claude");
+                        ui.radio_value(&mut self.ai_provider, 1, "GPT");
+                    });
+                    ui.separator();
+                    // Chat history
+                    egui::ScrollArea::vertical().max_height(300.0).stick_to_bottom(true).show(ui, |ui| {
+                        for (is_user, msg) in &self.ai_chat_history {
+                            let (align, color, prefix) = if *is_user {
+                                (egui::Align::RIGHT, egui::Color32::from_rgb(80, 140, 255), "You")
+                            } else {
+                                (egui::Align::LEFT, egui::Color32::from_rgb(180, 180, 200), "AI")
+                            };
+                            ui.with_layout(egui::Layout::top_down(align), |ui| {
+                                ui.label(egui::RichText::new(prefix).strong().small().color(color));
+                                ui.label(egui::RichText::new(msg).small());
+                            });
+                            ui.add_space(4.0);
+                        }
+                    });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        let resp = ui.add(egui::TextEdit::singleline(&mut self.ai_chat_input).desired_width(ui.available_width() - 60.0).hint_text("Ask anything..."));
+                        let send = ui.button("Send").clicked() || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        if send && !self.ai_chat_input.is_empty() {
+                            let msg = self.ai_chat_input.clone();
+                            self.ai_chat_history.push((true, msg.clone()));
+                            let key = if self.ai_provider == 0 { self.anthropic_key.clone() } else { self.openai_key.clone() };
+                            let provider = if self.ai_provider == 0 { "claude" } else { "openai" };
+                            if key.is_empty() {
+                                self.ai_chat_history.push((false, "Set API key in Settings first.".into()));
+                            } else {
+                                let _ = self.broker_tx.send(BrokerCmd::AiChat {
+                                    provider: provider.into(), api_key: key,
+                                    message: msg, history: self.ai_chat_history.clone(),
+                                });
+                            }
+                            self.ai_chat_input.clear();
+                        }
+                    });
+                });
+        }
+
+        // Matrix Chat (public room viewer)
+        if self.show_matrix_chat {
+            egui::Window::new("Matrix Chat")
+                .open(&mut self.show_matrix_chat)
+                .resizable(true).default_size([450.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Room ID:");
+                        ui.add(egui::TextEdit::singleline(&mut self.matrix_room).desired_width(250.0).hint_text("!roomid:matrix.org"));
+                        if ui.button("Fetch").clicked() && !self.matrix_room.is_empty() {
+                            let _ = self.broker_tx.send(BrokerCmd::MatrixFetchMessages { room_id: self.matrix_room.clone() });
+                        }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        if self.matrix_messages.is_empty() {
+                            ui.label(egui::RichText::new("No messages — enter room ID and click Fetch.").color(AXIS_TEXT).small());
+                        }
+                        for (sender, ts, body) in &self.matrix_messages {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(ts).color(AXIS_TEXT).small().monospace());
+                                let sender_hash = sender.bytes().fold(0u8, |a, b| a.wrapping_add(b)) as usize;
+                                let sender_col = WL_COLORS[sender_hash % WL_COLORS.len()];
+                                ui.label(egui::RichText::new(sender).color(sender_col).small().strong());
+                                ui.label(egui::RichText::new(body).small());
+                            });
+                        }
+                    });
                 });
         }
 
@@ -22887,6 +23076,8 @@ impl eframe::App for TyphooNApp {
                     (keyring::keys::PUSHOVER_TOKEN, "pushover_token"),
                     (keyring::keys::PUSHOVER_USER, "pushover_user"),
                     (keyring::keys::NTFY_TOPIC, "ntfy_topic"),
+                    (keyring::keys::ANTHROPIC_KEY, "anthropic_key"),
+                    (keyring::keys::OPENAI_KEY, "openai_key"),
                 ];
                 let mut loaded_values: Vec<(String, String)> = Vec::new();
                 for (kr_key, _label) in &cred_keys {
@@ -22923,6 +23114,8 @@ impl eframe::App for TyphooNApp {
                         k if k == keyring::keys::PUSHOVER_TOKEN => self.pushover_token = val.clone(),
                         k if k == keyring::keys::PUSHOVER_USER => self.pushover_user = val.clone(),
                         k if k == keyring::keys::NTFY_TOPIC => self.ntfy_topic = val.clone(),
+                        k if k == keyring::keys::ANTHROPIC_KEY => self.anthropic_key = val.clone(),
+                        k if k == keyring::keys::OPENAI_KEY => self.openai_key = val.clone(),
                         _ => {}
                     }
                 }
@@ -23504,6 +23697,12 @@ impl eframe::App for TyphooNApp {
                         if parts.len() == 2 {
                             self.fear_greed_value = parts[0].parse::<u32>().unwrap_or(50);
                             self.fear_greed_label = parts[1].to_string();
+                        }
+                    } else if label == "AiChat" {
+                        self.ai_chat_history.push((false, text.clone()));
+                    } else if label == "MatrixMessages" {
+                        if let Ok(msgs) = serde_json::from_str::<Vec<(String, String, String)>>(&text) {
+                            self.matrix_messages = msgs;
                         }
                     }
                     self.log.push_back(LogEntry::info(format!("{}:\n{}", label, text)));

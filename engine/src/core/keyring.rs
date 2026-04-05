@@ -53,6 +53,8 @@ pub mod keys {
     pub const PUSHOVER_TOKEN: &str = "pushover_token";
     pub const PUSHOVER_USER: &str = "pushover_user";
     pub const NTFY_TOPIC: &str = "ntfy_topic";
+    pub const ANTHROPIC_KEY: &str = "anthropic_api_key";
+    pub const OPENAI_KEY: &str = "openai_api_key";
 }
 
 #[cfg(test)]
