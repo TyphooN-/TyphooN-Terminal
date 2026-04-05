@@ -9930,8 +9930,10 @@ impl TyphooNApp {
                         BrokerCmd::SecScrape { .. } => Some("SEC_SCRAPE"),
                         BrokerCmd::FundamentalsScrape { .. } => Some("FUNDAMENTALS"),
                         BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
-                        BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
-                        BrokerCmd::CryptoCompareBackfill { .. } => Some("CRYPTOCOMPARE"),
+                        // Crypto backfill: execute LOCALLY on client (Kraken/CC are free public APIs)
+                        // Don't forward to server — client fetches its own viewed charts directly
+                        BrokerCmd::KrakenBackfill { .. } => None,
+                        BrokerCmd::CryptoCompareBackfill { .. } => None,
                         BrokerCmd::Mt5Sync { .. } => Some("MT5_SYNC"),
                         BrokerCmd::FinnhubNews { .. } => Some("FINNHUB_NEWS"),
                         BrokerCmd::FetchEconCalendar { .. } => Some("ECON_CALENDAR"),
@@ -23034,8 +23036,10 @@ impl eframe::App for TyphooNApp {
         // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
         // Periodic crypto bar refresh (~60s) — works on both server and LAN client
         // Uses Kraken (free, no auth) as primary source, Alpaca as fallback
-        // Periodic crypto bar refresh — server only (LAN clients get data via sync, avoid API rate limits)
-        if self.frame_count % 240 == 120 && self.lan_sync_mode != "client" {
+        // Periodic crypto bar refresh — runs on both server and LAN client
+        // Kraken is free/public, and LAN clients need fresh bars for their own viewed charts
+        // Rate: ~60s interval, only fetches for the active chart's crypto symbol
+        if self.frame_count % 240 == 120 {
             if let Some(chart) = self.charts.get(self.active_tab) {
                 let sym = chart.symbol.clone();
                 let bare = sym.split(':').last().unwrap_or(&sym).to_string();
