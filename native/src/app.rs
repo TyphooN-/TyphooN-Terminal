@@ -8913,7 +8913,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
     Command { name: "MATRIX",        desc: "Matrix chat room viewer" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
-    Command { name: "BARDATA",       desc: "Download ALL available bars for current symbol (Alpaca + tastytrade)" },
+    Command { name: "BARDATA",       desc: "Download bar data for all known symbols from all brokers" },
     Command { name: "INDICES",       desc: "World stock indices dashboard" },
     Command { name: "CRYPTO50",      desc: "Top 50 cryptocurrencies by market cap" },
     Command { name: "FOREX",         desc: "Forex major pairs dashboard" },
@@ -11414,44 +11414,30 @@ impl TyphooNApp {
                         }
                     }
                     BrokerCmd::FetchAllBars { symbol, timeframe } => {
+                        // Sequential (not spawned) — prevents flooding Alpaca's rate limiter
                         if let Some(ref b) = broker {
-                            let msg_tx = broker_msg_tx_clone.clone();
-                            let b_clone = b.clone();
-                            let shared = shared_cache_broker.clone();
-                            let sym = symbol.clone();
-                            let tf = timeframe.clone();
-                            tokio::spawn(async move {
-                                let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                                // Spawn progress reporter
-                                let msg_tx2 = msg_tx.clone();
-                                let reporter = tokio::spawn(async move {
-                                    while let Some(msg) = progress_rx.recv().await {
-                                        let _ = msg_tx2.send(BrokerMsg::OrderResult(format!("BARDATA: {}", msg)));
-                                    }
-                                });
-                                match b_clone.get_all_bars(&sym, &tf, Some(&progress_tx)).await {
-                                    Ok(bars) => {
-                                        let count = bars.len();
-                                        if count > 0 {
-                                            if let Some(cache) = shared.read().ok().and_then(|g| g.clone()) {
-                                                // Store with alpaca: prefix
-                                                let bare = sym.replace('/', "");
-                                                let key = format!("alpaca:{}:{}", bare, tf);
-                                                let json = serde_json::to_string(&bars).unwrap_or_default();
-                                                let _ = cache.put_bars(&key, &json);
-                                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
-                                                    "BARDATA: {} {} complete — {} bars stored", sym, tf, count)));
-                                                let _ = msg_tx.send(BrokerMsg::Mt5SyncDone(count));
-                                            }
-                                        } else {
-                                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("BARDATA: no bars for {} {}", sym, tf)));
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                "BARDATA: fetching {} {}...", symbol, timeframe)));
+                            match b.get_all_bars(&symbol, &timeframe, None).await {
+                                Ok(bars) => {
+                                    let count = bars.len();
+                                    if count > 0 {
+                                        if let Some(cache) = shared_cache_broker.read().ok().and_then(|g| g.clone()) {
+                                            let bare = symbol.replace('/', "");
+                                            let key = format!("alpaca:{}:{}", bare, timeframe);
+                                            let json = serde_json::to_string(&bars).unwrap_or_default();
+                                            let _ = cache.put_bars(&key, &json);
+                                            let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                                "BARDATA: {} {} — {} bars stored", symbol, timeframe, count)));
+                                            let _ = broker_msg_tx_clone.send(BrokerMsg::Mt5SyncDone(count));
                                         }
                                     }
-                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("BARDATA: {} {} failed: {}", sym, tf, e))); }
                                 }
-                                drop(progress_tx);
-                                let _ = reporter.await;
-                            });
+                                Err(e) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!(
+                                        "BARDATA: {} {} — {}", symbol, timeframe, e)));
+                                }
+                            }
                         } else {
                             let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect Alpaca first for BARDATA".into()));
                         }
@@ -15114,6 +15100,7 @@ impl TyphooNApp {
         self.show_ai_chat = false;
         self.show_matrix_chat = false;
         self.show_reddit = false;
+        self.show_bardata = false;
         self.show_backtest = false;
         self.show_screener = false;
         self.show_symbols = false;
@@ -18253,6 +18240,46 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new(sender).color(sender_col).small().strong());
                                 ui.label(egui::RichText::new(body).small());
                             });
+                        }
+                    });
+                });
+        }
+
+        // BARDATA Progress Window
+        if self.show_bardata {
+            egui::Window::new("BARDATA Sync")
+                .open(&mut self.show_bardata)
+                .resizable(true).default_size([450.0, 350.0])
+                .show(ctx, |ui| {
+                    let total = self.bardata_total;
+                    let queued = self.bardata_queued;
+                    let completed = self.bardata_completed;
+                    let skipped = self.bardata_skipped;
+                    let pct = if queued > 0 { (completed * 100) / queued } else { 0 };
+
+                    // Progress bar
+                    ui.label(egui::RichText::new(format!("Progress: {}/{} symbols ({}%)", completed, queued, pct)).strong());
+                    let bar_frac = if queued > 0 { completed as f32 / queued as f32 } else { 0.0 };
+                    let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 20.0), egui::Sense::hover());
+                    let painter = ui.painter_at(bar_rect);
+                    painter.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(30, 30, 50));
+                    let filled = egui::Rect::from_min_size(bar_rect.min, egui::vec2(bar_rect.width() * bar_frac, 20.0));
+                    painter.rect_filled(filled, 2.0, egui::Color32::from_rgb(0, 200, 100));
+                    painter.text(bar_rect.center(), egui::Align2::CENTER_CENTER,
+                        format!("{}%", pct), egui::FontId::monospace(11.0), egui::Color32::WHITE);
+
+                    ui.add_space(4.0);
+                    egui::Grid::new("bardata_stats").num_columns(2).show(ui, |ui| {
+                        ui.label("Total symbols:"); ui.label(total.to_string()); ui.end_row();
+                        ui.label("Queued:"); ui.label(egui::RichText::new(queued.to_string()).color(UP)); ui.end_row();
+                        ui.label("Completed:"); ui.label(egui::RichText::new(completed.to_string()).color(UP)); ui.end_row();
+                        ui.label("Skipped (cached):"); ui.label(egui::RichText::new(skipped.to_string()).color(AXIS_TEXT)); ui.end_row();
+                    });
+                    ui.separator();
+                    ui.label(egui::RichText::new("Activity Log").small().strong());
+                    egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).show(ui, |ui| {
+                        for msg in &self.bardata_log {
+                            ui.label(egui::RichText::new(msg).monospace().small().color(AXIS_TEXT));
                         }
                     });
                 });
@@ -24181,6 +24208,14 @@ impl eframe::App for TyphooNApp {
                     if is_trade && self.broker_connected {
                         let _ = self.broker_tx.send(BrokerCmd::GetPositions);
                         let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                    }
+                    // Track BARDATA progress
+                    if msg.starts_with("BARDATA:") {
+                        self.bardata_log.push(msg.clone());
+                        if self.bardata_log.len() > 200 { self.bardata_log.drain(0..100); }
+                        if msg.contains("bars stored") || msg.contains("complete") {
+                            self.bardata_completed += 1;
+                        }
                     }
                     self.log.push_back(LogEntry::info(msg));
                 }
