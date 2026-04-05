@@ -9460,6 +9460,10 @@ pub struct TyphooNApp {
     /// SL/TP planning lines (visual, pre-broker).
     sl_price: Option<f64>,
     tp_price: Option<f64>,
+    /// True while user is dragging the SL line on the chart.
+    dragging_sl: bool,
+    /// True while user is dragging the TP line on the chart.
+    dragging_tp: bool,
 
     // ── risk calculator state ────────────────────────────────────────────
     rc_equity: String,
@@ -11692,6 +11696,8 @@ impl TyphooNApp {
             news_articles: Vec::new(),
             sl_price: None,
             tp_price: None,
+            dragging_sl: false,
+            dragging_tp: false,
             rc_equity: "10000".to_string(),
             rc_risk_pct: "1.0".to_string(),
             rc_entry: String::new(),
@@ -25909,7 +25915,46 @@ impl eframe::App for TyphooNApp {
                         chart.scale_start_zoom = chart.price_zoom;
                         chart.scale_start_y = press_pos.y;
                     } else if available.contains(press_pos) {
-                        if chart.selected_drawing.is_some() && self.draw_mode == DrawMode::None {
+                        // Check if press is near SL or TP line (draggable)
+                        let mut sl_tp_drag = false;
+                        if self.draw_mode == DrawMode::None {
+                            let (si, ei) = chart.visible_range();
+                            if ei > si && !chart.bars.is_empty() {
+                                let vis = &chart.bars[si..ei];
+                                let p_min = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                                let p_max = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                                let pad = (p_max - p_min) * 0.05;
+                                let centre = (p_max + p_min + 2.0 * pad) * 0.5 + chart.price_pan;
+                                let half = (p_max - p_min + 2.0 * pad) * 0.5 / chart.price_zoom;
+                                let pm = centre - half;
+                                let px = centre + half;
+                                let price_to_y_drag = |p: f64| -> f32 {
+                                    let frac = (px - p) / (px - pm);
+                                    available.top() + frac as f32 * available.height()
+                                };
+                                if let Some(sl) = self.sl_price {
+                                    let sl_y = price_to_y_drag(sl);
+                                    if (press_pos.y - sl_y).abs() < 8.0 {
+                                        self.dragging_sl = true;
+                                        sl_tp_drag = true;
+                                    }
+                                }
+                                if !sl_tp_drag {
+                                    if let Some(tp) = self.tp_price {
+                                        let tp_y = price_to_y_drag(tp);
+                                        if (press_pos.y - tp_y).abs() < 8.0 {
+                                            self.dragging_tp = true;
+                                            sl_tp_drag = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if sl_tp_drag {
+                            chart.is_dragging = false;
+                            chart.is_drawing_drag = false;
+                            chart.is_scaling_price = false;
+                        } else if chart.selected_drawing.is_some() && self.draw_mode == DrawMode::None {
                             // Drag the selected drawing instead of panning the chart
                             chart.is_drawing_drag = true;
                             chart.is_dragging = false;
@@ -25930,6 +25975,27 @@ impl eframe::App for TyphooNApp {
                     chart.is_drawing_drag = false;
                     chart.is_scaling_price = false;
                     chart.drag_start = None;
+                    self.dragging_sl = false;
+                    self.dragging_tp = false;
+                }
+
+                // SL/TP line drag → update price from mouse Y position
+                if (self.dragging_sl || self.dragging_tp) && drag_delta.y.abs() > 0.0 {
+                    let (si, ei) = chart.visible_range();
+                    if ei > si && !chart.bars.is_empty() {
+                        let vis = &chart.bars[si..ei];
+                        let p_min = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                        let p_max = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                        let pad = (p_max - p_min) * 0.05;
+                        let range = p_max - p_min + 2.0 * pad;
+                        let price_delta = -drag_delta.y as f64 * range / available.height() as f64 / chart.price_zoom;
+                        if self.dragging_sl {
+                            if let Some(ref mut sl) = self.sl_price { *sl += price_delta; }
+                        }
+                        if self.dragging_tp {
+                            if let Some(ref mut tp) = self.tp_price { *tp += price_delta; }
+                        }
+                    }
                 }
 
                 // Price axis drag → vertical zoom (like TradingView)
