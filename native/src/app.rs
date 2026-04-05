@@ -23285,10 +23285,9 @@ impl eframe::App for TyphooNApp {
         // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
         // Periodic crypto bar refresh (~60s) — works on both server and LAN client
         // Uses Kraken (free, no auth) as primary source, Alpaca as fallback
-        // Periodic crypto bar refresh
-        // Server: fetches from Kraken/CryptoCompare directly
-        // LAN client: sends FETCH_BARS request to server for active crypto chart
-        if self.frame_count % 240 == 120 {
+        // Periodic crypto bar refresh — SERVER/STANDALONE ONLY
+        // LAN clients get ALL data from server via sync — no direct API calls
+        if self.frame_count % 240 == 120 && self.lan_sync_mode != "client" && self.cache_loaded {
             if let Some(chart) = self.charts.get(self.active_tab) {
                 let sym = chart.symbol.clone();
                 let bare = sym.split(':').last().unwrap_or(&sym).to_string();
@@ -28482,14 +28481,15 @@ impl eframe::App for TyphooNApp {
         }
 
         // Poll watchlist quotes every ~15 seconds (disabled for LAN client)
-        if self.frame_count % 60 == 5 && !self.user_watchlist.is_empty() && self.broker_connected && !self.lan_client_enabled {
+        if self.frame_count % 60 == 5 && !self.user_watchlist.is_empty() && self.broker_connected && !self.lan_client_enabled && self.cache_loaded {
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
         }
 
         // ── Data sync (disabled when LAN client — server provides all data) ──
         let is_lan_client = self.lan_client_enabled || self.lan_sync_mode == "client";
 
-        if !is_lan_client {
+        // No API calls or data operations before cache is loaded
+        if !is_lan_client && self.cache_loaded {
             // Weekend crypto sync — rotate through ALL Darwinex crypto symbols × ALL TFs.
             // Uses CryptoCompare (deep history) + Kraken (sub-hourly gap-fill).
             // Runs every ~60s, one symbol per cycle = full rotation in ~10 minutes.
