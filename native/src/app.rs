@@ -13590,12 +13590,25 @@ impl TyphooNApp {
                 } else { self.log.push_back(LogEntry::warn("Connect to broker first")); }
             }
             "SET_SL" => {
-                self.draw_mode = DrawMode::PlacingHLine;
-                self.log.push_back(LogEntry::info("Click chart to set SL level"));
+                // Use last close price as initial SL, then user can drag
+                if let Some(chart) = self.charts.get(self.active_tab) {
+                    if let Some(last) = chart.bars.last() {
+                        let sl = last.close * 0.98; // default: 2% below current price
+                        self.sl_price = Some(sl);
+                        self.sl_enabled = true;
+                        self.log.push_back(LogEntry::info(format!("SL set at {} — drag to adjust", format_price(sl))));
+                    }
+                }
             }
             "SET_TP" => {
-                self.draw_mode = DrawMode::PlacingHLine;
-                self.log.push_back(LogEntry::info("Click chart to set TP level"));
+                if let Some(chart) = self.charts.get(self.active_tab) {
+                    if let Some(last) = chart.bars.last() {
+                        let tp = last.close * 1.04; // default: 4% above current price
+                        self.tp_price = Some(tp);
+                        self.tp_enabled = true;
+                        self.log.push_back(LogEntry::info(format!("TP set at {} — drag to adjust", format_price(tp))));
+                    }
+                }
             }
             "OPEN_MG" => {
                 if self.broker_connected {
@@ -23805,24 +23818,63 @@ impl eframe::App for TyphooNApp {
                         ui.close();
                     }
                     if ui.button("Buy Lines").clicked() {
-                        self.draw_mode = DrawMode::PlacingHLine;
-                        self.log.push_back(LogEntry::info("Click chart to place buy reference line (green)"));
+                        // MT5 parity: SL at visible low, TP at visible high (buy setup)
+                        if let Some(chart) = self.charts.get(self.active_tab) {
+                            let (si, ei) = chart.visible_range();
+                            if ei > si && !chart.bars.is_empty() {
+                                let vis = &chart.bars[si..ei];
+                                let lo = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                                let hi = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                                self.sl_price = Some(lo);
+                                self.tp_price = Some(hi);
+                                self.sl_enabled = true;
+                                self.tp_enabled = true;
+                                self.log.push_back(LogEntry::info(format!("Buy Lines: SL {} TP {} (drag to adjust)", format_price(lo), format_price(hi))));
+                            }
+                        }
                         ui.close();
                     }
                     if ui.button("Sell Lines").clicked() {
-                        self.draw_mode = DrawMode::PlacingHLine;
-                        self.log.push_back(LogEntry::info("Click chart to place sell reference line (red)"));
+                        // MT5 parity: SL at visible high, TP at visible low (sell setup)
+                        if let Some(chart) = self.charts.get(self.active_tab) {
+                            let (si, ei) = chart.visible_range();
+                            if ei > si && !chart.bars.is_empty() {
+                                let vis = &chart.bars[si..ei];
+                                let lo = vis.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                                let hi = vis.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                                self.sl_price = Some(hi);
+                                self.tp_price = Some(lo);
+                                self.sl_enabled = true;
+                                self.tp_enabled = true;
+                                self.log.push_back(LogEntry::info(format!("Sell Lines: SL {} TP {} (drag to adjust)", format_price(hi), format_price(lo))));
+                            }
+                        }
                         ui.close();
                     }
                     ui.separator();
                     if ui.button("Set SL Line").clicked() {
-                        self.draw_mode = DrawMode::PlacingHLine;
-                        self.log.push_back(LogEntry::info("Click chart to set SL level"));
+                        // Use current SL price to modify existing positions (MT5 parity: ModifyPosition for SL)
+                        if let Some(sl) = self.sl_price {
+                            if self.broker_connected {
+                                self.log.push_back(LogEntry::info(format!("Set SL: {} — Alpaca does not support modifying SL on existing positions (use bracket orders)", format_price(sl))));
+                            } else {
+                                self.log.push_back(LogEntry::info(format!("Set SL: {} (visual only — connect broker to apply)", format_price(sl))));
+                            }
+                        } else {
+                            self.log.push_back(LogEntry::warn("No SL line set — use Buy Lines or Sell Lines first"));
+                        }
                         ui.close();
                     }
                     if ui.button("Set TP Line").clicked() {
-                        self.draw_mode = DrawMode::PlacingHLine;
-                        self.log.push_back(LogEntry::info("Click chart to set TP level"));
+                        if let Some(tp) = self.tp_price {
+                            if self.broker_connected {
+                                self.log.push_back(LogEntry::info(format!("Set TP: {} — Alpaca does not support modifying TP on existing positions (use bracket orders)", format_price(tp))));
+                            } else {
+                                self.log.push_back(LogEntry::info(format!("Set TP: {} (visual only — connect broker to apply)", format_price(tp))));
+                            }
+                        } else {
+                            self.log.push_back(LogEntry::warn("No TP line set — use Buy Lines or Sell Lines first"));
+                        }
                         ui.close();
                     }
                     if self.sl_price.is_some() || self.tp_price.is_some() {
@@ -24529,13 +24581,31 @@ impl eframe::App for TyphooNApp {
                                     self.show_order_entry = true;
                                 }
                                 if ui.add(egui::Button::new(egui::RichText::new("Buy Lines").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
-                                    self.draw_mode = DrawMode::PlacingHLine;
+                                    // MT5 parity: SL at visible low, TP at visible high
+                                    if let Some(chart) = self.charts.get(self.active_tab) {
+                                        let (si, ei) = chart.visible_range();
+                                        if ei > si && !chart.bars.is_empty() {
+                                            let vis = &chart.bars[si..ei];
+                                            self.sl_price = Some(vis.iter().map(|b| b.low).fold(f64::MAX, f64::min));
+                                            self.tp_price = Some(vis.iter().map(|b| b.high).fold(f64::MIN, f64::max));
+                                            self.sl_enabled = true; self.tp_enabled = true;
+                                        }
+                                    }
                                 }
                             });
                             // Row 2: Sell Lines (.btn-lines) | Destroy Lines (.btn-lines)
                             ui.horizontal(|ui| {
                                 if ui.add(egui::Button::new(egui::RichText::new("Sell Lines").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
-                                    self.draw_mode = DrawMode::PlacingHLine;
+                                    // MT5 parity: SL at visible high, TP at visible low
+                                    if let Some(chart) = self.charts.get(self.active_tab) {
+                                        let (si, ei) = chart.visible_range();
+                                        if ei > si && !chart.bars.is_empty() {
+                                            let vis = &chart.bars[si..ei];
+                                            self.sl_price = Some(vis.iter().map(|b| b.high).fold(f64::MIN, f64::max));
+                                            self.tp_price = Some(vis.iter().map(|b| b.low).fold(f64::MAX, f64::min));
+                                            self.sl_enabled = true; self.tp_enabled = true;
+                                        }
+                                    }
                                 }
                                 if ui.add(egui::Button::new(egui::RichText::new("Destroy Lines").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
                                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
