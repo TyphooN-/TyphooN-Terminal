@@ -1722,12 +1722,36 @@ impl ChartState {
         if is_crypto {
             self.gap_fill_timestamps.clear();
             // Snap timestamps to TF boundary for dedup (handles MT5 UTC+2 vs CC/Kraken UTC)
+            // Weekly: snap to Monday 00:00 UTC. Monthly: snap to 1st of month 00:00 UTC.
             let tf_ms: i64 = match tf {
-                "1Day" => 86_400_000, "1Week" => 7 * 86_400_000, "1Month" => 30 * 86_400_000,
+                "1Day" => 86_400_000,
                 "4Hour" => 4 * 3_600_000, "1Hour" => 3_600_000, "30Min" => 1_800_000,
                 "15Min" => 900_000, "5Min" => 300_000, _ => 60_000,
             };
-            let snap = |ts: i64| -> i64 { ts / tf_ms * tf_ms };
+            let snap = |ts: i64| -> i64 {
+                match tf {
+                    "1Month" => {
+                        // Snap to 1st of month 00:00 UTC
+                        let dt = chrono::DateTime::from_timestamp(ts / 1000, 0).unwrap_or_default();
+                        use chrono::Datelike;
+                        chrono::NaiveDate::from_ymd_opt(dt.year(), dt.month(), 1)
+                            .and_then(|d| d.and_hms_opt(0, 0, 0))
+                            .map(|ndt| ndt.and_utc().timestamp() * 1000)
+                            .unwrap_or(ts / tf_ms * tf_ms)
+                    }
+                    "1Week" => {
+                        // Snap to Monday 00:00 UTC
+                        let dt = chrono::DateTime::from_timestamp(ts / 1000, 0).unwrap_or_default();
+                        use chrono::Datelike;
+                        let days_since_mon = dt.weekday().num_days_from_monday() as i64;
+                        let mon = dt.date_naive() - chrono::Duration::days(days_since_mon);
+                        mon.and_hms_opt(0, 0, 0)
+                            .map(|ndt| ndt.and_utc().timestamp() * 1000)
+                            .unwrap_or(ts / (7 * 86_400_000) * (7 * 86_400_000))
+                    }
+                    _ => ts / tf_ms * tf_ms,
+                }
+            };
             let mut existing_snapped: std::collections::HashSet<i64> = self.bars.iter().map(|b| snap(b.ts_ms)).collect();
 
             let cc_key = format!("cryptocompare:{}:{}", bare_sym, tf);
@@ -1762,6 +1786,17 @@ impl ChartState {
                 if merged > 0 {
                     log.push_back(LogEntry::info(format!("  +{} bars from Kraken weekend fill", merged)));
                 }
+            }
+
+            // Remove any bars with invalid prices (negative, zero, NaN, or obviously wrong)
+            let pre_filter = self.bars.len();
+            self.bars.retain(|b| {
+                b.open > 0.0 && b.high > 0.0 && b.low > 0.0 && b.close > 0.0
+                && b.open.is_finite() && b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
+                && b.high >= b.low // high must be >= low
+            });
+            if self.bars.len() < pre_filter {
+                log.push_back(LogEntry::warn(format!("  Filtered {} invalid bars (negative/zero/NaN prices)", pre_filter - self.bars.len())));
             }
 
             // Sort merged bars by timestamp (CryptoCompare + Kraken may interleave with MT5)
