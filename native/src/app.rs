@@ -1780,10 +1780,11 @@ impl ChartState {
             if now_ms - last_ts > tf_ms {
                 // Try M5 first, then M1
                 let ltf_keys = [
-                    format!("{}:{}:5Min", self.symbol.split(':').next().unwrap_or("mt5"), bare_sym),
+                    format!("kraken:{}:1Min", bare_sym),
                     format!("kraken:{}:5Min", bare_sym),
-                    format!("cryptocompare:{}:5Min", bare_sym),
                     format!("{}:{}:1Min", self.symbol.split(':').next().unwrap_or("mt5"), bare_sym),
+                    format!("{}:{}:5Min", self.symbol.split(':').next().unwrap_or("mt5"), bare_sym),
+                    format!("cryptocompare:{}:5Min", bare_sym),
                 ];
                 for ltf_key in &ltf_keys {
                     if let Ok(Some(ltf_raw)) = cache.get_bars_raw(ltf_key) {
@@ -9896,8 +9897,10 @@ impl TyphooNApp {
                         BrokerCmd::SecScrape { .. } => Some("SEC_SCRAPE"),
                         BrokerCmd::FundamentalsScrape { .. } => Some("FUNDAMENTALS"),
                         BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
-                        BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
-                        BrokerCmd::CryptoCompareBackfill { .. } => Some("CRYPTOCOMPARE"),
+                        // KrakenBackfill + CryptoCompare: execute locally (free public APIs)
+                        // AND forward to server so both sides have the data
+                        BrokerCmd::KrakenBackfill { .. } => None, // execute locally, don't skip
+                        BrokerCmd::CryptoCompareBackfill { .. } => None, // execute locally, don't skip
                         BrokerCmd::Mt5Sync { .. } => Some("MT5_SYNC"),
                         BrokerCmd::FinnhubNews { .. } => Some("FINNHUB_NEWS"),
                         BrokerCmd::FetchEconCalendar { .. } => Some("ECON_CALENDAR"),
@@ -22694,10 +22697,13 @@ impl eframe::App for TyphooNApp {
                     let tf_label = chart.timeframe.label().to_string();
                     let tf_minutes = chart.timeframe.minutes();
                     // Fetch from Kraken (free, no auth, works on weekends)
-                    // Always fetch the chart's TF + M5 for forming bar synthesis on HTF
+                    // Always fetch the chart's TF + M5 + M1 for forming bar synthesis on HTF
                     let mut timeframes = vec![tf_label.clone()];
-                    if tf_minutes > 5 && !timeframes.contains(&"5Min".to_string()) {
+                    if tf_minutes > 5 {
                         timeframes.push("5Min".to_string());
+                    }
+                    if tf_minutes > 1 {
+                        timeframes.push("1Min".to_string());
                     }
                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                     let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: bare.clone(), timeframes, db_path: db_path.clone() });
@@ -23030,6 +23036,29 @@ impl eframe::App for TyphooNApp {
                             self.live_orders = orders;
                         }
                     }
+                    // Live quotes from server (update forming bars on LAN client)
+                    for chart in &mut self.charts {
+                        let bare = chart.symbol.split(':').last().unwrap_or("").to_string();
+                        if !bare.is_empty() {
+                            if let Ok(Some(qv)) = cache.get_kv(&format!("quote:{}", bare)) {
+                                let parts: Vec<&str> = qv.split(',').collect();
+                                if parts.len() == 2 {
+                                    if let (Ok(bid), Ok(ask)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+                                        let mid = (bid + ask) / 2.0;
+                                        if mid > 0.0 {
+                                            chart.live_bid = bid;
+                                            chart.live_ask = ask;
+                                            if let Some(bar) = chart.bars.last_mut() {
+                                                bar.close = mid;
+                                                bar.high = bar.high.max(mid);
+                                                bar.low = bar.low.min(mid);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // DARWIN open positions: read server's computed positions from KV.
                     // This bypasses the broken recompute-from-45K-deals pipeline —
                     // the server already computed the correct 3 positions, stored as KV.
@@ -23338,6 +23367,10 @@ impl eframe::App for TyphooNApp {
                     // Update forming bar close price + live bid/ask on matching charts
                     let last = (bid + ask) / 2.0;
                     if last > 0.0 {
+                        // Store to KV so LAN clients get live quotes
+                        if let Some(ref cache) = self.cache {
+                            let _ = cache.put_kv(&format!("quote:{}", symbol), &format!("{},{}", bid, ask));
+                        }
                         for chart in &mut self.charts {
                             if chart.symbol.contains(&symbol) {
                                 chart.live_bid = bid;
