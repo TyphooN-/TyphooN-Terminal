@@ -1698,12 +1698,13 @@ impl ChartState {
             r.split(':').last().unwrap_or(r).to_string()
         };
 
-        // Load primary source
+        // Load primary source (filter invalid bars at read time)
         match cache.get_bars_raw(&key) {
             Ok(Some(raw)) => {
-                self.bars = raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
-                    ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
-                }).collect();
+                self.bars = raw.into_iter()
+                    .filter(|(ts, o, h, l, c, _v)| *ts > 0 && *o > 0.0 && *h > 0.0 && *l > 0.0 && *c > 0.0 && *h >= *l)
+                    .map(|(ts, o, h, l, c, v)| Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v })
+                    .collect();
             }
             Ok(None) => { self.bars.clear(); }
             Err(e) => {
@@ -1758,6 +1759,7 @@ impl ChartState {
             if let Ok(Some(raw)) = cache.get_bars_raw(&cc_key) {
                 let mut merged = 0;
                 for (ts, o, h, l, c, v) in raw {
+                    if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l { continue; }
                     let snapped = snap(ts);
                     if !existing_snapped.contains(&snapped) {
                         self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
@@ -1775,6 +1777,7 @@ impl ChartState {
             if let Ok(Some(raw)) = cache.get_bars_raw(&kr_key) {
                 let mut merged = 0;
                 for (ts, o, h, l, c, v) in raw {
+                    if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l { continue; }
                     let snapped = snap(ts);
                     if !existing_snapped.contains(&snapped) {
                         self.bars.push(Bar { ts_ms: ts, open: o, high: h, low: l, close: c, volume: v });
@@ -1788,20 +1791,24 @@ impl ChartState {
                 }
             }
 
-            // Remove any bars with invalid prices (negative, zero, NaN, or obviously wrong)
+            // Sort merged bars by timestamp (CryptoCompare + Kraken may interleave with MT5)
+            if !self.bars.is_empty() {
+                self.bars.sort_by_key(|b| b.ts_ms);
+            }
+        }
+
+        // Remove any bars with invalid prices (negative, zero, NaN, or obviously wrong)
+        // Runs unconditionally on ALL bars from ALL sources
+        {
             let pre_filter = self.bars.len();
             self.bars.retain(|b| {
                 b.open > 0.0 && b.high > 0.0 && b.low > 0.0 && b.close > 0.0
                 && b.open.is_finite() && b.high.is_finite() && b.low.is_finite() && b.close.is_finite()
-                && b.high >= b.low // high must be >= low
+                && b.high >= b.low
+                && b.ts_ms > 0
             });
             if self.bars.len() < pre_filter {
-                log.push_back(LogEntry::warn(format!("  Filtered {} invalid bars (negative/zero/NaN prices)", pre_filter - self.bars.len())));
-            }
-
-            // Sort merged bars by timestamp (CryptoCompare + Kraken may interleave with MT5)
-            if !self.bars.is_empty() {
-                self.bars.sort_by_key(|b| b.ts_ms);
+                log.push_back(LogEntry::warn(format!("  Filtered {} invalid bars (negative/zero/NaN/bad prices)", pre_filter - self.bars.len())));
             }
         }
 
