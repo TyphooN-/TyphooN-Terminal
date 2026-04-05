@@ -14072,18 +14072,42 @@ impl TyphooNApp {
     }
 
     fn save_session(&self) {
-        // Write demand.txt for BarCacheWriter — list symbols the terminal actually needs
-        // This prevents BarCacheWriter from re-exporting ALL 851 symbols on reboot
+        // Write demand.txt for BarCacheWriter — ONLY symbols that need MT5 bar updates.
+        // Excludes: crypto (sourced from Kraken/CryptoCompare), symbols with non-MT5 primary source.
+        // BarCacheWriter reads this to avoid re-exporting 851 symbols on reboot.
         {
+            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+                "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB",
+                "OP","MKR","COMP","SNX","CRV","SUSHI","YFI","BAT","MANA","SAND",
+                "AXS","BCH","ETC","XLM","FIL","HBAR","ICP","VET","THETA"];
+            let is_crypto = |sym: &str| -> bool {
+                let su = sym.to_uppercase();
+                crypto_bases.iter().any(|b| su.starts_with(b) && (su.ends_with("USD") || su.ends_with("USDT") || su.ends_with("BTC")))
+            };
+            let is_index_etf = |sym: &str| -> bool {
+                // ETFs/indices sourced from Alpaca, not MT5
+                matches!(sym, "SPY"|"QQQ"|"DIA"|"IWM"|"EFA"|"EEM"|"VGK"|"EWJ"|"FXI"|"EWZ"|"GLD"|"SLV"|"USO"|"TLT"|"UUP")
+            };
             let mut demand_syms: std::collections::HashSet<String> = std::collections::HashSet::new();
-            // Add all chart tab symbols
+            // Add chart tab symbols (only MT5-sourced)
             for chart in &self.charts {
                 let bare = chart.symbol.split(':').last().unwrap_or("").to_string();
-                if !bare.is_empty() { demand_syms.insert(bare); }
+                if bare.is_empty() { continue; }
+                // Only include if the chart's primary source is MT5
+                let source = chart.symbol.split(':').next().unwrap_or("");
+                let is_mt5_source = source.starts_with("mt5") || source.starts_with("default") || source.starts_with("paper_");
+                if is_mt5_source && !is_crypto(&bare) && !is_index_etf(&bare) {
+                    demand_syms.insert(bare);
+                }
             }
-            // Add watchlist symbols
-            for sym in &self.user_watchlist {
-                if !sym.is_empty() { demand_syms.insert(sym.clone()); }
+            // Add DARWIN position symbols (these are MT5 CFD symbols)
+            if self.show_darwin_positions {
+                for pos in &self.bg.open_positions {
+                    let sym = pos.symbol.replace('/', "");
+                    if !sym.is_empty() && !is_crypto(&sym) {
+                        demand_syms.insert(sym);
+                    }
+                }
             }
             if demand_syms.is_empty() { /* nothing to write */ }
             else {
