@@ -8913,6 +8913,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
     Command { name: "MATRIX",        desc: "Matrix chat room viewer" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
+    Command { name: "BARDATA",       desc: "Download ALL available bars for current symbol from Alpaca" },
     Command { name: "INDICES",       desc: "World stock indices dashboard" },
     Command { name: "CRYPTO50",      desc: "Top 50 cryptocurrencies by market cap" },
     Command { name: "FOREX",         desc: "Forex major pairs dashboard" },
@@ -9228,6 +9229,8 @@ enum BrokerCmd {
     TastytradeOptionChain { symbol: String },
     /// Fetch bars from tastytrade via DXLink WebSocket.
     TastytradeFetchBars { symbol: String, timeframe: String },
+    /// Fetch ALL available bars from Alpaca (full history, no limit).
+    FetchAllBars { symbol: String, timeframe: String },
     /// Batch quote request for watchlist symbols.
     GetWatchlistQuotes { symbols: Vec<String> },
     /// Fetch FRED economic data series.
@@ -11233,6 +11236,49 @@ impl TyphooNApp {
                             let _ = broker_msg_tx_clone.send(BrokerMsg::Error(
                                 "Broker not connected — connect Alpaca first".into()
                             ));
+                        }
+                    }
+                    BrokerCmd::FetchAllBars { symbol, timeframe } => {
+                        if let Some(ref b) = broker {
+                            let msg_tx = broker_msg_tx_clone.clone();
+                            let b_clone = b.clone();
+                            let shared = shared_cache_broker.clone();
+                            let sym = symbol.clone();
+                            let tf = timeframe.clone();
+                            tokio::spawn(async move {
+                                let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                                // Spawn progress reporter
+                                let msg_tx2 = msg_tx.clone();
+                                let reporter = tokio::spawn(async move {
+                                    while let Some(msg) = progress_rx.recv().await {
+                                        let _ = msg_tx2.send(BrokerMsg::OrderResult(format!("BARDATA: {}", msg)));
+                                    }
+                                });
+                                match b_clone.get_all_bars(&sym, &tf, Some(&progress_tx)).await {
+                                    Ok(bars) => {
+                                        let count = bars.len();
+                                        if count > 0 {
+                                            if let Some(cache) = shared.read().ok().and_then(|g| g.clone()) {
+                                                // Store with alpaca: prefix
+                                                let bare = sym.replace('/', "");
+                                                let key = format!("alpaca:{}:{}", bare, tf);
+                                                let json = serde_json::to_string(&bars).unwrap_or_default();
+                                                let _ = cache.put_bars(&key, &json);
+                                                let _ = msg_tx.send(BrokerMsg::OrderResult(format!(
+                                                    "BARDATA: {} {} complete — {} bars stored", sym, tf, count)));
+                                                let _ = msg_tx.send(BrokerMsg::Mt5SyncDone(count));
+                                            }
+                                        } else {
+                                            let _ = msg_tx.send(BrokerMsg::OrderResult(format!("BARDATA: no bars for {} {}", sym, tf)));
+                                        }
+                                    }
+                                    Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("BARDATA: {} {} failed: {}", sym, tf, e))); }
+                                }
+                                drop(progress_tx);
+                                let _ = reporter.await;
+                            });
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Connect Alpaca first for BARDATA".into()));
                         }
                     }
                     BrokerCmd::KrakenBackfill { symbol, timeframes, db_path: _ } => {
@@ -13786,6 +13832,26 @@ impl TyphooNApp {
                 self.show_reddit = true;
                 if self.reddit_posts.is_empty() {
                     let _ = self.broker_tx.send(BrokerCmd::FetchRedditWSB);
+                }
+            }
+            "BARDATA" | "FETCH_ALL" | "FULL_HISTORY" => {
+                let sym = self.charts.get(self.active_tab)
+                    .map(|c| c.symbol.split(':').last().unwrap_or("").to_string())
+                    .unwrap_or_default();
+                let tf = self.charts.get(self.active_tab)
+                    .map(|c| c.timeframe.cache_suffix().to_string())
+                    .unwrap_or_else(|| "1Day".into());
+                if !sym.is_empty() {
+                    // Normalize crypto symbol for Alpaca
+                    let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                    let su = sym.to_uppercase();
+                    let api_sym = crypto_bases.iter().find_map(|b| {
+                        if su.starts_with(b) && su.ends_with("USD") && su.len() == b.len() + 3 {
+                            Some(format!("{}/USD", b))
+                        } else { None }
+                    }).unwrap_or_else(|| sym.clone());
+                    let _ = self.broker_tx.send(BrokerCmd::FetchAllBars { symbol: api_sym.clone(), timeframe: tf.clone() });
+                    self.log.push_back(LogEntry::info(format!("Downloading ALL available bars for {} {}...", api_sym, tf)));
                 }
             }
             "INDICES" | "WORLD_INDICES" => {

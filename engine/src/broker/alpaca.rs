@@ -1104,6 +1104,115 @@ impl AlpacaBroker {
 
     // ── Historical Data ──────────────────────────────────────────────
 
+    /// Fetch ALL available bars for a symbol/timeframe from Alpaca.
+    /// Paginates from the earliest available data to the present.
+    /// No limit cap — continues until the API returns no more data.
+    /// Use for initial full history download. Stores progress to callback.
+    pub async fn get_all_bars(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        progress: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
+    ) -> Result<Vec<Bar>, String> {
+        let is_crypto = symbol.contains('/');
+
+        // Monthly: aggregate from weekly
+        if timeframe == "1Month" {
+            let weekly = Box::pin(self.get_all_bars(symbol, "1Week", progress)).await?;
+            return Ok(Self::aggregate_weekly_to_monthly(&weekly));
+        }
+
+        let base = if is_crypto {
+            format!("{}/v1beta3/crypto/us/bars", DATA_BASE)
+        } else {
+            format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol)
+        };
+
+        let feeds: Vec<Option<&str>> = if is_crypto { vec![None] } else { vec![Some("iex"), Some("sip")] };
+
+        // Start from the earliest reasonable date
+        let start_date = if is_crypto { "2015-01-01" } else { "2000-01-01" };
+        let mut last_error = String::new();
+
+        for feed in &feeds {
+            let mut all_bars: Vec<Bar> = Vec::new();
+            let mut next_page_token: Option<String> = None;
+            let mut chunk_count = 0u32;
+            let fetch_start = std::time::Instant::now();
+
+            loop {
+                self.rate_limiter.wait().await;
+
+                let mut params = vec![
+                    ("timeframe", timeframe.to_string()),
+                    ("limit", "10000".to_string()),
+                    ("sort", "asc".to_string()),
+                ];
+                if let Some(ref token) = next_page_token {
+                    params.push(("page_token", token.clone()));
+                } else {
+                    params.push(("start", format!("{}T00:00:00Z", start_date)));
+                }
+                if let Some(f) = feed { params.push(("feed", f.to_string())); }
+                if is_crypto { params.push(("symbols", symbol.to_string())); }
+
+                let resp = match self.client.get(&base).headers(self.headers()).query(&params).send().await {
+                    Ok(r) => r,
+                    Err(e) => { last_error = format!("Request failed: {e}"); break; }
+                };
+
+                if resp.status().as_u16() == 429 {
+                    self.rate_limiter.trigger_cooldown().await;
+                    self.rate_limiter.wait().await;
+                    if all_bars.is_empty() { last_error = "Rate limited".into(); break; }
+                    // Accept partial data on rate limit
+                    break;
+                }
+                if !resp.status().is_success() {
+                    last_error = format!("HTTP {}", resp.status());
+                    let _ = resp.text().await;
+                    break;
+                }
+
+                let json: serde_json::Value = match resp.json().await {
+                    Ok(j) => j,
+                    Err(e) => { last_error = format!("Parse: {e}"); break; }
+                };
+
+                let new_page_token = json.get("next_page_token").and_then(|t| t.as_str()).map(|s| s.to_string());
+                let chunk_bars = Self::parse_bars(&json, symbol, is_crypto);
+                let bars_in_chunk = chunk_bars.len();
+                chunk_count += 1;
+
+                if bars_in_chunk == 0 { break; }
+
+                all_bars.extend(chunk_bars);
+
+                // Report progress
+                if let Some(tx) = progress {
+                    let elapsed = fetch_start.elapsed().as_secs();
+                    let last_ts = all_bars.last().map(|b| &b.timestamp[..10.min(b.timestamp.len())]).unwrap_or("?");
+                    let _ = tx.send(format!("{} {}: {} bars (chunk #{}, {}s, latest: {})",
+                        symbol, timeframe, all_bars.len(), chunk_count, elapsed, last_ts));
+                }
+
+                match new_page_token {
+                    Some(token) if !token.is_empty() => { next_page_token = Some(token); }
+                    _ => break,
+                }
+            }
+
+            if !all_bars.is_empty() {
+                all_bars.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+                all_bars.dedup_by(|a, b| a.timestamp == b.timestamp);
+                tracing::info!("{} {}: get_all_bars complete — {} bars in {}s",
+                    symbol, timeframe, all_bars.len(), fetch_start.elapsed().as_secs());
+                return Ok(all_bars);
+            }
+        }
+        if last_error.is_empty() { Ok(Vec::new()) } else { Err(last_error) }
+    }
+
     pub async fn get_bars(
         &self,
         symbol: &str,
