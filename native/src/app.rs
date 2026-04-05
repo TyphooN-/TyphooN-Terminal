@@ -9293,6 +9293,8 @@ enum BrokerCmd {
     FetchRedditWSB,
     /// Fetch CoinGecko top 50 cryptocurrencies by market cap (free, no auth).
     FetchCryptoTop50,
+    /// Fetch full CryptoCompare coin list (8000+ coins).
+    FetchCryptoSymbols,
 }
 
 /// Messages sent from async broker task → UI.
@@ -9626,6 +9628,9 @@ pub struct TyphooNApp {
     /// Full asset list from broker (symbol, name, asset_class) for Symbol Explorer.
     all_broker_assets: Vec<(String, String, String)>,
     all_broker_assets_fetched: bool,
+    /// Full CryptoCompare coin list: (symbol, name)
+    cc_all_coins: Vec<(String, String)>,
+    cc_coins_fetched: bool,
     show_optimizer: bool,
     show_news: bool,
     show_calendar: bool,
@@ -10633,6 +10638,31 @@ impl TyphooNApp {
                                     }
                                 }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Reddit: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchCryptoSymbols => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder().user_agent("TyphooN-Terminal/1.0").build().unwrap_or_default();
+                            match client.get("https://min-api.cryptocompare.com/data/all/coinlist?summary=true").send().await {
+                                Ok(resp) => {
+                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                        let mut coins = Vec::new();
+                                        if let Some(data) = json["Data"].as_object() {
+                                            for (sym, info) in data {
+                                                let name = info["FullName"].as_str()
+                                                    .or_else(|| info["CoinName"].as_str())
+                                                    .unwrap_or(sym).to_string();
+                                                coins.push((format!("{}USD", sym), name));
+                                            }
+                                        }
+                                        coins.sort_by(|a, b| a.0.cmp(&b.0));
+                                        let text = serde_json::to_string(&coins).unwrap_or_default();
+                                        let _ = msg_tx.send(BrokerMsg::JsonResult("CryptoSymbols".into(), text));
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("CryptoCompare coins: {}", e))); }
                             }
                         });
                     }
@@ -12038,6 +12068,8 @@ impl TyphooNApp {
             symbols_expanded: std::collections::HashSet::new(),
             all_broker_assets: Vec::new(),
             all_broker_assets_fetched: false,
+            cc_all_coins: Vec::new(),
+            cc_coins_fetched: false,
             show_optimizer: false,
             show_news: false,
             show_calendar: false,
@@ -18447,6 +18479,10 @@ impl TyphooNApp {
                 let _ = self.broker_tx.send(BrokerCmd::GetAllAssets);
                 self.all_broker_assets_fetched = true;
             }
+            if !self.cc_coins_fetched {
+                let _ = self.broker_tx.send(BrokerCmd::FetchCryptoSymbols);
+                self.cc_coins_fetched = true; // prevent re-fetch
+            }
 
             egui::Window::new("Symbol Explorer")
                 .open(&mut self.show_symbols)
@@ -18702,46 +18738,52 @@ impl TyphooNApp {
                             }
                         }
 
-                        // -- Section 3: CryptoCompare Universe (on-demand download) --
+                        // ── Section 3: CryptoCompare Universe (full dynamic list) ──
                         {
-                            let cc_coins: &[(&str, &str)] = &[
-                                ("BTCUSD","Bitcoin"),("ETHUSD","Ethereum"),("SOLUSD","Solana"),
-                                ("XRPUSD","XRP"),("DOGEUSD","Dogecoin"),("ADAUSD","Cardano"),
-                                ("AVAXUSD","Avalanche"),("DOTUSD","Polkadot"),("LINKUSD","Chainlink"),
-                                ("MATICUSD","Polygon"),("LTCUSD","Litecoin"),("BCHUSD","Bitcoin Cash"),
-                                ("UNIUSD","Uniswap"),("AAVEUSD","Aave"),("ATOMUSD","Cosmos"),
-                                ("NEARUSD","NEAR"),("FILUSD","Filecoin"),("ICPUSD","Internet Computer"),
-                                ("XLMUSD","Stellar"),("ALGOUSD","Algorand"),("VETUSD","VeChain"),
-                                ("HBARUSD","Hedera"),("FTMUSD","Fantom"),("SANDUSD","Sandbox"),
-                                ("MANAUSD","Decentraland"),("AXSUSD","Axie Infinity"),("GRTUSD","The Graph"),
-                                ("ENJUSD","Enjin"),("BATUSD","BAT"),("COMPUSD","Compound"),
-                                ("MKRUSD","Maker"),("SNXUSD","Synthetix"),("CRVUSD","Curve"),
-                                ("SUSHIUSD","SushiSwap"),("YFIUSD","Yearn"),("TRXUSD","TRON"),
-                                ("ETCUSD","Ethereum Classic"),("EOSUSD","EOS"),("XTZUSD","Tezos"),
-                                ("XMRUSD","Monero"),("ZECUSD","Zcash"),("DASHUSD","Dash"),
-                                ("SHIBUSD","Shiba Inu"),("APEUSD","ApeCoin"),("ARBUSD","Arbitrum"),
-                                ("OPUSD","Optimism"),("THETAUSD","Theta"),("KAVAUSD","Kava"),
-                            ];
-                            let cc_filtered: Vec<_> = cc_coins.iter()
-                                .filter(|(s, n)| filter_upper.is_empty() || s.contains(&filter_upper) || n.to_uppercase().contains(&filter_upper))
-                                .collect();
+                            let cc_count = self.cc_all_coins.len();
+                            let cc_filtered: Vec<&(String, String)> = if filter_upper.is_empty() {
+                                // No filter: show top 100 by alphabetical
+                                self.cc_all_coins.iter().take(200).collect()
+                            } else {
+                                self.cc_all_coins.iter()
+                                    .filter(|(s, n)| s.to_uppercase().contains(&filter_upper) || n.to_uppercase().contains(&filter_upper))
+                                    .take(500)
+                                    .collect()
+                            };
                             let sec_id = "cc_universe".to_string();
                             let exp = self.symbols_expanded.contains(&sec_id);
                             let ar = if exp { "\u{25BC}" } else { "\u{25B6}" };
+                            let label = if cc_count > 0 {
+                                format!("{} CryptoCompare Universe ({} coins, showing {})", ar, cc_count, cc_filtered.len())
+                            } else {
+                                format!("{} CryptoCompare Universe (loading...)", ar)
+                            };
                             ui.add_space(8.0);
                             if ui.add(egui::Label::new(
-                                egui::RichText::new(format!("{} CryptoCompare ({} coins)", ar, cc_filtered.len())).color(sym_magenta).strong()
+                                egui::RichText::new(label).color(sym_magenta).strong()
                             ).sense(egui::Sense::click())).clicked() {
                                 if exp { self.symbols_expanded.remove(&sec_id); } else { self.symbols_expanded.insert(sec_id.clone()); }
                             }
                             if exp {
-                                for (sym, name) in &cc_filtered {
-                                    let is_cached = cached_syms_set.contains(&sym.to_uppercase());
-                                    let cl = if is_cached { " [cached]" } else { "" };
-                                    let info = format!("{}{}", name, cl);
-                                    sym_row!(ui, *sym, info, 12.0_f32, load_sym, add_wl);
+                                if cc_count == 0 {
+                                    ui.label(egui::RichText::new("Fetching coin list from CryptoCompare...").color(sym_dim).small());
+                                } else {
+                                    if filter_upper.is_empty() {
+                                        ui.label(egui::RichText::new("Use filter to search all 8000+ coins").color(sym_dim).small());
+                                    }
+                                    for (sym, name) in &cc_filtered {
+                                        let sym_no_usd = sym.replace("USD", "").to_uppercase();
+                                        let sym_upper = sym.to_uppercase();
+                                        let is_cached = cached_syms_set.contains(&sym_no_usd) || cached_syms_set.contains(&sym_upper);
+                                        let cl = if is_cached { " [cached]" } else { "" };
+                                        // Show full name: "SOLUSD (Solana)"
+                                        let display_name = format!("{}{}", name, cl);
+                                        sym_row!(ui, sym.as_str(), display_name, 12.0_f32, load_sym, add_wl);
+                                    }
+                                    if cc_filtered.len() >= 500 {
+                                        ui.label(egui::RichText::new("... narrow filter for more results").color(sym_dim).small());
+                                    }
                                 }
-                                ui.label(egui::RichText::new("Type any SYMBOLUSD in filter for more (5000+ supported)").color(sym_dim).small());
                             }
                         }
                     });
@@ -24076,6 +24118,12 @@ impl eframe::App for TyphooNApp {
                         }
                     } else if label == "AiChat" {
                         self.ai_chat_history.push((false, text.clone()));
+                    } else if label == "CryptoSymbols" {
+                        if let Ok(coins) = serde_json::from_str::<Vec<(String, String)>>(&text) {
+                            self.cc_all_coins = coins;
+                            self.cc_coins_fetched = true;
+                            self.log.push_back(LogEntry::info(format!("CryptoCompare: {} coins loaded", self.cc_all_coins.len())));
+                        }
                     } else if label == "RedditWSB" {
                         if let Ok(posts) = serde_json::from_str::<Vec<(String, String, u64, u64)>>(&text) {
                             self.reddit_posts = posts;
