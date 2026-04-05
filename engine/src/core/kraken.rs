@@ -195,16 +195,18 @@ fn aggregate_to_monthly(daily: &[serde_json::Value]) -> Vec<serde_json::Value> {
     for bar in daily {
         let ts = bar["timestamp"].as_str().unwrap_or("");
         if ts.len() < 7 { continue; }
-        let month_key = ts[..7].to_string(); // "2024-06"
         let o = bar["open"].as_f64().unwrap_or(0.0);
         let h = bar["high"].as_f64().unwrap_or(0.0);
         let l = bar["low"].as_f64().unwrap_or(0.0);
         let c = bar["close"].as_f64().unwrap_or(0.0);
         let v = bar["volume"].as_f64().unwrap_or(0.0);
+        // Skip bars with invalid prices
+        if o <= 0.0 || h <= 0.0 || l <= 0.0 || c <= 0.0 || h < l { continue; }
+        let month_key = ts[..7].to_string(); // "2024-06"
 
         let entry = monthly.entry(month_key).or_insert((o, h, l, c, 0.0, ts.to_string()));
         if h > entry.1 { entry.1 = h; }
-        if l < entry.2 || entry.2 == 0.0 { entry.2 = l; }
+        if l < entry.2 { entry.2 = l; }
         entry.3 = c; // close = last day's close
         entry.4 += v;
     }
