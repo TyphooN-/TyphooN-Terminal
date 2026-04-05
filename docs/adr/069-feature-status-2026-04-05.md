@@ -42,14 +42,14 @@
 
 | Claimed Feature | Status | Notes |
 |----------------|--------|-------|
-| Fear and Greed Index | NOT IMPLEMENTED | alternative.me API exists in ADR-033 research, not wired |
+| Fear and Greed Index | IMPLEMENTED | FNG command, gauge visualization, alternative.me API |
 | World Indices Dashboard | NOT IMPLEMENTED | Yahoo Finance scraper exists but no dedicated dashboard |
 | Forex Cross-Rate Matrix | NOT IMPLEMENTED | ECB rates exist but no matrix UI |
 | Crypto Top 50 | NOT IMPLEMENTED | CoinGecko API researched but not wired |
 | Dark Pool Volume | NOT IMPLEMENTED | SqueezMetrics DIX/GEX researched but not wired |
 | OCO Orders | NOT IMPLEMENTED | Only market/limit/stop/bracket exist |
 | Draggable SL/TP | PARTIAL | SL/TP lines render on chart but are not interactively draggable; must edit numerically |
-| 7 Order Types | PARTIAL | 5 types functional (market/limit/stop/bracket/cancel). Missing: trailing stop, OCO, stop-limit |
+| 7 Order Types | PARTIAL | 6 types functional (market/limit/stop/stop-limit/bracket/trailing). Missing: OCO |
 
 ## Remaining Gaps (Prioritized)
 

@@ -8858,6 +8858,9 @@ const COMMANDS: &[Command] = &[
     Command { name: "LOAD_TEMPLATE", desc: "Load a saved indicator template (LOAD_TEMPLATE <name>)" },
     Command { name: "TEMPLATES",     desc: "List all available chart templates" },
     Command { name: "FEAR_GREED",    desc: "Crypto Fear & Greed Index" },
+    Command { name: "INDICES",       desc: "World stock indices dashboard" },
+    Command { name: "CRYPTO50",      desc: "Top 50 cryptocurrencies by market cap" },
+    Command { name: "FOREX",         desc: "Forex major pairs dashboard" },
 ];
 
 fn fuzzy_match(query: &str, target: &str) -> bool {
@@ -9217,6 +9220,8 @@ enum BrokerCmd {
     AlpacaStopLimitOrder { symbol: String, qty: f64, side: String, stop_price: f64, limit_price: f64 },
     /// Fetch Crypto Fear & Greed Index (alternative.me, no auth).
     FetchFearGreed,
+    /// Fetch CoinGecko top 50 cryptocurrencies by market cap (free, no auth).
+    FetchCryptoTop50,
 }
 
 /// Messages sent from async broker task → UI.
@@ -9270,6 +9275,8 @@ enum BrokerMsg {
     Mt5SyncDone(usize),
     /// Live bid/ask from MT5 BarCacheWriter — update forming bars.
     Mt5LiveQuotes(Vec<(String, f64, f64)>), // (symbol, bid, ask)
+    /// Crypto Top 50 from CoinGecko (name, price, 24h%, market_cap).
+    CryptoTop50(Vec<(String, f64, f64, f64)>),
 }
 
 /// Reusable sort state for clickable column headers.
@@ -9686,6 +9693,18 @@ pub struct TyphooNApp {
     show_fear_greed: bool,
     fear_greed_value: u32,     // 0-100
     fear_greed_label: String,  // "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed"
+
+    // ── World Indices Dashboard ─────────────────────────────────────────
+    show_world_indices: bool,
+    world_indices_data: Vec<WatchlistRow>,
+
+    // ── Crypto Top 50 ───────────────────────────────────────────────────
+    show_crypto_top50: bool,
+    crypto_top50: Vec<(String, f64, f64, f64)>, // (name, price, change_24h%, market_cap)
+
+    // ── Forex Major Pairs ───────────────────────────────────────────────
+    show_forex_matrix: bool,
+    forex_pairs_data: Vec<WatchlistRow>,
 
     /// Bottom panel tab.
     bottom_tab: BottomTab,
@@ -10382,6 +10401,32 @@ impl TyphooNApp {
                                     }
                                 }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Fear & Greed: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchCryptoTop50 => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::new();
+                            match client.get("https://api.coingecko.com/api/v3/coins/markets")
+                                .query(&[("vs_currency", "usd"), ("order", "market_cap_desc"), ("per_page", "50"), ("page", "1")])
+                                .header("User-Agent", "TyphooN-Terminal/1.0")
+                                .send().await {
+                                Ok(resp) => {
+                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                        if let Some(arr) = json.as_array() {
+                                            let data: Vec<(String, f64, f64, f64)> = arr.iter().map(|c| {
+                                                let name = format!("{} ({})", c["name"].as_str().unwrap_or("?"), c["symbol"].as_str().unwrap_or("?").to_uppercase());
+                                                let price = c["current_price"].as_f64().unwrap_or(0.0);
+                                                let change = c["price_change_percentage_24h"].as_f64().unwrap_or(0.0);
+                                                let mcap = c["market_cap"].as_f64().unwrap_or(0.0);
+                                                (name, price, change, mcap)
+                                            }).collect();
+                                            let _ = msg_tx.send(BrokerMsg::CryptoTop50(data));
+                                        }
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("CoinGecko: {}", e))); }
                             }
                         });
                     }
@@ -11829,6 +11874,12 @@ impl TyphooNApp {
             show_fear_greed: false,
             fear_greed_value: 0,
             fear_greed_label: String::new(),
+            show_world_indices: false,
+            world_indices_data: Vec::new(),
+            show_crypto_top50: false,
+            crypto_top50: Vec::new(),
+            show_forex_matrix: false,
+            forex_pairs_data: Vec::new(),
             bottom_tab: BottomTab::Log,
             log,
             crosshair: None,
@@ -13479,6 +13530,29 @@ impl TyphooNApp {
                     let _ = self.broker_tx.send(BrokerCmd::FetchFearGreed);
                 }
             }
+            "INDICES" | "WORLD_INDICES" => {
+                self.show_world_indices = true;
+                let symbols = vec![
+                    "DIA","SPY","QQQ","IWM","EFA","EEM","VGK","EWJ",
+                    "FXI","EWZ","GLD","SLV","USO","TLT","UUP","BTCUSD",
+                ].into_iter().map(String::from).collect();
+                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
+                self.log.push_back(LogEntry::info("Fetching world indices quotes..."));
+            }
+            "CRYPTO50" | "CRYPTO_TOP50" => {
+                self.show_crypto_top50 = true;
+                let _ = self.broker_tx.send(BrokerCmd::FetchCryptoTop50);
+                self.log.push_back(LogEntry::info("Fetching CoinGecko top 50..."));
+            }
+            "FOREX" | "FOREX_MATRIX" => {
+                self.show_forex_matrix = true;
+                let symbols = vec![
+                    "EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","NZDUSD","USDCAD",
+                    "EURGBP","EURJPY","GBPJPY",
+                ].into_iter().map(String::from).collect();
+                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
+                self.log.push_back(LogEntry::info("Fetching forex pairs..."));
+            }
             "PREV_LEVELS"    => self.show_prev_levels = !self.show_prev_levels,
             "CRYPTO_BACKFILL" => {
                 self.show_crypto_backfill = true;
@@ -13801,6 +13875,9 @@ impl TyphooNApp {
                 "fred": self.show_fred,
                 "econ_calendar": self.show_econ_calendar,
                 "congress": self.show_congress,
+                "world_indices": self.show_world_indices,
+                "crypto_top50": self.show_crypto_top50,
+                "forex_matrix": self.show_forex_matrix,
             },
             "journal": self.journal_entries.iter().map(|e| serde_json::json!({
                 "timestamp": e.timestamp, "symbol": e.symbol, "side": e.side,
@@ -14230,6 +14307,9 @@ impl TyphooNApp {
                     if let Some(b) = w["fred"].as_bool() { self.show_fred = b; }
                     if let Some(b) = w["econ_calendar"].as_bool() { self.show_econ_calendar = b; }
                     if let Some(b) = w["congress"].as_bool() { self.show_congress = b; }
+                    if let Some(b) = w["world_indices"].as_bool() { self.show_world_indices = b; }
+                    if let Some(b) = w["crypto_top50"].as_bool() { self.show_crypto_top50 = b; }
+                    if let Some(b) = w["forex_matrix"].as_bool() { self.show_forex_matrix = b; }
                 }
                 // Restore journal entries
                 if let Some(journal) = v["journal"].as_array() {
@@ -14334,6 +14414,9 @@ impl TyphooNApp {
         self.show_econ_calendar = false;
         self.show_congress = false;
         self.show_fear_greed = false;
+        self.show_world_indices = false;
+        self.show_crypto_top50 = false;
+        self.show_forex_matrix = false;
     }
 
     // ── chart interaction (zoom / pan) ───────────────────────────────────────
@@ -22155,6 +22238,139 @@ impl TyphooNApp {
                 });
         }
 
+        // World Indices Dashboard
+        if self.show_world_indices {
+            egui::Window::new("World Indices")
+                .open(&mut self.show_world_indices)
+                .resizable(true).default_size([620.0, 480.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("World Stock Indices & ETFs").strong());
+                    if ui.small_button("Refresh").clicked() {
+                        let symbols = vec![
+                            "DIA","SPY","QQQ","IWM","EFA","EEM","VGK","EWJ",
+                            "FXI","EWZ","GLD","SLV","USO","TLT","UUP","BTCUSD",
+                        ].into_iter().map(String::from).collect();
+                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
+                    }
+                    ui.separator();
+                    if self.world_indices_data.is_empty() {
+                        ui.label(egui::RichText::new("Loading... (requires broker connection)").color(AXIS_TEXT));
+                    } else {
+                        let descs: std::collections::HashMap<&str, &str> = [
+                            ("DIA", "DJIA"), ("SPY", "S&P 500"), ("QQQ", "NASDAQ-100"), ("IWM", "Russell 2000"),
+                            ("EFA", "EAFE Intl"), ("EEM", "Emerging Mkts"), ("VGK", "Europe"), ("EWJ", "Japan"),
+                            ("FXI", "China"), ("EWZ", "Brazil"), ("GLD", "Gold"), ("SLV", "Silver"),
+                            ("USO", "Oil"), ("TLT", "20Y Bonds"), ("UUP", "US Dollar"), ("BTCUSD", "Bitcoin"),
+                        ].iter().cloned().collect();
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            egui::Grid::new("indices_grid").striped(true).num_columns(5).min_col_width(80.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Symbol").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Name").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Last").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Change").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Change%").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for row in &self.world_indices_data {
+                                    let desc = descs.get(row.symbol.to_uppercase().as_str()).unwrap_or(&"");
+                                    let color = if row.change_pct > 0.0 { UP } else if row.change_pct < 0.0 { DOWN } else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(&row.symbol).small().strong().monospace());
+                                    ui.label(egui::RichText::new(*desc).small().color(AXIS_TEXT));
+                                    ui.label(egui::RichText::new(format_price(row.last)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}", row.change)).color(color).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", row.change_pct)).color(color).small().strong().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+        }
+
+        // Crypto Top 50 (CoinGecko)
+        if self.show_crypto_top50 {
+            egui::Window::new("Crypto Top 50")
+                .open(&mut self.show_crypto_top50)
+                .resizable(true).default_size([700.0, 550.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Top 50 Cryptocurrencies by Market Cap").strong());
+                    if ui.small_button("Refresh").clicked() {
+                        let _ = self.broker_tx.send(BrokerCmd::FetchCryptoTop50);
+                    }
+                    ui.separator();
+                    if self.crypto_top50.is_empty() {
+                        ui.label(egui::RichText::new("Loading from CoinGecko...").color(AXIS_TEXT));
+                    } else {
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            egui::Grid::new("crypto50_grid").striped(true).num_columns(5).min_col_width(80.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("#").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Name").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Price").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("24h%").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Market Cap").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for (i, (name, price, change, mcap)) in self.crypto_top50.iter().enumerate() {
+                                    let color = if *change > 0.0 { UP } else if *change < 0.0 { DOWN } else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(format!("{}", i + 1)).small().monospace());
+                                    ui.label(egui::RichText::new(name).small());
+                                    let price_str = if *price >= 1.0 { format!("${:.2}", price) } else { format!("${:.6}", price) };
+                                    ui.label(egui::RichText::new(price_str).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", change)).color(color).small().strong().monospace());
+                                    let mcap_str = if *mcap >= 1e12 { format!("${:.1}T", mcap / 1e12) }
+                                        else if *mcap >= 1e9 { format!("${:.1}B", mcap / 1e9) }
+                                        else if *mcap >= 1e6 { format!("${:.1}M", mcap / 1e6) }
+                                        else { format!("${:.0}", mcap) };
+                                    ui.label(egui::RichText::new(mcap_str).small().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+        }
+
+        // Forex Major Pairs Dashboard
+        if self.show_forex_matrix {
+            egui::Window::new("Forex Pairs")
+                .open(&mut self.show_forex_matrix)
+                .resizable(true).default_size([550.0, 380.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Major Forex Pairs").strong());
+                    if ui.small_button("Refresh").clicked() {
+                        let symbols = vec![
+                            "EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","NZDUSD","USDCAD",
+                            "EURGBP","EURJPY","GBPJPY",
+                        ].into_iter().map(String::from).collect();
+                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
+                    }
+                    ui.separator();
+                    if self.forex_pairs_data.is_empty() {
+                        ui.label(egui::RichText::new("Loading... (requires broker connection)").color(AXIS_TEXT));
+                    } else {
+                        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                            egui::Grid::new("forex_grid").striped(true).num_columns(4).min_col_width(90.0).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Pair").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Last").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Change").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Change%").color(AXIS_TEXT).small().strong());
+                                ui.end_row();
+                                for row in &self.forex_pairs_data {
+                                    let color = if row.change_pct > 0.0 { UP } else if row.change_pct < 0.0 { DOWN } else { AXIS_TEXT };
+                                    // Forex uses 5 decimal places for most, 3 for JPY pairs
+                                    let is_jpy = row.symbol.to_uppercase().contains("JPY");
+                                    let price_str = if is_jpy { format!("{:.3}", row.last) } else { format!("{:.5}", row.last) };
+                                    ui.label(egui::RichText::new(&row.symbol).small().strong().monospace());
+                                    ui.label(egui::RichText::new(price_str).small().monospace());
+                                    let chg_str = if is_jpy { format!("{:+.3}", row.change) } else { format!("{:+.5}", row.change) };
+                                    ui.label(egui::RichText::new(chg_str).color(color).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:+.2}%", row.change_pct)).color(color).small().strong().monospace());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+        }
+
         // DARWIN FTP Browser
         if self.show_darwin_browser {
             egui::Window::new("DarwinIA Browser")
@@ -22968,7 +23184,26 @@ impl eframe::App for TyphooNApp {
                             }
                         }
                     }
+                    // Route to world indices / forex windows if open
+                    let indices_syms = ["DIA","SPY","QQQ","IWM","EFA","EEM","VGK","EWJ","FXI","EWZ","GLD","SLV","USO","TLT","UUP","BTCUSD"];
+                    let forex_syms = ["EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","NZDUSD","USDCAD","EURGBP","EURJPY","GBPJPY"];
+                    if self.show_world_indices {
+                        let idx_rows: Vec<WatchlistRow> = rows.iter()
+                            .filter(|r| indices_syms.iter().any(|s| r.symbol.eq_ignore_ascii_case(s)))
+                            .cloned().collect();
+                        if !idx_rows.is_empty() { self.world_indices_data = idx_rows; }
+                    }
+                    if self.show_forex_matrix {
+                        let fx_rows: Vec<WatchlistRow> = rows.iter()
+                            .filter(|r| forex_syms.iter().any(|s| r.symbol.eq_ignore_ascii_case(s)))
+                            .cloned().collect();
+                        if !fx_rows.is_empty() { self.forex_pairs_data = fx_rows; }
+                    }
                     self.watchlist_rows = rows;
+                }
+                BrokerMsg::CryptoTop50(data) => {
+                    self.log.push_back(LogEntry::info(format!("CoinGecko: {} coins loaded", data.len())));
+                    self.crypto_top50 = data;
                 }
                 BrokerMsg::FredData(series, yields) => {
                     self.fred_data = series;
