@@ -18449,14 +18449,20 @@ impl TyphooNApp {
                     let uncached_count = self.all_broker_assets.iter()
                         .filter(|(s, _, _)| !cached_syms_set.contains(&s.replace('/', "").to_uppercase()))
                         .count();
+                    let cache_label = if self.lan_sync_mode == "client" { "cached (local)" } else { "cached" };
                     ui.label(egui::RichText::new(format!(
-                        "{} cached symbols | {} broker universe ({} not cached)",
-                        cached_count, broker_count, uncached_count
+                        "{} {} symbols | {} broker universe ({} not cached)",
+                        cached_count, cache_label, broker_count, uncached_count
                     )).color(sym_dim));
+                    if self.lan_sync_mode == "client" {
+                        ui.label(egui::RichText::new("LAN Client — use \u{1F4E5} to sync symbol from server").color(sym_teal).small());
+                    }
                     ui.add_space(4.0);
 
                     let mut load_sym: Option<String> = None;
                     let mut add_wl: Option<String> = None;
+                    let mut sync_sym: Option<String> = None;
+                    let is_lan_client = self.lan_sync_mode == "client";
 
                     // Macro for symbol row rendering
                     macro_rules! sym_row {
@@ -18464,12 +18470,18 @@ impl TyphooNApp {
                             $ui.horizontal(|ui| {
                                 ui.add_space($indent);
                                 if ui.add(egui::Button::new(egui::RichText::new("\u{1F4C8}").small())
-                                    .min_size(egui::vec2(22.0, 18.0))).clicked() {
+                                    .min_size(egui::vec2(22.0, 18.0))).on_hover_text("Load chart").clicked() {
                                     $load = Some($sym.to_string());
                                 }
                                 if ui.add(egui::Button::new(egui::RichText::new("+WL").color(sym_blue).small())
-                                    .min_size(egui::vec2(30.0, 18.0))).clicked() {
+                                    .min_size(egui::vec2(30.0, 18.0))).on_hover_text("Add to watchlist").clicked() {
                                     $wl = Some($sym.to_string());
+                                }
+                                if is_lan_client {
+                                    if ui.add(egui::Button::new(egui::RichText::new("\u{1F4E5}").small())
+                                        .min_size(egui::vec2(22.0, 18.0))).on_hover_text("Sync all TFs from server").clicked() {
+                                        sync_sym = Some($sym.to_string());
+                                    }
                                 }
                                 if ui.add(egui::Label::new(
                                     egui::RichText::new($sym).monospace().color(sym_white)
@@ -18637,6 +18649,19 @@ impl TyphooNApp {
                             }
                             self.log.push_back(LogEntry::info(format!("Added {} to watchlist", sym_upper)));
                         }
+                    }
+
+                    // Handle sync from server (LAN client)
+                    if let Some(sym) = sync_sym {
+                        let all_tfs = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month"];
+                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                        for tf in &all_tfs {
+                            let _ = self.broker_tx.send(BrokerCmd::FetchBars {
+                                symbol: sym.clone(), timeframe: tf.to_string(), db_path: db_path.clone(),
+                            });
+                        }
+                        let _ = self.broker_tx.send(BrokerCmd::LanResyncBars);
+                        self.log.push_back(LogEntry::info(format!("Syncing ALL TFs for {} from server...", sym)));
                     }
                 });
         }
