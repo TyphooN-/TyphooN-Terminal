@@ -60,11 +60,20 @@ fn to_kraken_pair(sym: &str) -> Option<&'static str> {
         "SUSHIUSD" => Some("SUSHIUSD"),
         "YFIUSD" => Some("YFIUSD"),
         "BATUSD" => Some("BATUSD"),
-        "ZECUSD" => Some("ZECUSD"),
+        "XMRUSD" => Some("XXMRZUSD"),
+        "ZECUSD" => Some("XZECZUSD"),
         "DASHUSD" => Some("DASHUSD"),
         "ENJUSD" => Some("ENJUSD"),
         "FTMUSD" => Some("FTMUSD"),
-        "BNBUSD" => Some("BNBUSD"), // Kraken may not have BNB
+        "BNBUSD" => Some("BNBUSD"),
+        "SHIBUSD" => Some("SHIBUSD"),
+        "APEUSD" => Some("APEUSD"),
+        "ARBUSD" => Some("ARBUSD"),
+        "OPUSD" => Some("OPUSD"),
+        "HBARUSD" => Some("HBARUSD"),
+        "VETUSD" => Some("VETUSD"),
+        "THETAUSD" => Some("THETAUSD"),
+        "AXSUSD" => Some("AXSUSD"),
         _ => None,
     }
 }

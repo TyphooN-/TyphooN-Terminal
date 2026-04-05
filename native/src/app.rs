@@ -1465,7 +1465,7 @@ impl ChartState {
             sym.replace('/', "")
         } else {
             // Check if it looks like a crypto pair (e.g. SOLUSD → SOL/USD)
-            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH",
                 "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB",
                 "OP","MKR","COMP","SNX","CRV","SUSHI","YFI","BAT","MANA","SAND",
                 "AXS","BCH","ETC","XLM","FIL","HBAR","ICP","VET","THETA"];
@@ -1600,7 +1600,7 @@ impl ChartState {
             // Try all alternate source prefixes for gap-fill (crypto slash variants too)
             let sym_slash = {
                 let s = sym.to_uppercase();
-                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH"];
                 crypto_bases.iter().find_map(|base| {
                     if s.starts_with(base) && s.ends_with("USD") && s.len() == base.len() + 3 {
                         Some(format!("{}/USD", base))
@@ -1715,7 +1715,7 @@ impl ChartState {
 
         // Merge gap-fill sources: CryptoCompare then Kraken
         // For crypto: merge ALL bars (fill gaps anywhere, not just append to end)
-        let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+        let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH",
             "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
         let sym_upper = bare_sym.to_uppercase();
         let is_crypto = crypto_bases.iter().any(|b| sym_upper.starts_with(b) && sym_upper.ends_with("USD"));
@@ -10129,7 +10129,7 @@ impl TyphooNApp {
                             let mut rows = Vec::new();
                             for sym in &symbols {
                                 let api_sym = {
-                                    let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                                    let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH"];
                                     let su = sym.to_uppercase();
                                     crypto_bases.iter().find_map(|base| {
                                         if su.starts_with(base) && su.ends_with("USD") && su.len() == base.len() + 3 {
@@ -13866,7 +13866,7 @@ impl TyphooNApp {
                 if symbols.is_empty() {
                     self.log.push_back(LogEntry::warn("BARDATA: no symbols to fetch — open charts or add to watchlist first"));
                 } else {
-                    let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+                    let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH",
                         "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
 
                     // Build set of already-cached symbol:TF combos to skip redundant fetches
@@ -14419,7 +14419,7 @@ impl TyphooNApp {
         // Excludes: crypto (sourced from Kraken/CryptoCompare), symbols with non-MT5 primary source.
         // BarCacheWriter reads this to avoid re-exporting 851 symbols on reboot.
         {
-            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
+            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH",
                 "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB",
                 "OP","MKR","COMP","SNX","CRV","SUSHI","YFI","BAT","MANA","SAND",
                 "AXS","BCH","ETC","XLM","FIL","HBAR","ICP","VET","THETA"];
@@ -23291,7 +23291,7 @@ impl eframe::App for TyphooNApp {
             if let Some(chart) = self.charts.get(self.active_tab) {
                 let sym = chart.symbol.clone();
                 let bare = sym.split(':').last().unwrap_or(&sym).to_string();
-                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH"];
                 let su = bare.to_uppercase();
                 let is_crypto = crypto_bases.iter().any(|b| su.starts_with(b) && su.ends_with("USD"));
                 if is_crypto {
@@ -28374,7 +28374,7 @@ impl eframe::App for TyphooNApp {
                                             let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                                             // Detect crypto and use Kraken (free, works weekends) + Alpaca
                                             let su = symbol.to_uppercase();
-                                            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                                            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT","XMR","ZEC","DASH"];
                                             let is_crypto = crypto_bases.iter().any(|b| su.starts_with(b) && su.ends_with("USD"));
                                             if is_crypto {
                                                 let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
