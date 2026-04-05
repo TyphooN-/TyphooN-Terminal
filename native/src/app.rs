@@ -8870,6 +8870,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "FEAR_GREED",    desc: "Crypto Fear & Greed Index" },
     Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
     Command { name: "MATRIX",        desc: "Matrix chat room viewer" },
+    Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
     Command { name: "INDICES",       desc: "World stock indices dashboard" },
     Command { name: "CRYPTO50",      desc: "Top 50 cryptocurrencies by market cap" },
     Command { name: "FOREX",         desc: "Forex major pairs dashboard" },
@@ -9242,6 +9243,8 @@ enum BrokerCmd {
     AlpacaStopLimitOrder { symbol: String, qty: f64, side: String, stop_price: f64, limit_price: f64 },
     /// Fetch Crypto Fear & Greed Index (alternative.me, no auth).
     FetchFearGreed,
+    /// Fetch Reddit WSB hot posts (no auth).
+    FetchRedditWSB,
     /// Fetch CoinGecko top 50 cryptocurrencies by market cap (free, no auth).
     FetchCryptoTop50,
 }
@@ -9480,6 +9483,9 @@ pub struct TyphooNApp {
     ai_chat_history: Vec<(bool, String)>, // (is_user, message)
     ai_chat_input: String,
     ai_provider: usize, // 0=Claude, 1=GPT
+    /// Reddit WSB posts.
+    show_reddit: bool,
+    reddit_posts: Vec<(String, String, u64, u64)>, // (title, url, score, comments)
     /// Matrix chat (public room message viewer).
     show_matrix_chat: bool,
     matrix_room: String,
@@ -10555,6 +10561,32 @@ impl TyphooNApp {
                                     }
                                 }
                                 Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Fear & Greed: {}", e))); }
+                            }
+                        });
+                    }
+                    BrokerCmd::FetchRedditWSB => {
+                        let msg_tx = broker_msg_tx_clone.clone();
+                        tokio::spawn(async move {
+                            let client = reqwest::Client::builder().user_agent("TyphooN-Terminal/1.0").build().unwrap_or_default();
+                            match client.get("https://www.reddit.com/r/wallstreetbets/hot.json?limit=25").send().await {
+                                Ok(resp) => {
+                                    if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                        let mut posts = Vec::new();
+                                        if let Some(children) = json["data"]["children"].as_array() {
+                                            for child in children {
+                                                let d = &child["data"];
+                                                let title = d["title"].as_str().unwrap_or("").to_string();
+                                                let url = d["permalink"].as_str().map(|p| format!("https://reddit.com{}", p)).unwrap_or_default();
+                                                let score = d["score"].as_u64().unwrap_or(0);
+                                                let comments = d["num_comments"].as_u64().unwrap_or(0);
+                                                if !title.is_empty() { posts.push((title, url, score, comments)); }
+                                            }
+                                        }
+                                        let text = serde_json::to_string(&posts).unwrap_or_default();
+                                        let _ = msg_tx.send(BrokerMsg::JsonResult("RedditWSB".into(), text));
+                                    }
+                                }
+                                Err(e) => { let _ = msg_tx.send(BrokerMsg::Error(format!("Reddit: {}", e))); }
                             }
                         });
                     }
@@ -11849,6 +11881,8 @@ impl TyphooNApp {
             ai_chat_history: Vec::new(),
             ai_chat_input: String::new(),
             ai_provider: 0,
+            show_reddit: false,
+            reddit_posts: Vec::new(),
             show_matrix_chat: false,
             matrix_room: String::new(),
             matrix_messages: Vec::new(),
@@ -13705,6 +13739,12 @@ impl TyphooNApp {
             }
             "AI" | "AI_CHAT" | "CHAT" => self.show_ai_chat = true,
             "MATRIX" => self.show_matrix_chat = true,
+            "WSB" | "REDDIT" | "WALLSTREETBETS" => {
+                self.show_reddit = true;
+                if self.reddit_posts.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::FetchRedditWSB);
+                }
+            }
             "INDICES" | "WORLD_INDICES" => {
                 self.show_world_indices = true;
                 let symbols = vec![
@@ -14634,6 +14674,7 @@ impl TyphooNApp {
         self.show_compound_calc = false;
         self.show_ai_chat = false;
         self.show_matrix_chat = false;
+        self.show_reddit = false;
         self.show_backtest = false;
         self.show_screener = false;
         self.show_symbols = false;
@@ -17739,6 +17780,32 @@ impl TyphooNApp {
                                 let sender_col = WL_COLORS[sender_hash % WL_COLORS.len()];
                                 ui.label(egui::RichText::new(sender).color(sender_col).small().strong());
                                 ui.label(egui::RichText::new(body).small());
+                            });
+                        }
+                    });
+                });
+        }
+
+        // Reddit WallStreetBets
+        if self.show_reddit {
+            egui::Window::new("Reddit — r/WallStreetBets")
+                .open(&mut self.show_reddit)
+                .resizable(true).default_size([550.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{} posts", self.reddit_posts.len())).strong());
+                        if ui.button("Refresh").clicked() {
+                            let _ = self.broker_tx.send(BrokerCmd::FetchRedditWSB);
+                        }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                        for (title, _url, score, comments) in &self.reddit_posts {
+                            ui.horizontal(|ui| {
+                                let score_col = if *score > 1000 { UP } else if *score > 100 { egui::Color32::from_rgb(255, 200, 50) } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(format!("{}▲", score)).color(score_col).small().monospace());
+                                ui.label(egui::RichText::new(format!("{}💬", comments)).color(AXIS_TEXT).small().monospace());
+                                ui.label(egui::RichText::new(title).small());
                             });
                         }
                     });
@@ -23700,6 +23767,10 @@ impl eframe::App for TyphooNApp {
                         }
                     } else if label == "AiChat" {
                         self.ai_chat_history.push((false, text.clone()));
+                    } else if label == "RedditWSB" {
+                        if let Ok(posts) = serde_json::from_str::<Vec<(String, String, u64, u64)>>(&text) {
+                            self.reddit_posts = posts;
+                        }
                     } else if label == "MatrixMessages" {
                         if let Ok(msgs) = serde_json::from_str::<Vec<(String, String, String)>>(&text) {
                             self.matrix_messages = msgs;
