@@ -13866,54 +13866,85 @@ impl TyphooNApp {
                 if symbols.is_empty() {
                     self.log.push_back(LogEntry::warn("BARDATA: no symbols to fetch — open charts or add to watchlist first"));
                 } else {
-                    let count = symbols.len();
                     let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT",
                         "UNI","AAVE","MATIC","SHIB","ATOM","ALGO","FTM","NEAR","APE","ARB"];
 
+                    // Build set of already-cached symbol:TF combos to skip redundant fetches
+                    let mut cached_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    for (key, bars, _ts) in &self.bg.detailed_stats {
+                        if *bars > 100 { // only consider "sufficiently cached"
+                            // Normalize: extract bare symbol + TF from cache key
+                            let parts: Vec<&str> = key.split(':').collect();
+                            if parts.len() >= 2 {
+                                let sym_part = parts[parts.len() - 2].replace('/', "").to_uppercase();
+                                let tf_part = parts[parts.len() - 1];
+                                cached_keys.insert(format!("{}:{}", sym_part, tf_part));
+                            }
+                        }
+                    }
+
+                    // Partition: uncached first, then partially cached
+                    let mut uncached_syms = Vec::new();
+                    let mut cached_syms = Vec::new();
                     for sym in &symbols {
+                        let su = sym.to_uppercase();
+                        let has_any = all_tfs.iter().any(|tf| cached_keys.contains(&format!("{}:{}", su, tf)));
+                        if has_any { cached_syms.push(sym.clone()); }
+                        else { uncached_syms.push(sym.clone()); }
+                    }
+
+                    let mut fetched_count = 0;
+                    let mut skipped_count = 0;
+                    let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+
+                    // Process uncached symbols first (highest priority)
+                    for sym in uncached_syms.iter().chain(cached_syms.iter()) {
                         let su = sym.to_uppercase();
                         let is_crypto = crypto_bases.iter().any(|b| su.starts_with(b) && su.ends_with("USD"));
 
-                        // Alpaca: full history for each TF
-                        if self.broker_connected {
-                            let api_sym = if is_crypto {
-                                crypto_bases.iter().find_map(|b| {
-                                    if su.starts_with(b) && su.ends_with("USD") && su.len() == b.len() + 3 {
-                                        Some(format!("{}/USD", b))
-                                    } else { None }
-                                }).unwrap_or_else(|| sym.clone())
-                            } else { sym.clone() };
-                            for tf in &all_tfs {
-                                let _ = self.broker_tx.send(BrokerCmd::FetchAllBars { symbol: api_sym.clone(), timeframe: tf.to_string() });
-                            }
+                        // Find which TFs are missing for this symbol
+                        let missing_tfs: Vec<&str> = all_tfs.iter()
+                            .filter(|tf| !cached_keys.contains(&format!("{}:{}", su, tf)))
+                            .copied()
+                            .collect();
+
+                        if missing_tfs.is_empty() {
+                            skipped_count += 1;
+                            continue; // fully cached, skip entirely
                         }
 
-                        // Kraken: crypto symbols
                         if is_crypto {
-                            let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                            // Crypto: use Kraken + CryptoCompare (NOT Alpaca — better source, no rate limit issues)
                             let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
                                 symbol: sym.clone(),
-                                timeframes: all_tfs.iter().map(|s| s.to_string()).collect(),
+                                timeframes: missing_tfs.iter().map(|s| s.to_string()).collect(),
                                 db_path: db_path.clone(),
                             });
                             let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill {
                                 symbol: sym.clone(),
-                                timeframes: all_tfs.iter().map(|s| s.to_string()).collect(),
-                                db_path,
+                                timeframes: missing_tfs.iter().map(|s| s.to_string()).collect(),
+                                db_path: db_path.clone(),
                             });
+                        } else if self.broker_connected {
+                            // Stocks/Forex/CFDs: use Alpaca
+                            for tf in &missing_tfs {
+                                let _ = self.broker_tx.send(BrokerCmd::FetchAllBars { symbol: sym.clone(), timeframe: tf.to_string() });
+                            }
                         }
 
-                        // tastytrade: bars + option chain
+                        // tastytrade: bars + option chain (if connected and not already cached)
                         if self.tt_connected {
-                            for tf in &all_tfs {
+                            for tf in &missing_tfs {
                                 let _ = self.broker_tx.send(BrokerCmd::TastytradeFetchBars { symbol: sym.clone(), timeframe: tf.to_string() });
                             }
                             let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym.clone() });
                         }
+                        fetched_count += 1;
                     }
+
                     self.log.push_back(LogEntry::info(format!(
-                        "BARDATA: downloading ALL bars for {} symbols × {} TFs from all brokers...",
-                        count, all_tfs.len()
+                        "BARDATA: queued {} symbols for download ({} already cached, skipped). Uncached first: {}",
+                        fetched_count, skipped_count, uncached_syms.len()
                     )));
                 }
             }
