@@ -11020,9 +11020,11 @@ impl TyphooNApp {
                     BrokerCmd::FetchBars { symbol, timeframe, db_path: _ } => {
                         if let Some(ref b) = broker {
                             let tf_alpaca = match timeframe.as_str() {
-                                "1Min" => "1Min", "5Min" => "5Min", "15Min" => "15Min",
-                                "30Min" => "30Min", "1Hour" => "1Hour", "4Hour" => "4Hour",
-                                "1Day" => "1Day", "1Week" => "1Week", "1Month" => "1Month",
+                                "1Min" | "M1" => "1Min", "5Min" | "M5" => "5Min",
+                                "15Min" | "M15" => "15Min", "30Min" | "M30" => "30Min",
+                                "1Hour" | "H1" => "1Hour", "4Hour" | "H4" => "4Hour",
+                                "1Day" | "D1" => "1Day", "1Week" | "W1" => "1Week",
+                                "1Month" | "MN1" => "1Month",
                                 _ => "1Day",
                             };
                             // Normalize crypto: SOLUSD → SOL/USD for Alpaca API
@@ -25344,7 +25346,7 @@ impl eframe::App for TyphooNApp {
                                     // Fetch from Alpaca if no cached data and broker is connected
                                     if !loaded && self.broker_connected {
                                         let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                                        let tf = self.charts.get(self.active_tab).map(|c| c.timeframe.label().to_string()).unwrap_or_else(|| "1Day".to_string());
+                                        let tf = self.charts.get(self.active_tab).map(|c| c.timeframe.cache_suffix().to_string()).unwrap_or_else(|| "1Day".to_string());
                                         let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: key.clone(), timeframe: tf, db_path });
                                         self.log.push_back(LogEntry::info(format!("Fetching {} from Alpaca...", key)));
                                     }
