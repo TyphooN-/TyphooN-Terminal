@@ -14291,31 +14291,53 @@ impl TyphooNApp {
                 sorted.sort();
                 let output = sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
 
-                // Always write to persistent ~/.typhoon/cache/demand.txt (universal fallback)
-                let mut demand_dir = dirs_home();
-                demand_dir.push("cache");
-                let _ = std::fs::create_dir_all(&demand_dir);
-                let universal = demand_dir.join("demand.txt");
-                match std::fs::write(&universal, &output) {
-                    Ok(_) => tracing::info!("demand.txt: wrote {} symbols to {}", demand_syms.len(), universal.display()),
-                    Err(e) => tracing::warn!("demand.txt: failed to write {}: {}", universal.display(), e),
-                }
+                let has_mt5 = !self.mt5_db_paths.iter().all(|p| p.is_empty());
+                if self.lan_sync_mode == "client" {
+                    // LAN client: forward demand list to server via KV cache
+                    // Server reads this and merges into its own demand.txt
+                    if let Some(ref cache) = self.cache {
+                        let _ = cache.put_kv("client:demand", &output);
+                        tracing::info!("demand.txt: {} symbols forwarded to server via KV", demand_syms.len());
+                    }
+                } else if has_mt5 {
+                    // Server / standalone: write demand.txt locally for BarCacheWriter
+                    let mut demand_dir = dirs_home();
+                    demand_dir.push("cache");
+                    let _ = std::fs::create_dir_all(&demand_dir);
 
-                // Also write next to each MT5 database for BarCacheWriter to find
-                for (i, mt5_path) in self.mt5_db_paths.iter().enumerate() {
-                    if mt5_path.is_empty() { continue; }
-                    // Try to get the directory — don't canonicalize (may fail if /dev/shm is empty)
-                    let path = std::path::Path::new(mt5_path);
-                    if let Some(dir) = path.parent() {
-                        if dir.exists() {
-                            let target = dir.join("demand.txt");
-                            let _ = std::fs::write(&target, &output);
-                            tracing::info!("demand.txt: wrote copy to {}", target.display());
+                    // Merge with client demand lists from KV cache
+                    if let Some(ref cache) = self.cache {
+                        if let Ok(Some(client_demand)) = cache.get_kv("client:demand") {
+                            for line in client_demand.lines() {
+                                let trimmed = line.trim();
+                                if !trimmed.is_empty() { demand_syms.insert(trimmed.to_string()); }
+                            }
+                            // Re-sort after merge
+                            sorted = demand_syms.iter().collect();
+                            sorted.sort();
                         }
                     }
-                    // Also write indexed copy to persistent dir
-                    let indexed = demand_dir.join(format!("demand_{}.txt", i));
-                    let _ = std::fs::write(&indexed, &output);
+                    let merged_output = sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+
+                    let universal = demand_dir.join("demand.txt");
+                    match std::fs::write(&universal, &merged_output) {
+                        Ok(_) => tracing::info!("demand.txt: wrote {} symbols to {}", demand_syms.len(), universal.display()),
+                        Err(e) => tracing::warn!("demand.txt: failed to write {}: {}", universal.display(), e),
+                    }
+
+                    // Also write next to each MT5 database for BarCacheWriter to find
+                    for (i, mt5_path) in self.mt5_db_paths.iter().enumerate() {
+                        if mt5_path.is_empty() { continue; }
+                        let path = std::path::Path::new(mt5_path);
+                        if let Some(dir) = path.parent() {
+                            if dir.exists() {
+                                let target = dir.join("demand.txt");
+                                let _ = std::fs::write(&target, &merged_output);
+                            }
+                        }
+                        let indexed = demand_dir.join(format!("demand_{}.txt", i));
+                        let _ = std::fs::write(&indexed, &merged_output);
+                    }
                 }
             }
         }
