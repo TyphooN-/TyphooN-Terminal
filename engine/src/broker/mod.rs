@@ -1,4 +1,5 @@
 pub mod alpaca;
+pub mod kraken_broker;
 pub mod tastytrade;
 pub mod dxlink;
 
