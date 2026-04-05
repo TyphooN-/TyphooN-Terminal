@@ -43,13 +43,13 @@
 | Claimed Feature | Status | Notes |
 |----------------|--------|-------|
 | Fear and Greed Index | IMPLEMENTED | FNG command, gauge visualization, alternative.me API |
-| World Indices Dashboard | NOT IMPLEMENTED | Yahoo Finance scraper exists but no dedicated dashboard |
-| Forex Cross-Rate Matrix | NOT IMPLEMENTED | ECB rates exist but no matrix UI |
-| Crypto Top 50 | NOT IMPLEMENTED | CoinGecko API researched but not wired |
+| World Indices Dashboard | IMPLEMENTED | INDICES command, 16 ETF proxies via Alpaca quotes |
+| Forex Cross-Rate Matrix | IMPLEMENTED | FOREX command, 10 major pairs with proper FX precision |
+| Crypto Top 50 | IMPLEMENTED | CRYPTO50 command, CoinGecko API, scrollable grid |
 | Dark Pool Volume | NOT IMPLEMENTED | SqueezMetrics DIX/GEX researched but not wired |
 | OCO Orders | NOT IMPLEMENTED | Only market/limit/stop/bracket exist |
-| Draggable SL/TP | IMPLEMENTED | SL/TP lines are click-draggable on chart (8px threshold, blocks chart pan during drag) |
-| 7 Order Types | PARTIAL | 6 types functional (market/limit/stop/stop-limit/bracket/trailing). Missing: OCO |
+| Draggable SL/TP | IMPLEMENTED | Draggable lines + Set SL/TP places stop/limit orders on broker (full MT5 EA parity) |
+| 7 Order Types | 6/7 | market/limit/stop/stop-limit/bracket/trailing + Set SL/TP orders. Missing: OCO (Alpaca limitation) |
 
 ## Remaining Gaps (Prioritized)
 
