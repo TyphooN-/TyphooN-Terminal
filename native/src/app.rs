@@ -8913,7 +8913,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "AI",            desc: "AI assistant chat (Claude/GPT)" },
     Command { name: "MATRIX",        desc: "Matrix chat room viewer" },
     Command { name: "WSB",           desc: "Reddit WallStreetBets hot posts" },
-    Command { name: "BARDATA",       desc: "Download ALL available bars for current symbol from Alpaca" },
+    Command { name: "BARDATA",       desc: "Download ALL available bars for current symbol (Alpaca + tastytrade)" },
     Command { name: "INDICES",       desc: "World stock indices dashboard" },
     Command { name: "CRYPTO50",      desc: "Top 50 cryptocurrencies by market cap" },
     Command { name: "FOREX",         desc: "Forex major pairs dashboard" },
@@ -13842,16 +13842,29 @@ impl TyphooNApp {
                     .map(|c| c.timeframe.cache_suffix().to_string())
                     .unwrap_or_else(|| "1Day".into());
                 if !sym.is_empty() {
-                    // Normalize crypto symbol for Alpaca
-                    let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
-                    let su = sym.to_uppercase();
-                    let api_sym = crypto_bases.iter().find_map(|b| {
-                        if su.starts_with(b) && su.ends_with("USD") && su.len() == b.len() + 3 {
-                            Some(format!("{}/USD", b))
-                        } else { None }
-                    }).unwrap_or_else(|| sym.clone());
-                    let _ = self.broker_tx.send(BrokerCmd::FetchAllBars { symbol: api_sym.clone(), timeframe: tf.clone() });
-                    self.log.push_back(LogEntry::info(format!("Downloading ALL available bars for {} {}...", api_sym, tf)));
+                    // Fetch from Alpaca
+                    if self.broker_connected {
+                        let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                        let su = sym.to_uppercase();
+                        let api_sym = crypto_bases.iter().find_map(|b| {
+                            if su.starts_with(b) && su.ends_with("USD") && su.len() == b.len() + 3 {
+                                Some(format!("{}/USD", b))
+                            } else { None }
+                        }).unwrap_or_else(|| sym.clone());
+                        let _ = self.broker_tx.send(BrokerCmd::FetchAllBars { symbol: api_sym.clone(), timeframe: tf.clone() });
+                        self.log.push_back(LogEntry::info(format!("BARDATA: fetching ALL bars for {} {} from Alpaca...", api_sym, tf)));
+                    }
+                    // Also fetch from tastytrade via DXLink
+                    if self.tt_connected {
+                        let _ = self.broker_tx.send(BrokerCmd::TastytradeFetchBars { symbol: sym.clone(), timeframe: tf.clone() });
+                        self.log.push_back(LogEntry::info(format!("BARDATA: fetching bars for {} {} from tastytrade...", sym, tf)));
+                        // Also fetch option chain for the symbol
+                        let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym.clone() });
+                        self.log.push_back(LogEntry::info(format!("BARDATA: fetching option chain for {} from tastytrade...", sym)));
+                    }
+                    if !self.broker_connected && !self.tt_connected {
+                        self.log.push_back(LogEntry::warn("BARDATA: connect Alpaca or tastytrade first"));
+                    }
                 }
             }
             "INDICES" | "WORLD_INDICES" => {
