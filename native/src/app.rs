@@ -9930,10 +9930,8 @@ impl TyphooNApp {
                         BrokerCmd::SecScrape { .. } => Some("SEC_SCRAPE"),
                         BrokerCmd::FundamentalsScrape { .. } => Some("FUNDAMENTALS"),
                         BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
-                        // Crypto backfill: execute LOCALLY on client (Kraken/CC are free public APIs)
-                        // Don't forward to server — client fetches its own viewed charts directly
-                        BrokerCmd::KrakenBackfill { .. } => None,
-                        BrokerCmd::CryptoCompareBackfill { .. } => None,
+                        BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
+                        BrokerCmd::CryptoCompareBackfill { .. } => Some("CRYPTOCOMPARE"),
                         BrokerCmd::Mt5Sync { .. } => Some("MT5_SYNC"),
                         BrokerCmd::FinnhubNews { .. } => Some("FINNHUB_NEWS"),
                         BrokerCmd::FetchEconCalendar { .. } => Some("ECON_CALENDAR"),
@@ -23036,9 +23034,9 @@ impl eframe::App for TyphooNApp {
         // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
         // Periodic crypto bar refresh (~60s) — works on both server and LAN client
         // Uses Kraken (free, no auth) as primary source, Alpaca as fallback
-        // Periodic crypto bar refresh — runs on both server and LAN client
-        // Kraken is free/public, and LAN clients need fresh bars for their own viewed charts
-        // Rate: ~60s interval, only fetches for the active chart's crypto symbol
+        // Periodic crypto bar refresh
+        // Server: fetches from Kraken/CryptoCompare directly
+        // LAN client: sends FETCH_BARS request to server for active crypto chart
         if self.frame_count % 240 == 120 {
             if let Some(chart) = self.charts.get(self.active_tab) {
                 let sym = chart.symbol.clone();
@@ -23064,11 +23062,24 @@ impl eframe::App for TyphooNApp {
                         }
                     }
                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
-                    let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: bare.clone(), timeframes, db_path: db_path.clone() });
-                    // Also fetch from CryptoCompare for deeper history on higher TFs
-                    if tf_minutes >= 1440 {
-                        let cc_tfs = vec![tf_label.clone()];
-                        let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill { symbol: bare, timeframes: cc_tfs, db_path });
+                    if self.lan_sync_mode == "client" {
+                        // LAN client: request bars from server via FETCH_BARS (includes symbol+TF args)
+                        // Server fetches from Kraken/CC, stores in cache, LAN sync delivers back
+                        let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: bare.clone(), timeframe: tf_label.clone(), db_path: db_path.clone() });
+                        // Also request the next-lower TF for forming bar synthesis
+                        for ltf in &timeframes[1..] {
+                            let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: bare.clone(), timeframe: ltf.clone(), db_path: db_path.clone() });
+                        }
+                        // Trigger immediate LAN resync to pull new bars quickly
+                        let _ = self.broker_tx.send(BrokerCmd::LanResyncBars);
+                    } else {
+                        // Server: fetch directly from Kraken
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: bare.clone(), timeframes, db_path: db_path.clone() });
+                        // Also fetch from CryptoCompare for deeper history on higher TFs
+                        if tf_minutes >= 1440 {
+                            let cc_tfs = vec![tf_label.clone()];
+                            let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill { symbol: bare, timeframes: cc_tfs, db_path });
+                        }
                     }
                 }
             }
@@ -28111,12 +28122,26 @@ impl eframe::App for TyphooNApp {
                                     "FETCH_BARS" => {
                                         if let Some((symbol, tf)) = args.split_once(',') {
                                             let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                            // Detect crypto and use Kraken (free, works weekends) + Alpaca
+                                            let su = symbol.to_uppercase();
+                                            let crypto_bases = ["BTC","ETH","SOL","DOGE","XRP","ADA","LTC","LINK","AVAX","DOT"];
+                                            let is_crypto = crypto_bases.iter().any(|b| su.starts_with(b) && su.ends_with("USD"));
+                                            if is_crypto {
+                                                let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
+                                                    symbol: symbol.to_string(),
+                                                    timeframes: vec![tf.to_string()],
+                                                    db_path: db_path.clone(),
+                                                });
+                                                self.log.push_back(LogEntry::info(format!("LAN remote: fetching {} {} from Kraken", symbol, tf)));
+                                            }
                                             let _ = self.broker_tx.send(BrokerCmd::FetchBars {
                                                 symbol: symbol.to_string(),
                                                 timeframe: tf.to_string(),
                                                 db_path,
                                             });
-                                            self.log.push_back(LogEntry::info(format!("LAN remote: fetching {} {} from Alpaca", symbol, tf)));
+                                            if !is_crypto {
+                                                self.log.push_back(LogEntry::info(format!("LAN remote: fetching {} {} from Alpaca", symbol, tf)));
+                                            }
                                         }
                                     }
                                     "FUNDAMENTALS" => {
