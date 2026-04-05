@@ -14085,23 +14085,38 @@ impl TyphooNApp {
             for sym in &self.user_watchlist {
                 if !sym.is_empty() { demand_syms.insert(sym.clone()); }
             }
-            // Write to MT5 common files directory (where BarCacheWriter reads)
-            for mt5_path in &self.mt5_db_paths {
+            // Write demand.txt to persistent location (survives /dev/shm reboot wipe)
+            // Use ~/.typhoon/cache/ which is always on disk, not ramdisk
+            let mut demand_dir = dirs_home();
+            demand_dir.push("cache");
+            let _ = std::fs::create_dir_all(&demand_dir);
+            // Write one demand.txt per MT5 database (each BarCacheWriter instance reads its own)
+            for (i, mt5_path) in self.mt5_db_paths.iter().enumerate() {
                 if mt5_path.is_empty() { continue; }
-                let db_dir = std::path::Path::new(mt5_path).parent();
+                // Also write next to the DB file for BarCacheWriter to find
+                // Resolve symlinks so we get the real path (not /dev/shm)
+                let real_path = std::fs::canonicalize(mt5_path).unwrap_or_else(|_| std::path::PathBuf::from(mt5_path));
+                let db_dir = real_path.parent();
+                // Merge with existing demand (other terminals may have written)
+                let mut merged = demand_syms.clone();
                 if let Some(dir) = db_dir {
-                    let demand_path = dir.join("demand.txt");
-                    if let Ok(content) = std::fs::read_to_string(&demand_path) {
-                        // Merge with existing demand (other terminals may have written)
+                    let existing = dir.join("demand.txt");
+                    if let Ok(content) = std::fs::read_to_string(&existing) {
                         for line in content.lines() {
                             let trimmed = line.trim();
-                            if !trimmed.is_empty() { demand_syms.insert(trimmed.to_string()); }
+                            if !trimmed.is_empty() { merged.insert(trimmed.to_string()); }
                         }
                     }
-                    let mut sorted: Vec<&String> = demand_syms.iter().collect();
-                    sorted.sort();
-                    let output = sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
-                    let _ = std::fs::write(&demand_path, output);
+                }
+                let mut sorted: Vec<&String> = merged.iter().collect();
+                sorted.sort();
+                let output = sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+                // Write to persistent ~/.typhoon/cache/demand_N.txt
+                let persistent = demand_dir.join(format!("demand_{}.txt", i));
+                let _ = std::fs::write(&persistent, &output);
+                // Also write next to DB for BarCacheWriter (may be on ramdisk — that's OK, it's a copy)
+                if let Some(dir) = db_dir {
+                    let _ = std::fs::write(dir.join("demand.txt"), &output);
                 }
             }
         }
