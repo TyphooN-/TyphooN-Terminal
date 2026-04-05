@@ -9906,10 +9906,8 @@ impl TyphooNApp {
                         BrokerCmd::SecScrape { .. } => Some("SEC_SCRAPE"),
                         BrokerCmd::FundamentalsScrape { .. } => Some("FUNDAMENTALS"),
                         BrokerCmd::FundamentalsScrapeOne { .. } => Some("FUNDAMENTALS_ONE"),
-                        // KrakenBackfill + CryptoCompare: execute locally (free public APIs)
-                        // AND forward to server so both sides have the data
-                        BrokerCmd::KrakenBackfill { .. } => None, // execute locally, don't skip
-                        BrokerCmd::CryptoCompareBackfill { .. } => None, // execute locally, don't skip
+                        BrokerCmd::KrakenBackfill { .. } => Some("KRAKEN_BACKFILL"),
+                        BrokerCmd::CryptoCompareBackfill { .. } => Some("CRYPTOCOMPARE"),
                         BrokerCmd::Mt5Sync { .. } => Some("MT5_SYNC"),
                         BrokerCmd::FinnhubNews { .. } => Some("FINNHUB_NEWS"),
                         BrokerCmd::FetchEconCalendar { .. } => Some("ECON_CALENDAR"),
@@ -13538,8 +13536,14 @@ impl TyphooNApp {
             "DASHBOARD"      => self.show_cache_stats = true,
             "STATUS"         => self.show_cache_stats = true,
             "IMPORT_XLSX"    => self.show_darwin_accounts = true,
-            "WORKSPACE"      => { self.save_session(); self.log.push_back(LogEntry::info("Workspace saved")); }
-            "BACKUP"         => { self.save_session(); self.log.push_back(LogEntry::info("Session backup saved")); }
+            "WORKSPACE"      => {
+                self.save_session();
+                self.log.push_back(LogEntry::info("Workspace saved"));
+            }
+            "BACKUP"         => {
+                self.save_session();
+                self.log.push_back(LogEntry::info("Session backup saved"));
+            }
             "QUOTE" => {
                 let sym = self.symbol_input.trim().to_string();
                 let _ = self.broker_tx.send(BrokerCmd::GetQuote { symbol: sym });
@@ -14143,26 +14147,31 @@ impl TyphooNApp {
                 }
             }
         }
-        // Persist credentials to keyring + SQLite fallback on quit
-        let creds = [
-            (keyring::keys::ALPACA_API_KEY, self.broker_api_key.as_str()),
-            (keyring::keys::ALPACA_SECRET, self.broker_secret.as_str()),
-            (keyring::keys::FINNHUB_KEY, self.finnhub_key.as_str()),
-            (keyring::keys::FRED_KEY, self.fred_key.as_str()),
-            (keyring::keys::TT_USERNAME, self.tt_username.as_str()),
-            (keyring::keys::TT_PASSWORD, self.tt_password.as_str()),
-            (keyring::keys::LAN_SYNC_PASS, self.lan_sync_passphrase.as_str()),
-            (keyring::keys::DISCORD_WEBHOOK, self.discord_webhook.as_str()),
-            (keyring::keys::PUSHOVER_TOKEN, self.pushover_token.as_str()),
-            (keyring::keys::PUSHOVER_USER, self.pushover_user.as_str()),
-            (keyring::keys::NTFY_TOPIC, self.ntfy_topic.as_str()),
+        // Persist credentials to keyring + SQLite fallback — on background thread to avoid UI freeze
+        // (each keyring::store can take 50-200ms on Linux due to DBUS roundtrip × 11 keys = 1-2s freeze)
+        let cred_pairs: Vec<(String, String)> = vec![
+            (keyring::keys::ALPACA_API_KEY.into(), self.broker_api_key.clone()),
+            (keyring::keys::ALPACA_SECRET.into(), self.broker_secret.clone()),
+            (keyring::keys::FINNHUB_KEY.into(), self.finnhub_key.clone()),
+            (keyring::keys::FRED_KEY.into(), self.fred_key.clone()),
+            (keyring::keys::TT_USERNAME.into(), self.tt_username.clone()),
+            (keyring::keys::TT_PASSWORD.into(), self.tt_password.clone()),
+            (keyring::keys::LAN_SYNC_PASS.into(), self.lan_sync_passphrase.clone()),
+            (keyring::keys::DISCORD_WEBHOOK.into(), self.discord_webhook.clone()),
+            (keyring::keys::PUSHOVER_TOKEN.into(), self.pushover_token.clone()),
+            (keyring::keys::PUSHOVER_USER.into(), self.pushover_user.clone()),
+            (keyring::keys::NTFY_TOPIC.into(), self.ntfy_topic.clone()),
         ];
-        for (key, val) in &creds {
-            let _ = keyring::store(key, val);
-            if let Some(ref cache) = self.cache {
-                let _ = cache.put_kv(&format!("cred:{}", key), val);
+        let cache_clone = self.cache.clone();
+        std::thread::spawn(move || {
+            for (key, val) in &cred_pairs {
+                let _ = keyring::store(key, val);
+                if let Some(ref cache) = cache_clone {
+                    let _ = cache.put_kv(&format!("cred:{}", key), val);
+                }
             }
-        }
+        });
+        // Session JSON write is fast (no DBUS) — keep on UI thread for atomicity
         let json = self.build_session_json();
         let mut path = dirs_home();
         path.push("session.json");
@@ -22768,7 +22777,8 @@ impl eframe::App for TyphooNApp {
         // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
         // Periodic crypto bar refresh (~60s) — works on both server and LAN client
         // Uses Kraken (free, no auth) as primary source, Alpaca as fallback
-        if self.frame_count % 240 == 120 {
+        // Periodic crypto bar refresh — server only (LAN clients get data via sync, avoid API rate limits)
+        if self.frame_count % 240 == 120 && self.lan_sync_mode != "client" {
             if let Some(chart) = self.charts.get(self.active_tab) {
                 let sym = chart.symbol.clone();
                 let bare = sym.split(':').last().unwrap_or(&sym).to_string();
@@ -22794,9 +22804,10 @@ impl eframe::App for TyphooNApp {
                     }
                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                     let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: bare.clone(), timeframes, db_path: db_path.clone() });
-                    // Also fetch from Alpaca if connected (better data quality when available)
-                    if self.broker_connected {
-                        let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: bare, timeframe: tf_label, db_path });
+                    // Also fetch from CryptoCompare for deeper history on higher TFs
+                    if tf_minutes >= 1440 {
+                        let cc_tfs = vec![tf_label.clone()];
+                        let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill { symbol: bare, timeframes: cc_tfs, db_path });
                     }
                 }
             }
