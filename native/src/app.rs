@@ -14860,6 +14860,8 @@ impl TyphooNApp {
             }
             let dest = if kr_ok { "system keyring + SQLite" } else { "SQLite fallback (keyring unavailable)" };
             self.log.push_back(LogEntry::info(format!("Credentials saved to {}", dest)));
+            // Also save session to persist non-credential settings (tt_sandbox, broker_paper, etc.)
+            self.save_session();
         }
         self.was_settings_open = self.show_settings;
 
@@ -25336,7 +25338,7 @@ impl eframe::App for TyphooNApp {
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut self.show_darwin_positions, egui::RichText::new("DARWIN").small());
                                 ui.checkbox(&mut self.show_alpaca_positions, egui::RichText::new("Alpaca").small());
-                                ui.checkbox(&mut self.show_tt_positions, egui::RichText::new("TT").small());
+                                ui.checkbox(&mut self.show_tt_positions, egui::RichText::new("Tasty").small());
                             });
                             ui.add_space(4.0);
                             let mut has_positions = false;
@@ -25422,7 +25424,7 @@ impl eframe::App for TyphooNApp {
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new(&pos.symbol).small().strong());
-                                        ui.label(egui::RichText::new(format!("[TT] {}", side_label)).color(side_c).small());
+                                        ui.label(egui::RichText::new(format!("[Tasty] {}", side_label)).color(side_c).small());
                                         ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small());
                                         let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
                                         ui.label(egui::RichText::new(format!("${:.2}", pos.unrealized_pl)).color(pl_c).small());
