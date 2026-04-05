@@ -18701,6 +18701,49 @@ impl TyphooNApp {
                                 }
                             }
                         }
+
+                        // -- Section 3: CryptoCompare Universe (on-demand download) --
+                        {
+                            let cc_coins: &[(&str, &str)] = &[
+                                ("BTCUSD","Bitcoin"),("ETHUSD","Ethereum"),("SOLUSD","Solana"),
+                                ("XRPUSD","XRP"),("DOGEUSD","Dogecoin"),("ADAUSD","Cardano"),
+                                ("AVAXUSD","Avalanche"),("DOTUSD","Polkadot"),("LINKUSD","Chainlink"),
+                                ("MATICUSD","Polygon"),("LTCUSD","Litecoin"),("BCHUSD","Bitcoin Cash"),
+                                ("UNIUSD","Uniswap"),("AAVEUSD","Aave"),("ATOMUSD","Cosmos"),
+                                ("NEARUSD","NEAR"),("FILUSD","Filecoin"),("ICPUSD","Internet Computer"),
+                                ("XLMUSD","Stellar"),("ALGOUSD","Algorand"),("VETUSD","VeChain"),
+                                ("HBARUSD","Hedera"),("FTMUSD","Fantom"),("SANDUSD","Sandbox"),
+                                ("MANAUSD","Decentraland"),("AXSUSD","Axie Infinity"),("GRTUSD","The Graph"),
+                                ("ENJUSD","Enjin"),("BATUSD","BAT"),("COMPUSD","Compound"),
+                                ("MKRUSD","Maker"),("SNXUSD","Synthetix"),("CRVUSD","Curve"),
+                                ("SUSHIUSD","SushiSwap"),("YFIUSD","Yearn"),("TRXUSD","TRON"),
+                                ("ETCUSD","Ethereum Classic"),("EOSUSD","EOS"),("XTZUSD","Tezos"),
+                                ("XMRUSD","Monero"),("ZECUSD","Zcash"),("DASHUSD","Dash"),
+                                ("SHIBUSD","Shiba Inu"),("APEUSD","ApeCoin"),("ARBUSD","Arbitrum"),
+                                ("OPUSD","Optimism"),("THETAUSD","Theta"),("KAVAUSD","Kava"),
+                            ];
+                            let cc_filtered: Vec<_> = cc_coins.iter()
+                                .filter(|(s, n)| filter_upper.is_empty() || s.contains(&filter_upper) || n.to_uppercase().contains(&filter_upper))
+                                .collect();
+                            let sec_id = "cc_universe".to_string();
+                            let exp = self.symbols_expanded.contains(&sec_id);
+                            let ar = if exp { "\u{25BC}" } else { "\u{25B6}" };
+                            ui.add_space(8.0);
+                            if ui.add(egui::Label::new(
+                                egui::RichText::new(format!("{} CryptoCompare ({} coins)", ar, cc_filtered.len())).color(sym_magenta).strong()
+                            ).sense(egui::Sense::click())).clicked() {
+                                if exp { self.symbols_expanded.remove(&sec_id); } else { self.symbols_expanded.insert(sec_id.clone()); }
+                            }
+                            if exp {
+                                for (sym, name) in &cc_filtered {
+                                    let is_cached = cached_syms_set.contains(&sym.to_uppercase());
+                                    let cl = if is_cached { " [cached]" } else { "" };
+                                    let info = format!("{}{}", name, cl);
+                                    sym_row!(ui, *sym, info, 12.0_f32, load_sym, add_wl);
+                                }
+                                ui.label(egui::RichText::new("Type any SYMBOLUSD in filter for more (5000+ supported)").color(sym_dim).small());
+                            }
+                        }
                     });
 
                     // Handle chart load
