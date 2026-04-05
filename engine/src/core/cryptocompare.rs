@@ -75,15 +75,26 @@ pub async fn fetch_ohlcv(
             endpoint, fsym, to_ts
         );
 
-        // Single attempt — on rate limit, abort immediately (use Kraken instead)
-        let resp = client.get(&url)
-            .timeout(std::time::Duration::from_secs(30))
-            .send().await
-            .map_err(|e| format!("CryptoCompare request failed: {e}"))?;
-
-        if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return Err("CryptoCompare rate limited — use Kraken for recent data, try CryptoCompare later".into());
+        // Rate limit handling: wait and retry up to 3 times
+        let mut resp = None;
+        for attempt in 0..3 {
+            match client.get(&url)
+                .timeout(std::time::Duration::from_secs(30))
+                .send().await {
+                Ok(r) => {
+                    if r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                        let wait = (attempt + 1) * 10; // 10s, 20s, 30s backoff
+                        tracing::warn!("CryptoCompare rate limited, waiting {}s (attempt {}/3)", wait, attempt + 1);
+                        tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                        continue;
+                    }
+                    resp = Some(r);
+                    break;
+                }
+                Err(e) => return Err(format!("CryptoCompare request failed: {e}")),
+            }
         }
+        let resp = resp.ok_or("CryptoCompare rate limited after 3 retries")?;
 
         if !resp.status().is_success() {
             return Err(format!("CryptoCompare HTTP {}", resp.status()));
@@ -95,7 +106,10 @@ pub async fn fetch_ohlcv(
         if body["Response"].as_str() != Some("Success") {
             let msg = body["Message"].as_str().unwrap_or("unknown");
             if msg.contains("rate limit") || msg.contains("upgrade") {
-                return Err("CryptoCompare rate limited — use Kraken for recent data, try CryptoCompare later".into());
+                // Wait and break — return what we have so far
+                tracing::warn!("CryptoCompare API rate limit in response body, returning {} bars collected", all_bars.len());
+                tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                break;
             }
             return Err(format!("CryptoCompare error: {msg}"));
         }

@@ -9557,6 +9557,13 @@ pub struct TyphooNApp {
     ai_provider: usize, // 0=Claude, 1=GPT
     /// Reddit WSB posts.
     show_reddit: bool,
+    /// BARDATA sync progress tracking.
+    show_bardata: bool,
+    bardata_total: usize,
+    bardata_queued: usize,
+    bardata_completed: usize,
+    bardata_skipped: usize,
+    bardata_log: Vec<String>,
     reddit_posts: Vec<(String, String, u64, u64)>, // (title, url, score, comments)
     /// Matrix chat (public room message viewer).
     show_matrix_chat: bool,
@@ -12139,6 +12146,12 @@ impl TyphooNApp {
             ai_chat_input: String::new(),
             ai_provider: 0,
             show_reddit: false,
+            show_bardata: false,
+            bardata_total: 0,
+            bardata_queued: 0,
+            bardata_completed: 0,
+            bardata_skipped: 0,
+            bardata_log: Vec::new(),
             reddit_posts: Vec::new(),
             show_matrix_chat: false,
             matrix_room: String::new(),
@@ -14037,6 +14050,14 @@ impl TyphooNApp {
                 for pos in &self.tt_positions {
                     if !pos.symbol.is_empty() { symbols.insert(pos.symbol.clone()); }
                 }
+                // Full Alpaca broker universe (12K+ symbols)
+                for (sym, _name, _class) in &self.all_broker_assets {
+                    symbols.insert(sym.replace('/', "").to_uppercase());
+                }
+                // Kraken tradeable pairs
+                for (pair, _name) in &self.kraken_pairs {
+                    symbols.insert(pair.clone());
+                }
 
                 if symbols.is_empty() {
                     self.log.push_back(LogEntry::warn("BARDATA: no symbols to fetch — open charts or add to watchlist first"));
@@ -14116,6 +14137,18 @@ impl TyphooNApp {
                         }
                         fetched_count += 1;
                     }
+
+                    // Update progress tracking and open window
+                    self.bardata_total = symbols.len();
+                    self.bardata_queued = fetched_count;
+                    self.bardata_skipped = skipped_count;
+                    self.bardata_completed = 0;
+                    self.bardata_log.clear();
+                    self.bardata_log.push(format!("Total symbols: {}", symbols.len()));
+                    self.bardata_log.push(format!("Queued for download: {}", fetched_count));
+                    self.bardata_log.push(format!("Already cached (skipped): {}", skipped_count));
+                    self.bardata_log.push(format!("Uncached (priority): {}", uncached_syms.len()));
+                    self.show_bardata = true;
 
                     self.log.push_back(LogEntry::info(format!(
                         "BARDATA: queued {} symbols for download ({} already cached, skipped). Uncached first: {}",
