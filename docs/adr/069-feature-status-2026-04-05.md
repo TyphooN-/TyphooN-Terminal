@@ -48,21 +48,19 @@
 | Crypto Top 50 | NOT IMPLEMENTED | CoinGecko API researched but not wired |
 | Dark Pool Volume | NOT IMPLEMENTED | SqueezMetrics DIX/GEX researched but not wired |
 | OCO Orders | NOT IMPLEMENTED | Only market/limit/stop/bracket exist |
-| Draggable SL/TP | PARTIAL | SL/TP lines render on chart but are not interactively draggable; must edit numerically |
+| Draggable SL/TP | IMPLEMENTED | SL/TP lines are click-draggable on chart (8px threshold, blocks chart pan during drag) |
 | 7 Order Types | PARTIAL | 6 types functional (market/limit/stop/stop-limit/bracket/trailing). Missing: OCO |
 
 ## Remaining Gaps (Prioritized)
 
 ### HIGH (Functional gaps)
-- Draggable SL/TP lines on chart (currently static visual only)
-- Trailing stop order type (engine has `trailing_stop_order()`, not wired to UI)
+- ~~Draggable SL/TP lines~~ DONE
+- ~~Trailing stop order type~~ DONE
+- ~~Fear & Greed Index~~ DONE
+- ~~World indices dashboard~~ DONE
+- ~~Crypto top 50~~ DONE
 - tastytrade position close (no mechanism exists)
 - Periodic MT5 sync loop (currently manual command only)
-
-### MEDIUM (Feature expansion)
-- Fear & Greed Index window (alternative.me API)
-- World indices dashboard (Yahoo Finance data)
-- Crypto top 50 window (CoinGecko API)
 - EasyLanguage compiler (third frontend for MQL5 IR pipeline)
 - thinkScript compiler (fourth frontend)
 - Options Greeks display in option chain windows
