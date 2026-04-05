@@ -1779,13 +1779,22 @@ impl ChartState {
             // Only synthesize if the last bar is older than one period
             if now_ms - last_ts > tf_ms {
                 // Try M5 first, then M1
-                let ltf_keys = [
-                    format!("kraken:{}:1Min", bare_sym),
-                    format!("kraken:{}:5Min", bare_sym),
-                    format!("{}:{}:1Min", self.symbol.split(':').next().unwrap_or("mt5"), bare_sym),
-                    format!("{}:{}:5Min", self.symbol.split(':').next().unwrap_or("mt5"), bare_sym),
-                    format!("cryptocompare:{}:5Min", bare_sym),
-                ];
+                // Cascade through all lower timeframes from all sources for best resolution
+                let src = self.symbol.split(':').next().unwrap_or("mt5");
+                let ltf_suffixes = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week"];
+                let sources = ["kraken", src, "cryptocompare", "alpaca"];
+                let mut ltf_keys = Vec::new();
+                for ltf in &ltf_suffixes {
+                    let ltf_min: u32 = match *ltf {
+                        "1Min" => 1, "5Min" => 5, "15Min" => 15, "30Min" => 30,
+                        "1Hour" => 60, "4Hour" => 240, "1Day" => 1440, _ => 10080,
+                    };
+                    if ltf_min < self.timeframe.minutes() {
+                        for s in &sources {
+                            ltf_keys.push(format!("{}:{}:{}", s, bare_sym, ltf));
+                        }
+                    }
+                }
                 for ltf_key in &ltf_keys {
                     if let Ok(Some(ltf_raw)) = cache.get_bars_raw(ltf_key) {
                         // Find LTF bars newer than the last HTF bar
@@ -22694,16 +22703,21 @@ impl eframe::App for TyphooNApp {
                 let su = bare.to_uppercase();
                 let is_crypto = crypto_bases.iter().any(|b| su.starts_with(b) && su.ends_with("USD"));
                 if is_crypto {
-                    let tf_label = chart.timeframe.label().to_string();
+                    let tf_label = chart.timeframe.cache_suffix().to_string(); // "1Month" not "MN1"
                     let tf_minutes = chart.timeframe.minutes();
                     // Fetch from Kraken (free, no auth, works on weekends)
-                    // Always fetch the chart's TF + M5 + M1 for forming bar synthesis on HTF
+                    // Fetch chart's TF + all lower TFs for gap fill and forming bar synthesis
                     let mut timeframes = vec![tf_label.clone()];
-                    if tf_minutes > 5 {
-                        timeframes.push("5Min".to_string());
-                    }
-                    if tf_minutes > 1 {
-                        timeframes.push("1Min".to_string());
+                    let all_tfs = ["1Week", "1Day", "4Hour", "1Hour", "30Min", "15Min", "5Min", "1Min"];
+                    for ltf in &all_tfs {
+                        let ltf_min: u32 = match *ltf {
+                            "1Week" => 10080, "1Day" => 1440, "4Hour" => 240, "1Hour" => 60,
+                            "30Min" => 30, "15Min" => 15, "5Min" => 5, _ => 1,
+                        };
+                        if ltf_min < tf_minutes && !timeframes.contains(&ltf.to_string()) {
+                            timeframes.push(ltf.to_string());
+                            break; // just the next lower TF for forming bar (Kraken has rate limits)
+                        }
                     }
                     let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
                     let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill { symbol: bare.clone(), timeframes, db_path: db_path.clone() });
