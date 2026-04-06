@@ -14126,10 +14126,16 @@ impl TyphooNApp {
                         if self.tt_connected {
                             for tf in &missing_tfs {
                                 let _ = self.broker_tx.send(BrokerCmd::TastytradeFetchBars { symbol: sym.clone(), timeframe: tf.to_string() });
+                                fetched_count += 1;
                             }
                             let _ = self.broker_tx.send(BrokerCmd::TastytradeOptionChain { symbol: sym.clone() });
                         }
-                        fetched_count += 1;
+                        // Count individual TF fetches (not symbols) to match completion counter
+                        if is_crypto {
+                            fetched_count += missing_tfs.len(); // Kraken fetches per TF
+                        } else if self.broker_connected {
+                            fetched_count += missing_tfs.len(); // Alpaca FetchAllBars per TF
+                        }
                     }
 
                     // Update progress tracking and open window
@@ -18263,11 +18269,11 @@ impl TyphooNApp {
                     let queued = self.bardata_queued;
                     let completed = self.bardata_completed;
                     let skipped = self.bardata_skipped;
-                    let pct = if queued > 0 { (completed * 100) / queued } else { 0 };
+                    let pct = if queued > 0 { ((completed * 100) / queued).min(100) } else { 0 };
 
                     // Progress bar
-                    ui.label(egui::RichText::new(format!("Progress: {}/{} symbols ({}%)", completed, queued, pct)).strong());
-                    let bar_frac = if queued > 0 { completed as f32 / queued as f32 } else { 0.0 };
+                    ui.label(egui::RichText::new(format!("Progress: {}/{} fetches ({}%)", completed, queued, pct)).strong());
+                    let bar_frac = if queued > 0 { (completed as f32 / queued as f32).min(1.0) } else { 0.0 };
                     let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 20.0), egui::Sense::hover());
                     let painter = ui.painter_at(bar_rect);
                     painter.rect_filled(bar_rect, 2.0, egui::Color32::from_rgb(30, 30, 50));
