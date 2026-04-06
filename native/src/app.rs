@@ -14268,7 +14268,16 @@ impl TyphooNApp {
                         if let Ok(conn) = cache.connection() {
                             match typhoon_engine::core::darwin::delete_darwin_account(&conn, &ticker) {
                                 Ok(deleted) => {
-                                    self.log.push_back(LogEntry::info(format!("Deleted DARWIN {} — {} rows removed", ticker, deleted)));
+                                    // Also purge from in-memory caches so UI updates immediately
+                                    self.bg.accounts.retain(|a| a.darwin_ticker != ticker);
+                                    self.bg.account_details.retain(|d| d.ticker != ticker);
+                                    self.bg.open_positions.retain(|p| {
+                                        // Remove positions from this DARWIN account
+                                        !self.bg.account_details.iter().any(|d| d.ticker == ticker && d.open_positions.iter().any(|op| op.symbol == p.symbol))
+                                    });
+                                    // Clear KV cached data for this account
+                                    let _ = cache.put_kv("darwin:account_details", &serde_json::to_string(&self.bg.account_details).unwrap_or_default());
+                                    self.log.push_back(LogEntry::info(format!("Deleted DARWIN {} — {} rows removed (UI refreshed)", ticker, deleted)));
                                 }
                                 Err(e) => self.log.push_back(LogEntry::err(format!("Delete {} failed: {}", ticker, e))),
                             }
