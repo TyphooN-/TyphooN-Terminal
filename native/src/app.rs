@@ -11234,13 +11234,10 @@ impl TyphooNApp {
                                                     src_skipped += 1;
                                                     continue;
                                                 }
-                                                // Detect regression: source has significantly fewer bars
-                                                if *src_count > 0 && target_count > 0 && *src_count < target_count / 2 {
-                                                    src_regressed += 1;
-                                                    tracing::warn!("MT5 sync regression: {} — source {} bars, target {} bars (skipping)",
-                                                        key, src_count, target_count);
-                                                    continue; // Don't overwrite with less data
-                                                }
+                                                // Note: regression check removed. BarCacheWriter caps at 10K bars per key,
+                                                // but the terminal cache may have 100K+ from previous full exports.
+                                                // Accept source data if it has newer timestamps — recent bars matter more
+                                                // than historical depth for live trading.
                                             } else {
                                                 src_new += 1;
                                             }
