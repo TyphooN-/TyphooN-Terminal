@@ -11215,7 +11215,7 @@ impl TyphooNApp {
                                         let mut src_skipped = 0usize;
                                         let mut src_new = 0usize;
                                         let mut src_errors = 0usize;
-                                        let mut src_regressed = 0usize;
+                                        let src_regressed = 0usize;
 
                                         for (key, src_count, src_ts) in &src_stats {
                                             // Skip metadata keys (symbols list, specs, server info)
