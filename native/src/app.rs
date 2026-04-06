@@ -9565,6 +9565,7 @@ pub struct TyphooNApp {
     bardata_completed: usize,
     bardata_skipped: usize,
     bardata_log: Vec<String>,
+    bardata_active: bool,
     reddit_posts: Vec<(String, String, u64, u64)>, // (title, url, score, comments)
     /// Matrix chat (public room message viewer).
     show_matrix_chat: bool,
@@ -12136,6 +12137,7 @@ impl TyphooNApp {
             bardata_completed: 0,
             bardata_skipped: 0,
             bardata_log: Vec::new(),
+            bardata_active: false,
             reddit_posts: Vec::new(),
             show_matrix_chat: false,
             matrix_room: String::new(),
@@ -14052,7 +14054,7 @@ impl TyphooNApp {
                     // Build set of already-cached symbol:TF combos to skip redundant fetches
                     let mut cached_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
                     for (key, bars, _ts) in &self.bg.detailed_stats {
-                        if *bars > 100 { // only consider "sufficiently cached"
+                        if *bars > 0 { // any cached data = don't re-download full history
                             // Normalize: extract bare symbol + TF from cache key
                             let parts: Vec<&str> = key.split(':').collect();
                             if parts.len() >= 2 {
@@ -14114,9 +14116,10 @@ impl TyphooNApp {
                                 });
                             }
                         } else if self.broker_connected {
-                            // Stocks/Forex/CFDs: use Alpaca
+                            // Stocks/Forex/CFDs: use Alpaca (incremental FetchBars, not full history)
+                            let mut db_path_alpaca = dirs_home(); db_path_alpaca.push("cache"); db_path_alpaca.push("typhoon_cache.db");
                             for tf in &missing_tfs {
-                                let _ = self.broker_tx.send(BrokerCmd::FetchAllBars { symbol: sym.clone(), timeframe: tf.to_string() });
+                                let _ = self.broker_tx.send(BrokerCmd::FetchBars { symbol: sym.clone(), timeframe: tf.to_string(), db_path: db_path_alpaca.clone() });
                             }
                         }
 
@@ -14147,6 +14150,7 @@ impl TyphooNApp {
                     self.bardata_log.push(format!("Already cached (skipped): {}", skipped_count));
                     self.bardata_log.push(format!("Uncached (priority): {}", uncached_syms.len()));
                     self.show_bardata = true;
+                    self.bardata_active = true;
 
                     self.log.push_back(LogEntry::info(format!(
                         "BARDATA: queued {} symbols for download ({} already cached, skipped). Uncached first: {}",
@@ -14664,9 +14668,28 @@ impl TyphooNApp {
             }
             if demand_syms.is_empty() { /* nothing to write */ }
             else {
-                let mut sorted: Vec<&String> = demand_syms.iter().collect();
-                sorted.sort();
-                let output = sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+                // v2 demand format: SYMBOL:TF:LAST_TS — BarCacheWriter only exports bars after LAST_TS
+                // This avoids loading full 100K bar blobs into memory for integrity checks
+                let all_tfs = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week", "1Month"];
+                let mut demand_lines: Vec<String> = Vec::new();
+                // Build last-timestamp map from cache metadata
+                let mut last_ts_map: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+                for (key, _bars, ts) in &self.bg.detailed_stats {
+                    last_ts_map.insert(key.clone(), *ts);
+                }
+                let mut sorted_syms: Vec<&String> = demand_syms.iter().collect();
+                sorted_syms.sort();
+                for sym in &sorted_syms {
+                    for tf in &all_tfs {
+                        let cache_key = format!("mt5:{}:{}", sym, tf);
+                        let last_ts = last_ts_map.get(&cache_key).copied().unwrap_or(0);
+                        demand_lines.push(format!("{}:{}:{}", sym, tf, last_ts));
+                    }
+                }
+                // Also include a v1-compatible flat symbol list at the top for backwards compat
+                let output = format!("# demand.txt v2 — SYMBOL:TF:LAST_TS (BarCacheWriter v1.437+)\n# Flat symbol list (v1 compat):\n{}\n# Timestamped demand (v2):\n{}",
+                    sorted_syms.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n"),
+                    demand_lines.join("\n"));
 
                 let has_mt5 = !self.mt5_db_paths.iter().all(|p| p.is_empty());
                 if self.lan_sync_mode == "client" {
@@ -14690,11 +14713,11 @@ impl TyphooNApp {
                                 if !trimmed.is_empty() { demand_syms.insert(trimmed.to_string()); }
                             }
                             // Re-sort after merge
-                            sorted = demand_syms.iter().collect();
-                            sorted.sort();
+                            sorted_syms = demand_syms.iter().collect();
+                            sorted_syms.sort();
                         }
                     }
-                    let merged_output = sorted.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+                    let merged_output = sorted_syms.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
 
                     let universal = demand_dir.join("demand.txt");
                     match std::fs::write(&universal, &merged_output) {
@@ -18288,7 +18311,17 @@ impl TyphooNApp {
                         ui.label("Skipped (cached):"); ui.label(egui::RichText::new(skipped.to_string()).color(AXIS_TEXT)); ui.end_row();
                     });
                     ui.separator();
-                    ui.label(egui::RichText::new("Activity Log").small().strong());
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Activity Log").small().strong());
+                        if self.bardata_active {
+                            if ui.add(egui::Button::new(egui::RichText::new("Stop").color(DOWN).small().strong()).fill(egui::Color32::from_rgb(60, 20, 20))).clicked() {
+                                self.bardata_active = false;
+                                self.bardata_log.push("=== STOPPED by user ===".into());
+                            }
+                        } else if completed >= queued && queued > 0 {
+                            ui.label(egui::RichText::new("Complete").color(UP).small().strong());
+                        }
+                    });
                     egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).show(ui, |ui| {
                         for msg in &self.bardata_log {
                             ui.label(egui::RichText::new(msg).monospace().small().color(AXIS_TEXT));
