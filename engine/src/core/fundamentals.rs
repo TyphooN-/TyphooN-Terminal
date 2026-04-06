@@ -10,7 +10,7 @@
 //! All data is stored in SQLite for offline access and cached between scrapes.
 //! The scraper respects SEC rate limits (5 req/sec) and Yahoo rate limits.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -164,6 +164,11 @@ pub fn create_fundamentals_tables(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_fundamentals_earnings ON fundamentals(next_earnings_date);
         CREATE INDEX IF NOT EXISTS idx_fundamentals_dividend ON fundamentals(next_ex_dividend_date);
         CREATE INDEX IF NOT EXISTS idx_quarterly_symbol ON quarterly_financials(symbol);
+        CREATE TABLE IF NOT EXISTS scrape_failures (
+            symbol TEXT PRIMARY KEY,
+            reason TEXT NOT NULL DEFAULT '',
+            failed_at TEXT NOT NULL DEFAULT ''
+        );
     ").map_err(|e| format!("Create fundamentals tables failed: {e}"))?;
 
     // Schema migration: add updated_at columns for incremental LAN sync
@@ -926,6 +931,18 @@ pub async fn scrape_batch(
             continue;
         }
 
+        // Skip permanently failed symbols (404 from Yahoo — won't magically start working)
+        {
+            let check: Result<Option<String>, _> = conn.query_row(
+                "SELECT reason FROM scrape_failures WHERE symbol = ?1",
+                rusqlite::params![&ticker],
+                |row| row.get(0),
+            ).optional();
+            if let Ok(Some(_)) = check {
+                continue; // permanently blocklisted
+            }
+        }
+
         // Skip if recently updated
         if let Some(ref cutoff_str) = cutoff {
             if let Ok(Some(existing)) = get_fundamentals(conn, &ticker) {
@@ -956,6 +973,13 @@ pub async fn scrape_batch(
                 results.push(r);
             }
             Err(e) => {
+                // Record permanent failures (404 Not Found) so we skip them next time
+                if e.contains("404") || e.contains("Not Found") {
+                    let _ = conn.execute(
+                        "INSERT OR REPLACE INTO scrape_failures (symbol, reason, failed_at) VALUES (?1, ?2, datetime('now'))",
+                        rusqlite::params![&ticker, &e],
+                    );
+                }
                 let r = ScrapeResult {
                     symbol: ticker.clone(),
                     success: false,
