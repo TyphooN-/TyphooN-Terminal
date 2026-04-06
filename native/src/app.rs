@@ -24215,7 +24215,8 @@ impl eframe::App for TyphooNApp {
                     if msg.starts_with("BARDATA:") {
                         self.bardata_log.push(msg.clone());
                         if self.bardata_log.len() > 200 { self.bardata_log.drain(0..100); }
-                        if msg.contains("bars stored") || msg.contains("complete") {
+                        // Count any finished fetch (success, error, or empty) as completed
+                        if msg.contains("bars stored") || msg.contains("complete") || msg.contains("failed") || msg.contains("no bars") {
                             self.bardata_completed += 1;
                         }
                     }
