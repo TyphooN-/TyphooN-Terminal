@@ -8774,7 +8774,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "DSCORE",        desc: "D-Score estimation components" },
     Command { name: "DARWIN_BROWSER", desc: "Browse DARWIN FTP universe (50K DARWINs)" },
     Command { name: "DARWINIA_SCAN",  desc: "DarwinIA universe scan — top DARWINs by Sharpe (GPU → CPU)" },
-    Command { name: "DARWINEXOUTLIERS", desc: "Darwinex symbol outlier analysis (VaR, spread, swap, ATR)" },
+    Command { name: "DARWINEXOUTLIERS", desc: "Multi-dimensional outlier scanner (P/E, EV, short ratio, SEC filings)" },
+    Command { name: "OUTLIERS",        desc: "Same as DARWINEXOUTLIERS — works on all symbols with fundamentals" },
     Command { name: "EXPORT_DARWIN", desc: "Export all DARWIN data to JSON file" },
     Command { name: "IMPORT_DARWIN", desc: "Import DARWIN data from JSON file" },
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
@@ -13661,7 +13662,7 @@ impl TyphooNApp {
                 self.show_alert_builder = true;
                 self.alert_symbol = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
             }
-            "DARWINEXOUTLIERS" => {
+            "DARWINEXOUTLIERS" | "OUTLIERS" | "ALPACAOUTLIERS" | "TASTYOUTLIERS" => {
                 // Multi-dimensional outlier detection: VaR + EV + ATR + SEC + Volume
                 if let Some(ref cache) = self.cache {
                     if let Some(_conn) = cache.try_connection() {
@@ -21766,9 +21767,9 @@ impl TyphooNApp {
             }
         }
 
-        // Darwinex Outliers
+        // Multi-Dimensional Outlier Scanner
         if self.show_darwinex_outliers {
-            egui::Window::new("Darwinex Outliers")
+            egui::Window::new("Outlier Scanner")
                 .open(&mut self.show_darwinex_outliers)
                 .resizable(true).default_size([800.0, 550.0])
                 .show(ctx, |ui| {
