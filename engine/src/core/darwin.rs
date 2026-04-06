@@ -5783,14 +5783,17 @@ pub fn get_symbol_overlap(conn: &Connection) -> Result<Vec<SymbolOverlap>, Strin
 }
 
 /// Delete a DARWIN account and all its data.
-pub fn delete_darwin_account(conn: &Connection, darwin_ticker: &str) -> Result<(), String> {
-    conn.execute("DELETE FROM darwin_deals WHERE account = ?1", params![darwin_ticker])
-        .map_err(|e| format!("Delete deals failed: {e}"))?;
-    conn.execute("DELETE FROM darwin_positions WHERE account = ?1", params![darwin_ticker])
-        .map_err(|e| format!("Delete positions failed: {e}"))?;
-    conn.execute("DELETE FROM darwin_accounts WHERE darwin_ticker = ?1", params![darwin_ticker])
-        .map_err(|e| format!("Delete account failed: {e}"))?;
-    Ok(())
+pub fn delete_darwin_account(conn: &Connection, darwin_ticker: &str) -> Result<usize, String> {
+    let mut deleted = 0usize;
+    deleted += conn.execute("DELETE FROM darwin_deals WHERE account = ?1", params![darwin_ticker])
+        .map_err(|e| format!("Delete deals failed: {e}"))? as usize;
+    deleted += conn.execute("DELETE FROM darwin_positions WHERE account = ?1", params![darwin_ticker])
+        .map_err(|e| format!("Delete positions failed: {e}"))? as usize;
+    deleted += conn.execute("DELETE FROM darwin_equity_snapshots WHERE darwin_ticker = ?1", params![darwin_ticker])
+        .unwrap_or(0) as usize;
+    deleted += conn.execute("DELETE FROM darwin_accounts WHERE darwin_ticker = ?1", params![darwin_ticker])
+        .map_err(|e| format!("Delete account failed: {e}"))? as usize;
+    Ok(deleted)
 }
 
 // ── Darwinex Metrics ────────────────────────────────────────────────

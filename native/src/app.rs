@@ -8778,6 +8778,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "OUTLIERS",        desc: "Same as DARWINEXOUTLIERS — works on all symbols with fundamentals" },
     Command { name: "EXPORT_DARWIN", desc: "Export all DARWIN data to JSON file" },
     Command { name: "IMPORT_DARWIN", desc: "Import DARWIN data from JSON file" },
+    Command { name: "DELETE_DARWIN", desc: "Delete a DARWIN/MT5 account (DELETE_DARWIN TICKER)" },
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
     Command { name: "RISKRUIN",        desc: "Risk-of-Ruin calculator (Monte Carlo equity path simulation)" },
     Command { name: "REPLAY",          desc: "Market replay mode — step through history bar-by-bar" },
@@ -14258,8 +14259,22 @@ impl TyphooNApp {
                 self.log.push_back(LogEntry::info(format!("Templates: {}", names.join(", "))));
             }
             other => {
-                // Commands with arguments: SAVE_TEMPLATE <name>, LOAD_TEMPLATE <name>, TEMPLATE <name>
-                if other.starts_with("SAVE_TEMPLATE ") || other.starts_with("TEMPLATE_SAVE ") {
+                // Commands with arguments
+                if other.starts_with("DELETE_DARWIN ") {
+                    let ticker = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_uppercase();
+                    if ticker.is_empty() {
+                        self.log.push_back(LogEntry::warn("Usage: DELETE_DARWIN TICKER (e.g. DELETE_DARWIN CKUC)"));
+                    } else if let Some(ref cache) = self.cache {
+                        if let Ok(conn) = cache.connection() {
+                            match typhoon_engine::core::darwin::delete_darwin_account(&conn, &ticker) {
+                                Ok(deleted) => {
+                                    self.log.push_back(LogEntry::info(format!("Deleted DARWIN {} — {} rows removed", ticker, deleted)));
+                                }
+                                Err(e) => self.log.push_back(LogEntry::err(format!("Delete {} failed: {}", ticker, e))),
+                            }
+                        }
+                    }
+                } else if other.starts_with("SAVE_TEMPLATE ") || other.starts_with("TEMPLATE_SAVE ") {
                     let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
                     if name.is_empty() {
                         self.log.push_back(LogEntry::warn("Usage: SAVE_TEMPLATE <name>"));
@@ -16363,7 +16378,7 @@ impl TyphooNApp {
                                 if let Some(ref cache) = self.cache {
                                     if let Some(conn) = cache.try_connection() {
                                         match darwin::delete_darwin_account(&conn, &ticker) {
-                                            Ok(()) => { self.log.push_back(LogEntry::info(format!("Deleted DARWIN account: {}", ticker))); }
+                                            Ok(n) => { self.log.push_back(LogEntry::info(format!("Deleted DARWIN account: {} ({} rows)", ticker, n))); }
                                             Err(e) => { self.log.push_back(LogEntry::err(format!("Delete failed: {}", e))); }
                                         }
                                     }
