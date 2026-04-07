@@ -9933,6 +9933,8 @@ pub struct TyphooNApp {
     // ── DARWIN portfolio view selector ─────────────────────────────────
     /// Which DARWIN view is selected in the portfolio dropdown.
     darwin_view: usize,
+    /// Per-DARWIN AuM (Assets under Management) input — keyed by ticker.
+    darwin_aum: std::collections::HashMap<String, String>,
     /// Frame number when DARWIN windows last queried the DB.
     /// Latest background-computed data. Updated by draining bg_rx each frame.
     bg: BgDarwinData,
@@ -12526,6 +12528,7 @@ impl TyphooNApp {
             tp_enabled: false,
             recent_fills: Vec::new(),
             darwin_view: 0,
+            darwin_aum: std::collections::HashMap::new(),
             bg: BgDarwinData::default(),
             bg_rx: {
                 // Channel created here; tx passed to background thread below
@@ -16210,10 +16213,22 @@ impl TyphooNApp {
                     }
                     if self.bg.accounts.is_empty() { return; }
 
+                    // Load AuM values from KV if not yet loaded
+                    if self.darwin_aum.is_empty() {
+                        if let Some(ref cache) = self.cache {
+                            for acct in &self.bg.accounts {
+                                if let Ok(Some(val)) = cache.get_kv(&format!("darwin:aum:{}", acct.darwin_ticker)) {
+                                    self.darwin_aum.insert(acct.darwin_ticker.clone(), val);
+                                }
+                            }
+                        }
+                    }
+
                     egui::ScrollArea::vertical().show(ui, |ui| {
                     // ── Compact overview table ──────────────────────────────────
                     let mut darwin_to_delete: Option<String> = None;
-                    egui::Grid::new("darwin_overview").striped(true).num_columns(11).min_col_width(55.0).show(ui, |ui| {
+                    let mut aum_changed: Option<(String, String)> = None;
+                    egui::Grid::new("darwin_overview").striped(true).num_columns(12).min_col_width(55.0).show(ui, |ui| {
                         ui.label(egui::RichText::new("DARWIN").color(dim).small());
                         ui.label(egui::RichText::new("MT5").color(dim).small());
                         ui.label(egui::RichText::new("Deals").color(dim).small());
@@ -16224,6 +16239,7 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new("PF").color(dim).small());
                         ui.label(egui::RichText::new("Quote").color(dim).small());
                         ui.label(egui::RichText::new("Q.Ret%").color(dim).small());
+                        ui.label(egui::RichText::new("AuM").color(dim).small());
                         ui.label(egui::RichText::new("").color(dim).small());
                         ui.end_row();
                         if !self.bg.account_details.is_empty() {
@@ -16250,6 +16266,12 @@ impl TyphooNApp {
                                         ui.label(egui::RichText::new("—").color(dim));
                                         ui.label(egui::RichText::new("—").color(dim));
                                     }
+                                    // AuM input
+                                    let aum_entry = self.darwin_aum.entry(det.ticker.clone()).or_default();
+                                    let resp = ui.add(egui::TextEdit::singleline(aum_entry).desired_width(70.0).hint_text("AuM $").font(egui::TextStyle::Small));
+                                    if resp.lost_focus() {
+                                        aum_changed = Some((det.ticker.clone(), aum_entry.clone()));
+                                    }
                                     if ui.small_button("X").on_hover_text(format!("Delete {}", det.ticker)).clicked() {
                                         darwin_to_delete = Some(det.ticker.clone());
                                     }
@@ -16266,6 +16288,12 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new("...").color(dim));
                                 ui.label(""); ui.label("");
                                 ui.label(""); ui.label("");
+                                // AuM input
+                                let aum_entry = self.darwin_aum.entry(acct.darwin_ticker.clone()).or_default();
+                                let resp = ui.add(egui::TextEdit::singleline(aum_entry).desired_width(70.0).hint_text("AuM $").font(egui::TextStyle::Small));
+                                if resp.lost_focus() {
+                                    aum_changed = Some((acct.darwin_ticker.clone(), aum_entry.clone()));
+                                }
                                 if ui.small_button("X").on_hover_text(format!("Delete {}", acct.darwin_ticker)).clicked() {
                                     darwin_to_delete = Some(acct.darwin_ticker.clone());
                                 }
@@ -16273,6 +16301,13 @@ impl TyphooNApp {
                             }
                         }
                     });
+
+                    // Persist AuM changes to KV (synced to LAN clients automatically)
+                    if let Some((ticker, val)) = aum_changed {
+                        if let Some(ref cache) = self.cache {
+                            let _ = cache.put_kv(&format!("darwin:aum:{}", ticker), &val);
+                        }
+                    }
 
                     // Handle DARWIN deletion from grid button
                     if let Some(ticker) = darwin_to_delete {

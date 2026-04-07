@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+use zeroize::Zeroizing;
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -32,8 +33,8 @@ fn kraken_client() -> &'static Client {
 /// Kraken broker client with HMAC-SHA512 request signing.
 pub struct KrakenBroker {
     client: &'static Client,
-    api_key: String,
-    api_secret: String, // base64-encoded
+    api_key: Zeroizing<String>,
+    api_secret: Zeroizing<String>, // base64-encoded, zeroized on drop
     nonce: AtomicU64,
 }
 
@@ -41,6 +42,8 @@ impl KrakenBroker {
     /// Create a new Kraken broker instance.
     /// Pass empty strings for unauthenticated (public-endpoint-only) usage.
     pub fn new(api_key: String, api_secret: String) -> Self {
+        let api_key = Zeroizing::new(api_key);
+        let api_secret = Zeroizing::new(api_secret);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -119,7 +122,7 @@ impl KrakenBroker {
         let resp = self
             .client
             .post(&url)
-            .header("API-Key", &self.api_key)
+            .header("API-Key", self.api_key.as_str())
             .header("API-Sign", &signature)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .body(post_data)

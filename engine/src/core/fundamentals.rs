@@ -230,6 +230,10 @@ pub async fn fetch_ev_from_sec(
     client: &reqwest::Client,
     cik: &str,
 ) -> Result<(Option<f64>, Option<f64>), String> {
+    // Validate CIK: must be numeric only (prevent URL injection)
+    if cik.is_empty() || !cik.chars().all(|c| c.is_ascii_digit()) {
+        return Err(format!("Invalid CIK: {cik}"));
+    }
     let url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json");
     let resp = client.get(&url)
         .header("User-Agent", SEC_USER_AGENT)
@@ -326,6 +330,12 @@ pub async fn fetch_yahoo_fundamentals(
     session: &YahooSession,
     ticker: &str,
 ) -> Result<serde_json::Value, String> {
+    // Validate ticker: alphanumeric + dots + hyphens only (prevent URL injection)
+    if ticker.is_empty() || ticker.len() > 20
+        || !ticker.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(format!("Invalid ticker for Yahoo: {ticker}"));
+    }
     let url = if session.crumb.is_empty() {
         format!("https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={YAHOO_MODULES}")
     } else {
