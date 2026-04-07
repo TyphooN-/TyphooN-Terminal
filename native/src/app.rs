@@ -9743,6 +9743,7 @@ pub struct TyphooNApp {
     swap_harvest_dir_filter: String, // "", "LONG", "SHORT", "BOTH"
     show_darwinex_radar: bool,
     darwinex_radar_data: Vec<(String, String, String, i32, f64, f64, f64, f64, String)>, // (symbol, sector, industry, trade_mode, swap_l, swap_s, vol_min, margin, desc)
+    darwinex_radar_changelog: Vec<typhoon_engine::core::darwin::RadarChange>,
     // Fundamentals symbol source settings
     fund_source_mt5: bool,
     fund_source_alpaca: bool,
@@ -12351,6 +12352,7 @@ impl TyphooNApp {
             swap_harvest_dir_filter: String::new(),
             show_darwinex_radar: false,
             darwinex_radar_data: Vec::new(),
+            darwinex_radar_changelog: Vec::new(),
             fund_source_mt5: true,
             fund_source_alpaca: false,
             fund_source_tastytrade: false,
@@ -13773,11 +13775,26 @@ impl TyphooNApp {
                             }
                             Err(e) => self.log.push_back(LogEntry::err(format!("DARWINEXRADAR failed: {}", e))),
                         }
-                        // Also export CSVs
+                        // Compute changelog (compares against previous snapshot)
+                        match darwin::radar_changelog(&conn) {
+                            Ok(changes) => {
+                                if changes.is_empty() {
+                                    self.log.push_back(LogEntry::info("DARWINEXRADAR: no changes since last snapshot"));
+                                } else {
+                                    self.log.push_back(LogEntry::info(format!("DARWINEXRADAR: {} changes detected", changes.len())));
+                                }
+                                self.darwinex_radar_changelog = changes;
+                            }
+                            Err(e) => self.log.push_back(LogEntry::warn(format!("Changelog: {}", e))),
+                        }
+                        // Export CSVs (terminal export dir + MarketWizardry.org)
                         let mut out = dirs_home();
                         out.push("export");
                         let _ = std::fs::create_dir_all(&out);
-                        let _ = darwin::export_radar_txt(&conn, &conn, &out.display().to_string());
+                        match darwin::export_radar_txt(&conn, &conn, &out.display().to_string()) {
+                            Ok(msg) => self.log.push_back(LogEntry::info(format!("Radar exported: {}", msg))),
+                            Err(e) => self.log.push_back(LogEntry::err(format!("Export failed: {}", e))),
+                        }
                     }
                 }
             }
@@ -20687,6 +20704,36 @@ impl TyphooNApp {
                     if tech_count > 0 { categories.push(("Technology", tech_count)); }
                     if healthcare_count > 0 { categories.push(("Healthcare", healthcare_count)); }
                     if other_count > 0 { categories.push(("Other", other_count)); }
+
+                    // Changelog section
+                    if !self.darwinex_radar_changelog.is_empty() {
+                        ui.collapsing(egui::RichText::new(format!("Changelog ({} changes)", self.darwinex_radar_changelog.len())).strong(), |ui| {
+                            egui::Grid::new("radar_changelog_grid").striped(true).num_columns(3).min_col_width(60.0).show(ui, |ui| {
+                                ui.strong("Symbol");
+                                ui.strong("Type");
+                                ui.strong("Detail");
+                                ui.end_row();
+                                for c in &self.darwinex_radar_changelog {
+                                    ui.label(egui::RichText::new(&c.symbol).monospace().strong());
+                                    let (type_color, type_label) = match c.change_type.as_str() {
+                                        "NEW" => (ACCENT, "NEW"),
+                                        "REMOVED" => (egui::Color32::from_rgb(255, 100, 100), "REMOVED"),
+                                        "MODE_CHANGED" => (egui::Color32::YELLOW, "MODE"),
+                                        "SWAP_CHANGED" => (egui::Color32::from_rgb(100, 180, 255), "SWAP"),
+                                        "SPREAD_CHANGED" => (AXIS_TEXT, "SPREAD"),
+                                        _ => (AXIS_TEXT, "OTHER"),
+                                    };
+                                    ui.label(egui::RichText::new(type_label).color(type_color).small());
+                                    ui.label(egui::RichText::new(&c.detail).color(AXIS_TEXT).small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                        ui.separator();
+                    } else {
+                        ui.label(egui::RichText::new("No changes since last snapshot (run again tomorrow to see diffs)").color(AXIS_TEXT).small());
+                        ui.separator();
+                    }
 
                     // Table
                     egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {

@@ -2042,7 +2042,146 @@ pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir:
     std::fs::write(&raw_path, &specs)
         .map_err(|e| format!("Write raw failed: {e}"))?;
 
+    // Export to MarketWizardry.org darwinex-radar directory (web-compatible snapshots)
+    let mw_dir = std::path::Path::new("/home/typhoon/git/MarketWizardry.org/darwinex-radar");
+    if mw_dir.exists() {
+        let mw_timestamp = chrono::Utc::now().format("%Y.%m.%d").to_string();
+        if !stocks.is_empty() {
+            let _ = std::fs::write(mw_dir.join(format!("SymbolsExport-Darwinex-Live-Stocks-{}.csv", mw_timestamp)), to_semicolon(&stocks));
+        }
+        if !cfd.is_empty() {
+            let _ = std::fs::write(mw_dir.join(format!("SymbolsExport-Darwinex-Live-CFD-{}.csv", mw_timestamp)), to_semicolon(&cfd));
+        }
+        if !crypto.is_empty() {
+            let _ = std::fs::write(mw_dir.join(format!("SymbolsExport-Darwinex-Live-Crypto-{}.csv", mw_timestamp)), to_semicolon(&crypto));
+        }
+        if !futures.is_empty() {
+            let _ = std::fs::write(mw_dir.join(format!("SymbolsExport-Darwinex-Live-Futures-{}.csv", mw_timestamp)), to_semicolon(&futures));
+        }
+        exported.push(format!("MarketWizardry.org:{}", mw_timestamp));
+    }
+
     Ok(format!("Exported {} ({} total symbols)", exported.join(", "), lines.len()))
+}
+
+/// Radar changelog entry — one change between snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarChange {
+    pub symbol: String,
+    pub change_type: String, // "NEW", "REMOVED", "SWAP_CHANGED", "SPREAD_CHANGED", "MODE_CHANGED"
+    pub detail: String,
+}
+
+/// Compare current specs against previous snapshot stored in KV, return changelog.
+/// Also stores current snapshot for next comparison.
+pub fn radar_changelog(cache_conn: &Connection) -> Result<Vec<RadarChange>, String> {
+    let specs = load_all_specs(cache_conn)?;
+
+    // Parse current specs into map: symbol -> (trade_mode, swap_long, swap_short, spread, sector, description)
+    let parse_specs = |data: &str| -> std::collections::HashMap<String, (i32, f64, f64, i32, String, String)> {
+        let mut map = std::collections::HashMap::new();
+        for line in data.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let f: Vec<&str> = line.split(',').collect();
+            if f.len() < 7 { continue; }
+            let sym = f[0].trim();
+            if sym.is_empty() || sym == "Symbol" { continue; }
+            let mode: i32 = f.get(3).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            let swap_l: f64 = f.get(4).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+            let swap_s: f64 = f.get(5).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+            let spread: i32 = f.get(6).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            let sector = f.get(1).unwrap_or(&"").trim().to_string();
+            let desc = f.get(18).unwrap_or(&"").trim().to_string();
+            map.insert(sym.to_string(), (mode, swap_l, swap_s, spread, sector, desc));
+        }
+        map
+    };
+
+    let current = parse_specs(&specs);
+
+    // Load previous snapshot from KV
+    let prev_data = {
+        let sql = "SELECT value FROM kv_cache WHERE key = 'radar:previous_snapshot' LIMIT 1";
+        cache_conn.prepare(sql).ok().and_then(|mut stmt| {
+            stmt.query_row([], |row| row.get::<_, Vec<u8>>(0)).ok()
+        }).and_then(|data| {
+            zstd::decode_all(data.as_slice()).ok()
+                .and_then(|d| String::from_utf8(d).ok())
+                .or_else(|| String::from_utf8(data).ok())
+        })
+    };
+
+    let previous = prev_data.as_deref().map(parse_specs).unwrap_or_default();
+
+    let mut changes = Vec::new();
+
+    // New symbols
+    for (sym, (mode, swap_l, swap_s, _spread, sector, desc)) in &current {
+        if !previous.contains_key(sym) {
+            let mode_str = match *mode { 0 => "Disabled", 3 => "Close-Only", 4 => "Full", _ => "Partial" };
+            changes.push(RadarChange {
+                symbol: sym.clone(),
+                change_type: "NEW".into(),
+                detail: format!("{} [{}] SwapL:{:.2} SwapS:{:.2} {} — {}", sym, mode_str, swap_l, swap_s, sector, desc),
+            });
+        }
+    }
+
+    // Removed symbols
+    for (sym, (_mode, _swap_l, _swap_s, _spread, _sector, desc)) in &previous {
+        if !current.contains_key(sym) {
+            changes.push(RadarChange {
+                symbol: sym.clone(),
+                change_type: "REMOVED".into(),
+                detail: format!("{} — {}", sym, desc),
+            });
+        }
+    }
+
+    // Changed symbols
+    for (sym, (mode, swap_l, swap_s, spread, _sector, _desc)) in &current {
+        if let Some((prev_mode, prev_swap_l, prev_swap_s, prev_spread, _, _)) = previous.get(sym) {
+            if mode != prev_mode {
+                let mode_str = |m: i32| match m { 0 => "Disabled", 3 => "Close-Only", 4 => "Full", _ => "Partial" };
+                changes.push(RadarChange {
+                    symbol: sym.clone(),
+                    change_type: "MODE_CHANGED".into(),
+                    detail: format!("{} → {} (was {})", sym, mode_str(*mode), mode_str(*prev_mode)),
+                });
+            }
+            if (swap_l - prev_swap_l).abs() > 0.01 || (swap_s - prev_swap_s).abs() > 0.01 {
+                changes.push(RadarChange {
+                    symbol: sym.clone(),
+                    change_type: "SWAP_CHANGED".into(),
+                    detail: format!("{} SwapL:{:.2}→{:.2} SwapS:{:.2}→{:.2}", sym, prev_swap_l, swap_l, prev_swap_s, swap_s),
+                });
+            }
+            if spread != prev_spread {
+                changes.push(RadarChange {
+                    symbol: sym.clone(),
+                    change_type: "SPREAD_CHANGED".into(),
+                    detail: format!("{} Spread:{}→{}", sym, prev_spread, spread),
+                });
+            }
+        }
+    }
+
+    // Sort: NEW first, then REMOVED, then MODE, then SWAP, then SPREAD
+    changes.sort_by(|a, b| {
+        let order = |t: &str| match t { "NEW" => 0, "REMOVED" => 1, "MODE_CHANGED" => 2, "SWAP_CHANGED" => 3, _ => 4 };
+        order(&a.change_type).cmp(&order(&b.change_type)).then(a.symbol.cmp(&b.symbol))
+    });
+
+    // Store current snapshot for next comparison (compress with zstd)
+    if let Ok(compressed) = zstd::encode_all(specs.as_bytes(), 3) {
+        let sql = "INSERT OR REPLACE INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)";
+        if let Ok(mut stmt) = cache_conn.prepare(sql) {
+            let _ = stmt.execute(rusqlite::params!["radar:previous_snapshot", compressed, chrono::Utc::now().timestamp()]);
+        }
+    }
+
+    Ok(changes)
 }
 
 // ── FTP Quote / Price Series ────────────────────────────────────────
