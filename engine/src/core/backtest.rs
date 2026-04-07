@@ -78,7 +78,7 @@ impl TradeReport {
 
         let n_trades = trades.len() as f64;
         let win_rate = if n_trades > 0.0 { wins.len() as f64 / n_trades * 100.0 } else { 0.0 };
-        let profit_factor = if gross_loss > 0.0 { gross_profit / gross_loss } else { f64::INFINITY };
+        let profit_factor = if gross_loss > 0.0 { (gross_profit / gross_loss).min(999.0) } else { 999.0 };
         let avg_win = if wins.is_empty() { 0.0 } else { gross_profit / wins.len() as f64 };
         let avg_loss = if losses.is_empty() { 0.0 } else { gross_loss / losses.len() as f64 };
         let avg_trade = if n_trades > 0.0 { total_pnl / n_trades } else { 0.0 };
@@ -1165,7 +1165,7 @@ mod tests {
         let report = TradeReport::from_trades(&trades, 10000.0);
         assert_eq!(report.total_trades, 1);
         assert!((report.win_rate - 100.0).abs() < 1e-6);
-        assert_eq!(report.profit_factor, f64::INFINITY);
+        assert_eq!(report.profit_factor, 999.0);
         assert!((report.total_pnl - 100.0).abs() < 1e-6);
         assert!((report.gross_profit - 100.0).abs() < 1e-6);
         assert!((report.gross_loss - 0.0).abs() < 1e-6); // no losses, stored as -0 = 0

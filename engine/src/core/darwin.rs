@@ -516,7 +516,7 @@ pub fn get_darwin_summary(conn: &Connection, darwin_ticker: &str) -> Result<Darw
 
     let total_trades = win_count + loss_count;
     let win_rate = if total_trades > 0 { win_count as f64 / total_trades as f64 * 100.0 } else { 0.0 };
-    let profit_factor = if gross_losses > 0.0 { gross_wins / gross_losses } else { if gross_wins > 0.0 { f64::INFINITY } else { 0.0 } };
+    let profit_factor = if gross_losses > 0.0 { (gross_wins / gross_losses).min(999.0) } else { if gross_wins > 0.0 { 999.0 } else { 0.0 } };
 
     // Final balance from last deal
     let final_balance: f64 = conn.query_row(
@@ -1138,11 +1138,23 @@ pub fn compute_var_full(daily_returns: &[DailyReturn]) -> VaRResult {
 
     // Sharpe (annualized, risk-free = 0)
     let sharpe = if daily_vol > 0.0 { avg_ret / daily_vol * (252.0f64).sqrt() } else { 0.0 };
-    let sortino = if downside_dev > 0.0 { avg_ret / downside_dev * (252.0f64).sqrt() } else { 0.0 };
+    let sortino = if downside_dev > 0.0 {
+        avg_ret / downside_dev * (252.0f64).sqrt()
+    } else if avg_ret > 0.0 {
+        99.0 // Perfect record: positive returns with no downside volatility
+    } else {
+        0.0
+    };
 
     // Calmar (annualized return / max drawdown)
     let annualized_return = avg_ret * 252.0;
-    let calmar = if max_dd > 0.0 { annualized_return / max_dd } else { 0.0 };
+    let calmar = if max_dd > 0.0 {
+        annualized_return / max_dd
+    } else if annualized_return > 0.0 {
+        99.0 // Perfect record: positive return with no drawdown
+    } else {
+        0.0
+    };
 
     VaRResult {
         var_95, var_99, cvar_95, cvar_99,
@@ -3266,10 +3278,12 @@ pub fn compute_tail_risk(daily_returns: &[DailyReturn]) -> TailRiskMetrics {
         0.0
     };
 
-    // Excess kurtosis (normal = 0)
+    // Excess kurtosis (sample-corrected, normal = 0)
     let kurtosis = if std_dev > 0.0 && n > 3.0 {
-        let m4 = rets.iter().map(|r| ((r - mean) / std_dev).powi(4)).sum::<f64>() / n;
-        m4 - 3.0
+        let m4 = rets.iter().map(|r| ((r - mean) / std_dev).powi(4)).sum::<f64>();
+        let adj = (n * (n + 1.0)) / ((n - 1.0) * (n - 2.0) * (n - 3.0));
+        let excess_corr = (3.0 * (n - 1.0).powi(2)) / ((n - 2.0) * (n - 3.0));
+        adj * m4 - excess_corr
     } else {
         0.0
     };
@@ -3281,7 +3295,7 @@ pub fn compute_tail_risk(daily_returns: &[DailyReturn]) -> TailRiskMetrics {
     let idx_95 = ((n * 0.95).floor() as usize).min(sorted.len() - 1);
     let p5 = sorted[idx_5];
     let p95 = sorted[idx_95];
-    let tail_ratio = if p5.abs() > 1e-10 { p95 / p5.abs() } else { 0.0 };
+    let tail_ratio = if p5.abs() > 1e-10 { p95.abs() / p5.abs() } else { 0.0 };
 
     // Gain-to-pain: sum of all returns / sum of |negative returns|
     let total_return: f64 = rets.iter().sum();
@@ -5798,12 +5812,19 @@ pub fn estimate_dscore(conn: &Connection, darwin_ticker: &str) -> Result<DScoreE
 
     // ── Total D-Score (weighted composite, 0-100)
     // Darwinex weights: Ex 15%, Rs 25%, Pf 25%, Mc 15%, Cp 10%, Sc 10%
-    let total_dscore = experience * 1.5
+    // Clamp each component to [0, 10] before weighting
+    let experience = experience.clamp(0.0, 10.0);
+    let risk_mgmt = risk_mgmt.clamp(0.0, 10.0);
+    let performance = performance.clamp(0.0, 10.0);
+    let market_timing = market_timing.clamp(0.0, 10.0);
+    let capacity = capacity.clamp(0.0, 10.0);
+    let scalability = scalability.clamp(0.0, 10.0);
+    let total_dscore = (experience * 1.5
         + risk_mgmt * 2.5
         + performance * 2.5
         + market_timing * 1.5
         + capacity * 1.0
-        + scalability * 1.0;
+        + scalability * 1.0).clamp(0.0, 100.0);
 
     Ok(DScoreEstimate {
         darwin_ticker: darwin_ticker.to_string(),
