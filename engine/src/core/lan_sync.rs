@@ -531,10 +531,14 @@ impl LanSyncServer {
                         let cache = cache.clone();
                         let status = status_clone.clone();
                         tokio::spawn(async move {
-                            // TLS handshake
+                            // TLS handshake with 30s timeout
                             let client_ip = addr.ip().to_string();
-                            match tls_acc.accept(stream).await {
-                                Ok(tls_stream) => {
+                            let tls_result = tokio::time::timeout(
+                                std::time::Duration::from_secs(30),
+                                tls_acc.accept(stream),
+                            ).await;
+                            match tls_result {
+                                Ok(Ok(tls_stream)) => {
                                     {
                                         let mut s = status.lock().await;
                                         s.clients += 1;
@@ -545,8 +549,11 @@ impl LanSyncServer {
                                     }
                                     handle_client_tls(tls_stream, cache, secret, status, &client_ip).await;
                                 }
-                                Err(e) => {
+                                Ok(Err(e)) => {
                                     tracing::warn!("LAN sync: TLS handshake failed from {addr}: {e}");
+                                }
+                                Err(_) => {
+                                    tracing::warn!("LAN sync: TLS handshake timeout from {addr}");
                                 }
                             }
                         });
@@ -581,12 +588,25 @@ async fn handle_client_tls(
     status: Arc<TokioMutex<SyncStatus>>,
     client_ip: &str,
 ) {
+    // Helper: clean up client count + IP on any early exit
+    let cleanup_client = |status: &Arc<TokioMutex<SyncStatus>>, cache: &Arc<SqliteCache>, ip: &str| {
+        let status = status.clone();
+        let cache = cache.clone();
+        let ip = ip.to_string();
+        async move {
+            let mut s = status.lock().await;
+            s.clients = s.clients.saturating_sub(1);
+            s.client_ips.retain(|i| i != &ip);
+            let ips_json = serde_json::to_string(&s.client_ips).unwrap_or_default();
+            let _ = cache.put_kv("lan:server:clients", &ips_json);
+        }
+    };
+
     let ws = match tokio_tungstenite::accept_async_with_config(tls_stream, Some(ws_config())).await {
         Ok(ws) => ws,
         Err(e) => {
             tracing::warn!("LAN sync WebSocket handshake failed: {e}");
-            let mut s = status.lock().await;
-            s.clients = s.clients.saturating_sub(1);
+            cleanup_client(&status, &cache, client_ip).await;
             return;
         }
     };
@@ -600,14 +620,12 @@ async fn handle_client_tls(
         Ok(m) => m,
         Err(e) => {
             tracing::warn!("LAN sync: failed to serialize AuthChallenge: {e}");
-            let mut s = status.lock().await;
-            s.clients = s.clients.saturating_sub(1);
+            cleanup_client(&status, &cache, client_ip).await;
             return;
         }
     };
     if sink.send(challenge_msg).await.is_err() {
-        let mut s = status.lock().await;
-        s.clients = s.clients.saturating_sub(1);
+        cleanup_client(&status, &cache, client_ip).await;
         return;
     }
 
@@ -630,8 +648,7 @@ async fn handle_client_tls(
         if let Ok(msg) = send_msg(&SyncMessage::AuthFail { reason: "Invalid credentials".into() }) {
             let _ = sink.send(msg).await;
         }
-        let mut s = status.lock().await;
-        s.clients = s.clients.saturating_sub(1);
+        cleanup_client(&status, &cache, client_ip).await;
         return;
     }
     if let Ok(msg) = send_msg(&SyncMessage::AuthOk) {
@@ -662,6 +679,7 @@ async fn handle_client_tls(
                 // Fast binary transfer: batch entries into large binary WebSocket frames
                 // Format per entry: [u32 key_len][key_bytes][i64 timestamp][u32 data_len][data_bytes]
                 let mut count = 0u32;
+                let mut bytes_total = 0u64;
                 let mut batch_buf: Vec<u8> = Vec::with_capacity(4 * 1024 * 1024); // 4MB batch buffer
                 let flush_threshold = 2 * 1024 * 1024; // flush every 2MB
 
@@ -677,6 +695,7 @@ async fn handle_client_tls(
 
                         // Flush when batch is large enough (swap to avoid clone)
                         if batch_buf.len() >= flush_threshold {
+                            bytes_total += batch_buf.len() as u64;
                             let send_buf = std::mem::replace(&mut batch_buf, Vec::with_capacity(4 * 1024 * 1024));
                             let _ = sink.send(Message::Binary(send_buf.into())).await;
                         }
@@ -684,6 +703,7 @@ async fn handle_client_tls(
                 }
                 // Flush remaining
                 if !batch_buf.is_empty() {
+                    bytes_total += batch_buf.len() as u64;
                     let _ = sink.send(Message::Binary(batch_buf.into())).await;
                 }
                 // Send completion marker as text
@@ -693,7 +713,7 @@ async fn handle_client_tls(
                 {
                     let mut s = status.lock().await;
                     s.entries_synced += count as usize;
-                    s.bytes_sent += count as u64; // approximate
+                    s.bytes_sent += bytes_total;
                 }
             }
             SyncMessage::RequestDarwinData => {
@@ -783,8 +803,8 @@ async fn handle_client_tls(
                     batch_buf.extend_from_slice(vb);
                     count += 1;
                     if batch_buf.len() >= 2 * 1024 * 1024 {
-                        let _ = sink.send(Message::Binary(batch_buf.clone().into())).await;
-                        batch_buf.clear();
+                        let send_buf = std::mem::replace(&mut batch_buf, Vec::with_capacity(2 * 1024 * 1024));
+                        let _ = sink.send(Message::Binary(send_buf.into())).await;
                     }
                 }
                 if !batch_buf.is_empty() {
@@ -1093,7 +1113,7 @@ async fn client_sync_loop(
 
         // 8. Receive entries until BatchComplete
         // Server sends binary frames (fast, no base64/JSON overhead) + text BatchComplete
-        let total_received = 0usize;
+        let mut total_received = 0usize;
         let mut total_bytes = 0usize;
         loop {
             match stream.next().await {
@@ -1103,9 +1123,10 @@ async fn client_sync_loop(
                     total_bytes += buf.len();
                     let mut pos = 0;
                     while pos + 4 <= buf.len() {
+                        let prev_pos = pos;
                         let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                         pos += 4;
-                        if key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: key_len {key_len} exceeds limit"); break; }
+                        if key_len == 0 || key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: key_len {key_len} invalid"); break; }
                         if pos + key_len + 8 + 4 > buf.len() { break; }
                         let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
                         pos += key_len;
@@ -1122,13 +1143,17 @@ async fn client_sync_loop(
                         if let Err(e) = cache.put_raw_bar_entry(&key, data, ts, bar_count) {
                             tracing::warn!("LAN sync: failed to write {key}: {e}");
                         }
-                        let _ = total_received;
+                        total_received += 1;
+                        if pos == prev_pos { tracing::warn!("LAN sync: binary parse stalled at pos {pos}"); break; }
                     }
                 }
                 Some(Ok(msg)) if msg.is_text() => {
                     // Check for BatchComplete
                     if let Ok(SyncMessage::BatchComplete { count }) = parse_msg(&msg) {
-                        tracing::info!("LAN sync: received {} entries ({:.1} MB)", count, total_bytes as f64 / 1024.0 / 1024.0);
+                        if total_received != count {
+                            tracing::warn!("LAN sync: batch count mismatch — server sent {count}, received {total_received}");
+                        }
+                        tracing::info!("LAN sync: received {total_received} entries ({:.1} MB)", total_bytes as f64 / 1024.0 / 1024.0);
                         break;
                     }
                 }
@@ -1185,9 +1210,10 @@ async fn client_sync_loop(
                 let buf = msg.into_data();
                 let mut pos = 0;
                 while pos + 4 <= buf.len() {
+                    let prev_pos = pos;
                     let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                     pos += 4;
-                    if key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: KV key_len {key_len} exceeds limit"); break; }
+                    if key_len == 0 || key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: KV key_len {key_len} invalid"); break; }
                     if pos + key_len + 4 > buf.len() { break; }
                     let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
                     pos += key_len;
@@ -1199,6 +1225,7 @@ async fn client_sync_loop(
                     pos += val_len;
                     let _ = cache.put_kv(&key, &val);
                     kv_count += 1;
+                    if pos == prev_pos { break; }
                 }
             }
             Some(Ok(msg)) if msg.is_text() => {
@@ -1223,9 +1250,10 @@ async fn client_sync_loop(
                     let buf = msg.into_data();
                     let mut pos = 0;
                     while pos + 4 <= buf.len() {
+                        let prev_pos = pos;
                         let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                         pos += 4;
-                        if key_len > MAX_KEY_LEN { break; }
+                        if key_len == 0 || key_len > MAX_KEY_LEN { break; }
                         if pos + key_len + 4 > buf.len() { break; }
                         let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
                         pos += key_len;
@@ -1237,6 +1265,7 @@ async fn client_sync_loop(
                         pos += val_len;
                         let _ = cache.put_kv(&key, &val);
                         kv_count += 1;
+                        if pos == prev_pos { break; }
                     }
                 }
                 Some(Ok(msg)) if msg.is_text() => {
@@ -1402,9 +1431,10 @@ async fn client_sync_loop(
                                 // KV binary: [u32 key_len][key][u32 val_len][val] repeated
                                 let mut pos = 0;
                                 while pos + 4 <= buf.len() {
+                                    let prev_pos = pos;
                                     let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                                     pos += 4;
-                                    if key_len > MAX_KEY_LEN { break; }
+                                    if key_len == 0 || key_len > MAX_KEY_LEN { break; }
                                     if pos + key_len + 4 > buf.len() { break; }
                                     let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
                                     pos += key_len;
@@ -1415,14 +1445,16 @@ async fn client_sync_loop(
                                     let val = String::from_utf8_lossy(&buf[pos..pos+val_len]).to_string();
                                     pos += val_len;
                                     let _ = cache.put_kv(&key, &val);
+                                    if pos == prev_pos { break; }
                                 }
                             } else {
                                 // Bar binary: [u32 key_len][key][i64 ts][u32 data_len][data] repeated
                                 let mut pos = 0;
                                 while pos + 4 <= buf.len() {
+                                    let prev_pos = pos;
                                     let key_len = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap_or([0;4])) as usize;
                                     pos += 4;
-                                    if key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: incremental key_len {key_len} exceeds limit"); break; }
+                                    if key_len == 0 || key_len > MAX_KEY_LEN { tracing::warn!("LAN sync: incremental key_len {key_len} invalid"); break; }
                                     if pos + key_len + 8 + 4 > buf.len() { break; }
                                     let key = String::from_utf8_lossy(&buf[pos..pos+key_len]).to_string();
                                     pos += key_len;
@@ -1437,6 +1469,7 @@ async fn client_sync_loop(
                                     let bar_count = extract_bar_count(data);
                                     let _ = cache.put_raw_bar_entry(&key, data, ts, bar_count);
                                     tracing::debug!("LAN sync: incremental update for {key}");
+                                    if pos == prev_pos { break; }
                                 }
                             }
                         } else if msg.is_text() {
