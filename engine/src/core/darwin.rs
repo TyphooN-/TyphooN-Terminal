@@ -1951,40 +1951,7 @@ pub fn scan_darwin_ftp(
 /// Export symbol radar data in MarketWizardry format.
 /// Reads MT5 specs from SQLite and generates the .txt report.
 pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir: &str) -> Result<String, String> {
-    // Read __SPECS__ from bar_cache (BarCacheWriter) or kv_cache (legacy)
-    let try_table = |table: &str| -> Option<String> {
-        // table/col are hardcoded constants, not user input — safe to format into SQL
-        let (col, tbl) = if table == "bar_cache" { ("data", "bar_cache") } else { ("value", "kv_cache") };
-        let sql = format!("SELECT {col} FROM {tbl} WHERE key LIKE '%__SPECS__%' LIMIT 1");
-        let mut stmt = cache_conn.prepare(&sql).map_err(|e| {
-            tracing::debug!("Failed to prepare specs query on {}: {}", table, e);
-            e
-        }).ok()?;
-        let result = stmt.query_row([], |row| {
-            row.get::<_, Vec<u8>>(0).or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))
-        });
-        match result {
-            Ok(data) => {
-                // Try zstd decompress, fall back to raw UTF-8
-                if let Ok(d) = zstd::decode_all(data.as_slice()) {
-                    String::from_utf8(d).ok()
-                } else {
-                    String::from_utf8(data).ok()
-                }
-            }
-            Err(_) => None,
-        }
-    };
-    let specs_json: Option<String> = try_table("bar_cache").or_else(|| try_table("kv_cache"));
-
-    if specs_json.is_none() {
-        return Err("No MT5 specs data found in cache. Run MT5 sync first.".into());
-    }
-
-    let specs = match specs_json {
-        Some(s) => s,
-        None => return Err("No MT5 specs data found in cache".into()),
-    };
+    let specs = load_all_specs(cache_conn)?;
     let dir = std::path::Path::new(output_dir);
     std::fs::create_dir_all(dir).map_err(|e| format!("Create dir failed: {e}"))?;
 
@@ -2003,10 +1970,7 @@ pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir:
     let mut crypto = Vec::new();
     let mut futures = Vec::new();
 
-    // Header line (first line is the column header from BarCacheWriter)
-    let _header = lines.first().copied().unwrap_or("");
-
-    for line in lines.iter().skip(1) {
+    for line in lines.iter() {
         if line.trim().is_empty() { continue; }
         let fields: Vec<&str> = line.split(',').collect();
         if fields.len() < 4 { continue; }
@@ -2078,7 +2042,7 @@ pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir:
     std::fs::write(&raw_path, &specs)
         .map_err(|e| format!("Write raw failed: {e}"))?;
 
-    Ok(format!("Exported {} ({} total symbols)", exported.join(", "), lines.len() - 1))
+    Ok(format!("Exported {} ({} total symbols)", exported.join(", "), lines.len()))
 }
 
 // ── FTP Quote / Price Series ────────────────────────────────────────
@@ -6451,32 +6415,64 @@ pub struct SwapHarvestResult {
     pub both_count: usize,
 }
 
+/// Load ALL __SPECS__ entries from cache (multiple MT5 accounts), merge by symbol.
+/// Returns the combined CSV as a single string with all unique symbols.
+fn load_all_specs(cache_conn: &Connection) -> Result<String, String> {
+    let load_from_table = |table: &str| -> Vec<String> {
+        let (col, tbl) = if table == "bar_cache" { ("data", "bar_cache") } else { ("value", "kv_cache") };
+        let sql = format!("SELECT {col} FROM {tbl} WHERE key LIKE '%__SPECS__%'");
+        let mut results = Vec::new();
+        if let Ok(mut stmt) = cache_conn.prepare(&sql) {
+            let rows = stmt.query_map([], |row| {
+                row.get::<_, Vec<u8>>(0).or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))
+            });
+            if let Ok(rows) = rows {
+                for row in rows.flatten() {
+                    let text = if let Ok(d) = zstd::decode_all(row.as_slice()) {
+                        String::from_utf8(d).ok()
+                    } else {
+                        String::from_utf8(row).ok()
+                    };
+                    if let Some(t) = text {
+                        results.push(t);
+                    }
+                }
+            }
+        }
+        results
+    };
+
+    let mut all_blobs = load_from_table("bar_cache");
+    all_blobs.extend(load_from_table("kv_cache"));
+
+    if all_blobs.is_empty() {
+        return Err("No MT5 specs data found in cache. Run BarCacheWriter first.".into());
+    }
+
+    // Merge all specs CSVs, deduplicating by symbol name (first field).
+    // Keep the entry with more fields (richer data) on collision.
+    let mut seen = std::collections::HashMap::<String, String>::new();
+    for blob in &all_blobs {
+        for line in blob.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let symbol = line.split(',').next().unwrap_or("").trim();
+            if symbol.is_empty() || symbol == "Symbol" { continue; }
+            let existing_len = seen.get(symbol).map(|s| s.len()).unwrap_or(0);
+            if line.len() > existing_len {
+                seen.insert(symbol.to_string(), line.to_string());
+            }
+        }
+    }
+
+    let merged: String = seen.values().map(|s| s.as_str()).collect::<Vec<_>>().join("\n");
+    Ok(merged)
+}
+
 /// Scan MT5 symbol specs from cache and return all symbols with positive swap,
 /// sorted by best swap value descending. Reads the __SPECS__ CSV written by BarCacheWriter.
 pub fn swap_harvest(cache_conn: &Connection, min_swap: f64) -> Result<SwapHarvestResult, String> {
-    // Reuse the same __SPECS__ loading logic as export_radar_txt
-    let try_table = |table: &str| -> Option<String> {
-        let (col, tbl) = if table == "bar_cache" { ("data", "bar_cache") } else { ("value", "kv_cache") };
-        let sql = format!("SELECT {col} FROM {tbl} WHERE key LIKE '%__SPECS__%' LIMIT 1");
-        let mut stmt = cache_conn.prepare(&sql).ok()?;
-        let result = stmt.query_row([], |row| {
-            row.get::<_, Vec<u8>>(0).or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))
-        });
-        match result {
-            Ok(data) => {
-                if let Ok(d) = zstd::decode_all(data.as_slice()) {
-                    String::from_utf8(d).ok()
-                } else {
-                    String::from_utf8(data).ok()
-                }
-            }
-            Err(_) => None,
-        }
-    };
-
-    let specs = try_table("bar_cache")
-        .or_else(|| try_table("kv_cache"))
-        .ok_or_else(|| "No MT5 specs data found in cache. Run BarCacheWriter first.".to_string())?;
+    let specs = load_all_specs(cache_conn)?;
 
     // CSV format: Symbol(0),SectorName(1),IndustryName(2),TradeMode(3),SwapLong(4),SwapShort(5),
     //   Spread(6),VolumeMin(7),VolumeMax(8),VolumeStep(9),ContractSize(10),TickSize(11),
