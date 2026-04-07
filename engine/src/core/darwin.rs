@@ -6423,6 +6423,129 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
     Ok((n_acct, n_deals, n_pos))
 }
 
+// ── SwapHarvest ────────────────────────────────────────────────────
+
+/// A symbol with positive swap in at least one direction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwapHarvestEntry {
+    pub symbol: String,
+    pub description: String,
+    pub sector: String,
+    pub industry: String,
+    pub swap_long: f64,
+    pub swap_short: f64,
+    pub spread: i32,
+    pub volume_min: f64,
+    pub margin_initial: f64,
+    pub direction: String,  // "LONG", "SHORT", or "BOTH"
+    pub best_swap: f64,     // max(positive long, positive short)
+}
+
+/// Result of a swap harvest scan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwapHarvestResult {
+    pub entries: Vec<SwapHarvestEntry>,
+    pub total_scanned: usize,
+    pub long_count: usize,
+    pub short_count: usize,
+    pub both_count: usize,
+}
+
+/// Scan MT5 symbol specs from cache and return all symbols with positive swap,
+/// sorted by best swap value descending. Reads the __SPECS__ CSV written by BarCacheWriter.
+pub fn swap_harvest(cache_conn: &Connection, min_swap: f64) -> Result<SwapHarvestResult, String> {
+    // Reuse the same __SPECS__ loading logic as export_radar_txt
+    let try_table = |table: &str| -> Option<String> {
+        let (col, tbl) = if table == "bar_cache" { ("data", "bar_cache") } else { ("value", "kv_cache") };
+        let sql = format!("SELECT {col} FROM {tbl} WHERE key LIKE '%__SPECS__%' LIMIT 1");
+        let mut stmt = cache_conn.prepare(&sql).ok()?;
+        let result = stmt.query_row([], |row| {
+            row.get::<_, Vec<u8>>(0).or_else(|_| row.get::<_, String>(0).map(|s| s.into_bytes()))
+        });
+        match result {
+            Ok(data) => {
+                if let Ok(d) = zstd::decode_all(data.as_slice()) {
+                    String::from_utf8(d).ok()
+                } else {
+                    String::from_utf8(data).ok()
+                }
+            }
+            Err(_) => None,
+        }
+    };
+
+    let specs = try_table("bar_cache")
+        .or_else(|| try_table("kv_cache"))
+        .ok_or_else(|| "No MT5 specs data found in cache. Run BarCacheWriter first.".to_string())?;
+
+    // CSV format: Symbol(0),SectorName(1),IndustryName(2),TradeMode(3),SwapLong(4),SwapShort(5),
+    //   Spread(6),VolumeMin(7),VolumeMax(8),VolumeStep(9),ContractSize(10),TickSize(11),
+    //   TickValue(12),Digits(13),MarginInitial(14),MarginMaintenance(15),BaseCurrency(16),
+    //   QuoteCurrency(17),Description(18)
+    let mut entries = Vec::new();
+    let mut total_scanned = 0usize;
+
+    for line in specs.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() < 7 { continue; }
+
+        let symbol = fields[0].trim();
+        // Skip header row
+        if symbol == "Symbol" || symbol.is_empty() { continue; }
+        total_scanned += 1;
+
+        // TradeMode 0 = disabled
+        let trade_mode: i32 = fields.get(3).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+        if trade_mode == 0 { continue; }
+
+        let swap_long: f64 = fields.get(4).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+        let swap_short: f64 = fields.get(5).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+
+        let pos_long = swap_long > min_swap;
+        let pos_short = swap_short > min_swap;
+        if !pos_long && !pos_short { continue; }
+
+        let direction = if pos_long && pos_short { "BOTH" }
+                        else if pos_long { "LONG" }
+                        else { "SHORT" };
+
+        let best = if pos_long && pos_short { swap_long.max(swap_short) }
+                   else if pos_long { swap_long }
+                   else { swap_short };
+
+        entries.push(SwapHarvestEntry {
+            symbol: symbol.to_string(),
+            description: fields.get(18).unwrap_or(&"").trim().to_string(),
+            sector: fields.get(1).unwrap_or(&"").trim().to_string(),
+            industry: fields.get(2).unwrap_or(&"").trim().to_string(),
+            swap_long,
+            swap_short,
+            spread: fields.get(6).and_then(|s| s.trim().parse().ok()).unwrap_or(0),
+            volume_min: fields.get(7).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0),
+            margin_initial: fields.get(14).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0),
+            direction: direction.to_string(),
+            best_swap: best,
+        });
+    }
+
+    // Sort by best swap descending
+    entries.sort_by(|a, b| b.best_swap.partial_cmp(&a.best_swap).unwrap_or(std::cmp::Ordering::Equal));
+
+    let long_count = entries.iter().filter(|e| e.direction == "LONG").count();
+    let short_count = entries.iter().filter(|e| e.direction == "SHORT").count();
+    let both_count = entries.iter().filter(|e| e.direction == "BOTH").count();
+
+    Ok(SwapHarvestResult {
+        entries,
+        total_scanned,
+        long_count,
+        short_count,
+        both_count,
+    })
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]

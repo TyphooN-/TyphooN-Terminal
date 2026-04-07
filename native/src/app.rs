@@ -16362,6 +16362,27 @@ impl TyphooNApp {
                                 }
                             }
                         }
+                        if ui.small_button("SwapHarvest").clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Some(conn) = cache.try_connection() {
+                                    match darwin::swap_harvest(&conn, 0.0) {
+                                        Ok(result) => {
+                                            self.log.push_back(LogEntry::info(format!(
+                                                "SWAPHARVEST: {} symbols with positive swap ({} long, {} short, {} both) out of {} scanned",
+                                                result.entries.len(), result.long_count, result.short_count, result.both_count, result.total_scanned
+                                            )));
+                                            for e in &result.entries {
+                                                self.log.push_back(LogEntry::info(format!(
+                                                    "  {} [{}] SwapL:{:.4} SwapR:{:.4} Spread:{} MinLot:{} Margin:{:.0} — {}",
+                                                    e.symbol, e.direction, e.swap_long, e.swap_short, e.spread, e.volume_min, e.margin_initial, e.description
+                                                )));
+                                            }
+                                        }
+                                        Err(e) => self.log.push_back(LogEntry::err(format!("SwapHarvest failed: {}", e))),
+                                    }
+                                }
+                            }
+                        }
                         let ftp_available = !self.darwin_ftp_dir.is_empty();
                         if ftp_available {
                             let label = if self.gpu_darwin.is_some() { "DarwinIA Scan (GPU)" } else { "DarwinIA Scan (CPU)" };
