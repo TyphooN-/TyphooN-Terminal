@@ -14460,24 +14460,29 @@ impl TyphooNApp {
                     let ticker = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_uppercase();
                     if ticker.is_empty() {
                         self.log.push_back(LogEntry::warn("Usage: DELETE_DARWIN TICKER (e.g. DELETE_DARWIN CKUC)"));
-                    } else if let Some(ref cache) = self.cache {
-                        if let Ok(conn) = cache.connection() {
-                            match typhoon_engine::core::darwin::delete_darwin_account(&conn, &ticker) {
-                                Ok(deleted) => {
-                                    // Also purge from in-memory caches so UI updates immediately
-                                    self.bg.accounts.retain(|a| a.darwin_ticker != ticker);
-                                    self.bg.account_details.retain(|d| d.ticker != ticker);
-                                    self.bg.open_positions.retain(|p| {
-                                        // Remove positions from this DARWIN account
-                                        !self.bg.account_details.iter().any(|d| d.ticker == ticker && d.open_positions.iter().any(|op| op.symbol == p.symbol))
-                                    });
-                                    // Clear KV cached data for this account
-                                    let _ = cache.put_kv("darwin:account_details", &serde_json::to_string(&self.bg.account_details).unwrap_or_default());
-                                    self.log.push_back(LogEntry::info(format!("Deleted DARWIN {} — {} rows removed (UI refreshed)", ticker, deleted)));
+                    } else {
+                        // Immediately remove from in-memory UI state
+                        self.bg.accounts.retain(|a| a.darwin_ticker != ticker);
+                        self.bg.account_details.retain(|d| d.ticker != ticker);
+
+                        // Write blacklist + update KV (fast)
+                        if let Some(ref cache) = self.cache {
+                            let _ = cache.put_kv(&format!("darwin:deleted:{}", ticker), "1");
+                            let _ = cache.put_kv("darwin:account_details", &serde_json::to_string(&self.bg.account_details).unwrap_or_default());
+
+                            // Spawn SQL DELETE on background thread
+                            let cache = cache.clone();
+                            let ticker_clone = ticker.clone();
+                            std::thread::spawn(move || {
+                                if let Ok(conn) = cache.connection() {
+                                    match typhoon_engine::core::darwin::delete_darwin_account(&conn, &ticker_clone) {
+                                        Ok(n) => tracing::info!("Deleted DARWIN {} — {} rows", ticker_clone, n),
+                                        Err(e) => tracing::error!("Delete {} failed: {}", ticker_clone, e),
+                                    }
                                 }
-                                Err(e) => self.log.push_back(LogEntry::err(format!("Delete {} failed: {}", ticker, e))),
-                            }
+                            });
                         }
+                        self.log.push_back(LogEntry::info(format!("Deleting DARWIN {} (background)...", ticker)));
                     }
                 } else if other.starts_with("CRYPTOCOMPARE ") {
                     let sym = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_uppercase();
@@ -16217,24 +16222,30 @@ impl TyphooNApp {
 
                     // Handle DARWIN deletion from grid button
                     if let Some(ticker) = darwin_to_delete {
+                        // 1. Immediately remove from in-memory UI state (no freeze)
+                        self.bg.accounts.retain(|a| a.darwin_ticker != ticker);
+                        self.bg.account_details.retain(|d| d.ticker != ticker);
+
+                        // 2. Write blacklist + update KV (fast, small writes)
                         if let Some(ref cache) = self.cache {
-                            if let Ok(conn) = cache.connection() {
-                                match typhoon_engine::core::darwin::delete_darwin_account(&conn, &ticker) {
-                                    Ok(deleted) => {
-                                        self.bg.accounts.retain(|a| a.darwin_ticker != ticker);
-                                        self.bg.account_details.retain(|d| d.ticker != ticker);
-                                        self.bg.open_positions.retain(|p| {
-                                            !p.symbol.is_empty() // keep all — positions are shared
-                                        });
-                                        let _ = cache.put_kv("darwin:account_details", &serde_json::to_string(&self.bg.account_details).unwrap_or_default());
-                                        // Blacklist ticker so LAN sync won't re-import it
-                                        let _ = cache.put_kv(&format!("darwin:deleted:{}", ticker), "1");
-                                        self.log.push_back(LogEntry::info(format!("Deleted DARWIN {} — {} rows removed", ticker, deleted)));
-                                    }
-                                    Err(e) => self.log.push_back(LogEntry::err(format!("Delete {} failed: {}", ticker, e))),
-                                }
-                            }
+                            let _ = cache.put_kv(&format!("darwin:deleted:{}", ticker), "1");
+                            let _ = cache.put_kv("darwin:account_details", &serde_json::to_string(&self.bg.account_details).unwrap_or_default());
                         }
+
+                        // 3. Spawn SQL DELETE on background thread (avoids DB lock freeze)
+                        if let Some(ref cache) = self.cache {
+                            let cache = cache.clone();
+                            let ticker_clone = ticker.clone();
+                            std::thread::spawn(move || {
+                                if let Ok(conn) = cache.connection() {
+                                    match typhoon_engine::core::darwin::delete_darwin_account(&conn, &ticker_clone) {
+                                        Ok(n) => tracing::info!("Deleted DARWIN {} — {} rows", ticker_clone, n),
+                                        Err(e) => tracing::error!("Delete {} failed: {}", ticker_clone, e),
+                                    }
+                                }
+                            });
+                        }
+                        self.log.push_back(LogEntry::info(format!("Deleting DARWIN {} (background)...", ticker)));
                     }
 
                     // ── Per-account detail cards with charts ─────────────────────
