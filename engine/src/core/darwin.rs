@@ -6469,6 +6469,35 @@ fn load_all_specs(cache_conn: &Connection) -> Result<String, String> {
     Ok(merged)
 }
 
+/// Load all MT5 specs as parsed tuples for the DARWINEXRADAR UI.
+/// Returns: (symbol, sector, industry, trade_mode, swap_long, swap_short, vol_min, margin_initial, description)
+pub fn load_all_specs_parsed(cache_conn: &Connection) -> Result<Vec<(String, String, String, i32, f64, f64, f64, f64, String)>, String> {
+    let specs = load_all_specs(cache_conn)?;
+    let mut result = Vec::new();
+    for line in specs.lines() {
+        let line = line.trim();
+        if line.is_empty() { continue; }
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() < 7 { continue; }
+        let symbol = fields[0].trim();
+        if symbol.is_empty() { continue; }
+        let trade_mode: i32 = fields.get(3).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+        result.push((
+            symbol.to_string(),
+            fields.get(1).unwrap_or(&"").trim().to_string(),
+            fields.get(2).unwrap_or(&"").trim().to_string(),
+            trade_mode,
+            fields.get(4).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0),
+            fields.get(5).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0),
+            fields.get(7).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0),
+            fields.get(14).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0),
+            fields.get(18).unwrap_or(&"").trim().to_string(),
+        ));
+    }
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(result)
+}
+
 /// Scan MT5 symbol specs from cache and return all symbols with positive swap,
 /// sorted by best swap value descending. Reads the __SPECS__ CSV written by BarCacheWriter.
 pub fn swap_harvest(cache_conn: &Connection, min_swap: f64) -> Result<SwapHarvestResult, String> {

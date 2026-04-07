@@ -9736,6 +9736,12 @@ pub struct TyphooNApp {
     show_alerts: bool,
     show_order_entry: bool,
     show_crypto_backfill: bool,
+    show_swap_harvest: bool,
+    swap_harvest_results: Option<typhoon_engine::core::darwin::SwapHarvestResult>,
+    swap_harvest_filter: String,
+    swap_harvest_dir_filter: String, // "", "LONG", "SHORT", "BOTH"
+    show_darwinex_radar: bool,
+    darwinex_radar_data: Vec<(String, String, String, i32, f64, f64, f64, f64, String)>, // (symbol, sector, industry, trade_mode, swap_l, swap_s, vol_min, margin, desc)
     // DARWIN FTP browser
     /// DARWIN FTP browser window visibility.
     show_darwin_browser: bool,
@@ -12274,6 +12280,12 @@ impl TyphooNApp {
             show_alerts: false,
             show_order_entry: false,
             show_crypto_backfill: false,
+            show_swap_harvest: false,
+            swap_harvest_results: None,
+            swap_harvest_filter: String::new(),
+            swap_harvest_dir_filter: String::new(),
+            show_darwinex_radar: false,
+            darwinex_radar_data: Vec::new(),
             show_darwin_browser: false,
             ftp_scan_results: Vec::new(),
             ftp_detail_ticker: String::new(),
@@ -13656,12 +13668,8 @@ impl TyphooNApp {
                                     "SWAPHARVEST: {} symbols with positive swap ({} long, {} short, {} both) out of {} scanned",
                                     result.entries.len(), result.long_count, result.short_count, result.both_count, result.total_scanned
                                 )));
-                                for e in &result.entries {
-                                    self.log.push_back(LogEntry::info(format!(
-                                        "  {} [{}] SwapL:{:.4} SwapR:{:.4} Spread:{} MinLot:{} Margin:{:.0} — {}",
-                                        e.symbol, e.direction, e.swap_long, e.swap_short, e.spread, e.volume_min, e.margin_initial, e.description
-                                    )));
-                                }
+                                self.swap_harvest_results = Some(result);
+                                self.show_swap_harvest = true;
                             }
                             Err(e) => self.log.push_back(LogEntry::err(format!("SwapHarvest failed: {}", e))),
                         }
@@ -13671,13 +13679,20 @@ impl TyphooNApp {
             "DARWINEXRADAR" => {
                 if let Some(ref cache) = self.cache {
                     if let Some(conn) = cache.try_connection() {
+                        // Load all specs for UI display
+                        match darwin::load_all_specs_parsed(&conn) {
+                            Ok(data) => {
+                                self.log.push_back(LogEntry::info(format!("DARWINEXRADAR: loaded {} symbols", data.len())));
+                                self.darwinex_radar_data = data;
+                                self.show_darwinex_radar = true;
+                            }
+                            Err(e) => self.log.push_back(LogEntry::err(format!("DARWINEXRADAR failed: {}", e))),
+                        }
+                        // Also export CSVs
                         let mut out = dirs_home();
                         out.push("export");
                         let _ = std::fs::create_dir_all(&out);
-                        match darwin::export_radar_txt(&conn, &conn, &out.display().to_string()) {
-                            Ok(msg) => self.log.push_back(LogEntry::info(format!("DARWINEXRADAR: {}", msg))),
-                            Err(e) => self.log.push_back(LogEntry::err(format!("DARWINEXRADAR failed: {}", e))),
-                        }
+                        let _ = darwin::export_radar_txt(&conn, &conn, &out.display().to_string());
                     }
                 }
             }
@@ -15262,6 +15277,8 @@ impl TyphooNApp {
         self.show_alerts = false;
         self.show_order_entry = false;
         self.show_crypto_backfill = false;
+        self.show_swap_harvest = false;
+        self.show_darwinex_radar = false;
         self.show_darwin_browser = false;
         self.show_ev_scanner = false;
         self.show_earnings_calendar = false;
@@ -16435,12 +16452,8 @@ impl TyphooNApp {
                                                 "SWAPHARVEST: {} symbols with positive swap ({} long, {} short, {} both) out of {} scanned",
                                                 result.entries.len(), result.long_count, result.short_count, result.both_count, result.total_scanned
                                             )));
-                                            for e in &result.entries {
-                                                self.log.push_back(LogEntry::info(format!(
-                                                    "  {} [{}] SwapL:{:.4} SwapR:{:.4} Spread:{} MinLot:{} Margin:{:.0} — {}",
-                                                    e.symbol, e.direction, e.swap_long, e.swap_short, e.spread, e.volume_min, e.margin_initial, e.description
-                                                )));
-                                            }
+                                            self.swap_harvest_results = Some(result);
+                                            self.show_swap_harvest = true;
                                         }
                                         Err(e) => self.log.push_back(LogEntry::err(format!("SwapHarvest failed: {}", e))),
                                     }
@@ -20399,6 +20412,217 @@ impl TyphooNApp {
                                             ui.end_row();
                                         }
                                     }
+                            }
+                        });
+                    });
+                });
+        }
+
+        // ── SwapHarvest Window ──
+        if self.show_swap_harvest {
+            egui::Window::new("SwapHarvest — Positive Swap Scanner")
+                .open(&mut self.show_swap_harvest)
+                .resizable(true).default_size([900.0, 600.0])
+                .show(ctx, |ui| {
+                    if let Some(ref result) = self.swap_harvest_results {
+                        // Summary bar
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("{} symbols with positive swap", result.entries.len())).strong());
+                            ui.separator();
+                            ui.label(egui::RichText::new(format!("Long: {}", result.long_count)).color(ACCENT));
+                            ui.separator();
+                            ui.label(egui::RichText::new(format!("Short: {}", result.short_count)).color(egui::Color32::from_rgb(255, 100, 100)));
+                            ui.separator();
+                            ui.label(egui::RichText::new(format!("Both: {}", result.both_count)).color(egui::Color32::from_rgb(100, 180, 255)));
+                            ui.separator();
+                            ui.label(egui::RichText::new(format!("Scanned: {}", result.total_scanned)).color(AXIS_TEXT));
+                        });
+                        ui.add_space(4.0);
+
+                        // Filters
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Filter:").color(AXIS_TEXT).small());
+                            ui.add(egui::TextEdit::singleline(&mut self.swap_harvest_filter).desired_width(120.0).hint_text("symbol...").font(egui::TextStyle::Monospace));
+                            ui.separator();
+                            ui.label(egui::RichText::new("Direction:").color(AXIS_TEXT).small());
+                            if ui.selectable_label(self.swap_harvest_dir_filter.is_empty(), "All").clicked() {
+                                self.swap_harvest_dir_filter.clear();
+                            }
+                            if ui.selectable_label(self.swap_harvest_dir_filter == "LONG", "Long").clicked() {
+                                self.swap_harvest_dir_filter = "LONG".into();
+                            }
+                            if ui.selectable_label(self.swap_harvest_dir_filter == "SHORT", "Short").clicked() {
+                                self.swap_harvest_dir_filter = "SHORT".into();
+                            }
+                            if ui.selectable_label(self.swap_harvest_dir_filter == "BOTH", "Both").clicked() {
+                                self.swap_harvest_dir_filter = "BOTH".into();
+                            }
+                            // Export button
+                            ui.separator();
+                            if ui.add(egui::Button::new(egui::RichText::new("Export CSV").color(BTN_GREEN_TEXT).small()).fill(BTN_GREEN)).clicked() {
+                                if let Some(ref cache) = self.cache {
+                                    if let Some(conn) = cache.try_connection() {
+                                        let mut out = dirs_home(); out.push("export");
+                                        let _ = std::fs::create_dir_all(&out);
+                                        let path = out.join(format!("SwapHarvest-{}.csv", chrono::Utc::now().format("%Y-%m-%d")));
+                                        let mut csv = String::from("Symbol;Direction;SwapLong;SwapShort;Spread;VolumeMin;MarginInitial;Sector;Industry;Description\n");
+                                        for e in &result.entries {
+                                            csv.push_str(&format!("{};{};{:.4};{:.4};{};{};{:.0};{};{};{}\n",
+                                                e.symbol, e.direction, e.swap_long, e.swap_short, e.spread, e.volume_min, e.margin_initial, e.sector, e.industry, e.description));
+                                        }
+                                        match std::fs::write(&path, &csv) {
+                                            Ok(_) => self.log.push_back(LogEntry::info(format!("SwapHarvest CSV exported: {}", path.display()))),
+                                            Err(e) => self.log.push_back(LogEntry::err(format!("Export failed: {}", e))),
+                                        }
+                                        drop(conn);
+                                    }
+                                }
+                            }
+                        });
+                        ui.separator();
+
+                        // Table
+                        let filter_upper = self.swap_harvest_filter.to_uppercase();
+                        let dir_filter = self.swap_harvest_dir_filter.clone();
+                        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                            egui::Grid::new("swap_harvest_grid").striped(true).num_columns(9).min_col_width(50.0).show(ui, |ui| {
+                                // Header
+                                ui.strong("Symbol");
+                                ui.strong("Direction");
+                                ui.strong("Swap Long");
+                                ui.strong("Swap Short");
+                                ui.strong("Best");
+                                ui.strong("Spread");
+                                ui.strong("Min Lot");
+                                ui.strong("Margin");
+                                ui.strong("Description");
+                                ui.end_row();
+
+                                for e in &result.entries {
+                                    // Apply filters
+                                    if !filter_upper.is_empty() && !e.symbol.to_uppercase().contains(&filter_upper) && !e.description.to_uppercase().contains(&filter_upper) {
+                                        continue;
+                                    }
+                                    if !dir_filter.is_empty() && e.direction != dir_filter {
+                                        continue;
+                                    }
+
+                                    ui.label(egui::RichText::new(&e.symbol).monospace().strong());
+                                    let dir_color = match e.direction.as_str() {
+                                        "LONG" => ACCENT,
+                                        "SHORT" => egui::Color32::from_rgb(255, 100, 100),
+                                        _ => egui::Color32::from_rgb(100, 180, 255),
+                                    };
+                                    ui.label(egui::RichText::new(&e.direction).color(dir_color).small());
+                                    // Color swap values: green if positive, red if negative
+                                    let swap_l_color = if e.swap_long > 0.0 { ACCENT } else { egui::Color32::from_rgb(255, 100, 100) };
+                                    let swap_s_color = if e.swap_short > 0.0 { ACCENT } else { egui::Color32::from_rgb(255, 100, 100) };
+                                    ui.label(egui::RichText::new(format!("{:.4}", e.swap_long)).color(swap_l_color).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.4}", e.swap_short)).color(swap_s_color).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.4}", e.best_swap)).color(egui::Color32::from_rgb(255, 215, 0)).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{}", e.spread)).color(AXIS_TEXT).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{}", e.volume_min)).color(AXIS_TEXT).small().monospace());
+                                    ui.label(egui::RichText::new(format!("{:.0}", e.margin_initial)).color(AXIS_TEXT).small().monospace());
+                                    ui.label(egui::RichText::new(&e.description).color(AXIS_TEXT).small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    } else {
+                        ui.label("No data — run SWAPHARVEST first.");
+                    }
+                });
+        }
+
+        // ── DarwinexRadar Window ──
+        if self.show_darwinex_radar {
+            egui::Window::new("Darwinex Radar — All MT5 Symbols")
+                .open(&mut self.show_darwinex_radar)
+                .resizable(true).default_size([950.0, 600.0])
+                .show(ctx, |ui| {
+                    let data = &self.darwinex_radar_data;
+                    // Summary
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{} symbols loaded", data.len())).strong());
+                        ui.separator();
+                        let sectors: std::collections::HashSet<&str> = data.iter().map(|d| d.1.as_str()).filter(|s| !s.is_empty()).collect();
+                        ui.label(egui::RichText::new(format!("{} sectors", sectors.len())).color(AXIS_TEXT));
+                        ui.separator();
+                        let tradeable = data.iter().filter(|d| d.3 > 0).count();
+                        ui.label(egui::RichText::new(format!("{} tradeable", tradeable)).color(ACCENT));
+                        // Export button
+                        ui.separator();
+                        if ui.add(egui::Button::new(egui::RichText::new("Export CSVs").color(BTN_GREEN_TEXT).small()).fill(BTN_GREEN)).clicked() {
+                            if let Some(ref cache) = self.cache {
+                                if let Some(conn) = cache.try_connection() {
+                                    let mut out = dirs_home(); out.push("export");
+                                    let _ = std::fs::create_dir_all(&out);
+                                    match darwin::export_radar_txt(&conn, &conn, &out.display().to_string()) {
+                                        Ok(msg) => self.log.push_back(LogEntry::info(format!("Radar exported: {}", msg))),
+                                        Err(e) => self.log.push_back(LogEntry::err(format!("Export failed: {}", e))),
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    ui.separator();
+
+                    // Sector tabs
+                    let mut categories: Vec<(&str, usize)> = Vec::new();
+                    let mut currency_count = 0; let mut index_count = 0; let mut commodity_count = 0;
+                    let mut tech_count = 0; let mut healthcare_count = 0; let mut other_count = 0;
+                    for d in data {
+                        match d.1.as_str() {
+                            "Currency" => currency_count += 1,
+                            "Indexes" => index_count += 1,
+                            "Commodities" => commodity_count += 1,
+                            "Technology" => tech_count += 1,
+                            "Healthcare" => healthcare_count += 1,
+                            _ => other_count += 1,
+                        }
+                    }
+                    categories.push(("All", data.len()));
+                    if currency_count > 0 { categories.push(("Currency", currency_count)); }
+                    if index_count > 0 { categories.push(("Indexes", index_count)); }
+                    if commodity_count > 0 { categories.push(("Commodities", commodity_count)); }
+                    if tech_count > 0 { categories.push(("Technology", tech_count)); }
+                    if healthcare_count > 0 { categories.push(("Healthcare", healthcare_count)); }
+                    if other_count > 0 { categories.push(("Other", other_count)); }
+
+                    // Table
+                    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                        egui::Grid::new("radar_grid").striped(true).num_columns(9).min_col_width(50.0).show(ui, |ui| {
+                            ui.strong("Symbol");
+                            ui.strong("Sector");
+                            ui.strong("Industry");
+                            ui.strong("Mode");
+                            ui.strong("Swap Long");
+                            ui.strong("Swap Short");
+                            ui.strong("Min Lot");
+                            ui.strong("Margin");
+                            ui.strong("Description");
+                            ui.end_row();
+
+                            for d in data {
+                                let (ref sym, ref sector, ref industry, mode, swap_l, swap_s, vol_min, margin, ref desc) = *d;
+                                let mode_text = match mode {
+                                    0 => "Disabled",
+                                    4 => "Full",
+                                    _ => "Partial",
+                                };
+                                let mode_color = if mode >= 4 { ACCENT } else if mode > 0 { egui::Color32::YELLOW } else { egui::Color32::from_rgb(255, 100, 100) };
+                                ui.label(egui::RichText::new(sym).monospace().strong());
+                                ui.label(egui::RichText::new(sector).color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(industry).color(AXIS_TEXT).small());
+                                ui.label(egui::RichText::new(mode_text).color(mode_color).small());
+                                let sl_color = if swap_l > 0.0 { ACCENT } else if swap_l < 0.0 { egui::Color32::from_rgb(255, 100, 100) } else { AXIS_TEXT };
+                                let ss_color = if swap_s > 0.0 { ACCENT } else if swap_s < 0.0 { egui::Color32::from_rgb(255, 100, 100) } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(format!("{:.4}", swap_l)).color(sl_color).small().monospace());
+                                ui.label(egui::RichText::new(format!("{:.4}", swap_s)).color(ss_color).small().monospace());
+                                ui.label(egui::RichText::new(format!("{}", vol_min)).color(AXIS_TEXT).small().monospace());
+                                ui.label(egui::RichText::new(format!("{:.0}", margin)).color(AXIS_TEXT).small().monospace());
+                                ui.label(egui::RichText::new(desc).color(AXIS_TEXT).small());
+                                ui.end_row();
                             }
                         });
                     });
