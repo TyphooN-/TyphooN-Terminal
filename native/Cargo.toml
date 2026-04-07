@@ -12,6 +12,10 @@ path = "src/main.rs"
 # Engine (shared core library)
 typhoon-engine = { path = "../engine" }
 
+# Web client server (HTTPS + WebSocket relay for phone access)
+typhoon-web-server = { path = "../web-server" }
+typhoon-web-protocol = { path = "../web-protocol" }
+
 # MQL5/PineScript compiler (indicator compilation + execution)
 mql5-compiler = { path = "../mql5-compiler" }
 

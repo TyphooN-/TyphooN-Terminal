@@ -8782,6 +8782,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "SWAPHARVEST",  desc: "Scan MT5 symbols for positive swap carry trades" },
     Command { name: "DARWINEXRADAR", desc: "Export Darwinex symbol radar CSVs (stocks/CFD/crypto/futures)" },
     Command { name: "SCRAPESTATUS", desc: "Scrape status dashboard — fundamentals, SEC, DarwinIA, crypto" },
+    Command { name: "WEBSERVER",    desc: "Start HTTPS web server for phone access over LAN" },
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
     Command { name: "RISKRUIN",        desc: "Risk-of-Ruin calculator (Monte Carlo equity path simulation)" },
     Command { name: "REPLAY",          desc: "Market replay mode — step through history bar-by-bar" },
@@ -9762,6 +9763,10 @@ pub struct TyphooNApp {
     scrape_darwin_last_msg: String,
     scrape_crypto_running: bool,
     scrape_crypto_last_msg: String,
+    // Web server (phone access over LAN)
+    web_server_running: bool,
+    web_cmd_rx: Option<tokio::sync::mpsc::UnboundedReceiver<typhoon_web_protocol::WebCmd>>,
+    web_msg_tx: Option<tokio::sync::broadcast::Sender<typhoon_web_protocol::WebMsg>>,
     // DARWIN FTP browser
     /// DARWIN FTP browser window visibility.
     show_darwin_browser: bool,
@@ -12369,6 +12374,9 @@ impl TyphooNApp {
             scrape_darwin_last_msg: String::new(),
             scrape_crypto_running: false,
             scrape_crypto_last_msg: String::new(),
+            web_server_running: false,
+            web_cmd_rx: None,
+            web_msg_tx: None,
             show_darwin_browser: false,
             ftp_scan_results: Vec::new(),
             ftp_detail_ticker: String::new(),
@@ -13801,6 +13809,29 @@ impl TyphooNApp {
             "RISKRUIN" => self.show_risk_ruin = true,
             "SCRAPESTATUS" => {
                 self.show_scrape_status = true;
+            }
+            "WEBSERVER" => {
+                if !self.web_server_running {
+                    // Generate ephemeral self-signed TLS cert (same as LAN sync)
+                    match typhoon_engine::core::lan_sync::generate_self_signed_cert() {
+                        Ok((cert_pem, key_pem, _fingerprint)) => {
+                            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<typhoon_web_protocol::WebCmd>();
+                            let (msg_tx, _) = tokio::sync::broadcast::channel::<typhoon_web_protocol::WebMsg>(256);
+                            let state = typhoon_web_server::WebServerState { cmd_tx, msg_tx: msg_tx.clone() };
+                            let wasm_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/web-dist");
+                            typhoon_web_server::start_web_server(&self.rt_handle, state, 9848, wasm_dir, cert_pem, key_pem);
+                            self.web_cmd_rx = Some(cmd_rx);
+                            self.web_msg_tx = Some(msg_tx);
+                            self.web_server_running = true;
+                            self.log.push_back(LogEntry::info("Web server started on https://0.0.0.0:9848"));
+                        }
+                        Err(e) => {
+                            self.log.push_back(LogEntry::err(format!("Web server TLS cert failed: {e}")));
+                        }
+                    }
+                } else {
+                    self.log.push_back(LogEntry::info("Web server already running on port 9848"));
+                }
             }
             "REPLAY" => {
                 self.replay_active = !self.replay_active;
@@ -24767,6 +24798,19 @@ impl eframe::App for TyphooNApp {
                             let _ = cache.put_kv("broker:account", &json);
                         }
                     }
+                    // Broadcast to web clients
+                    if let Some(ref tx) = self.web_msg_tx {
+                        let _ = tx.send(typhoon_web_protocol::WebMsg::Account(typhoon_web_protocol::AccountSnapshot {
+                            equity: acct.equity,
+                            cash: acct.cash,
+                            buying_power: acct.buying_power,
+                            portfolio_value: acct.portfolio_value,
+                            unrealized_pl: 0.0, // computed from positions
+                            initial_margin: acct.initial_margin,
+                            maintenance_margin: acct.maintenance_margin,
+                            currency: acct.currency.clone(),
+                        }));
+                    }
                     self.live_account = Some(acct);
                 }
                 BrokerMsg::Positions(pos) => {
@@ -24774,6 +24818,21 @@ impl eframe::App for TyphooNApp {
                         if let Ok(json) = serde_json::to_string(&pos) {
                             let _ = cache.put_kv("broker:positions", &json);
                         }
+                    }
+                    // Broadcast to web clients
+                    if let Some(ref tx) = self.web_msg_tx {
+                        let items: Vec<typhoon_web_protocol::PositionSnapshot> = pos.iter().map(|p| {
+                            typhoon_web_protocol::PositionSnapshot {
+                                symbol: p.symbol.clone(),
+                                qty: p.qty,
+                                side: p.side.clone(),
+                                avg_entry_price: p.avg_entry_price,
+                                market_value: p.market_value,
+                                unrealized_pl: p.unrealized_pl,
+                                asset_class: p.asset_class.clone(),
+                            }
+                        }).collect();
+                        let _ = tx.send(typhoon_web_protocol::WebMsg::Positions { items });
                     }
                     self.live_positions = pos;
                 }
@@ -24836,6 +24895,22 @@ impl eframe::App for TyphooNApp {
                         if let Ok(json) = serde_json::to_string(&orders) {
                             let _ = cache.put_kv("broker:orders", &json);
                         }
+                    }
+                    // Broadcast to web clients
+                    if let Some(ref tx) = self.web_msg_tx {
+                        let items: Vec<typhoon_web_protocol::OrderSnapshot> = orders.iter().map(|o| {
+                            typhoon_web_protocol::OrderSnapshot {
+                                id: o.id.clone(),
+                                symbol: o.symbol.clone(),
+                                qty: o.qty.clone(),
+                                side: o.side.clone(),
+                                order_type: o.order_type.clone(),
+                                status: o.status.clone(),
+                                limit_price: o.limit_price.clone(),
+                                stop_price: o.stop_price.clone(),
+                            }
+                        }).collect();
+                        let _ = tx.send(typhoon_web_protocol::WebMsg::Orders { items });
                     }
                     self.live_orders = orders;
                 }
@@ -25154,6 +25229,55 @@ impl eframe::App for TyphooNApp {
                         }
                     } else {
                         self.log.push_back(LogEntry::warn("GPU not available — cannot compute stats"));
+                    }
+                }
+            }
+        }
+
+        // ── drain web client commands ────────────────────────────────────
+        if let Some(ref mut rx) = self.web_cmd_rx {
+            while let Ok(cmd) = rx.try_recv() {
+                match cmd {
+                    typhoon_web_protocol::WebCmd::GetAccount => {
+                        let _ = self.broker_tx.send(BrokerCmd::GetAccount);
+                    }
+                    typhoon_web_protocol::WebCmd::GetPositions => {
+                        let _ = self.broker_tx.send(BrokerCmd::GetPositions);
+                    }
+                    typhoon_web_protocol::WebCmd::GetOrders => {
+                        let _ = self.broker_tx.send(BrokerCmd::GetOrders);
+                    }
+                    typhoon_web_protocol::WebCmd::GetWatchlistQuotes { symbols } => {
+                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
+                    }
+                    typhoon_web_protocol::WebCmd::GetMarketClock => {
+                        let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
+                    }
+                    typhoon_web_protocol::WebCmd::GetBars { symbol, timeframe } => {
+                        // Read bars directly from cache and broadcast
+                        if let Some(ref cache) = self.cache {
+                            let key = format!("mt5:CC:{}:{}", symbol, timeframe);
+                            if let Ok(Some(data)) = cache.get_bars_raw(&key) {
+                                let bars: Vec<typhoon_web_protocol::BarData> = data.iter().map(|b| {
+                                    typhoon_web_protocol::BarData {
+                                        timestamp: b.0,
+                                        open: b.1,
+                                        high: b.2,
+                                        low: b.3,
+                                        close: b.4,
+                                        volume: b.5,
+                                    }
+                                }).collect();
+                                if let Some(ref tx) = self.web_msg_tx {
+                                    let _ = tx.send(typhoon_web_protocol::WebMsg::Bars { symbol, timeframe, bars });
+                                }
+                            }
+                        }
+                    }
+                    typhoon_web_protocol::WebCmd::Ping => {
+                        if let Some(ref tx) = self.web_msg_tx {
+                            let _ = tx.send(typhoon_web_protocol::WebMsg::Pong);
+                        }
                     }
                 }
             }

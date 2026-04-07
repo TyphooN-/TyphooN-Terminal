@@ -5,6 +5,11 @@ members = [
     "native",
     "mql5-compiler",
     "cli",
+    "web-protocol",
+    "web-server",
+]
+exclude = [
+    "web",  # WASM target — built separately via trunk
 ]
 
 [profile.release]
