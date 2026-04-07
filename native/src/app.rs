@@ -8881,6 +8881,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "STATUS",        desc: "Cache, memory, uptime status" },
     // Crypto-specific
     Command { name: "CRYPTO_BACKFILL",desc: "Crypto deep history backfill (CryptoCompare + Kraken)" },
+    Command { name: "CRYPTOCOMPARE", desc: "Full CryptoCompare download for symbol (CRYPTOCOMPARE DOGEUSD)" },
     // Data management
     Command { name: "BACKUP",        desc: "Backup settings and cache" },
     Command { name: "IMPORT_XLSX",   desc: "Import MT5 XLSX trade history (any server)" },
@@ -14304,6 +14305,33 @@ impl TyphooNApp {
                                 Err(e) => self.log.push_back(LogEntry::err(format!("Delete {} failed: {}", ticker, e))),
                             }
                         }
+                    }
+                } else if other.starts_with("CRYPTOCOMPARE ") {
+                    let sym = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_uppercase();
+                    if sym.is_empty() {
+                        self.log.push_back(LogEntry::warn("Usage: CRYPTOCOMPARE SYMBOL (e.g. CRYPTOCOMPARE DOGEUSD)"));
+                    } else {
+                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                        // All available timeframes — full depth from 2010
+                        let all_tfs: Vec<String> = vec![
+                            "1Day".into(), "1Week".into(), "1Month".into(),
+                            "4Hour".into(), "1Hour".into(),
+                            "30Min".into(), "15Min".into(), "5Min".into(), "1Min".into(),
+                        ];
+                        let _ = self.broker_tx.send(BrokerCmd::CryptoCompareBackfill {
+                            symbol: sym.clone(), timeframes: all_tfs, db_path: db_path.clone(),
+                        });
+                        // Kraken for sub-hourly gap-fill
+                        let kraken_tfs: Vec<String> = vec![
+                            "1Day".into(), "1Hour".into(), "4Hour".into(),
+                            "15Min".into(), "30Min".into(), "5Min".into(), "1Min".into(),
+                        ];
+                        let _ = self.broker_tx.send(BrokerCmd::KrakenBackfill {
+                            symbol: sym.clone(), timeframes: kraken_tfs, db_path,
+                        });
+                        self.log.push_back(LogEntry::info(format!(
+                            "CRYPTOCOMPARE: downloading {} — all timeframes, full history (CryptoCompare + Kraken)", sym
+                        )));
                     }
                 } else if other.starts_with("SAVE_TEMPLATE ") || other.starts_with("TEMPLATE_SAVE ") {
                     let name = other.splitn(2, ' ').nth(1).unwrap_or("").trim().to_string();
