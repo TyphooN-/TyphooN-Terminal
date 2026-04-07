@@ -695,15 +695,16 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
             }
         }
 
-        // From kv_cache mt5 keys
+        // From bar_cache mt5 keys (format: "mt5:CC:SLV:4Hour")
         if let Ok(mut stmt) = conn.prepare(
-            "SELECT DISTINCT key FROM kv_cache WHERE key LIKE 'mt5:%'"
+            "SELECT DISTINCT key FROM bar_cache WHERE key LIKE 'mt5:%'"
         ) {
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
                 for row in rows.flatten() {
                     let parts: Vec<&str> = row.split(':').collect();
-                    if parts.len() >= 2 {
-                        let sym = parts[1].to_uppercase();
+                    // mt5:CC:SYMBOL:timeframe — symbol is at index 2
+                    if parts.len() >= 3 {
+                        let sym = parts[2].to_uppercase();
                         if is_equity_symbol(&sym) && !syms.contains(&sym) {
                             syms.push(sym);
                         }

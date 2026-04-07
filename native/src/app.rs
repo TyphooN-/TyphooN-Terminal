@@ -11072,6 +11072,16 @@ impl TyphooNApp {
                                                 } else { false }; // conn dropped here
                                                 if skip { skipped += 1; continue; }
 
+                                                // Check scrape_failures blocklist (404 etc)
+                                                let blocklisted = if let Ok(conn) = cache.connection() {
+                                                    conn.query_row(
+                                                        "SELECT reason FROM scrape_failures WHERE symbol = ?1",
+                                                        [ticker.as_str()],
+                                                        |row| row.get::<_, String>(0),
+                                                    ).ok().is_some()
+                                                } else { false };
+                                                if blocklisted { skipped += 1; continue; }
+
                                                 if consecutive_fail >= 10 {
                                                     let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
                                                         "Aborting: {} consecutive failures. {} OK, {} failed, {} skipped (cached) out of {}",
@@ -11092,9 +11102,42 @@ impl TyphooNApp {
                                                         let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK ({}/{})", ticker, ok + skipped, tickers.len())));
                                                     }
                                                     Err(e) => {
-                                                        fail += 1;
-                                                        consecutive_fail += 1;
-                                                        let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: FAIL — {} ({}/{})", ticker, e, ok + fail + skipped, tickers.len())));
+                                                        // Rate limit: cooldown and retry
+                                                        if e.contains("429") || e.contains("Too Many") {
+                                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!(
+                                                                "Rate limited — cooling down 60s... ({}/{})", ok + fail + skipped, tickers.len()
+                                                            )));
+                                                            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                                                            // Retry this ticker after cooldown
+                                                            let retry = if let Ok(conn) = cache.connection() {
+                                                                fundamentals::scrape_ticker(&session, &conn, ticker).await
+                                                            } else { Err("DB lock".into()) };
+                                                            match retry {
+                                                                Ok(_) => {
+                                                                    ok += 1;
+                                                                    consecutive_fail = 0;
+                                                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: OK (retry) ({}/{})", ticker, ok + skipped, tickers.len())));
+                                                                }
+                                                                Err(e2) => {
+                                                                    fail += 1;
+                                                                    consecutive_fail += 1;
+                                                                    let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: FAIL — {} ({}/{})", ticker, e2, ok + fail + skipped, tickers.len())));
+                                                                }
+                                                            }
+                                                        } else {
+                                                            // Record 404s as permanent failures
+                                                            if e.contains("404") || e.contains("Not Found") || e.contains("No Yahoo data") {
+                                                                if let Ok(conn) = cache.connection() {
+                                                                    let _ = conn.execute(
+                                                                        "INSERT OR REPLACE INTO scrape_failures (symbol, reason, failed_at) VALUES (?1, ?2, datetime('now'))",
+                                                                        [ticker.as_str(), e.as_str()],
+                                                                    );
+                                                                }
+                                                            }
+                                                            fail += 1;
+                                                            consecutive_fail += 1;
+                                                            let _ = msg_tx.send(BrokerMsg::FundamentalsProgress(format!("Scraped {}: FAIL — {} ({}/{})", ticker, e, ok + fail + skipped, tickers.len())));
+                                                        }
                                                     }
                                                 }
                                                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -12566,8 +12609,16 @@ impl TyphooNApp {
                         let phase_start = std::time::Instant::now();
                         tracing::trace!("BG thread: lightweight refresh...");
 
-                        // Phase 1a: list accounts using BG thread's own read connection
+                        // Phase 1a: list accounts, filtering out user-deleted DARWINs
                         data.accounts = darwin::list_darwin_accounts(conn).unwrap_or_default();
+                        // Blacklist filter: check KV for darwin:deleted:TICKER keys
+                        let blacklist: Vec<String> = data.accounts.iter()
+                            .filter(|a| cache.get_kv(&format!("darwin:deleted:{}", a.darwin_ticker)).ok().flatten().is_some())
+                            .map(|a| a.darwin_ticker.clone())
+                            .collect();
+                        if !blacklist.is_empty() {
+                            data.accounts.retain(|a| !blacklist.contains(&a.darwin_ticker));
+                        }
                         tracing::trace!("BG: Phase 1a done in {}ms", phase_start.elapsed().as_millis());
                         let _ = bg_tx.send(data.clone());
 
@@ -12861,9 +12912,12 @@ impl TyphooNApp {
 
                         // Phase 5: per-account detailed analytics (DARWIN Accounts window)
                         if is_lan_client {
-                            // LAN client: load from KV
+                            // LAN client: load from KV, filter out deleted DARWINs
                             if let Ok(Some(j)) = cache.get_kv("darwin:account_details") {
-                                if let Ok(v) = serde_json::from_str(&j) { data.account_details = v; }
+                                if let Ok(mut v) = serde_json::from_str::<Vec<AccountDetailCache>>(&j) {
+                                    v.retain(|d| cache.get_kv(&format!("darwin:deleted:{}", d.ticker)).ok().flatten().is_none());
+                                    data.account_details = v;
+                                }
                             }
                         } else
                         {
@@ -20966,9 +21020,41 @@ impl TyphooNApp {
 
                     ui.add_space(8.0);
                     ui.separator();
-                    // Symbol source settings inline
+                    // Per-broker scrape buttons
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Fundamentals Sources:").small().strong());
+                        ui.label(egui::RichText::new("Scrape by Broker:").small().strong());
+                        let can_scrape = !self.scrape_fund_running;
+                        if can_scrape {
+                            if ui.add(egui::Button::new(egui::RichText::new("MT5 Only").small()).fill(BTN_GREEN)).clicked() {
+                                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: true, use_alpaca: false, use_tastytrade: false });
+                                self.scrape_fund_running = true;
+                                self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
+                            }
+                            if ui.add(egui::Button::new(egui::RichText::new("Alpaca Only").small()).fill(BTN_GREEN)).clicked() {
+                                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: false, use_alpaca: true, use_tastytrade: false });
+                                self.scrape_fund_running = true;
+                                self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
+                            }
+                            if ui.add(egui::Button::new(egui::RichText::new("TastyTrade Only").small()).fill(BTN_GREEN)).clicked() {
+                                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: false, use_alpaca: false, use_tastytrade: true });
+                                self.scrape_fund_running = true;
+                                self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
+                            }
+                            if ui.add(egui::Button::new(egui::RichText::new("All Sources").small()).fill(BTN_GREEN)).clicked() {
+                                let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: true, use_alpaca: true, use_tastytrade: true });
+                                self.scrape_fund_running = true;
+                                self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
+                            }
+                        } else {
+                            ui.label(egui::RichText::new("(scrape running)").color(egui::Color32::YELLOW).small());
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Source Checkboxes (for main Scrape button):").small().color(AXIS_TEXT));
                         ui.checkbox(&mut self.fund_source_mt5, "MT5");
                         ui.checkbox(&mut self.fund_source_alpaca, "Alpaca");
                         ui.checkbox(&mut self.fund_source_tastytrade, "TastyTrade");
