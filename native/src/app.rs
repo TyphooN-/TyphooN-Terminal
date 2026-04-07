@@ -16153,7 +16153,8 @@ impl TyphooNApp {
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
                     // ── Compact overview table ──────────────────────────────────
-                    egui::Grid::new("darwin_overview").striped(true).num_columns(10).min_col_width(55.0).show(ui, |ui| {
+                    let mut darwin_to_delete: Option<String> = None;
+                    egui::Grid::new("darwin_overview").striped(true).num_columns(11).min_col_width(55.0).show(ui, |ui| {
                         ui.label(egui::RichText::new("DARWIN").color(dim).small());
                         ui.label(egui::RichText::new("MT5").color(dim).small());
                         ui.label(egui::RichText::new("Deals").color(dim).small());
@@ -16164,6 +16165,7 @@ impl TyphooNApp {
                         ui.label(egui::RichText::new("PF").color(dim).small());
                         ui.label(egui::RichText::new("Quote").color(dim).small());
                         ui.label(egui::RichText::new("Q.Ret%").color(dim).small());
+                        ui.label(egui::RichText::new("").color(dim).small());
                         ui.end_row();
                         if !self.bg.account_details.is_empty() {
                             for det in &self.bg.account_details {
@@ -16189,6 +16191,9 @@ impl TyphooNApp {
                                         ui.label(egui::RichText::new("—").color(dim));
                                         ui.label(egui::RichText::new("—").color(dim));
                                     }
+                                    if ui.small_button("X").on_hover_text(format!("Delete {}", det.ticker)).clicked() {
+                                        darwin_to_delete = Some(det.ticker.clone());
+                                    }
                                     ui.end_row();
                                 }
                             }
@@ -16202,10 +16207,35 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new("...").color(dim));
                                 ui.label(""); ui.label("");
                                 ui.label(""); ui.label("");
+                                if ui.small_button("X").on_hover_text(format!("Delete {}", acct.darwin_ticker)).clicked() {
+                                    darwin_to_delete = Some(acct.darwin_ticker.clone());
+                                }
                                 ui.end_row();
                             }
                         }
                     });
+
+                    // Handle DARWIN deletion from grid button
+                    if let Some(ticker) = darwin_to_delete {
+                        if let Some(ref cache) = self.cache {
+                            if let Ok(conn) = cache.connection() {
+                                match typhoon_engine::core::darwin::delete_darwin_account(&conn, &ticker) {
+                                    Ok(deleted) => {
+                                        self.bg.accounts.retain(|a| a.darwin_ticker != ticker);
+                                        self.bg.account_details.retain(|d| d.ticker != ticker);
+                                        self.bg.open_positions.retain(|p| {
+                                            !p.symbol.is_empty() // keep all — positions are shared
+                                        });
+                                        let _ = cache.put_kv("darwin:account_details", &serde_json::to_string(&self.bg.account_details).unwrap_or_default());
+                                        // Blacklist ticker so LAN sync won't re-import it
+                                        let _ = cache.put_kv(&format!("darwin:deleted:{}", ticker), "1");
+                                        self.log.push_back(LogEntry::info(format!("Deleted DARWIN {} — {} rows removed", ticker, deleted)));
+                                    }
+                                    Err(e) => self.log.push_back(LogEntry::err(format!("Delete {} failed: {}", ticker, e))),
+                                }
+                            }
+                        }
+                    }
 
                     // ── Per-account detail cards with charts ─────────────────────
                     for det in &self.bg.account_details {
@@ -27900,9 +27930,9 @@ impl eframe::App for TyphooNApp {
             // Skip drag in MTF mode — individual cells handle their own interaction
             if !self.mtf_enabled {
             for chart in &mut self.charts {
-                if pointer.primary_pressed() && !pointer_over_window {
+                if pointer.primary_pressed() {
                     let press_pos = pointer.press_origin().unwrap_or_default();
-                    // Only start drag if press originated inside chart area or price axis
+                    // Price axis drag always allowed (even when egui claims pointer)
                     if price_axis_rect.contains(press_pos) {
                         // Start price-axis scaling drag (TradingView style)
                         chart.is_scaling_price = true;
@@ -27910,7 +27940,7 @@ impl eframe::App for TyphooNApp {
                         chart.is_drawing_drag = false;
                         chart.scale_start_zoom = chart.price_zoom;
                         chart.scale_start_y = press_pos.y;
-                    } else if available.contains(press_pos) {
+                    } else if available.contains(press_pos) && !pointer_over_window {
                         // Check if press is near SL or TP line (draggable)
                         let mut sl_tp_drag = false;
                         if self.draw_mode == DrawMode::None {
@@ -27965,14 +27995,18 @@ impl eframe::App for TyphooNApp {
                             chart.drag_start_ppan = chart.price_pan;
                         }
                     }
-                } else if pointer.primary_released() || pointer_over_window {
-                    // Stop dragging when mouse released OR pointer moves over a floating window
+                } else if pointer.primary_released() {
+                    // Stop dragging when mouse released
                     chart.is_dragging = false;
                     chart.is_drawing_drag = false;
                     chart.is_scaling_price = false;
                     chart.drag_start = None;
                     self.dragging_sl = false;
                     self.dragging_tp = false;
+                } else if pointer_over_window && !chart.is_scaling_price && !chart.is_dragging && !chart.is_drawing_drag {
+                    // Cancel pending drag state if pointer moves over a floating window
+                    // but don't interrupt active drags/scaling
+                    chart.drag_start = None;
                 }
 
                 // SL/TP line drag → update price from mouse Y position

@@ -6423,6 +6423,29 @@ pub fn export_darwin_data(conn: &Connection) -> Result<(String, usize, usize, us
 /// Import DARWIN data from JSON (received via LAN sync).
 /// Merges into existing tables (INSERT OR REPLACE).
 pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize, usize), String> {
+    // Read deletion blacklist from kv_cache (keys like "darwin:deleted:CKUC")
+    let deleted_tickers = load_darwin_blacklist(conn);
+    import_darwin_data_filtered(conn, json, &deleted_tickers)
+}
+
+/// Load tickers that have been explicitly deleted by the user.
+fn load_darwin_blacklist(conn: &Connection) -> Vec<String> {
+    let mut stmt = match conn.prepare("SELECT key FROM kv_cache WHERE key LIKE 'darwin:deleted:%'") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map([], |row| {
+        let key: String = row.get(0)?;
+        Ok(key.strip_prefix("darwin:deleted:").unwrap_or("").to_string())
+    });
+    match rows {
+        Ok(iter) => iter.filter_map(|r| r.ok()).filter(|s| !s.is_empty()).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Import DARWIN data from JSON, skipping any tickers in the `deleted_tickers` blacklist.
+pub fn import_darwin_data_filtered(conn: &Connection, json: &str, deleted_tickers: &[String]) -> Result<(usize, usize, usize), String> {
     let payload: serde_json::Value = serde_json::from_str(json)
         .map_err(|e| format!("JSON parse failed: {e}"))?;
 
@@ -6454,6 +6477,7 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
         for a in accounts {
             let ticker = a["darwin_ticker"].as_str().unwrap_or("");
             if ticker.is_empty() { continue; }
+            if deleted_tickers.iter().any(|d| d == ticker) { continue; }
             conn.execute(
                 "INSERT OR REPLACE INTO darwin_accounts (darwin_ticker, name, mt5_account, initial_balance, created_at, deal_count, position_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 rusqlite::params![
@@ -6473,6 +6497,8 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
     // Import deals (table was cleared per-account above, no duplicates)
     if let Some(deals) = payload["deals"].as_array() {
         for d in deals {
+            let deal_acct = d["account"].as_str().unwrap_or("");
+            if deleted_tickers.iter().any(|dt| dt == deal_acct) { continue; }
             conn.execute(
                 "INSERT OR REPLACE INTO darwin_deals (account, time, deal_ticket, symbol, deal_type, direction, volume, price, order_ticket, commission, fee, swap, profit, balance, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 rusqlite::params![
@@ -6500,6 +6526,8 @@ pub fn import_darwin_data(conn: &Connection, json: &str) -> Result<(usize, usize
     // Import positions
     if let Some(positions) = payload["positions"].as_array() {
         for p in positions {
+            let pos_acct = p["account"].as_str().unwrap_or("");
+            if deleted_tickers.iter().any(|dt| dt == pos_acct) { continue; }
             conn.execute(
                 "INSERT OR REPLACE INTO darwin_positions (account, open_time, position_ticket, symbol, pos_type, volume, open_price, sl, tp, close_time, close_price, commission, swap, profit) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 rusqlite::params![
