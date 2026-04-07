@@ -1524,7 +1524,11 @@ async fn client_sync_loop(
                                     expecting_kv_binary = false;
                                     let new_ts = chrono::Utc::now().timestamp();
                                     let _ = cache.set_sync_ts("kv_cache", new_ts);
-                                    tracing::info!("LAN sync: KV re-sync received {} entries", count);
+                                    if count > 0 {
+                                        tracing::info!("LAN sync: KV re-sync received {} entries", count);
+                                    } else {
+                                        tracing::debug!("LAN sync: KV re-sync received 0 entries");
+                                    }
                                 }
                                 Ok(SyncMessage::DarwinData { data, accounts: _, deals: _, positions: _ }) => {
                                     // Decode: base64 → zstd decompress → JSON (same as initial sync)
