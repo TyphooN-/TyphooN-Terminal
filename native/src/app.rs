@@ -16237,8 +16237,8 @@ impl TyphooNApp {
                                     ui.label(format!("${:.0}", s.final_balance));
                                     let pc = if s.total_profit >= 0.0 { chart_green } else { chart_red };
                                     ui.label(egui::RichText::new(format!("${:.0}", s.total_profit)).color(pc));
-                                    let wc = if s.win_rate >= 0.5 { chart_green } else { chart_red };
-                                    ui.label(egui::RichText::new(format!("{:.1}%", s.win_rate * 100.0)).color(wc));
+                                    let wc = if s.win_rate >= 50.0 { chart_green } else { chart_red };
+                                    ui.label(egui::RichText::new(format!("{:.1}%", s.win_rate)).color(wc));
                                     ui.label(format!("{:.2}", s.profit_factor));
                                     // Quote columns from FTP data
                                     if let Some(ref fs) = det.ftp_summary {
@@ -16540,9 +16540,8 @@ impl TyphooNApp {
                                         let pc = if a.total_pnl >= 0.0 { chart_green } else { chart_red };
                                         ui.label(egui::RichText::new(format!("${:.0}", a.total_pnl)).color(pc).small());
                                         {
-                                            let awr = a.win_rate * 100.0;
-                                            let awr_c = if awr >= 50.0 { UP } else if awr >= 40.0 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
-                                            ui.label(egui::RichText::new(format!("{:.1}%", awr)).color(awr_c).small());
+                                            let awr_c = if a.win_rate >= 50.0 { UP } else if a.win_rate >= 40.0 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
+                                            ui.label(egui::RichText::new(format!("{:.1}%", a.win_rate)).color(awr_c).small());
                                         }
                                         let cont_c = if a.contribution_pct >= 0.0 { UP } else { DOWN };
                                         ui.label(egui::RichText::new(format!("{:.1}%", a.contribution_pct)).color(cont_c).small());
@@ -18968,7 +18967,7 @@ impl TyphooNApp {
                                 "Backtest complete: {} trades, PF={:.2}, WR={:.1}%",
                                 self.bt_trades.len(),
                                 self.bt_result.as_ref().map(|r| r.profit_factor).unwrap_or(0.0),
-                                self.bt_result.as_ref().map(|r| r.win_rate * 100.0).unwrap_or(0.0),
+                                self.bt_result.as_ref().map(|r| r.win_rate).unwrap_or(0.0),
                             )));
                         }
                     }
@@ -18981,9 +18980,8 @@ impl TyphooNApp {
                         egui::Grid::new("bt_report").striped(true).num_columns(4).show(ui, |ui| {
                             ui.label("Trades:"); ui.label(format!("{}", report.total_trades));
                             ui.label("Win Rate:"); {
-                                let wr = report.win_rate * 100.0;
-                                let wr_c = if wr >= 50.0 { UP } else if wr >= 40.0 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
-                                ui.label(egui::RichText::new(format!("{:.1}%", wr)).color(wr_c));
+                                let wr_c = if report.win_rate >= 50.0 { UP } else if report.win_rate >= 40.0 { egui::Color32::from_rgb(255, 200, 50) } else { DOWN };
+                                ui.label(egui::RichText::new(format!("{:.1}%", report.win_rate)).color(wr_c));
                             }
                             ui.end_row();
                             ui.label("Profit Factor:"); ui.label(format!("{:.2}", report.profit_factor));
@@ -19833,8 +19831,8 @@ impl TyphooNApp {
                                     ui.label(egui::RichText::new(format!("{:.1}%", r.max_drawdown * 100.0)).color(opt_red));
                                     let sc = if r.sharpe > 1.0 { opt_green } else if r.sharpe > 0.0 { opt_gold } else { opt_red };
                                     ui.label(egui::RichText::new(format!("{:.2}", r.sharpe)).color(sc));
-                                    let wc = if r.win_rate > 0.5 { opt_green } else { opt_red };
-                                    ui.label(egui::RichText::new(format!("{:.0}%", r.win_rate * 100.0)).color(wc));
+                                    let wc = if r.win_rate > 50.0 { opt_green } else { opt_red };
+                                    ui.label(egui::RichText::new(format!("{:.0}%", r.win_rate)).color(wc));
                                     ui.label(format!("{}", r.trade_count));
                                     let rc = if r.robustness_score > 0.7 { opt_green } else if r.robustness_score > 0.3 { opt_gold } else { opt_red };
                                     ui.label(egui::RichText::new(format!("{:.2}", r.robustness_score)).color(rc));
