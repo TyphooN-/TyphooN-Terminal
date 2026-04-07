@@ -13812,21 +13812,29 @@ impl TyphooNApp {
             }
             "WEBSERVER" => {
                 if !self.web_server_running {
-                    // Generate ephemeral self-signed TLS cert (same as LAN sync)
-                    match typhoon_engine::core::lan_sync::generate_self_signed_cert() {
-                        Ok((cert_pem, key_pem, _fingerprint)) => {
-                            let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<typhoon_web_protocol::WebCmd>();
-                            let (msg_tx, _) = tokio::sync::broadcast::channel::<typhoon_web_protocol::WebMsg>(256);
-                            let state = typhoon_web_server::WebServerState { cmd_tx, msg_tx: msg_tx.clone() };
-                            let wasm_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/web-dist");
-                            typhoon_web_server::start_web_server(&self.rt_handle, state, 9848, wasm_dir, cert_pem, key_pem);
-                            self.web_cmd_rx = Some(cmd_rx);
-                            self.web_msg_tx = Some(msg_tx);
-                            self.web_server_running = true;
-                            self.log.push_back(LogEntry::info("Web server started on https://0.0.0.0:9848"));
-                        }
-                        Err(e) => {
-                            self.log.push_back(LogEntry::err(format!("Web server TLS cert failed: {e}")));
+                    if self.lan_sync_passphrase.is_empty() {
+                        self.log.push_back(LogEntry::err("Set LAN sync passphrase in Settings before starting web server"));
+                    } else {
+                        // Generate ephemeral self-signed TLS cert (same as LAN sync)
+                        match typhoon_engine::core::lan_sync::generate_self_signed_cert() {
+                            Ok((cert_pem, key_pem, _fingerprint)) => {
+                                let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel::<typhoon_web_protocol::WebCmd>();
+                                let (msg_tx, _) = tokio::sync::broadcast::channel::<typhoon_web_protocol::WebMsg>(512);
+                                let state = typhoon_web_server::WebServerState {
+                                    cmd_tx,
+                                    msg_tx: msg_tx.clone(),
+                                    passphrase: self.lan_sync_passphrase.clone(),
+                                };
+                                let wasm_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../target/web-dist");
+                                typhoon_web_server::start_web_server(&self.rt_handle, state, 9848, wasm_dir, cert_pem, key_pem);
+                                self.web_cmd_rx = Some(cmd_rx);
+                                self.web_msg_tx = Some(msg_tx);
+                                self.web_server_running = true;
+                                self.log.push_back(LogEntry::info("Web server started on https://0.0.0.0:9848 (passphrase required)"));
+                            }
+                            Err(e) => {
+                                self.log.push_back(LogEntry::err(format!("Web server TLS cert failed: {e}")));
+                            }
                         }
                     }
                 } else {
@@ -25278,6 +25286,9 @@ impl eframe::App for TyphooNApp {
                         if let Some(ref tx) = self.web_msg_tx {
                             let _ = tx.send(typhoon_web_protocol::WebMsg::Pong);
                         }
+                    }
+                    typhoon_web_protocol::WebCmd::Auth { .. } => {
+                        // Auth is handled by web-server before relay — ignore here
                     }
                 }
             }

@@ -20,7 +20,12 @@ pub struct WebApp {
     ws: Option<WebSocket>,
     incoming: Rc<RefCell<Vec<WebMsg>>>,
     connected: bool,
+    authenticated: bool,
     tab: Tab,
+
+    // Auth
+    passphrase: String,
+    auth_failed: bool,
 
     // Data
     account: Option<AccountSnapshot>,
@@ -36,14 +41,14 @@ pub struct WebApp {
 
 impl WebApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        let incoming: Rc<RefCell<Vec<WebMsg>>> = Rc::new(RefCell::new(Vec::new()));
-        let ws = Self::connect_ws(&incoming);
-
         Self {
-            ws,
-            incoming,
+            ws: None,
+            incoming: Rc::new(RefCell::new(Vec::new())),
             connected: false,
+            authenticated: false,
             tab: Tab::Account,
+            passphrase: String::new(),
+            auth_failed: false,
             account: None,
             positions: Vec::new(),
             orders: Vec::new(),
@@ -54,36 +59,64 @@ impl WebApp {
         }
     }
 
-    fn connect_ws(incoming: &Rc<RefCell<Vec<WebMsg>>>) -> Option<WebSocket> {
-        let window = web_sys::window()?;
+    fn connect_and_auth(&mut self) {
+        // Close existing connection cleanly
+        if let Some(ref old_ws) = self.ws {
+            old_ws.set_onmessage(None);
+            old_ws.set_onerror(None);
+            old_ws.set_onclose(None);
+            let _ = old_ws.close();
+        }
+        self.incoming.borrow_mut().clear();
+        self.authenticated = false;
+        self.auth_failed = false;
+
+        let window = match web_sys::window() {
+            Some(w) => w,
+            None => return,
+        };
         let location = window.location();
-        let hostname = location.hostname().ok()?;
-        let port = location.port().ok()?;
+        let hostname = location.hostname().unwrap_or_default();
+        let port = location.port().unwrap_or_default();
         let url = format!("wss://{hostname}:{port}/ws");
 
-        let ws = WebSocket::new(&url).ok()?;
+        let ws = match WebSocket::new(&url) {
+            Ok(ws) => ws,
+            Err(_) => return,
+        };
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
 
-        // onmessage callback: parse WebMsg and push to queue
-        let inc = incoming.clone();
+        // onmessage: parse WebMsg, cap queue at 1000
+        let inc = self.incoming.clone();
         let onmessage = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
             if let Some(text) = e.data().as_string() {
                 if let Ok(msg) = serde_json::from_str::<WebMsg>(&text) {
-                    inc.borrow_mut().push(msg);
+                    let mut q = inc.borrow_mut();
+                    if q.len() < 1000 {
+                        q.push(msg);
+                    }
                 }
             }
         });
         ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
         onmessage.forget();
 
-        // onerror callback
-        let onerror = Closure::<dyn FnMut(web_sys::ErrorEvent)>::new(move |_e: web_sys::ErrorEvent| {
+        let onerror = Closure::<dyn FnMut(web_sys::ErrorEvent)>::new(move |_: web_sys::ErrorEvent| {
             web_sys::console::log_1(&"WebSocket error".into());
         });
         ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
         onerror.forget();
 
-        Some(ws)
+        // Send Auth immediately on open
+        let passphrase = self.passphrase.clone();
+        let onopen = Closure::<dyn FnMut()>::new(move || {
+            // Auth is sent from update() after connected=true
+            let _ = &passphrase; // prevent premature drop
+        });
+        ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        onopen.forget();
+
+        self.ws = Some(ws);
     }
 
     fn send_cmd(&self, cmd: &WebCmd) {
@@ -96,6 +129,10 @@ impl WebApp {
         }
     }
 
+    fn send_auth(&self) {
+        self.send_cmd(&WebCmd::Auth { passphrase: self.passphrase.clone() });
+    }
+
     fn request_data(&self) {
         self.send_cmd(&WebCmd::GetAccount);
         self.send_cmd(&WebCmd::GetPositions);
@@ -106,6 +143,20 @@ impl WebApp {
         let msgs: Vec<WebMsg> = self.incoming.borrow_mut().drain(..).collect();
         for msg in msgs {
             match msg {
+                WebMsg::AuthResult { ok } => {
+                    if ok {
+                        self.authenticated = true;
+                        self.auth_failed = false;
+                        self.request_data();
+                    } else {
+                        self.authenticated = false;
+                        self.auth_failed = true;
+                        // Close connection on auth failure
+                        if let Some(ref ws) = self.ws {
+                            let _ = ws.close();
+                        }
+                    }
+                }
                 WebMsg::Account(a) => self.account = Some(a),
                 WebMsg::Positions { items } => self.positions = items,
                 WebMsg::Orders { items } => self.orders = items,
@@ -115,7 +166,7 @@ impl WebApp {
                 }
                 WebMsg::Pong => {}
                 WebMsg::Error { msg } => {
-                    web_sys::console::warn_1(&format!("Server error: {msg}").into());
+                    web_sys::console::warn_1(&format!("Server: {msg}").into());
                 }
                 _ => {}
             }
@@ -128,41 +179,70 @@ impl eframe::App for WebApp {
         let ctx = ui.ctx().clone();
 
         // Track connection state
-        if let Some(ref ws) = self.ws {
-            self.connected = ws.ready_state() == WebSocket::OPEN;
-            if ws.ready_state() == WebSocket::CLOSED {
-                self.ws = Self::connect_ws(&self.incoming);
-            }
+        let ws_open = self.ws.as_ref().map_or(false, |ws| ws.ready_state() == WebSocket::OPEN);
+        let ws_closed = self.ws.as_ref().map_or(true, |ws| ws.ready_state() == WebSocket::CLOSED);
+        self.connected = ws_open;
+
+        // Send auth when first connected
+        if ws_open && !self.authenticated && !self.auth_failed {
+            self.send_auth();
         }
 
         // Drain incoming messages
         self.drain_messages();
 
-        // Poll every ~5 seconds (ui() fires at ~60fps, so every 300 frames)
-        self.poll_counter += 1;
-        if self.poll_counter >= 300 {
-            self.poll_counter = 0;
-            self.request_data();
+        // Poll every ~5 seconds when authenticated
+        if self.authenticated {
+            self.poll_counter += 1;
+            if self.poll_counter >= 300 {
+                self.poll_counter = 0;
+                self.request_data();
+            }
         }
 
-        // Request initial data on connect
-        if self.connected && self.account.is_none() {
-            self.request_data();
-        }
-
-        // Schedule periodic repaint
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
 
-        // ── UI ──────────────────────────────────────────────────
+        // ── Login screen (not connected or not authenticated) ───────
+        if !self.authenticated {
+            ui.vertical_centered(|ui| {
+                ui.add_space(40.0);
+                ui.heading("TyphooN Terminal");
+                ui.add_space(20.0);
+
+                if self.auth_failed {
+                    ui.colored_label(egui::Color32::from_rgb(200, 0, 0), "Authentication failed — check passphrase");
+                    ui.add_space(10.0);
+                }
+
+                ui.label("LAN Passphrase:");
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.passphrase)
+                        .desired_width(200.0)
+                        .password(true)
+                        .hint_text("same as LAN sync"),
+                );
+
+                let enter_pressed = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let connect_clicked = ui.button("Connect").clicked();
+
+                if (connect_clicked || enter_pressed) && !self.passphrase.is_empty() {
+                    self.connect_and_auth();
+                }
+
+                if ws_closed && !self.passphrase.is_empty() && !self.auth_failed {
+                    ui.add_space(10.0);
+                    ui.colored_label(egui::Color32::from_rgb(200, 200, 0), "Disconnected — click Connect");
+                }
+            });
+            return;
+        }
+
+        // ── Authenticated UI ────────────────────────────────────────
         // Header
         ui.horizontal(|ui| {
             ui.heading("TyphooN Terminal");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.connected {
-                    ui.colored_label(egui::Color32::from_rgb(0, 200, 0), "Connected");
-                } else {
-                    ui.colored_label(egui::Color32::from_rgb(200, 0, 0), "Disconnected");
-                }
+                ui.colored_label(egui::Color32::from_rgb(0, 200, 0), "Connected");
             });
         });
 
@@ -195,7 +275,6 @@ impl eframe::App for WebApp {
         });
         ui.separator();
 
-        // Tab content
         match self.tab {
             Tab::Account => self.render_account(ui),
             Tab::Positions => self.render_positions(ui),
@@ -334,14 +413,25 @@ impl WebApp {
     fn render_chart(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Symbol:");
-            ui.text_edit_singleline(&mut self.current_symbol);
+            let sym_response = ui.add(
+                egui::TextEdit::singleline(&mut self.current_symbol)
+                    .desired_width(80.0)
+                    .char_limit(MAX_SYMBOL_LEN),
+            );
             ui.label("TF:");
-            ui.text_edit_singleline(&mut self.current_timeframe);
-            if ui.button("Load").clicked() {
-                self.send_cmd(&WebCmd::GetBars {
-                    symbol: self.current_symbol.clone(),
-                    timeframe: self.current_timeframe.clone(),
-                });
+            ui.add(
+                egui::TextEdit::singleline(&mut self.current_timeframe)
+                    .desired_width(60.0)
+                    .char_limit(MAX_TIMEFRAME_LEN),
+            );
+            let enter = sym_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("Load").clicked() || enter {
+                if is_valid_symbol(&self.current_symbol) && is_valid_timeframe(&self.current_timeframe) {
+                    self.send_cmd(&WebCmd::GetBars {
+                        symbol: self.current_symbol.clone(),
+                        timeframe: self.current_timeframe.clone(),
+                    });
+                }
             }
         });
 
