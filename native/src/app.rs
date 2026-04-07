@@ -8780,6 +8780,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "IMPORT_DARWIN", desc: "Import DARWIN data from JSON file" },
     Command { name: "DELETE_DARWIN", desc: "Delete a DARWIN/MT5 account (DELETE_DARWIN TICKER)" },
     Command { name: "SWAPHARVEST",  desc: "Scan MT5 symbols for positive swap carry trades" },
+    Command { name: "DARWINEXRADAR", desc: "Export Darwinex symbol radar CSVs (stocks/CFD/crypto/futures)" },
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
     Command { name: "RISKRUIN",        desc: "Risk-of-Ruin calculator (Monte Carlo equity path simulation)" },
     Command { name: "REPLAY",          desc: "Market replay mode — step through history bar-by-bar" },
@@ -13663,6 +13664,19 @@ impl TyphooNApp {
                                 }
                             }
                             Err(e) => self.log.push_back(LogEntry::err(format!("SwapHarvest failed: {}", e))),
+                        }
+                    }
+                }
+            }
+            "DARWINEXRADAR" => {
+                if let Some(ref cache) = self.cache {
+                    if let Some(conn) = cache.try_connection() {
+                        let mut out = dirs_home();
+                        out.push("export");
+                        let _ = std::fs::create_dir_all(&out);
+                        match darwin::export_radar_txt(&conn, &conn, &out.display().to_string()) {
+                            Ok(msg) => self.log.push_back(LogEntry::info(format!("DARWINEXRADAR: {}", msg))),
+                            Err(e) => self.log.push_back(LogEntry::err(format!("DARWINEXRADAR failed: {}", e))),
                         }
                     }
                 }
