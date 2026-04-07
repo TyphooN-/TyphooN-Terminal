@@ -998,7 +998,8 @@ pub async fn scrape_batch(
 /// Cache keys look like "mt5:CC:SLV:4Hour" — we extract "SLV".
 /// Filters out known currency pairs, indices, and crypto.
 pub fn extract_stock_tickers_from_cache(conn: &Connection) -> Result<Vec<String>, String> {
-    let mut stmt = conn.prepare("SELECT DISTINCT key FROM bar_cache")
+    // Only query MT5-sourced keys — Alpaca/Kraken/CryptoCompare keys are separate sources
+    let mut stmt = conn.prepare("SELECT DISTINCT key FROM bar_cache WHERE key LIKE 'mt5:%'")
         .map_err(|e| format!("Prepare cache keys failed: {e}"))?;
 
     let keys: Vec<String> = stmt.query_map([], |row| row.get(0))
