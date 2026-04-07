@@ -1230,29 +1230,50 @@ pub fn get_darwin_correlations(conn: &Connection) -> Result<Vec<CorrelationEntry
         all_returns.push((account.darwin_ticker.clone(), map));
     }
 
-    let mut result = Vec::new();
-    for i in 0..all_returns.len() {
-        for j in i..all_returns.len() {
-            let (ref name_a, ref map_a) = all_returns[i];
-            let (ref name_b, ref map_b) = all_returns[j];
+    // Pre-compute per-series statistics in a single pass (Welford-style)
+    // For each series: collect returns as Vec for common-date pairing,
+    // and pre-compute mean + variance to avoid redundant iterations.
+    struct SeriesStats {
+        returns_by_date: std::collections::HashMap<String, f64>,
+        mean: f64,
+        var: f64,    // sample variance
+        n: usize,
+    }
+    let stats: Vec<(String, SeriesStats)> = all_returns.into_iter().map(|(name, map)| {
+        let n = map.len();
+        let sum: f64 = map.values().sum();
+        let mean = if n > 0 { sum / n as f64 } else { 0.0 };
+        let var = if n > 1 {
+            map.values().map(|v| (v - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0)
+        } else { 0.0 };
+        (name, SeriesStats { returns_by_date: map, mean, var, n })
+    }).collect();
 
-            // Find common dates
-            let mut pairs: Vec<(f64, f64)> = Vec::new();
-            for (date, ret_a) in map_a {
-                if let Some(ret_b) = map_b.get(date) {
-                    pairs.push((*ret_a, *ret_b));
+    let mut result = Vec::with_capacity(stats.len() * stats.len());
+    for i in 0..stats.len() {
+        for j in i..stats.len() {
+            let (ref name_a, ref sa) = stats[i];
+            let (ref name_b, ref sb) = stats[j];
+
+            // Single-pass covariance over common dates
+            let corr = if i == j {
+                1.0
+            } else {
+                let mut sum_ab = 0.0;
+                let mut count = 0usize;
+                for (date, &ret_a) in &sa.returns_by_date {
+                    if let Some(&ret_b) = sb.returns_by_date.get(date) {
+                        sum_ab += (ret_a - sa.mean) * (ret_b - sb.mean);
+                        count += 1;
+                    }
                 }
-            }
-
-            let corr = if pairs.len() > 2 {
-                let n = pairs.len() as f64;
-                let mean_a = pairs.iter().map(|(a, _)| a).sum::<f64>() / n;
-                let mean_b = pairs.iter().map(|(_, b)| b).sum::<f64>() / n;
-                let cov = pairs.iter().map(|(a, b)| (a - mean_a) * (b - mean_b)).sum::<f64>() / (n - 1.0);
-                let std_a = (pairs.iter().map(|(a, _)| (a - mean_a).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
-                let std_b = (pairs.iter().map(|(_, b)| (b - mean_b).powi(2)).sum::<f64>() / (n - 1.0)).sqrt();
-                if std_a > 0.0 && std_b > 0.0 { cov / (std_a * std_b) } else { 0.0 }
-            } else { 0.0 };
+                if count > 2 && sa.var > 0.0 && sb.var > 0.0 {
+                    let cov = sum_ab / (count as f64 - 1.0);
+                    cov / (sa.var.sqrt() * sb.var.sqrt())
+                } else {
+                    0.0
+                }
+            };
 
             result.push(CorrelationEntry { darwin_a: name_a.clone(), darwin_b: name_b.clone(), correlation: corr });
             if i != j {
@@ -6485,23 +6506,32 @@ pub fn import_darwin_data_filtered(conn: &Connection, json: &str, deleted_ticker
     // is also auto-commit per INSERT. This avoids the "cannot start a transaction
     // within a transaction" error that occurred when import_table_from_json (which
     // uses its own transaction) was called on a connection with an open transaction.
-    conn.execute("DELETE FROM darwin_equity_snapshots", [])
-        .map_err(|e| format!("DELETE darwin_equity_snapshots failed: {e}"))?;
-    conn.execute("DELETE FROM darwin_deals", [])
-        .map_err(|e| format!("DELETE darwin_deals failed: {e}"))?;
-    conn.execute("DELETE FROM darwin_positions", [])
-        .map_err(|e| format!("DELETE darwin_positions failed: {e}"))?;
-    conn.execute("DELETE FROM darwin_accounts", [])
-        .map_err(|e| format!("DELETE darwin_accounts failed: {e}"))?;
+    // Use a HashSet for O(1) blacklist lookups instead of O(n) linear scan
+    let blacklist: std::collections::HashSet<&str> = deleted_tickers.iter().map(|s| s.as_str()).collect();
 
-    if let Some(accounts) = payload["accounts"].as_array() {
-        for a in accounts {
-            let ticker = a["darwin_ticker"].as_str().unwrap_or("");
-            if ticker.is_empty() { continue; }
-            if deleted_tickers.iter().any(|d| d == ticker) { continue; }
-            conn.execute(
-                "INSERT OR REPLACE INTO darwin_accounts (darwin_ticker, name, mt5_account, initial_balance, created_at, deal_count, position_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![
+    // Batch all deletes + inserts in a single transaction for ~20-40x speedup
+    conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| format!("BEGIN failed: {e}"))?;
+
+    conn.execute("DELETE FROM darwin_equity_snapshots", [])
+        .map_err(|e| { let _ = conn.execute_batch("ROLLBACK"); format!("DELETE darwin_equity_snapshots failed: {e}") })?;
+    conn.execute("DELETE FROM darwin_deals", [])
+        .map_err(|e| { let _ = conn.execute_batch("ROLLBACK"); format!("DELETE darwin_deals failed: {e}") })?;
+    conn.execute("DELETE FROM darwin_positions", [])
+        .map_err(|e| { let _ = conn.execute_batch("ROLLBACK"); format!("DELETE darwin_positions failed: {e}") })?;
+    conn.execute("DELETE FROM darwin_accounts", [])
+        .map_err(|e| { let _ = conn.execute_batch("ROLLBACK"); format!("DELETE darwin_accounts failed: {e}") })?;
+
+    // Prepared statements reused across all rows (avoid per-row query planning)
+    {
+        let mut acct_stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO darwin_accounts (darwin_ticker, name, mt5_account, initial_balance, created_at, deal_count, position_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        ).map_err(|e| format!("Prepare account stmt failed: {e}"))?;
+
+        if let Some(accounts) = payload["accounts"].as_array() {
+            for a in accounts {
+                let ticker = a["darwin_ticker"].as_str().unwrap_or("");
+                if ticker.is_empty() || blacklist.contains(ticker) { continue; }
+                acct_stmt.execute(rusqlite::params![
                     ticker,
                     a["name"].as_str().unwrap_or(""),
                     a["mt5_account"].as_str().unwrap_or(""),
@@ -6509,21 +6539,24 @@ pub fn import_darwin_data_filtered(conn: &Connection, json: &str, deleted_ticker
                     a["created_at"].as_i64().unwrap_or(0),
                     a["deal_count"].as_i64().unwrap_or(0),
                     a["position_count"].as_i64().unwrap_or(0),
-                ],
-            ).map_err(|e| format!("Insert account failed: {e}"))?;
-            n_acct += 1;
+                ]).map_err(|e| format!("Insert account failed: {e}"))?;
+                n_acct += 1;
+            }
         }
     }
 
-    // Import deals (table was cleared per-account above, no duplicates)
-    if let Some(deals) = payload["deals"].as_array() {
-        for d in deals {
-            let deal_acct = d["account"].as_str().unwrap_or("");
-            if deleted_tickers.iter().any(|dt| dt == deal_acct) { continue; }
-            conn.execute(
-                "INSERT OR REPLACE INTO darwin_deals (account, time, deal_ticket, symbol, deal_type, direction, volume, price, order_ticket, commission, fee, swap, profit, balance, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-                rusqlite::params![
-                    d["account"].as_str().unwrap_or(""),
+    // Import deals with prepared statement
+    {
+        let mut deal_stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO darwin_deals (account, time, deal_ticket, symbol, deal_type, direction, volume, price, order_ticket, commission, fee, swap, profit, balance, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
+        ).map_err(|e| format!("Prepare deal stmt failed: {e}"))?;
+
+        if let Some(deals) = payload["deals"].as_array() {
+            for d in deals {
+                let deal_acct = d["account"].as_str().unwrap_or("");
+                if blacklist.contains(deal_acct) { continue; }
+                deal_stmt.execute(rusqlite::params![
+                    deal_acct,
                     d["time"].as_str().unwrap_or(""),
                     d["deal_ticket"].as_i64().unwrap_or(0),
                     d["symbol"].as_str().unwrap_or(""),
@@ -6538,21 +6571,24 @@ pub fn import_darwin_data_filtered(conn: &Connection, json: &str, deleted_ticker
                     d["profit"].as_f64().unwrap_or(0.0),
                     d["balance"].as_f64().unwrap_or(0.0),
                     d["comment"].as_str().unwrap_or(""),
-                ],
-            ).map_err(|e| format!("Insert deal failed: {e}"))?;
-            n_deals += 1;
+                ]).map_err(|e| format!("Insert deal failed: {e}"))?;
+                n_deals += 1;
+            }
         }
     }
 
-    // Import positions
-    if let Some(positions) = payload["positions"].as_array() {
-        for p in positions {
-            let pos_acct = p["account"].as_str().unwrap_or("");
-            if deleted_tickers.iter().any(|dt| dt == pos_acct) { continue; }
-            conn.execute(
-                "INSERT OR REPLACE INTO darwin_positions (account, open_time, position_ticket, symbol, pos_type, volume, open_price, sl, tp, close_time, close_price, commission, swap, profit) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
-                rusqlite::params![
-                    p["account"].as_str().unwrap_or(""),
+    // Import positions with prepared statement
+    {
+        let mut pos_stmt = conn.prepare_cached(
+            "INSERT OR REPLACE INTO darwin_positions (account, open_time, position_ticket, symbol, pos_type, volume, open_price, sl, tp, close_time, close_price, commission, swap, profit) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"
+        ).map_err(|e| format!("Prepare position stmt failed: {e}"))?;
+
+        if let Some(positions) = payload["positions"].as_array() {
+            for p in positions {
+                let pos_acct = p["account"].as_str().unwrap_or("");
+                if blacklist.contains(pos_acct) { continue; }
+                pos_stmt.execute(rusqlite::params![
+                    pos_acct,
                     p["open_time"].as_str().unwrap_or(""),
                     p["position_ticket"].as_i64().unwrap_or(0),
                     p["symbol"].as_str().unwrap_or(""),
@@ -6566,11 +6602,13 @@ pub fn import_darwin_data_filtered(conn: &Connection, json: &str, deleted_ticker
                     p["commission"].as_f64().unwrap_or(0.0),
                     p["swap"].as_f64().unwrap_or(0.0),
                     p["profit"].as_f64().unwrap_or(0.0),
-                ],
-            ).map_err(|e| format!("Insert position failed: {e}"))?;
-            n_pos += 1;
+                ]).map_err(|e| format!("Insert position failed: {e}"))?;
+                n_pos += 1;
+            }
         }
     }
+
+    conn.execute_batch("COMMIT").map_err(|e| format!("COMMIT failed: {e}"))?;
 
     Ok((n_acct, n_deals, n_pos))
 }

@@ -1887,10 +1887,16 @@ impl ChartState {
         // ── GPU path: upload bars to VRAM, compute on GPU, read back ──
         if let Some(gpu) = gpu {
             if n > 0 {
-                let closes: Vec<f32> = self.bars.iter().map(|b| b.close as f32).collect();
-                let highs: Vec<f32> = self.bars.iter().map(|b| b.high as f32).collect();
-                let lows: Vec<f32> = self.bars.iter().map(|b| b.low as f32).collect();
-                let volumes: Vec<f32> = self.bars.iter().map(|b| b.volume as f32).collect();
+                let mut closes = Vec::with_capacity(n);
+                let mut highs = Vec::with_capacity(n);
+                let mut lows = Vec::with_capacity(n);
+                let mut volumes = Vec::with_capacity(n);
+                for b in &self.bars {
+                    closes.push(b.close as f32);
+                    highs.push(b.high as f32);
+                    lows.push(b.low as f32);
+                    volumes.push(b.volume as f32);
+                }
                 gpu.upload_bars_full(&closes, &highs, &lows, &volumes);
 
                 // SMA — parallel GPU
