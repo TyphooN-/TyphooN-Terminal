@@ -8779,6 +8779,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "EXPORT_DARWIN", desc: "Export all DARWIN data to JSON file" },
     Command { name: "IMPORT_DARWIN", desc: "Import DARWIN data from JSON file" },
     Command { name: "DELETE_DARWIN", desc: "Delete a DARWIN/MT5 account (DELETE_DARWIN TICKER)" },
+    Command { name: "SWAPHARVEST",  desc: "Scan MT5 symbols for positive swap carry trades" },
     Command { name: "ALERTS",          desc: "Indicator alert builder (RSI, MACD, Fisher, Price conditions)" },
     Command { name: "RISKRUIN",        desc: "Risk-of-Ruin calculator (Monte Carlo equity path simulation)" },
     Command { name: "REPLAY",          desc: "Market replay mode — step through history bar-by-bar" },
@@ -13641,6 +13642,27 @@ impl TyphooNApp {
                     }
                     Err(e) => {
                         self.log.push_back(LogEntry::err(format!("Failed to read {}: {}", path.display(), e)));
+                    }
+                }
+            }
+            "SWAPHARVEST" => {
+                if let Some(ref cache) = self.cache {
+                    if let Some(conn) = cache.try_connection() {
+                        match darwin::swap_harvest(&conn, 0.0) {
+                            Ok(result) => {
+                                self.log.push_back(LogEntry::info(format!(
+                                    "SWAPHARVEST: {} symbols with positive swap ({} long, {} short, {} both) out of {} scanned",
+                                    result.entries.len(), result.long_count, result.short_count, result.both_count, result.total_scanned
+                                )));
+                                for e in &result.entries {
+                                    self.log.push_back(LogEntry::info(format!(
+                                        "  {} [{}] SwapL:{:.4} SwapR:{:.4} Spread:{} MinLot:{} Margin:{:.0} — {}",
+                                        e.symbol, e.direction, e.swap_long, e.swap_short, e.spread, e.volume_min, e.margin_initial, e.description
+                                    )));
+                                }
+                            }
+                            Err(e) => self.log.push_back(LogEntry::err(format!("SwapHarvest failed: {}", e))),
+                        }
                     }
                 }
             }
