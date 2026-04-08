@@ -9847,6 +9847,8 @@ pub struct TyphooNApp {
     web_server_running: bool,
     /// Hash-based dedup for broker KV writes — skip put_kv if content unchanged
     kv_write_hashes: std::collections::HashMap<String, u64>,
+    /// Throttle: last write time per KV key (max once per 30s even if content changes)
+    kv_write_times: std::collections::HashMap<String, std::time::Instant>,
     web_cmd_rx: Option<tokio::sync::mpsc::UnboundedReceiver<typhoon_web_protocol::WebCmd>>,
     web_msg_tx: Option<tokio::sync::broadcast::Sender<typhoon_web_protocol::WebMsg>>,
     // DARWIN FTP browser
@@ -12592,6 +12594,7 @@ impl TyphooNApp {
             scrape_crypto_last_msg: String::new(),
             web_server_running: false,
             kv_write_hashes: std::collections::HashMap::new(),
+            kv_write_times: std::collections::HashMap::new(),
             web_cmd_rx: None,
             web_msg_tx: None,
             show_darwin_browser: false,
@@ -13325,19 +13328,26 @@ impl TyphooNApp {
         v
     }
 
-    /// Write to KV cache only if content changed (hash-based dedup).
+    /// Write to KV cache only if content changed AND at least 30s since last write.
     /// Reduces KV timestamp churn → less LAN sync traffic.
     fn put_kv_dedup(&mut self, key: &str, json: &str) {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         json.hash(&mut h);
         let hash = h.finish();
-        if self.kv_write_hashes.get(key).copied() != Some(hash) {
-            if let Some(ref cache) = self.cache {
-                let _ = cache.put_kv(key, json);
-            }
-            self.kv_write_hashes.insert(key.to_string(), hash);
+        let prev_hash = self.kv_write_hashes.get(key).copied().unwrap_or(0);
+        if hash == prev_hash { return; } // content unchanged — skip entirely
+        // Content changed — but throttle writes to at most every 30s per key
+        let now = std::time::Instant::now();
+        let last_write = self.kv_write_times.get(key).copied();
+        if let Some(t) = last_write {
+            if now.duration_since(t).as_secs() < 30 { return; } // too soon — skip
         }
+        if let Some(ref cache) = self.cache {
+            let _ = cache.put_kv(key, json);
+        }
+        self.kv_write_hashes.insert(key.to_string(), hash);
+        self.kv_write_times.insert(key.to_string(), now);
     }
 
     /// Get all "active" symbols: chart tabs + open positions from ticked brokers + watchlist.

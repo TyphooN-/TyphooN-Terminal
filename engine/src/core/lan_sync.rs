@@ -775,26 +775,17 @@ async fn handle_client_tls(
                         || k.starts_with("lan:")                  // all LAN config is per-machine
                 };
                 let cache_clone = cache.clone();
-                let kv_data = tokio::task::spawn_blocking(move || {
+                // Send KV values as compressed blobs (skip server-side decompression).
+                // Client uses put_kv_compressed() to store directly — saves CPU + bandwidth.
+                // Binary format: [u32 key_len][key][u32 blob_len][compressed_blob] repeated
+                let kv_data: Vec<(String, Vec<u8>)> = tokio::task::spawn_blocking(move || {
                     if since_ts > 0 {
-                        // Incremental: only entries updated since since_ts
-                        // list_kv_entries_since returns (key, compressed_value, timestamp)
-                        // We need to decompress for the client
                         match cache_clone.list_kv_entries_since(since_ts) {
                             Ok(entries) => {
-                                let mut result = Vec::new();
-                                for (key, compressed, _ts) in entries {
-                                    if is_skip_key(&key) { continue; }
-                                    match zstd::decode_all(compressed.as_slice()) {
-                                        Ok(decompressed) => {
-                                            if let Ok(val) = String::from_utf8(decompressed) {
-                                                result.push((key, val));
-                                            }
-                                        }
-                                        Err(_) => {} // skip corrupt entries
-                                    }
-                                }
-                                result
+                                entries.into_iter()
+                                    .filter(|(key, _, _)| !is_skip_key(key))
+                                    .map(|(key, compressed, _ts)| (key, compressed))
+                                    .collect()
                             }
                             Err(e) => {
                                 tracing::warn!("LAN sync: list_kv_entries_since failed: {e}");
@@ -802,26 +793,24 @@ async fn handle_client_tls(
                             }
                         }
                     } else {
-                        // Full sync: all entries
-                        let mut entries: Vec<(String, String)> = Vec::new();
-                        if let Ok(keys) = cache_clone.list_kv_keys("") {
-                            for key in &keys {
-                                if is_skip_key(key) { continue; }
-                                if let Ok(Some(val)) = cache_clone.get_kv(key) {
-                                    entries.push((key.clone(), val));
-                                }
+                        // Full sync: send compressed blobs directly
+                        let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+                        if let Ok(all) = cache_clone.list_kv_entries_since(0) {
+                            for (key, compressed, _ts) in all {
+                                if is_skip_key(&key) { continue; }
+                                entries.push((key, compressed));
                             }
                         }
                         entries
                     }
                 }).await.unwrap_or_default();
 
-                // Send as binary batch: [u32 key_len][key][u32 val_len][val] repeated
+                // Send as binary batch: [u32 key_len][key][u32 blob_len][compressed_blob] repeated
                 let mut count = 0u32;
                 let mut batch_buf: Vec<u8> = Vec::with_capacity(2 * 1024 * 1024);
-                for (key, val) in &kv_data {
+                for (key, blob) in &kv_data {
                     let kb = key.as_bytes();
-                    let vb = val.as_bytes();
+                    let vb = blob.as_slice();
                     batch_buf.extend_from_slice(&(kb.len() as u32).to_le_bytes());
                     batch_buf.extend_from_slice(kb);
                     batch_buf.extend_from_slice(&(vb.len() as u32).to_le_bytes());
@@ -1250,9 +1239,9 @@ async fn client_sync_loop(
                     pos += 4;
                     if val_len > MAX_DATA_LEN { tracing::warn!("LAN sync: KV val_len {val_len} exceeds limit"); break; }
                     if pos + val_len > buf.len() { break; }
-                    let val = String::from_utf8_lossy(&buf[pos..pos+val_len]).to_string();
+                    let blob = &buf[pos..pos+val_len];
                     pos += val_len;
-                    let _ = cache.put_kv(&key, &val);
+                    let _ = cache.put_kv_compressed(&key, blob);
                     kv_count += 1;
                     if pos == prev_pos { break; }
                 }
@@ -1290,9 +1279,9 @@ async fn client_sync_loop(
                         pos += 4;
                         if val_len > MAX_DATA_LEN { break; }
                         if pos + val_len > buf.len() { break; }
-                        let val = String::from_utf8_lossy(&buf[pos..pos+val_len]).to_string();
+                        let blob = &buf[pos..pos+val_len];
                         pos += val_len;
-                        let _ = cache.put_kv(&key, &val);
+                        let _ = cache.put_kv_compressed(&key, blob);
                         kv_count += 1;
                         if pos == prev_pos { break; }
                     }
@@ -1472,9 +1461,9 @@ async fn client_sync_loop(
                                     pos += 4;
                                     if val_len > MAX_DATA_LEN { break; }
                                     if pos + val_len > buf.len() { break; }
-                                    let val = String::from_utf8_lossy(&buf[pos..pos+val_len]).to_string();
+                                    let blob = &buf[pos..pos+val_len];
                                     pos += val_len;
-                                    let _ = cache.put_kv(&key, &val);
+                                    let _ = cache.put_kv_compressed(&key, blob);
                                     if pos == prev_pos { break; }
                                 }
                             } else {

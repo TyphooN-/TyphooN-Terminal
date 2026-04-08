@@ -447,6 +447,18 @@ impl SqliteCache {
         Ok(())
     }
 
+    /// Store a pre-compressed KV blob directly (skip re-compression).
+    /// Used by LAN sync to avoid decompress-on-server + recompress-on-client overhead.
+    pub fn put_kv_compressed(&self, key: &str, compressed: &[u8]) -> Result<(), String> {
+        let timestamp = chrono::Utc::now().timestamp();
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO kv_cache (key, value, timestamp) VALUES (?1, ?2, ?3)",
+            params![key, compressed, timestamp],
+        ).map_err(|e| format!("SQLite insert failed: {e}"))?;
+        Ok(())
+    }
+
     /// Load key-value data.
     pub fn get_kv(&self, key: &str) -> Result<Option<String>, String> {
         let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
