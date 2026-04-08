@@ -4682,7 +4682,8 @@ fn draw_chart(
         + show_obv as u8 + show_momentum as u8 + show_better_volume as u8
         + show_ehlers_ebsw as u8 + show_ehlers_cyber as u8 + show_ehlers_cg as u8 + show_ehlers_roof as u8
         + show_squeeze as u8;
-    let sub_pane_height = if sub_pane_count > 0 { 80.0 * sub_pane_count as f32 } else { 0.0 };
+    const SUB_PANE_H: f32 = 80.0; // Height per indicator sub-pane (RSI, Fisher, MACD, Volume)
+    let sub_pane_height = if sub_pane_count > 0 { SUB_PANE_H * sub_pane_count as f32 } else { 0.0 };
     let main_rect = egui::Rect::from_min_max(
         rect.min,
         egui::pos2(rect.right(), rect.bottom() - sub_pane_height),
@@ -27006,7 +27007,7 @@ impl eframe::App for TyphooNApp {
                                         }
                                     }
                                 }
-                                if ui.add(egui::Button::new(egui::RichText::new("Destroy Lines").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Destroy Lines").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).on_hover_text("Remove all buy/sell planning lines from chart").clicked() {
                                     if let Some(chart) = self.charts.get_mut(self.active_tab) {
                                         chart.drawings.clear();
                                     }
@@ -27016,7 +27017,7 @@ impl eframe::App for TyphooNApp {
                             });
                             // Row 3: Open MG (.btn-mg) | Close All (.btn-danger)
                             ui.horizontal(|ui| {
-                                if ui.add(egui::Button::new(egui::RichText::new("Open MG").color(BTN_MG_TEXT).small().strong()).fill(BTN_MG).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Open MG").color(BTN_MG_TEXT).small().strong()).fill(BTN_MG).min_size(btn_size)).on_hover_text("Open Martingale grid order").clicked() {
                                     self.log.push_back(LogEntry::info("Martingale: connect broker first"));
                                 }
                                 if ui.add(egui::Button::new(egui::RichText::new("Close All").color(BTN_RED_TEXT).small().strong()).fill(BTN_RED).min_size(btn_size)).clicked() {
@@ -27025,7 +27026,7 @@ impl eframe::App for TyphooNApp {
                             });
                             // Row 4: Close Partial (.btn-danger) | Set SL (.btn-lines)
                             ui.horizontal(|ui| {
-                                if ui.add(egui::Button::new(egui::RichText::new("Close Partial").color(BTN_RED_TEXT).small().strong()).fill(BTN_RED).min_size(btn_size)).clicked() {
+                                if ui.add(egui::Button::new(egui::RichText::new("Close Partial").color(BTN_RED_TEXT).small().strong()).fill(BTN_RED).min_size(btn_size)).on_hover_text("Close a percentage of open position").clicked() {
                                     self.log.push_back(LogEntry::info("Close partial: connect broker"));
                                 }
                                 if ui.add(egui::Button::new(egui::RichText::new("Set SL").color(BTN_BLUE_TEXT).small().strong()).fill(BTN_BLUE).min_size(btn_size)).clicked() {
@@ -27599,9 +27600,16 @@ impl eframe::App for TyphooNApp {
                                             }
                                         }
                                     }
-                                    if row_resp.secondary_clicked() {
-                                        remove_sym = Some(wl.symbol.clone());
-                                    }
+                                    row_resp.context_menu(|ui| {
+                                        if ui.button(format!("Chart {}", wl.symbol)).clicked() {
+                                            load_key = Some(wl.cache_key.clone());
+                                            ui.close_menu();
+                                        }
+                                        if ui.button(format!("Remove {}", wl.symbol)).clicked() {
+                                            remove_sym = Some(wl.symbol.clone());
+                                            ui.close_menu();
+                                        }
+                                    });
                                 }
                                 // Handle remove
                                 if let Some(ref sym) = remove_sym {

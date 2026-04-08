@@ -169,7 +169,9 @@ pub fn start_metrics_server(rt: &tokio::runtime::Handle, registry: Arc<MetricsRe
                     let encoder = TextEncoder::new();
                     let metric_families = reg.registry.gather();
                     let mut buffer = Vec::new();
-                    encoder.encode(&metric_families, &mut buffer).unwrap();
+                    if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
+                        tracing::warn!("Metrics encode failed: {e}");
+                    }
                     let content_type = encoder.format_type().to_string();
                     (
                         [(axum::http::header::CONTENT_TYPE, content_type)],
