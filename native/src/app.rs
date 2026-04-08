@@ -10207,6 +10207,10 @@ impl TyphooNApp {
                         }
                     }
                     BrokerCmd::GetWatchlistQuotes { symbols } => {
+                        // LAN client: skip — watchlist data comes from server via KV sync (broker:watchlist)
+                        if lan_client.load(std::sync::atomic::Ordering::Relaxed) {
+                            continue;
+                        }
                         if let Some(ref b) = broker {
                             let mut rows = Vec::new();
                             for sym in &symbols {
