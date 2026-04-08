@@ -27288,15 +27288,22 @@ impl eframe::App for TyphooNApp {
                                     rp.text(egui::pos2(rx + 2.0, ry), egui::Align2::LEFT_CENTER, "\u{25CF}", font.clone(), sym_color);
                                     rp.text(egui::pos2(rx + 14.0, ry), egui::Align2::LEFT_CENTER, &wl.symbol, font.clone(), egui::Color32::WHITE);
 
-                                    // Last (right-aligned)
-                                    rp.text(egui::pos2(rx + col_last - 2.0, ry), egui::Align2::RIGHT_CENTER, &format_price(wl.last), font.clone(), egui::Color32::WHITE);
+                                    // Last / Change / Change% — show extended hours price if available
+                                    let (disp_last, disp_chg, disp_pct, disp_color) = if wl.ext_change_pct.abs() > 0.001 && wl.prev_close > 0.0 {
+                                        // Extended hours: derive price from prev_close + ext%
+                                        let ext_price = wl.prev_close * (1.0 + wl.ext_change_pct / 100.0);
+                                        let ext_chg = ext_price - wl.prev_close;
+                                        let c = if wl.ext_change_pct >= 0.0 { UP } else { DOWN };
+                                        (ext_price, ext_chg, wl.ext_change_pct, c)
+                                    } else {
+                                        (wl.last, wl.change, wl.change_pct, chg_color)
+                                    };
+                                    rp.text(egui::pos2(rx + col_last - 2.0, ry), egui::Align2::RIGHT_CENTER, &format_price(disp_last), font.clone(), egui::Color32::WHITE);
 
-                                    // Change (right-aligned, colored)
-                                    let chg_str = if wl.change >= 0.0 { format_price(wl.change) } else { format!("-{}", format_price(wl.change.abs())) };
-                                    rp.text(egui::pos2(rx + col_chg - 2.0, ry), egui::Align2::RIGHT_CENTER, &chg_str, font.clone(), chg_color);
+                                    let chg_str = if disp_chg >= 0.0 { format_price(disp_chg) } else { format!("-{}", format_price(disp_chg.abs())) };
+                                    rp.text(egui::pos2(rx + col_chg - 2.0, ry), egui::Align2::RIGHT_CENTER, &chg_str, font.clone(), disp_color);
 
-                                    // Change % (right-aligned, colored)
-                                    rp.text(egui::pos2(rx + col_pct - 2.0, ry), egui::Align2::RIGHT_CENTER, &format!("{:.2}%", wl.change_pct), font.clone(), chg_color);
+                                    rp.text(egui::pos2(rx + col_pct - 2.0, ry), egui::Align2::RIGHT_CENTER, &format!("{:.2}%", disp_pct), font.clone(), disp_color);
 
                                     // Extended hours change % (right-aligned, colored, dimmed if zero)
                                     if wl.ext_change_pct.abs() > 0.001 {
