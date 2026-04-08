@@ -74,6 +74,8 @@ pub enum SyncMessage {
     AuthOk,
     AuthFail { reason: String },
     RequestMeta,
+    /// Incremental metadata request — only entries updated since since_ts.
+    RequestMetaSince { since_ts: i64 },
     Metadata { entries: Vec<CacheMeta> },
     RequestEntries { keys: Vec<String> },
     EntryData { key: String, data: String, timestamp: i64 },
@@ -675,6 +677,21 @@ async fn handle_client_tls(
                     let _ = sink.send(msg).await;
                 }
             }
+            SyncMessage::RequestMetaSince { since_ts } => {
+                // Delta metadata: only entries updated since since_ts
+                let entries = cache.get_cache_meta_since(since_ts).unwrap_or_default();
+                let meta: Vec<CacheMeta> = entries.into_iter().map(|(key, ts, bc)| {
+                    CacheMeta { key, timestamp: ts, bar_count: Some(bc) }
+                }).collect();
+                if meta.is_empty() {
+                    tracing::trace!("LAN sync: meta delta — 0 changed entries since {since_ts}");
+                } else {
+                    tracing::debug!("LAN sync: meta delta — {} changed entries since {since_ts}", meta.len());
+                }
+                if let Ok(msg) = send_msg(&SyncMessage::Metadata { entries: meta }) {
+                    let _ = sink.send(msg).await;
+                }
+            }
             SyncMessage::RequestEntries { keys } => {
                 // Fast binary transfer: batch entries into large binary WebSocket frames
                 // Format per entry: [u32 key_len][key_bytes][i64 timestamp][u32 data_len][data_bytes]
@@ -746,8 +763,10 @@ async fn handle_client_tls(
                     "lan:server_enabled", "lan:client_enabled",
                     "lan:server_ip", "lan:sync_port",
                 ];
-                let is_local_key = |k: &str| {
-                    kv_local_keys.iter().any(|&lk| k == lk) || k.starts_with("cred:")
+                let is_skip_key = |k: &str| {
+                    kv_local_keys.iter().any(|&lk| k == lk)
+                        || k.starts_with("cred:")
+                        || k.starts_with("quote:")  // 851 individual bid/ask entries — huge churn, low value
                 };
                 let cache_clone = cache.clone();
                 let kv_data = tokio::task::spawn_blocking(move || {
@@ -759,7 +778,7 @@ async fn handle_client_tls(
                             Ok(entries) => {
                                 let mut result = Vec::new();
                                 for (key, compressed, _ts) in entries {
-                                    if is_local_key(&key) { continue; }
+                                    if is_skip_key(&key) { continue; }
                                     match zstd::decode_all(compressed.as_slice()) {
                                         Ok(decompressed) => {
                                             if let Ok(val) = String::from_utf8(decompressed) {
@@ -781,7 +800,7 @@ async fn handle_client_tls(
                         let mut entries: Vec<(String, String)> = Vec::new();
                         if let Ok(keys) = cache_clone.list_kv_keys("") {
                             for key in &keys {
-                                if is_local_key(key) { continue; }
+                                if is_skip_key(key) { continue; }
                                 if let Ok(Some(val)) = cache_clone.get_kv(key) {
                                     entries.push((key.clone(), val));
                                 }
@@ -1492,8 +1511,7 @@ async fn client_sync_loop(
                                     expecting_kv_binary = true;
                                     let kv_since = cache.get_sync_ts("kv_cache");
                                     let _ = sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: kv_since })?).await;
-                                    // Re-sync DARWIN data (full sync — always)
-                                    let _ = sink.send(send_msg(&SyncMessage::RequestDarwinData)?).await;
+                                    // NOTE: DARWIN deals NOT re-synced here — analytics come via KV.
                                     tracing::info!("LAN sync: incremental re-sync triggered after '{}' completion", cmd);
                                 }
                                 Ok(SyncMessage::TableSyncData { table, rows_json }) => {
@@ -1588,10 +1606,13 @@ async fn client_sync_loop(
                 }
             }
             _ = resync_interval.tick() => {
-                // Periodic re-sync: pull any new data from server since last sync.
-                // Bars: request metadata, server sends entries with newer timestamps.
+                // Periodic re-sync: pull only CHANGED data from server.
+                // Uses delta metadata (since_ts) to avoid sending 460KB of full metadata every 30s.
                 tracing::trace!("LAN sync: periodic re-sync — bars + KV + tables");
-                let _ = sink.send(send_msg(&SyncMessage::RequestMeta)?).await;
+                // Update bar_cache sync timestamp to current time (so next delta only gets newer entries)
+                let bar_since = cache.get_sync_ts("bar_cache");
+                let _ = cache.set_sync_ts("bar_cache", chrono::Utc::now().timestamp());
+                let _ = sink.send(send_msg(&SyncMessage::RequestMetaSince { since_ts: bar_since })?).await;
                 // KV: incremental since last sync timestamp (carries broker:*, darwin:* analytics)
                 expecting_kv_binary = true;
                 let kv_since = cache.get_sync_ts("kv_cache");

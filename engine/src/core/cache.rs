@@ -717,6 +717,23 @@ impl SqliteCache {
         Ok(count)
     }
 
+    /// Bulk-load cache metadata for entries updated since `since_ts`.
+    /// Returns Vec<(key, timestamp, bar_count)> — only changed entries.
+    pub fn get_cache_meta_since(&self, since_ts: i64) -> Result<Vec<(String, i64, i64)>, String> {
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn.prepare(
+            "SELECT key, timestamp, bar_count FROM bar_cache WHERE timestamp > ?1"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let mut result = Vec::new();
+        let rows = stmt.query_map(rusqlite::params![since_ts], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        }).map_err(|e| format!("SQLite query failed: {e}"))?;
+        for row in rows {
+            if let Ok(entry) = row { result.push(entry); }
+        }
+        Ok(result)
+    }
+
     /// Bulk-load cache metadata (age_secs, bar_count) for all entries.
     /// Returns HashMap<key, (age_secs, bar_count)> — one query instead of N individual lookups.
     pub fn get_all_cache_meta(&self) -> Result<std::collections::HashMap<String, (i64, i64)>, String> {
