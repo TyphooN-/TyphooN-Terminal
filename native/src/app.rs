@@ -9248,7 +9248,7 @@ enum BrokerCmd {
     /// Fetch ALL available bars from Alpaca (full history, no limit).
     FetchAllBars { symbol: String, timeframe: String },
     /// Batch quote request for watchlist symbols.
-    GetWatchlistQuotes { symbols: Vec<String>, finnhub_key: String },
+    GetWatchlistQuotes { symbols: Vec<String> },
     /// Fetch FRED economic data series.
     FredFetch { api_key: String },
     /// Fetch Finnhub economic calendar.
@@ -10206,7 +10206,7 @@ impl TyphooNApp {
                             }
                         }
                     }
-                    BrokerCmd::GetWatchlistQuotes { symbols, finnhub_key } => {
+                    BrokerCmd::GetWatchlistQuotes { symbols } => {
                         if let Some(ref b) = broker {
                             let mut rows = Vec::new();
                             for sym in &symbols {
@@ -10249,44 +10249,68 @@ impl TyphooNApp {
                                     }
                                 }
                             }
-                            // Finnhub enrichment for extended hours — get real-time pre/post market prices
-                            if !finnhub_key.is_empty() {
-                                let client = reqwest::Client::new();
-                                for row in &mut rows {
-                                    // Skip crypto (Finnhub doesn't cover), skip if already has ext change
-                                    if row.symbol.contains('/') || row.symbol.ends_with("USD") && row.symbol.len() > 5 {
-                                        continue;
-                                    }
+                            // Yahoo Finance enrichment for extended hours — returns preMarketPrice/postMarketPrice
+                            // Unlike Finnhub (which returns regular close as "current"), Yahoo has explicit ext hours fields.
+                            {
+                                let client = reqwest::Client::builder()
+                                    .timeout(std::time::Duration::from_secs(5))
+                                    .build().unwrap_or_else(|_| reqwest::Client::new());
+                                // Batch all equity symbols into one Yahoo query (up to 20)
+                                let equity_syms: Vec<String> = rows.iter()
+                                    .filter(|r| !r.symbol.contains('/') && !(r.symbol.ends_with("USD") && r.symbol.len() > 5))
+                                    .map(|r| r.symbol.clone())
+                                    .collect();
+                                if !equity_syms.is_empty() {
+                                    let sym_list = equity_syms.join(",");
                                     let url = format!(
-                                        "https://finnhub.io/api/v1/quote?symbol={}&token={}",
-                                        row.symbol, finnhub_key
+                                        "https://query1.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,preMarketPrice,preMarketChangePercent,postMarketPrice,postMarketChangePercent",
+                                        sym_list
                                     );
-                                    if let Ok(resp) = tokio::time::timeout(
-                                        std::time::Duration::from_secs(2),
-                                        client.get(&url).send(),
+                                    if let Ok(Ok(resp)) = tokio::time::timeout(
+                                        std::time::Duration::from_secs(5),
+                                        client.get(&url).header("Accept", "application/json").send(),
                                     ).await {
-                                        if let Ok(resp) = resp {
-                                            if let Ok(json) = resp.json::<serde_json::Value>().await {
-                                                // Finnhub quote: c=current, pc=prev close, dp=change%
-                                                let fh_price = json["c"].as_f64().unwrap_or(0.0);
-                                                let fh_prev = json["pc"].as_f64().unwrap_or(0.0);
-                                                if fh_price > 0.0 && fh_prev > 0.0 {
-                                                    // Use Finnhub prev_close if Alpaca's is missing
-                                                    if row.prev_close <= 0.0 {
-                                                        row.prev_close = fh_prev;
-                                                    }
-                                                    // Update price if Finnhub differs (extended hours)
-                                                    if row.prev_close > 0.0 && (fh_price - row.last).abs() > 0.001 {
-                                                        row.last = fh_price;
-                                                        row.change = fh_price - row.prev_close;
-                                                        row.change_pct = (fh_price / row.prev_close - 1.0) * 100.0;
-                                                        row.ext_change_pct = row.change_pct;
+                                        if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                            if let Some(results) = json["quoteResponse"]["result"].as_array() {
+                                                for q in results {
+                                                    let sym = q["symbol"].as_str().unwrap_or("");
+                                                    if let Some(row) = rows.iter_mut().find(|r| r.symbol == sym) {
+                                                        let reg_price = q["regularMarketPrice"].as_f64().unwrap_or(0.0);
+                                                        let reg_prev = q["regularMarketPreviousClose"].as_f64().unwrap_or(0.0);
+
+                                                        // Use Yahoo prev_close if Alpaca's is missing
+                                                        if row.prev_close <= 0.0 && reg_prev > 0.0 {
+                                                            row.prev_close = reg_prev;
+                                                        }
+
+                                                        // Pre-market price (only valid before market open)
+                                                        let pre_price = q["preMarketPrice"].as_f64().unwrap_or(0.0);
+                                                        let post_price = q["postMarketPrice"].as_f64().unwrap_or(0.0);
+
+                                                        // Use whichever extended price is available
+                                                        let ext_price = if pre_price > 0.0 { pre_price } else if post_price > 0.0 { post_price } else { 0.0 };
+
+                                                        if ext_price > 0.0 && row.prev_close > 0.0 {
+                                                            row.last = ext_price;
+                                                            row.change = ext_price - row.prev_close;
+                                                            row.change_pct = (ext_price / row.prev_close - 1.0) * 100.0;
+                                                            // Ext% = change from regular close to ext price
+                                                            if reg_price > 0.0 {
+                                                                row.ext_change_pct = (ext_price / reg_price - 1.0) * 100.0;
+                                                            } else {
+                                                                row.ext_change_pct = row.change_pct;
+                                                            }
+                                                        } else if reg_price > 0.0 && row.prev_close > 0.0 {
+                                                            // No ext hours — use Yahoo regular price (may be fresher than Alpaca)
+                                                            row.last = reg_price;
+                                                            row.change = reg_price - row.prev_close;
+                                                            row.change_pct = (reg_price / row.prev_close - 1.0) * 100.0;
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await; // Finnhub free: 60 req/min
                                 }
                             }
                             let _ = broker_msg_tx_clone.send(BrokerMsg::WatchlistQuotes(rows));
@@ -14464,7 +14488,7 @@ impl TyphooNApp {
                     "DIA","SPY","QQQ","IWM","EFA","EEM","VGK","EWJ",
                     "FXI","EWZ","GLD","SLV","USO","TLT","UUP","BTCUSD",
                 ].into_iter().map(String::from).collect();
-                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols, finnhub_key: self.finnhub_key.clone() });
+                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
                 self.log.push_back(LogEntry::info("Fetching world indices quotes..."));
             }
             "CRYPTO50" | "CRYPTO_TOP50" => {
@@ -14478,7 +14502,7 @@ impl TyphooNApp {
                     "EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","NZDUSD","USDCAD",
                     "EURGBP","EURJPY","GBPJPY",
                 ].into_iter().map(String::from).collect();
-                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols, finnhub_key: self.finnhub_key.clone() });
+                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
                 self.log.push_back(LogEntry::info("Fetching forex pairs..."));
             }
             "KRAKEN" => {
@@ -19547,7 +19571,7 @@ impl TyphooNApp {
                             self.user_watchlist.push(sym_upper.clone());
                             self.watchlist_cache_tried = false;
                             if self.broker_connected {
-                                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone(), finnhub_key: self.finnhub_key.clone() });
+                                let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
                             }
                             self.log.push_back(LogEntry::info(format!("Added {} to watchlist", sym_upper)));
                         }
@@ -24154,7 +24178,7 @@ impl TyphooNApp {
                             "DIA","SPY","QQQ","IWM","EFA","EEM","VGK","EWJ",
                             "FXI","EWZ","GLD","SLV","USO","TLT","UUP","BTCUSD",
                         ].into_iter().map(String::from).collect();
-                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols, finnhub_key: self.finnhub_key.clone() });
+                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
                     }
                     ui.separator();
                     if self.world_indices_data.is_empty() {
@@ -24244,7 +24268,7 @@ impl TyphooNApp {
                             "EURUSD","GBPUSD","USDJPY","USDCHF","AUDUSD","NZDUSD","USDCAD",
                             "EURGBP","EURJPY","GBPJPY",
                         ].into_iter().map(String::from).collect();
-                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols, finnhub_key: self.finnhub_key.clone() });
+                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
                     }
                     ui.separator();
                     if self.forex_pairs_data.is_empty() {
@@ -25469,7 +25493,7 @@ impl eframe::App for TyphooNApp {
                         let _ = self.broker_tx.send(BrokerCmd::GetOrders);
                     }
                     typhoon_web_protocol::WebCmd::GetWatchlistQuotes { symbols } => {
-                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols, finnhub_key: self.finnhub_key.clone() });
+                        let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols });
                     }
                     typhoon_web_protocol::WebCmd::GetMarketClock => {
                         let _ = self.broker_tx.send(BrokerCmd::GetMarketClock);
@@ -27182,7 +27206,7 @@ impl eframe::App for TyphooNApp {
                                         self.watchlist_cache_tried = false; // retry cache lookup
                                         // Trigger immediate refresh
                                         if self.broker_connected {
-                                            let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone(), finnhub_key: self.finnhub_key.clone() });
+                                            let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
                                         }
                                     }
                                     self.watchlist_input.clear();
@@ -29894,7 +29918,7 @@ impl eframe::App for TyphooNApp {
 
         // Poll watchlist quotes every ~15 seconds (disabled for LAN client)
         if self.frame_count % 60 == 5 && !self.user_watchlist.is_empty() && self.broker_connected && !self.lan_client_enabled && self.cache_loaded {
-            let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone(), finnhub_key: self.finnhub_key.clone() });
+            let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
         }
 
         // ── Data sync (disabled when LAN client — server provides all data) ──
