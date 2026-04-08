@@ -19,7 +19,7 @@ fn sec_client() -> &'static Client {
             .timeout(std::time::Duration::from_secs(15))
             .pool_max_idle_per_host(2)
             .build()
-            .expect("Failed to build SEC HTTP client")
+            .unwrap_or_else(|_| Client::new())
     })
 }
 
@@ -271,7 +271,7 @@ impl AlpacaBroker {
                 .pool_max_idle_per_host(5)
                 .tcp_keepalive(std::time::Duration::from_secs(30))
                 .build()
-                .expect("Failed to build HTTP client"),
+                .unwrap_or_else(|_| Client::new()),
             base_url,
             api_key: Zeroizing::new(api_key),
             secret_key: Zeroizing::new(secret_key),

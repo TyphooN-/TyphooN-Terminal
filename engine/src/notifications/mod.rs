@@ -17,7 +17,7 @@ fn notification_client() -> &'static Client {
             .timeout(std::time::Duration::from_secs(10))
             .pool_max_idle_per_host(2)
             .build()
-            .expect("Failed to build notification HTTP client")
+            .unwrap_or_else(|_| Client::new())
     })
 }
 

@@ -4470,7 +4470,7 @@ pub fn compute_rebalance_suggestions(
         for acct in &accounts {
             let returns = get_daily_returns(conn, &acct.darwin_ticker)?;
             let var = compute_var(&returns);
-            let weight = if !returns.is_empty() { returns.last().unwrap().balance } else { 0.0 };
+            let weight = returns.last().map(|r| r.balance).unwrap_or(0.0);
             darwin_var_list.push((acct.darwin_ticker.clone(), var.var_95, var.sharpe, weight));
             darwin_returns_map.insert(acct.darwin_ticker.clone(), returns);
             sum += weight;

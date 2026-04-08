@@ -897,8 +897,10 @@ pub async fn scrape_ticker(
             // Recalculate EV with SEC data
             if let (Some(mc), Some(debt), Some(cash)) = (fund.market_cap, fund.total_debt, fund.cash_and_equivalents) {
                 fund.enterprise_value = Some(mc + debt - cash);
-                if fund.enterprise_value.unwrap_or(0.0) > 0.0 {
-                    fund.mcap_ev_ratio = Some(mc / fund.enterprise_value.unwrap() * 100.0);
+                if let Some(ev) = fund.enterprise_value {
+                    if ev > 0.0 {
+                        fund.mcap_ev_ratio = Some(mc / ev * 100.0);
+                    }
                 }
             }
         }

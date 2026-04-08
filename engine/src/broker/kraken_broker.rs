@@ -26,7 +26,7 @@ fn kraken_client() -> &'static Client {
             .timeout(std::time::Duration::from_secs(15))
             .pool_max_idle_per_host(2)
             .build()
-            .expect("Failed to build Kraken HTTP client")
+            .unwrap_or_else(|_| Client::new())
     })
 }
 
@@ -86,8 +86,10 @@ impl KrakenBroker {
             .decode(&self.api_secret)
             .unwrap_or_default();
 
-        let mut mac = HmacSha512::new_from_slice(&secret_bytes)
-            .expect("HMAC accepts any key length");
+        let mut mac = match HmacSha512::new_from_slice(&secret_bytes) {
+            Ok(m) => m,
+            Err(_) => return String::new(), // HMAC init failed — return empty signature
+        };
         mac.update(&hmac_input);
         let result = mac.finalize().into_bytes();
 
