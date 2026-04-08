@@ -1128,6 +1128,12 @@ struct ChartState {
     /// Live bid/ask from streaming quotes (for spread line rendering).
     live_bid: f64,
     live_ask: f64,
+    // Extended hours candle (pre/post market)
+    ext_open: f64,
+    ext_high: f64,
+    ext_low: f64,
+    ext_close: f64,
+    ext_active: bool, // true when ext hours data is available
     /// Raw bar data loaded from cache.
     bars: Vec<Bar>,
     /// Pre-computed SMA(200) — indexed parallel to `bars`.
@@ -1338,6 +1344,7 @@ impl ChartState {
             compare_bars: Vec::new(),
             live_bid: 0.0,
             live_ask: 0.0,
+            ext_open: 0.0, ext_high: 0.0, ext_low: 0.0, ext_close: 0.0, ext_active: false,
             bars: Vec::new(),
             sma200: Vec::new(),
             sma100: Vec::new(),
@@ -5811,33 +5818,62 @@ fn draw_chart(
         }
     }
 
-    // ── FakeCandle (ghost next bar — matching FakeCandle.mqh) ──────────────
-    // Draws a semi-transparent outline where the next candle would appear
+    // ── Extended Hours Candle (magenta, TradingView-style) ─────────────
+    // When pre/post market data is available, draw a real ext hours candle.
+    // Otherwise, draw a ghost placeholder.
     if let Some(last) = bars.last() {
         let next_x = chart_rect.left() + (bars.len() as f32 + 0.5) * bar_w;
         if next_x < chart_rect.right() - 10.0 {
-            let ghost_close = last.close;
-            let ghost_open = last.close;
-            let ghost_high = last.close + (last.high - last.low) * 0.3;
-            let ghost_low = last.close - (last.high - last.low) * 0.3;
-            let y_open = price_to_y(ghost_open);
-            let y_high = price_to_y(ghost_high);
-            let y_low = price_to_y(ghost_low);
-            let y_close = price_to_y(ghost_close);
-            let ghost_col = egui::Color32::from_rgba_premultiplied(100, 100, 120, 80);
-            // Wick
-            painter.line_segment(
-                [egui::pos2(next_x, y_high), egui::pos2(next_x, y_low)],
-                egui::Stroke::new(1.0, ghost_col),
-            );
-            // Body outline
-            let body_top = y_open.min(y_close);
-            let body_h = (y_open - y_close).abs().max(2.0);
-            let body_rect = egui::Rect::from_min_size(
-                egui::pos2(next_x - half_body, body_top),
-                egui::vec2(candle_w, body_h),
-            );
-            painter.rect_stroke(body_rect, 0.0, egui::Stroke::new(1.0, ghost_col), egui::StrokeKind::Outside);
+            if chart.ext_active && chart.ext_high > 0.0 {
+                // Real extended hours candle (magenta)
+                let ext_col = egui::Color32::from_rgb(200, 50, 200); // Magenta
+                let y_open  = price_to_y(chart.ext_open);
+                let y_high  = price_to_y(chart.ext_high);
+                let y_low   = price_to_y(chart.ext_low);
+                let y_close = price_to_y(chart.ext_close);
+                // Wick
+                painter.line_segment(
+                    [egui::pos2(next_x, y_high), egui::pos2(next_x, y_low)],
+                    egui::Stroke::new(1.0, ext_col),
+                );
+                // Body
+                let body_top = y_open.min(y_close);
+                let body_h = (y_open - y_close).abs().max(1.0);
+                let body_rect = egui::Rect::from_min_size(
+                    egui::pos2(next_x - half_body, body_top),
+                    egui::vec2(candle_w, body_h),
+                );
+                if body_h > 2.0 {
+                    painter.rect_filled(body_rect, 0.0, ext_col);
+                } else {
+                    painter.line_segment(
+                        [egui::pos2(next_x - half_body, body_top), egui::pos2(next_x + half_body, body_top)],
+                        egui::Stroke::new(1.0, ext_col),
+                    );
+                }
+            } else {
+                // Ghost candle (no ext data — regular hours)
+                let ghost_col = egui::Color32::from_rgba_premultiplied(100, 100, 120, 80);
+                let ghost_close = last.close;
+                let ghost_open = last.close;
+                let ghost_high = last.close + (last.high - last.low) * 0.3;
+                let ghost_low = last.close - (last.high - last.low) * 0.3;
+                let y_open = price_to_y(ghost_open);
+                let y_high = price_to_y(ghost_high);
+                let y_low = price_to_y(ghost_low);
+                let y_close = price_to_y(ghost_close);
+                painter.line_segment(
+                    [egui::pos2(next_x, y_high), egui::pos2(next_x, y_low)],
+                    egui::Stroke::new(1.0, ghost_col),
+                );
+                let body_top = y_open.min(y_close);
+                let body_h = (y_open - y_close).abs().max(2.0);
+                let body_rect = egui::Rect::from_min_size(
+                    egui::pos2(next_x - half_body, body_top),
+                    egui::vec2(candle_w, body_h),
+                );
+                painter.rect_stroke(body_rect, 0.0, egui::Stroke::new(1.0, ghost_col), egui::StrokeKind::Outside);
+            }
         }
     }
 
@@ -5864,6 +5900,38 @@ fn draw_chart(
                 egui::vec2(price_axis_w - 4.0, 16.0),
             );
             painter.rect_filled(lbl_rect, 2.0, color);
+            painter.text(
+                egui::pos2(chart_rect.right() + 4.0, y),
+                egui::Align2::LEFT_CENTER,
+                &label,
+                egui::FontId::monospace(10.0),
+                egui::Color32::BLACK,
+            );
+        }
+    }
+
+    // ── Extended hours price line (magenta dashed) ─────────────────────────
+    if chart.ext_active && chart.ext_close > 0.0 {
+        let y = price_to_y(chart.ext_close);
+        if y >= chart_rect.top() && y <= chart_rect.bottom() {
+            let ext_col = egui::Color32::from_rgb(200, 50, 200);
+            let dash_len = 4.0_f32;
+            let mut x = chart_rect.left();
+            while x < chart_rect.right() {
+                let end = (x + dash_len).min(chart_rect.right());
+                painter.line_segment(
+                    [egui::pos2(x, y), egui::pos2(end, y)],
+                    egui::Stroke::new(1.0, ext_col),
+                );
+                x += dash_len * 2.0;
+            }
+            // Price label
+            let label = format_price(chart.ext_close);
+            let lbl_rect = egui::Rect::from_min_size(
+                egui::pos2(chart_rect.right() + 2.0, y - 8.0),
+                egui::vec2(price_axis_w - 4.0, 16.0),
+            );
+            painter.rect_filled(lbl_rect, 2.0, ext_col);
             painter.text(
                 egui::pos2(chart_rect.right() + 4.0, y),
                 egui::Align2::LEFT_CENTER,
@@ -25251,10 +25319,34 @@ impl eframe::App for TyphooNApp {
                                 if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s }
                             };
                             if chart_bare == row_sym || chart_bare.contains(&row_sym) || row_sym.contains(&chart_bare) {
+                                // Update ext hours candle if ext data available
+                                if row.ext_change_pct.abs() > 0.001 && row.prev_close > 0.0 {
+                                    let ext_price = row.prev_close * (1.0 + row.ext_change_pct / 100.0);
+                                    if !chart.ext_active {
+                                        // First ext tick: open = regular close, OHLC from ext price
+                                        let reg_close = if let Some(bar) = chart.bars.last() { bar.close } else { ext_price };
+                                        chart.ext_open = reg_close;
+                                        chart.ext_high = ext_price.max(reg_close);
+                                        chart.ext_low = ext_price.min(reg_close);
+                                        chart.ext_close = ext_price;
+                                        chart.ext_active = true;
+                                    } else {
+                                        // Update ongoing ext candle
+                                        chart.ext_close = ext_price;
+                                        if ext_price > chart.ext_high { chart.ext_high = ext_price; }
+                                        if ext_price < chart.ext_low { chart.ext_low = ext_price; }
+                                    }
+                                } else {
+                                    // No ext data — clear ext candle (regular hours)
+                                    chart.ext_active = false;
+                                }
+                                // Update forming bar
                                 if let Some(bar) = chart.bars.last_mut() {
-                                    bar.close = row.last;
-                                    if row.last > bar.high { bar.high = row.last; }
-                                    if row.last < bar.low { bar.low = row.last; }
+                                    if !chart.ext_active {
+                                        bar.close = row.last;
+                                        if row.last > bar.high { bar.high = row.last; }
+                                        if row.last < bar.low { bar.low = row.last; }
+                                    }
                                 }
                             }
                         }
