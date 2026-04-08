@@ -10274,7 +10274,7 @@ impl TyphooNApp {
                                     let sym_list = equity_syms.join(",");
                                     let crumb_param = if session.crumb().is_empty() { String::new() } else { format!("&crumb={}", session.crumb()) };
                                     let url = format!(
-                                        "https://query2.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,preMarketPrice,preMarketChangePercent,postMarketPrice,postMarketChangePercent{}",
+                                        "https://query2.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketVolume,preMarketPrice,preMarketChangePercent,postMarketPrice,postMarketChangePercent{}",
                                         sym_list, crumb_param
                                     );
                                     if let Ok(Ok(resp)) = tokio::time::timeout(
@@ -10289,7 +10289,10 @@ impl TyphooNApp {
                                                         let reg_price = q["regularMarketPrice"].as_f64().unwrap_or(0.0);
                                                         let reg_prev = q["regularMarketPreviousClose"].as_f64().unwrap_or(0.0);
 
-                                                        let yah_vol = q["regularMarketVolume"].as_f64().unwrap_or(0.0);
+                                                        let yah_vol = q["regularMarketVolume"].as_f64()
+                                                            .or_else(|| q["regularMarketVolume"].as_i64().map(|v| v as f64))
+                                                            .or_else(|| q["regularMarketVolume"]["raw"].as_f64())
+                                                            .unwrap_or(0.0);
 
                                                         if row.prev_close <= 0.0 && reg_prev > 0.0 {
                                                             row.prev_close = reg_prev;
