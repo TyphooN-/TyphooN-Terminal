@@ -702,9 +702,14 @@ pub async fn scrape_all_portfolio_symbols(db_path: PathBuf) -> Result<ScrapeStat
             if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
                 for row in rows.flatten() {
                     let parts: Vec<&str> = row.split(':').collect();
-                    // mt5:CC:SYMBOL:timeframe — symbol is at index 2
-                    if parts.len() >= 3 {
-                        let sym = parts[2].to_uppercase();
+                    // mt5:CC:SYMBOL:timeframe — symbol is at index 2 (4-part keys)
+                    // mt5:SYMBOL:timeframe — symbol is at index 1 (3-part keys)
+                    let sym_opt = if parts.len() >= 4 {
+                        Some(parts[2].to_uppercase())
+                    } else if parts.len() >= 3 {
+                        Some(parts[1].to_uppercase())
+                    } else { None };
+                    if let Some(sym) = sym_opt {
                         if is_equity_symbol(&sym) && !syms.contains(&sym) {
                             syms.push(sym);
                         }
