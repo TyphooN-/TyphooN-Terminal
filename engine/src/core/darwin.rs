@@ -1237,7 +1237,6 @@ pub fn get_darwin_correlations(conn: &Connection) -> Result<Vec<CorrelationEntry
         returns_by_date: std::collections::HashMap<String, f64>,
         mean: f64,
         var: f64,    // sample variance
-        n: usize,
     }
     let stats: Vec<(String, SeriesStats)> = all_returns.into_iter().map(|(name, map)| {
         let n = map.len();
@@ -1246,7 +1245,7 @@ pub fn get_darwin_correlations(conn: &Connection) -> Result<Vec<CorrelationEntry
         let var = if n > 1 {
             map.values().map(|v| (v - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0)
         } else { 0.0 };
-        (name, SeriesStats { returns_by_date: map, mean, var, n })
+        (name, SeriesStats { returns_by_date: map, mean, var })
     }).collect();
 
     let mut result = Vec::with_capacity(stats.len() * stats.len());
