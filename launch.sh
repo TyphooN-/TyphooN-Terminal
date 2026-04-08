@@ -17,6 +17,8 @@ build_wasm() {
            [ web/src/app.rs -nt target/web-dist/index.html ] || \
            [ web/src/lib.rs -nt target/web-dist/index.html ] || \
            [ web-protocol/src/lib.rs -nt target/web-dist/index.html ]; then
+            # Ensure wasm32 target is installed (survives rustup updates)
+            rustup target add wasm32-unknown-unknown 2>/dev/null || true
             echo "Building WASM web client..."
             (cd web && trunk build --release 2>&1 | tail -3)
         fi
