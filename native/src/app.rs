@@ -9750,7 +9750,12 @@ pub struct TyphooNApp {
     show_sec: bool,
     sec_selected_filing: Option<usize>,
     sec_tab: usize,  // 0=Filings, 1=Alerts
-    sec_active_only: bool, // filter SEC filings to active positions/charts only
+    sec_active_only: bool,      // filter SEC filings to active positions/charts only
+    earnings_active_only: bool,  // filter earnings calendar to active symbols
+    dividends_active_only: bool, // filter dividend calendar to active symbols
+    ev_active_only: bool,        // filter EV scanner to active symbols
+    congress_active_only: bool,  // filter congressional trades to active symbols
+    volume_active_only: bool,    // filter unusual volume to active symbols
     sec_filing_content: String,  // cached filing document text
     sec_filing_loading: bool,
     show_insider: bool,
@@ -12498,6 +12503,11 @@ impl TyphooNApp {
             sec_selected_filing: None,
             sec_tab: 0,
             sec_active_only: false,
+            earnings_active_only: false,
+            dividends_active_only: false,
+            ev_active_only: false,
+            congress_active_only: false,
+            volume_active_only: false,
             sec_filing_content: String::new(),
             sec_filing_loading: false,
             show_insider: false,
@@ -20613,11 +20623,15 @@ impl TyphooNApp {
 
         // Unusual Volume Scanner
         if self.show_unusual_volume {
+            let vol_active = if self.volume_active_only { self.active_symbols() } else { Vec::new() };
             egui::Window::new("Unusual Volume Scanner")
                 .open(&mut self.show_unusual_volume)
                 .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new(format!("{} symbols with volume > 1.5x 20-day average", self.unusual_volume_results.len())).strong());
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{} symbols with volume > 1.5x 20-day average", self.unusual_volume_results.len())).strong());
+                        ui.checkbox(&mut self.volume_active_only, egui::RichText::new("Active Only").small());
+                    });
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         egui::Grid::new("unusual_vol_grid").striped(true).num_columns(4).show(ui, |ui| {
@@ -20627,6 +20641,7 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new("Ratio").color(AXIS_TEXT).small().strong());
                             ui.end_row();
                             for (sym, today, avg, ratio) in &self.unusual_volume_results {
+                                if !vol_active.is_empty() && !vol_active.iter().any(|s| s.eq_ignore_ascii_case(sym)) { continue; }
                                 let ratio_c = if *ratio > 3.0 { egui::Color32::from_rgb(231, 76, 60) }
                                     else if *ratio > 2.0 { egui::Color32::from_rgb(241, 196, 15) }
                                     else { egui::Color32::from_rgb(46, 204, 113) };
@@ -20779,14 +20794,18 @@ impl TyphooNApp {
 
         // Congressional Trades (House Stock Watcher)
         if self.show_congress {
+            let cong_active = if self.congress_active_only { self.active_symbols() } else { Vec::new() };
             egui::Window::new("Congressional Trades")
                 .open(&mut self.show_congress)
                 .resizable(true).default_size([750.0, 450.0])
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new("House Stock Watcher \u{2014} Congressional Stock Trades").strong());
-                    if ui.small_button("Refresh").clicked() {
-                        let _ = self.broker_tx.send(BrokerCmd::FetchCongressTrades);
-                    }
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("House Stock Watcher \u{2014} Congressional Stock Trades").strong());
+                        if ui.small_button("Refresh").clicked() {
+                            let _ = self.broker_tx.send(BrokerCmd::FetchCongressTrades);
+                        }
+                        ui.checkbox(&mut self.congress_active_only, egui::RichText::new("Active Only").small());
+                    });
                     ui.separator();
                     if self.congress_trades.is_empty() {
                         ui.label(egui::RichText::new("Loading...").color(AXIS_TEXT));
@@ -20801,6 +20820,7 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new("Party").color(AXIS_TEXT).small().strong());
                                 ui.end_row();
                                 for (date, rep, ticker, tx_type, amount, party) in &self.congress_trades {
+                                    if !cong_active.is_empty() && !cong_active.iter().any(|s| s.eq_ignore_ascii_case(ticker)) { continue; }
                                     ui.label(egui::RichText::new(date).small().monospace());
                                     ui.label(egui::RichText::new(rep).small());
                                     ui.label(egui::RichText::new(ticker).small().strong().color(egui::Color32::WHITE));
@@ -21461,6 +21481,7 @@ impl TyphooNApp {
 
         // EV Scanner
         if self.show_ev_scanner {
+            let ev_active = if self.ev_active_only { self.active_symbols() } else { Vec::new() };
             egui::Window::new("Enterprise Value Scanner")
                 .open(&mut self.show_ev_scanner)
                 .resizable(true).default_size([900.0, 500.0])
@@ -21472,9 +21493,12 @@ impl TyphooNApp {
                             self.log.push_back(LogEntry::info("Fundamentals scrape started for all MT5 symbols..."));
                         }
                         ui.label(egui::RichText::new(format!("{} symbols", self.bg.all_fundamentals.len())).color(AXIS_TEXT).small());
+                        ui.checkbox(&mut self.ev_active_only, egui::RichText::new("Active Only").small());
                     });
                     ui.separator();
-                    let mut fund_sorted: Vec<&_> = self.bg.all_fundamentals.iter().collect();
+                    let mut fund_sorted: Vec<&_> = self.bg.all_fundamentals.iter()
+                        .filter(|f| ev_active.is_empty() || ev_active.iter().any(|s| s.eq_ignore_ascii_case(&f.symbol)))
+                        .collect();
                     match self.ev_sort.column {
                         0 => fund_sorted.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
                         1 => fund_sorted.sort_by(|a, b| a.company_name.cmp(&b.company_name)),
@@ -21529,11 +21553,15 @@ impl TyphooNApp {
 
         // Earnings Calendar
         if self.show_earnings_calendar {
+            let earn_active = if self.earnings_active_only { self.active_symbols() } else { Vec::new() };
             egui::Window::new("Earnings Calendar")
                 .open(&mut self.show_earnings_calendar)
                 .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new(format!("{} upcoming earnings", self.bg.upcoming_earnings.len())).color(AXIS_TEXT).small());
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{} upcoming earnings", self.bg.upcoming_earnings.len())).color(AXIS_TEXT).small());
+                        ui.checkbox(&mut self.earnings_active_only, egui::RichText::new("Active Only").small());
+                    });
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         egui::Grid::new("earnings_cal_grid").striped(true).num_columns(3).show(ui, |ui| {
@@ -21541,6 +21569,7 @@ impl TyphooNApp {
                             ui.end_row();
                             let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
                             for (sym, company, date) in &self.bg.upcoming_earnings {
+                                if !earn_active.is_empty() && !earn_active.iter().any(|s| s.eq_ignore_ascii_case(sym)) { continue; }
                                 let days_away = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok().and_then(|d| {
                                     chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d").ok().map(|t| (d - t).num_days())
                                 });
@@ -21561,17 +21590,22 @@ impl TyphooNApp {
 
         // Dividend Calendar
         if self.show_dividend_calendar {
+            let div_active = if self.dividends_active_only { self.active_symbols() } else { Vec::new() };
             egui::Window::new("Dividend Calendar")
                 .open(&mut self.show_dividend_calendar)
                 .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new(format!("{} upcoming dividends", self.bg.upcoming_dividends.len())).color(AXIS_TEXT).small());
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{} upcoming dividends", self.bg.upcoming_dividends.len())).color(AXIS_TEXT).small());
+                        ui.checkbox(&mut self.dividends_active_only, egui::RichText::new("Active Only").small());
+                    });
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         egui::Grid::new("div_cal_grid").striped(true).num_columns(4).show(ui, |ui| {
                             ui.strong("Ex-Div Date"); ui.strong("Symbol"); ui.strong("Company"); ui.strong("Yield%");
                             ui.end_row();
                             for (sym, company, date, yld) in &self.bg.upcoming_dividends {
+                                if !div_active.is_empty() && !div_active.iter().any(|s| s.eq_ignore_ascii_case(sym)) { continue; }
                                 ui.label(egui::RichText::new(date).color(AXIS_TEXT).small());
                                 ui.label(egui::RichText::new(sym).small().strong().monospace());
                                 ui.label(egui::RichText::new(company).small());
