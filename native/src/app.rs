@@ -10278,9 +10278,13 @@ impl TyphooNApp {
                                                         let reg_price = q["regularMarketPrice"].as_f64().unwrap_or(0.0);
                                                         let reg_prev = q["regularMarketPreviousClose"].as_f64().unwrap_or(0.0);
 
-                                                        // Use Yahoo prev_close if Alpaca's is missing
+                                                        let yah_vol = q["regularMarketVolume"].as_f64().unwrap_or(0.0);
+
                                                         if row.prev_close <= 0.0 && reg_prev > 0.0 {
                                                             row.prev_close = reg_prev;
+                                                        }
+                                                        if yah_vol > 0.0 {
+                                                            row.volume = yah_vol;
                                                         }
 
                                                         // Pre-market price (only valid before market open)
