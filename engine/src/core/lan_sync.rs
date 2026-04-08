@@ -766,7 +766,13 @@ async fn handle_client_tls(
                 let is_skip_key = |k: &str| {
                     kv_local_keys.iter().any(|&lk| k == lk)
                         || k.starts_with("cred:")
-                        || k.starts_with("quote:")  // 851 individual bid/ask entries — huge churn, low value
+                        || k.starts_with("quote:")            // 851 individual bid/ask entries — huge churn
+                        || k.starts_with("darwin:daily_returns")  // huge (100KB+), client computes locally
+                        || k.starts_with("darwin:correlations")   // N×N matrix, client computes locally
+                        || k.starts_with("darwin:exposure")       // client computes locally
+                        || k == "darwin:insider_trades"            // large, client has SEC data via table sync
+                        || k == "client:demand"                   // per-machine demand list
+                        || k.starts_with("lan:")                  // all LAN config is per-machine
                 };
                 let cache_clone = cache.clone();
                 let kv_data = tokio::task::spawn_blocking(move || {

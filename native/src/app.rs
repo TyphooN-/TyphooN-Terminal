@@ -12740,6 +12740,23 @@ impl TyphooNApp {
                 const VACUUM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(21600); // 6 hours
                 // Persist data across loops so lightweight refreshes keep expensive Phase 2-8 results
                 let mut data = BgDarwinData::default();
+                let mut kv_hashes: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+                // Macro for hash-based dedup of KV writes — skip put_kv if JSON identical to last write
+                macro_rules! put_kv_if_changed {
+                    ($cache:expr, $key:expr, $json:expr, $hashes:expr) => {{
+                        let hash = {
+                            use std::hash::{Hash, Hasher};
+                            let mut h = std::collections::hash_map::DefaultHasher::new();
+                            $json.hash(&mut h);
+                            h.finish()
+                        };
+                        let prev = $hashes.get($key).copied().unwrap_or(0);
+                        if hash != prev {
+                            let _ = $cache.put_kv($key, &$json);
+                            $hashes.insert($key.to_string(), hash);
+                        }
+                    }};
+                }
                 // BG thread opens its OWN read-only SQLite connection via SqliteCache::open_bg_read_connection().
                 // This eliminates all Mutex contention with the UI thread's read_conn.
                 // WAL mode allows unlimited concurrent readers — each connection reads
@@ -12840,12 +12857,12 @@ impl TyphooNApp {
                             data.correlations = darwin::get_darwin_correlations(conn).unwrap_or_default();
                             data.exposure = darwin::get_portfolio_exposure(conn).unwrap_or_default();
                             data.open_positions = darwin::get_portfolio_open_positions(conn).unwrap_or_default();
-                            // Store to KV for LAN clients
-                            if let Ok(j) = serde_json::to_string(&data.open_positions) { let _ = cache.put_kv("darwin:open_positions", &j); }
-                            if let Some(ref p) = data.portfolio { if let Ok(j) = serde_json::to_string(p) { let _ = cache.put_kv("darwin:portfolio", &j); } }
-                            if let Ok(j) = serde_json::to_string(&data.exposure) { let _ = cache.put_kv("darwin:exposure", &j); }
-                            if let Ok(j) = serde_json::to_string(&data.correlations) { let _ = cache.put_kv("darwin:correlations", &j); }
-                            if let Ok(j) = serde_json::to_string(&data.daily_returns) { let _ = cache.put_kv("darwin:daily_returns", &j); }
+                            // Store to KV for LAN clients — only write if data changed (reduces KV churn + LAN sync bandwidth)
+                            if let Ok(j) = serde_json::to_string(&data.open_positions) { put_kv_if_changed!(cache, "darwin:open_positions", j, kv_hashes); }
+                            if let Some(ref p) = data.portfolio { if let Ok(j) = serde_json::to_string(p) { put_kv_if_changed!(cache, "darwin:portfolio", j, kv_hashes); } }
+                            if let Ok(j) = serde_json::to_string(&data.exposure) { put_kv_if_changed!(cache, "darwin:exposure", j, kv_hashes); }
+                            if let Ok(j) = serde_json::to_string(&data.correlations) { put_kv_if_changed!(cache, "darwin:correlations", j, kv_hashes); }
+                            if let Ok(j) = serde_json::to_string(&data.daily_returns) { put_kv_if_changed!(cache, "darwin:daily_returns", j, kv_hashes); }
                         }
                         let _ = bg_tx.send(data.clone());
 
@@ -13212,9 +13229,9 @@ impl TyphooNApp {
                             });
 
                             data.account_details = details;
-                            // Store to KV for LAN clients
+                            // Store to KV for LAN clients — only write if changed
                             if let Ok(j) = serde_json::to_string(&data.account_details) {
-                                let _ = cache.put_kv("darwin:account_details", &j);
+                                put_kv_if_changed!(cache, "darwin:account_details", j, kv_hashes);
                             }
                             let _ = bg_tx.send(data.clone());
                         }
@@ -13234,9 +13251,9 @@ impl TyphooNApp {
                                 }
                                 data.insider_trades = insider_map;
                             }
-                            // Store to KV for LAN clients
-                            if let Ok(j) = serde_json::to_string(&data.darwin_alerts) { let _ = cache.put_kv("darwin:alerts", &j); }
-                            if let Ok(j) = serde_json::to_string(&data.insider_trades) { let _ = cache.put_kv("darwin:insider_trades", &j); }
+                            // Store to KV for LAN clients — only write if changed
+                            if let Ok(j) = serde_json::to_string(&data.darwin_alerts) { put_kv_if_changed!(cache, "darwin:alerts", j, kv_hashes); }
+                            if let Ok(j) = serde_json::to_string(&data.insider_trades) { put_kv_if_changed!(cache, "darwin:insider_trades", j, kv_hashes); }
                         } else {
                             // LAN client: load from KV
                             if let Ok(Some(j)) = cache.get_kv("darwin:alerts") {
