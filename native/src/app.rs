@@ -10271,15 +10271,16 @@ impl TyphooNApp {
                                                 let fh_price = json["c"].as_f64().unwrap_or(0.0);
                                                 let fh_prev = json["pc"].as_f64().unwrap_or(0.0);
                                                 if fh_price > 0.0 && fh_prev > 0.0 {
-                                                    // Use Finnhub price if it differs from Alpaca (extended hours)
-                                                    if (fh_price - row.last).abs() > 0.001 {
-                                                        let ext = (fh_price / row.prev_close - 1.0) * 100.0;
-                                                        row.ext_change_pct = ext;
+                                                    // Use Finnhub prev_close if Alpaca's is missing
+                                                    if row.prev_close <= 0.0 {
+                                                        row.prev_close = fh_prev;
+                                                    }
+                                                    // Update price if Finnhub differs (extended hours)
+                                                    if row.prev_close > 0.0 && (fh_price - row.last).abs() > 0.001 {
                                                         row.last = fh_price;
                                                         row.change = fh_price - row.prev_close;
-                                                        row.change_pct = if row.prev_close > 0.0 {
-                                                            (fh_price / row.prev_close - 1.0) * 100.0
-                                                        } else { 0.0 };
+                                                        row.change_pct = (fh_price / row.prev_close - 1.0) * 100.0;
+                                                        row.ext_change_pct = row.change_pct;
                                                     }
                                                 }
                                             }
@@ -27017,26 +27018,27 @@ impl eframe::App for TyphooNApp {
                                 ui.label(egui::RichText::new("No open positions.").color(AXIS_TEXT).small());
                             }
 
-                            // ── Recent Fills (collapsible) ────────────────────
-                            let fills_count = self.recent_fills.len();
-                            egui::CollapsingHeader::new(egui::RichText::new(format!("Recent Fills ({})", fills_count)).strong().small())
-                                .id_salt("recent_fills_section")
-                                .default_open(false)
-                                .show(ui, |ui| {
-                                    if self.recent_fills.is_empty() {
-                                        ui.label(egui::RichText::new("No recent fills.").color(AXIS_TEXT).small());
-                                    } else {
-                                        for (sym, side, qty, price, time) in &self.recent_fills {
-                                            let c = if side == "buy" { UP } else { DOWN };
-                                            ui.horizontal(|ui| {
-                                                ui.label(egui::RichText::new(sym).small().strong());
-                                                ui.label(egui::RichText::new(side).color(c).small());
-                                                ui.label(egui::RichText::new(format!("{:.2}@{}", qty, format_price(*price))).small());
-                                                ui.label(egui::RichText::new(time).color(AXIS_TEXT).small());
-                                            });
-                                        }
-                                    }
-                                });
+                        });
+
+                    // ── Recent Fills Section ──────────────────────────────
+                    let fills_count2 = self.recent_fills.len();
+                    egui::CollapsingHeader::new(egui::RichText::new(format!("Recent Fills ({})", fills_count2)).strong().small())
+                        .id_salt("recent_fills_top")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            if self.recent_fills.is_empty() {
+                                ui.label(egui::RichText::new("No recent fills.").color(AXIS_TEXT).small());
+                            } else {
+                                for (sym, side, qty, price, time) in &self.recent_fills {
+                                    let c = if side == "buy" { UP } else { DOWN };
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new(sym).small().strong());
+                                        ui.label(egui::RichText::new(side).color(c).small());
+                                        ui.label(egui::RichText::new(format!("{:.2}@{}", qty, format_price(*price))).small());
+                                        ui.label(egui::RichText::new(time).color(AXIS_TEXT).small());
+                                    });
+                                }
+                            }
                         });
 
                     // ── Orders Section ────────────────────────────────────
