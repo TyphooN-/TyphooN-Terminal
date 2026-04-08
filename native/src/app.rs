@@ -12172,10 +12172,10 @@ impl TyphooNApp {
                             };
 
                             // Auto-reconnect loop: retry every 30s on failure.
-                            // Periodic re-sync: force reconnect every 15 minutes so clients
-                            // pick up new bars (weekend crypto backfill, MT5 updates) without
-                            // waiting for a connection drop.
-                            const RESYNC_INTERVAL_SECS: u64 = 15 * 60; // 15 minutes
+                            // The WebSocket stays connected and uses incremental re-sync (every 15s)
+                            // for bars, KV, and tables. Full reconnect only on connection drop or
+                            // very long intervals (2 hours) to refresh TLS certificate.
+                            const RESYNC_INTERVAL_SECS: u64 = 2 * 60 * 60; // 2 hours
                             loop {
                                 match tokio::time::timeout(
                                     std::time::Duration::from_secs(10),

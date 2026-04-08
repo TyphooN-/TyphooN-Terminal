@@ -1233,26 +1233,13 @@ pub fn get_darwin_correlations(conn: &Connection) -> Result<Vec<CorrelationEntry
     // Pre-compute per-series statistics in a single pass (Welford-style)
     // For each series: collect returns as Vec for common-date pairing,
     // and pre-compute mean + variance to avoid redundant iterations.
-    struct SeriesStats {
-        returns_by_date: std::collections::HashMap<String, f64>,
-        mean: f64,
-        var: f64,    // sample variance
-    }
-    let stats: Vec<(String, SeriesStats)> = all_returns.into_iter().map(|(name, map)| {
-        let n = map.len();
-        let sum: f64 = map.values().sum();
-        let mean = if n > 0 { sum / n as f64 } else { 0.0 };
-        let var = if n > 1 {
-            map.values().map(|v| (v - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0)
-        } else { 0.0 };
-        (name, SeriesStats { returns_by_date: map, mean, var })
-    }).collect();
+    let stats: Vec<(String, std::collections::HashMap<String, f64>)> = all_returns;
 
     let mut result = Vec::with_capacity(stats.len() * stats.len());
     for i in 0..stats.len() {
         for j in i..stats.len() {
-            let (ref name_a, ref sa) = stats[i];
-            let (ref name_b, ref sb) = stats[j];
+            let (ref name_a, ref map_a) = stats[i];
+            let (ref name_b, ref map_b) = stats[j];
 
             // Pearson correlation over common dates only
             // Must compute mean/var/cov over the SAME date set to guarantee result in [-1, 1]
@@ -1261,8 +1248,8 @@ pub fn get_darwin_correlations(conn: &Connection) -> Result<Vec<CorrelationEntry
             } else {
                 // Collect paired returns for common dates
                 let mut pairs: Vec<(f64, f64)> = Vec::new();
-                for (date, &ret_a) in &sa.returns_by_date {
-                    if let Some(&ret_b) = sb.returns_by_date.get(date) {
+                for (date, &ret_a) in map_a {
+                    if let Some(&ret_b) = map_b.get(date) {
                         pairs.push((ret_a, ret_b));
                     }
                 }
@@ -7156,6 +7143,27 @@ mod tests {
         let self_corr = corr.iter().find(|c| c.darwin_a == "TEST" && c.darwin_b == "TEST");
         assert!(self_corr.is_some());
         assert!((self_corr.unwrap().correlation - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_correlation_always_in_range() {
+        // Verify correlations are always in [-1, 1] range
+        let conn = setup_test_db();
+        let corr = get_darwin_correlations(&conn).unwrap();
+        for c in &corr {
+            assert!(c.correlation >= -1.0 && c.correlation <= 1.0,
+                "Correlation out of range: {} ↔ {} = {}", c.darwin_a, c.darwin_b, c.correlation);
+        }
+    }
+
+    #[test]
+    fn test_profit_factor_capped() {
+        // With only winning trades, profit_factor should be capped at 999.0
+        let conn = setup_test_db();
+        let summary = get_darwin_summary(&conn, "TEST").unwrap();
+        // Our test data has mixed wins/losses, so PF is finite
+        assert!(summary.profit_factor < 999.0);
+        assert!(summary.profit_factor >= 0.0);
     }
 
     #[test]

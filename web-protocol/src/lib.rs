@@ -213,4 +213,58 @@ mod tests {
         assert!(!is_valid_timeframe("A".repeat(11).as_str()));
         assert!(!is_valid_timeframe("1Day; rm -rf"));
     }
+
+    #[test]
+    fn symbol_boundary_length() {
+        // Exactly MAX_SYMBOL_LEN (20) should pass
+        assert!(is_valid_symbol("A".repeat(MAX_SYMBOL_LEN).as_str()));
+        // MAX_SYMBOL_LEN + 1 should fail
+        assert!(!is_valid_symbol("A".repeat(MAX_SYMBOL_LEN + 1).as_str()));
+    }
+
+    #[test]
+    fn timeframe_boundary_length() {
+        assert!(is_valid_timeframe("A".repeat(MAX_TIMEFRAME_LEN).as_str()));
+        assert!(!is_valid_timeframe("A".repeat(MAX_TIMEFRAME_LEN + 1).as_str()));
+    }
+
+    #[test]
+    fn symbol_rejects_unicode() {
+        assert!(!is_valid_symbol("AAPL\u{200B}")); // zero-width space
+        assert!(!is_valid_symbol("A\u{00E9}PL"));  // accented e
+    }
+
+    #[test]
+    fn symbol_rejects_null_bytes() {
+        assert!(!is_valid_symbol("AA\0PL"));
+    }
+
+    #[test]
+    fn watchlist_symbol_count_limit() {
+        assert!(MAX_WATCHLIST_SYMBOLS == 100);
+    }
+
+    #[test]
+    fn auth_cmd_roundtrip() {
+        let cmd = WebCmd::Auth { passphrase: "s3cr3t!@#$%".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: WebCmd = serde_json::from_str(&json).unwrap();
+        match back {
+            WebCmd::Auth { passphrase } => assert_eq!(passphrase, "s3cr3t!@#$%"),
+            _ => panic!("Expected Auth"),
+        }
+    }
+
+    #[test]
+    fn auth_result_roundtrip() {
+        for ok in [true, false] {
+            let msg = WebMsg::AuthResult { ok };
+            let json = serde_json::to_string(&msg).unwrap();
+            let back: WebMsg = serde_json::from_str(&json).unwrap();
+            match back {
+                WebMsg::AuthResult { ok: v } => assert_eq!(v, ok),
+                _ => panic!("Expected AuthResult"),
+            }
+        }
+    }
 }

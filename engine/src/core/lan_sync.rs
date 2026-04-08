@@ -1413,10 +1413,10 @@ async fn client_sync_loop(
     // State flag: when true, binary frames are KV data (key+val); when false, bar data (key+ts+data)
     let mut expecting_kv_binary = false;
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
-    // Periodic re-sync: pull new bars/KV/DARWIN/tables every 15s.
+    // Periodic re-sync: pull new bars/KV/tables every 30s.
     // Server may have received new MT5 data, Alpaca bars, crypto backfill,
-    // fundamentals, etc. — 15s gives near-real-time sync on LAN.
-    let mut resync_interval = tokio::time::interval(std::time::Duration::from_secs(15));
+    // fundamentals, etc. — 30s balances freshness vs bandwidth on LAN.
+    let mut resync_interval = tokio::time::interval(std::time::Duration::from_secs(30));
     resync_interval.tick().await; // skip the first immediate tick (initial sync just completed)
     loop {
         tokio::select! {

@@ -1049,6 +1049,47 @@ mod tests {
         assert!(!is_equity_symbol("AB123"));    // contains digits
     }
 
+    #[test]
+    fn is_equity_symbol_boundary_cases() {
+        assert!(is_equity_symbol("ABCDE"));   // exactly 5 chars (max)
+        assert!(!is_equity_symbol("ABCDEF")); // 6 chars (too long)
+        assert!(is_equity_symbol("A"));       // single letter
+        assert!(!is_equity_symbol("XBRUSD")); // XBR prefix
+        assert!(!is_equity_symbol("XTIUSD")); // XTI prefix
+    }
+
+    #[test]
+    fn bar_cache_key_parsing_4_part() {
+        // Simulates mt5:CC:SYMBOL:TF format
+        let key = "mt5:CC:AAPL:4Hour";
+        let parts: Vec<&str> = key.split(':').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[2], "AAPL");
+        assert!(is_equity_symbol(&parts[2].to_uppercase()));
+    }
+
+    #[test]
+    fn bar_cache_key_parsing_3_part() {
+        // Simulates mt5:SYMBOL:TF format (legacy)
+        let key = "mt5:MSFT:1Day";
+        let parts: Vec<&str> = key.split(':').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[1], "MSFT");
+        assert!(is_equity_symbol(&parts[1].to_uppercase()));
+    }
+
+    #[test]
+    fn bar_cache_key_filters_timeframe_not_symbol() {
+        // Ensure we don't accidentally extract timeframe as symbol
+        let key = "mt5:CC:SLV:15Min";
+        let parts: Vec<&str> = key.split(':').collect();
+        let sym = if parts.len() >= 4 { parts[2] } else { parts[1] };
+        assert_eq!(sym, "SLV");
+        assert!(is_equity_symbol(&sym.to_uppercase()));
+        // "15Min" should NOT pass as equity
+        assert!(!is_equity_symbol("15MIN"));
+    }
+
     // ── extract_xml_value ──────────────────────────────────────────
 
     #[test]
