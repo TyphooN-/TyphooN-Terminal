@@ -9750,6 +9750,7 @@ pub struct TyphooNApp {
     show_sec: bool,
     sec_selected_filing: Option<usize>,
     sec_tab: usize,  // 0=Filings, 1=Alerts
+    sec_active_only: bool, // filter SEC filings to active positions/charts only
     sec_filing_content: String,  // cached filing document text
     sec_filing_loading: bool,
     show_insider: bool,
@@ -12496,6 +12497,7 @@ impl TyphooNApp {
             show_sec: false,
             sec_selected_filing: None,
             sec_tab: 0,
+            sec_active_only: false,
             sec_filing_content: String::new(),
             sec_filing_loading: false,
             show_insider: false,
@@ -13291,6 +13293,32 @@ impl TyphooNApp {
         // Separator
         v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(0);
         v
+    }
+
+    /// Get all "active" symbols: chart tabs + open positions from ticked brokers + watchlist.
+    fn active_symbols(&self) -> Vec<String> {
+        let mut syms: Vec<String> = Vec::new();
+        let mut add = |s: &str| {
+            let t = s.split(':').rev().nth(1).or_else(|| s.split(':').last()).unwrap_or(s).to_uppercase();
+            if !t.is_empty() && !syms.contains(&t) { syms.push(t); }
+        };
+        // Chart symbols
+        if self.mtf_enabled {
+            for c in &self.charts { add(&c.symbol); }
+        } else if let Some(c) = self.charts.get(self.active_tab) {
+            add(&c.symbol);
+        }
+        // Alpaca positions
+        if self.show_alpaca_positions {
+            for p in &self.live_positions { add(&p.symbol); }
+        }
+        // TastyTrade positions
+        if self.show_tt_positions {
+            for p in &self.tt_positions { add(&p.symbol); }
+        }
+        // Watchlist
+        for s in &self.user_watchlist { add(s); }
+        syms
     }
 
     fn reload_symbol(&mut self, symbol: &str, tf: Timeframe) {
@@ -20217,11 +20245,13 @@ impl TyphooNApp {
 
         // SEC Filing Scanner — tabbed: Filings | Alerts | Detail
         if self.show_sec {
+            let sec_active_syms = if self.sec_active_only { self.active_symbols() } else { Vec::new() };
             egui::Window::new("SEC Filing Scanner")
                 .open(&mut self.show_sec)
                 .resizable(true).default_size([900.0, 650.0]).min_size([600.0, 200.0]).constrain(false)
                 .scroll([false, true])
                 .show(ctx, |ui| {
+                    let active_syms = &sec_active_syms;
                     let sec_high = egui::Color32::from_rgb(231, 76, 60);
                     let sec_med = egui::Color32::from_rgb(241, 196, 15);
                     let sec_low = egui::Color32::from_rgb(100, 100, 120);
@@ -20232,7 +20262,9 @@ impl TyphooNApp {
 
                     // ── Tab bar + scrape button ──
                     ui.horizontal(|ui| {
-                        let filing_count = self.bg.sec_filings.len();
+                        let filing_count = if self.sec_active_only {
+                            self.bg.sec_filings.iter().filter(|f| active_syms.iter().any(|s| f.ticker.eq_ignore_ascii_case(s))).count()
+                        } else { self.bg.sec_filings.len() };
                         let alert_count = self.bg.sec_alerts.len();
                         if ui.selectable_label(self.sec_tab == 0, egui::RichText::new(format!("Filings ({})", filing_count)).small()).clicked() { self.sec_tab = 0; }
                         if ui.selectable_label(self.sec_tab == 1, egui::RichText::new(format!("Alerts ({})", alert_count)).small()).clicked() { self.sec_tab = 1; }
@@ -20249,6 +20281,8 @@ impl TyphooNApp {
                             let _ = self.broker_tx.send(BrokerCmd::SecScrape { db_path });
                             self.log.push_back(LogEntry::info("SEC EDGAR scrape initiated..."));
                         }
+                        ui.separator();
+                        ui.checkbox(&mut self.sec_active_only, egui::RichText::new("Active Only").small());
                     });
                     ui.separator();
 
@@ -20274,7 +20308,12 @@ impl TyphooNApp {
                                         f.form_type.contains(ft)
                                     }
                                 });
-                                if pass { deduped.push(f); }
+                                if !pass { continue; }
+                                // Active Only filter: skip filings not in active symbols
+                                if self.sec_active_only && !active_syms.iter().any(|s| f.ticker.eq_ignore_ascii_case(s)) {
+                                    continue;
+                                }
+                                deduped.push(f);
                             }
                         }
 
@@ -21260,38 +21299,12 @@ impl TyphooNApp {
 
         // Fundamentals Viewer
         if self.show_fundamentals {
+            let fund_tickers = self.active_symbols();
             egui::Window::new("Fundamentals")
                 .open(&mut self.show_fundamentals)
                 .resizable(true).default_size([600.0, 550.0])
                 .show(ctx, |ui| {
-                    // Collect unique symbols: open charts + position symbols from ticked brokers
-                    let mut tickers: Vec<String> = Vec::new();
-                    // Charts (all if MTF, active if single)
-                    if self.mtf_enabled {
-                        for c in &self.charts {
-                            let s = c.symbol.clone();
-                            let t = s.split(':').rev().nth(1).or_else(|| s.split(':').last()).unwrap_or(&s).to_string();
-                            if !t.is_empty() && !tickers.contains(&t) { tickers.push(t); }
-                        }
-                    } else {
-                        let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
-                        let t = sym.split(':').rev().nth(1).or_else(|| sym.split(':').last()).unwrap_or(&sym).to_string();
-                        if !t.is_empty() { tickers.push(t); }
-                    }
-                    // Alpaca positions
-                    if self.show_alpaca_positions {
-                        for pos in &self.live_positions {
-                            let t = pos.symbol.to_uppercase();
-                            if !t.is_empty() && !tickers.contains(&t) { tickers.push(t); }
-                        }
-                    }
-                    // TastyTrade positions
-                    if self.show_tt_positions {
-                        for pos in &self.tt_positions {
-                            let t = pos.symbol.to_uppercase();
-                            if !t.is_empty() && !tickers.contains(&t) { tickers.push(t); }
-                        }
-                    }
+                    let tickers = fund_tickers.clone();
 
                     // Scrape All button when MTF grid
                     if tickers.len() > 1 {
