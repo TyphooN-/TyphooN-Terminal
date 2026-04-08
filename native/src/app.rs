@@ -1118,6 +1118,9 @@ struct ChartState {
     rsi_period: u32,
     atr_period: u32,
     bb_period: u32,
+    macd_fast: u32,
+    macd_slow: u32,
+    macd_signal_p: u32,
     stoch_period: u32,
     adx_period: u32,
     fisher_period: u32,
@@ -1336,6 +1339,9 @@ impl ChartState {
             rsi_period: 14,
             atr_period: 14,
             bb_period: 20,
+            macd_fast: 12,
+            macd_slow: 26,
+            macd_signal_p: 9,
             stoch_period: 14,
             adx_period: 14,
             fisher_period: 32,
@@ -1978,22 +1984,21 @@ impl ChartState {
 
                 // MACD — sequential GPU (warmup: 26 bars for EMA26, +9 for signal)
                 if let Some(data) = gpu.compute_macd_gpu() {
-                    let mut ml = Vec::with_capacity(n);
-                    let mut ms = Vec::with_capacity(n);
-                    let mut mh = Vec::with_capacity(n);
+                    // Reuse existing Vec allocations (clear + refill instead of new Vec)
+                    self.macd_line.clear(); self.macd_signal.clear(); self.macd_hist.clear();
+                    self.macd_line.reserve(n); self.macd_signal.reserve(n); self.macd_hist.reserve(n);
                     for i in 0..n {
                         let l = data.get(i * 3).copied().unwrap_or(0.0);
                         let s = data.get(i * 3 + 1).copied().unwrap_or(0.0);
                         let h = data.get(i * 3 + 2).copied().unwrap_or(0.0);
                         if i < 26 || (l == 0.0 && s == 0.0 && h == 0.0) {
-                            ml.push(None); ms.push(None); mh.push(None);
+                            self.macd_line.push(None); self.macd_signal.push(None); self.macd_hist.push(None);
                         } else {
-                            ml.push(Some(l as f64)); ms.push(Some(s as f64)); mh.push(Some(h as f64));
+                            self.macd_line.push(Some(l as f64)); self.macd_signal.push(Some(s as f64)); self.macd_hist.push(Some(h as f64));
                         }
                     }
-                    self.macd_line = ml; self.macd_signal = ms; self.macd_hist = mh;
                 } else {
-                    let (ml, ms, mh) = compute_macd(&self.bars, 12, 26, 9);
+                    let (ml, ms, mh) = compute_macd(&self.bars, self.macd_fast as usize, self.macd_slow as usize, self.macd_signal_p as usize);
                     self.macd_line = ml; self.macd_signal = ms; self.macd_hist = mh;
                 }
 
@@ -2376,7 +2381,7 @@ impl ChartState {
         self.fisher = f;
         self.fisher_signal = fs;
         self.atr = compute_atr(&self.bars, atr_p);
-        let (ml, ms, mh) = compute_macd(&self.bars, 12, 26, 9);
+        let (ml, ms, mh) = compute_macd(&self.bars, self.macd_fast as usize, self.macd_slow as usize, self.macd_signal_p as usize);
         self.macd_line = ml;
         self.macd_signal = ms;
         self.macd_hist = mh;
@@ -9230,7 +9235,8 @@ impl OrderBroker {
 }
 
 /// Messages sent from UI → async broker task.
-#[allow(dead_code)] // Some variants are handled but not all have UI triggers yet
+#[allow(dead_code)] // All variants are handled in broker task. Some lack dedicated UI buttons but are
+// accessible via console commands or research windows. See ADR-081 for tracking.
 enum BrokerCmd {
     Connect { api_key: String, secret: String, paper: bool },
     GetAccount,
@@ -16424,6 +16430,15 @@ impl TyphooNApp {
                             ui.end_row();
                             ui.label("Momentum:");
                             if ui.add(egui::DragValue::new(&mut chart.momentum_period).range(2..=100)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("MACD Fast:");
+                            if ui.add(egui::DragValue::new(&mut chart.macd_fast).range(2..=50)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("MACD Slow:");
+                            if ui.add(egui::DragValue::new(&mut chart.macd_slow).range(5..=100)).changed() { changed = true; }
+                            ui.end_row();
+                            ui.label("MACD Signal:");
+                            if ui.add(egui::DragValue::new(&mut chart.macd_signal_p).range(2..=50)).changed() { changed = true; }
                             ui.end_row();
                         });
                         if changed {
@@ -23970,6 +23985,12 @@ impl TyphooNApp {
                     });
                     ui.add_space(10.0);
                     ui.label(egui::RichText::new("TyphooN Terminal — Pure Rust GPU").color(ACCENT));
+                    ui.add_space(5.0);
+                    // GPU compute status
+                    let gpu_ind = if self.gpu_indicators.is_some() { "GPU Indicators: Active" } else { "GPU Indicators: CPU fallback" };
+                    let gpu_dar = if self.gpu_darwin.is_some() { "GPU DARWIN Analytics: Active" } else { "GPU DARWIN: CPU fallback" };
+                    ui.label(egui::RichText::new(gpu_ind).color(if self.gpu_indicators.is_some() { UP } else { DOWN }).small());
+                    ui.label(egui::RichText::new(gpu_dar).color(if self.gpu_darwin.is_some() { UP } else { DOWN }).small());
                 });
         }
 
