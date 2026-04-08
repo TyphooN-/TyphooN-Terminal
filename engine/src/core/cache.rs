@@ -229,6 +229,7 @@ impl SqliteCache {
             PRAGMA temp_store=MEMORY;
             PRAGMA mmap_size=268435456;
             PRAGMA auto_vacuum=INCREMENTAL;
+            PRAGMA wal_autocheckpoint=2000;
             PRAGMA busy_timeout=5000;
         ").map_err(|e| format!("SQLite pragma failed: {e}"))?;
 
