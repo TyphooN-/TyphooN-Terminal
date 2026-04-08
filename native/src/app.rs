@@ -25555,10 +25555,9 @@ impl eframe::App for TyphooNApp {
                     // Update forming bar close price + live bid/ask on matching charts
                     let last = (bid + ask) / 2.0;
                     if last > 0.0 {
-                        // Store to KV so LAN clients get live quotes
-                        if let Some(ref cache) = self.cache {
-                            let _ = cache.put_kv(&format!("quote:{}", symbol), &format!("{},{}", bid, ask));
-                        }
+                        // Live quotes stored in-memory only (chart.live_bid/ask).
+                        // Removed per-tick KV writes: 851 symbols × zstd compress + SQLite INSERT
+                        // was burning hundreds of SSD writes/sec during market hours.
                         for chart in &mut self.charts {
                             if chart.symbol.contains(&symbol) {
                                 chart.live_bid = bid;
