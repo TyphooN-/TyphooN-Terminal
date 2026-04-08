@@ -10050,6 +10050,9 @@ impl TyphooNApp {
                 Arc::new(tokio::sync::Mutex::new(None));
             let lan_remote_tx_ref = lan_remote_tx.clone();
             let mut lan_reconnect_handle: Option<tokio::task::AbortHandle> = None;
+            // Cached Yahoo session for watchlist extended hours (avoid re-auth every cycle)
+            let mut yahoo_session: Option<fundamentals::YahooSession> = None;
+            let mut yahoo_session_created: std::time::Instant = std::time::Instant::now();
             while let Some(cmd) = cmd_rx.recv().await {
                 // LAN client: forward external data-fetching commands to server
                 if lan_client.load(std::sync::atomic::Ordering::Relaxed) {
@@ -10262,8 +10265,12 @@ impl TyphooNApp {
                                     .map(|r| r.symbol.clone())
                                     .collect();
                                 if !equity_syms.is_empty() {
-                                    // Create authenticated Yahoo session (consent cookies + crumb)
-                                    if let Ok(session) = fundamentals::YahooSession::new().await {
+                                    // Reuse cached Yahoo session (recreate every 30 min to refresh cookies)
+                                    if yahoo_session.is_none() || yahoo_session_created.elapsed().as_secs() > 1800 {
+                                        yahoo_session = fundamentals::YahooSession::new().await.ok();
+                                        yahoo_session_created = std::time::Instant::now();
+                                    }
+                                    if let Some(ref session) = yahoo_session {
                                     let sym_list = equity_syms.join(",");
                                     let crumb_param = if session.crumb().is_empty() { String::new() } else { format!("&crumb={}", session.crumb()) };
                                     let url = format!(
@@ -29925,8 +29932,9 @@ impl eframe::App for TyphooNApp {
             }
         }
 
-        // Poll watchlist quotes every ~15 seconds (disabled for LAN client)
-        if self.frame_count % 60 == 5 && !self.user_watchlist.is_empty() && self.broker_connected && !self.lan_client_enabled && self.cache_loaded {
+        // Poll watchlist quotes every ~15 seconds at 60fps (900 frames). Disabled for LAN client.
+        // Includes Alpaca snapshot + Yahoo extended hours enrichment per cycle.
+        if self.frame_count % 900 == 5 && !self.user_watchlist.is_empty() && self.broker_connected && !self.lan_client_enabled && self.cache_loaded {
             let _ = self.broker_tx.send(BrokerCmd::GetWatchlistQuotes { symbols: self.user_watchlist.clone() });
         }
 
