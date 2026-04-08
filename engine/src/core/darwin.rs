@@ -1254,24 +1254,36 @@ pub fn get_darwin_correlations(conn: &Connection) -> Result<Vec<CorrelationEntry
             let (ref name_a, ref sa) = stats[i];
             let (ref name_b, ref sb) = stats[j];
 
-            // Single-pass covariance over common dates
+            // Pearson correlation over common dates only
+            // Must compute mean/var/cov over the SAME date set to guarantee result in [-1, 1]
             let corr = if i == j {
                 1.0
             } else {
-                let mut sum_ab = 0.0;
-                let mut count = 0usize;
+                // Collect paired returns for common dates
+                let mut pairs: Vec<(f64, f64)> = Vec::new();
                 for (date, &ret_a) in &sa.returns_by_date {
                     if let Some(&ret_b) = sb.returns_by_date.get(date) {
-                        sum_ab += (ret_a - sa.mean) * (ret_b - sb.mean);
-                        count += 1;
+                        pairs.push((ret_a, ret_b));
                     }
                 }
-                if count > 2 && sa.var > 0.0 && sb.var > 0.0 {
-                    let cov = sum_ab / (count as f64 - 1.0);
-                    cov / (sa.var.sqrt() * sb.var.sqrt())
-                } else {
-                    0.0
-                }
+                if pairs.len() > 2 {
+                    let n = pairs.len() as f64;
+                    let mean_a = pairs.iter().map(|(a, _)| a).sum::<f64>() / n;
+                    let mean_b = pairs.iter().map(|(_, b)| b).sum::<f64>() / n;
+                    let mut cov = 0.0;
+                    let mut var_a = 0.0;
+                    let mut var_b = 0.0;
+                    for &(a, b) in &pairs {
+                        let da = a - mean_a;
+                        let db = b - mean_b;
+                        cov += da * db;
+                        var_a += da * da;
+                        var_b += db * db;
+                    }
+                    if var_a > 0.0 && var_b > 0.0 {
+                        (cov / (var_a.sqrt() * var_b.sqrt())).clamp(-1.0, 1.0)
+                    } else { 0.0 }
+                } else { 0.0 }
             };
 
             result.push(CorrelationEntry { darwin_a: name_a.clone(), darwin_b: name_b.clone(), correlation: corr });
