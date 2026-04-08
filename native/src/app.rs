@@ -10250,25 +10250,25 @@ impl TyphooNApp {
                                 }
                             }
                             // Yahoo Finance enrichment for extended hours — returns preMarketPrice/postMarketPrice
-                            // Unlike Finnhub (which returns regular close as "current"), Yahoo has explicit ext hours fields.
+                            // Requires authenticated session (cookie jar + crumb) like fundamentals scraper.
                             {
-                                let client = reqwest::Client::builder()
-                                    .timeout(std::time::Duration::from_secs(5))
-                                    .build().unwrap_or_else(|_| reqwest::Client::new());
-                                // Batch all equity symbols into one Yahoo query (up to 20)
+                                // Batch all equity symbols into one Yahoo query
                                 let equity_syms: Vec<String> = rows.iter()
                                     .filter(|r| !r.symbol.contains('/') && !(r.symbol.ends_with("USD") && r.symbol.len() > 5))
                                     .map(|r| r.symbol.clone())
                                     .collect();
                                 if !equity_syms.is_empty() {
+                                    // Create authenticated Yahoo session (consent cookies + crumb)
+                                    if let Ok(session) = fundamentals::YahooSession::new().await {
                                     let sym_list = equity_syms.join(",");
+                                    let crumb_param = if session.crumb().is_empty() { String::new() } else { format!("&crumb={}", session.crumb()) };
                                     let url = format!(
-                                        "https://query1.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,preMarketPrice,preMarketChangePercent,postMarketPrice,postMarketChangePercent",
-                                        sym_list
+                                        "https://query2.finance.yahoo.com/v7/finance/quote?symbols={}&fields=regularMarketPrice,regularMarketPreviousClose,preMarketPrice,preMarketChangePercent,postMarketPrice,postMarketChangePercent{}",
+                                        sym_list, crumb_param
                                     );
                                     if let Ok(Ok(resp)) = tokio::time::timeout(
                                         std::time::Duration::from_secs(5),
-                                        client.get(&url).header("Accept", "application/json").send(),
+                                        session.client().get(&url).header("Accept", "application/json").send(),
                                     ).await {
                                         if let Ok(json) = resp.json::<serde_json::Value>().await {
                                             if let Some(results) = json["quoteResponse"]["result"].as_array() {
@@ -10311,6 +10311,7 @@ impl TyphooNApp {
                                             }
                                         }
                                     }
+                                    } // if let Ok(session)
                                 }
                             }
                             let _ = broker_msg_tx_clone.send(BrokerMsg::WatchlistQuotes(rows));

@@ -280,6 +280,11 @@ pub struct YahooSession {
 }
 
 impl YahooSession {
+    /// Get the authenticated HTTP client (with cookie jar).
+    pub fn client(&self) -> &reqwest::Client { &self.client }
+    /// Get the crumb token for API calls.
+    pub fn crumb(&self) -> &str { &self.crumb }
+
     /// Create a new authenticated Yahoo Finance session.
     /// Uses consent-bypass flow to get cookies + crumb token.
     pub async fn new() -> Result<Self, String> {
