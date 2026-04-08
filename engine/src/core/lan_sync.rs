@@ -838,7 +838,11 @@ async fn handle_client_tls(
                 if let Ok(msg) = send_msg(&SyncMessage::KvBatchComplete { count: count as usize }) {
                     let _ = sink.send(msg).await;
                 }
-                tracing::info!("LAN sync: sent {} KV entries to client (since_ts={})", count, since_ts);
+                if count > 0 {
+                    tracing::info!("LAN sync: sent {} KV entries to client (since_ts={})", count, since_ts);
+                } else {
+                    tracing::debug!("LAN sync: KV sync — 0 entries changed since ts={}", since_ts);
+                }
             }
             SyncMessage::RemoteRequest { cmd, args } => {
                 // Whitelist allowed remote commands — reject unknown commands
@@ -1438,11 +1442,12 @@ async fn client_sync_loop(
     // State flag: when true, binary frames are KV data (key+val); when false, bar data (key+ts+data)
     let mut expecting_kv_binary = false;
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
-    // Periodic re-sync: pull new bars/KV/tables every 30s.
-    // Server may have received new MT5 data, Alpaca bars, crypto backfill,
-    // fundamentals, etc. — 30s balances freshness vs bandwidth on LAN.
-    let mut resync_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    // Periodic re-sync: pull new bars/KV/tables every 60s.
+    // With hash-based KV dedup on the server, most re-syncs send zero entries.
+    // 60s is sufficient since positions/watchlist update infrequently.
+    let mut resync_interval = tokio::time::interval(std::time::Duration::from_secs(60));
     resync_interval.tick().await; // skip the first immediate tick (initial sync just completed)
+    let mut resync_count: u64 = 0;
     loop {
         tokio::select! {
             msg = stream.next() => {
@@ -1612,23 +1617,28 @@ async fn client_sync_loop(
                 }
             }
             _ = resync_interval.tick() => {
+                resync_count += 1;
                 // Periodic re-sync: pull only CHANGED data from server.
-                // Uses delta metadata (since_ts) to avoid sending 460KB of full metadata every 30s.
-                tracing::trace!("LAN sync: periodic re-sync — bars + KV + tables");
-                // Update bar_cache sync timestamp to current time (so next delta only gets newer entries)
+                tracing::trace!("LAN sync: periodic re-sync #{resync_count}");
+
+                // Bars: delta metadata (only entries updated since last sync)
                 let bar_since = cache.get_sync_ts("bar_cache");
                 let _ = cache.set_sync_ts("bar_cache", chrono::Utc::now().timestamp());
                 let _ = sink.send(send_msg(&SyncMessage::RequestMetaSince { since_ts: bar_since })?).await;
-                // KV: incremental since last sync timestamp (carries broker:*, darwin:* analytics)
+
+                // KV: incremental since last sync timestamp
                 expecting_kv_binary = true;
                 let kv_since = cache.get_sync_ts("kv_cache");
                 let _ = sink.send(send_msg(&SyncMessage::RequestKvData { since_ts: kv_since })?).await;
-                // Research tables: incremental
-                let table_requests: Vec<(String, i64)> = SYNCABLE_TABLES.iter().map(|tbl| {
-                    let since_ts = cache.get_sync_ts(&format!("table:{}", tbl));
-                    (tbl.to_string(), since_ts)
-                }).collect();
-                let _ = sink.send(send_msg(&SyncMessage::RequestTableSync { tables: table_requests })?).await;
+
+                // Research tables: only every 5th cycle (~5 min) — tables change rarely
+                if resync_count % 5 == 0 {
+                    let table_requests: Vec<(String, i64)> = SYNCABLE_TABLES.iter().map(|tbl| {
+                        let since_ts = cache.get_sync_ts(&format!("table:{}", tbl));
+                        (tbl.to_string(), since_ts)
+                    }).collect();
+                    let _ = sink.send(send_msg(&SyncMessage::RequestTableSync { tables: table_requests })?).await;
+                }
                 // NOTE: DARWIN deal import removed from periodic resync.
                 // All DARWIN analytics (positions, VaR, exposure, etc.) now sync via KV cache.
                 // The 45K deal import was 20+ seconds of CPU and produced wrong results on client.

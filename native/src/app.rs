@@ -9845,6 +9845,8 @@ pub struct TyphooNApp {
     scrape_crypto_last_msg: String,
     // Web server (phone access over LAN)
     web_server_running: bool,
+    /// Hash-based dedup for broker KV writes — skip put_kv if content unchanged
+    kv_write_hashes: std::collections::HashMap<String, u64>,
     web_cmd_rx: Option<tokio::sync::mpsc::UnboundedReceiver<typhoon_web_protocol::WebCmd>>,
     web_msg_tx: Option<tokio::sync::broadcast::Sender<typhoon_web_protocol::WebMsg>>,
     // DARWIN FTP browser
@@ -12589,6 +12591,7 @@ impl TyphooNApp {
             scrape_crypto_running: false,
             scrape_crypto_last_msg: String::new(),
             web_server_running: false,
+            kv_write_hashes: std::collections::HashMap::new(),
             web_cmd_rx: None,
             web_msg_tx: None,
             show_darwin_browser: false,
@@ -13320,6 +13323,21 @@ impl TyphooNApp {
         // Separator
         v.widgets.noninteractive.corner_radius = egui::CornerRadius::same(0);
         v
+    }
+
+    /// Write to KV cache only if content changed (hash-based dedup).
+    /// Reduces KV timestamp churn → less LAN sync traffic.
+    fn put_kv_dedup(&mut self, key: &str, json: &str) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        json.hash(&mut h);
+        let hash = h.finish();
+        if self.kv_write_hashes.get(key).copied() != Some(hash) {
+            if let Some(ref cache) = self.cache {
+                let _ = cache.put_kv(key, json);
+            }
+            self.kv_write_hashes.insert(key.to_string(), hash);
+        }
     }
 
     /// Get all "active" symbols: chart tabs + open positions from ticked brokers + watchlist.
@@ -25235,11 +25253,9 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 BrokerMsg::Account(acct) => {
-                    // Store to cache KV for LAN sync (clients get read-only view)
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(json) = serde_json::to_string(&acct) {
-                            let _ = cache.put_kv("broker:account", &json);
-                        }
+                    // Store to cache KV for LAN sync — dedup to avoid timestamp churn
+                    if let Ok(json) = serde_json::to_string(&acct) {
+                        self.put_kv_dedup("broker:account", &json);
                     }
                     // Broadcast to web clients
                     if let Some(ref tx) = self.web_msg_tx {
@@ -25257,10 +25273,8 @@ impl eframe::App for TyphooNApp {
                     self.live_account = Some(acct);
                 }
                 BrokerMsg::Positions(pos) => {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(json) = serde_json::to_string(&pos) {
-                            let _ = cache.put_kv("broker:positions", &json);
-                        }
+                    if let Ok(json) = serde_json::to_string(&pos) {
+                        self.put_kv_dedup("broker:positions", &json);
                     }
                     // Broadcast to web clients
                     if let Some(ref tx) = self.web_msg_tx {
@@ -25326,18 +25340,14 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 BrokerMsg::TastytradePositions(pos) => {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(json) = serde_json::to_string(&pos) {
-                            let _ = cache.put_kv("broker:tt_positions", &json);
-                        }
+                    if let Ok(json) = serde_json::to_string(&pos) {
+                        self.put_kv_dedup("broker:tt_positions", &json);
                     }
                     self.tt_positions = pos;
                 }
                 BrokerMsg::Orders(orders) => {
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(json) = serde_json::to_string(&orders) {
-                            let _ = cache.put_kv("broker:orders", &json);
-                        }
+                    if let Ok(json) = serde_json::to_string(&orders) {
+                        self.put_kv_dedup("broker:orders", &json);
                     }
                     // Broadcast to web clients
                     if let Some(ref tx) = self.web_msg_tx {
@@ -25414,10 +25424,8 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 BrokerMsg::WatchlistQuotes(rows) => {
-                    // Store to KV for LAN clients
-                    if let Some(ref cache) = self.cache {
-                        if let Ok(j) = serde_json::to_string(&rows) { let _ = cache.put_kv("broker:watchlist", &j); }
-                    }
+                    // Store to KV for LAN clients — dedup to avoid timestamp churn
+                    if let Ok(j) = serde_json::to_string(&rows) { self.put_kv_dedup("broker:watchlist", &j); }
                     // Update forming bars on all charts from watchlist prices
                     for row in &rows {
                         if row.last <= 0.0 { continue; }
