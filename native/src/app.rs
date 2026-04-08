@@ -30171,7 +30171,7 @@ impl eframe::App for TyphooNApp {
             // Runs every ~60s, one symbol per cycle = full rotation in ~10 minutes.
             if self.frame_count % 240 == 150 && self.frame_count > 0 {
                 let now_utc = chrono::Utc::now();
-                let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
+                let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).expect("EST offset is always valid"));
                 use chrono::Datelike;
                 let is_weekend = matches!(eastern.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
                 if is_weekend {
@@ -30196,7 +30196,7 @@ impl eframe::App for TyphooNApp {
             // Auto MT5 bar sync every ~60s on weekdays (smart: skips unchanged keys)
             if self.frame_count % 240 == 100 && self.frame_count > 0 {
                 let now_utc = chrono::Utc::now();
-                let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
+                let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).expect("EST offset is always valid"));
                 use chrono::Datelike;
                 let is_weekday = !matches!(eastern.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun);
                 if is_weekday {
@@ -30247,7 +30247,7 @@ impl eframe::App for TyphooNApp {
             // Runs on background thread to avoid blocking UI with detailed_stats + delete_key
             if self.frame_count == 1800 && self.frame_count > 0 {
                 let now_utc = chrono::Utc::now();
-                let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).unwrap_or(chrono::FixedOffset::east_opt(0).unwrap()));
+                let eastern = now_utc.with_timezone(&chrono::FixedOffset::west_opt(5 * 3600).expect("EST offset is always valid"));
                 use chrono::Datelike;
                 if eastern.weekday() == chrono::Weekday::Mon {
                     if let Some(cache) = self.cache.clone() {
