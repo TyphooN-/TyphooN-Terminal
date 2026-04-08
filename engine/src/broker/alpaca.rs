@@ -2057,9 +2057,11 @@ impl AlpacaBroker {
         } else {
             // Stock/ETF: v2/stocks/{symbol}/snapshot
             let url = format!("{}/v2/stocks/{}/snapshot", DATA_BASE, symbol);
+            // Use SIP feed for snapshots — includes extended hours (pre/post market) trades.
+            // IEX feed only reports regular session trades, missing pre/post market entirely.
             let resp = self.client.get(&url)
                 .headers(self.headers())
-                .query(&[("feed", "iex")])
+                .query(&[("feed", "sip")])
                 .send().await
                 .map_err(|e| format!("Snapshot failed: {e}"))?;
             if !resp.status().is_success() {
