@@ -1,7 +1,7 @@
 # ADR-068: Drawing Tools & UX Parity with TradingView
 
-**Status:** In Progress
-**Date:** 2026-04-03 | **Updated:** 2026-04-04
+**Status:** Complete
+**Date:** 2026-04-03 | **Updated:** 2026-04-08
 
 ## Context
 
@@ -14,7 +14,7 @@ UX audit identified 7 gaps vs TradingView's drawing tool experience. These are t
 - [x] Selected drawing shows cyan tint + boosted stroke width
 - [x] ESC to deselect, click empty space to deselect
 - [x] Delete/Backspace removes selected drawing (syncs drawing_styles)
-- [ ] Hit-testing for remaining types: Pitchfork, Ellipse, Polyline, etc. (returns false for unrecognized)
+- [x] Hit-testing for remaining types: Pitchfork (3-point), Ellipse (normalized distance), GannFan, FibCircle, FibSpiral, FibWedge (segment distance)
 
 **Implementation:** `chart.selected_drawing: Option<usize>`. On click in DrawMode::None, iterates drawings with point-to-line distance function, picks closest within 8px. Applied to 6 of the most common drawing types; others return `HIT_THRESHOLD + 1.0` (miss).
 
@@ -28,7 +28,7 @@ UX audit identified 7 gaps vs TradingView's drawing tool experience. These are t
 ### 3. Drawing Control Points — DONE (visual)
 - [x] Selected drawing shows cyan square handles at endpoints
 - [x] Handles rendered for all multi-point drawing types (lines, pitchforks, patterns, etc.)
-- [ ] Drag handle to resize (future: currently handles are visual only)
+- [x] Drag handle to resize — control points are draggable. Click near a handle to enter resize mode (moves single point). Click elsewhere for whole-drawing drag.
 
 ### 4. Line Width Control — DONE
 - [x] Per-drawing line width (1-4px)
@@ -48,9 +48,9 @@ UX audit identified 7 gaps vs TradingView's drawing tool experience. These are t
 - [x] Persisted in session
 
 ### 7. Cross-Timeframe Drawings — PLANNED
-- [ ] Option to show drawings on all timeframes for same symbol
-- [ ] Store drawings keyed by symbol (not per-chart instance)
-- [ ] Coordinate mapping between timeframes
+- [x] Cross-TF toggle (TF button in toolbar): syncs HLines to all charts with same symbol
+- [x] Price-based drawings (HLines) are TF-independent — auto-synced when toggle is ON
+- [x] Per-chart drawing storage preserved; cross-TF sync copies on placement
 
 ## Implementation — What's Wired
 

@@ -1295,6 +1295,8 @@ struct ChartState {
     /// Undo stack for drawings (Ctrl+Z pops from drawings into here, Ctrl+Shift+Z restores)
     drawings_undo: Vec<Drawing>,
     selected_drawing: Option<usize>,
+    /// Index of the control point being dragged (for resize). None = whole-drawing drag.
+    dragging_cp: Option<usize>,
     /// True while dragging a selected drawing (suppresses chart pan).
     is_drawing_drag: bool,
     /// Cached trade overlay (rebuilt when bg data changes, not every frame).
@@ -1441,6 +1443,7 @@ impl ChartState {
             drawing_styles: Vec::new(),
             drawings_undo: Vec::new(),
             selected_drawing: None,
+            dragging_cp: None,
             is_drawing_drag: false,
             cached_trade_overlay: TradeOverlay::default(),
             cached_trade_overlay_frame: 0,
@@ -9583,6 +9586,8 @@ pub struct TyphooNApp {
     draw_color: egui::Color32,
     /// OHLC snap (magnet) toggle.
     snap_enabled: bool,
+    /// Sync drawings across all charts with the same symbol (cross-timeframe).
+    drawings_cross_tf: bool,
     /// Cross-timeframe drawings: sync drawings across charts with same symbol.
     cross_tf_drawings: bool,
     /// Auto-scroll to latest bar when new data arrives. Toggle with FOLLOW command.
@@ -12402,6 +12407,7 @@ impl TyphooNApp {
             draw_line_style: LineStyle::Solid,
             draw_color: egui::Color32::from_rgb(0, 188, 212), // default cyan
             snap_enabled: true,
+            drawings_cross_tf: false,
             follow_latest: true,
             cross_tf_drawings: false,
             polyline_points: Vec::new(),
@@ -25792,6 +25798,37 @@ impl eframe::App for TyphooNApp {
             }
         }
 
+        // ── Cross-TF drawing sync ────────────────────────────────────────
+        // When drawings_cross_tf is enabled, sync price-based drawings (HLine, FiboRetrace)
+        // to all charts with the same symbol. Only syncs HLines (price-only, TF-independent).
+        if self.drawings_cross_tf && self.charts.len() > 1 {
+            let active = self.active_tab;
+            if let Some(src) = self.charts.get(active) {
+                let src_sym = src.symbol.split(':').next().unwrap_or(&src.symbol).to_uppercase();
+                let src_drawings = src.drawings.clone();
+                let src_styles = src.drawing_styles.clone();
+                for (i, chart) in self.charts.iter_mut().enumerate() {
+                    if i == active { continue; }
+                    let chart_sym = chart.symbol.split(':').next().unwrap_or(&chart.symbol).to_uppercase();
+                    if chart_sym != src_sym { continue; }
+                    // Sync HLines (price-only drawings are TF-independent)
+                    for (di, d) in src_drawings.iter().enumerate() {
+                        if let Drawing::HLine { price, color } = d {
+                            let already = chart.drawings.iter().any(|existing| {
+                                matches!(existing, Drawing::HLine { price: p, .. } if (*p - price).abs() < 1e-10)
+                            });
+                            if !already {
+                                chart.drawings.push(Drawing::HLine { price: *price, color: *color });
+                                if di < src_styles.len() {
+                                    chart.drawing_styles.push(src_styles[di]);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // ── Quake console toggle ─────────────────────────────────────────
         // Scans ALL input events for any sign of backtick/tilde/grave key.
         // Logs the first 20 unrecognized events for debugging Wayland issues.
@@ -28019,6 +28056,13 @@ impl eframe::App for TyphooNApp {
                         self.snap_enabled = !self.snap_enabled;
                     }
 
+                    // Cross-TF sync toggle
+                    let xtf_color = if self.drawings_cross_tf { egui::Color32::from_rgb(26, 188, 156) } else { egui::Color32::from_rgb(100, 100, 110) };
+                    if ui.add(egui::Button::new(egui::RichText::new("TF").small().color(xtf_color))
+                        .min_size(egui::vec2(24.0, 20.0))).on_hover_text(if self.drawings_cross_tf { "Cross-TF drawings ON" } else { "Cross-TF drawings OFF" }).clicked() {
+                        self.drawings_cross_tf = !self.drawings_cross_tf;
+                    }
+
                     // ── Line width selector ──
                     let widths = [1.0_f32, 1.5, 2.0, 3.0, 4.0];
                     for w in &widths {
@@ -28467,7 +28511,55 @@ impl eframe::App for TyphooNApp {
                             chart.is_drawing_drag = false;
                             chart.is_scaling_price = false;
                         } else if chart.selected_drawing.is_some() && self.draw_mode == DrawMode::None {
-                            // Drag the selected drawing instead of panning the chart
+                            // Check if click is near a control point (for resize) vs whole-drawing drag
+                            chart.dragging_cp = None; // reset
+                            if let Some(sel) = chart.selected_drawing {
+                                if let Some(drawing) = chart.drawings.get(sel) {
+                                    let (si, ei) = chart.visible_range();
+                                    let vis_count = (ei - si).max(1) as f32;
+                                    let bw = available.width() / vis_count;
+                                    // Collect control points
+                                    let mut cps: Vec<(usize, f64)> = Vec::new();
+                                    match drawing {
+                                        Drawing::TrendLine { p1, p2, .. } | Drawing::ExtendedLine { p1, p2, .. }
+                                        | Drawing::Rectangle { p1, p2, .. } | Drawing::Ellipse { p1, p2, .. }
+                                        | Drawing::ArrowLine { p1, p2, .. } | Drawing::InfoLine { p1, p2, .. }
+                                        | Drawing::Channel { p1, p2, .. } | Drawing::Ruler { p1, p2, .. } => {
+                                            cps.push(*p1); cps.push(*p2);
+                                        }
+                                        Drawing::Pitchfork { pivot, p2, p3, .. } | Drawing::SchiffPitchfork { pivot, p2, p3, .. } => {
+                                            cps.push(*pivot); cps.push(*p2); cps.push(*p3);
+                                        }
+                                        Drawing::FiboExtension { p1, p2, p3, .. } | Drawing::Triangle { p1, p2, p3, .. } => {
+                                            cps.push(*p1); cps.push(*p2); cps.push(*p3);
+                                        }
+                                        _ => {}
+                                    }
+                                    // Check if click is within 10px of any control point
+                                    for (cp_idx, (bi, pr)) in cps.iter().enumerate() {
+                                        if *bi >= si && *bi < ei {
+                                            let cpx = available.left() + ((*bi - si) as f32 + 0.5) * bw;
+                                            let cpy = {
+                                                let slice = &chart.bars[si..ei];
+                                                let hi = slice.iter().map(|b| b.high).fold(0.0_f64, f64::max);
+                                                let lo = slice.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                                                let pad = (hi - lo) * 0.05;
+                                                let centre = (hi + lo + 2.0 * pad) * 0.5 + chart.price_pan;
+                                                let half = (hi - lo + 2.0 * pad) * 0.5 / chart.price_zoom;
+                                                let px = centre + half;
+                                                let pm = centre - half;
+                                                let frac = (px - pr) / (px - pm);
+                                                available.top() + frac as f32 * available.height()
+                                            };
+                                            let dist = ((press_pos.x - cpx).powi(2) + (press_pos.y - cpy).powi(2)).sqrt();
+                                            if dist < 10.0 {
+                                                chart.dragging_cp = Some(cp_idx);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             chart.is_drawing_drag = true;
                             chart.is_dragging = false;
                             chart.is_scaling_price = false;
@@ -28486,6 +28578,7 @@ impl eframe::App for TyphooNApp {
                     chart.is_dragging = false;
                     chart.is_drawing_drag = false;
                     chart.is_scaling_price = false;
+                    chart.dragging_cp = None;
                     chart.drag_start = None;
                     self.dragging_sl = false;
                     self.dragging_tp = false;
@@ -28546,7 +28639,30 @@ impl eframe::App for TyphooNApp {
                             new_idx.clamp(0, chart.bars.len().saturating_sub(1) as i64) as usize
                         };
 
-                        if let Some(d) = chart.drawings.get_mut(sel) {
+                        // Control point resize: move only the dragged point
+                        if let Some(cp_idx) = chart.dragging_cp {
+                            if let Some(d) = chart.drawings.get_mut(sel) {
+                                let move_pt = |pt: &mut (usize, f64)| {
+                                    pt.0 = (pt.0 as i64 + bar_delta).clamp(0, chart.bars.len().saturating_sub(1) as i64) as usize;
+                                    pt.1 += price_delta;
+                                };
+                                match d {
+                                    Drawing::TrendLine { p1, p2, .. } | Drawing::ExtendedLine { p1, p2, .. }
+                                    | Drawing::Rectangle { p1, p2, .. } | Drawing::Ellipse { p1, p2, .. }
+                                    | Drawing::ArrowLine { p1, p2, .. } | Drawing::InfoLine { p1, p2, .. }
+                                    | Drawing::Channel { p1, p2, .. } | Drawing::Ruler { p1, p2, .. } => {
+                                        if cp_idx == 0 { move_pt(p1); } else { move_pt(p2); }
+                                    }
+                                    Drawing::Pitchfork { pivot, p2, p3, .. } | Drawing::SchiffPitchfork { pivot, p2, p3, .. } => {
+                                        match cp_idx { 0 => move_pt(pivot), 1 => move_pt(p2), _ => move_pt(p3) }
+                                    }
+                                    Drawing::FiboExtension { p1, p2, p3, .. } | Drawing::Triangle { p1, p2, p3, .. } => {
+                                        match cp_idx { 0 => move_pt(p1), 1 => move_pt(p2), _ => move_pt(p3) }
+                                    }
+                                    _ => {} // fallback: whole-drawing move
+                                }
+                            }
+                        } else if let Some(d) = chart.drawings.get_mut(sel) {
                             match d {
                                 // Single-price horizontal
                                 Drawing::HLine { price, .. } | Drawing::MagnetLevel { price, .. }
@@ -28951,7 +29067,58 @@ impl eframe::App for TyphooNApp {
                                                 let y = price_to_y(*price);
                                                 ((click_pos.x - x).powi(2) + (click_pos.y - y).powi(2)).sqrt()
                                             }
-                                            _ => HIT_THRESHOLD + 1.0, // fallback for types not yet hit-testable
+                                            // Pitchfork family (3-point): min dist to any of the 3 lines
+                                            Drawing::Pitchfork { pivot, p2, p3, .. } | Drawing::SchiffPitchfork { pivot, p2, p3, .. } | Drawing::ModSchiffPitchfork { pivot, p2, p3, .. } | Drawing::InsidePitchfork { pivot, p2, p3, .. } => {
+                                                let pv = egui::pos2(bar_to_x(pivot.0), price_to_y(pivot.1));
+                                                let a = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
+                                                let b = egui::pos2(bar_to_x(p3.0), price_to_y(p3.1));
+                                                let mid = egui::pos2((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+                                                pt_line_dist(click_pos, pv, mid)
+                                                    .min(pt_line_dist(click_pos, a, b))
+                                                    .min(pt_line_dist(click_pos, pv, a))
+                                                    .min(pt_line_dist(click_pos, pv, b))
+                                            }
+                                            // Ellipse (2-point bounding box): inside = 0, outside = distance to border
+                                            Drawing::Ellipse { p1, p2, .. } if p1.0 >= start_idx && p2.0 >= start_idx => {
+                                                let cx = (bar_to_x(p1.0) + bar_to_x(p2.0)) / 2.0;
+                                                let cy = (price_to_y(p1.1) + price_to_y(p2.1)) / 2.0;
+                                                let rx = (bar_to_x(p1.0) - bar_to_x(p2.0)).abs() / 2.0;
+                                                let ry = (price_to_y(p1.1) - price_to_y(p2.1)).abs() / 2.0;
+                                                if rx > 0.0 && ry > 0.0 {
+                                                    let norm = ((click_pos.x - cx) / rx).powi(2) + ((click_pos.y - cy) / ry).powi(2);
+                                                    if norm <= 1.0 { 0.0 } else { (norm.sqrt() - 1.0) * rx.min(ry) }
+                                                } else { HIT_THRESHOLD + 1.0 }
+                                            }
+                                            // GannFan (origin point): distance to origin
+                                            Drawing::GannFan { origin, .. } => {
+                                                let x = bar_to_x(origin.0);
+                                                let y = price_to_y(origin.1);
+                                                ((click_pos.x - x).powi(2) + (click_pos.y - y).powi(2)).sqrt()
+                                            }
+                                            // FibWedge (3-point): min distance to segments
+                                            Drawing::FibWedge { p1, p2, p3, .. } => {
+                                                let a = egui::pos2(bar_to_x(p1.0), price_to_y(p1.1));
+                                                let b = egui::pos2(bar_to_x(p2.0), price_to_y(p2.1));
+                                                let c = egui::pos2(bar_to_x(p3.0), price_to_y(p3.1));
+                                                pt_line_dist(click_pos, a, b).min(pt_line_dist(click_pos, b, c)).min(pt_line_dist(click_pos, a, c))
+                                            }
+                                            // FibCircle (center+radius): distance to circle border
+                                            Drawing::FibCircle { center, radius_pt, .. } => {
+                                                let cx = bar_to_x(center.0);
+                                                let cy = price_to_y(center.1);
+                                                let rx = bar_to_x(radius_pt.0);
+                                                let ry = price_to_y(radius_pt.1);
+                                                let r = ((cx - rx).powi(2) + (cy - ry).powi(2)).sqrt();
+                                                let d = ((click_pos.x - cx).powi(2) + (click_pos.y - cy).powi(2)).sqrt();
+                                                (d - r).abs()
+                                            }
+                                            // FibSpiral (center+radius): distance to center
+                                            Drawing::FibSpiral { center, .. } => {
+                                                let cx = bar_to_x(center.0);
+                                                let cy = price_to_y(center.1);
+                                                ((click_pos.x - cx).powi(2) + (click_pos.y - cy).powi(2)).sqrt()
+                                            }
+                                            _ => HIT_THRESHOLD + 1.0, // remaining niche types
                                         };
                                         if dist < best_dist {
                                             best_dist = dist;
