@@ -27017,23 +27017,26 @@ impl eframe::App for TyphooNApp {
                                 ui.label(egui::RichText::new("No open positions.").color(AXIS_TEXT).small());
                             }
 
-                            // ── Recent Fills ──────────────────────────────────
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new("Recent Fills").color(AXIS_TEXT).small().strong());
-                            ui.separator();
-                            if self.recent_fills.is_empty() {
-                                ui.label(egui::RichText::new("No recent fills.").color(AXIS_TEXT).small());
-                            } else {
-                                for (sym, side, qty, price, time) in &self.recent_fills {
-                                    let c = if side == "buy" { UP } else { DOWN };
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(sym).small().strong());
-                                        ui.label(egui::RichText::new(side).color(c).small());
-                                        ui.label(egui::RichText::new(format!("{:.2}@{}", qty, format_price(*price))).small());
-                                        ui.label(egui::RichText::new(time).color(AXIS_TEXT).small());
-                                    });
-                                }
-                            }
+                            // ── Recent Fills (collapsible) ────────────────────
+                            let fills_count = self.recent_fills.len();
+                            egui::CollapsingHeader::new(egui::RichText::new(format!("Recent Fills ({})", fills_count)).strong().small())
+                                .id_salt("recent_fills_section")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    if self.recent_fills.is_empty() {
+                                        ui.label(egui::RichText::new("No recent fills.").color(AXIS_TEXT).small());
+                                    } else {
+                                        for (sym, side, qty, price, time) in &self.recent_fills {
+                                            let c = if side == "buy" { UP } else { DOWN };
+                                            ui.horizontal(|ui| {
+                                                ui.label(egui::RichText::new(sym).small().strong());
+                                                ui.label(egui::RichText::new(side).color(c).small());
+                                                ui.label(egui::RichText::new(format!("{:.2}@{}", qty, format_price(*price))).small());
+                                                ui.label(egui::RichText::new(time).color(AXIS_TEXT).small());
+                                            });
+                                        }
+                                    }
+                                });
                         });
 
                     // ── Orders Section ────────────────────────────────────
