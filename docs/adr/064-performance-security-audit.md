@@ -1,6 +1,6 @@
 # ADR-064: Performance & Security Audit
 
-**Status:** Complete | **Date:** 2026-03-28 | **Updated:** 2026-04-05
+**Status:** Complete | **Date:** 2026-03-28 | **Updated:** 2026-04-08
 
 ## Context
 
@@ -164,3 +164,24 @@ No per-frame throttling by window state — expensive operations eliminated inst
 - Replaced expect() in HMAC init — graceful fallback instead of panic.
 - Confirmed: zero unsafe blocks, zero SQL injection, zero hardcoded secrets, all credentials in OS keyring, message size limits enforced, remote command whitelist in place.
 - Remaining recommendations: Zeroizing<String> for credential fields in AppState (medium priority).
+
+**Security Hardening (2026-04-07/08):**
+- Kraken API secret now uses `Zeroizing<String>` — zeroized on drop, prevents plaintext in memory dumps.
+- Yahoo Finance ticker validated (alphanumeric + dots/hyphens, max 20 chars) before URL construction — prevents URL injection.
+- SEC CIK validated (numeric only) before EDGAR URL construction.
+- Hardcoded `/home/typhoon/` path in darwin radar export replaced with `$HOME`-based resolution.
+- See ADR-073 for WASM web server security model (TLS, passphrase auth, rate limiting, connection limits).
+
+**Performance Optimizations (2026-04-07/08):**
+- Correlation matrix: single-pass mean/variance pre-compute, single-pass covariance per pair (was 5 passes). Self-correlation short-circuits to 1.0.
+- DARWIN import: transaction batching (BEGIN IMMEDIATE/COMMIT wraps all DELETE+INSERT, ~20-40x faster for 46K deals). `prepare_cached()` for statement reuse. HashSet for O(1) blacklist lookups.
+- GPU indicator upload: single-loop bar extraction with pre-allocated Vecs (was 4 separate collect passes).
+- BarCacheWriter v1.439: sorted demand lookup (O(log n) binary search), specs caching (SpecsCacheMin=60min), per-line CSV build, pre-prepared metadata SQL statements, pre-allocated demand arrays with exponential doubling.
+
+**Analytics Fixes (2026-04-07/08):**
+- win_rate double-multiply bug fixed across 5 UI locations (engine stores 0-100, UI was multiplying again).
+- Tail ratio: use abs() on both numerator and denominator.
+- Kurtosis: sample-corrected Fisher adjustment formula.
+- Profit factor: capped at 999.0 (was f64::INFINITY, broke JSON serialization).
+- D-Score: all 6 components clamped to [0,10], total to [0,100].
+- Sortino/Calmar: return 99.0 for perfect records (was returning 0).

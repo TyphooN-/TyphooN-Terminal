@@ -2075,7 +2075,9 @@ pub fn export_radar_txt(_conn: &Connection, cache_conn: &Connection, output_dir:
         .map_err(|e| format!("Write raw failed: {e}"))?;
 
     // Export to MarketWizardry.org darwinex-radar directory (web-compatible snapshots)
-    let mw_dir = std::path::Path::new("/home/typhoon/git/MarketWizardry.org/darwinex-radar");
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let mw_dir_path = std::path::PathBuf::from(home).join("git/MarketWizardry.org/darwinex-radar");
+    let mw_dir = mw_dir_path.as_path();
     if mw_dir.exists() {
         let mw_timestamp = chrono::Utc::now().format("%Y.%m.%d").to_string();
         if !stocks.is_empty() {

@@ -1,7 +1,7 @@
 # ADR-054: Fundamentals Engine (Enterprise Value, Earnings, Dividends)
 
 **Status:** Implemented
-**Date:** 2026-03-26 | **Updated:** 2026-04-05
+**Date:** 2026-03-26 | **Updated:** 2026-04-08
 
 ## Context
 
@@ -85,3 +85,19 @@ MT5 cache keys are `"mt5:CC:SLV:4Hour"`. The module parses these and filters out
 - SEC XBRL only available for US-listed companies
 - Non-US Darwinex symbols (forex CFDs) will have no fundamentals data
 - Initial batch scrape of ~800+ symbols takes ~5 minutes at 300ms rate limit
+
+## Updates (2026-04-08)
+
+### Permanent Failure Blocklist
+`scrape_failures` table stores symbols that return 404/Not Found from Yahoo. These are permanently skipped on future scrape runs, avoiding wasted API calls on delisted or non-existent symbols.
+
+### Rate Limit Cooldown
+When Yahoo returns HTTP 429 (Too Many Requests), the scraper automatically pauses for 60 seconds, then retries the failed ticker before continuing. Previously, 10 consecutive failures would abort the entire batch.
+
+### Per-Broker Scrape Buttons
+Scrape Status Dashboard now has individual buttons: "MT5 Only", "Alpaca Only", "TastyTrade Only", "All Sources". Each sends `BrokerCmd::FundamentalsScrape` with the appropriate `use_mt5/use_alpaca/use_tastytrade` flags.
+
+### Symbol Sources
+`FundamentalsScrape` carries three boolean flags: `use_mt5`, `use_alpaca`, `use_tastytrade`. MT5 symbols extracted from `bar_cache` keys (`mt5:CC:SYMBOL:TF`). Alpaca symbols from `broker.get_all_assets()`. TastyTrade symbols from `tt.get_positions()`.
+
+See also: ADR-075 (SwapHarvester), ADR-076 (DarwinexRadar), ADR-077 (Screener)

@@ -24879,10 +24879,17 @@ impl eframe::App for TyphooNApp {
                             self.bg.open_positions = pos;
                         }
                     }
-                    // Watchlist quotes from server (reload every cycle for live updates)
+                    // Watchlist quotes from server — only use server data for symbols the client wants
                     if let Ok(Some(json)) = cache.get_kv("broker:watchlist") {
                         if let Ok(rows) = serde_json::from_str::<Vec<WatchlistRow>>(&json) {
-                            self.watchlist_rows = rows;
+                            if self.user_watchlist.is_empty() {
+                                self.watchlist_rows = rows;
+                            } else {
+                                // Filter server rows to only the client's local watchlist
+                                self.watchlist_rows = rows.into_iter()
+                                    .filter(|r| self.user_watchlist.iter().any(|w| r.symbol.contains(w) || w.contains(&r.symbol)))
+                                    .collect();
+                            }
                         }
                     }
                 }

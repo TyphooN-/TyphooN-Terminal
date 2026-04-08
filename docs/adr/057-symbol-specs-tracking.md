@@ -100,3 +100,5 @@ MT5 → BarCacheWriter → typhoon_mt5_cache.db (specs table)
 - Additional DB storage (~1KB per symbol per day × 900 symbols = ~900KB/day, ~330MB/year)
 - BarCacheWriter EA needs update and redeployment to all MT5 instances
 - Spec snapshot adds ~100ms to daily BarCacheWriter cycle
+
+See also: ADR-075 (SwapHarvester — scans specs for positive swap), ADR-076 (DarwinexRadar — changelog from spec snapshots)
