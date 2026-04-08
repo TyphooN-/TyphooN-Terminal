@@ -21264,9 +21264,54 @@ impl TyphooNApp {
                 .open(&mut self.show_fundamentals)
                 .resizable(true).default_size([600.0, 550.0])
                 .show(ctx, |ui| {
-                    let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
-                    let ticker = sym.split(':').rev().nth(1).or_else(|| sym.split(':').last()).unwrap_or(&sym).to_string();
-                    let found = self.bg.all_fundamentals.iter().find(|f| f.symbol == ticker).cloned();
+                    // Collect unique symbols: open charts + position symbols from ticked brokers
+                    let mut tickers: Vec<String> = Vec::new();
+                    // Charts (all if MTF, active if single)
+                    if self.mtf_enabled {
+                        for c in &self.charts {
+                            let s = c.symbol.clone();
+                            let t = s.split(':').rev().nth(1).or_else(|| s.split(':').last()).unwrap_or(&s).to_string();
+                            if !t.is_empty() && !tickers.contains(&t) { tickers.push(t); }
+                        }
+                    } else {
+                        let sym = self.charts.get(self.active_tab).map(|c| c.symbol.clone()).unwrap_or_default();
+                        let t = sym.split(':').rev().nth(1).or_else(|| sym.split(':').last()).unwrap_or(&sym).to_string();
+                        if !t.is_empty() { tickers.push(t); }
+                    }
+                    // Alpaca positions
+                    if self.show_alpaca_positions {
+                        for pos in &self.live_positions {
+                            let t = pos.symbol.to_uppercase();
+                            if !t.is_empty() && !tickers.contains(&t) { tickers.push(t); }
+                        }
+                    }
+                    // TastyTrade positions
+                    if self.show_tt_positions {
+                        for pos in &self.tt_positions {
+                            let t = pos.symbol.to_uppercase();
+                            if !t.is_empty() && !tickers.contains(&t) { tickers.push(t); }
+                        }
+                    }
+
+                    // Scrape All button when MTF grid
+                    if tickers.len() > 1 {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(format!("Fundamentals: {} symbols", tickers.len())).strong());
+                            if ui.add(egui::Button::new("Scrape All").fill(BTN_BLUE)).clicked() {
+                                for t in &tickers {
+                                    if !t.is_empty() {
+                                        let mut db_path = dirs_home(); db_path.push("cache"); db_path.push("typhoon_cache.db");
+                                        let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrapeOne { ticker: t.clone(), db_path });
+                                    }
+                                }
+                                self.log.push_back(LogEntry::info(format!("Scraping fundamentals for {} symbols...", tickers.len())));
+                            }
+                        });
+                        ui.separator();
+                    }
+
+                    for ticker in &tickers {
+                    let found = self.bg.all_fundamentals.iter().find(|f| f.symbol == *ticker).cloned();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("Fundamentals: {}", ticker)).strong());
                         if ui.add(egui::Button::new("Scrape / Refresh").fill(BTN_BLUE)).clicked() && !ticker.is_empty() {
@@ -21394,8 +21439,10 @@ impl TyphooNApp {
                             ui.label(egui::RichText::new(format!("Last updated: {}", if f.last_updated.is_empty() { "never" } else { &f.last_updated })).color(AXIS_TEXT).small());
                         });
                     } else {
-                        ui.label(egui::RichText::new("No fundamentals data. Run EVSCRAPE command or click Scrape/Refresh.").color(AXIS_TEXT));
+                        ui.label(egui::RichText::new("No fundamentals data. Click Scrape/Refresh.").color(AXIS_TEXT));
                     }
+                    if tickers.len() > 1 { ui.separator(); }
+                    } // end for ticker in &tickers
                 });
         }
 
