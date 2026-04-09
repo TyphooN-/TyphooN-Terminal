@@ -135,7 +135,7 @@ pub fn unpack_bars_raw(data: &[u8]) -> Result<Vec<(i64, f64, f64, f64, f64, f64)
 
 /// Extract last and second-to-last bar timestamps from binary data (for metadata columns).
 /// Returns (second_last_ts_rfc3339, last_ts_rfc3339) or empty strings if not enough bars.
-fn extract_tail_timestamps(binary: &[u8], count: usize) -> (Option<String>, Option<String>) {
+fn get_last_two_bar_timestamps(binary: &[u8], count: usize) -> (Option<String>, Option<String>) {
     let required = match count.checked_mul(BYTES_PER_BAR).and_then(|n| n.checked_add(8)) {
         Some(n) => n,
         None => return (None, None),
@@ -324,7 +324,7 @@ impl SqliteCache {
         let bar_count = u32::from_le_bytes(
             binary[4..8].try_into().map_err(|_| "bar_count header slice failed")?
         ) as i64;
-        let (second_last_ts, last_ts) = extract_tail_timestamps(&binary, bar_count as usize);
+        let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count as usize);
         let zstd_level = 3i32;
         let compressed = zstd::encode_all(binary.as_slice(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
@@ -766,7 +766,7 @@ impl SqliteCache {
         let bar_count = u32::from_le_bytes(
             binary[4..8].try_into().map_err(|_| "bar_count header slice failed in put_bars_fast")?
         ) as i64;
-        let (second_last_ts, last_ts) = extract_tail_timestamps(&binary, bar_count as usize);
+        let (second_last_ts, last_ts) = get_last_two_bar_timestamps(&binary, bar_count as usize);
         let zstd_level = 3i32;
         let compressed = zstd::encode_all(binary.as_slice(), zstd_level)
             .map_err(|e| format!("zstd compress failed: {e}"))?;
@@ -1773,7 +1773,7 @@ mod tests {
         assert_eq!(tail.len(), 1);
     }
 
-    // ---- extract_tail_timestamps tests ----
+    // ---- get_last_two_bar_timestamps tests ----
 
     #[test]
     fn extract_tail_timestamps_two_bars() {
@@ -1782,7 +1782,7 @@ mod tests {
             (1_705_100_000_000i64, 2.0, 3.0, 1.5, 2.5, 200.0),
         ];
         let binary = make_binary_bars(&bars);
-        let (second, last) = extract_tail_timestamps(&binary, 2);
+        let (second, last) = get_last_two_bar_timestamps(&binary, 2);
         assert!(second.is_some());
         assert!(last.is_some());
         // second_last should correspond to first bar's timestamp
@@ -1796,7 +1796,7 @@ mod tests {
     fn extract_tail_timestamps_single_bar_returns_none() {
         let bars = vec![(1_705_000_000_000i64, 1.0, 2.0, 0.5, 1.5, 100.0)];
         let binary = make_binary_bars(&bars);
-        let (second, last) = extract_tail_timestamps(&binary, 1);
+        let (second, last) = get_last_two_bar_timestamps(&binary, 1);
         assert!(second.is_none());
         assert!(last.is_none());
     }
@@ -1804,7 +1804,7 @@ mod tests {
     #[test]
     fn extract_tail_timestamps_empty_returns_none() {
         let binary = make_binary_bars(&[]);
-        let (second, last) = extract_tail_timestamps(&binary, 0);
+        let (second, last) = get_last_two_bar_timestamps(&binary, 0);
         assert!(second.is_none());
         assert!(last.is_none());
     }

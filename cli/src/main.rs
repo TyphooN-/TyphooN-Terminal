@@ -158,16 +158,16 @@ fn parse_mt5_csv(text: &str, account_name: &str) -> ImportedAccount {
 
             let type_str = row.get("type").or(row.get("action")).or(row.get("side")).cloned().unwrap_or_default().to_lowercase();
             let side = if type_str.contains("buy") { "buy" } else { "sell" }.to_string();
-            let lots = parse_f64(row.get("volume").or(row.get("lots")).or(row.get("qty")));
-            let price = parse_f64(row.get("price").or(row.get("open price")).or(row.get("entry")));
-            let profit = parse_f64(row.get("profit").or(row.get("p/l")).or(row.get("pnl")));
-            let commission = parse_f64(row.get("commission").or(row.get("comm")));
-            let swap = parse_f64(row.get("swap"));
+            let lots = parse_csv_float(row.get("volume").or(row.get("lots")).or(row.get("qty")));
+            let price = parse_csv_float(row.get("price").or(row.get("open price")).or(row.get("entry")));
+            let profit = parse_csv_float(row.get("profit").or(row.get("p/l")).or(row.get("pnl")));
+            let commission = parse_csv_float(row.get("commission").or(row.get("comm")));
+            let swap = parse_csv_float(row.get("swap"));
             let time = row.get("time").or(row.get("open time")).or(row.get("date")).cloned().unwrap_or_default();
 
             if section == "positions" {
-                let sl = parse_f64(row.get("s/l").or(row.get("sl")).or(row.get("stop loss")));
-                let tp = parse_f64(row.get("t/p").or(row.get("tp")).or(row.get("take profit")));
+                let sl = parse_csv_float(row.get("s/l").or(row.get("sl")).or(row.get("stop loss")));
+                let tp = parse_csv_float(row.get("t/p").or(row.get("tp")).or(row.get("take profit")));
                 result.positions.push(Mt5Position { symbol, side, lots, price, profit, commission, swap, sl, tp, time });
             } else {
                 result.history.push(Mt5Trade { symbol, side, lots, price, profit, commission, swap, time });
@@ -187,11 +187,11 @@ fn parse_mt5_csv(text: &str, account_name: &str) -> ImportedAccount {
                     if symbol.is_empty() { continue; }
                     let type_str = row.get("type").cloned().unwrap_or_default().to_lowercase();
                     let side = if type_str.contains("buy") { "buy" } else { "sell" }.to_string();
-                    let lots = parse_f64(row.get("volume").or(row.get("lots")));
-                    let price = parse_f64(row.get("price"));
-                    let profit = parse_f64(row.get("profit"));
-                    let commission = parse_f64(row.get("commission"));
-                    let swap = parse_f64(row.get("swap"));
+                    let lots = parse_csv_float(row.get("volume").or(row.get("lots")));
+                    let price = parse_csv_float(row.get("price"));
+                    let profit = parse_csv_float(row.get("profit"));
+                    let commission = parse_csv_float(row.get("commission"));
+                    let swap = parse_csv_float(row.get("swap"));
                     let time = row.get("time").or(row.get("open time")).cloned().unwrap_or_default();
                     result.history.push(Mt5Trade { symbol, side, lots, price, profit, commission, swap, time });
                 }
@@ -224,7 +224,7 @@ fn make_row_map(headers: &[String], vals: &[String]) -> std::collections::HashMa
     map
 }
 
-fn parse_f64(val: Option<&String>) -> f64 {
+fn parse_csv_float(val: Option<&String>) -> f64 {
     val.and_then(|s| s.replace(',', "").parse::<f64>().ok()).unwrap_or(0.0)
 }
 

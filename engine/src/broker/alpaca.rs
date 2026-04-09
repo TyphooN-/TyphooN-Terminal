@@ -88,7 +88,7 @@ fn parse_f64_field(json: &serde_json::Value, field: &str) -> f64 {
     0.0
 }
 
-fn round_price(price: f64) -> String {
+fn format_order_price(price: f64) -> String {
     if price >= 1.0 {
         format!("{:.2}", price) // $1+ → 2 decimals (e.g., 15.68)
     } else if price >= 0.01 {
@@ -409,7 +409,7 @@ impl AlpacaBroker {
             "qty": qty.to_string(),
             "side": side,
             "type": "limit",
-            "limit_price": round_price(limit_price),
+            "limit_price": format_order_price(limit_price),
             "time_in_force": tif,
         });
         self.submit_order(&body).await
@@ -422,7 +422,7 @@ impl AlpacaBroker {
             "qty": qty.to_string(),
             "side": side,
             "type": "stop",
-            "stop_price": round_price(stop_price),
+            "stop_price": format_order_price(stop_price),
             "time_in_force": tif,
         });
         self.submit_order(&body).await
@@ -435,8 +435,8 @@ impl AlpacaBroker {
             "qty": qty.to_string(),
             "side": side,
             "type": "stop_limit",
-            "stop_price": round_price(stop_price),
-            "limit_price": round_price(limit_price),
+            "stop_price": format_order_price(stop_price),
+            "limit_price": format_order_price(limit_price),
             "time_in_force": tif,
         });
         self.submit_order(&body).await
@@ -452,10 +452,10 @@ impl AlpacaBroker {
             "time_in_force": tif,
         });
         if let Some(tp) = trail_price {
-            body["trail_price"] = serde_json::json!(round_price(tp));
+            body["trail_price"] = serde_json::json!(format_order_price(tp));
         }
         if let Some(tp) = trail_percent {
-            body["trail_percent"] = serde_json::json!(round_price(tp));
+            body["trail_percent"] = serde_json::json!(format_order_price(tp));
         }
         self.submit_order(&body).await
     }
@@ -463,8 +463,8 @@ impl AlpacaBroker {
     /// Place a bracket order (market entry with TP + SL legs).
     pub async fn bracket_order(&self, symbol: &str, qty: f64, side: &str, tp_price: f64, sl_price: f64) -> Result<OrderResult, String> {
         // Round prices to valid increments (Alpaca rejects sub-penny for stocks > $1)
-        let tp_rounded = round_price(tp_price);
-        let sl_rounded = round_price(sl_price);
+        let tp_rounded = format_order_price(tp_price);
+        let sl_rounded = format_order_price(sl_price);
         let body = serde_json::json!({
             "symbol": symbol,
             "qty": qty.to_string(),
@@ -552,8 +552,8 @@ impl AlpacaBroker {
     pub async fn modify_order(&self, order_id: &str, qty: Option<f64>, limit_price: Option<f64>, stop_price: Option<f64>, trail: Option<f64>) -> Result<OrderResult, String> {
         let mut body = serde_json::Map::new();
         if let Some(q) = qty { body.insert("qty".into(), serde_json::json!(q.to_string())); }
-        if let Some(lp) = limit_price { body.insert("limit_price".into(), serde_json::json!(round_price(lp))); }
-        if let Some(sp) = stop_price { body.insert("stop_price".into(), serde_json::json!(round_price(sp))); }
+        if let Some(lp) = limit_price { body.insert("limit_price".into(), serde_json::json!(format_order_price(lp))); }
+        if let Some(sp) = stop_price { body.insert("stop_price".into(), serde_json::json!(format_order_price(sp))); }
         if let Some(t) = trail { body.insert("trail".into(), serde_json::json!(t.to_string())); }
 
         let resp = self
@@ -2676,26 +2676,26 @@ mod tests {
         assert_eq!(parse_f64_field(&j, "equity"), 0.0);
     }
 
-    // ── round_price ─────────────────────────────────────────────────
+    // ── format_order_price ─────────────────────────────────────────────────
 
     #[test]
     fn round_price_stock_above_one() {
-        assert_eq!(round_price(15.6789), "15.68");
-        assert_eq!(round_price(100.0), "100.00");
-        assert_eq!(round_price(1.0), "1.00");
+        assert_eq!(format_order_price(15.6789), "15.68");
+        assert_eq!(format_order_price(100.0), "100.00");
+        assert_eq!(format_order_price(1.0), "1.00");
     }
 
     #[test]
     fn round_price_penny_stock() {
-        assert_eq!(round_price(0.1234), "0.1234");
-        assert_eq!(round_price(0.01), "0.0100");
-        assert_eq!(round_price(0.99), "0.9900");
+        assert_eq!(format_order_price(0.1234), "0.1234");
+        assert_eq!(format_order_price(0.01), "0.0100");
+        assert_eq!(format_order_price(0.99), "0.9900");
     }
 
     #[test]
     fn round_price_sub_penny_crypto() {
-        assert_eq!(round_price(0.00123456), "0.00123456");
-        assert_eq!(round_price(0.009), "0.00900000");
+        assert_eq!(format_order_price(0.00123456), "0.00123456");
+        assert_eq!(format_order_price(0.009), "0.00900000");
     }
 
     // ── is_crypto detection (symbol.contains('/')) ──────────────────

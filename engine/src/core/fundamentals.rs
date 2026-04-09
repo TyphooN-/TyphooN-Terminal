@@ -366,12 +366,12 @@ pub async fn fetch_yahoo_fundamentals(
 }
 
 /// Helper to extract a raw number from Yahoo's nested {"raw": 123.45} format.
-fn yf_raw(val: &serde_json::Value, path: &str) -> Option<f64> {
+fn yahoo_json_raw(val: &serde_json::Value, path: &str) -> Option<f64> {
     val.pointer(path)?.get("raw")?.as_f64()
 }
 
 /// Helper to extract a string from Yahoo's nested {"fmt": "2026-04-15"} format.
-fn yf_fmt(val: &serde_json::Value, path: &str) -> Option<String> {
+fn yahoo_json_fmt(val: &serde_json::Value, path: &str) -> Option<String> {
     val.pointer(path)?.get("fmt")?.as_str().map(|s| s.to_string())
 }
 
@@ -394,46 +394,46 @@ pub fn parse_yahoo_data(ticker: &str, yahoo: &serde_json::Value) -> Fundamentals
     // price module
     if let Some(p) = yahoo.get("price") {
         f.company_name = p.get("shortName").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        f.market_cap = yf_raw(p, "/marketCap");
-        f.stock_price = yf_raw(p, "/regularMarketPrice");
+        f.market_cap = yahoo_json_raw(p, "/marketCap");
+        f.stock_price = yahoo_json_raw(p, "/regularMarketPrice");
     }
 
     // defaultKeyStatistics
     if let Some(ks) = yahoo.get("defaultKeyStatistics") {
-        f.enterprise_value = yf_raw(ks, "/enterpriseValue");
-        f.shares_outstanding = yf_raw(ks, "/sharesOutstanding");
-        f.pe_ratio = yf_raw(ks, "/trailingEps").and_then(|eps| {
+        f.enterprise_value = yahoo_json_raw(ks, "/enterpriseValue");
+        f.shares_outstanding = yahoo_json_raw(ks, "/sharesOutstanding");
+        f.pe_ratio = yahoo_json_raw(ks, "/trailingEps").and_then(|eps| {
             f.stock_price.map(|p| if eps != 0.0 { p / eps } else { 0.0 })
         });
-        f.forward_pe = yf_raw(ks, "/forwardPE");
-        f.peg_ratio = yf_raw(ks, "/pegRatio");
-        f.price_to_book = yf_raw(ks, "/priceToBook");
-        f.beta = yf_raw(ks, "/beta");
-        f.short_ratio = yf_raw(ks, "/shortRatio");
-        f.short_percent_of_float = yf_raw(ks, "/shortPercentOfFloat");
+        f.forward_pe = yahoo_json_raw(ks, "/forwardPE");
+        f.peg_ratio = yahoo_json_raw(ks, "/pegRatio");
+        f.price_to_book = yahoo_json_raw(ks, "/priceToBook");
+        f.beta = yahoo_json_raw(ks, "/beta");
+        f.short_ratio = yahoo_json_raw(ks, "/shortRatio");
+        f.short_percent_of_float = yahoo_json_raw(ks, "/shortPercentOfFloat");
     }
 
     // summaryDetail
     if let Some(sd) = yahoo.get("summaryDetail") {
-        f.dividend_yield = yf_raw(sd, "/dividendYield");
-        f.pe_ratio = f.pe_ratio.or_else(|| yf_raw(sd, "/trailingPE"));
-        f.forward_pe = f.forward_pe.or_else(|| yf_raw(sd, "/forwardPE"));
-        f.price_to_sales = yf_raw(sd, "/priceToSalesTrailing12Months");
+        f.dividend_yield = yahoo_json_raw(sd, "/dividendYield");
+        f.pe_ratio = f.pe_ratio.or_else(|| yahoo_json_raw(sd, "/trailingPE"));
+        f.forward_pe = f.forward_pe.or_else(|| yahoo_json_raw(sd, "/forwardPE"));
+        f.price_to_sales = yahoo_json_raw(sd, "/priceToSalesTrailing12Months");
         // Check if pays dividends
-        if let Some(rate) = yf_raw(sd, "/dividendRate") {
+        if let Some(rate) = yahoo_json_raw(sd, "/dividendRate") {
             f.is_dividend_stock = rate > 0.0;
         }
     }
 
     // financialData
     if let Some(fd) = yahoo.get("financialData") {
-        f.profit_margin = yf_raw(fd, "/profitMargins");
-        f.operating_margin = yf_raw(fd, "/operatingMargins");
-        f.roe = yf_raw(fd, "/returnOnEquity");
-        f.roa = yf_raw(fd, "/returnOnAssets");
-        f.total_debt = f.total_debt.or_else(|| yf_raw(fd, "/totalDebt"));
-        f.cash_and_equivalents = f.cash_and_equivalents.or_else(|| yf_raw(fd, "/totalCash"));
-        f.ev_to_ebitda = yf_raw(fd, "/enterpriseToEbitda");
+        f.profit_margin = yahoo_json_raw(fd, "/profitMargins");
+        f.operating_margin = yahoo_json_raw(fd, "/operatingMargins");
+        f.roe = yahoo_json_raw(fd, "/returnOnEquity");
+        f.roa = yahoo_json_raw(fd, "/returnOnAssets");
+        f.total_debt = f.total_debt.or_else(|| yahoo_json_raw(fd, "/totalDebt"));
+        f.cash_and_equivalents = f.cash_and_equivalents.or_else(|| yahoo_json_raw(fd, "/totalCash"));
+        f.ev_to_ebitda = yahoo_json_raw(fd, "/enterpriseToEbitda");
     }
 
     // EV components: prefer SEC XBRL (filled later), fallback to Yahoo
@@ -470,8 +470,8 @@ pub fn parse_yahoo_data(ticker: &str, yahoo: &serde_json::Value) -> Fundamentals
             }
         }
         // Dividend dates
-        f.next_ex_dividend_date = yf_fmt(cal, "/exDividendDate");
-        f.next_dividend_payment_date = yf_fmt(cal, "/dividendDate");
+        f.next_ex_dividend_date = yahoo_json_fmt(cal, "/exDividendDate");
+        f.next_dividend_payment_date = yahoo_json_fmt(cal, "/dividendDate");
     }
 
     f
@@ -507,19 +507,19 @@ pub fn parse_quarterly_financials(ticker: &str, yahoo: &serde_json::Value) -> Ve
             let mut q = QuarterlyFinancial {
                 symbol: ticker.to_uppercase(),
                 period_end,
-                total_revenue: yf_raw(entry, "/totalRevenue"),
-                net_income: yf_raw(entry, "/netIncome"),
-                gross_profit: yf_raw(entry, "/grossProfit"),
-                operating_income: yf_raw(entry, "/operatingIncome"),
-                ebitda: yf_raw(entry, "/ebitda"),
-                eps: yf_raw(entry, "/dilutedEPS").or_else(|| yf_raw(entry, "/basicEPS")),
+                total_revenue: yahoo_json_raw(entry, "/totalRevenue"),
+                net_income: yahoo_json_raw(entry, "/netIncome"),
+                gross_profit: yahoo_json_raw(entry, "/grossProfit"),
+                operating_income: yahoo_json_raw(entry, "/operatingIncome"),
+                ebitda: yahoo_json_raw(entry, "/ebitda"),
+                eps: yahoo_json_raw(entry, "/dilutedEPS").or_else(|| yahoo_json_raw(entry, "/basicEPS")),
                 free_cash_flow: None,
             };
 
             // Free cash flow from cashflow statement
             if let Some(cf_entry) = cf {
-                let op_cf = yf_raw(cf_entry, "/totalCashFromOperatingActivities");
-                let capex = yf_raw(cf_entry, "/capitalExpenditures");
+                let op_cf = yahoo_json_raw(cf_entry, "/totalCashFromOperatingActivities");
+                let capex = yahoo_json_raw(cf_entry, "/capitalExpenditures");
                 if let (Some(op), Some(cx)) = (op_cf, capex) {
                     q.free_cash_flow = Some(op - cx.abs());
                 }
@@ -1225,20 +1225,20 @@ mod tests {
         assert_eq!(extract_usd_fact(&json, "LongTermDebt"), None);
     }
 
-    // ── yf_raw / yf_fmt ────────────────────────────────────────────
+    // ── yahoo_json_raw / yahoo_json_fmt ────────────────────────────────────────────
 
     #[test]
     fn yf_raw_extracts_raw_value() {
         let json = serde_json::json!({
             "price": { "marketCap": { "raw": 1234567890.0, "fmt": "1.23B" } }
         });
-        assert_eq!(yf_raw(&json, "/price/marketCap"), Some(1234567890.0));
+        assert_eq!(yahoo_json_raw(&json, "/price/marketCap"), Some(1234567890.0));
     }
 
     #[test]
     fn yf_raw_returns_none_on_missing() {
         let json = serde_json::json!({ "price": {} });
-        assert_eq!(yf_raw(&json, "/price/marketCap"), None);
+        assert_eq!(yahoo_json_raw(&json, "/price/marketCap"), None);
     }
 
     #[test]
@@ -1246,13 +1246,13 @@ mod tests {
         let json = serde_json::json!({
             "calendarEvents": { "exDividendDate": { "raw": 1718409600, "fmt": "2024-06-15" } }
         });
-        assert_eq!(yf_fmt(&json, "/calendarEvents/exDividendDate"), Some("2024-06-15".to_string()));
+        assert_eq!(yahoo_json_fmt(&json, "/calendarEvents/exDividendDate"), Some("2024-06-15".to_string()));
     }
 
     #[test]
     fn yf_fmt_returns_none_on_missing() {
         let json = serde_json::json!({});
-        assert_eq!(yf_fmt(&json, "/calendarEvents/exDividendDate"), None);
+        assert_eq!(yahoo_json_fmt(&json, "/calendarEvents/exDividendDate"), None);
     }
 
     // ── parse_yahoo_data ───────────────────────────────────────────

@@ -9774,6 +9774,12 @@ pub struct TyphooNApp {
     // ── watchlist ────────────────────────────────────────────────────────
     /// Rich watchlist data: symbol name, last, prev_close, change, change_pct, volume, cache_key.
     watchlist_rows: Vec<WatchlistRow>,
+    /// Unix timestamp of last successful watchlist quote refresh — drives staleness badge.
+    watchlist_last_update_ts: i64,
+    /// Unix timestamp of last successful positions refresh.
+    positions_last_update_ts: i64,
+    /// Unix timestamp of last successful orders refresh.
+    orders_last_update_ts: i64,
     /// User-managed watchlist symbols (persisted in session).
     user_watchlist: Vec<String>,
     /// Input field for adding symbols to watchlist.
@@ -9887,6 +9893,14 @@ pub struct TyphooNApp {
     /// Persistent: saved LAN server IP for auto-connect
     lan_server_ip: String,
     show_help: bool,
+    help_filter: String,
+    /// Count of alerts that have fired since the user last dismissed the badge.
+    /// Rendered as a red breach counter on the top bar so the trader can't miss it.
+    alert_breach_count: u32,
+    /// Unix timestamp of the most recent alert breach (for tooltip display).
+    alert_last_breach_ts: i64,
+    /// Message of the most recent alert (shown in the breach tooltip).
+    alert_last_breach_msg: String,
     /// Deduplicate FetchBars — track which symbol:TF combos have been requested
     pending_fetches: std::collections::HashSet<String>,
     show_connect: bool,
@@ -9954,6 +9968,15 @@ pub struct TyphooNApp {
     fred_yield_curve: Vec<(String, f64)>,
     show_econ_calendar: bool,
     econ_events: Vec<(String, String, String, String, String)>, // (date, country, event, impact, actual)
+    // Calendar filters — persisted across window open/close.
+    econ_filter_high: bool,
+    econ_filter_medium: bool,
+    econ_filter_low: bool,
+    econ_filter_holiday: bool,
+    /// Currency/country filter text. Empty = all. Comma-separated (e.g. "USD,EUR,GBP").
+    econ_filter_currencies: String,
+    /// Unix timestamp of last successful econ calendar fetch, for staleness badge.
+    econ_last_fetch_ts: i64,
     show_congress: bool,
     congress_trades: Vec<(String, String, String, String, String, String)>, // (date, rep, ticker, type, amount, party)
     /// Crypto backfill single symbol input.
@@ -12574,6 +12597,9 @@ impl TyphooNApp {
             mm_result: String::new(),
             active_tab: 0,
             watchlist_rows,
+            watchlist_last_update_ts: 0,
+            positions_last_update_ts: 0,
+            orders_last_update_ts: 0,
             user_watchlist: vec!["BTCUSD".into(), "ETHUSD".into(), "SOLUSD".into()],
             watchlist_input: String::new(),
             show_settings: false,
@@ -12674,6 +12700,10 @@ impl TyphooNApp {
             lan_server_enabled: false,
             lan_server_ip: String::new(),
             show_help: false,
+            help_filter: String::new(),
+            alert_breach_count: 0,
+            alert_last_breach_ts: 0,
+            alert_last_breach_msg: String::new(),
             pending_fetches: std::collections::HashSet::new(),
             show_connect: false,
             show_indicators_panel: false,
@@ -12726,6 +12756,12 @@ impl TyphooNApp {
             fred_yield_curve: Vec::new(),
             show_econ_calendar: false,
             econ_events: Vec::new(),
+            econ_filter_high: true,
+            econ_filter_medium: true,
+            econ_filter_low: false,
+            econ_filter_holiday: false,
+            econ_filter_currencies: String::new(),
+            econ_last_fetch_ts: 0,
             show_congress: false,
             congress_trades: Vec::new(),
             backfill_symbol: String::new(),
@@ -13527,6 +13563,24 @@ impl TyphooNApp {
             EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
             EventSource::Darwinex => "DARWINEX", EventSource::Tasty => "TASTY",
         }
+    }
+
+    /// Format a Unix timestamp as a relative staleness label for UI display.
+    /// Returns (label, color) so the caller can render with appropriate urgency.
+    /// `ts=0` means "never fetched".
+    fn staleness_badge(&self, ts: i64) -> (String, egui::Color32) {
+        if ts == 0 {
+            return ("— never".to_string(), AXIS_TEXT);
+        }
+        let age = chrono::Utc::now().timestamp() - ts;
+        if age < 0 {
+            // Clock skew — treat as fresh
+            return ("fresh".to_string(), egui::Color32::from_rgb(120, 220, 120));
+        }
+        if age < 30 { (format!("{}s", age), egui::Color32::from_rgb(120, 220, 120)) }
+        else if age < 120 { (format!("{}s", age), AXIS_TEXT) }
+        else if age < 600 { (format!("{}m", age / 60), egui::Color32::from_rgb(220, 180, 60)) }
+        else { (format!("{}m STALE", age / 60), egui::Color32::from_rgb(231, 76, 60)) }
     }
 
     fn active_symbols(&self) -> Vec<String> {
@@ -21206,40 +21260,142 @@ impl TyphooNApp {
                 });
         }
 
-        // Economic Calendar (Finnhub)
+        // Economic Calendar — ForexFactory (keyless) or Finnhub (if key set).
+        // Parses the collapsed "actual" field into forecast/previous/actual columns
+        // and adds impact + currency filters with persistent staleness indicator.
         if self.show_econ_calendar {
             egui::Window::new("Economic Calendar")
                 .open(&mut self.show_econ_calendar)
-                .resizable(true).default_size([700.0, 400.0])
+                .resizable(true).default_size([960.0, 520.0])
                 .show(ctx, |ui| {
-                    ui.label(egui::RichText::new("Upcoming Economic Events (7 days)").strong());
-                    if ui.small_button("Refresh").clicked() && !self.finnhub_key.is_empty() {
-                        let _ = self.broker_tx.send(BrokerCmd::FetchEconCalendar { finnhub_key: self.finnhub_key.clone() });
-                    }
+                    // ── Header row: refresh, source tag, staleness ──
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Economic Calendar").strong());
+                        let source = if self.finnhub_key.is_empty() { "ForexFactory" } else { "Finnhub" };
+                        ui.label(egui::RichText::new(format!("[{source}]")).color(AXIS_TEXT).small());
+                        if ui.small_button("Refresh").clicked() {
+                            let _ = self.broker_tx.send(BrokerCmd::FetchEconCalendar {
+                                finnhub_key: self.finnhub_key.clone()
+                            });
+                        }
+                        if self.econ_last_fetch_ts > 0 {
+                            let age = chrono::Utc::now().timestamp() - self.econ_last_fetch_ts;
+                            let (label, color) = if age < 60 {
+                                (format!("updated {}s ago", age), egui::Color32::from_rgb(120, 220, 120))
+                            } else if age < 3600 {
+                                (format!("updated {}m ago", age / 60), AXIS_TEXT)
+                            } else {
+                                (format!("updated {}h ago — STALE", age / 3600), egui::Color32::from_rgb(220, 180, 60))
+                            };
+                            ui.label(egui::RichText::new(label).small().color(color));
+                        } else {
+                            ui.label(egui::RichText::new("not yet fetched").small().color(AXIS_TEXT));
+                        }
+                    });
+                    // ── Filter row 1: impact ──
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Impact:").strong().small());
+                        ui.checkbox(&mut self.econ_filter_high, egui::RichText::new("High").color(egui::Color32::from_rgb(231, 76, 60)));
+                        ui.checkbox(&mut self.econ_filter_medium, egui::RichText::new("Medium").color(egui::Color32::from_rgb(241, 196, 15)));
+                        ui.checkbox(&mut self.econ_filter_low, "Low");
+                        ui.checkbox(&mut self.econ_filter_holiday, "Holiday");
+                    });
+                    // ── Filter row 2: currency ──
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Currencies:").strong().small());
+                        ui.add(egui::TextEdit::singleline(&mut self.econ_filter_currencies)
+                            .hint_text("e.g. USD,EUR,GBP (empty = all)")
+                            .desired_width(260.0));
+                        if ui.small_button("Clear").clicked() { self.econ_filter_currencies.clear(); }
+                        // Quick presets
+                        if ui.small_button("USD").clicked() { self.econ_filter_currencies = "USD".to_string(); }
+                        if ui.small_button("Majors").clicked() { self.econ_filter_currencies = "USD,EUR,GBP,JPY,CHF,CAD,AUD,NZD".to_string(); }
+                    });
                     ui.separator();
+
                     if self.econ_events.is_empty() {
-                        ui.label(egui::RichText::new("Loading...").color(AXIS_TEXT));
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(40.0);
+                            ui.label(egui::RichText::new("No events loaded").color(AXIS_TEXT));
+                            ui.label(egui::RichText::new("Click Refresh to fetch from ForexFactory (keyless)").small().color(AXIS_TEXT));
+                        });
                     } else {
+                        // Build allowed impact set
+                        let allow_impact = |imp: &str| -> bool {
+                            match imp.to_ascii_lowercase().as_str() {
+                                "high"   => self.econ_filter_high,
+                                "medium" => self.econ_filter_medium,
+                                "low"    => self.econ_filter_low,
+                                _        => self.econ_filter_holiday,
+                            }
+                        };
+                        let allow_currency: Option<Vec<String>> = if self.econ_filter_currencies.trim().is_empty() {
+                            None
+                        } else {
+                            Some(self.econ_filter_currencies.split(',')
+                                .map(|s| s.trim().to_ascii_uppercase())
+                                .filter(|s| !s.is_empty())
+                                .collect())
+                        };
+
+                        // Parse the FF-flattened "actual" field: "fc:X (prev:Y)" → (forecast, previous)
+                        let parse_fc_prev = |raw: &str| -> (String, String, String) {
+                            if let Some(rest) = raw.strip_prefix("fc:") {
+                                if let Some(paren) = rest.find(" (prev:") {
+                                    let fc = rest[..paren].to_string();
+                                    let rest2 = &rest[paren + 7..];
+                                    let prev = rest2.trim_end_matches(')').to_string();
+                                    return (String::new(), fc, prev);
+                                }
+                            }
+                            // Finnhub path: actual is a single value
+                            (raw.to_string(), String::new(), String::new())
+                        };
+
+                        // Count visible for the header badge
+                        let visible: Vec<&(String, String, String, String, String)> = self.econ_events.iter()
+                            .filter(|(_, country, _, impact, _)| {
+                                if !allow_impact(impact) { return false; }
+                                if let Some(ref set) = allow_currency {
+                                    if !set.iter().any(|c| c == &country.to_ascii_uppercase()) { return false; }
+                                }
+                                true
+                            })
+                            .collect();
+
+                        ui.label(egui::RichText::new(format!("{} events shown ({} total)", visible.len(), self.econ_events.len())).small().color(AXIS_TEXT));
+                        ui.separator();
+
                         egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                            egui::Grid::new("econ_cal_grid").striped(true).num_columns(5).show(ui, |ui| {
-                                ui.label(egui::RichText::new("Date").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Country").color(AXIS_TEXT).small().strong());
-                                ui.label(egui::RichText::new("Event").color(AXIS_TEXT).small().strong());
+                            egui::Grid::new("econ_cal_grid_v2").striped(true).num_columns(7).show(ui, |ui| {
+                                ui.label(egui::RichText::new("Date/Time").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Curr").color(AXIS_TEXT).small().strong());
                                 ui.label(egui::RichText::new("Impact").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Event").color(AXIS_TEXT).small().strong());
                                 ui.label(egui::RichText::new("Actual").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Forecast").color(AXIS_TEXT).small().strong());
+                                ui.label(egui::RichText::new("Previous").color(AXIS_TEXT).small().strong());
                                 ui.end_row();
-                                for (date, country, event, impact, actual) in &self.econ_events {
-                                    let date_short = if date.len() > 16 { &date[..16] } else { date };
+
+                                for (date, country, event, impact, raw) in &visible {
+                                    let date_short = if date.len() > 20 { &date[..20] } else { date.as_str() };
                                     ui.label(egui::RichText::new(date_short).small().monospace());
-                                    ui.label(egui::RichText::new(country).small());
-                                    ui.label(egui::RichText::new(event).small());
-                                    let impact_c = match impact.as_str() {
-                                        "high" => egui::Color32::from_rgb(231, 76, 60),
-                                        "medium" => egui::Color32::from_rgb(241, 196, 15),
-                                        _ => AXIS_TEXT,
+                                    ui.label(egui::RichText::new(country).small().strong().color(egui::Color32::from_rgb(100, 180, 255)));
+                                    let impact_c = match impact.to_ascii_lowercase().as_str() {
+                                        "high"    => egui::Color32::from_rgb(231, 76, 60),
+                                        "medium"  => egui::Color32::from_rgb(241, 196, 15),
+                                        "low"     => egui::Color32::from_rgb(100, 180, 100),
+                                        _         => AXIS_TEXT,
                                     };
-                                    ui.label(egui::RichText::new(impact).color(impact_c).small().strong());
-                                    ui.label(egui::RichText::new(actual).small());
+                                    ui.label(egui::RichText::new(impact.as_str()).color(impact_c).small().strong());
+                                    ui.label(egui::RichText::new(event.as_str()).small());
+                                    let (actual, forecast, prev) = parse_fc_prev(raw);
+                                    let actual_disp = if actual.is_empty() { "—".to_string() } else { actual };
+                                    let fc_disp = if forecast.is_empty() { "—".to_string() } else { forecast };
+                                    let prev_disp = if prev.is_empty() { "—".to_string() } else { prev };
+                                    ui.label(egui::RichText::new(actual_disp).small().monospace());
+                                    ui.label(egui::RichText::new(fc_disp).small().monospace().color(AXIS_TEXT));
+                                    ui.label(egui::RichText::new(prev_disp).small().monospace().color(AXIS_TEXT));
                                     ui.end_row();
                                 }
                             });
@@ -23637,6 +23793,10 @@ impl TyphooNApp {
                             "ALERT: {} {} {} {} (value: {:.2})",
                             alert.symbol, alert.indicator, alert.condition, alert.threshold, current_val
                         );
+                        // Surface to the top-bar breach badge — trader cannot miss this.
+                        self.alert_breach_count = self.alert_breach_count.saturating_add(1);
+                        self.alert_last_breach_ts = chrono::Utc::now().timestamp();
+                        self.alert_last_breach_msg = msg.clone();
                         self.log.push_back(LogEntry::warn(msg.clone()));
                         // Send notification if any provider configured
                         if !self.discord_webhook.is_empty() || !self.ntfy_topic.is_empty()
@@ -24677,60 +24837,133 @@ impl TyphooNApp {
             }
         }
 
-        // Help
+        // Help — keyboard shortcuts + quick command reference.
+        // Searchable filter covers both sections.
         if self.show_help {
-            egui::Window::new("Keyboard Shortcuts")
+            egui::Window::new("Keyboard Shortcuts & Command Reference")
                 .open(&mut self.show_help)
-                .resizable(true).default_size([400.0, 350.0])
+                .resizable(true).default_size([720.0, 560.0])
                 .show(ctx, |ui| {
-                    ui.heading("Shortcuts");
-                    ui.separator();
-                    egui::Grid::new("help_grid").striped(true).num_columns(2).show(ui, |ui| {
-                        ui.strong("Key"); ui.strong("Action");
-                        ui.end_row();
-                        ui.label("~ (tilde)"); ui.label("Console");
-                        ui.end_row();
-                        ui.label("Esc"); ui.label("Close palette / cancel drawing");
-                        ui.end_row();
-                        ui.label("Scroll wheel"); ui.label("Zoom chart (horizontal)");
-                        ui.end_row();
-                        ui.label("Ctrl + scroll"); ui.label("Zoom chart (vertical / price)");
-                        ui.end_row();
-                        ui.label("Double-click"); ui.label("Reset zoom & pan");
-                        ui.end_row();
-                        ui.label("Click + drag"); ui.label("Pan chart");
-                        ui.end_row();
-                        ui.label("← →"); ui.label("Bar-by-bar scroll");
-                        ui.end_row();
-                        ui.label("Home / End"); ui.label("Jump to start / end");
-                        ui.end_row();
-                        ui.label("PgUp / PgDn"); ui.label("Half-screen scroll");
-                        ui.end_row();
-                        ui.label("+ / -"); ui.label("Zoom in / out");
-                        ui.end_row();
-                        ui.label("Delete / Backspace"); ui.label("Remove last drawing");
-                        ui.end_row();
-                        ui.label("Right-click"); ui.label("Context menu (drawings, chart type)");
-                        ui.end_row();
-                        ui.label("Ctrl+N"); ui.label("New tab");
-                        ui.end_row();
-                        ui.label("Ctrl+W"); ui.label("Close tab");
-                        ui.end_row();
-                        ui.label("Ctrl+Tab"); ui.label("Next tab");
-                        ui.end_row();
-                        ui.label("Ctrl+Shift+Tab"); ui.label("Previous tab");
-                        ui.end_row();
-                        ui.label("Alt+F4"); ui.label("Quit");
-                        ui.end_row();
+                    ui.horizontal(|ui| {
+                        ui.heading("Help");
+                        ui.add(egui::TextEdit::singleline(&mut self.help_filter)
+                            .hint_text("filter keys/commands…")
+                            .desired_width(260.0));
+                        if ui.small_button("Clear").clicked() { self.help_filter.clear(); }
                     });
-                    ui.add_space(10.0);
-                    ui.label(egui::RichText::new("TyphooN Terminal — Pure Rust GPU").color(ACCENT));
-                    ui.add_space(5.0);
-                    // GPU compute status
-                    let gpu_ind = if self.gpu_indicators.is_some() { "GPU Indicators: Active" } else { "GPU Indicators: CPU fallback" };
-                    let gpu_dar = if self.gpu_darwin.is_some() { "GPU DARWIN Analytics: Active" } else { "GPU DARWIN: CPU fallback" };
-                    ui.label(egui::RichText::new(gpu_ind).color(if self.gpu_indicators.is_some() { UP } else { DOWN }).small());
-                    ui.label(egui::RichText::new(gpu_dar).color(if self.gpu_darwin.is_some() { UP } else { DOWN }).small());
+                    ui.separator();
+
+                    let filter_lower = self.help_filter.to_lowercase();
+                    let matches = |key: &str, desc: &str| -> bool {
+                        filter_lower.is_empty()
+                            || key.to_lowercase().contains(&filter_lower)
+                            || desc.to_lowercase().contains(&filter_lower)
+                    };
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // ── Chart navigation ──
+                        ui.label(egui::RichText::new("Chart navigation").color(ACCENT).strong());
+                        egui::Grid::new("help_nav").striped(true).num_columns(2).show(ui, |ui| {
+                            let nav: &[(&str, &str)] = &[
+                                ("Scroll wheel",  "Zoom chart (horizontal)"),
+                                ("Ctrl + scroll", "Zoom chart (vertical / price)"),
+                                ("Double-click",  "Reset zoom & pan"),
+                                ("Click + drag",  "Pan chart"),
+                                ("← →",           "Bar-by-bar scroll"),
+                                ("Home / End",    "Jump to start / end"),
+                                ("PgUp / PgDn",   "Half-screen scroll"),
+                                ("+ / -",         "Zoom in / out"),
+                                ("Delete / Backspace", "Remove last drawing"),
+                                ("Right-click",   "Context menu (drawings, chart type)"),
+                            ];
+                            for (k, d) in nav {
+                                if !matches(k, d) { continue; }
+                                ui.label(egui::RichText::new(*k).monospace());
+                                ui.label(*d);
+                                ui.end_row();
+                            }
+                        });
+                        ui.add_space(8.0);
+
+                        // ── App / window management ──
+                        ui.label(egui::RichText::new("App & window").color(ACCENT).strong());
+                        egui::Grid::new("help_app").striped(true).num_columns(2).show(ui, |ui| {
+                            let app: &[(&str, &str)] = &[
+                                ("~ (tilde/backtick)", "Open command palette (Quake-style)"),
+                                ("Esc", "Close palette / cancel drawing / close top window"),
+                                ("Ctrl+N", "New chart tab"),
+                                ("Ctrl+W", "Close current tab"),
+                                ("Ctrl+Tab", "Next tab"),
+                                ("Ctrl+Shift+Tab", "Previous tab"),
+                                ("Alt+1..9", "Jump to timeframe 1..9"),
+                                ("F5", "Reload bars from cache"),
+                                ("F11", "Toggle fullscreen"),
+                                ("Alt+F4", "Quit"),
+                            ];
+                            for (k, d) in app {
+                                if !matches(k, d) { continue; }
+                                ui.label(egui::RichText::new(*k).monospace());
+                                ui.label(*d);
+                                ui.end_row();
+                            }
+                        });
+                        ui.add_space(8.0);
+
+                        // ── Commands quick reference (top ~30 most-used) ──
+                        ui.label(egui::RichText::new("Command palette (top commands)").color(ACCENT).strong());
+                        ui.label(egui::RichText::new("Press ~ then type. All commands are case-insensitive.").small().color(AXIS_TEXT));
+                        egui::Grid::new("help_cmds").striped(true).num_columns(2).show(ui, |ui| {
+                            let cmds: &[(&str, &str)] = &[
+                                ("SETTINGS",      "Application settings"),
+                                ("CONNECT",       "Connect to broker (Alpaca / MT5)"),
+                                ("SCOPE ALL|ALPACA|DARWINEX|TASTY", "Global broker scope filter"),
+                                ("MTF",           "Toggle multi-timeframe grid"),
+                                ("FUNDAMENTALS",  "Fundamentals viewer"),
+                                ("OUTLIERS",      "Multi-dim outlier scanner"),
+                                ("EVOUTLIERS",    "EV outlier scanner"),
+                                ("DARWINVAR",     "DARWIN VaR corridor check"),
+                                ("EVENTS",        "Upcoming earnings/dividends (per broker)"),
+                                ("CALENDAR",      "Economic calendar (ForexFactory)"),
+                                ("OPTION_CHAIN",  "tastytrade option chain"),
+                                ("OPTIONS",       "Alpaca options chain"),
+                                ("MONTECARLO",    "Monte Carlo VaR simulation"),
+                                ("RISKRUIN",      "Risk-of-Ruin calculator"),
+                                ("STRESS_TEST",   "Portfolio stress test"),
+                                ("CORRELATION",   "Correlation matrix"),
+                                ("STAT_ARB",      "Statistical arbitrage pairs"),
+                                ("SEC",           "SEC filings scanner"),
+                                ("INSIDER",       "Insider trades (Form 4)"),
+                                ("FRED",          "FRED economic dashboard"),
+                                ("NEWS",          "Market news"),
+                                ("ALERTS",        "Indicator alert builder"),
+                                ("SCREENER",      "Symbol screener"),
+                                ("SYMBOLS",       "Symbol explorer"),
+                                ("BACKTEST",      "Run backtest on current symbol"),
+                                ("REPLAY",        "Market replay mode"),
+                                ("JOURNAL",       "Trade journal"),
+                                ("EXPORT_CSV",    "Export chart data"),
+                                ("SCREENSHOT",    "Save chart as PNG"),
+                                ("WEBSERVER",     "Start HTTPS web server (phone access)"),
+                                ("HELP",          "This window"),
+                                ("QUIT",          "Exit application"),
+                            ];
+                            for (k, d) in cmds {
+                                if !matches(k, d) { continue; }
+                                ui.label(egui::RichText::new(*k).monospace().color(egui::Color32::from_rgb(150, 200, 255)));
+                                ui.label(*d);
+                                ui.end_row();
+                            }
+                        });
+                        ui.add_space(10.0);
+
+                        // ── Status footer ──
+                        ui.separator();
+                        ui.label(egui::RichText::new("TyphooN Terminal — Pure Rust GPU").color(ACCENT));
+                        let gpu_ind = if self.gpu_indicators.is_some() { "GPU Indicators: Active" } else { "GPU Indicators: CPU fallback" };
+                        let gpu_dar = if self.gpu_darwin.is_some() { "GPU DARWIN Analytics: Active" } else { "GPU DARWIN: CPU fallback" };
+                        ui.label(egui::RichText::new(gpu_ind).color(if self.gpu_indicators.is_some() { UP } else { DOWN }).small());
+                        ui.label(egui::RichText::new(gpu_dar).color(if self.gpu_darwin.is_some() { UP } else { DOWN }).small());
+                    });
                 });
         }
 
@@ -24894,9 +25127,63 @@ impl TyphooNApp {
                 .show(ctx, |ui| {
                     ui.heading("Place Order");
                     ui.separator();
+                    // Autocomplete: match against broker asset list and watchlist.
+                    // Build suggestion list once per frame while the input is non-empty.
+                    let sym_upper = self.order_symbol.to_ascii_uppercase();
+                    let suggestions: Vec<String> = if sym_upper.is_empty() || sym_upper.len() < 1 {
+                        Vec::new()
+                    } else {
+                        let mut set: Vec<String> = Vec::new();
+                        // Broker asset list (primary)
+                        for (s, _name, _class) in &self.all_broker_assets {
+                            if s.to_ascii_uppercase().starts_with(&sym_upper) && !set.contains(s) {
+                                set.push(s.clone());
+                                if set.len() >= 10 { break; }
+                            }
+                        }
+                        // Fallback: watchlist
+                        if set.len() < 10 {
+                            for s in &self.user_watchlist {
+                                if s.to_ascii_uppercase().starts_with(&sym_upper) && !set.contains(s) {
+                                    set.push(s.clone());
+                                    if set.len() >= 10 { break; }
+                                }
+                            }
+                        }
+                        set
+                    };
+                    // Validation: is the typed symbol known?
+                    let known_symbol = !sym_upper.is_empty() && self.all_broker_assets.iter().any(|(s, _, _)| s.eq_ignore_ascii_case(&sym_upper));
+
                     egui::Grid::new("order_grid").num_columns(2).show(ui, |ui| {
                         ui.label("Symbol:");
-                        ui.add(egui::TextEdit::singleline(&mut self.order_symbol).desired_width(120.0));
+                        ui.vertical(|ui| {
+                            let hint_color = if sym_upper.is_empty() { AXIS_TEXT }
+                                else if known_symbol { egui::Color32::from_rgb(120, 220, 120) }
+                                else { egui::Color32::from_rgb(231, 76, 60) };
+                            ui.add(egui::TextEdit::singleline(&mut self.order_symbol)
+                                .desired_width(160.0)
+                                .font(egui::FontId::monospace(13.0))
+                                .text_color(hint_color));
+                            // Validation hint
+                            if !sym_upper.is_empty() && !self.all_broker_assets.is_empty() {
+                                let hint = if known_symbol {
+                                    egui::RichText::new("✓ known").small().color(egui::Color32::from_rgb(120, 220, 120))
+                                } else {
+                                    egui::RichText::new("✗ unknown — broker will reject").small().color(egui::Color32::from_rgb(231, 76, 60))
+                                };
+                                ui.label(hint);
+                            } else if self.all_broker_assets.is_empty() {
+                                ui.label(egui::RichText::new("(connect broker to validate)").small().color(AXIS_TEXT));
+                            }
+                            // Suggestions — click to fill
+                            for sug in &suggestions {
+                                if sug.eq_ignore_ascii_case(&sym_upper) { continue; }
+                                if ui.selectable_label(false, egui::RichText::new(sug).small().monospace()).clicked() {
+                                    self.order_symbol = sug.clone();
+                                }
+                            }
+                        });
                         ui.end_row();
                         ui.label("Side:");
                         ui.horizontal(|ui| {
@@ -26047,6 +26334,7 @@ impl eframe::App for TyphooNApp {
                     self.live_account = Some(acct);
                 }
                 BrokerMsg::Positions(pos) => {
+                    self.positions_last_update_ts = chrono::Utc::now().timestamp();
                     if let Ok(json) = serde_json::to_string(&pos) {
                         self.put_kv_dedup("broker:positions", &json);
                     }
@@ -26120,6 +26408,7 @@ impl eframe::App for TyphooNApp {
                     self.tt_positions = pos;
                 }
                 BrokerMsg::Orders(orders) => {
+                    self.orders_last_update_ts = chrono::Utc::now().timestamp();
                     if let Ok(json) = serde_json::to_string(&orders) {
                         self.put_kv_dedup("broker:orders", &json);
                     }
@@ -26198,6 +26487,7 @@ impl eframe::App for TyphooNApp {
                     }
                 }
                 BrokerMsg::WatchlistQuotes(rows) => {
+                    self.watchlist_last_update_ts = chrono::Utc::now().timestamp();
                     // Store to KV for LAN clients — dedup to avoid timestamp churn
                     if let Ok(j) = serde_json::to_string(&rows) { self.put_kv_dedup("broker:watchlist", &j); }
                     // Update forming bars on all charts from watchlist prices
@@ -26282,6 +26572,7 @@ impl eframe::App for TyphooNApp {
                 }
                 BrokerMsg::EconCalendarData(events) => {
                     self.econ_events = events;
+                    self.econ_last_fetch_ts = chrono::Utc::now().timestamp();
                     self.log.push_back(LogEntry::info(format!("Economic calendar: {} events loaded", self.econ_events.len())));
                 }
                 BrokerMsg::CongressData(trades) => {
@@ -27199,6 +27490,28 @@ impl eframe::App for TyphooNApp {
                         .color(ACCENT)
                         .strong(),
                 );
+                // Alert breach badge — visible red counter when alerts have fired.
+                // Clicking clears the counter and opens the alerts window.
+                if self.alert_breach_count > 0 {
+                    ui.separator();
+                    let breach_label = format!("🔔 {} ALERT", self.alert_breach_count);
+                    let tooltip = if self.alert_last_breach_msg.is_empty() {
+                        format!("{} alert(s) fired — click to view and clear", self.alert_breach_count)
+                    } else {
+                        format!("{} alert(s) fired — latest:\n{}\n\nClick to view and clear.",
+                            self.alert_breach_count, self.alert_last_breach_msg)
+                    };
+                    let btn = egui::Button::new(
+                        egui::RichText::new(breach_label)
+                            .strong()
+                            .color(egui::Color32::WHITE)
+                    ).fill(egui::Color32::from_rgb(231, 76, 60));
+                    if ui.add(btn).on_hover_text(tooltip).clicked() {
+                        self.show_alert_builder = true;
+                        self.alert_breach_count = 0;
+                        self.alert_last_breach_msg.clear();
+                    }
+                }
             });
         });
 
@@ -27971,7 +28284,9 @@ impl eframe::App for TyphooNApp {
                     let alpaca_count = if self.show_alpaca_positions { self.live_positions.len() } else { 0 };
                     let tt_count = if self.show_tt_positions { self.tt_positions.len() } else { 0 };
                     let pos_count = darwin_count + alpaca_count + tt_count;
-                    egui::CollapsingHeader::new(egui::RichText::new(format!("Positions ({})", pos_count)).strong().small())
+                    let (pos_stale_lbl, pos_stale_col) = self.staleness_badge(self.positions_last_update_ts);
+                    let pos_header = format!("Positions ({})  •  {}", pos_count, pos_stale_lbl);
+                    egui::CollapsingHeader::new(egui::RichText::new(pos_header).strong().small().color(pos_stale_col))
                         .id_salt("positions_section")
                         .default_open(self.right_positions_open)
                         .show(ui, |ui| {
@@ -28103,7 +28418,9 @@ impl eframe::App for TyphooNApp {
 
                     // ── Orders Section ────────────────────────────────────
                     let ord_count = if self.show_alpaca_positions { self.live_orders.len() } else { 0 };
-                    egui::CollapsingHeader::new(egui::RichText::new(format!("Orders ({})", ord_count)).strong().small())
+                    let (ord_stale_lbl, ord_stale_col) = self.staleness_badge(self.orders_last_update_ts);
+                    let ord_header = format!("Orders ({})  •  {}", ord_count, ord_stale_lbl);
+                    egui::CollapsingHeader::new(egui::RichText::new(ord_header).strong().small().color(ord_stale_col))
                         .id_salt("orders_section")
                         .default_open(self.right_orders_open)
                         .show(ui, |ui| {
@@ -28218,7 +28535,9 @@ impl eframe::App for TyphooNApp {
 
                     // ── Watchlist Section ─────────────────────────────────
                     let wl_count = self.user_watchlist.len();
-                    egui::CollapsingHeader::new(egui::RichText::new(format!("Watchlist ({})", wl_count)).strong().small())
+                    let (wl_stale_lbl, wl_stale_col) = self.staleness_badge(self.watchlist_last_update_ts);
+                    let wl_header = format!("Watchlist ({})  •  {}", wl_count, wl_stale_lbl);
+                    egui::CollapsingHeader::new(egui::RichText::new(wl_header).strong().small().color(wl_stale_col))
                         .id_salt("watchlist_section") // stable ID — don't reset on count change
                         .default_open(self.right_watchlist_open)
                         .show(ui, |ui| {

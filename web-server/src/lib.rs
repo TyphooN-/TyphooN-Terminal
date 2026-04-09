@@ -148,11 +148,11 @@ async fn ws_handler(
     drop(conns);
 
     ws.max_message_size(MAX_WS_MSG_SIZE)
-        .on_upgrade(move |socket| handle_ws(socket, state, ip))
+        .on_upgrade(move |socket| run_websocket_session(socket, state, ip))
         .into_response()
 }
 
-async fn handle_ws(socket: ws::WebSocket, state: Arc<AppState>, client_ip: std::net::IpAddr) {
+async fn run_websocket_session(socket: ws::WebSocket, state: Arc<AppState>, client_ip: std::net::IpAddr) {
     let (mut sender, mut receiver) = socket.split();
 
     tracing::info!("Web client connected from {client_ip}");
