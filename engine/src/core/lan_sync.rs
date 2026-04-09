@@ -850,15 +850,13 @@ async fn handle_client_tls(
                     }
                 } else {
                     tracing::info!("LAN sync: client requested remote '{}' (args: {})", cmd, &args[..args.len().min(100)]);
-                    // Append to remote command queue in KV. Multiple commands can arrive
-                    // rapidly (e.g., FETCH_BARS for 9 timeframes). Use JSON array so none are lost.
+                    // Append to remote command queue. Multiple commands can arrive
+                    // rapidly (e.g., FETCH_BARS for 9 timeframes). Use append_to_queue
+                    // for O(1) inserts instead of the old read-decompress-append-recompress-write
+                    // pattern which was O(n²) under burst load.
                     let new_entry = serde_json::json!({ "cmd": cmd, "args": args });
-                    let mut queue: Vec<serde_json::Value> = cache.get_kv("lan:remote_queue")
-                        .ok().flatten()
-                        .and_then(|j| serde_json::from_str(&j).ok())
-                        .unwrap_or_default();
-                    queue.push(new_entry);
-                    let _ = cache.put_kv("lan:remote_queue", &serde_json::to_string(&queue).unwrap_or_default());
+                    let entry_json = serde_json::to_string(&new_entry).unwrap_or_default();
+                    let _ = cache.append_to_queue("lan:remote_queue", &entry_json);
                     let msg_text = format!("Remote '{}' accepted — executing on server", cmd);
                     if let Ok(msg) = send_msg(&SyncMessage::RemoteRequestDone { cmd, message: msg_text }) {
                         let _ = sink.send(msg).await;

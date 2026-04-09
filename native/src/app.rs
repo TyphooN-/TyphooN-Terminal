@@ -1523,12 +1523,12 @@ impl ChartState {
             }
         }
 
-        // Fallback: try partial match from detailed_stats
-        if let Ok(stats) = cache.detailed_stats() {
-            let sym_lower = sym.to_lowercase();
-            for (key, _, _) in &stats {
-                let key_lower = key.to_lowercase();
-                if key_lower.contains(&sym_lower) && key_lower.ends_with(&tf.to_lowercase()) {
+        // Fallback: partial-match search via SQL LIKE (avoids pulling full bar_cache
+        // into memory — 3.9GB DB would be a disaster).
+        if let Ok(keys) = cache.search_keys(&sym, 32) {
+            let tf_lower = tf.to_lowercase();
+            for key in &keys {
+                if key.to_lowercase().ends_with(&tf_lower) {
                     return key.clone();
                 }
             }
@@ -1890,7 +1890,9 @@ impl ChartState {
                 self.bars.len(), self.symbol, self.timeframe.label(), mtf_info
             )));
         }
-        while log.len() > 500 { log.pop_front(); }
+        // Steady-state cap of 200 (was 500). Console log is diagnostic, not forensic —
+        // keep it tight to avoid frame jank during bulk imports that push dozens of lines.
+        while log.len() > 200 { log.pop_front(); }
     }
 
     fn compute_indicators(&mut self) {
@@ -2552,14 +2554,12 @@ impl ChartState {
                     }).collect());
                 }
             }
-            // Fallback: search detailed_stats for partial match
+            // Fallback: indexed partial-match search via SQL LIKE.
             if htf_bars.is_none() {
-                if let Ok(stats) = cache.detailed_stats() {
-                    let sym_lower = bare_sym.to_lowercase();
+                if let Ok(keys) = cache.search_keys(&bare_sym, 32) {
                     let tf_lower = tf_suffix.to_lowercase();
-                    for (k, _, _) in &stats {
-                        let kl = k.to_lowercase();
-                        if kl.contains(&sym_lower) && kl.ends_with(&tf_lower) {
+                    for k in &keys {
+                        if k.to_lowercase().ends_with(&tf_lower) {
                             if let Ok(Some(raw)) = cache.get_bars_raw(k) {
                                 htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                                     ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
@@ -2649,14 +2649,12 @@ impl ChartState {
                     }).collect());
                 }
             }
-            // Fallback: search by partial match
+            // Fallback: indexed partial-match search via SQL LIKE.
             if htf_bars.is_none() {
-                if let Ok(stats) = cache.detailed_stats() {
-                    let sym_lower = bare_sym.to_lowercase();
+                if let Ok(keys) = cache.search_keys(&bare_sym, 32) {
                     let tf_lower = tf_suffix.to_lowercase();
-                    for (k, _, _) in &stats {
-                        let kl = k.to_lowercase();
-                        if kl.contains(&sym_lower) && kl.ends_with(&tf_lower) {
+                    for k in &keys {
+                        if k.to_lowercase().ends_with(&tf_lower) {
                             if let Ok(Some(raw)) = cache.get_bars_raw(k) {
                                 htf_bars = Some(raw.into_iter().map(|(ts, o, h, l, c, v)| Bar {
                                     ts_ms: ts, open: o, high: h, low: l, close: c, volume: v,
@@ -25521,8 +25519,10 @@ impl eframe::App for TyphooNApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count += 1;
         ctx.set_visuals(Self::dark_visuals());
-        // Bound log size to prevent unbounded memory growth
-        while self.log.len() > 500 { self.log.pop_front(); }
+        // Bound log size to prevent unbounded memory growth.
+        // 200 is a steady-state cap — small enough that pop_front is amortized O(1)
+        // even during bulk imports that push dozens of lines per frame.
+        while self.log.len() > 200 { self.log.pop_front(); }
 
         // Periodic crypto bar refresh (every ~60 seconds at 4fps = every 240 frames)
         // Periodic crypto bar refresh (~60s) — works on both server and LAN client
@@ -30966,14 +30966,17 @@ impl eframe::App for TyphooNApp {
             }
         }
 
-        // Poll for remote commands from LAN clients (server only, every ~5 seconds)
+        // Poll for remote commands from LAN clients (server only, every ~5 seconds).
+        // Uses drain_queue for atomic read+delete (O(1) per entry instead of O(n) full
+        // array read + rewrite). See cache.rs:append_to_queue for the producer side.
         if self.frame_count % 20 == 3 && self.lan_sync_mode == "server" {
             if let Some(ref cache) = self.cache {
-                if let Ok(Some(json)) = cache.get_kv("lan:remote_queue") {
-                    if !json.is_empty() && json != "[]" {
-                        // Clear immediately to avoid re-executing
-                        let _ = cache.put_kv("lan:remote_queue", "[]");
-                        if let Ok(queue) = serde_json::from_str::<Vec<serde_json::Value>>(&json) {
+                if let Ok(entries) = cache.drain_queue("lan:remote_queue") {
+                    if !entries.is_empty() {
+                        let queue: Vec<serde_json::Value> = entries.iter()
+                            .filter_map(|s| serde_json::from_str(s).ok())
+                            .collect();
+                        if !queue.is_empty() {
                             for v in &queue {
                                 let cmd = v["cmd"].as_str().unwrap_or("");
                                 let args = v["args"].as_str().unwrap_or("");
@@ -31186,9 +31189,10 @@ impl eframe::App for TyphooNApp {
                 if eastern.weekday() == chrono::Weekday::Mon {
                     if let Some(cache) = self.cache.clone() {
                         std::thread::spawn(move || {
-                            if let Ok(stats) = cache.detailed_stats() {
+                            // Indexed LIKE lookup instead of full table scan.
+                            if let Ok(keys) = cache.search_keys("kraken:", 100_000) {
                                 let mut deleted = 0;
-                                for (key, _, _) in &stats {
+                                for key in &keys {
                                     if key.starts_with("kraken:") {
                                         let _ = cache.delete_key(key);
                                         deleted += 1;

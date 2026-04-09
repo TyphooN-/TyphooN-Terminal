@@ -488,6 +488,83 @@ impl SqliteCache {
         }
     }
 
+    /// Append a single entry to a logical KV queue. Keys are generated as
+    /// `{prefix}:{nanos}` — monotonic within a single process, unique across retries.
+    /// O(1) append vs the previous read-modify-write pattern which was O(n^2) overall
+    /// for rapid bursts (e.g. 9 FETCH_BARS requests arriving together).
+    pub fn append_to_queue(&self, prefix: &str, entry_json: &str) -> Result<(), String> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let ts_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let key = format!("{prefix}:{ts_ns:020}:{seq:08}");
+        self.put_kv(&key, entry_json)
+    }
+
+    /// Drain all entries from a KV queue in key order (monotonic timestamp ascending).
+    /// Returns the list of entry values and deletes them atomically within a single
+    /// transaction. Consumers call this to process pending queue entries.
+    pub fn drain_queue(&self, prefix: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock failed: {e}"))?;
+        let like = format!("{prefix}:%");
+        // Collect matching keys + values in order.
+        let mut stmt = conn.prepare_cached(
+            "SELECT key, value FROM kv_cache WHERE key LIKE ?1 ORDER BY key"
+        ).map_err(|e| format!("Prepare failed: {e}"))?;
+        let rows = stmt.query_map(params![like], |row| {
+            let key: String = row.get(0)?;
+            let data: Vec<u8> = row.get(1)?;
+            Ok((key, data))
+        }).map_err(|e| format!("Query failed: {e}"))?;
+
+        let mut result: Vec<(String, String)> = Vec::new();
+        for row in rows {
+            if let Ok((k, compressed)) = row {
+                if let Ok(decompressed) = zstd::decode_all(compressed.as_slice()) {
+                    if let Ok(s) = String::from_utf8(decompressed) {
+                        result.push((k, s));
+                    }
+                }
+            }
+        }
+        drop(stmt);
+
+        // Delete drained keys in a single transaction.
+        if !result.is_empty() {
+            let tx = conn.unchecked_transaction()
+                .map_err(|e| format!("Transaction begin failed: {e}"))?;
+            for (k, _) in &result {
+                let _ = tx.execute("DELETE FROM kv_cache WHERE key = ?1", params![k]);
+            }
+            tx.commit().map_err(|e| format!("Transaction commit failed: {e}"))?;
+        }
+
+        Ok(result.into_iter().map(|(_, v)| v).collect())
+    }
+
+    /// Load raw compressed KV blob (skip zstd decompression + UTF-8 decode).
+    /// Used by the LAN sync pass-through path: the client decompresses on its end,
+    /// so the server should not pay the decompression cost. Also useful for
+    /// "is this key present?" probes without the decode overhead.
+    pub fn get_kv_raw(&self, key: &str) -> Result<Option<(Vec<u8>, i64)>, String> {
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
+        let mut stmt = conn.prepare_cached(
+            "SELECT value, timestamp FROM kv_cache WHERE key = ?1"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        match stmt.query_row(params![key], |row| {
+            let data: Vec<u8> = row.get(0)?;
+            let ts: i64 = row.get(1)?;
+            Ok((data, ts))
+        }) {
+            Ok(r) => Ok(Some(r)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("SQLite query failed: {e}")),
+        }
+    }
+
     /// Delete entries older than max_age_secs.
     pub fn evict_old(&self, max_age_secs: i64) -> Result<u64, String> {
         let cutoff = chrono::Utc::now().timestamp() - max_age_secs;
@@ -535,6 +612,26 @@ impl SqliteCache {
         let mut result = Vec::new();
         for row in rows {
             if let Ok(r) = row { result.push(r); }
+        }
+        Ok(result)
+    }
+
+    /// Search cache keys by substring pattern. Uses SQL LIKE — avoids pulling the
+    /// full bar_cache table into memory for partial-match fallbacks.
+    ///
+    /// `pattern` is matched case-insensitively against the key. Returns at most `limit`
+    /// keys ordered by last-modified timestamp (most recent first).
+    pub fn search_keys(&self, pattern: &str, limit: usize) -> Result<Vec<String>, String> {
+        let conn = self.read_conn.lock().map_err(|e| format!("Read lock failed: {e}"))?;
+        let like_pattern = format!("%{}%", pattern);
+        let mut stmt = conn.prepare_cached(
+            "SELECT key FROM bar_cache WHERE LOWER(key) LIKE LOWER(?1) ORDER BY timestamp DESC LIMIT ?2"
+        ).map_err(|e| format!("SQLite prepare failed: {e}"))?;
+        let rows = stmt.query_map(params![like_pattern, limit as i64], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("SQLite query failed: {e}"))?;
+        let mut result = Vec::new();
+        for row in rows {
+            if let Ok(k) = row { result.push(k); }
         }
         Ok(result)
     }
@@ -1926,5 +2023,90 @@ mod tests {
         assert_eq!(deleted, 2);
         assert!(cache.get_bars("AAPL:1Hour").unwrap().is_none());
         assert!(cache.get_bars("MSFT:1Hour").unwrap().is_some());
+    }
+
+    #[test]
+    fn search_keys_finds_partial_matches() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let json = r#"[{"timestamp":"2024-01-01T00:00:00+00:00","open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}]"#;
+        cache.put_bars("mt5:EURUSD:1Hour", json).unwrap();
+        cache.put_bars("alpaca:AAPL:1Day", json).unwrap();
+        cache.put_bars("kraken:BTCUSD:5Min", json).unwrap();
+
+        let eur = cache.search_keys("EURUSD", 10).unwrap();
+        assert_eq!(eur.len(), 1);
+        assert_eq!(eur[0], "mt5:EURUSD:1Hour");
+
+        // Case-insensitive
+        let eur_lower = cache.search_keys("eurusd", 10).unwrap();
+        assert_eq!(eur_lower.len(), 1);
+
+        // Limit respected
+        let all = cache.search_keys(":", 2).unwrap();
+        assert!(all.len() <= 2);
+    }
+
+    #[test]
+    fn search_keys_returns_empty_on_no_match() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let result = cache.search_keys("DOESNOTEXIST", 10).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn queue_append_and_drain_in_order() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+
+        cache.append_to_queue("lan:test_queue", r#"{"cmd":"A"}"#).unwrap();
+        cache.append_to_queue("lan:test_queue", r#"{"cmd":"B"}"#).unwrap();
+        cache.append_to_queue("lan:test_queue", r#"{"cmd":"C"}"#).unwrap();
+
+        let drained = cache.drain_queue("lan:test_queue").unwrap();
+        assert_eq!(drained.len(), 3);
+        // Order by timestamp/seq — monotonic
+        assert_eq!(drained[0], r#"{"cmd":"A"}"#);
+        assert_eq!(drained[1], r#"{"cmd":"B"}"#);
+        assert_eq!(drained[2], r#"{"cmd":"C"}"#);
+
+        // Second drain returns empty — drain deletes
+        let drained2 = cache.drain_queue("lan:test_queue").unwrap();
+        assert!(drained2.is_empty());
+    }
+
+    #[test]
+    fn queue_isolates_by_prefix() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        cache.append_to_queue("q1", "one").unwrap();
+        cache.append_to_queue("q2", "two").unwrap();
+        cache.append_to_queue("q1", "three").unwrap();
+
+        let q1 = cache.drain_queue("q1").unwrap();
+        assert_eq!(q1.len(), 2);
+        assert!(q1.contains(&"one".to_string()));
+        assert!(q1.contains(&"three".to_string()));
+
+        let q2 = cache.drain_queue("q2").unwrap();
+        assert_eq!(q2, vec!["two".to_string()]);
+    }
+
+    #[test]
+    fn get_kv_raw_returns_compressed_blob() {
+        let db_path = temp_db_path();
+        let cache = SqliteCache::open(&db_path).unwrap();
+        let payload = r#"{"hello":"world"}"#;
+        cache.put_kv("test:kv", payload).unwrap();
+
+        let raw = cache.get_kv_raw("test:kv").unwrap().unwrap();
+        // Blob is zstd-compressed — decompress should roundtrip
+        let decompressed = zstd::decode_all(raw.0.as_slice()).unwrap();
+        assert_eq!(String::from_utf8(decompressed).unwrap(), payload);
+        assert!(raw.1 > 0, "timestamp should be populated");
+
+        let missing = cache.get_kv_raw("missing:key").unwrap();
+        assert!(missing.is_none());
     }
 }
