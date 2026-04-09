@@ -13558,6 +13558,82 @@ impl TyphooNApp {
     }
 
     /// Short label for the current broker scope — used in window headers.
+    /// Build an iCalendar (RFC 5545) payload for the current Event Calendar filter.
+    /// Events are emitted as all-day VEVENTs — we only store date strings, not precise times.
+    /// Compatible with Google Calendar, Apple Calendar, Outlook, Thunderbird.
+    fn build_events_ics(
+        rows: &[EventRow],
+        source_filter: EventSource,
+        show_earnings: bool,
+        show_exdiv: bool,
+        show_divpay: bool,
+    ) -> String {
+        let mut out = String::new();
+        out.push_str("BEGIN:VCALENDAR\r\n");
+        out.push_str("VERSION:2.0\r\n");
+        out.push_str("PRODID:-//TyphooN Terminal//Event Calendar//EN\r\n");
+        out.push_str("CALSCALE:GREGORIAN\r\n");
+        out.push_str("METHOD:PUBLISH\r\n");
+        out.push_str("X-WR-CALNAME:TyphooN Event Calendar\r\n");
+
+        let escape = |s: &str| -> String {
+            s.replace('\\', "\\\\")
+                .replace(';', "\\;")
+                .replace(',', "\\,")
+                .replace('\n', "\\n")
+        };
+
+        let now = chrono::Utc::now();
+        let dtstamp = now.format("%Y%m%dT%H%M%SZ").to_string();
+
+        for r in rows {
+            let src_ok = match source_filter {
+                EventSource::All      => r.in_alpaca || r.in_darwinex || r.in_tasty,
+                EventSource::Alpaca   => r.in_alpaca,
+                EventSource::Darwinex => r.in_darwinex,
+                EventSource::Tasty    => r.in_tasty,
+            };
+            let kind_ok = match r.kind {
+                EventKind::Earnings        => show_earnings,
+                EventKind::ExDividend      => show_exdiv,
+                EventKind::DividendPayment => show_divpay,
+            };
+            if !src_ok || !kind_ok { continue; }
+
+            // Parse date to YYYYMMDD for DTSTART;VALUE=DATE
+            let date_compact = match chrono::NaiveDate::parse_from_str(&r.date, "%Y-%m-%d") {
+                Ok(d) => d.format("%Y%m%d").to_string(),
+                Err(_) => continue, // skip un-parseable rows
+            };
+            let next_day = chrono::NaiveDate::parse_from_str(&r.date, "%Y-%m-%d")
+                .ok()
+                .and_then(|d| d.succ_opt())
+                .map(|d| d.format("%Y%m%d").to_string())
+                .unwrap_or_else(|| date_compact.clone());
+
+            let uid = format!("{}-{}-{}@typhoon-terminal", r.symbol, date_compact, r.kind.label());
+            // Escape once at the final emit site — avoid double-escaping when fields get concatenated.
+            let summary_raw = format!("{} — {} ({})", r.symbol, r.kind.label(), r.company);
+            let description_raw = if r.detail.is_empty() {
+                format!("{} — {}", r.symbol, r.kind.label())
+            } else {
+                format!("{}\n{}", r.kind.label(), r.detail)
+            };
+
+            out.push_str("BEGIN:VEVENT\r\n");
+            out.push_str(&format!("UID:{}\r\n", escape(&uid)));
+            out.push_str(&format!("DTSTAMP:{}\r\n", dtstamp));
+            out.push_str(&format!("DTSTART;VALUE=DATE:{}\r\n", date_compact));
+            out.push_str(&format!("DTEND;VALUE=DATE:{}\r\n", next_day));
+            out.push_str(&format!("SUMMARY:{}\r\n", escape(&summary_raw)));
+            out.push_str(&format!("DESCRIPTION:{}\r\n", escape(&description_raw)));
+            out.push_str("END:VEVENT\r\n");
+        }
+
+        out.push_str("END:VCALENDAR\r\n");
+        out
+    }
+
     fn broker_scope_label(&self) -> &'static str {
         match self.broker_scope {
             EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
@@ -14050,12 +14126,20 @@ impl TyphooNApp {
                 let mut db_path = dirs_home();
                 db_path.push("cache");
                 db_path.push("typhoon_cache.db");
-                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade });
+                // Broker scope override: narrow sources to just the scoped broker.
+                // SCOPE ALL → use configured source toggles. SCOPE ALPACA → force use_alpaca only, etc.
+                let (use_mt5, use_alpaca, use_tasty) = match self.broker_scope {
+                    EventSource::All      => (self.fund_source_mt5, self.fund_source_alpaca, self.fund_source_tastytrade),
+                    EventSource::Alpaca   => (false, true, false),
+                    EventSource::Darwinex => (true, false, false),
+                    EventSource::Tasty    => (false, false, true),
+                };
+                let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5, use_alpaca, use_tastytrade: use_tasty });
                 self.scrape_fund_running = true;
                 self.scrape_fund_ok = 0; self.scrape_fund_fail = 0; self.scrape_fund_skipped = 0;
-                let sources: Vec<&str> = [("MT5", self.fund_source_mt5), ("Alpaca", self.fund_source_alpaca), ("TastyTrade", self.fund_source_tastytrade)]
+                let sources: Vec<&str> = [("MT5", use_mt5), ("Alpaca", use_alpaca), ("TastyTrade", use_tasty)]
                     .iter().filter(|(_, on)| *on).map(|(n, _)| *n).collect();
-                self.log.push_back(LogEntry::info(format!("Fundamentals scrape started (sources: {})...", sources.join(", "))));
+                self.log.push_back(LogEntry::info(format!("Fundamentals scrape started [{}] sources: {}...", self.broker_scope_label(), sources.join(", "))));
             }
             "MT5SYNC"       => {
                 let paths: Vec<String> = self.mt5_db_paths.iter()
@@ -15466,6 +15550,17 @@ impl TyphooNApp {
             },
             "mtf_enabled": self.mtf_enabled,
             "mtf_cols": self.mtf_cols,
+            "broker_scope": match self.broker_scope {
+                EventSource::All => "all",
+                EventSource::Alpaca => "alpaca",
+                EventSource::Darwinex => "darwinex",
+                EventSource::Tasty => "tasty",
+            },
+            "econ_filter_high": self.econ_filter_high,
+            "econ_filter_medium": self.econ_filter_medium,
+            "econ_filter_low": self.econ_filter_low,
+            "econ_filter_holiday": self.econ_filter_holiday,
+            "econ_filter_currencies": self.econ_filter_currencies,
             "right_tab": match self.right_tab {
                 RightTab::Trading => "trading",
                 RightTab::Positions => "positions",
@@ -15789,6 +15884,18 @@ impl TyphooNApp {
                 if let Some(sym) = v["symbol"].as_str() { self.symbol_input = sym.to_string(); }
                 if let Some(mtf) = v["mtf_enabled"].as_bool() { self.mtf_enabled = mtf; }
                 if let Some(tab) = v["active_tab"].as_u64() { self.active_tab = tab as usize; }
+                // Broker scope + econ filters (added 2026-04-09)
+                self.broker_scope = match v["broker_scope"].as_str() {
+                    Some("alpaca") => EventSource::Alpaca,
+                    Some("darwinex") => EventSource::Darwinex,
+                    Some("tasty") => EventSource::Tasty,
+                    _ => EventSource::All,
+                };
+                if let Some(b) = v["econ_filter_high"].as_bool() { self.econ_filter_high = b; }
+                if let Some(b) = v["econ_filter_medium"].as_bool() { self.econ_filter_medium = b; }
+                if let Some(b) = v["econ_filter_low"].as_bool() { self.econ_filter_low = b; }
+                if let Some(b) = v["econ_filter_holiday"].as_bool() { self.econ_filter_holiday = b; }
+                if let Some(s) = v["econ_filter_currencies"].as_str() { self.econ_filter_currencies = s.to_string(); }
                 // Restore tabs: symbol, timeframe, chart type — rebuild charts from session
                 if let Some(tabs) = v["tabs"].as_array() {
                     if !tabs.is_empty() {
@@ -22094,6 +22201,8 @@ impl TyphooNApp {
         // EV Scanner
         if self.show_ev_scanner {
             let ev_active = if self.ev_active_only { self.active_symbols() } else { Vec::new() };
+            let scope_syms = self.broker_scope_symbols();
+            let scope_label = self.broker_scope_label();
             egui::Window::new("Enterprise Value Scanner")
                 .open(&mut self.show_ev_scanner)
                 .resizable(true).default_size([900.0, 500.0])
@@ -22104,12 +22213,16 @@ impl TyphooNApp {
                             let _ = self.broker_tx.send(BrokerCmd::FundamentalsScrape { db_path, use_mt5: self.fund_source_mt5, use_alpaca: self.fund_source_alpaca, use_tastytrade: self.fund_source_tastytrade });
                             self.log.push_back(LogEntry::info("Fundamentals scrape started for all MT5 symbols..."));
                         }
-                        ui.label(egui::RichText::new(format!("{} symbols", self.bg.all_fundamentals.len())).color(AXIS_TEXT).small());
+                        ui.label(egui::RichText::new(format!("{} symbols • scope: {}", self.bg.all_fundamentals.len(), scope_label)).color(AXIS_TEXT).small());
                         ui.checkbox(&mut self.ev_active_only, egui::RichText::new("Active Only").small());
                     });
                     ui.separator();
                     let mut fund_sorted: Vec<&_> = self.bg.all_fundamentals.iter()
                         .filter(|f| ev_active.is_empty() || ev_active.iter().any(|s| s.eq_ignore_ascii_case(&f.symbol)))
+                        .filter(|f| match &scope_syms {
+                            None => true,
+                            Some(set) => set.contains(&f.symbol.to_uppercase()),
+                        })
                         .collect();
                     match self.ev_sort.column {
                         0 => fund_sorted.sort_by(|a, b| a.symbol.cmp(&b.symbol)),
@@ -22955,6 +23068,19 @@ impl TyphooNApp {
                         ui.checkbox(&mut self.event_filter_earnings, "Earnings");
                         ui.checkbox(&mut self.event_filter_exdiv, "Ex-Div");
                         ui.checkbox(&mut self.event_filter_divpay, "Div Pay");
+                        ui.separator();
+                        if ui.small_button("Export .ics").clicked() {
+                            // Export currently-filtered events to an iCalendar file
+                            // that can be imported into Google / Apple / Outlook calendars.
+                            let mut path = dirs_home();
+                            path.push("typhoon_events.ics");
+                            let ics = Self::build_events_ics(&self.event_calendar_rows, self.event_filter_source,
+                                self.event_filter_earnings, self.event_filter_exdiv, self.event_filter_divpay);
+                            match std::fs::write(&path, ics) {
+                                Ok(_) => self.log.push_back(LogEntry::info(format!("Event calendar exported to {}", path.display()))),
+                                Err(e) => self.log.push_back(LogEntry::err(format!("ICS export failed: {e}"))),
+                            }
+                        }
                     });
                     ui.separator();
 
@@ -23797,6 +23923,11 @@ impl TyphooNApp {
                         self.alert_breach_count = self.alert_breach_count.saturating_add(1);
                         self.alert_last_breach_ts = chrono::Utc::now().timestamp();
                         self.alert_last_breach_msg = msg.clone();
+                        // OS-level attention request: taskbar icon flashes, dock bounces on macOS,
+                        // title bar flashes on Windows. No new crate dep — egui 0.34 supports this.
+                        ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(
+                            egui::UserAttentionType::Critical
+                        ));
                         self.log.push_back(LogEntry::warn(msg.clone()));
                         // Send notification if any provider configured
                         if !self.discord_webhook.is_empty() || !self.ntfy_topic.is_empty()
@@ -24909,50 +25040,32 @@ impl TyphooNApp {
                         });
                         ui.add_space(8.0);
 
-                        // ── Commands quick reference (top ~30 most-used) ──
-                        ui.label(egui::RichText::new("Command palette (top commands)").color(ACCENT).strong());
+                        // ── Commands reference (auto-generated from COMMANDS registry) ──
+                        // Skips the DRAW_* cluster — they're listed in their own section below.
+                        ui.label(egui::RichText::new(format!("Command palette ({} commands)", COMMANDS.iter().filter(|c| !c.name.starts_with("DRAW_")).count())).color(ACCENT).strong());
                         ui.label(egui::RichText::new("Press ~ then type. All commands are case-insensitive.").small().color(AXIS_TEXT));
                         egui::Grid::new("help_cmds").striped(true).num_columns(2).show(ui, |ui| {
-                            let cmds: &[(&str, &str)] = &[
-                                ("SETTINGS",      "Application settings"),
-                                ("CONNECT",       "Connect to broker (Alpaca / MT5)"),
-                                ("SCOPE ALL|ALPACA|DARWINEX|TASTY", "Global broker scope filter"),
-                                ("MTF",           "Toggle multi-timeframe grid"),
-                                ("FUNDAMENTALS",  "Fundamentals viewer"),
-                                ("OUTLIERS",      "Multi-dim outlier scanner"),
-                                ("EVOUTLIERS",    "EV outlier scanner"),
-                                ("DARWINVAR",     "DARWIN VaR corridor check"),
-                                ("EVENTS",        "Upcoming earnings/dividends (per broker)"),
-                                ("CALENDAR",      "Economic calendar (ForexFactory)"),
-                                ("OPTION_CHAIN",  "tastytrade option chain"),
-                                ("OPTIONS",       "Alpaca options chain"),
-                                ("MONTECARLO",    "Monte Carlo VaR simulation"),
-                                ("RISKRUIN",      "Risk-of-Ruin calculator"),
-                                ("STRESS_TEST",   "Portfolio stress test"),
-                                ("CORRELATION",   "Correlation matrix"),
-                                ("STAT_ARB",      "Statistical arbitrage pairs"),
-                                ("SEC",           "SEC filings scanner"),
-                                ("INSIDER",       "Insider trades (Form 4)"),
-                                ("FRED",          "FRED economic dashboard"),
-                                ("NEWS",          "Market news"),
-                                ("ALERTS",        "Indicator alert builder"),
-                                ("SCREENER",      "Symbol screener"),
-                                ("SYMBOLS",       "Symbol explorer"),
-                                ("BACKTEST",      "Run backtest on current symbol"),
-                                ("REPLAY",        "Market replay mode"),
-                                ("JOURNAL",       "Trade journal"),
-                                ("EXPORT_CSV",    "Export chart data"),
-                                ("SCREENSHOT",    "Save chart as PNG"),
-                                ("WEBSERVER",     "Start HTTPS web server (phone access)"),
-                                ("HELP",          "This window"),
-                                ("QUIT",          "Exit application"),
-                            ];
-                            for (k, d) in cmds {
-                                if !matches(k, d) { continue; }
-                                ui.label(egui::RichText::new(*k).monospace().color(egui::Color32::from_rgb(150, 200, 255)));
-                                ui.label(*d);
+                            for cmd in COMMANDS {
+                                if cmd.name.starts_with("DRAW_") { continue; }
+                                if !matches(cmd.name, cmd.desc) { continue; }
+                                ui.label(egui::RichText::new(cmd.name).monospace().color(egui::Color32::from_rgb(150, 200, 255)));
+                                ui.label(cmd.desc);
                                 ui.end_row();
                             }
+                        });
+                        ui.add_space(8.0);
+
+                        // ── Drawing tools (separate section) ──
+                        ui.collapsing(egui::RichText::new(format!("Drawing tools ({} types)", COMMANDS.iter().filter(|c| c.name.starts_with("DRAW_")).count())).color(ACCENT).strong(), |ui| {
+                            egui::Grid::new("help_draw").striped(true).num_columns(2).show(ui, |ui| {
+                                for cmd in COMMANDS {
+                                    if !cmd.name.starts_with("DRAW_") { continue; }
+                                    if !matches(cmd.name, cmd.desc) { continue; }
+                                    ui.label(egui::RichText::new(cmd.name).monospace().color(egui::Color32::from_rgb(150, 200, 255)));
+                                    ui.label(cmd.desc);
+                                    ui.end_row();
+                                }
+                            });
                         });
                         ui.add_space(10.0);
 
@@ -27490,6 +27603,32 @@ impl eframe::App for TyphooNApp {
                         .color(ACCENT)
                         .strong(),
                 );
+                // Broker scope indicator — click to cycle through scopes.
+                // Shows the current global filter so the trader always knows what
+                // data universe they're looking at (All / Alpaca / Darwinex / Tasty).
+                ui.separator();
+                let (scope_lbl, scope_col) = match self.broker_scope {
+                    EventSource::All      => ("ALL",      egui::Color32::from_rgb(140, 140, 160)),
+                    EventSource::Alpaca   => ("ALPACA",   egui::Color32::from_rgb(255, 160, 60)),
+                    EventSource::Darwinex => ("DARWINEX", egui::Color32::from_rgb(100, 180, 255)),
+                    EventSource::Tasty    => ("TASTY",    egui::Color32::from_rgb(200, 130, 255)),
+                };
+                let scope_btn = egui::Button::new(
+                    egui::RichText::new(format!("Scope: {}", scope_lbl)).strong().color(egui::Color32::WHITE)
+                ).fill(scope_col);
+                if ui.add(scope_btn).on_hover_text("Click to cycle scope (All → Alpaca → Darwinex → Tasty → All). Affects OUTLIERS, EVOUTLIERS, Sector Heatmap, Dividend Screener.").clicked() {
+                    self.broker_scope = match self.broker_scope {
+                        EventSource::All      => EventSource::Alpaca,
+                        EventSource::Alpaca   => EventSource::Darwinex,
+                        EventSource::Darwinex => EventSource::Tasty,
+                        EventSource::Tasty    => EventSource::All,
+                    };
+                    let n = self.scoped_fundamentals().len();
+                    self.log.push_back(LogEntry::info(format!(
+                        "Broker scope → {} ({} fundamentals in scope)",
+                        self.broker_scope_label(), n
+                    )));
+                }
                 // Alert breach badge — visible red counter when alerts have fired.
                 // Clicking clears the counter and opens the alerts window.
                 if self.alert_breach_count > 0 {
@@ -32622,5 +32761,98 @@ mod tests {
         let ts = 1700006400000_i64 + 9 * 3600000 + 30 * 60000; // 09:30
         format_ts_buf(ts, Timeframe::M15, &mut buf);
         assert!(buf.contains("09:30"), "M15 should show HH:MM, got: {}", buf);
+    }
+
+    fn sample_events() -> Vec<EventRow> {
+        vec![
+            EventRow {
+                symbol: "AAPL".into(),
+                company: "Apple Inc.".into(),
+                date: "2026-05-01".into(),
+                days_until: 10,
+                kind: EventKind::Earnings,
+                detail: "P/E 28.5".into(),
+                in_alpaca: true, in_darwinex: false, in_tasty: true,
+            },
+            EventRow {
+                symbol: "MSFT".into(),
+                company: "Microsoft".into(),
+                date: "2026-05-08".into(),
+                days_until: 17,
+                kind: EventKind::ExDividend,
+                detail: "0.82% yield".into(),
+                in_alpaca: true, in_darwinex: true, in_tasty: false,
+            },
+            EventRow {
+                symbol: "T".into(),
+                company: "AT&T, Inc.".into(),  // tests comma escaping
+                date: "2026-05-15".into(),
+                days_until: 24,
+                kind: EventKind::DividendPayment,
+                detail: "5.10% yield".into(),
+                in_alpaca: false, in_darwinex: true, in_tasty: false,
+            },
+        ]
+    }
+
+    #[test]
+    fn test_build_events_ics_contains_calendar_wrapper() {
+        let ics = TyphooNApp::build_events_ics(&sample_events(), EventSource::All, true, true, true);
+        assert!(ics.starts_with("BEGIN:VCALENDAR\r\n"));
+        assert!(ics.ends_with("END:VCALENDAR\r\n"));
+        assert!(ics.contains("VERSION:2.0"));
+        assert!(ics.contains("PRODID:-//TyphooN Terminal"));
+    }
+
+    #[test]
+    fn test_build_events_ics_emits_all_filtered_vevents() {
+        let ics = TyphooNApp::build_events_ics(&sample_events(), EventSource::All, true, true, true);
+        let vevent_count = ics.matches("BEGIN:VEVENT").count();
+        assert_eq!(vevent_count, 3, "All 3 events should be emitted");
+        assert!(ics.contains("SUMMARY:AAPL — Earnings"));
+        assert!(ics.contains("DTSTART;VALUE=DATE:20260501"));
+        assert!(ics.contains("DTEND;VALUE=DATE:20260502"));
+    }
+
+    #[test]
+    fn test_build_events_ics_respects_source_filter() {
+        // Only Alpaca — AAPL (yes), MSFT (yes), T (no)
+        let ics = TyphooNApp::build_events_ics(&sample_events(), EventSource::Alpaca, true, true, true);
+        assert_eq!(ics.matches("BEGIN:VEVENT").count(), 2);
+        assert!(ics.contains("AAPL"));
+        assert!(ics.contains("MSFT"));
+        assert!(!ics.contains("SUMMARY:T"));
+    }
+
+    #[test]
+    fn test_build_events_ics_respects_type_filter() {
+        // Earnings only
+        let ics = TyphooNApp::build_events_ics(&sample_events(), EventSource::All, true, false, false);
+        assert_eq!(ics.matches("BEGIN:VEVENT").count(), 1);
+        assert!(ics.contains("AAPL"));
+        // Ex-Div + Div-Pay only
+        let ics2 = TyphooNApp::build_events_ics(&sample_events(), EventSource::All, false, true, true);
+        assert_eq!(ics2.matches("BEGIN:VEVENT").count(), 2);
+    }
+
+    #[test]
+    fn test_build_events_ics_escapes_special_chars() {
+        let ics = TyphooNApp::build_events_ics(&sample_events(), EventSource::All, true, true, true);
+        // Comma in "AT&T, Inc." must be escaped per RFC 5545
+        assert!(ics.contains("AT&T\\, Inc."), "comma should be backslash-escaped: {}", ics);
+    }
+
+    #[test]
+    fn test_build_events_ics_skips_unparseable_dates() {
+        let bad = vec![EventRow {
+            symbol: "X".into(), company: "Bad".into(),
+            date: "not-a-date".into(),
+            days_until: 0,
+            kind: EventKind::Earnings,
+            detail: String::new(),
+            in_alpaca: true, in_darwinex: false, in_tasty: false,
+        }];
+        let ics = TyphooNApp::build_events_ics(&bad, EventSource::All, true, true, true);
+        assert_eq!(ics.matches("BEGIN:VEVENT").count(), 0);
     }
 }
