@@ -21870,12 +21870,33 @@ impl TyphooNApp {
                                         .show(ui, |ui| {
                                             if let Some(strikes) = strikes {
                                                 egui::Grid::new(format!("oc_{}", date))
-                                                    .striped(true).num_columns(3)
+                                                    .striped(true).num_columns(7)
                                                     .show(ui, |ui| {
                                                     ui.strong("Strike");
-                                                    ui.strong("Call Symbol");
-                                                    ui.strong("Put Symbol");
+                                                    ui.strong("Call");
+                                                    ui.strong("Put");
+                                                    ui.strong("Delta");
+                                                    ui.strong("Gamma");
+                                                    ui.strong("Theta");
+                                                    ui.strong("Vega");
                                                     ui.end_row();
+                                                    // Compute Greeks for each strike
+                                                    let spot = self.live_account.as_ref().map(|_| {
+                                                        // Use last price from watchlist or chart
+                                                        self.watchlist_rows.iter()
+                                                            .find(|r| r.symbol.eq_ignore_ascii_case(sym))
+                                                            .map(|r| r.last)
+                                                            .unwrap_or(0.0)
+                                                    }).unwrap_or(0.0);
+                                                    let days_to_exp = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()
+                                                        .map(|exp| {
+                                                            let today = chrono::Utc::now().date_naive();
+                                                            (exp - today).num_days().max(1) as f64
+                                                        }).unwrap_or(30.0);
+                                                    let t_years = days_to_exp / 365.0;
+                                                    let r = 0.05; // risk-free rate estimate
+                                                    let sigma = 0.30; // default IV (30%)
+
                                                     for s in strikes.iter() {
                                                         let strike = s["strike_price"].as_f64().unwrap_or(0.0);
                                                         let call_sym = s["call_symbol"].as_str().unwrap_or("—");
@@ -21883,6 +21904,17 @@ impl TyphooNApp {
                                                         ui.label(format!("{:.2}", strike));
                                                         ui.label(egui::RichText::new(call_sym).color(oc_green).monospace().small());
                                                         ui.label(egui::RichText::new(put_sym).color(oc_red).monospace().small());
+                                                        // Greeks columns
+                                                        if spot > 0.0 {
+                                                            let cg = typhoon_engine::core::options::greeks(spot, strike, t_years, r, sigma, true);
+                                                            let _pg = typhoon_engine::core::options::greeks(spot, strike, t_years, r, sigma, false);
+                                                            ui.label(egui::RichText::new(format!("{:.3}", cg.delta)).small());
+                                                            ui.label(egui::RichText::new(format!("{:.4}", cg.gamma)).small());
+                                                            ui.label(egui::RichText::new(format!("{:.2}", cg.theta)).small());
+                                                            ui.label(egui::RichText::new(format!("{:.3}", cg.vega)).small());
+                                                        } else {
+                                                            ui.label("—"); ui.label("—"); ui.label("—"); ui.label("—");
+                                                        }
                                                         ui.end_row();
                                                     }
                                                 });
