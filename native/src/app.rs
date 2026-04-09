@@ -5830,9 +5830,11 @@ fn draw_chart(
     // ── Extended Hours Candle (magenta, TradingView-style) ─────────────
     // When pre/post market data is available, draw a real ext hours candle.
     // Otherwise, draw a ghost placeholder.
+    // Position flush to the right edge of the chart (no reserved slot in bar_w math,
+    // so we clamp into chart_rect instead of reserving whitespace and shifting all bars).
     if let Some(last) = bars.last() {
-        let next_x = chart_rect.left() + (bars.len() as f32 + 0.5) * bar_w;
-        if next_x < chart_rect.right() - 10.0 {
+        let next_x = (chart_rect.right() - half_body - 2.0).max(chart_rect.left() + bar_w);
+        if next_x > chart_rect.left() + bar_w {
             if chart.ext_active && chart.ext_high > 0.0 {
                 // Real extended hours candle (magenta)
                 let ext_col = egui::Color32::from_rgb(200, 50, 200); // Magenta
@@ -25766,9 +25768,11 @@ impl eframe::App for TyphooNApp {
                                 if is_tf && parts.len() > 1 { parts[parts.len()-2].to_string() } else { s }
                             };
                             if chart_bare == row_sym || chart_bare.contains(&row_sym) || row_sym.contains(&chart_bare) {
-                                // Update ext hours candle if ext data available
-                                if row.ext_change_pct.abs() > 0.001 && row.prev_close > 0.0 {
-                                    let ext_price = row.prev_close * (1.0 + row.ext_change_pct / 100.0);
+                                // Update ext hours candle if ext data available.
+                                // row.last is already set to the ext price by Yahoo enrichment
+                                // (see GetWatchlistQuotes handler) when ext_change_pct != 0.
+                                if row.ext_change_pct.abs() > 0.001 && row.last > 0.0 {
+                                    let ext_price = row.last;
                                     if !chart.ext_active {
                                         // First ext tick: open = regular close, OHLC from ext price
                                         let reg_close = if let Some(bar) = chart.bars.last() { bar.close } else { ext_price };
