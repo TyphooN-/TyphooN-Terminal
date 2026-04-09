@@ -8844,6 +8844,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "HV_CONE",       desc: "Historical volatility cone (percentile rank)" },
     Command { name: "SECTOR_HEATMAP",desc: "Sector performance heatmap" },
     Command { name: "DIVSCREEN",     desc: "Dividend yield screener (ranked by yield)" },
+    Command { name: "DIVEXPLORER",   desc: "Upcoming dividend dates for Darwinex-tradeable symbols" },
     Command { name: "CONFLUENCE",    desc: "Multi-timeframe RSI/MACD confluence score" },
     Command { name: "STAT_ARB",      desc: "Statistical arbitrage pairs (z-score + half-life)" },
     Command { name: "RISK_BUDGET",   desc: "Portfolio risk budget (marginal VaR contribution)" },
@@ -8867,6 +8868,8 @@ const COMMANDS: &[Command] = &[
     Command { name: "DARWINIA_SCAN",  desc: "DarwinIA universe scan — top DARWINs by Sharpe (GPU → CPU)" },
     Command { name: "DARWINEXOUTLIERS", desc: "Multi-dimensional outlier scanner (P/E, EV, short ratio, SEC filings)" },
     Command { name: "OUTLIERS",        desc: "Same as DARWINEXOUTLIERS — works on all symbols with fundamentals" },
+    Command { name: "DARWINVAR",       desc: "Outlier scanner on DARWIN VaR95 values + Darwinex corridor check (3.25%-6.5%)" },
+    Command { name: "EVOUTLIERS",      desc: "Outlier scanner on enterprise value (EV), grouped by sector" },
     Command { name: "EXPORT_DARWIN", desc: "Export all DARWIN data to JSON file" },
     Command { name: "IMPORT_DARWIN", desc: "Import DARWIN data from JSON file" },
     Command { name: "DELETE_DARWIN", desc: "Delete a DARWIN/MT5 account (DELETE_DARWIN TICKER)" },
@@ -9048,6 +9051,34 @@ struct WatchlistRow {
     volume: f64,
     /// Extended hours change % (pre/post market).
     ext_change_pct: f64,
+}
+
+/// Upcoming event source filter for the Event Calendar window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventSource { All, Alpaca, Darwinex, Tasty }
+
+/// Upcoming event type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventKind { Earnings, ExDividend, DividendPayment }
+
+impl EventKind {
+    fn label(&self) -> &'static str {
+        match self { Self::Earnings => "Earnings", Self::ExDividend => "Ex-Div", Self::DividendPayment => "Div Pay" }
+    }
+}
+
+/// Single upcoming event row — used by the Event Calendar window.
+#[derive(Debug, Clone)]
+struct EventRow {
+    symbol: String,       // bare ticker (e.g. AAPL)
+    company: String,
+    date: String,         // YYYY-MM-DD
+    days_until: i64,      // days from today (negative = past)
+    kind: EventKind,
+    detail: String,       // yield%, previous EPS, etc.
+    in_alpaca: bool,
+    in_darwinex: bool,
+    in_tasty: bool,
 }
 
 /// Cached per-account analytics (computed in background thread).
@@ -9795,6 +9826,12 @@ pub struct TyphooNApp {
     show_hv_cone: bool,
     show_sector_heatmap: bool,
     show_dividends: bool,
+    show_event_calendar: bool,
+    event_calendar_rows: Vec<EventRow>,
+    event_filter_source: EventSource,
+    event_filter_earnings: bool,
+    event_filter_exdiv: bool,
+    event_filter_divpay: bool,
     show_confluence: bool,
     show_stat_arb: bool,
     show_risk_budget: bool,
@@ -12558,6 +12595,12 @@ impl TyphooNApp {
             show_hv_cone: false,
             show_sector_heatmap: false,
             show_dividends: false,
+            show_event_calendar: false,
+            event_calendar_rows: Vec::new(),
+            event_filter_source: EventSource::All,
+            event_filter_earnings: true,
+            event_filter_exdiv: true,
+            event_filter_divpay: true,
             show_confluence: false,
             show_stat_arb: false,
             show_risk_budget: false,
@@ -13953,6 +13996,100 @@ impl TyphooNApp {
             "HV_CONE"       => self.show_hv_cone = true,
             "SECTOR_HEATMAP"=> self.show_sector_heatmap = true,
             "DIVSCREEN"     => self.show_dividends = true,
+            "DIVEXPLORER" | "EVENTS" | "EVENTCALENDAR" => {
+                // Comprehensive upcoming events view for actively traded symbols.
+                // Aggregates earnings / ex-dividend / dividend-payment dates from
+                // fundamentals, tags each row by broker tradeability (Alpaca / Darwinex / Tasty).
+                use chrono::NaiveDate;
+                let today = chrono::Utc::now().date_naive();
+
+                // Active symbol sets (bare tickers, uppercased).
+                let alpaca_syms: std::collections::HashSet<String> = self.live_positions.iter()
+                    .map(|p| p.symbol.replace('/', "").to_uppercase())
+                    .collect();
+                let tasty_syms: std::collections::HashSet<String> = self.tt_positions.iter()
+                    .map(|p| p.symbol.replace('/', "").to_uppercase())
+                    .collect();
+                // Darwinex: strip suffix (.US, .UK, .DE, etc.) from tradeable MT5 symbols.
+                let darwinex_syms: std::collections::HashSet<String> = self.darwinex_radar_data.iter()
+                    .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
+                    .map(|(sym, _, _, _, _, _, _, _, _)| {
+                        sym.split('.').next().unwrap_or(sym.as_str()).to_uppercase()
+                    })
+                    .collect();
+
+                let parse_date = |s: &str| -> Option<NaiveDate> {
+                    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+                        .or_else(|| NaiveDate::parse_from_str(s, "%Y/%m/%d").ok())
+                };
+
+                let mut rows: Vec<EventRow> = Vec::new();
+                for f in &self.bg.all_fundamentals {
+                    let sym_u = f.symbol.to_uppercase();
+                    let in_alpaca = alpaca_syms.contains(&sym_u);
+                    let in_tasty = tasty_syms.contains(&sym_u);
+                    let in_darwinex = darwinex_syms.contains(&sym_u);
+                    if !in_alpaca && !in_tasty && !in_darwinex { continue; }
+
+                    let mut push = |date_str: &str, kind: EventKind, detail: String| {
+                        if let Some(d) = parse_date(date_str) {
+                            let days = (d - today).num_days();
+                            if days < 0 { return; } // only upcoming
+                            rows.push(EventRow {
+                                symbol: f.symbol.clone(),
+                                company: f.company_name.clone(),
+                                date: date_str.to_string(),
+                                days_until: days,
+                                kind,
+                                detail,
+                                in_alpaca, in_darwinex, in_tasty,
+                            });
+                        }
+                    };
+
+                    if let Some(ref d) = f.next_earnings_date {
+                        let detail = match f.pe_ratio {
+                            Some(pe) => format!("P/E {:.1}", pe),
+                            None => String::new(),
+                        };
+                        push(d, EventKind::Earnings, detail);
+                    }
+                    if let Some(ref d) = f.next_ex_dividend_date {
+                        let detail = match f.dividend_yield {
+                            Some(y) => format!("{:.2}% yield", y),
+                            None => String::new(),
+                        };
+                        push(d, EventKind::ExDividend, detail);
+                    }
+                    if let Some(ref d) = f.next_dividend_payment_date {
+                        let detail = match f.dividend_yield {
+                            Some(y) => format!("{:.2}% yield", y),
+                            None => String::new(),
+                        };
+                        push(d, EventKind::DividendPayment, detail);
+                    }
+                }
+
+                // Sort by days_until ASC (most imminent first).
+                rows.sort_by_key(|r| r.days_until);
+
+                self.log.push_back(LogEntry::info(format!(
+                    "Event Calendar: {} upcoming events | Alpaca {} • Darwinex {} • Tasty {}",
+                    rows.len(), alpaca_syms.len(), darwinex_syms.len(), tasty_syms.len()
+                )));
+                if rows.is_empty() {
+                    self.log.push_back(LogEntry::warn("No events found. Run EVSCRAPE/FUNDAMENTALS first to populate earnings/dividend dates."));
+                }
+                self.event_calendar_rows = rows;
+                // DIVEXPLORER preset: Darwinex + dividends only.
+                if cmd_upper == "DIVEXPLORER" {
+                    self.event_filter_source = EventSource::Darwinex;
+                    self.event_filter_earnings = false;
+                    self.event_filter_exdiv = true;
+                    self.event_filter_divpay = true;
+                }
+                self.show_event_calendar = true;
+            }
             "CONFLUENCE"    => self.show_confluence = true,
             "STAT_ARB"      => self.show_stat_arb = true,
             "RISK_BUDGET"   => self.show_risk_budget = true,
@@ -14261,6 +14398,84 @@ impl TyphooNApp {
                             self.show_darwinex_outliers = true;
                         }
                     }
+                }
+            }
+            "DARWINVAR" | "DARWINVAROUTLIERS" | "VAROUTLIERS" => {
+                // DARWIN VaR outlier scanner: IQR detection on per-DARWIN var_95 values,
+                // plus flagging against Darwinex corridor (3.25% – 6.5% of equity).
+                use typhoon_engine::core::var;
+                if self.bg.per_darwin_var.len() < 4 {
+                    self.log.push_back(LogEntry::warn(format!(
+                        "Need 4+ DARWINs with VaR data (have {}). Load DARWIN daily returns first.",
+                        self.bg.per_darwin_var.len()
+                    )));
+                } else {
+                    // Flat distribution — all DARWINs in one "sector" since they're all strategies.
+                    let data: Vec<(String, String, f64)> = self.bg.per_darwin_var.iter()
+                        .filter(|(_, vr)| vr.var_95 > 0.0)
+                        .map(|(ticker, vr)| (ticker.clone(), "DARWIN".to_string(), vr.var_95))
+                        .collect();
+                    let (outliers, stats) = var::detect_outliers(&data, 1.5);
+
+                    // Darwinex corridor: 3.25% - 6.5% of equity.
+                    // Assumes var_95 is expressed as % of equity (typical for Darwinex VaR).
+                    const CORRIDOR_LOW: f64 = 3.25;
+                    const CORRIDOR_HIGH: f64 = 6.50;
+                    let below: Vec<&str> = data.iter()
+                        .filter(|(_, _, v)| *v < CORRIDOR_LOW)
+                        .map(|(s, _, _)| s.as_str())
+                        .collect();
+                    let above: Vec<&str> = data.iter()
+                        .filter(|(_, _, v)| *v > CORRIDOR_HIGH)
+                        .map(|(s, _, _)| s.as_str())
+                        .collect();
+
+                    self.log.push_back(LogEntry::info(format!(
+                        "DARWIN VaR outliers: {} IQR-flagged from {} DARWINs | Corridor violations: {} below {:.2}%, {} above {:.2}%",
+                        outliers.len(), data.len(), below.len(), CORRIDOR_LOW, above.len(), CORRIDOR_HIGH
+                    )));
+                    if !below.is_empty() {
+                        self.log.push_back(LogEntry::warn(format!("Below corridor: {}", below.join(", "))));
+                    }
+                    if !above.is_empty() {
+                        self.log.push_back(LogEntry::err(format!("Above corridor (rule violation): {}", above.join(", "))));
+                    }
+
+                    self.darwinex_outliers = outliers;
+                    self.darwinex_sector_stats = stats;
+                    self.darwinex_multi_outliers = Vec::new();
+                    self.show_darwinex_outliers = true;
+                }
+            }
+            "EVOUTLIERS" | "EV_OUTLIERS" => {
+                // Enterprise value outlier scanner: IQR detection on EV, grouped by sector.
+                use typhoon_engine::core::var;
+                let fund = &self.bg.all_fundamentals;
+                let data: Vec<(String, String, f64)> = fund.iter()
+                    .filter_map(|f| f.enterprise_value.map(|ev| (
+                        f.symbol.clone(),
+                        if f.sector.is_empty() { "Unknown".to_string() } else { f.sector.clone() },
+                        ev,
+                    )))
+                    .filter(|(_, _, ev)| *ev > 0.0)
+                    .collect();
+                if data.len() < 10 {
+                    self.log.push_back(LogEntry::warn(format!(
+                        "Need 10+ symbols with enterprise_value (have {}). Run EVSCRAPE first.",
+                        data.len()
+                    )));
+                } else {
+                    let (outliers, stats) = var::detect_outliers(&data, 1.5);
+                    let extreme = outliers.iter().filter(|o| o.tier == "EXTREME").count();
+                    let high = outliers.iter().filter(|o| o.tier == "HIGH").count();
+                    self.log.push_back(LogEntry::info(format!(
+                        "EV outliers: {} total ({} EXTREME, {} HIGH) from {} symbols across {} sectors",
+                        outliers.len(), extreme, high, data.len(), stats.len()
+                    )));
+                    self.darwinex_outliers = outliers;
+                    self.darwinex_sector_stats = stats;
+                    self.darwinex_multi_outliers = Vec::new();
+                    self.show_darwinex_outliers = true;
                 }
             }
             "DARWINIA_SCAN" | "DARWIN_SCAN" | "GPU_SCAN" => {
@@ -22407,6 +22622,81 @@ impl TyphooNApp {
                                 ui.label(egui::RichText::new(format!("{:.2}%", d.dividend_yield)).color(yc));
                                 ui.label(egui::RichText::new(&d.ex_div_date).small());
                                 ui.label(format!("{:.1}", d.pe_ratio));
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+        }
+
+        // ── Event Calendar (upcoming earnings / ex-div / div-pay) ─────
+        if self.show_event_calendar {
+            egui::Window::new("Event Calendar — Upcoming Important Dates")
+                .open(&mut self.show_event_calendar)
+                .resizable(true).default_size([780.0, 520.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Source:").strong());
+                        ui.radio_value(&mut self.event_filter_source, EventSource::All, "All");
+                        ui.radio_value(&mut self.event_filter_source, EventSource::Alpaca, "Alpaca");
+                        ui.radio_value(&mut self.event_filter_source, EventSource::Darwinex, "Darwinex");
+                        ui.radio_value(&mut self.event_filter_source, EventSource::Tasty, "Tasty");
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Type:").strong());
+                        ui.checkbox(&mut self.event_filter_earnings, "Earnings");
+                        ui.checkbox(&mut self.event_filter_exdiv, "Ex-Div");
+                        ui.checkbox(&mut self.event_filter_divpay, "Div Pay");
+                    });
+                    ui.separator();
+
+                    // Apply filters.
+                    let filtered: Vec<&EventRow> = self.event_calendar_rows.iter().filter(|r| {
+                        let src_ok = match self.event_filter_source {
+                            EventSource::All      => r.in_alpaca || r.in_darwinex || r.in_tasty,
+                            EventSource::Alpaca   => r.in_alpaca,
+                            EventSource::Darwinex => r.in_darwinex,
+                            EventSource::Tasty    => r.in_tasty,
+                        };
+                        let kind_ok = match r.kind {
+                            EventKind::Earnings         => self.event_filter_earnings,
+                            EventKind::ExDividend       => self.event_filter_exdiv,
+                            EventKind::DividendPayment  => self.event_filter_divpay,
+                        };
+                        src_ok && kind_ok
+                    }).collect();
+
+                    ui.label(egui::RichText::new(format!(
+                        "{} events shown ({} total)",
+                        filtered.len(), self.event_calendar_rows.len()
+                    )).strong());
+                    ui.separator();
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::Grid::new("event_cal_grid").striped(true).num_columns(7).show(ui, |ui| {
+                            ui.strong("Date"); ui.strong("Days"); ui.strong("Type");
+                            ui.strong("Symbol"); ui.strong("Company"); ui.strong("Detail"); ui.strong("Brokers");
+                            ui.end_row();
+                            for r in filtered.iter().take(500) {
+                                let date_col = if r.days_until <= 3 { DOWN }
+                                    else if r.days_until <= 7 { egui::Color32::from_rgb(220, 180, 60) }
+                                    else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(&r.date).color(date_col));
+                                ui.label(egui::RichText::new(format!("{}", r.days_until)).color(date_col));
+                                let kind_col = match r.kind {
+                                    EventKind::Earnings        => egui::Color32::from_rgb(100, 180, 255),
+                                    EventKind::ExDividend      => egui::Color32::from_rgb(120, 220, 120),
+                                    EventKind::DividendPayment => egui::Color32::from_rgb(220, 200, 80),
+                                };
+                                ui.label(egui::RichText::new(r.kind.label()).color(kind_col).strong());
+                                ui.label(egui::RichText::new(&r.symbol).strong().monospace());
+                                ui.label(egui::RichText::new(&r.company).small());
+                                ui.label(egui::RichText::new(&r.detail).small());
+                                let mut tags = Vec::new();
+                                if r.in_alpaca   { tags.push("A"); }
+                                if r.in_darwinex { tags.push("D"); }
+                                if r.in_tasty    { tags.push("T"); }
+                                ui.label(egui::RichText::new(tags.join("")).small().monospace());
                                 ui.end_row();
                             }
                         });
