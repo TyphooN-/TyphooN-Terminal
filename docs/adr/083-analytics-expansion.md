@@ -26,12 +26,25 @@ Comprehensive audit identified feature gaps vs TradingView/Bloomberg in options 
 - **All have CPU fallback** (except Anchored VWAP — GPU only)
 - **GpuBacktester struct exists** but has zero implementation (future: parallel parameter grid evaluation)
 
+### Portfolio Metrics (engine/src/core/darwin.rs)
+- Treynor Ratio: `(annualized_return - risk_free_rate) / beta`
+- Jensen's Alpha: `(R_d - R_f) - β * (R_b - R_f)` (CAPM excess return)
+- Added to `BenchmarkComparison` struct alongside existing alpha, beta, information_ratio
+
+### Symbol Correlation Matrix (engine/src/core/screener.rs)
+- `compute_symbol_correlation_matrix()`: N×N Pearson correlation from close price series
+- Configurable window (0 = all bars, N = last N bars)
+- Single-pass mean/var/cov, clamped [-1, 1]
+- `CorrelationMatrix` struct: symbols + matrix + window_bars
+
+### Volume Profile: Initial Balance (native/src/app.rs)
+- Detects session start (first bar of last trading day)
+- Computes IB High, IB Low, IB Range from first hour of session
+- Displayed alongside POC and VAH/VAL
+
 ## Remaining Feature Gaps (Roadmap)
-- [ ] Market Breadth indicators (Advance/Decline, McClellan Oscillator)
-- [ ] Put/Call Ratio visualization
-- [ ] Full Volume Profile (Visible Range, Initial Balance, Rotation)
-- [ ] Symbol Correlation Matrix (arbitrary pairs, not just DARWINs)
-- [ ] Information Ratio, Treynor Ratio, Jensen's Alpha
+- [ ] Market Breadth indicators (Advance/Decline, McClellan — needs exchange-level data)
+- [ ] Put/Call Ratio visualization (needs options volume data feed)
 - [ ] GPU Monte Carlo VaR (parallel sampling — infrastructure exists)
 - [ ] GPU Backtester (parallel parameter grid — struct exists)
 
