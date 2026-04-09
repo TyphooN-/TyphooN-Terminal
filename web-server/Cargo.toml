@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 typhoon-web-protocol = { path = "../web-protocol" }
 axum = { version = "0.8", features = ["ws"] }
-axum-server = { version = "0.7", features = ["tls-rustls"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 tokio = { version = "1", features = ["sync", "net"] }
 serde_json = "1"
 tracing = "0.1"
