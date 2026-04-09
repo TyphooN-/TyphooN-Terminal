@@ -250,4 +250,42 @@ mod tests {
         let lots = var_lots(&config, &spec, 100_000.0, 500.0);
         assert!((lots - 2.0).abs() < 0.01);
     }
+
+    #[test]
+    fn test_risk_lots_zero_sl() {
+        let spec = test_spec();
+        let lots = risk_lots(&spec, 100.0, 0.0);
+        assert_eq!(lots, 0.0, "Zero SL should produce zero lots");
+    }
+
+    #[test]
+    fn test_risk_lots_zero_risk() {
+        let spec = test_spec();
+        let lots = risk_lots(&spec, 0.0, 10.0);
+        assert_eq!(lots, 0.0, "Zero risk should produce zero lots");
+    }
+
+    #[test]
+    fn test_standard_lots_zero_equity() {
+        let config = RiskConfig::default();
+        let spec = test_spec();
+        let lots = standard_lots(&config, &spec, 0.0, 10.0, false);
+        assert_eq!(lots, 0.0, "Zero equity should produce zero lots");
+    }
+
+    #[test]
+    fn test_var_lots_zero_var_per_lot() {
+        let config = RiskConfig::default();
+        let spec = test_spec();
+        let lots = var_lots(&config, &spec, 100_000.0, 0.0);
+        assert_eq!(lots, 0.0, "Zero VaR/lot should produce zero lots");
+    }
+
+    #[test]
+    fn test_normalize_lots_rounding() {
+        let spec = test_spec();
+        // 0.123 lots with step 0.01 → 0.12
+        let normalized = normalize_lots(0.123, &spec);
+        assert!((normalized - 0.12).abs() < 0.001, "Should round down to lot step: {normalized}");
+    }
 }

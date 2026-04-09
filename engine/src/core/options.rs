@@ -172,4 +172,60 @@ mod tests {
         let price = bs_price(100.0, 200.0, 0.1, 0.05, 0.20, true);
         assert!(price < 0.01, "Deep OTM call should be ~0: {price}");
     }
+
+    #[test]
+    fn test_deep_itm_call() {
+        let price = bs_price(200.0, 100.0, 1.0, 0.05, 0.20, true);
+        // Deep ITM: should be close to intrinsic value (200-100*e^(-0.05))
+        assert!(price > 95.0, "Deep ITM call: {price}");
+    }
+
+    #[test]
+    fn test_deep_itm_put() {
+        let price = bs_price(50.0, 100.0, 1.0, 0.05, 0.20, false);
+        assert!(price > 45.0, "Deep ITM put: {price}");
+    }
+
+    #[test]
+    fn test_greeks_deep_itm_delta() {
+        let g = greeks(200.0, 100.0, 0.5, 0.05, 0.20, true);
+        assert!(g.delta > 0.95, "Deep ITM call delta should be ~1.0: {}", g.delta);
+    }
+
+    #[test]
+    fn test_greeks_deep_otm_delta() {
+        let g = greeks(50.0, 100.0, 0.5, 0.05, 0.20, true);
+        assert!(g.delta < 0.05, "Deep OTM call delta should be ~0: {}", g.delta);
+    }
+
+    #[test]
+    fn test_iv_zero_price() {
+        let iv = implied_volatility(100.0, 100.0, 1.0, 0.05, 0.0, true);
+        assert!(iv.is_none(), "Zero market price should return None");
+    }
+
+    #[test]
+    fn test_iv_put() {
+        let target_price = bs_price(100.0, 100.0, 1.0, 0.05, 0.30, false);
+        let iv = implied_volatility(100.0, 100.0, 1.0, 0.05, target_price, false);
+        assert!(iv.is_some());
+        assert!((iv.unwrap() - 0.30).abs() < 0.01, "Put IV: {}", iv.unwrap());
+    }
+
+    #[test]
+    fn test_vega_always_positive() {
+        for strike in [80.0, 100.0, 120.0] {
+            let g = greeks(100.0, strike, 0.5, 0.05, 0.25, true);
+            assert!(g.vega >= 0.0, "Vega should be non-negative at strike {strike}: {}", g.vega);
+        }
+    }
+
+    #[test]
+    fn test_gamma_highest_atm() {
+        let g_itm = greeks(100.0, 80.0, 0.5, 0.05, 0.25, true);
+        let g_atm = greeks(100.0, 100.0, 0.5, 0.05, 0.25, true);
+        let g_otm = greeks(100.0, 120.0, 0.5, 0.05, 0.25, true);
+        assert!(g_atm.gamma > g_itm.gamma, "ATM gamma should be highest");
+        assert!(g_atm.gamma > g_otm.gamma, "ATM gamma should be highest");
+    }
 }

@@ -531,4 +531,48 @@ mod tests {
         assert!(result.is_some());
         assert!(result.unwrap().var_dollars > 0.0);
     }
+
+    #[test]
+    fn test_std_dev_single_value() {
+        assert_eq!(std_dev(&[42.0]), 0.0);
+    }
+
+    #[test]
+    fn test_std_dev_empty() {
+        assert_eq!(std_dev(&[]), 0.0);
+    }
+
+    #[test]
+    fn test_std_dev_identical_values() {
+        assert_eq!(std_dev(&[5.0, 5.0, 5.0, 5.0]), 0.0);
+    }
+
+    #[test]
+    fn test_inverse_normal_99() {
+        let z = inverse_cumulative_normal(0.99);
+        assert!((z - 2.3263).abs() < 0.001, "z99={z}");
+    }
+
+    #[test]
+    fn test_inverse_normal_50() {
+        let z = inverse_cumulative_normal(0.50);
+        assert!(z.abs() < 0.01, "z50 should be ~0, got {z}");
+    }
+
+    #[test]
+    fn test_var_insufficient_data() {
+        let prices = vec![100.0, 101.0]; // only 2 prices, need >20
+        let result = calculate_var(&prices, 1.0, 1.0, 0.01, 101.0, 0.95);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_var_99_greater_than_95() {
+        let prices: Vec<f64> = (0..100).map(|i| 100.0 + (i as f64 * 0.3).sin() * 5.0).collect();
+        let var95 = calculate_var(&prices, 1.0, 1.0, 0.01, 100.0, 0.95);
+        let var99 = calculate_var(&prices, 1.0, 1.0, 0.01, 100.0, 0.99);
+        if let (Some(v95), Some(v99)) = (var95, var99) {
+            assert!(v99.var_dollars >= v95.var_dollars, "VaR99 should >= VaR95");
+        }
+    }
 }

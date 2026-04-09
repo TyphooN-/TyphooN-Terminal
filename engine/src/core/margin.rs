@@ -138,4 +138,29 @@ mod tests {
         let usable = usable_margin(100_000.0, 50_000.0, 1.0);
         assert!((usable - 49_000.0).abs() < 1.0);
     }
+
+    #[test]
+    fn test_usable_margin_zero_balance() {
+        let usable = usable_margin(0.0, 0.0, 1.0);
+        assert!(usable <= 0.0);
+    }
+
+    #[test]
+    fn test_spread_tolerance_equal() {
+        let st = spread_tolerance(50_000.0, 50_000.0);
+        assert!((st - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_protect_urgency_at_threshold() {
+        let u = protect_urgency(56.0, 56.0);
+        // At threshold: (1.0 - 1.0).max(0.01) = 0.01 (minimum urgency)
+        assert!((u - 0.01).abs() < 0.001, "At threshold, urgency should be minimum 0.01, got {u}");
+    }
+
+    #[test]
+    fn test_protect_urgency_below_threshold() {
+        let u = protect_urgency(30.0, 56.0);
+        assert!(u > 0.0);
+    }
 }
