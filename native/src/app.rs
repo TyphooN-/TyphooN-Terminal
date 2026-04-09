@@ -9426,6 +9426,8 @@ enum BrokerCmd {
     MatrixFetchMessages { room_id: String },
     /// Place equity order via tastytrade.
     TastytradeEquityOrder { symbol: String, qty: i64, side: String, order_type: String, price: Option<f64> },
+    /// Close an open tastytrade equity position at market (Sell/Buy to Close).
+    TastytradeClosePosition { symbol: String },
     /// Place trailing stop order via Alpaca.
     AlpacaTrailingStop { symbol: String, qty: f64, side: String, trail_percent: f64 },
     /// Place stop-limit order via Alpaca.
@@ -9894,6 +9896,9 @@ pub struct TyphooNApp {
     lan_server_ip: String,
     show_help: bool,
     help_filter: String,
+    /// Auto-sync MT5 cache every ~5 min when enabled (opt-in, default off).
+    /// Dispatches BrokerCmd::Mt5Sync silently without log spam.
+    mt5_auto_sync: bool,
     /// Count of alerts that have fired since the user last dismissed the badge.
     /// Rendered as a red breach counter on the top bar so the trader can't miss it.
     alert_breach_count: u32,
@@ -10946,6 +10951,18 @@ impl TyphooNApp {
                                 }
                                 Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("tastytrade order failed: {}", e))); }
                             }
+                        }
+                    }
+                    BrokerCmd::TastytradeClosePosition { symbol } => {
+                        if let Some(ref tb) = tt_broker {
+                            match tb.close_equity_position(&symbol).await {
+                                Ok(_) => {
+                                    let _ = broker_msg_tx_clone.send(BrokerMsg::OrderResult(format!("tastytrade: closed position {symbol}")));
+                                }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("tastytrade close {symbol}: {e}"))); }
+                            }
+                        } else {
+                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("tastytrade: not connected".into()));
                         }
                     }
                     BrokerCmd::AlpacaTrailingStop { symbol, qty, side, trail_percent } => {
@@ -12701,6 +12718,7 @@ impl TyphooNApp {
             lan_server_ip: String::new(),
             show_help: false,
             help_filter: String::new(),
+            mt5_auto_sync: false,
             alert_breach_count: 0,
             alert_last_breach_ts: 0,
             alert_last_breach_msg: String::new(),
@@ -15561,6 +15579,7 @@ impl TyphooNApp {
             "econ_filter_low": self.econ_filter_low,
             "econ_filter_holiday": self.econ_filter_holiday,
             "econ_filter_currencies": self.econ_filter_currencies,
+            "mt5_auto_sync": self.mt5_auto_sync,
             "right_tab": match self.right_tab {
                 RightTab::Trading => "trading",
                 RightTab::Positions => "positions",
@@ -15896,6 +15915,7 @@ impl TyphooNApp {
                 if let Some(b) = v["econ_filter_low"].as_bool() { self.econ_filter_low = b; }
                 if let Some(b) = v["econ_filter_holiday"].as_bool() { self.econ_filter_holiday = b; }
                 if let Some(s) = v["econ_filter_currencies"].as_str() { self.econ_filter_currencies = s.to_string(); }
+                if let Some(b) = v["mt5_auto_sync"].as_bool() { self.mt5_auto_sync = b; }
                 // Restore tabs: symbol, timeframe, chart type — rebuild charts from session
                 if let Some(tabs) = v["tabs"].as_array() {
                     if !tabs.is_empty() {
@@ -16583,17 +16603,21 @@ impl TyphooNApp {
                             }
                         });
                     }
-                    if ui.button("Sync MT5 Data Now").clicked() {
-                        let paths: Vec<String> = self.mt5_db_paths.iter()
-                            .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
-                            .cloned().collect();
-                        if paths.is_empty() {
-                            self.log.push_back(LogEntry::warn("No valid MT5 database paths configured"));
-                        } else {
-                            let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths });
-                            self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", self.mt5_db_paths.iter().filter(|p| !p.is_empty()).count())));
+                    ui.horizontal(|ui| {
+                        if ui.button("Sync MT5 Data Now").clicked() {
+                            let paths: Vec<String> = self.mt5_db_paths.iter()
+                                .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
+                                .cloned().collect();
+                            if paths.is_empty() {
+                                self.log.push_back(LogEntry::warn("No valid MT5 database paths configured"));
+                            } else {
+                                let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths });
+                                self.log.push_back(LogEntry::info(format!("MT5 sync started ({} sources)...", self.mt5_db_paths.iter().filter(|p| !p.is_empty()).count())));
+                            }
                         }
-                    }
+                        ui.checkbox(&mut self.mt5_auto_sync, "Auto-sync every 5 min")
+                            .on_hover_text("Periodically fires MT5SYNC in the background. Silent — no log spam.");
+                    });
 
                     ui.add_space(10.0);
                     ui.heading("Darwinex");
@@ -19692,25 +19716,52 @@ impl TyphooNApp {
                         ui.label("Compounds/Year:"); ui.add(egui::TextEdit::singleline(&mut self.ci_compounds).desired_width(60.0)); ui.end_row();
                         ui.label("Monthly Add ($):"); ui.add(egui::TextEdit::singleline(&mut self.ci_contribution).desired_width(120.0)); ui.end_row();
                     });
-                    if ui.button("Calculate").clicked() {
-                        let p = self.ci_principal.replace(['$', ','], "").parse::<f64>().unwrap_or(10000.0);
-                        let r = self.ci_rate.parse::<f64>().unwrap_or(10.0) / 100.0;
-                        let y = self.ci_years.parse::<u32>().unwrap_or(10);
-                        let n = self.ci_compounds.parse::<f64>().unwrap_or(12.0);
-                        let monthly = self.ci_contribution.replace(['$', ','], "").parse::<f64>().unwrap_or(0.0);
-                        self.ci_result.clear();
-                        let mut balance = p;
-                        let mut total_contrib = p;
-                        for year in 0..=y {
-                            self.ci_result.push((year as f64, balance, total_contrib));
-                            // Compound for one year
-                            for _ in 0..n as u32 {
-                                balance *= 1.0 + r / n;
-                                balance += monthly * 12.0 / n; // distribute monthly contribution
+                    ui.horizontal(|ui| {
+                        if ui.button("Calculate").clicked() {
+                            let p = self.ci_principal.replace(['$', ','], "").parse::<f64>().unwrap_or(10000.0);
+                            let r = self.ci_rate.parse::<f64>().unwrap_or(10.0) / 100.0;
+                            let y = self.ci_years.parse::<u32>().unwrap_or(10);
+                            let n = self.ci_compounds.parse::<f64>().unwrap_or(12.0);
+                            let monthly = self.ci_contribution.replace(['$', ','], "").parse::<f64>().unwrap_or(0.0);
+                            self.ci_result.clear();
+                            let mut balance = p;
+                            let mut total_contrib = p;
+                            for year in 0..=y {
+                                self.ci_result.push((year as f64, balance, total_contrib));
+                                // Compound for one year
+                                for _ in 0..n as u32 {
+                                    balance *= 1.0 + r / n;
+                                    balance += monthly * 12.0 / n; // distribute monthly contribution
+                                }
+                                total_contrib += monthly * 12.0;
                             }
-                            total_contrib += monthly * 12.0;
                         }
-                    }
+                        // Use the user's DARWIN portfolio equity curve to derive a realistic
+                        // annualized return and current balance, then pre-fill the calculator.
+                        // Button is only enabled when we have ≥30 days of data.
+                        let has_curve = self.bg.equity_curve.len() >= 30;
+                        if ui.add_enabled(has_curve, egui::Button::new("Use My Equity Curve"))
+                            .on_hover_text("Pre-fill principal and annual return from your actual DARWIN portfolio history")
+                            .clicked()
+                        {
+                            let curve = &self.bg.equity_curve;
+                            if let (Some(first), Some(last)) = (curve.first(), curve.last()) {
+                                let first_val = first.1.max(1.0);
+                                let last_val = last.1;
+                                let n_days = curve.len() as f64;
+                                let n_years = (n_days / 252.0).max(1.0 / 252.0);
+                                let total_return = last_val / first_val;
+                                // CAGR: (end/start)^(1/years) - 1
+                                let cagr = total_return.powf(1.0 / n_years) - 1.0;
+                                self.ci_principal = format!("{:.2}", last_val);
+                                self.ci_rate = format!("{:.2}", cagr * 100.0);
+                                self.log.push_back(LogEntry::info(format!(
+                                    "Prefilled from equity curve: ${:.0} @ {:.2}% CAGR over {:.1}y",
+                                    last_val, cagr * 100.0, n_years
+                                )));
+                            }
+                        }
+                    });
                     if !self.ci_result.is_empty() {
                         ui.separator();
                         // Summary
@@ -28514,6 +28565,7 @@ impl eframe::App for TyphooNApp {
                             // tastytrade positions
                             if self.show_tt_positions && !self.tt_positions.is_empty() {
                                 has_positions = true;
+                                let mut close_sym: Option<String> = None;
                                 for pos in &self.tt_positions {
                                     let side_c = if pos.side == "long" { UP } else { DOWN };
                                     let side_label = if pos.side == "long" { "L" } else { "S" };
@@ -28523,9 +28575,17 @@ impl eframe::App for TyphooNApp {
                                         ui.label(egui::RichText::new(format!("{:.2}", pos.qty)).small());
                                         let pl_c = if pos.unrealized_pl >= 0.0 { UP } else { DOWN };
                                         ui.label(egui::RichText::new(format!("${:.2}", pos.unrealized_pl)).color(pl_c).small());
+                                        // Close button — submits a market order in the opposite direction.
+                                        if ui.small_button("X").on_hover_text(format!("Close {} position at market", pos.symbol)).clicked() {
+                                            close_sym = Some(pos.symbol.clone());
+                                        }
                                     });
                                     ui.label(egui::RichText::new(format!("entry: {}  ({})", format_price(pos.avg_entry_price), pos.asset_class)).color(AXIS_TEXT).small());
                                     ui.separator();
+                                }
+                                if let Some(sym) = close_sym {
+                                    let _ = self.broker_tx.send(BrokerCmd::TastytradeClosePosition { symbol: sym.clone() });
+                                    self.log.push_back(LogEntry::info(format!("Tastytrade: closing {sym} at market")));
                                 }
                             }
                             if !has_positions {
@@ -28731,6 +28791,9 @@ impl eframe::App for TyphooNApp {
                             } else {
                                 let mut load_key: Option<String> = None;
                                 let mut remove_sym: Option<String> = None;
+                                let mut move_up_sym: Option<String> = None;
+                                let mut move_down_sym: Option<String> = None;
+                                let mut move_top_sym: Option<String> = None;
                                 let row_h = 18.0_f32;
                                 let font = egui::FontId::monospace(10.0);
                                 let hdr_font = egui::FontId::monospace(9.0);
@@ -28859,11 +28922,42 @@ impl eframe::App for TyphooNApp {
                                             load_key = Some(wl.cache_key.clone());
                                             ui.close_menu();
                                         }
+                                        if ui.button(format!("Move Up  {}", wl.symbol)).clicked() {
+                                            move_up_sym = Some(wl.symbol.clone());
+                                            ui.close_menu();
+                                        }
+                                        if ui.button(format!("Move Down  {}", wl.symbol)).clicked() {
+                                            move_down_sym = Some(wl.symbol.clone());
+                                            ui.close_menu();
+                                        }
+                                        if ui.button(format!("Move to Top  {}", wl.symbol)).clicked() {
+                                            move_top_sym = Some(wl.symbol.clone());
+                                            ui.close_menu();
+                                        }
                                         if ui.button(format!("Remove {}", wl.symbol)).clicked() {
                                             remove_sym = Some(wl.symbol.clone());
                                             ui.close_menu();
                                         }
                                     });
+                                }
+                                // Handle reorder — one-step neighbour swap or jump-to-top
+                                if let Some(ref sym) = move_up_sym {
+                                    if let Some(idx) = self.user_watchlist.iter().position(|s| s == sym) {
+                                        if idx > 0 { self.user_watchlist.swap(idx, idx - 1); }
+                                    }
+                                }
+                                if let Some(ref sym) = move_down_sym {
+                                    if let Some(idx) = self.user_watchlist.iter().position(|s| s == sym) {
+                                        if idx + 1 < self.user_watchlist.len() { self.user_watchlist.swap(idx, idx + 1); }
+                                    }
+                                }
+                                if let Some(ref sym) = move_top_sym {
+                                    if let Some(idx) = self.user_watchlist.iter().position(|s| s == sym) {
+                                        if idx > 0 {
+                                            let item = self.user_watchlist.remove(idx);
+                                            self.user_watchlist.insert(0, item);
+                                        }
+                                    }
                                 }
                                 // Handle remove
                                 if let Some(ref sym) = remove_sym {
@@ -29852,8 +29946,28 @@ impl eframe::App for TyphooNApp {
                                     Drawing::Pitchfork { pivot, p2, p3, .. } | Drawing::SchiffPitchfork { pivot, p2, p3, .. } => {
                                         match cp_idx { 0 => move_pt(pivot), 1 => move_pt(p2), _ => move_pt(p3) }
                                     }
-                                    Drawing::FiboExtension { p1, p2, p3, .. } | Drawing::Triangle { p1, p2, p3, .. } => {
+                                    Drawing::FiboExtension { p1, p2, p3, .. } | Drawing::Triangle { p1, p2, p3, .. }
+                                    | Drawing::FibChannel { p1, p2, p3, .. } => {
                                         match cp_idx { 0 => move_pt(p1), 1 => move_pt(p2), _ => move_pt(p3) }
+                                    }
+                                    // Vec-of-points drawings: index directly into the points vector
+                                    Drawing::Polyline { points, .. }
+                                    | Drawing::PathDraw { points, .. }
+                                    | Drawing::Brush { points, .. }
+                                    | Drawing::ElliottWave { points, .. }
+                                    | Drawing::AbcCorrection { points, .. }
+                                    | Drawing::HeadShoulders { points, .. }
+                                    | Drawing::XabcdPattern { points, .. }
+                                    | Drawing::TrianglePattern { points, .. }
+                                    | Drawing::ThreeDrives { points, .. }
+                                    | Drawing::ElliottDouble { points, .. }
+                                    | Drawing::AbcdPattern { points, .. }
+                                    | Drawing::CypherPattern { points, .. }
+                                    | Drawing::ElliottTriangle { points, .. }
+                                    | Drawing::ElliottTripleCombo { points, .. } => {
+                                        if let Some(pt) = points.get_mut(cp_idx) {
+                                            move_pt(pt);
+                                        }
                                     }
                                     _ => {} // fallback: whole-drawing move
                                 }
@@ -31666,6 +31780,19 @@ impl eframe::App for TyphooNApp {
             }
 
             // No Kraken bulk startup — weekend polling handles it (1 symbol/min, no log flood)
+
+            // Periodic MT5 bar sync — every ~5 minutes when auto-sync is enabled and
+            // at least one MT5 path is configured. Fires MT5SYNC in the background so
+            // the user doesn't have to trigger it manually. Opt-in (off by default).
+            if self.mt5_auto_sync && self.frame_count % 1200 == 600 && self.frame_count > 0 {
+                let paths: Vec<String> = self.mt5_db_paths.iter()
+                    .filter(|p| !p.is_empty() && std::path::Path::new(p.as_str()).exists())
+                    .cloned().collect();
+                if !paths.is_empty() {
+                    let _ = self.broker_tx.send(BrokerCmd::Mt5Sync { sources: paths });
+                    // Silent — don't spam the log with auto-sync notifications
+                }
+            }
         }
 
         // Repaint strategy:

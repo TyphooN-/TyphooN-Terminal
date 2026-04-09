@@ -310,6 +310,33 @@ impl TastytradeBroker {
         Ok(data["data"]["order"]["id"].as_str().unwrap_or("ok").to_string())
     }
 
+    /// Close an open equity position at market.
+    /// Looks up the current position quantity and submits a market order
+    /// in the opposite direction for the full size.
+    ///
+    /// tastytrade does not expose a dedicated "close position" endpoint —
+    /// closure is a regular order in the opposite direction. We wrap the
+    /// lookup + order submission here so callers don't have to replicate it.
+    pub async fn close_equity_position(&self, symbol: &str) -> Result<String, String> {
+        let positions = self.get_positions().await?;
+        let pos = positions.iter()
+            .find(|p| p.symbol.eq_ignore_ascii_case(symbol))
+            .ok_or_else(|| format!("No open tastytrade position for {symbol}"))?;
+
+        // Determine closing direction from the position's quantity_direction field.
+        // Long  → Sell to Close.  Short → Buy to Close.
+        let qty_abs = pos.quantity.abs() as i64;
+        if qty_abs == 0 {
+            return Err(format!("Position {symbol} has zero quantity"));
+        }
+        let action = if pos.quantity_direction.eq_ignore_ascii_case("Long") {
+            "Sell to Close"
+        } else {
+            "Buy to Close"
+        };
+        self.place_equity_order(symbol, qty_abs, action, "Market", None, "Day").await
+    }
+
     /// Search symbols by query string.
     pub async fn search_symbols(&self, query: &str) -> Result<Vec<serde_json::Value>, String> {
         let token = self.auth_header().ok_or("Not authenticated")?;
