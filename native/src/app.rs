@@ -22248,6 +22248,23 @@ impl TyphooNApp {
                                 let vah = price_min + (va_hi as f64 + 1.0) * bin_size;
                                 let val = price_min + va_lo as f64 * bin_size;
                                 ui.label(format!("VAH: {}  |  VAL: {}", format_price(vah), format_price(val)));
+
+                                // Initial Balance (IB) — first hour of the session
+                                // Detect session start: first bar of the last trading day
+                                let last_day = bars.last().map(|b| b.ts_ms / 1000 / 86400).unwrap_or(0);
+                                let session_bars: Vec<&Bar> = bars.iter().filter(|b| b.ts_ms / 1000 / 86400 == last_day).collect();
+                                if session_bars.len() > 2 {
+                                    // IB = first ~60 minutes of bars
+                                    let session_start_ts = session_bars.first().map(|b| b.ts_ms).unwrap_or(0);
+                                    let ib_end_ts = session_start_ts + 60 * 60 * 1000; // +1 hour in ms
+                                    let ib_bars: Vec<&&Bar> = session_bars.iter().filter(|b| b.ts_ms <= ib_end_ts).collect();
+                                    if ib_bars.len() > 1 {
+                                        let ib_high = ib_bars.iter().map(|b| b.high).fold(f64::MIN, f64::max);
+                                        let ib_low = ib_bars.iter().map(|b| b.low).fold(f64::MAX, f64::min);
+                                        ui.label(egui::RichText::new(format!("IB High: {}  |  IB Low: {}  |  IB Range: {}",
+                                            format_price(ib_high), format_price(ib_low), format_price(ib_high - ib_low))).color(SMA200_COL).small());
+                                    }
+                                }
                                 ui.add_space(5.0);
 
                                 // Horizontal bar chart

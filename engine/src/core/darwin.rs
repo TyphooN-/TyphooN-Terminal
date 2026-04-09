@@ -4028,10 +4028,12 @@ pub struct BenchmarkComparison {
     pub darwin_sharpe: f64,
     pub darwin_max_dd: f64,
     pub benchmark_return: f64,
-    pub alpha: f64, // excess return vs benchmark
-    pub beta: f64,  // sensitivity to market
-    pub information_ratio: f64,
-    pub tracking_error: f64,
+    pub alpha: f64,             // excess return vs benchmark (annualized)
+    pub beta: f64,              // sensitivity to market
+    pub information_ratio: f64, // excess return / tracking error
+    pub tracking_error: f64,    // std dev of excess returns (annualized)
+    pub treynor_ratio: f64,     // (return - risk_free) / beta
+    pub jensen_alpha: f64,      // return - risk_free - beta * (benchmark - risk_free)
 }
 
 /// Compute alpha, beta, information ratio, tracking error of a DARWIN vs a benchmark.
@@ -4103,6 +4105,18 @@ pub fn compare_to_benchmark(
         if first_bal > 0.0 { (last_bal - first_bal) / first_bal * 100.0 } else { 0.0 }
     } else { 0.0 };
 
+    // Treynor Ratio: (annualized return - risk-free rate) / beta
+    let risk_free_rate = 0.04; // 4% annual (approximate current T-bill rate)
+    let ann_darwin_return = mean_d * 252.0;
+    let ann_bench_return = mean_b * 252.0;
+    let treynor_ratio = if beta.abs() > 0.001 {
+        (ann_darwin_return - risk_free_rate) / beta
+    } else { 0.0 };
+
+    // Jensen's Alpha: excess return beyond CAPM prediction
+    // α = (R_d - R_f) - β * (R_b - R_f)
+    let jensen_alpha = (ann_darwin_return - risk_free_rate) - beta * (ann_bench_return - risk_free_rate);
+
     Ok(BenchmarkComparison {
         darwin_ticker: darwin_ticker.to_string(),
         darwin_return,
@@ -4113,6 +4127,8 @@ pub fn compare_to_benchmark(
         beta,
         information_ratio,
         tracking_error,
+        treynor_ratio,
+        jensen_alpha,
     })
 }
 

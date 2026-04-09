@@ -306,3 +306,122 @@ mod rs_tests {
     }
 }
 
+// ── Symbol Correlation Matrix ────────────────────────────────────────
+
+/// Pairwise correlation between two symbols.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolCorrelation {
+    pub symbol_a: String,
+    pub symbol_b: String,
+    pub correlation: f64,
+    pub sample_count: usize,
+}
+
+/// Full N×N correlation matrix for a set of symbols.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrelationMatrix {
+    pub symbols: Vec<String>,
+    pub matrix: Vec<Vec<f64>>,
+    pub window_bars: usize,
+}
+
+/// Compute pairwise Pearson correlation matrix from close price series.
+/// `close_map`: symbol → Vec<f64> close prices (aligned by index).
+/// `window`: number of most recent bars to use (0 = all).
+pub fn compute_symbol_correlation_matrix(
+    close_map: &std::collections::HashMap<String, Vec<f64>>,
+    window: usize,
+) -> CorrelationMatrix {
+    let symbols: Vec<String> = close_map.keys().cloned().collect();
+    let n = symbols.len();
+    let mut matrix = vec![vec![0.0; n]; n];
+
+    for i in 0..n {
+        matrix[i][i] = 1.0; // self-correlation
+        for j in (i + 1)..n {
+            let closes_a = close_map.get(&symbols[i]);
+            let closes_b = close_map.get(&symbols[j]);
+            let corr = match (closes_a, closes_b) {
+                (Some(a), Some(b)) => {
+                    // Align by taking tail of both series
+                    let len = a.len().min(b.len());
+                    if len < 3 { 0.0 } else {
+                        let start = if window > 0 && len > window { len - window } else { 0 };
+                        let sa = &a[a.len() - len + start..];
+                        let sb = &b[b.len() - len + start..];
+                        // Compute returns
+                        let ret_a: Vec<f64> = sa.windows(2).map(|w| if w[0] > 0.0 { w[1] / w[0] - 1.0 } else { 0.0 }).collect();
+                        let ret_b: Vec<f64> = sb.windows(2).map(|w| if w[0] > 0.0 { w[1] / w[0] - 1.0 } else { 0.0 }).collect();
+                        let rn = ret_a.len().min(ret_b.len());
+                        if rn < 3 { 0.0 } else {
+                            let mean_a = ret_a[..rn].iter().sum::<f64>() / rn as f64;
+                            let mean_b = ret_b[..rn].iter().sum::<f64>() / rn as f64;
+                            let mut cov = 0.0;
+                            let mut var_a = 0.0;
+                            let mut var_b = 0.0;
+                            for k in 0..rn {
+                                let da = ret_a[k] - mean_a;
+                                let db = ret_b[k] - mean_b;
+                                cov += da * db;
+                                var_a += da * da;
+                                var_b += db * db;
+                            }
+                            if var_a > 0.0 && var_b > 0.0 {
+                                (cov / (var_a.sqrt() * var_b.sqrt())).clamp(-1.0, 1.0)
+                            } else { 0.0 }
+                        }
+                    }
+                }
+                _ => 0.0,
+            };
+            matrix[i][j] = corr;
+            matrix[j][i] = corr;
+        }
+    }
+
+    CorrelationMatrix { symbols, matrix, window_bars: window }
+}
+
+#[cfg(test)]
+mod corr_tests {
+    use super::*;
+
+    #[test]
+    fn test_correlation_matrix_basic() {
+        let mut close_map = std::collections::HashMap::new();
+        close_map.insert("A".into(), vec![100.0, 102.0, 104.0, 103.0, 105.0]);
+        close_map.insert("B".into(), vec![50.0, 51.0, 52.0, 51.5, 52.5]);   // correlated with A
+        close_map.insert("C".into(), vec![200.0, 198.0, 196.0, 197.0, 195.0]); // inversely correlated
+        let cm = compute_symbol_correlation_matrix(&close_map, 0);
+        assert_eq!(cm.symbols.len(), 3);
+        assert_eq!(cm.matrix.len(), 3);
+        // Self-correlation = 1.0
+        for i in 0..3 { assert!((cm.matrix[i][i] - 1.0).abs() < 1e-10); }
+        // All values in [-1, 1]
+        for row in &cm.matrix {
+            for &v in row { assert!(v >= -1.0 && v <= 1.0, "Correlation out of range: {v}"); }
+        }
+    }
+
+    #[test]
+    fn test_correlation_matrix_empty() {
+        let close_map = std::collections::HashMap::new();
+        let cm = compute_symbol_correlation_matrix(&close_map, 0);
+        assert!(cm.symbols.is_empty());
+        assert!(cm.matrix.is_empty());
+    }
+
+    #[test]
+    fn test_correlation_with_window() {
+        let mut close_map = std::collections::HashMap::new();
+        close_map.insert("X".into(), vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0]);
+        close_map.insert("Y".into(), vec![20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0, 34.0, 36.0, 38.0]);
+        let cm = compute_symbol_correlation_matrix(&close_map, 5);
+        assert_eq!(cm.window_bars, 5);
+        // Perfect positive correlation
+        let x_idx = cm.symbols.iter().position(|s| s == "X").unwrap_or(0);
+        let y_idx = cm.symbols.iter().position(|s| s == "Y").unwrap_or(1);
+        assert!((cm.matrix[x_idx][y_idx] - 1.0).abs() < 0.01, "Expected ~1.0, got {}", cm.matrix[x_idx][y_idx]);
+    }
+}
+
