@@ -8839,6 +8839,12 @@ const COMMANDS: &[Command] = &[
     Command { name: "VOLUME_PROFILE",desc: "Volume profile (POC + value area)" },
     Command { name: "ORDER_FLOW",    desc: "Order flow / delta analysis" },
     Command { name: "BOOKMAP",       desc: "Bookmap depth heatmap" },
+    Command { name: "HV_CONE",       desc: "Historical volatility cone (percentile rank)" },
+    Command { name: "SECTOR_HEATMAP",desc: "Sector performance heatmap" },
+    Command { name: "DIVSCREEN",     desc: "Dividend yield screener (ranked by yield)" },
+    Command { name: "CONFLUENCE",    desc: "Multi-timeframe RSI/MACD confluence score" },
+    Command { name: "STAT_ARB",      desc: "Statistical arbitrage pairs (z-score + half-life)" },
+    Command { name: "RISK_BUDGET",   desc: "Portfolio risk budget (marginal VaR contribution)" },
     // Chart types
     Command { name: "CANDLE",        desc: "Switch to candlestick chart" },
     Command { name: "HEIKINASHI",    desc: "Switch to Heikin-Ashi chart" },
@@ -9784,6 +9790,12 @@ pub struct TyphooNApp {
     show_montecarlo: bool,
     show_stress_test: bool,
     show_volume_profile: bool,
+    show_hv_cone: bool,
+    show_sector_heatmap: bool,
+    show_dividends: bool,
+    show_confluence: bool,
+    show_stat_arb: bool,
+    show_risk_budget: bool,
     show_order_flow: bool,
     show_bookmap: bool,
     show_darwinex_outliers: bool,
@@ -12541,6 +12553,12 @@ impl TyphooNApp {
             show_montecarlo: false,
             show_stress_test: false,
             show_volume_profile: false,
+            show_hv_cone: false,
+            show_sector_heatmap: false,
+            show_dividends: false,
+            show_confluence: false,
+            show_stat_arb: false,
+            show_risk_budget: false,
             show_order_flow: false,
             show_bookmap: false,
             show_darwinex_outliers: false,
@@ -13930,6 +13948,12 @@ impl TyphooNApp {
             "MONTECARLO"    => self.show_montecarlo = true,
             "STRESS_TEST"   => self.show_stress_test = true,
             "VOLUME_PROFILE"=> self.show_volume_profile = true,
+            "HV_CONE"       => self.show_hv_cone = true,
+            "SECTOR_HEATMAP"=> self.show_sector_heatmap = true,
+            "DIVSCREEN"     => self.show_dividends = true,
+            "CONFLUENCE"    => self.show_confluence = true,
+            "STAT_ARB"      => self.show_stat_arb = true,
+            "RISK_BUDGET"   => self.show_risk_budget = true,
             "ORDER_FLOW"    => self.show_order_flow = true,
             "BOOKMAP"       => self.show_bookmap = true,
             "JOURNAL"       => self.show_journal = true,
@@ -22301,6 +22325,223 @@ impl TyphooNApp {
                         } else {
                             ui.label(egui::RichText::new("Need visible bar data for volume profile.").color(AXIS_TEXT));
                         }
+                    }
+                });
+        }
+
+        // ── HV Cone ────────────────────────────────────────────────────
+        if self.show_hv_cone {
+            egui::Window::new("Historical Volatility Cone")
+                .open(&mut self.show_hv_cone)
+                .resizable(true).default_size([450.0, 300.0])
+                .show(ctx, |ui| {
+                    if let Some(chart) = self.charts.get(self.active_tab) {
+                        let closes: Vec<f64> = chart.bars.iter().map(|b| b.close).collect();
+                        let cone = typhoon_engine::core::screener::compute_hv_cone(&closes, &[10, 20, 60, 252]);
+                        ui.label(egui::RichText::new(format!("HV Cone: {} ({} bars)", chart.symbol, closes.len())).strong());
+                        ui.separator();
+                        egui::Grid::new("hv_cone_grid").striped(true).num_columns(6).show(ui, |ui| {
+                            ui.strong("Lookback"); ui.strong("Current HV"); ui.strong("Percentile"); ui.strong("Min"); ui.strong("Median"); ui.strong("Max");
+                            ui.end_row();
+                            for pt in &cone {
+                                ui.label(format!("{}d", pt.lookback));
+                                let hv_col = if pt.percentile > 80.0 { DOWN } else if pt.percentile > 50.0 { SMA200_COL } else { UP };
+                                ui.label(egui::RichText::new(format!("{:.1}%", pt.current_hv)).color(hv_col));
+                                ui.label(egui::RichText::new(format!("{:.0}%ile", pt.percentile)).color(hv_col));
+                                ui.label(format!("{:.1}%", pt.min_hv));
+                                ui.label(format!("{:.1}%", pt.median_hv));
+                                ui.label(format!("{:.1}%", pt.max_hv));
+                                ui.end_row();
+                            }
+                        });
+                    } else {
+                        ui.label("Open a chart first.");
+                    }
+                });
+        }
+
+        // ── Sector Heatmap ────────────────────────────────────────────
+        if self.show_sector_heatmap {
+            egui::Window::new("Sector Heatmap")
+                .open(&mut self.show_sector_heatmap)
+                .resizable(true).default_size([500.0, 400.0])
+                .show(ctx, |ui| {
+                    let sectors = typhoon_engine::core::screener::compute_sector_heatmap(&self.bg.all_fundamentals);
+                    ui.label(egui::RichText::new(format!("{} sectors", sectors.len())).strong());
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::Grid::new("sector_heat_grid").striped(true).num_columns(4).show(ui, |ui| {
+                            ui.strong("Sector"); ui.strong("Symbols"); ui.strong("Total MCap"); ui.strong("Avg P/E");
+                            ui.end_row();
+                            for s in &sectors {
+                                ui.label(&s.sector);
+                                ui.label(format!("{}", s.symbol_count));
+                                ui.label(fundamentals::format_large_number(s.total_market_cap));
+                                ui.label(format!("{:.1}", s.avg_pe));
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+        }
+
+        // ── Dividend Yield Screener ───────────────────────────────────
+        if self.show_dividends {
+            egui::Window::new("Dividend Yield Screener")
+                .open(&mut self.show_dividends)
+                .resizable(true).default_size([600.0, 400.0])
+                .show(ctx, |ui| {
+                    let divs = typhoon_engine::core::screener::screen_dividend_stocks(&self.bg.all_fundamentals);
+                    ui.label(egui::RichText::new(format!("{} dividend stocks", divs.len())).strong());
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        egui::Grid::new("div_screen_grid").striped(true).num_columns(5).show(ui, |ui| {
+                            ui.strong("Symbol"); ui.strong("Company"); ui.strong("Yield%"); ui.strong("Ex-Div"); ui.strong("P/E");
+                            ui.end_row();
+                            for d in divs.iter().take(100) {
+                                ui.label(egui::RichText::new(&d.symbol).strong());
+                                ui.label(egui::RichText::new(&d.company).small());
+                                let yc = if d.dividend_yield > 4.0 { UP } else { AXIS_TEXT };
+                                ui.label(egui::RichText::new(format!("{:.2}%", d.dividend_yield)).color(yc));
+                                ui.label(egui::RichText::new(&d.ex_div_date).small());
+                                ui.label(format!("{:.1}", d.pe_ratio));
+                                ui.end_row();
+                            }
+                        });
+                    });
+                });
+        }
+
+        // ── MTF Confluence ────────────────────────────────────────────
+        if self.show_confluence {
+            egui::Window::new("MTF Confluence")
+                .open(&mut self.show_confluence)
+                .resizable(true).default_size([400.0, 300.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Multi-Timeframe Confluence Score").strong());
+                    ui.separator();
+                    // Compute confluence for each chart symbol
+                    for chart in &self.charts {
+                        let sym = chart.symbol.split(':').next().unwrap_or(&chart.symbol);
+                        // Gather signals from indicator data
+                        let mut signals: Vec<(String, Option<bool>)> = Vec::new();
+                        // RSI: >50 = bullish, <50 = bearish
+                        if let Some(Some(rsi)) = chart.rsi.last() {
+                            signals.push(("RSI".into(), Some(*rsi > 50.0)));
+                        }
+                        // MACD: line > signal = bullish
+                        if let (Some(Some(ml)), Some(Some(ms))) = (chart.macd_line.last(), chart.macd_signal.last()) {
+                            signals.push(("MACD".into(), Some(*ml > *ms)));
+                        }
+                        // Price vs SMA200: above = bullish
+                        if let (Some(bar), Some(Some(sma))) = (chart.bars.last(), chart.sma200.last()) {
+                            signals.push(("SMA200".into(), Some(bar.close > *sma)));
+                        }
+                        // Price vs KAMA: above = bullish
+                        if let (Some(bar), Some(Some(kama))) = (chart.bars.last(), chart.kama.last()) {
+                            signals.push(("KAMA".into(), Some(bar.close > *kama)));
+                        }
+                        let conf = typhoon_engine::core::screener::compute_mtf_confluence(sym, &signals);
+                        let score_col = if conf.confluence_score > 0.3 { UP } else if conf.confluence_score < -0.3 { DOWN } else { AXIS_TEXT };
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(sym).strong().monospace());
+                            ui.label(egui::RichText::new(format!("{:+.2}", conf.confluence_score)).color(score_col));
+                            ui.label(egui::RichText::new(format!("({} bull / {} bear / {} total)",
+                                conf.bullish_tfs, conf.bearish_tfs, conf.total_tfs)).small().color(AXIS_TEXT));
+                        });
+                    }
+                });
+        }
+
+        // ── Stat Arb Pairs ────────────────────────────────────────────
+        if self.show_stat_arb {
+            egui::Window::new("Statistical Arbitrage Pairs")
+                .open(&mut self.show_stat_arb)
+                .resizable(true).default_size([600.0, 400.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Correlated Pairs — Spread Z-Score").strong());
+                    ui.separator();
+                    // Build close map from all chart symbols
+                    let mut close_map: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+                    for chart in &self.charts {
+                        let sym = chart.symbol.split(':').next().unwrap_or(&chart.symbol).to_uppercase();
+                        if !sym.is_empty() && chart.bars.len() > 50 {
+                            close_map.insert(sym, chart.bars.iter().map(|b| b.close).collect());
+                        }
+                    }
+                    let pairs = typhoon_engine::core::screener::find_stat_arb_pairs(&close_map, 0.7, 50);
+                    if pairs.is_empty() {
+                        ui.label(egui::RichText::new("No correlated pairs found (need >2 charts with >50 bars, correlation >0.7).").color(AXIS_TEXT));
+                    } else {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            egui::Grid::new("stat_arb_grid").striped(true).num_columns(5).show(ui, |ui| {
+                                ui.strong("Pair"); ui.strong("Corr"); ui.strong("Z-Score"); ui.strong("Half-Life"); ui.strong("Signal");
+                                ui.end_row();
+                                for p in pairs.iter().take(20) {
+                                    ui.label(format!("{} / {}", p.symbol_a, p.symbol_b));
+                                    ui.label(format!("{:.3}", p.correlation));
+                                    let zc = if p.current_zscore.abs() > 2.0 { DOWN } else if p.current_zscore.abs() > 1.5 { SMA200_COL } else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(format!("{:+.2}", p.current_zscore)).color(zc));
+                                    let hl = if p.half_life < 1000.0 { format!("{:.1} bars", p.half_life) } else { "N/A".into() };
+                                    ui.label(hl);
+                                    let signal = if p.current_zscore > 2.0 { "SHORT spread" }
+                                        else if p.current_zscore < -2.0 { "LONG spread" }
+                                        else { "—" };
+                                    let sc = if signal.contains("SHORT") { DOWN } else if signal.contains("LONG") { UP } else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(signal).color(sc));
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+        }
+
+        // ── Risk Budget ───────────────────────────────────────────────
+        if self.show_risk_budget {
+            egui::Window::new("Risk Budget")
+                .open(&mut self.show_risk_budget)
+                .resizable(true).default_size([500.0, 350.0])
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Portfolio Risk Contribution (VaR Decomposition)").strong());
+                    ui.separator();
+                    // Build from DARWIN data
+                    if self.bg.var_stats.is_some() {
+                        let names: Vec<String> = self.bg.account_details.iter().map(|d| d.ticker.clone()).collect();
+                        let n = names.len();
+                        if n > 0 {
+                            let weights: Vec<f64> = vec![1.0 / n as f64; n]; // equal weight
+                            let individual_vars: Vec<f64> = self.bg.account_details.iter().map(|d| {
+                                d.var_stats.as_ref().map(|v| v.var_95).unwrap_or(0.0)
+                            }).collect();
+                            // Build correlation matrix from bg data
+                            let mut corr = vec![vec![0.0; n]; n];
+                            for i in 0..n { corr[i][i] = 1.0; }
+                            for c in &self.bg.correlations {
+                                if let (Some(i), Some(j)) = (names.iter().position(|s| s == &c.darwin_a), names.iter().position(|s| s == &c.darwin_b)) {
+                                    corr[i][j] = c.correlation;
+                                    corr[j][i] = c.correlation;
+                                }
+                            }
+                            let budget = typhoon_engine::core::screener::compute_risk_budget(&names, &weights, &individual_vars, &corr);
+                            egui::Grid::new("risk_budget_grid").striped(true).num_columns(5).show(ui, |ui| {
+                                ui.strong("DARWIN"); ui.strong("Weight%"); ui.strong("VaR95"); ui.strong("Risk%"); ui.strong("Marginal VaR");
+                                ui.end_row();
+                                for b in &budget {
+                                    ui.label(egui::RichText::new(&b.name).strong());
+                                    ui.label(format!("{:.1}%", b.weight_pct));
+                                    ui.label(format!("${:.0}", b.var_95));
+                                    let rc = if b.risk_contribution_pct > 20.0 { DOWN } else { AXIS_TEXT };
+                                    ui.label(egui::RichText::new(format!("{:.1}%", b.risk_contribution_pct)).color(rc));
+                                    ui.label(format!("{:.2}", b.marginal_var));
+                                    ui.end_row();
+                                }
+                            });
+                        } else {
+                            ui.label("No DARWIN accounts loaded.");
+                        }
+                    } else {
+                        ui.label("VaR data not computed yet.");
                     }
                 });
         }
