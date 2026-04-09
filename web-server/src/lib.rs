@@ -165,15 +165,17 @@ async fn handle_ws(socket: ws::WebSocket, state: Arc<AppState>, client_ip: std::
     .await
     {
         Ok(Ok(true)) => {
-            let _ = sender.send(ws::Message::Text(
-                serde_json::to_string(&WebMsg::AuthResult { ok: true }).unwrap().into(),
-            )).await;
+            // AuthResult has a single bool field — serialization cannot realistically fail,
+            // but we handle the Err arm anyway rather than .unwrap() per ADR-082.
+            let payload = serde_json::to_string(&WebMsg::AuthResult { ok: true })
+                .unwrap_or_else(|_| r#"{"AuthResult":{"ok":true}}"#.to_string());
+            let _ = sender.send(ws::Message::Text(payload.into())).await;
             true
         }
         _ => {
-            let _ = sender.send(ws::Message::Text(
-                serde_json::to_string(&WebMsg::AuthResult { ok: false }).unwrap().into(),
-            )).await;
+            let payload = serde_json::to_string(&WebMsg::AuthResult { ok: false })
+                .unwrap_or_else(|_| r#"{"AuthResult":{"ok":false}}"#.to_string());
+            let _ = sender.send(ws::Message::Text(payload.into())).await;
             false
         }
     };

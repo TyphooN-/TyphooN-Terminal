@@ -270,8 +270,11 @@ impl SqliteCache {
             .map_err(|e| format!("SQLite read conn open failed: {e}"))?;
         read_conn.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(|e| format!("SQLite read conn busy_timeout failed: {e}"))?;
+        // Align read_conn cache_size with write conn (-64000 = 64MB) so the
+        // shared page cache is effective on hot reads. Previously -32000 (32MB)
+        // which undersized the buffer pool for mixed read/write workloads.
         let _ = read_conn.execute_batch("
-            PRAGMA cache_size=-32000;
+            PRAGMA cache_size=-64000;
             PRAGMA temp_store=MEMORY;
             PRAGMA mmap_size=268435456;
         ");

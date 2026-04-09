@@ -280,13 +280,16 @@ fn aggregate_bars(bars: &[broker::Bar], factor: usize) -> Vec<broker::Bar> {
     if factor <= 1 { return bars.to_vec(); }
     let mut result = Vec::new();
     for chunk in bars.chunks(factor) {
-        if chunk.is_empty() { break; }
+        // The is_empty guard above already handles this, but chunk.last() still
+        // returns Option — use it properly rather than .expect().
+        let Some(last) = chunk.last() else { continue; };
+        let Some(first) = chunk.first() else { continue; };
         result.push(broker::Bar {
-            timestamp: chunk[0].timestamp.clone(),
-            open: chunk[0].open,
+            timestamp: first.timestamp.clone(),
+            open: first.open,
             high: chunk.iter().map(|b| b.high).fold(f64::MIN, f64::max),
             low: chunk.iter().map(|b| b.low).fold(f64::MAX, f64::min),
-            close: chunk.last().expect("non-empty chunk").close,
+            close: last.close,
             volume: chunk.iter().map(|b| b.volume).sum(),
         });
     }

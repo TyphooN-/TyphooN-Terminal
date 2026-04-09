@@ -52,46 +52,54 @@ pub struct MetricsRegistry {
 }
 
 impl MetricsRegistry {
-    pub fn new() -> Self {
+    /// Construct the metrics registry. Returns `Err` only if prometheus rejects
+    /// one of our metric names — should never happen at runtime with our static
+    /// names, but we surface the error properly per ADR-082 (no .unwrap()).
+    pub fn new() -> Result<Self, String> {
         let registry = Registry::new();
 
         let equity = GaugeVec::new(
             Opts::new("typhoon_equity_total", "Total equity per DARWIN account"),
             &["account"],
-        ).unwrap();
+        ).map_err(|e| format!("equity metric: {e}"))?;
 
         let positions = GaugeVec::new(
             Opts::new("typhoon_positions_open", "Count of open positions"),
             &["account"],
-        ).unwrap();
+        ).map_err(|e| format!("positions metric: {e}"))?;
 
         let var = GaugeVec::new(
             Opts::new("typhoon_var_current", "Current VaR percentage"),
             &["account"],
-        ).unwrap();
+        ).map_err(|e| format!("var metric: {e}"))?;
 
         let drawdown = GaugeVec::new(
             Opts::new("typhoon_drawdown_current", "Current drawdown percentage"),
             &["account"],
-        ).unwrap();
+        ).map_err(|e| format!("drawdown metric: {e}"))?;
 
-        let cache_size = Gauge::new("typhoon_cache_size_bytes", "SQLite cache file size in bytes").unwrap();
-        let cache_symbols = Gauge::new("typhoon_cache_symbols_total", "Number of symbols in cache").unwrap();
+        let cache_size = Gauge::new("typhoon_cache_size_bytes", "SQLite cache file size in bytes")
+            .map_err(|e| format!("cache_size metric: {e}"))?;
+        let cache_symbols = Gauge::new("typhoon_cache_symbols_total", "Number of symbols in cache")
+            .map_err(|e| format!("cache_symbols metric: {e}"))?;
 
         let bars = GaugeVec::new(
             Opts::new("typhoon_bars_total", "Bar count per symbol and timeframe"),
             &["symbol", "timeframe"],
-        ).unwrap();
+        ).map_err(|e| format!("bars metric: {e}"))?;
 
-        let sync_ts = Gauge::new("typhoon_sync_last_timestamp", "Unix timestamp of last MT5 sync").unwrap();
+        let sync_ts = Gauge::new("typhoon_sync_last_timestamp", "Unix timestamp of last MT5 sync")
+            .map_err(|e| format!("sync_ts metric: {e}"))?;
 
         let broker = GaugeVec::new(
             Opts::new("typhoon_broker_connected", "1 if broker connected, 0 if not"),
             &["broker"],
-        ).unwrap();
+        ).map_err(|e| format!("broker metric: {e}"))?;
 
-        let alerts = Gauge::new("typhoon_alerts_active", "Number of active price alerts").unwrap();
-        let uptime = Gauge::new("typhoon_uptime_seconds", "Application uptime in seconds").unwrap();
+        let alerts = Gauge::new("typhoon_alerts_active", "Number of active price alerts")
+            .map_err(|e| format!("alerts metric: {e}"))?;
+        let uptime = Gauge::new("typhoon_uptime_seconds", "Application uptime in seconds")
+            .map_err(|e| format!("uptime metric: {e}"))?;
 
         let reg = |collector: Box<dyn prometheus::core::Collector>| {
             if let Err(e) = registry.register(collector) {
@@ -110,7 +118,7 @@ impl MetricsRegistry {
         reg(Box::new(alerts.clone()));
         reg(Box::new(uptime.clone()));
 
-        Self {
+        Ok(Self {
             registry,
             equity,
             positions,
@@ -123,7 +131,7 @@ impl MetricsRegistry {
             broker,
             alerts,
             uptime,
-        }
+        })
     }
 
     /// Update all gauges from a snapshot of current app state.

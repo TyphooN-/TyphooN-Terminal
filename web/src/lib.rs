@@ -13,22 +13,39 @@ pub fn main() {
     let options = eframe::WebOptions::default();
 
     wasm_bindgen_futures::spawn_local(async {
-        let window = web_sys::window().expect("no window");
-        let document = window.document().expect("no document");
-        let canvas = document
-            .get_element_by_id("typhoon_canvas")
-            .expect("no canvas element")
-            .dyn_into::<web_sys::HtmlCanvasElement>()
-            .expect("not a canvas");
+        // Each of these "cannot happen" in a normal browser context, but we log
+        // to the console instead of panicking so the user gets a visible error
+        // in the dev tools rather than a cryptic wasm trap. Per ADR-082.
+        let Some(window) = web_sys::window() else {
+            web_sys::console::error_1(&"TyphooN: no window object — not running in a browser?".into());
+            return;
+        };
+        let Some(document) = window.document() else {
+            web_sys::console::error_1(&"TyphooN: no document object".into());
+            return;
+        };
+        let Some(canvas_elem) = document.get_element_by_id("typhoon_canvas") else {
+            web_sys::console::error_1(&"TyphooN: #typhoon_canvas element missing from index.html".into());
+            return;
+        };
+        let canvas = match canvas_elem.dyn_into::<web_sys::HtmlCanvasElement>() {
+            Ok(c) => c,
+            Err(_) => {
+                web_sys::console::error_1(&"TyphooN: #typhoon_canvas is not a <canvas> element".into());
+                return;
+            }
+        };
 
         let runner = eframe::WebRunner::new();
-        runner
+        if let Err(e) = runner
             .start(
                 canvas,
                 options,
                 Box::new(|cc| Ok(Box::new(app::WebApp::new(cc)))),
             )
             .await
-            .expect("Failed to start eframe");
+        {
+            web_sys::console::error_1(&format!("TyphooN: eframe start failed: {e:?}").into());
+        }
     });
 }

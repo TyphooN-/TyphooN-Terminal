@@ -4674,12 +4674,24 @@ fn draw_chart(
     let bars = &chart.bars[start_idx..end_idx];
 
     if bars.is_empty() {
+        // Show an actionable message — not just "No data".
+        // Common failure modes: wrong cache key, symbol not yet imported, MT5 sync missing.
+        let sym = chart.symbol.as_str();
+        let line1 = format!("No data for {}", sym);
+        let line2 = "Import via MT5 sync (F5) or run MT5SYNC in the console".to_string();
         painter.text(
-            rect.center(),
+            rect.center() - egui::vec2(0.0, 12.0),
             egui::Align2::CENTER_CENTER,
-            "No data — load a symbol",
+            line1,
             egui::FontId::proportional(16.0),
-            egui::Color32::from_rgb(100, 100, 120),
+            egui::Color32::from_rgb(180, 180, 200),
+        );
+        painter.text(
+            rect.center() + egui::vec2(0.0, 10.0),
+            egui::Align2::CENTER_CENTER,
+            line2,
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgb(110, 110, 130),
         );
         return;
     }
@@ -8815,6 +8827,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "SEC",           desc: "SEC filings (10-K, 10-Q, 8-K)" },
     Command { name: "INSIDER",       desc: "Insider trades (Form 4)" },
     Command { name: "FUNDAMENTALS",  desc: "Fundamentals viewer (EV, ratios, profile)" },
+    Command { name: "SCOPE",         desc: "Set broker scope filter for fundamental features: SCOPE [ALL|ALPACA|DARWINEX|TASTY]" },
     Command { name: "EV",            desc: "Enterprise Value scanner (all symbols)" },
     Command { name: "EARNINGS",      desc: "Upcoming earnings calendar" },
     Command { name: "DIVIDENDS",     desc: "Upcoming dividend calendar" },
@@ -8844,7 +8857,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "HV_CONE",       desc: "Historical volatility cone (percentile rank)" },
     Command { name: "SECTOR_HEATMAP",desc: "Sector performance heatmap" },
     Command { name: "DIVSCREEN",     desc: "Dividend yield screener (ranked by yield)" },
-    Command { name: "DIVEXPLORER",   desc: "Upcoming dividend dates for Darwinex-tradeable symbols" },
+    Command { name: "EVENTS",        desc: "Upcoming events calendar (earnings/dividends) per broker (aliases: DIVEXPLORER, EVENTCALENDAR)" },
     Command { name: "CONFLUENCE",    desc: "Multi-timeframe RSI/MACD confluence score" },
     Command { name: "STAT_ARB",      desc: "Statistical arbitrage pairs (z-score + half-life)" },
     Command { name: "RISK_BUDGET",   desc: "Portfolio risk budget (marginal VaR contribution)" },
@@ -8866,8 +8879,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "DSCORE",        desc: "D-Score estimation components" },
     Command { name: "DARWIN_BROWSER", desc: "Browse DARWIN FTP universe (50K DARWINs)" },
     Command { name: "DARWINIA_SCAN",  desc: "DarwinIA universe scan — top DARWINs by Sharpe (GPU → CPU)" },
-    Command { name: "DARWINEXOUTLIERS", desc: "Multi-dimensional outlier scanner (P/E, EV, short ratio, SEC filings)" },
-    Command { name: "OUTLIERS",        desc: "Same as DARWINEXOUTLIERS — works on all symbols with fundamentals" },
+    Command { name: "OUTLIERS",        desc: "Multi-dim outlier scanner: P/E + EV + short ratio + SEC filings (aliases: DARWINEXOUTLIERS)" },
     Command { name: "DARWINVAR",       desc: "Outlier scanner on DARWIN VaR95 values + Darwinex corridor check (3.25%-6.5%)" },
     Command { name: "EVOUTLIERS",      desc: "Outlier scanner on enterprise value (EV), grouped by sector" },
     Command { name: "EXPORT_DARWIN", desc: "Export all DARWIN data to JSON file" },
@@ -9826,6 +9838,10 @@ pub struct TyphooNApp {
     show_hv_cone: bool,
     show_sector_heatmap: bool,
     show_dividends: bool,
+    /// Global broker scope filter applied to all fundamental-based commands
+    /// (OUTLIERS, EVOUTLIERS, DARWINVAR, DIVSCREEN, SECTOR_HEATMAP, HV_CONE, EV viewer, etc.).
+    /// All = no filter. Use `SCOPE [ALL|ALPACA|DARWINEX|TASTY]` command to change.
+    broker_scope: EventSource,
     show_event_calendar: bool,
     event_calendar_rows: Vec<EventRow>,
     event_filter_source: EventSource,
@@ -12149,10 +12165,10 @@ impl TyphooNApp {
                         let _ = broker_msg_tx_clone.send(BrokerMsg::FredData(series_data, yield_curve));
                     }
                     BrokerCmd::FetchEconCalendar { finnhub_key } => {
-                        if finnhub_key.is_empty() {
-                            let _ = broker_msg_tx_clone.send(BrokerMsg::Error("Set Finnhub API Key in Settings".into()));
-                        } else {
-                            let client = reqwest::Client::new();
+                        // Strategy: if Finnhub key present, use Finnhub (richer — includes "actual" values).
+                        // Otherwise fall back to ForexFactory weekly XML (free, no key, ForexFactory-parity data).
+                        let client = reqwest::Client::new();
+                        if !finnhub_key.is_empty() {
                             let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
                             let next_week = (chrono::Utc::now() + chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
                             let url = format!("https://finnhub.io/api/v1/calendar/economic?from={}&to={}&token={}", today, next_week, finnhub_key);
@@ -12171,10 +12187,31 @@ impl TyphooNApp {
                                             }
                                         }
                                         let _ = broker_msg_tx_clone.send(BrokerMsg::EconCalendarData(events));
+                                        continue;
                                     }
                                 }
-                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Econ calendar: {}", e))); }
+                                Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("Finnhub econ calendar: {}", e))); }
                             }
+                        }
+                        // ForexFactory fallback (keyless)
+                        match typhoon_engine::core::econ_calendar::fetch_forexfactory_week(&client).await {
+                            Ok(ff_events) => {
+                                let events: Vec<(String, String, String, String, String)> = ff_events.into_iter()
+                                    .map(|e| {
+                                        // Flatten MM-DD-YYYY + time into ISO-ish "YYYY-MM-DD HH:MM"
+                                        let date_str = if let Ok(d) = chrono::NaiveDate::parse_from_str(&e.date, "%m-%d-%Y") {
+                                            format!("{} {}", d.format("%Y-%m-%d"), e.time)
+                                        } else {
+                                            format!("{} {}", e.date, e.time)
+                                        };
+                                        let prev = if e.previous.is_empty() { "\u{2014}".to_string() } else { e.previous.clone() };
+                                        let actual = if e.forecast.is_empty() { prev } else { format!("fc:{} (prev:{})", e.forecast, if e.previous.is_empty() { "-" } else { &e.previous }) };
+                                        (date_str, e.country, e.title, e.impact.label().to_lowercase(), actual)
+                                    })
+                                    .collect();
+                                let _ = broker_msg_tx_clone.send(BrokerMsg::EconCalendarData(events));
+                            }
+                            Err(e) => { let _ = broker_msg_tx_clone.send(BrokerMsg::Error(format!("ForexFactory fallback: {}", e))); }
                         }
                     }
                     BrokerCmd::FetchCongressTrades => {
@@ -12595,6 +12632,7 @@ impl TyphooNApp {
             show_hv_cone: false,
             show_sector_heatmap: false,
             show_dividends: false,
+            broker_scope: EventSource::All,
             show_event_calendar: false,
             event_calendar_rows: Vec::new(),
             event_filter_source: EventSource::All,
@@ -12795,15 +12833,21 @@ impl TyphooNApp {
         };
 
         // ── Prometheus metrics server ────────────────────────────────────────
-        {
-            let registry = std::sync::Arc::new(crate::metrics::MetricsRegistry::new());
-            let metrics_port: u16 = std::env::var("TYPHOON_METRICS_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(9090);
-            crate::metrics::start_metrics_server(&app.rt_handle, registry.clone(), metrics_port);
-            app.metrics_registry = Some(registry);
-            app.log.push_back(LogEntry::info(format!("Prometheus metrics on :{}", metrics_port)));
+        match crate::metrics::MetricsRegistry::new() {
+            Ok(registry) => {
+                let registry = std::sync::Arc::new(registry);
+                let metrics_port: u16 = std::env::var("TYPHOON_METRICS_PORT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(9090);
+                crate::metrics::start_metrics_server(&app.rt_handle, registry.clone(), metrics_port);
+                app.metrics_registry = Some(registry);
+                app.log.push_back(LogEntry::info(format!("Prometheus metrics on :{}", metrics_port)));
+            }
+            Err(e) => {
+                // Non-fatal — metrics are observability, not core functionality.
+                app.log.push_back(LogEntry::warn(format!("Prometheus disabled: {e}")));
+            }
         }
 
         // Spawn background DARWIN data refresh thread (mpsc channel, capacity 1)
@@ -13427,6 +13471,66 @@ impl TyphooNApp {
     }
 
     /// Get all "active" symbols: chart tabs + open positions from ticked brokers + watchlist.
+    /// Broker scope symbol set for fundamental filtering.
+    /// Returns None for `EventSource::All` (no filter applied). Otherwise returns the
+    /// uppercase bare-ticker set for the selected broker.
+    fn broker_scope_symbols(&self) -> Option<std::collections::HashSet<String>> {
+        match self.broker_scope {
+            EventSource::All => None,
+            EventSource::Alpaca => Some(
+                self.live_positions.iter()
+                    .map(|p| p.symbol.replace('/', "").to_uppercase())
+                    .collect()
+            ),
+            EventSource::Tasty => Some(
+                self.tt_positions.iter()
+                    .map(|p| p.symbol.replace('/', "").to_uppercase())
+                    .collect()
+            ),
+            EventSource::Darwinex => Some(
+                self.darwinex_radar_data.iter()
+                    .filter(|(_, _, _, trade_mode, _, _, _, _, _)| *trade_mode != 0)
+                    .map(|(sym, _, _, _, _, _, _, _, _)| {
+                        sym.split('.').next().unwrap_or(sym.as_str()).to_uppercase()
+                    })
+                    .collect()
+            ),
+        }
+    }
+
+    /// Fundamentals filtered by the current `broker_scope`. Returns a Vec of refs
+    /// (cheap — just pointers). Use `scoped_fundamentals_owned` when the callee
+    /// requires `&[Fundamentals]` (slice of values).
+    fn scoped_fundamentals(&self) -> Vec<&typhoon_engine::core::fundamentals::Fundamentals> {
+        match self.broker_scope_symbols() {
+            None => self.bg.all_fundamentals.iter().collect(),
+            Some(set) => self.bg.all_fundamentals.iter()
+                .filter(|f| set.contains(&f.symbol.to_uppercase()))
+                .collect(),
+        }
+    }
+
+    /// Owned-Vec variant for APIs that require `&[Fundamentals]`.
+    /// When scope=All, returns a clone of the full list (no filter work).
+    /// Acceptable cost — all_fundamentals is typically a few hundred structs.
+    fn scoped_fundamentals_owned(&self) -> Vec<typhoon_engine::core::fundamentals::Fundamentals> {
+        match self.broker_scope_symbols() {
+            None => self.bg.all_fundamentals.clone(),
+            Some(set) => self.bg.all_fundamentals.iter()
+                .filter(|f| set.contains(&f.symbol.to_uppercase()))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Short label for the current broker scope — used in window headers.
+    fn broker_scope_label(&self) -> &'static str {
+        match self.broker_scope {
+            EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
+            EventSource::Darwinex => "DARWINEX", EventSource::Tasty => "TASTY",
+        }
+    }
+
     fn active_symbols(&self) -> Vec<String> {
         let mut syms: Vec<String> = Vec::new();
         let mut add = |s: &str| {
@@ -13996,6 +14100,37 @@ impl TyphooNApp {
             "HV_CONE"       => self.show_hv_cone = true,
             "SECTOR_HEATMAP"=> self.show_sector_heatmap = true,
             "DIVSCREEN"     => self.show_dividends = true,
+            s if s.starts_with("SCOPE") => {
+                // SCOPE [ALL|ALPACA|DARWINEX|TASTY] — global broker filter for fundamental features.
+                let arg = s.trim_start_matches("SCOPE").trim();
+                let (new_scope, label) = match arg {
+                    "" => { // show current
+                        let lbl = match self.broker_scope {
+                            EventSource::All => "ALL", EventSource::Alpaca => "ALPACA",
+                            EventSource::Darwinex => "DARWINEX", EventSource::Tasty => "TASTY",
+                        };
+                        self.log.push_back(LogEntry::info(format!(
+                            "Broker scope: {lbl} (use SCOPE [ALL|ALPACA|DARWINEX|TASTY] to change)"
+                        )));
+                        return;
+                    }
+                    "ALL" => (EventSource::All, "ALL"),
+                    "ALPACA" => (EventSource::Alpaca, "ALPACA"),
+                    "DARWINEX" | "DARWIN" => (EventSource::Darwinex, "DARWINEX"),
+                    "TASTY" | "TASTYTRADE" => (EventSource::Tasty, "TASTY"),
+                    other => {
+                        self.log.push_back(LogEntry::err(format!(
+                            "Unknown SCOPE '{other}'. Valid: ALL, ALPACA, DARWINEX, TASTY"
+                        )));
+                        return;
+                    }
+                };
+                self.broker_scope = new_scope;
+                let n = self.scoped_fundamentals().len();
+                self.log.push_back(LogEntry::info(format!(
+                    "Broker scope → {label} ({} fundamentals in scope)", n
+                )));
+            }
             "DIVEXPLORER" | "EVENTS" | "EVENTCALENDAR" => {
                 // Comprehensive upcoming events view for actively traded symbols.
                 // Aggregates earnings / ex-dividend / dividend-payment dates from
@@ -14333,10 +14468,22 @@ impl TyphooNApp {
             }
             "DARWINEXOUTLIERS" | "OUTLIERS" | "ALPACAOUTLIERS" | "TASTYOUTLIERS" => {
                 // Multi-dimensional outlier detection: VaR + EV + ATR + SEC + Volume
+                // Per-command broker scope override: ALPACAOUTLIERS/TASTYOUTLIERS/DARWINEXOUTLIERS
+                // temporarily narrow the scope for this run without mutating the global.
+                let scope_override = match cmd_upper.as_str() {
+                    "ALPACAOUTLIERS" => Some(EventSource::Alpaca),
+                    "TASTYOUTLIERS" => Some(EventSource::Tasty),
+                    "DARWINEXOUTLIERS" => Some(EventSource::Darwinex),
+                    _ => None,
+                };
+                let prev_scope = self.broker_scope;
+                if let Some(s) = scope_override { self.broker_scope = s; }
+                let fund_owned = self.scoped_fundamentals_owned();
+                if let Some(_) = scope_override { self.broker_scope = prev_scope; }
                 if let Some(ref cache) = self.cache {
                     if let Some(_conn) = cache.try_connection() {
                         use typhoon_engine::core::var;
-                        let fund = &self.bg.all_fundamentals;
+                        let fund = &fund_owned;
                         if fund.len() < 10 {
                             self.log.push_back(LogEntry::warn("Need 10+ symbols with fundamentals data. Run EVSCRAPE first."));
                         } else {
@@ -14449,8 +14596,11 @@ impl TyphooNApp {
             }
             "EVOUTLIERS" | "EV_OUTLIERS" => {
                 // Enterprise value outlier scanner: IQR detection on EV, grouped by sector.
+                // Respects the global broker_scope filter.
                 use typhoon_engine::core::var;
-                let fund = &self.bg.all_fundamentals;
+                let fund_owned = self.scoped_fundamentals_owned();
+                let fund = &fund_owned;
+                let scope_label = self.broker_scope_label();
                 let data: Vec<(String, String, f64)> = fund.iter()
                     .filter_map(|f| f.enterprise_value.map(|ev| (
                         f.symbol.clone(),
@@ -14469,8 +14619,8 @@ impl TyphooNApp {
                     let extreme = outliers.iter().filter(|o| o.tier == "EXTREME").count();
                     let high = outliers.iter().filter(|o| o.tier == "HIGH").count();
                     self.log.push_back(LogEntry::info(format!(
-                        "EV outliers: {} total ({} EXTREME, {} HIGH) from {} symbols across {} sectors",
-                        outliers.len(), extreme, high, data.len(), stats.len()
+                        "EV outliers [{}]: {} total ({} EXTREME, {} HIGH) from {} symbols across {} sectors",
+                        scope_label, outliers.len(), extreme, high, data.len(), stats.len()
                     )));
                     self.darwinex_outliers = outliers;
                     self.darwinex_sector_stats = stats;
@@ -22579,12 +22729,14 @@ impl TyphooNApp {
 
         // ── Sector Heatmap ────────────────────────────────────────────
         if self.show_sector_heatmap {
+            let scope_label = self.broker_scope_label();
+            let scoped = self.scoped_fundamentals_owned();
             egui::Window::new("Sector Heatmap")
                 .open(&mut self.show_sector_heatmap)
                 .resizable(true).default_size([500.0, 400.0])
                 .show(ctx, |ui| {
-                    let sectors = typhoon_engine::core::screener::compute_sector_heatmap(&self.bg.all_fundamentals);
-                    ui.label(egui::RichText::new(format!("{} sectors", sectors.len())).strong());
+                    let sectors = typhoon_engine::core::screener::compute_sector_heatmap(&scoped);
+                    ui.label(egui::RichText::new(format!("{} sectors • scope: {} ({} symbols)", sectors.len(), scope_label, scoped.len())).strong());
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         egui::Grid::new("sector_heat_grid").striped(true).num_columns(4).show(ui, |ui| {
@@ -22604,12 +22756,14 @@ impl TyphooNApp {
 
         // ── Dividend Yield Screener ───────────────────────────────────
         if self.show_dividends {
+            let scope_label = self.broker_scope_label();
+            let scoped = self.scoped_fundamentals_owned();
             egui::Window::new("Dividend Yield Screener")
                 .open(&mut self.show_dividends)
                 .resizable(true).default_size([600.0, 400.0])
                 .show(ctx, |ui| {
-                    let divs = typhoon_engine::core::screener::screen_dividend_stocks(&self.bg.all_fundamentals);
-                    ui.label(egui::RichText::new(format!("{} dividend stocks", divs.len())).strong());
+                    let divs = typhoon_engine::core::screener::screen_dividend_stocks(&scoped);
+                    ui.label(egui::RichText::new(format!("{} dividend stocks • scope: {}", divs.len(), scope_label)).strong());
                     ui.separator();
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         egui::Grid::new("div_screen_grid").striped(true).num_columns(5).show(ui, |ui| {

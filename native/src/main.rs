@@ -49,12 +49,21 @@ fn main() -> eframe::Result {
         tracing::info!("Session: {}", session_path.display());
     }
 
-    // Start tokio runtime in background thread for async broker operations
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    // Start tokio runtime in background thread for async broker operations.
+    // If this fails we cannot continue — the whole app depends on tokio.
+    // We print a user-visible error instead of an anonymous panic.
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
-        .expect("Failed to create tokio runtime");
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("Fatal: failed to create tokio runtime: {e}");
+            eprintln!("This usually means the OS refused to create worker threads.");
+            std::process::exit(1);
+        }
+    };
     let rt_handle = runtime.handle().clone();
     tracing::info!("Tokio runtime: 2 worker threads");
 

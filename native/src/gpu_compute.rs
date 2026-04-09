@@ -47,6 +47,12 @@ pub struct GpuCompute {
     bind_group_layout: wgpu::BindGroupLayout,
     /// Staging buffer for CPU readback.
     readback_buffer: Option<wgpu::Buffer>,
+    /// Shared output buffer for `dispatch_indicator` (sized 1x bars).
+    /// Reused across every single-output indicator call — avoids per-call alloc.
+    ind_out_buffer: Option<wgpu::Buffer>,
+    /// Shared 8-byte uniform buffer for `dispatch_indicator` params (period, bar_count).
+    /// Reused across every call — avoids per-call alloc.
+    ind_params_buffer: Option<wgpu::Buffer>,
     // ─── Compute pipelines ───
     sma_pipeline: wgpu::ComputePipeline,
     ema_pipeline: wgpu::ComputePipeline,
@@ -304,6 +310,8 @@ impl GpuCompute {
             anchored_vwap_pipeline,
             bind_group_layout,
             readback_buffer: None,
+            ind_out_buffer: None,
+            ind_params_buffer: None,
         }
     }
 
@@ -391,26 +399,31 @@ impl GpuCompute {
             label: Some("readback"), size: out_size_4x,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         }));
+        // Shared dispatch_indicator output buffer (sized to 1x bars).
+        // Previously a fresh buffer was created per call — hot path for 31 indicators × 60fps.
+        self.ind_out_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ind_out_shared"), size: out_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
+        }));
+        // Shared params uniform (fixed 8-byte size — [period, bar_count]).
+        self.ind_params_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ind_params_shared"), size: 8,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
+        }));
     }
 
     /// Generic dispatch: run a compute pipeline with close prices as input, return f32 per bar.
+    /// Uses shared output + params buffers (populated in `upload_bars`) to avoid per-call allocations.
     fn dispatch_indicator(&self, pipeline: &wgpu::ComputePipeline, period: u32, parallel: bool) -> Option<Vec<f32>> {
         if self.bar_count == 0 { return None; }
         let bar_buf = self.bar_buffer.as_ref()?;
         let rb_buf = self.readback_buffer.as_ref()?;
+        let out_buf = self.ind_out_buffer.as_ref()?;
+        let params_buffer = self.ind_params_buffer.as_ref()?;
 
         let out_size = (self.bar_count as u64) * 4;
-        let out_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ind_out"), size: out_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false,
-        });
-
         let params = [period, self.bar_count];
-        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ind_params"), size: 8,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
-        });
-        self.queue.write_buffer(&params_buffer, 0, bytemuck_cast_slice(&params));
+        self.queue.write_buffer(params_buffer, 0, bytemuck_cast_slice(&params));
 
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ind_bg"), layout: &self.bind_group_layout,
@@ -434,7 +447,7 @@ impl GpuCompute {
                 pass.dispatch_workgroups(1, 1, 1);
             }
         }
-        encoder.copy_buffer_to_buffer(&out_buf, 0, rb_buf, 0, out_size);
+        encoder.copy_buffer_to_buffer(out_buf, 0, rb_buf, 0, out_size);
         self.queue.submit(std::iter::once(encoder.finish()));
 
         let slice = rb_buf.slice(0..out_size);
