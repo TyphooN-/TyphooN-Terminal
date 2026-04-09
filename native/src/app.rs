@@ -8841,7 +8841,7 @@ const COMMANDS: &[Command] = &[
     Command { name: "OPTION_CHAIN",  desc: "tastytrade option chain for current symbol" },
     Command { name: "OPTIONS",       desc: "Alpaca options chain for current symbol" },
     Command { name: "WATCHLISTS",    desc: "Alpaca watchlists" },
-    Command { name: "COMPILE",       desc: "Indicator compiler: MQL5 / PineScript / EasyLanguage / thinkScript" },
+    Command { name: "COMPILE",       desc: "Indicator compiler: MQL5/MQL4/PineScript v4+v5/EasyLanguage/thinkScript/AFL/ProBuilder/NinjaScript/cAlgo + cross-language transpiler" },
     Command { name: "STREAM",        desc: "Start real-time WebSocket stream for current symbol" },
     Command { name: "DXLINK_STREAM", desc: "Start DXLink real-time quote stream (tastytrade)" },
     // Analysis
@@ -9865,10 +9865,12 @@ pub struct TyphooNApp {
     darwinex_multi_outliers: Vec<typhoon_engine::core::var::MultiOutlierResult>,
     show_option_chain: bool,
     option_chain_sym: String,  // symbol last fetched
-    // MQL5/PineScript compiler
+    // MQL5/PineScript/…/transpile compiler
     show_indicator_compiler: bool,
     compiler_source: String,         // source code input
-    compiler_language: usize,        // 0=MQL5, 1=PineScript
+    compiler_language: usize,        // see COMPILER_LANGS below
+    compiler_transpile_target: usize, // target language index for transpile dropdown
+    compiler_transpiled: Option<String>, // transpiled source output
     compiler_diagnostics: Vec<String>,
     compiler_metadata: Option<mql5_compiler::CompileResult>,
     show_journal: bool,
@@ -12694,6 +12696,8 @@ impl TyphooNApp {
             show_indicator_compiler: false,
             compiler_source: String::new(),
             compiler_language: 0,
+            compiler_transpile_target: 0,
+            compiler_transpiled: None,
             compiler_diagnostics: Vec::new(),
             compiler_metadata: None,
             show_journal: false,
@@ -23603,34 +23607,59 @@ impl TyphooNApp {
                     let cc_green = egui::Color32::from_rgb(46, 204, 113);
                     let cc_red   = egui::Color32::from_rgb(231, 76, 60);
                     let cc_dim   = egui::Color32::from_rgb(100, 100, 120);
+                    // Language table — kept adjacent to the match arms below so
+                    // they stay in sync if we add another frontend.
+                    const LANG_LABELS: &[&str] = &[
+                        "MQL5",
+                        "MQL4",
+                        "PineScript",
+                        "EasyLanguage",
+                        "thinkScript",
+                        "AFL (AmiBroker)",
+                        "ProBuilder",
+                        "NinjaScript",
+                        "cAlgo (cTrader)",
+                    ];
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Language:").small());
                         egui::ComboBox::from_id_salt("compiler_lang")
-                            .selected_text(match self.compiler_language {
-                                0 => "MQL5",
-                                1 => "PineScript v5",
-                                2 => "EasyLanguage",
-                                3 => "thinkScript",
-                                _ => "MQL5",
-                            })
-                            .width(140.0)
+                            .selected_text(LANG_LABELS.get(self.compiler_language).copied().unwrap_or("MQL5"))
+                            .width(180.0)
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.compiler_language, 0, "MQL5");
-                                ui.selectable_value(&mut self.compiler_language, 1, "PineScript v5");
-                                ui.selectable_value(&mut self.compiler_language, 2, "EasyLanguage");
-                                ui.selectable_value(&mut self.compiler_language, 3, "thinkScript");
+                                for (i, label) in LANG_LABELS.iter().enumerate() {
+                                    ui.selectable_value(&mut self.compiler_language, i, *label);
+                                }
                             });
                         if ui.button("Load File...").clicked() {
                             if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("Indicator", &["mq5", "mqh", "pine", "el", "els", "ts", "tos", "txt"])
+                                .add_filter("Indicator", &[
+                                    "mq5", "mqh",   // MQL5
+                                    "mq4", "mqh",   // MQL4
+                                    "pine",          // PineScript
+                                    "el", "els",    // EasyLanguage
+                                    "ts", "tos",    // thinkScript
+                                    "afl",           // AFL
+                                    "itf",           // ProBuilder
+                                    "cs",            // NinjaScript + cAlgo (C#)
+                                    "txt",
+                                ])
                                 .pick_file() {
                                 if let Ok(contents) = std::fs::read_to_string(&path) {
                                     self.compiler_source = contents;
-                                    // Auto-detect language by extension
+                                    // Auto-detect language by extension / content
                                     self.compiler_language = match path.extension().and_then(|e| e.to_str()) {
-                                        Some("pine") => 1,
-                                        Some("el") | Some("els") => 2,
-                                        Some("ts") | Some("tos") => 3,
+                                        Some("mq4") => 1,
+                                        Some("pine") => 2,
+                                        Some("el") | Some("els") => 3,
+                                        Some("ts") | Some("tos") => 4,
+                                        Some("afl") => 5,
+                                        Some("itf") => 6,
+                                        Some("cs") => {
+                                            // Disambiguate NinjaScript vs cAlgo by content
+                                            if self.compiler_source.contains("NinjaScriptProperty")
+                                                || self.compiler_source.contains("NinjaTrader")
+                                            { 7 } else { 8 }
+                                        }
                                         _ => 0,
                                     };
                                     self.log.push_back(LogEntry::info(format!("Loaded: {}", path.display())));
@@ -23642,9 +23671,14 @@ impl TyphooNApp {
                         if compile_btn.clicked() && !self.compiler_source.is_empty() {
                             let result = match self.compiler_language {
                                 0 => mql5_compiler::compile_mql5(&self.compiler_source),
-                                1 => mql5_compiler::compile_pine(&self.compiler_source),
-                                2 => mql5_compiler::compile_easylang(&self.compiler_source),
-                                3 => mql5_compiler::compile_thinkscript(&self.compiler_source),
+                                1 => mql5_compiler::compile_mql4(&self.compiler_source),
+                                2 => mql5_compiler::compile_pine(&self.compiler_source),
+                                3 => mql5_compiler::compile_easylang(&self.compiler_source),
+                                4 => mql5_compiler::compile_thinkscript(&self.compiler_source),
+                                5 => mql5_compiler::compile_afl(&self.compiler_source),
+                                6 => mql5_compiler::compile_probuilder(&self.compiler_source),
+                                7 => mql5_compiler::compile_ninjascript(&self.compiler_source),
+                                8 => mql5_compiler::compile_calgo(&self.compiler_source),
                                 _ => mql5_compiler::compile_mql5(&self.compiler_source),
                             };
                             self.compiler_diagnostics.clear();
@@ -23665,6 +23699,78 @@ impl TyphooNApp {
                                     "Compiled: {} bytes WASM, {} buffers", wasm_size, buffers)));
                             }
                             self.compiler_metadata = Some(result);
+                        }
+                    });
+
+                    // ── Cross-language transpile row (ADR-090) ────────
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Transpile to:").small());
+                        const TRANSPILE_TARGETS: &[(&str, mql5_compiler::transpile::TargetLanguage)] = &[
+                            ("MQL5",         mql5_compiler::transpile::TargetLanguage::Mql5),
+                            ("PineScript v5", mql5_compiler::transpile::TargetLanguage::PineScript),
+                            ("EasyLanguage", mql5_compiler::transpile::TargetLanguage::EasyLanguage),
+                            ("thinkScript",  mql5_compiler::transpile::TargetLanguage::ThinkScript),
+                        ];
+                        egui::ComboBox::from_id_salt("compiler_transpile_target")
+                            .selected_text(TRANSPILE_TARGETS
+                                .get(self.compiler_transpile_target)
+                                .map(|(l, _)| *l)
+                                .unwrap_or("MQL5"))
+                            .width(140.0)
+                            .show_ui(ui, |ui| {
+                                for (i, (label, _)) in TRANSPILE_TARGETS.iter().enumerate() {
+                                    ui.selectable_value(&mut self.compiler_transpile_target, i, *label);
+                                }
+                            });
+                        if ui.button("Transpile").clicked() && !self.compiler_source.is_empty() {
+                            use mql5_compiler::transpile::{SourceLanguage, transpile};
+                            let from = match self.compiler_language {
+                                0 => SourceLanguage::Mql5,
+                                1 => SourceLanguage::Mql4,
+                                2 => SourceLanguage::PineScript,
+                                3 => SourceLanguage::EasyLanguage,
+                                4 => SourceLanguage::ThinkScript,
+                                5 => SourceLanguage::Afl,
+                                6 => SourceLanguage::ProBuilder,
+                                7 => SourceLanguage::NinjaScript,
+                                8 => SourceLanguage::Calgo,
+                                _ => SourceLanguage::Mql5,
+                            };
+                            let to = TRANSPILE_TARGETS
+                                .get(self.compiler_transpile_target)
+                                .map(|(_, t)| *t)
+                                .unwrap_or(mql5_compiler::transpile::TargetLanguage::Mql5);
+                            match transpile(&self.compiler_source, from, to) {
+                                Ok(out) => {
+                                    let line_count = out.lines().count();
+                                    self.compiler_transpiled = Some(out);
+                                    self.log.push_back(LogEntry::info(format!(
+                                        "Transpiled {:?} → {:?}: {} lines", from, to, line_count)));
+                                }
+                                Err(e) => {
+                                    self.compiler_transpiled = None;
+                                    self.log.push_back(LogEntry::err(format!("Transpile failed: {e}")));
+                                    self.compiler_diagnostics.insert(0, format!("TRANSPILE ERROR: {e}"));
+                                }
+                            }
+                        }
+                        if self.compiler_transpiled.is_some() && ui.button("Use as Source").clicked() {
+                            if let Some(ref out) = self.compiler_transpiled {
+                                self.compiler_source = out.clone();
+                                self.compiler_language = match self.compiler_transpile_target {
+                                    0 => 0, // MQL5
+                                    1 => 2, // Pine
+                                    2 => 3, // EL
+                                    3 => 4, // TS
+                                    _ => 0,
+                                };
+                                self.compiler_transpiled = None;
+                            }
+                        }
+                        if self.compiler_transpiled.is_some() && ui.button("Copy").clicked() {
+                            if let Some(ref out) = self.compiler_transpiled {
+                                ui.ctx().copy_text(out.clone());
+                            }
                         }
                     });
                     ui.separator();
@@ -23715,6 +23821,17 @@ impl TyphooNApp {
                                 }
                             }
                         }
+                    }
+
+                    // Transpiled output panel
+                    if let Some(ref transpiled) = self.compiler_transpiled {
+                        ui.separator();
+                        ui.label(egui::RichText::new("Transpiled Output").small().strong().color(cc_green));
+                        egui::ScrollArea::vertical().max_height(200.0).id_salt("compiler_transpile_out").show(ui, |ui| {
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(transpiled).monospace().small()
+                            ).wrap_mode(egui::TextWrapMode::Extend));
+                        });
                     }
                 });
         }

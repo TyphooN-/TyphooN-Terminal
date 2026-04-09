@@ -1,8 +1,14 @@
-//! PineScript v5 Parser — converts PineScript to the same IR as MQL5.
+//! PineScript v4 / v5 Parser — converts PineScript to the same IR as MQL5.
 //!
-//! Supports a subset of PineScript v5 sufficient for common indicators:
-//! - //@version=5 header
-//! - indicator() declaration
+//! Auto-detects the version from the `//@version=N` header. Pine v4 uses
+//! `study()` instead of `indicator()`, and some legacy function call sites
+//! (`rsi(...)` instead of `ta.rsi(...)`, `sma(...)` instead of `ta.sma(...)`,
+//! `security(...)` instead of `request.security(...)`). We accept both and
+//! normalise them into the same IR.
+//!
+//! Supports a subset of PineScript v4/v5 sufficient for common indicators:
+//! - //@version=4 or //@version=5 header
+//! - indicator() (v5) / study() (v4) declaration
 //! - input.int(), input.float(), input.bool(), input.string()
 //! - ta.sma(), ta.ema(), ta.rsi(), ta.atr(), ta.highest(), ta.lowest()
 //! - ta.crossover(), ta.crossunder()
@@ -17,6 +23,36 @@ use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, Dra
 
 /// Parse PineScript source and produce IR module.
 pub fn parse_pine(source: &str) -> CompileResult {
+    let (ir_module, meta, pine_version) = build_ir_internal(source);
+    let mut diagnostics = Vec::new();
+    match crate::codegen::emit_wasm(&ir_module) {
+        Ok(wasm) => {
+            diagnostics.push(Diagnostic {
+                level: DiagLevel::Info,
+                message: format!("PineScript v{} compiled: {} inputs, {} plots",
+                    pine_version, meta.inputs.len(), meta.plots.len()),
+                line: 0, col: 0,
+            });
+            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+        }
+        Err(e) => {
+            diagnostics.push(Diagnostic {
+                level: DiagLevel::Error,
+                message: format!("WASM codegen failed: {e}"),
+                line: 0, col: 0,
+            });
+            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+        }
+    }
+}
+
+/// Build IR + meta for PineScript source — used by the cross-language transpiler.
+pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
+    let (m, meta, _) = build_ir_internal(source);
+    (m, meta)
+}
+
+fn build_ir_internal(source: &str) -> (IrModule, IndicatorMeta, u8) {
     let mut meta = IndicatorMeta {
         short_name: String::new(),
         buffers: 0,
@@ -24,13 +60,62 @@ pub fn parse_pine(source: &str) -> CompileResult {
         inputs: Vec::new(),
         plots: Vec::new(),
     };
-    let mut diagnostics = Vec::new();
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let mut inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
     let mut plot_count = 0usize;
+    // Detect version header. v4 scripts use `//@version=4` and call functions
+    // without the `ta.`/`math.` namespace prefix. v5 requires the prefix.
+    let mut pine_version: u8 = 5;
+    for line in source.lines() {
+        let t = line.trim();
+        if let Some(ver) = t.strip_prefix("//@version=") {
+            pine_version = ver.trim().parse().unwrap_or(5);
+            break;
+        }
+    }
 
-    for (_line_num, line) in source.lines().enumerate() {
+    // Helper: given a line, rewrite v4 bareword calls into v5 namespaced form
+    // so the rest of the scanner only needs one set of match arms.
+    let normalize_line = |line: String| -> String {
+        if pine_version >= 5 { return line; }
+        let replacements: &[(&str, &str)] = &[
+            ("study(",          "indicator("),
+            ("security(",       "request.security("),
+            ("sma(",            "ta.sma("),
+            ("ema(",            "ta.ema("),
+            ("rma(",            "ta.rma("),
+            ("wma(",            "ta.wma("),
+            ("vwma(",           "ta.vwma("),
+            ("rsi(",            "ta.rsi("),
+            ("atr(",            "ta.atr("),
+            ("highest(",        "ta.highest("),
+            ("lowest(",         "ta.lowest("),
+            ("stdev(",          "ta.stdev("),
+            ("crossover(",      "ta.crossover("),
+            ("crossunder(",     "ta.crossunder("),
+            ("change(",         "ta.change("),
+            ("tr(",             "ta.tr("),
+            ("abs(",            "math.abs("),
+            ("sqrt(",           "math.sqrt("),
+            ("log(",            "math.log("),
+            ("max(",            "math.max("),
+            ("min(",            "math.min("),
+            ("input.int(",      "input.int("), // already v5 form — no-op
+            ("input(",          "input.int("), // v4 `input(14)` → treat as int
+        ];
+        let mut out = line;
+        for (from, to) in replacements {
+            // Replace only when preceded by a non-identifier char (or at line start)
+            // so `ta.sma(` doesn't become `ta.ta.sma(`.
+            out = replace_unprefixed(&out, from, to);
+        }
+        out
+    };
+
+    for (_line_num, raw_line) in source.lines().enumerate() {
+        let normalized = normalize_line(raw_line.to_string());
+        let line = normalized.as_str();
         let trimmed = line.trim();
 
         // Skip comments and empty lines
@@ -39,7 +124,7 @@ pub fn parse_pine(source: &str) -> CompileResult {
         // Version header
         if trimmed.starts_with("//@version=") { continue; }
 
-        // indicator() declaration
+        // indicator() declaration (study() in v4 was rewritten above)
         if trimmed.starts_with("indicator(") {
             if let Some(name) = extract_string_arg(trimmed, "indicator(") {
                 meta.short_name = name;
@@ -149,30 +234,7 @@ pub fn parse_pine(source: &str) -> CompileResult {
         on_init: None,
         globals: Vec::new(),
     };
-
-    // Try to generate WASM
-    match crate::codegen::emit_wasm(&ir_module) {
-        Ok(wasm) => {
-            diagnostics.push(Diagnostic {
-                level: DiagLevel::Info,
-                message: format!("PineScript compiled: {} inputs, {} plots", meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
-            });
-            CompileResult {
-                wasm: Some(wasm),
-                diagnostics,
-                metadata: Some(meta),
-            }
-        }
-        Err(e) => {
-            diagnostics.push(Diagnostic {
-                level: DiagLevel::Error,
-                message: format!("WASM codegen failed: {e}"),
-                line: 0, col: 0,
-            });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
-        }
-    }
+    (ir_module, meta, pine_version)
 }
 
 /// Parse a PineScript expression to IR.
@@ -317,6 +379,33 @@ fn parse_two_arg_call(expr: &str, func: &str) -> Option<IrExpr> {
         let b = parse_pine_expr(parts[1].trim())?;
         Some(IrExpr::Call(func.into(), vec![a, b]))
     } else { None }
+}
+
+/// Replace occurrences of `from` with `to` only when not preceded by an
+/// identifier character. Used for v4 → v5 normalisation so we don't mangle
+/// `ta.sma(` into `ta.ta.sma(` when both forms coexist.
+fn replace_unprefixed(haystack: &str, from: &str, to: &str) -> String {
+    if !haystack.contains(from) { return haystack.to_string(); }
+    let bytes = haystack.as_bytes();
+    let fb = from.as_bytes();
+    let mut out = String::with_capacity(haystack.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + fb.len() <= bytes.len() && &bytes[i..i + fb.len()] == fb {
+            let prev_ok = i == 0
+                || (!bytes[i - 1].is_ascii_alphanumeric()
+                    && bytes[i - 1] != b'_'
+                    && bytes[i - 1] != b'.');
+            if prev_ok {
+                out.push_str(to);
+                i += fb.len();
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// Extract content between first ( and last ).
@@ -472,6 +561,37 @@ plot(slow, title="Slow", color=color.red)
         let meta = result.metadata.unwrap();
         assert_eq!(meta.plots.len(), 2);
         assert_eq!(meta.buffers, 2);
+    }
+
+    #[test]
+    fn parse_pine_v4_study_and_bareword_calls() {
+        let source = r#"
+//@version=4
+study("v4 indicator", overlay=true)
+length = input(defval=14, title="Length")
+val = sma(close, length)
+plot(val, title="SMA", color=color.blue)
+"#;
+        let result = parse_pine(source);
+        assert!(result.wasm.is_some(), "v4 should compile: {:?}", result.diagnostics);
+        let meta = result.metadata.unwrap();
+        assert_eq!(meta.short_name, "v4 indicator");
+        assert_eq!(meta.inputs.len(), 1);
+        assert_eq!(meta.plots.len(), 1);
+        // Diagnostic should mention v4
+        let has_v4 = result.diagnostics.iter().any(|d| d.message.contains("v4"));
+        assert!(has_v4, "diagnostics should mention Pine v4");
+    }
+
+    #[test]
+    fn replace_unprefixed_skips_namespaced_calls() {
+        let input = "x = ta.sma(close, 20) + sma(close, 10)";
+        // Only the bareword sma(...) should be rewritten; ta.sma(...) stays put.
+        let out = replace_unprefixed(input, "sma(", "ta.sma(");
+        assert!(out.contains("ta.sma(close, 20)"));
+        assert!(out.contains("ta.sma(close, 10)"));
+        // Should not produce ta.ta.sma
+        assert!(!out.contains("ta.ta.sma"));
     }
 
     #[test]

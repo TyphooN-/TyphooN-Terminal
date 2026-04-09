@@ -3,12 +3,19 @@
 //! Pipeline: Source → Parse → AST → IR → WASM
 //!
 //! Frontends:
-//! - MQL5       — full parser (pest grammar), AST, IR lowering
-//! - PineScript — line scanner (pine.rs)
+//! - MQL5        — full parser (pest grammar), AST, IR lowering
+//! - MQL4        — MT4 compat shim: textual rewrite → MQL5 parser
+//! - PineScript  — v4 + v5 line scanner (pine.rs)
 //! - EasyLanguage — line scanner (easylang.rs)
 //! - thinkScript  — line scanner (thinkscript.rs)
+//! - AFL         — AmiBroker Formula Language (afl.rs)
+//! - ProBuilder  — ProRealTime (probuilder.rs)
+//! - NinjaScript — NinjaTrader indicator subset (ninjascript.rs)
+//! - cAlgo       — cTrader indicator subset (calgo.rs)
 //!
-//! All four share the same IR + WASM/WGSL codegen pipeline.
+//! All nine share the same IR + WASM/WGSL codegen pipeline.
+//! Because of this common lowering, ANY source language can be
+//! transpiled into ANY other (IR → source backends — see ADR-090).
 
 pub mod parser;
 pub mod ast;
@@ -20,6 +27,12 @@ pub mod runtime;
 pub mod pine;
 pub mod easylang;
 pub mod thinkscript;
+pub mod mql4;
+pub mod afl;
+pub mod probuilder;
+pub mod ninjascript;
+pub mod calgo;
+pub mod transpile;
 
 
 
@@ -176,6 +189,48 @@ pub fn compile_easylang(source: &str) -> CompileResult {
 /// `declare lower`, # line comments, case-sensitive identifiers.
 pub fn compile_thinkscript(source: &str) -> CompileResult {
     thinkscript::parse_thinkscript(source)
+}
+
+/// Compile MQL4 (MetaTrader 4) source to WASM. Applies a textual rewrite
+/// pass (extern → input, init/start/deinit → OnInit/OnTick/OnDeinit,
+/// Close[i] → iClose(_Symbol,0,i), …) and then runs through the MQL5
+/// parser. Warnings are emitted for constructs that cannot be auto-ported
+/// (OrderSend, OrderSelect — strategies).
+pub fn compile_mql4(source: &str) -> CompileResult {
+    mql4::compile_mql4(source)
+}
+
+/// Compile AmiBroker Formula Language (AFL) source to WASM.
+/// Supports: Plot(), Param() → input, EMA/SMA/RSI/ATR/HHV/LLV built-ins,
+/// arithmetic, case-insensitive.
+pub fn compile_afl(source: &str) -> CompileResult {
+    afl::parse_afl(source)
+}
+
+/// Compile ProRealTime ProBuilder source to WASM.
+/// Supports: RETURN expr AS "label", bracketed-length functions
+/// (Average[14], ExponentialAverage[14], RSI[14], ATR[14], Highest[14],
+/// Lowest[14], StdDev[14]), CROSSES OVER / CROSSES UNDER, REM comments.
+pub fn compile_probuilder(source: &str) -> CompileResult {
+    probuilder::parse_probuilder(source)
+}
+
+/// Compile NinjaScript (NinjaTrader) source — indicator subset.
+/// Supports: `[NinjaScriptProperty]` inputs, `AddPlot()` declarations,
+/// `Value[0]` / `Values[N][0]` plot assignments, SMA/EMA/RSI/ATR built-ins,
+/// `Math.*` utilities.
+pub fn compile_ninjascript(source: &str) -> CompileResult {
+    ninjascript::parse_ninjascript(source)
+}
+
+/// Compile cTrader cAlgo source — indicator subset.
+/// Supports: `[Indicator]` / `[Parameter]` / `[Output]` attributes,
+/// `Result[index]` assignments, `Indicators.*` built-ins (SimpleMovingAverage,
+/// ExponentialMovingAverage, RelativeStrengthIndex, AverageTrueRange, …),
+/// `Math.*` utilities, long-form (`Bars.ClosePrices`) and short-form (`Close`)
+/// series access.
+pub fn compile_calgo(source: &str) -> CompileResult {
+    calgo::parse_calgo(source)
 }
 
 #[cfg(test)]

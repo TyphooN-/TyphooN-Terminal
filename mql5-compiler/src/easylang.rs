@@ -26,6 +26,32 @@ use crate::{IndicatorMeta, InputParam, CompileResult, Diagnostic, DiagLevel, Dra
 
 /// Parse EasyLanguage source and produce an IR-based CompileResult.
 pub fn parse_easylang(source: &str) -> CompileResult {
+    let (ir_module, meta) = build_ir(source);
+    let mut diagnostics = Vec::new();
+    match crate::codegen::emit_wasm(&ir_module) {
+        Ok(wasm) => {
+            diagnostics.push(Diagnostic {
+                level: DiagLevel::Info,
+                message: format!("EasyLanguage compiled: {} inputs, {} plots",
+                    meta.inputs.len(), meta.plots.len()),
+                line: 0, col: 0,
+            });
+            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
+        }
+        Err(e) => {
+            diagnostics.push(Diagnostic {
+                level: DiagLevel::Error,
+                message: format!("EasyLanguage WASM codegen failed: {e}"),
+                line: 0, col: 0,
+            });
+            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
+        }
+    }
+}
+
+/// Build the IR module + metadata for EasyLanguage source — used by both
+/// the WASM codegen path and the cross-language transpiler.
+pub fn build_ir(source: &str) -> (IrModule, IndicatorMeta) {
     let mut meta = IndicatorMeta {
         short_name: String::from("EasyLanguage"),
         buffers: 0,
@@ -33,7 +59,6 @@ pub fn parse_easylang(source: &str) -> CompileResult {
         inputs: Vec::new(),
         plots: Vec::new(),
     };
-    let mut diagnostics = Vec::new();
     let mut ir_body: Vec<IrStmt> = Vec::new();
     let mut inputs: Vec<IrInput> = Vec::new();
     let mut locals: Vec<(String, IrType)> = Vec::new();
@@ -88,10 +113,15 @@ pub fn parse_easylang(source: &str) -> CompileResult {
 
         // Plot statement: Plot1(value) / Plot1(value, "label")
         if let Some(rest) = el_plot_prefix(&lower) {
-            // rest starts at the matching Plot<N>( content
+            // rest starts at the matching Plot<N>( content. The slice is
+            // taken from the lowercased line, but since EL is ASCII, the
+            // byte offsets match the original `trimmed` — use `trimmed` for
+            // the label so we preserve the user's original capitalisation.
             let plot_idx = rest.0;
-            let args_str = rest.1;
-            let args = extract_parens(args_str);
+            let args_lower = rest.1;
+            let offset = trimmed.len() - args_lower.len();
+            let args_orig = &trimmed[offset..];
+            let args = extract_parens(args_orig);
             let parts: Vec<&str> = split_top_level_commas(args);
             if let Some(first) = parts.first() {
                 if let Some(expr) = parse_el_expr(first.trim()) {
@@ -158,26 +188,7 @@ pub fn parse_easylang(source: &str) -> CompileResult {
         on_init: None,
         globals: Vec::new(),
     };
-
-    match crate::codegen::emit_wasm(&ir_module) {
-        Ok(wasm) => {
-            diagnostics.push(Diagnostic {
-                level: DiagLevel::Info,
-                message: format!("EasyLanguage compiled: {} inputs, {} plots",
-                    meta.inputs.len(), meta.plots.len()),
-                line: 0, col: 0,
-            });
-            CompileResult { wasm: Some(wasm), diagnostics, metadata: Some(meta) }
-        }
-        Err(e) => {
-            diagnostics.push(Diagnostic {
-                level: DiagLevel::Error,
-                message: format!("EasyLanguage WASM codegen failed: {e}"),
-                line: 0, col: 0,
-            });
-            CompileResult { wasm: None, diagnostics, metadata: Some(meta) }
-        }
-    }
+    (ir_module, meta)
 }
 
 /// If the (lowercased) line starts with "plot<N>(", return (index, original-case prefix+rest).
